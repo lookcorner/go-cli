@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
 type webRoundTripFunc func(*http.Request) (*http.Response, error)
@@ -104,6 +105,45 @@ func TestWebFetchLimitsRedirects(t *testing.T) {
 	tool := &webFetchTool{approver: PromptApprover{Mode: PermissionAuto}, client: client, allowPrivate: true}
 	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"url":"https://example.com/start"}`)); err == nil || !strings.Contains(err.Error(), "too many redirects") {
 		t.Fatalf("unexpected redirect limit error: %v", err)
+	}
+}
+
+func TestWebFetchCachesSuccessfulText(t *testing.T) {
+	requests := 0
+	client := &http.Client{Transport: webRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{
+			StatusCode: http.StatusOK, Status: "200 OK", Request: request,
+			Header: http.Header{"Content-Type": []string{"text/plain"}},
+			Body:   io.NopCloser(strings.NewReader("cached page")),
+		}, nil
+	})}
+	tool := &webFetchTool{approver: PromptApprover{Mode: PermissionAuto}, client: client, allowPrivate: true}
+	for range 2 {
+		output, err := tool.Execute(context.Background(), json.RawMessage(`{"url":"http://example.com/page"}`))
+		if err != nil || !strings.Contains(output, "cached page") {
+			t.Fatalf("unexpected cached fetch: output=%q err=%v", output, err)
+		}
+	}
+	if requests != 1 {
+		t.Fatalf("cache made %d HTTP requests, want 1", requests)
+	}
+}
+
+func TestWebFetchCacheExpiresAndEvictsOldest(t *testing.T) {
+	cache := webFetchCache{ttl: time.Minute, max: 2}
+	start := time.Unix(1_700_000_000, 0)
+	cache.put("a", "first", start)
+	cache.put("b", "second", start.Add(time.Second))
+	cache.put("c", "third", start.Add(2*time.Second))
+	if _, ok := cache.get("a", start.Add(3*time.Second)); ok {
+		t.Fatal("oldest cache entry was not evicted")
+	}
+	if output, ok := cache.get("b", start.Add(30*time.Second)); !ok || output != "second" {
+		t.Fatalf("unexpected live cache entry: output=%q ok=%v", output, ok)
+	}
+	if _, ok := cache.get("b", start.Add(62*time.Second)); ok {
+		t.Fatal("expired cache entry was returned")
 	}
 }
 

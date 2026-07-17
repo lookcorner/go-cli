@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -21,6 +22,8 @@ const (
 	maxWebFetchBytes = 2 << 20
 	maxWebFetchURL   = 2000
 	maxWebRedirects  = 10
+	webFetchCacheTTL = 15 * time.Minute
+	maxWebCachePages = 128
 )
 
 type crossHostRedirectError struct {
@@ -34,6 +37,60 @@ type webFetchTool struct {
 	approver     Approver
 	client       *http.Client
 	allowPrivate bool
+	cache        webFetchCache
+}
+
+type cachedWebPage struct {
+	output   string
+	inserted time.Time
+}
+
+type webFetchCache struct {
+	mu      sync.Mutex
+	entries map[string]cachedWebPage
+	ttl     time.Duration
+	max     int
+}
+
+func (c *webFetchCache) get(url string, now time.Time) (string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	page, ok := c.entries[url]
+	if !ok || now.Sub(page.inserted) >= c.cacheTTL() {
+		delete(c.entries, url)
+		return "", false
+	}
+	return page.output, true
+}
+
+func (c *webFetchCache) put(url, output string, now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries == nil {
+		c.entries = make(map[string]cachedWebPage)
+	}
+	limit := c.max
+	if limit <= 0 {
+		limit = maxWebCachePages
+	}
+	if _, exists := c.entries[url]; !exists && len(c.entries) >= limit {
+		var oldestURL string
+		var oldest time.Time
+		for key, page := range c.entries {
+			if oldestURL == "" || page.inserted.Before(oldest) {
+				oldestURL, oldest = key, page.inserted
+			}
+		}
+		delete(c.entries, oldestURL)
+	}
+	c.entries[url] = cachedWebPage{output: output, inserted: now}
+}
+
+func (c *webFetchCache) cacheTTL() time.Duration {
+	if c.ttl > 0 {
+		return c.ttl
+	}
+	return webFetchCacheTTL
 }
 
 func (t *webFetchTool) Definition() api.ToolDefinition {
@@ -64,6 +121,10 @@ func (t *webFetchTool) Execute(ctx context.Context, raw json.RawMessage) (string
 		if err := t.approver.Approve(ctx, "web fetch", parsed.String()); err != nil {
 			return "", err
 		}
+	}
+	cacheKey := parsed.String()
+	if output, ok := t.cache.get(cacheKey, time.Now()); ok {
+		return output, nil
 	}
 	client := t.client
 	if client == nil {
@@ -137,7 +198,9 @@ func (t *webFetchTool) Execute(ctx context.Context, raw json.RawMessage) (string
 	if len(data) > maxWebFetchBytes {
 		return "", fmt.Errorf("converted web response exceeds %d bytes", maxWebFetchBytes)
 	}
-	return fmt.Sprintf("URL: %s\nContent-Type: %s\n\n%s", response.Request.URL, contentType, data), nil
+	output := fmt.Sprintf("URL: %s\nContent-Type: %s\n\n%s", response.Request.URL, contentType, data)
+	t.cache.put(cacheKey, output, time.Now())
+	return output, nil
 }
 
 func isTextWebContent(mediaType string) bool {
