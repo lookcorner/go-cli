@@ -180,8 +180,10 @@ after the target checkpoint. Shell-created file changes are not checkpointed.
 
 Unix ACP clients may also create interactive terminals through
 `x.ai/terminal/pty/create`, stream base64 input and output, resize or reconnect
-with bounded output replay, list terminals, and terminate them. PTYs are owned
-by the ACP server connection and are cleaned up when it closes.
+with bounded output replay, list terminals, and terminate them. Foreground
+commands emit transition-only `process_started` and `process_ended`
+notifications. PTYs are owned by the ACP server connection and are cleaned up
+when it closes.
 
 Git repositories also expose compatible hunk tracker ACP extensions:
 `x.ai/hunk-tracker/get-hunks`, `get-files`, `get-summary`, `hunk-action`,

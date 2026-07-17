@@ -9,6 +9,7 @@ import (
 	"syscall"
 
 	"github.com/creack/pty"
+	"golang.org/x/sys/unix"
 )
 
 func startTerminal(cmd *exec.Cmd, rows, cols uint16) (*os.File, error) {
@@ -17,6 +18,11 @@ func startTerminal(cmd *exec.Cmd, rows, cols uint16) (*os.File, error) {
 
 func resizeTerminal(file *os.File, rows, cols uint16) error {
 	return pty.Setsize(file, &pty.Winsize{Rows: rows, Cols: cols})
+}
+
+func terminalHasForegroundProcess(file *os.File, shellPID int) bool {
+	foreground, err := unix.IoctlGetInt(int(file.Fd()), unix.TIOCGPGRP)
+	return err == nil && foreground > 0 && foreground != shellPID
 }
 
 func killTerminalProcess(cmd *exec.Cmd) error {

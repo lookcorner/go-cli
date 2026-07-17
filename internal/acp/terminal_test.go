@@ -202,3 +202,53 @@ func TestPTYReplayBufferIsBounded(t *testing.T) {
 		t.Fatalf("unexpected bounded output: len=%d offset=%d", len(terminal.output), terminal.outputOffset)
 	}
 }
+
+func TestPTYActivityTransitions(t *testing.T) {
+	events := make(chan string, 16)
+	manager := newTerminalManager(func(method string, params any) {
+		if method != "x.ai/terminal/pty/notification" {
+			return
+		}
+		typeName, _ := params.(map[string]any)["type"].(string)
+		if typeName == "process_started" || typeName == "process_ended" {
+			events <- typeName
+		}
+	})
+	id, err := manager.create("/bin/sh", t.TempDir(), nil, 24, 80, "activity")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.closeAll()
+
+	select {
+	case event := <-events:
+		t.Fatalf("idle shell emitted %q", event)
+	case <-time.After(terminalActivityInterval * 3):
+	}
+	if _, err := manager.load(id); err != nil {
+		t.Fatal(err)
+	}
+	waitForPTYActivity(t, events, "process_ended")
+	if err := manager.writeInput(id, []byte("sleep 2\n")); err != nil {
+		t.Fatal(err)
+	}
+	waitForPTYActivity(t, events, "process_started")
+	waitForPTYActivity(t, events, "process_ended")
+	select {
+	case event := <-events:
+		t.Fatalf("steady idle state repeated %q", event)
+	case <-time.After(terminalActivityInterval * 2):
+	}
+}
+
+func waitForPTYActivity(t *testing.T, events <-chan string, want string) {
+	t.Helper()
+	select {
+	case got := <-events:
+		if got != want {
+			t.Fatalf("activity event=%q, want %q", got, want)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %q", want)
+	}
+}

@@ -16,6 +16,7 @@ import (
 )
 
 const terminalOutputBytes = 256 << 10
+const terminalActivityInterval = 500 * time.Millisecond
 
 type terminalManager struct {
 	mu        sync.Mutex
@@ -39,6 +40,7 @@ type ptyTerminal struct {
 	outputOffset uint64
 	exited       bool
 	exitCode     *int
+	busy         bool
 }
 
 type terminalInfo struct {
@@ -111,6 +113,7 @@ func (m *terminalManager) create(shell, cwd string, env map[string]string, rows,
 	m.terminals[id] = terminal
 	m.mu.Unlock()
 	go m.readOutput(terminal)
+	go m.monitorActivity(terminal)
 	return id, nil
 }
 
@@ -159,14 +162,55 @@ func (m *terminalManager) readOutput(terminal *ptyTerminal) {
 		code = terminal.cmd.ProcessState.ExitCode()
 	}
 	terminal.mu.Lock()
+	wasBusy := terminal.busy
+	terminal.busy = false
 	terminal.exited = true
 	terminal.exitCode = &code
 	terminal.mu.Unlock()
+	if wasBusy {
+		m.sendActivity(terminal.id, false)
+	}
 	_ = terminal.file.Close()
 	close(terminal.done)
 	m.send("x.ai/terminal/pty/notification", map[string]any{
 		"terminalId": terminal.id, "type": "exit", "exitCode": code,
 	})
+}
+
+func (m *terminalManager) monitorActivity(terminal *ptyTerminal) {
+	ticker := time.NewTicker(terminalActivityInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			m.sampleActivity(terminal, false)
+		case <-terminal.done:
+			return
+		}
+	}
+}
+
+func (m *terminalManager) sampleActivity(terminal *ptyTerminal, reportCurrent bool) {
+	terminal.mu.Lock()
+	if terminal.exited {
+		terminal.mu.Unlock()
+		return
+	}
+	busy := terminalHasForegroundProcess(terminal.file, terminal.cmd.Process.Pid)
+	changed := busy != terminal.busy
+	terminal.busy = busy
+	terminal.mu.Unlock()
+	if changed || reportCurrent {
+		m.sendActivity(terminal.id, busy)
+	}
+}
+
+func (m *terminalManager) sendActivity(id string, busy bool) {
+	typeName := "process_ended"
+	if busy {
+		typeName = "process_started"
+	}
+	m.send("x.ai/terminal/pty/notification", map[string]any{"terminalId": id, "type": typeName})
 }
 
 func (t *ptyTerminal) recordOutput(data []byte) uint64 {
@@ -207,8 +251,11 @@ func (m *terminalManager) writeInput(id string, data []byte) error {
 	if exited {
 		return fmt.Errorf("terminal %q exited", id)
 	}
-	_, err = terminal.file.Write(data)
-	return err
+	if _, err = terminal.file.Write(data); err != nil {
+		return err
+	}
+	m.sampleActivity(terminal, false)
+	return nil
 }
 
 func (m *terminalManager) resize(id string, rows, cols uint16) error {
@@ -248,6 +295,8 @@ func (m *terminalManager) load(id string) (map[string]any, error) {
 		m.send("x.ai/terminal/pty/notification", map[string]any{
 			"terminalId": id, "type": "exit", "exitCode": exitCode, "isReplay": true,
 		})
+	} else {
+		m.sampleActivity(terminal, true)
 	}
 	result := map[string]any{"terminalId": id, "rows": rows, "cols": cols, "exited": exited}
 	if exitCode != nil {
