@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -69,6 +70,10 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 	if int(initialize["id"].(float64)) != 1 {
 		t.Fatalf("unexpected initialize response: %#v", initialize)
 	}
+	promptCapabilities := initialize["result"].(map[string]any)["agentCapabilities"].(map[string]any)["promptCapabilities"].(map[string]any)
+	if promptCapabilities["embeddedContext"] != true || promptCapabilities["image"] != false {
+		t.Fatalf("unexpected prompt capabilities: %#v", promptCapabilities)
+	}
 	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 2, "method": "session/new", "params": map[string]any{
 		"cwd": root, "mcpServers": []any{map[string]any{
 			"name": "client-tools", "command": "/fixture-mcp", "args": []string{"--stdio"},
@@ -118,6 +123,11 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 	if err != nil || string(data) != "ok" {
 		t.Fatalf("tool did not run: data=%q err=%v", data, err)
 	}
+	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 4, "method": "session/close", "params": map[string]any{"sessionId": sessionID}})
+	closed := decodeACP(t, decoder)
+	if int(closed["id"].(float64)) != 4 {
+		t.Fatalf("unexpected close response: %#v", closed)
+	}
 	_ = clientToAgentW.Close()
 	select {
 	case err := <-done:
@@ -126,6 +136,36 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("ACP server did not stop at EOF")
+	}
+}
+
+func TestRenderPromptSupportsEmbeddedTextAndRejectsUnsupportedMedia(t *testing.T) {
+	var embedded promptBlock
+	embedded.Type = "resource"
+	embedded.Resource.URI = "file:///workspace/context.md"
+	embedded.Resource.MimeType = "text/markdown"
+	embedded.Resource.Text = "# Context"
+	parts, err := renderPrompt([]promptBlock{
+		{Type: "text", Text: "Use this context"},
+		embedded,
+		{Type: "resource_link", Name: "spec", URI: "file:///workspace/spec.md"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(parts, "\n\n")
+	if !strings.Contains(joined, "Embedded resource file:///workspace/context.md (text/markdown):\n# Context") {
+		t.Fatalf("embedded resource missing from prompt: %q", joined)
+	}
+	if _, err := renderPrompt([]promptBlock{{Type: "image"}}); err == nil {
+		t.Fatal("expected unsupported image error")
+	}
+	var blob promptBlock
+	blob.Type = "resource"
+	blob.Resource.URI = "file:///workspace/data.bin"
+	blob.Resource.Blob = "AA=="
+	if _, err := renderPrompt([]promptBlock{blob}); err == nil {
+		t.Fatal("expected unsupported binary resource error")
 	}
 }
 

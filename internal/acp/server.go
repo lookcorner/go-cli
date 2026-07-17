@@ -69,6 +69,19 @@ type permissionResult struct {
 	err      error
 }
 
+type promptBlock struct {
+	Type     string `json:"type"`
+	Text     string `json:"text"`
+	URI      string `json:"uri"`
+	Name     string `json:"name"`
+	Resource struct {
+		URI      string `json:"uri"`
+		MimeType string `json:"mimeType"`
+		Text     string `json:"text"`
+		Blob     string `json:"blob"`
+	} `json:"resource"`
+}
+
 func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) error {
 	if s.Factory == nil {
 		return errors.New("ACP session factory is required")
@@ -98,7 +111,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				"protocolVersion": ProtocolVersion,
 				"agentCapabilities": map[string]any{
 					"loadSession":         false,
-					"promptCapabilities":  map[string]any{"image": false, "audio": false, "embeddedContext": false},
+					"promptCapabilities":  map[string]any{"image": false, "audio": false, "embeddedContext": true},
 					"mcpCapabilities":     map[string]any{"http": false, "sse": false},
 					"sessionCapabilities": map[string]any{"close": map[string]any{}},
 					"auth":                map[string]any{},
@@ -174,13 +187,8 @@ func (s *Server) handleNewSession(ctx context.Context, incoming message) {
 
 func (s *Server) handlePrompt(parent context.Context, incoming message) {
 	var params struct {
-		SessionID string `json:"sessionId"`
-		Prompt    []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-			URI  string `json:"uri"`
-			Name string `json:"name"`
-		} `json:"prompt"`
+		SessionID string        `json:"sessionId"`
+		Prompt    []promptBlock `json:"prompt"`
 	}
 	if err := json.Unmarshal(incoming.Params, &params); err != nil {
 		s.respondError(incoming.ID, -32602, "invalid prompt parameters")
@@ -191,14 +199,10 @@ func (s *Server) handlePrompt(parent context.Context, incoming message) {
 		s.respondError(incoming.ID, -32602, "unknown session")
 		return
 	}
-	var parts []string
-	for _, block := range params.Prompt {
-		switch block.Type {
-		case "text":
-			parts = append(parts, block.Text)
-		case "resource_link":
-			parts = append(parts, fmt.Sprintf("Referenced resource %s: %s", block.Name, block.URI))
-		}
+	parts, err := renderPrompt(params.Prompt)
+	if err != nil {
+		s.respondError(incoming.ID, -32602, err.Error())
+		return
 	}
 	prompt := strings.TrimSpace(strings.Join(parts, "\n\n"))
 	if prompt == "" {
@@ -237,6 +241,43 @@ func (s *Server) handlePrompt(parent context.Context, incoming message) {
 			s.respond(incoming.ID, map[string]any{"stopReason": stopReason})
 		}
 	}()
+}
+
+func renderPrompt(blocks []promptBlock) ([]string, error) {
+	parts := make([]string, 0, len(blocks))
+	for _, block := range blocks {
+		switch block.Type {
+		case "text":
+			if block.Text != "" {
+				parts = append(parts, block.Text)
+			}
+		case "resource_link":
+			if block.Name == "" || block.URI == "" {
+				return nil, errors.New("resource links require name and uri")
+			}
+			parts = append(parts, fmt.Sprintf("Referenced resource %s: %s", block.Name, block.URI))
+		case "resource":
+			if block.Resource.URI == "" {
+				return nil, errors.New("embedded resources require a uri")
+			}
+			if block.Resource.Text == "" {
+				if block.Resource.Blob != "" {
+					return nil, errors.New("binary embedded resources are not supported")
+				}
+				return nil, errors.New("embedded text resources require text")
+			}
+			header := "Embedded resource " + block.Resource.URI
+			if block.Resource.MimeType != "" {
+				header += " (" + block.Resource.MimeType + ")"
+			}
+			parts = append(parts, header+":\n"+block.Resource.Text)
+		case "image", "audio":
+			return nil, fmt.Errorf("%s prompt content is not supported", block.Type)
+		default:
+			return nil, fmt.Errorf("unsupported prompt content type %q", block.Type)
+		}
+	}
+	return parts, nil
 }
 
 func (s *Server) handleCancel(raw json.RawMessage) {
