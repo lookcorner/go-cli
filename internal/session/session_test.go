@@ -239,3 +239,112 @@ func TestForkCopiesTranscriptAndRebindsCWD(t *testing.T) {
 		t.Fatalf("forked transcript: %#v err=%v", messages, err)
 	}
 }
+
+func TestRewindCreatesLiveConversationBranch(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rewind.jsonl")
+	logger, err := NewLoggerWithID(dir, "rewind")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []struct {
+		kind string
+		data any
+	}{
+		{"session_metadata", map[string]any{"cwd": "/workspace"}},
+		{"user_prompt", map[string]any{"text": "first"}},
+		{"model_response", map[string]any{"response_id": "r1", "text": "one", "tool_call_count": 0}},
+		{"user_prompt", map[string]any{"text": "discarded"}},
+		{"model_response", map[string]any{"response_id": "r2", "text": "two", "tool_call_count": 0}},
+	} {
+		if err := logger.Append(event.kind, event.data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	points, err := RewindPoints(path)
+	if err != nil || len(points) != 2 || points[1].PromptPreview == nil || *points[1].PromptPreview != "discarded" {
+		t.Fatalf("unexpected rewind points: %#v err=%v", points, err)
+	}
+	preview, err := PreviewRewind(path, 1)
+	if err != nil || preview.PreviousResponseID != "r1" || preview.PromptText != "discarded" {
+		t.Fatalf("unexpected rewind preview: %#v err=%v", preview, err)
+	}
+	result, err := Rewind(path, 1)
+	if err != nil || result.PreviousResponseID != "r1" {
+		t.Fatalf("rewind failed: %#v err=%v", result, err)
+	}
+	messages, err := Transcript(path)
+	if err != nil || len(messages) != 2 || messages[1].Text != "one" {
+		t.Fatalf("discarded branch remained live: %#v err=%v", messages, err)
+	}
+	responseID, err := CompletedResponseID(path)
+	if err != nil || responseID != "r1" {
+		t.Fatalf("unexpected response after rewind: %q err=%v", responseID, err)
+	}
+	logger, _, err = Resume(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.AppendPrompt("replacement", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append("model_response", map[string]any{"response_id": "r3", "text": "three", "tool_call_count": 0}); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	result, err = Rewind(path, 0)
+	if err != nil || result.PreviousResponseID != "" {
+		t.Fatalf("rewind to zero failed: %#v err=%v", result, err)
+	}
+	messages, err = Transcript(path)
+	if err != nil || len(messages) != 0 {
+		t.Fatalf("rewind to zero did not clear live conversation: %#v err=%v", messages, err)
+	}
+	responseID, err = CompletedResponseID(path)
+	if err != nil || responseID != "" {
+		t.Fatalf("unexpected zero rewind response: %q err=%v", responseID, err)
+	}
+	logger, responseID, err = Resume(path)
+	if err != nil || responseID != "" {
+		t.Fatalf("zero rewind could not resume: response=%q err=%v", responseID, err)
+	}
+	_ = logger.Close()
+	if _, err := PreviewRewind(path, 0); err == nil {
+		t.Fatal("rewind point zero should not exist after rewinding to zero")
+	}
+}
+
+func TestRewindRejectsMalformedMarker(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "malformed.jsonl")
+	content := `{"kind":"session_rewind","data":{}}` + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RewindPoints(path); err == nil || !strings.Contains(err.Error(), "invalid rewind marker") {
+		t.Fatalf("malformed rewind marker was accepted: %v", err)
+	}
+}
+
+func TestRewindRejectsInvalidTarget(t *testing.T) {
+	dir := t.TempDir()
+	logger, err := NewLoggerWithID(dir, "rewind-invalid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.AppendPrompt("only prompt", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append("model_response", map[string]any{"response_id": "r1", "tool_call_count": 0}); err != nil {
+		t.Fatal(err)
+	}
+	path := logger.Path()
+	_ = logger.Close()
+	if _, err := Rewind(path, 1); err == nil {
+		t.Fatal("rewind accepted target at current prompt count")
+	}
+}

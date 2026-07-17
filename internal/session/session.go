@@ -31,6 +31,27 @@ type Event struct {
 	Data any       `json:"data,omitempty"`
 }
 
+type storedEvent struct {
+	Time time.Time       `json:"time"`
+	Kind string          `json:"kind"`
+	Data json.RawMessage `json:"data"`
+}
+
+type RewindPoint struct {
+	PromptIndex      int     `json:"prompt_index"`
+	CreatedAt        string  `json:"created_at"`
+	NumFileSnapshots int     `json:"num_file_snapshots"`
+	HasFileChanges   bool    `json:"has_file_changes"`
+	PromptPreview    *string `json:"prompt_preview"`
+}
+
+type RewindResult struct {
+	TargetPromptIndex  int
+	PreviousResponseID string
+	PromptText         string
+	Messages           []Message
+}
+
 // Fork copies a validated session event stream to a new session ID and appends
 // metadata that binds the fork to its new working directory.
 func Fork(dir, sourceID, newID, cwd string) (chatMessages, updates int, err error) {
@@ -338,31 +359,184 @@ func Latest(dir string) (string, error) {
 	return filepath.Join(dir, latest), nil
 }
 
+// RewindPoints returns every prompt on the current append-only timeline.
+func RewindPoints(path string) ([]RewindPoint, error) {
+	events, starts, _, err := liveTimeline(path)
+	if err != nil {
+		return nil, err
+	}
+	points := make([]RewindPoint, 0, len(starts))
+	for index, start := range starts {
+		text, err := promptText(events[start])
+		if err != nil {
+			return nil, err
+		}
+		created := ""
+		if !events[start].Time.IsZero() {
+			created = events[start].Time.Format(time.RFC3339)
+		}
+		preview := promptPreview(text)
+		var prompt *string
+		if preview != "" {
+			prompt = &preview
+		}
+		points = append(points, RewindPoint{PromptIndex: index, CreatedAt: created, PromptPreview: prompt})
+	}
+	return points, nil
+}
+
+// PreviewRewind resolves a conversation checkpoint without changing the log.
+func PreviewRewind(path string, target int) (RewindResult, error) {
+	events, starts, _, err := liveTimeline(path)
+	if err != nil {
+		return RewindResult{}, err
+	}
+	if target < 0 || target >= len(starts) {
+		return RewindResult{}, fmt.Errorf("cannot rewind to prompt #%d; valid targets are 0..%d", target, len(starts)-1)
+	}
+	cut := starts[target]
+	text, err := promptText(events[cut])
+	if err != nil {
+		return RewindResult{}, err
+	}
+	messages, err := transcriptFromEvents(path, events[:cut], true)
+	if err != nil {
+		return RewindResult{}, err
+	}
+	previous, err := completedResponseID(events[:cut])
+	if err != nil {
+		return RewindResult{}, err
+	}
+	return RewindResult{
+		TargetPromptIndex: target, PreviousResponseID: previous,
+		PromptText: text, Messages: messages,
+	}, nil
+}
+
+// Rewind appends a branch marker and leaves the discarded branch intact for
+// audit and future migrations. Only conversation state is changed here.
+func Rewind(path string, target int) (RewindResult, error) {
+	result, err := PreviewRewind(path, target)
+	if err != nil {
+		return RewindResult{}, err
+	}
+	event := Event{Time: time.Now().UTC(), Kind: "session_rewind", Data: map[string]any{
+		"target_prompt_index": target, "previous_response_id": result.PreviousResponseID,
+	}}
+	encoded, err := json.Marshal(event)
+	if err != nil {
+		return RewindResult{}, err
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		return RewindResult{}, fmt.Errorf("open session log for rewind: %w", err)
+	}
+	opened, statErr := file.Stat()
+	linked, linkErr := os.Lstat(path)
+	if statErr != nil || linkErr != nil || linked.Mode()&os.ModeSymlink != 0 || !opened.Mode().IsRegular() || !os.SameFile(opened, linked) {
+		_ = file.Close()
+		return RewindResult{}, errors.New("session log changed before rewind")
+	}
+	if _, err = file.Write(append(encoded, '\n')); err == nil {
+		err = file.Sync()
+	}
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return RewindResult{}, fmt.Errorf("append session rewind: %w", err)
+	}
+	return result, nil
+}
+
+func liveTimeline(path string) ([]storedEvent, []int, bool, error) {
+	if err := validateSessionFile(path); err != nil {
+		return nil, nil, false, err
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("open session log: %w", err)
+	}
+	defer file.Close()
+	var events []storedEvent
+	var starts []int
+	rewound := false
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64<<10), 8<<20)
+	line := 0
+	for scanner.Scan() {
+		line++
+		var event storedEvent
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			return nil, nil, false, fmt.Errorf("parse session line %d: %w", line, err)
+		}
+		if event.Kind == "session_rewind" {
+			var data struct {
+				Target *int `json:"target_prompt_index"`
+			}
+			if err := json.Unmarshal(event.Data, &data); err != nil || data.Target == nil || *data.Target < 0 || *data.Target > len(starts) {
+				return nil, nil, false, fmt.Errorf("invalid rewind marker on session line %d", line)
+			}
+			cut := len(events)
+			if *data.Target < len(starts) {
+				cut = starts[*data.Target]
+			}
+			events = events[:cut]
+			starts = starts[:*data.Target]
+			rewound = true
+			continue
+		}
+		if event.Kind == "user_prompt" {
+			starts = append(starts, len(events))
+		}
+		events = append(events, event)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, nil, false, fmt.Errorf("read session log: %w", err)
+	}
+	return events, starts, rewound, nil
+}
+
+func promptText(event storedEvent) (string, error) {
+	var data struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(event.Data, &data); err != nil {
+		return "", err
+	}
+	return data.Text, nil
+}
+
+func promptPreview(text string) string {
+	line := ""
+	for _, candidate := range strings.Split(text, "\n") {
+		if candidate = strings.TrimSpace(candidate); candidate != "" {
+			line = candidate
+			break
+		}
+	}
+	chars := []rune(line)
+	if len(chars) > 60 {
+		return string(chars[:57]) + "..."
+	}
+	return line
+}
+
 // Transcript reconstructs the user/assistant messages through the last fully
 // completed model turn. Events after that checkpoint are intentionally ignored
 // because Resume continues from the same completed response ID.
 func Transcript(path string) ([]Message, error) {
-	if err := validateSessionFile(path); err != nil {
+	events, _, rewound, err := liveTimeline(path)
+	if err != nil {
 		return nil, err
 	}
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("open session log: %w", err)
-	}
-	defer file.Close()
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 64<<10), 8<<20)
+	return transcriptFromEvents(path, events, rewound)
+}
+
+func transcriptFromEvents(path string, events []storedEvent, allowEmpty bool) ([]Message, error) {
 	var current, completed []Message
-	line := 0
-	for scanner.Scan() {
-		line++
-		var event struct {
-			Kind string          `json:"kind"`
-			Data json.RawMessage `json:"data"`
-		}
-		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
-			return nil, fmt.Errorf("parse session line %d: %w", line, err)
-		}
+	for index, event := range events {
+		line := index + 1
 		switch event.Kind {
 		case "user_prompt":
 			var data struct {
@@ -396,10 +570,10 @@ func Transcript(path string) ([]Message, error) {
 			}
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read session log: %w", err)
-	}
 	if completed == nil {
+		if allowEmpty {
+			return []Message{}, nil
+		}
 		return nil, errors.New("session has no completed transcript to resume")
 	}
 	for messageIndex := range completed {
@@ -463,24 +637,26 @@ func validateSessionFile(path string) error {
 }
 
 func lastCompletedResponseID(path string) (string, error) {
-	file, err := os.Open(path)
+	events, _, rewound, err := liveTimeline(path)
 	if err != nil {
-		return "", fmt.Errorf("open session log: %w", err)
+		return "", err
 	}
-	defer file.Close()
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 64<<10), 8<<20)
+	last, err := completedResponseID(events)
+	if err != nil {
+		return "", err
+	}
+	if last == "" {
+		if rewound {
+			return "", nil
+		}
+		return "", errors.New("session has no completed model response to resume")
+	}
+	return last, nil
+}
+
+func completedResponseID(events []storedEvent) (string, error) {
 	last := ""
-	line := 0
-	for scanner.Scan() {
-		line++
-		var event struct {
-			Kind string          `json:"kind"`
-			Data json.RawMessage `json:"data"`
-		}
-		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
-			return "", fmt.Errorf("parse session line %d: %w", line, err)
-		}
+	for index, event := range events {
 		if event.Kind != "model_response" {
 			continue
 		}
@@ -489,17 +665,11 @@ func lastCompletedResponseID(path string) (string, error) {
 			ToolCallCount int    `json:"tool_call_count"`
 		}
 		if err := json.Unmarshal(event.Data, &data); err != nil {
-			return "", fmt.Errorf("parse model response on session line %d: %w", line, err)
+			return "", fmt.Errorf("parse model response on live event %d: %w", index+1, err)
 		}
 		if data.ResponseID != "" && data.ToolCallCount == 0 {
 			last = data.ResponseID
 		}
-	}
-	if err := scanner.Err(); err != nil {
-		return "", fmt.Errorf("read session log: %w", err)
-	}
-	if last == "" {
-		return "", errors.New("session has no completed model response to resume")
 	}
 	return last, nil
 }

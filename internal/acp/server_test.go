@@ -22,8 +22,9 @@ import (
 )
 
 type fixtureStreamer struct {
-	mu      sync.Mutex
-	results []api.StreamResult
+	mu       sync.Mutex
+	results  []api.StreamResult
+	requests []api.ResponseRequest
 }
 
 type blockingStreamer struct{ started chan struct{} }
@@ -34,8 +35,9 @@ func (f *blockingStreamer) StreamResponse(ctx context.Context, _ api.ResponseReq
 	return api.StreamResult{}, ctx.Err()
 }
 
-func (f *fixtureStreamer) StreamResponse(ctx context.Context, _ api.ResponseRequest, onText func(string)) (api.StreamResult, error) {
+func (f *fixtureStreamer) StreamResponse(ctx context.Context, request api.ResponseRequest, onText func(string)) (api.StreamResult, error) {
 	f.mu.Lock()
+	f.requests = append(f.requests, request)
 	result := f.results[0]
 	f.results = f.results[1:]
 	f.mu.Unlock()
@@ -57,16 +59,31 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 			CallID: "tool-1", Name: "write_file", Arguments: json.RawMessage(`{"path":"made.txt","content":"ok"}`),
 		}}},
 		{ResponseID: "response-2", Text: "finished"},
+		{ResponseID: "response-3", Text: "replacement answer"},
 	}}
 	factoryConfigs := make(chan SessionConfig, 1)
-	server := &Server{SessionDir: t.TempDir(), Factory: func(_ context.Context, cfg SessionConfig, approver tools.Approver, text, status io.Writer) (*agent.Runner, func(), error) {
+	sessionDir := t.TempDir()
+	server := &Server{SessionDir: sessionDir, Factory: func(_ context.Context, cfg SessionConfig, approver tools.Approver, text, status io.Writer) (*agent.Runner, func(), error) {
 		factoryConfigs <- cfg
 		ws, err := workspace.Open(cfg.CWD)
 		if err != nil {
 			return nil, nil, err
 		}
 		registry := tools.NewRegistry(ws, approver)
-		return &agent.Runner{Client: streamer, Tools: registry, Model: "fixture", MaxSteps: 3, TextOutput: text, StatusOutput: status}, func() { _ = registry.Close() }, nil
+		logger, err := sessionlog.NewLoggerWithID(sessionDir, cfg.SessionID)
+		if err != nil {
+			_ = registry.Close()
+			return nil, nil, err
+		}
+		if err := logger.Append("session_metadata", map[string]any{"cwd": cfg.CWD}); err != nil {
+			_ = logger.Close()
+			_ = registry.Close()
+			return nil, nil, err
+		}
+		return &agent.Runner{Client: streamer, Tools: registry, Logger: logger, Model: "fixture", MaxSteps: 3, TextOutput: text, StatusOutput: status}, func() {
+			_ = logger.Close()
+			_ = registry.Close()
+		}, nil
 	}}
 	clientToAgentR, clientToAgentW := io.Pipe()
 	agentToClientR, agentToClientW := io.Pipe()
@@ -184,6 +201,52 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 	if visible := acceptedResponse["result"].(map[string]any)["hunks"].([]any); len(visible) != 0 {
 		t.Fatalf("accepted ACP hunk remained visible: %#v", acceptedResponse)
 	}
+	encodeACP(t, encoder, map[string]any{
+		"jsonrpc": "2.0", "id": 36, "method": "x.ai/rewind/points",
+		"params": map[string]any{"sessionId": sessionID},
+	})
+	pointsResponse := decodeACP(t, decoder)
+	points := pointsResponse["result"].(map[string]any)["rewind_points"].([]any)
+	if len(points) != 1 || int(points[0].(map[string]any)["prompt_index"].(float64)) != 0 {
+		t.Fatalf("unexpected ACP rewind points: %#v", pointsResponse)
+	}
+	encodeACP(t, encoder, map[string]any{
+		"jsonrpc": "2.0", "id": 37, "method": "x.ai/rewind/execute",
+		"params": map[string]any{"sessionId": sessionID, "targetPromptIndex": 0, "force": true, "mode": "all"},
+	})
+	unsupported := decodeACP(t, decoder)
+	if unsupported["result"].(map[string]any)["success"] != false || !strings.Contains(unsupported["result"].(map[string]any)["error"].(string), "file rewind") {
+		t.Fatalf("unsupported file rewind was not rejected: %#v", unsupported)
+	}
+	encodeACP(t, encoder, map[string]any{
+		"jsonrpc": "2.0", "id": 38, "method": "x.ai/rewind/execute",
+		"params": map[string]any{"sessionId": sessionID, "targetPromptIndex": 0, "force": true, "mode": "conversation_only"},
+	})
+	rewindUpdate := decodeACP(t, decoder)
+	if rewindUpdate["method"] != "session/update" || rewindUpdate["params"].(map[string]any)["update"].(map[string]any)["sessionUpdate"] != "rewind_marker" {
+		t.Fatalf("missing ACP rewind marker: %#v", rewindUpdate)
+	}
+	rewound := decodeACP(t, decoder)
+	if rewound["result"].(map[string]any)["success"] != true || rewound["result"].(map[string]any)["prompt_text"] != "create the file" {
+		t.Fatalf("unexpected ACP rewind response: %#v", rewound)
+	}
+	encodeACP(t, encoder, map[string]any{
+		"jsonrpc": "2.0", "id": 39, "method": "session/prompt",
+		"params": map[string]any{"sessionId": sessionID, "prompt": []any{map[string]any{"type": "text", "text": "replacement"}}},
+	})
+	replacementUpdate := decodeACP(t, decoder)
+	if replacementUpdate["method"] != "session/update" {
+		t.Fatalf("missing replacement stream update: %#v", replacementUpdate)
+	}
+	replacementDone := decodeACP(t, decoder)
+	if int(replacementDone["id"].(float64)) != 39 {
+		t.Fatalf("unexpected replacement completion: %#v", replacementDone)
+	}
+	streamer.mu.Lock()
+	if len(streamer.requests) != 3 || streamer.requests[2].PreviousResponseID != "" {
+		t.Fatalf("rewound prompt used the discarded response chain: %#v", streamer.requests)
+	}
+	streamer.mu.Unlock()
 	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 4, "method": "session/close", "params": map[string]any{"sessionId": sessionID}})
 	closed := decodeACP(t, decoder)
 	if int(closed["id"].(float64)) != 4 {

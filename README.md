@@ -164,6 +164,12 @@ to the actual tool call, so protocol stdin is never consumed by a CLI prompt.
 `--approval auto` and `--approval deny` remain available for clients that
 intentionally want a fixed policy.
 
+ACP sessions expose `x.ai/rewind/points` and `x.ai/rewind/execute` for
+conversation-only rewind. Rewinds append a timeline marker instead of deleting
+history, restore the selected Responses continuation ID, and rebuild visible
+Chat Completions or Anthropic history. File rewind modes fail explicitly until
+per-prompt file checkpoints are available.
+
 Unix ACP clients may also create interactive terminals through
 `x.ai/terminal/pty/create`, stream base64 input and output, resize or reconnect
 with bounded output replay, list terminals, and terminate them. PTYs are owned

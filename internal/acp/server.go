@@ -195,6 +195,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleRehydrateSession(ctx, incoming)
 		case "x.ai/session/resolve_local_for_worktree_resume":
 			s.handleResolveLocalSession(ctx, incoming)
+		case "x.ai/rewind/points", "x.ai/rewind/execute":
+			s.handleRewind(incoming)
 		case "x.ai/terminal/pty/create", "x.ai/terminal/pty/load", "x.ai/terminal/pty/resize", "x.ai/terminal/list", "x.ai/terminal/kill":
 			s.handleTerminal(incoming)
 		case "x.ai/terminal/pty/input":
@@ -648,6 +650,118 @@ func (s *Server) handleNewSession(ctx context.Context, incoming message) {
 		return
 	}
 	s.respond(incoming.ID, map[string]any{"sessionId": id})
+}
+
+func (s *Server) handleRewind(incoming message) {
+	var base struct {
+		SessionID      string `json:"sessionId"`
+		SessionIDSnake string `json:"session_id"`
+	}
+	if json.Unmarshal(incoming.Params, &base) != nil {
+		s.respondError(incoming.ID, -32602, "invalid rewind parameters")
+		return
+	}
+	sessionID := base.SessionID
+	if sessionID == "" {
+		sessionID = base.SessionIDSnake
+	}
+	current := s.lookupSession(sessionID)
+	if current == nil {
+		s.respondError(incoming.ID, -32602, "session not found")
+		return
+	}
+	path, err := sessionlog.PathForID(s.SessionDir, sessionID)
+	if err != nil {
+		s.respondError(incoming.ID, -32602, err.Error())
+		return
+	}
+	if incoming.Method == "x.ai/rewind/points" {
+		current.mu.Lock()
+		running := current.running
+		current.mu.Unlock()
+		if running {
+			s.respondError(incoming.ID, -32000, "cannot list rewind points while a prompt is running")
+			return
+		}
+		points, err := sessionlog.RewindPoints(path)
+		if err != nil {
+			s.respondError(incoming.ID, -32000, err.Error())
+			return
+		}
+		s.respond(incoming.ID, map[string]any{"rewind_points": points})
+		return
+	}
+	var req struct {
+		Target      *int   `json:"targetPromptIndex"`
+		TargetSnake *int   `json:"target_prompt_index"`
+		Force       bool   `json:"force"`
+		Mode        string `json:"mode"`
+	}
+	if json.Unmarshal(incoming.Params, &req) != nil {
+		s.respondError(incoming.ID, -32602, "invalid rewind execute parameters")
+		return
+	}
+	if req.Target == nil {
+		req.Target = req.TargetSnake
+	}
+	if req.Target == nil {
+		s.respondError(incoming.ID, -32602, "targetPromptIndex is required")
+		return
+	}
+	mode := req.Mode
+	if mode == "" {
+		mode = "all"
+	}
+	if mode == "code_only" {
+		mode = "files_only"
+	}
+	if mode != "all" && mode != "conversation_only" && mode != "files_only" {
+		s.respondError(incoming.ID, -32602, "invalid rewind mode")
+		return
+	}
+	if mode != "conversation_only" {
+		s.respond(incoming.ID, rewindResponse(*req.Target, mode, false, "file rewind checkpoints are unavailable; use conversation_only"))
+		return
+	}
+	current.mu.Lock()
+	defer current.mu.Unlock()
+	if current.running {
+		s.respondError(incoming.ID, -32000, "cannot rewind while a prompt is running")
+		return
+	}
+	preview, err := sessionlog.PreviewRewind(path, *req.Target)
+	if err != nil {
+		s.respond(incoming.ID, rewindResponse(*req.Target, mode, false, err.Error()))
+		return
+	}
+	if !req.Force {
+		s.respond(incoming.ID, rewindResponse(*req.Target, mode, false, ""))
+		return
+	}
+	result, err := sessionlog.Rewind(path, *req.Target)
+	if err != nil {
+		s.respondError(incoming.ID, -32000, err.Error())
+		return
+	}
+	current.previous = result.PreviousResponseID
+	current.runner.RewindHistory(result.Messages)
+	current.updated = time.Now().UTC()
+	s.notify(sessionID, map[string]any{"sessionUpdate": "rewind_marker", "target_prompt_index": *req.Target})
+	response := rewindResponse(*req.Target, mode, true, "")
+	response["prompt_text"] = preview.PromptText
+	s.respond(incoming.ID, response)
+}
+
+func rewindResponse(target int, mode string, success bool, message string) map[string]any {
+	var responseError any
+	if message != "" {
+		responseError = message
+	}
+	return map[string]any{
+		"success": success, "target_prompt_index": target, "mode": mode,
+		"reverted_files": []string{}, "clean_files": []string{}, "conflicts": []any{},
+		"prompt_text": nil, "error": responseError,
+	}
 }
 
 func (s *Server) startSession(ctx context.Context, id string, sessionConfig SessionConfig, previous string) (*session, error) {

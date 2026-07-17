@@ -37,6 +37,10 @@ type HistoryResetter interface {
 	ResetHistory(summary string)
 }
 
+type HistoryRewinder interface {
+	RewindHistory(messages []session.Message)
+}
+
 type Runner struct {
 	Client                  ResponseStreamer
 	Tools                   *tools.Registry
@@ -249,6 +253,14 @@ func (r *Runner) Compact(ctx context.Context, previousResponseID string) (string
 	r.log("context_compacted", map[string]any{"summary": summary})
 	r.status("context compacted")
 	return summary, nil
+}
+
+func (r *Runner) RewindHistory(messages []session.Message) {
+	r.lastInputTokens = 0
+	r.pendingSummary = ""
+	if rewinder, ok := r.Client.(HistoryRewinder); ok {
+		rewinder.RewindHistory(messages)
+	}
 }
 
 func (r *Runner) log(kind string, data any) {

@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/lookcorner/go-cli/internal/session"
 )
 
 type MessagesClient struct {
@@ -62,6 +64,23 @@ func (c *MessagesClient) ResetHistory(summary string) {
 	defer c.mu.Unlock()
 	c.history = nil
 	_ = summary
+}
+
+func (c *MessagesClient) RewindHistory(messages []session.Message) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.history = nil
+	for _, message := range messages {
+		blocks, err := messagesContent(sessionMessageContent(message))
+		if err != nil {
+			continue
+		}
+		if len(c.history) > 0 && c.history[len(c.history)-1].Role == message.Role {
+			c.history[len(c.history)-1].Content = append(c.history[len(c.history)-1].Content, blocks...)
+		} else {
+			c.history = append(c.history, messagesMessage{Role: message.Role, Content: blocks})
+		}
+	}
 }
 
 func (c *MessagesClient) SetPruning(config PruningConfig) { c.pruning = config }

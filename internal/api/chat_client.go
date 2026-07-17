@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/lookcorner/go-cli/internal/session"
 )
 
 type ChatClient struct {
@@ -71,6 +73,35 @@ func (c *ChatClient) ResetHistory(summary string) {
 	defer c.mu.Unlock()
 	c.history = nil
 	_ = summary
+}
+
+func (c *ChatClient) RewindHistory(messages []session.Message) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.history = make([]chatMessage, 0, len(messages))
+	for _, message := range messages {
+		c.history = append(c.history, chatMessage{Role: message.Role, Content: chatContent(sessionMessageContent(message))})
+	}
+}
+
+func sessionMessageContent(message session.Message) []ContentPart {
+	if len(message.Content) == 0 {
+		return []ContentPart{{Type: "input_text", Text: message.Text}}
+	}
+	parts := make([]ContentPart, 0, len(message.Content))
+	for _, content := range message.Content {
+		switch content.Type {
+		case "text":
+			parts = append(parts, ContentPart{Type: "input_text", Text: content.Text})
+		case "image":
+			uri := content.URI
+			if content.Data != "" {
+				uri = "data:" + content.MimeType + ";base64," + content.Data
+			}
+			parts = append(parts, ContentPart{Type: "input_image", ImageURL: uri})
+		}
+	}
+	return parts
 }
 
 func (c *ChatClient) SetPruning(config PruningConfig) { c.pruning = config }
