@@ -242,13 +242,14 @@ func (m *ProcessManager) persistentShellCommand(command string) (*exec.Cmd, shel
 	bootstrap := ""
 	switch filepath.Base(selectedShell()) {
 	case "bash":
-		dumpScript = "{ declare -f; alias -p; }"
+		dumpScript = `{ set +o 2>/dev/null | command grep -v 'nounset' || true; shopt -p 2>/dev/null || true; declare -f 2>/dev/null || true; alias -p 2>/dev/null || true; }`
 		bootstrap = "shopt -s expand_aliases\n"
 	case "zsh":
-		dumpScript = "{ typeset -f; alias -L; }"
+		dumpScript = `{ setopt 2>/dev/null | command grep -v "^nounset$" | command sed -e "s/^/setopt /" || true; typeset -f 2>/dev/null || true; { alias -L; alias -gL; alias -sL; } 2>/dev/null || true; }`
+		bootstrap = "unsetopt nounset 2>/dev/null || true\nsetopt nonomatch aliases 2>/dev/null || true\n"
 	}
 	trap := "trap '__gork_status=$?; pwd > \"$GORK_GO_STATE_CWD\"; /usr/bin/env -0 > \"$GORK_GO_STATE_ENV\"; " + dumpScript + " > \"$GORK_GO_STATE_SCRIPT\"; trap - EXIT; exit \"$__gork_status\"' EXIT\n"
-	wrapped := bootstrap + m.shellPrelude + "\n" + trap + ". \"$GORK_GO_COMMAND_FILE\""
+	wrapped := m.shellPrelude + "\n" + bootstrap + trap + ". \"$GORK_GO_COMMAND_FILE\""
 	cmd := shellCommand(wrapped)
 	cmd.Dir = m.currentDir
 	cmd.Env = setEnvironment(m.environment, map[string]string{
@@ -490,12 +491,18 @@ func shellCommand(command string) *exec.Cmd {
 }
 
 func selectedShell() string {
-	shell := os.Getenv("SHELL")
-	base := filepath.Base(shell)
-	if (base != "bash" && base != "zsh") || shell == "" {
-		shell = "/bin/sh"
+	for _, candidate := range []string{os.Getenv("GROK_SHELL"), os.Getenv("SHELL")} {
+		base := filepath.Base(candidate)
+		if (base == "bash" || base == "zsh") && candidate != "" {
+			if resolved, err := exec.LookPath(candidate); err == nil {
+				return resolved
+			}
+		}
 	}
-	return shell
+	if resolved, err := exec.LookPath("bash"); err == nil {
+		return resolved
+	}
+	return "/bin/bash"
 }
 
 type tailBuffer struct {

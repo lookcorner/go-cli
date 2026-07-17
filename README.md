@@ -277,8 +277,11 @@ surface is `run_terminal_cmd`,
 `get_task_output`, and `kill_task`, including
 foreground exit-status output, background task IDs, multi-task polling/waiting,
 process-group termination, and persistent cwd/environment/function/alias state
-between foreground calls. Background commands inherit a state snapshot without
-changing the foreground session when they finish. The earlier aliases
+and Bash/Zsh options between foreground calls. `GROK_SHELL` overrides `SHELL`
+when it points to Bash or Zsh; otherwise Bash is the fallback. `nounset` is not
+replayed, and Zsh unmatched globs remain literal, matching the reference safety
+behavior. Background commands inherit a state snapshot without changing the
+foreground session when they finish. The earlier aliases
 `start_background_command`, `get_background_command_output`, and
 `kill_background_command` remain available. Output is captured in a bounded
 tail buffer, process groups are terminated on request, and every remaining

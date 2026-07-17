@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -122,6 +123,89 @@ func TestPersistentShellDirectoryAndEnvironment(t *testing.T) {
 	}
 	if !strings.Contains(background, filepath.Join(root, "nested")+"|preserved") {
 		t.Fatalf("background task did not inherit shell state: %s", background)
+	}
+}
+
+func TestPersistentBashOptionsAndNounsetReset(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture is Unix-specific")
+	}
+	t.Setenv("SHELL", "/bin/bash")
+	t.Setenv("GROK_SHELL", "")
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewProcessManager(ws, PromptApprover{Mode: PermissionAuto})
+	defer manager.Close()
+	tool := &runTerminalCommandTool{manager: manager}
+	if _, err := tool.Execute(context.Background(), json.RawMessage(
+		`{"command":"set -o pipefail; shopt -s nullglob; set -u","description":"persist bash options"}`,
+	)); err != nil {
+		t.Fatal(err)
+	}
+	output, err := tool.Execute(context.Background(), json.RawMessage(
+		`{"command":"set -o | grep '^pipefail[[:space:]]*on'; shopt -q nullglob && printf 'nullglob-on|'; printf '<%s>' \"${GORK_MISSING_TEST-}\"","description":"read bash options"}`,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output, "pipefail") || !strings.Contains(output, "nullglob-on|<>") {
+		t.Fatalf("bash options did not persist or nounset was not reset: %s", output)
+	}
+	if _, err := tool.Execute(context.Background(), json.RawMessage(
+		`{"command":"set -e","description":"persist bash errexit"}`,
+	)); err != nil {
+		t.Fatal(err)
+	}
+	errexit, err := tool.Execute(context.Background(), json.RawMessage(
+		`{"command":"false; printf should-not-run","description":"exercise persisted errexit"}`,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(errexit, "exit: 1") || strings.Contains(errexit, "should-not-run") {
+		t.Fatalf("bash errexit did not persist: %s", errexit)
+	}
+}
+
+func TestPersistentZshOptionsAndNonomatchReset(t *testing.T) {
+	if runtime.GOOS == "windows" || func() bool { _, err := exec.LookPath("zsh"); return err != nil }() {
+		t.Skip("zsh is unavailable")
+	}
+	t.Setenv("SHELL", "/bin/zsh")
+	t.Setenv("GROK_SHELL", "")
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewProcessManager(ws, PromptApprover{Mode: PermissionAuto})
+	defer manager.Close()
+	tool := &runTerminalCommandTool{manager: manager}
+	if _, err := tool.Execute(context.Background(), json.RawMessage(
+		`{"command":"setopt extendedglob; setopt nounset","description":"persist zsh options"}`,
+	)); err != nil {
+		t.Fatal(err)
+	}
+	output, err := tool.Execute(context.Background(), json.RawMessage(
+		`{"command":"[[ -o extendedglob ]] && print -n 'extendedglob-on|'; print -n \"${GORK_ZSH_MISSING-}|\"; print -r -- gork-no-match-*.zzz","description":"read zsh options"}`,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output, "extendedglob-on||gork-no-match-*.zzz") {
+		t.Fatalf("zsh options did not persist or nounset/nonomatch behavior was wrong: %s", output)
+	}
+}
+
+func TestSelectedShellPrefersGrokOverride(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture is Unix-specific")
+	}
+	t.Setenv("SHELL", "/bin/zsh")
+	t.Setenv("GROK_SHELL", "/bin/bash")
+	if shell := selectedShell(); filepath.Base(shell) != "bash" {
+		t.Fatalf("GROK_SHELL override was not selected: %s", shell)
 	}
 }
 
