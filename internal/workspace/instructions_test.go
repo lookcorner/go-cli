@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestLoadRootInstructions(t *testing.T) {
+func TestLoadInstructions(t *testing.T) {
 	root := t.TempDir()
 	command := exec.Command("git", "init", "-q")
 	command.Dir = root
@@ -39,7 +39,7 @@ func TestLoadRootInstructions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	files, err := ws.LoadRootInstructions()
+	files, err := ws.LoadInstructions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,13 +58,54 @@ func TestLoadRootInstructions(t *testing.T) {
 	}
 }
 
-func TestLoadRootInstructionsWithNoFiles(t *testing.T) {
+func TestLoadInstructionsWithNoFiles(t *testing.T) {
 	ws, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	files, err := ws.LoadRootInstructions()
+	files, err := ws.LoadInstructions()
 	if err != nil || len(files) != 0 {
 		t.Fatalf("expected empty instructions, files=%#v err=%v", files, err)
+	}
+}
+
+func TestLoadInstructionsFromGitRootToWorkspace(t *testing.T) {
+	repo := t.TempDir()
+	command := exec.Command("git", "init", "-q")
+	command.Dir = repo
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, output)
+	}
+	cwd := filepath.Join(repo, "services", "api")
+	if err := os.MkdirAll(cwd, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		filepath.Join(repo, "AGENTS.md"):              "root",
+		filepath.Join(repo, "services", "Claude.md"):  "service",
+		filepath.Join(cwd, "AGENTS.md"):               "api",
+		filepath.Join(repo, "services", "ignored.md"): "not an instruction name",
+	}
+	for path, content := range files {
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ws, err := Open(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := ws.LoadInstructions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 3 {
+		t.Fatalf("unexpected scoped instructions: %#v", loaded)
+	}
+	want := []string{"AGENTS.md", "services/Claude.md", "services/api/AGENTS.md"}
+	for index, path := range want {
+		if !strings.EqualFold(loaded[index].Path, path) {
+			t.Fatalf("instruction %d path = %q, want %q; all=%#v", index, loaded[index].Path, path, loaded)
+		}
 	}
 }

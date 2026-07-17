@@ -167,7 +167,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	instructionFiles, err := ws.LoadRootInstructions()
+	instructionFiles, err := ws.LoadInstructions()
 	if err != nil {
 		return err
 	}
@@ -354,7 +354,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		if err != nil {
 			return nil, nil, err
 		}
-		instructionFiles, err := ws.LoadRootInstructions()
+		instructionFiles, err := ws.LoadInstructions()
 		if err != nil {
 			return nil, nil, err
 		}

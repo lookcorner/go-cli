@@ -6,6 +6,20 @@ import (
 	"strings"
 )
 
+func GitRoot(cwd string) string {
+	command := exec.Command("git", "rev-parse", "--show-toplevel")
+	command.Dir = cwd
+	output, err := command.Output()
+	if err != nil {
+		return cwd
+	}
+	root, err := filepath.EvalSymlinks(strings.TrimSpace(string(output)))
+	if err != nil {
+		return cwd
+	}
+	return root
+}
+
 // IsGitIgnored delegates ignore semantics to Git, including nested .gitignore
 // files and the user's core.excludesFile. Errors mean no ignore decision.
 func IsGitIgnored(root, path string) bool {

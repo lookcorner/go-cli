@@ -16,7 +16,8 @@ Interactive REPL and full-screen sessions accept `/compact` to summarize the
 current completed response chain and continue from a fresh context.
 
 Workspace instruction and skill discovery respects repository and global Git
-ignore rules through Git's own matching engine.
+ignore rules through Git's own matching engine. Project instructions load from
+the Git root through the current workspace so deeper files take precedence.
 
 ## Build
 
