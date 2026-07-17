@@ -74,6 +74,7 @@ type Server struct {
 	nextRequest atomic.Uint64
 	wg          sync.WaitGroup
 	worktrees   *worktrees.Manager
+	terminals   *terminalManager
 }
 
 type message struct {
@@ -131,6 +132,9 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 		return err
 	}
 	s.worktrees = manager
+	s.terminals = newTerminalManager(func(method string, params any) {
+		s.write(map[string]any{"jsonrpc": "2.0", "method": method, "params": params})
+	})
 	decoder := json.NewDecoder(input)
 	for {
 		var incoming message
@@ -191,6 +195,10 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleRehydrateSession(ctx, incoming)
 		case "x.ai/session/resolve_local_for_worktree_resume":
 			s.handleResolveLocalSession(ctx, incoming)
+		case "x.ai/terminal/pty/create", "x.ai/terminal/pty/load", "x.ai/terminal/pty/resize", "x.ai/terminal/list", "x.ai/terminal/kill":
+			s.handleTerminal(incoming)
+		case "x.ai/terminal/pty/input":
+			s.handleTerminalInput(incoming.Params)
 		default:
 			if len(incoming.ID) > 0 {
 				s.respondError(incoming.ID, -32601, "method not found")
@@ -1040,6 +1048,117 @@ func (s *Server) handleCancel(raw json.RawMessage) {
 	current.mu.Unlock()
 }
 
+func (s *Server) handleTerminal(incoming message) {
+	if s.terminals == nil {
+		s.respondError(incoming.ID, -32000, "terminal manager is unavailable")
+		return
+	}
+	switch incoming.Method {
+	case "x.ai/terminal/pty/create":
+		var req struct {
+			Shell     string `json:"shell"`
+			CWD       string `json:"cwd"`
+			SessionID string `json:"sessionId"`
+			Env       []struct {
+				Name  string `json:"name"`
+				Value string `json:"value"`
+			} `json:"env"`
+			Rows *uint16 `json:"rows"`
+			Cols *uint16 `json:"cols"`
+			Name string  `json:"name"`
+		}
+		if json.Unmarshal(incoming.Params, &req) != nil {
+			s.respondError(incoming.ID, -32602, "invalid PTY create parameters")
+			return
+		}
+		if req.CWD == "" && req.SessionID != "" {
+			if current := s.lookupSession(req.SessionID); current != nil {
+				req.CWD = current.cwd
+			}
+		}
+		env := make(map[string]string, len(req.Env))
+		for _, item := range req.Env {
+			env[item.Name] = item.Value
+		}
+		id, err := s.terminals.create(req.Shell, req.CWD, env, defaultTerminalDimension(req.Rows, 24), defaultTerminalDimension(req.Cols, 80), req.Name)
+		if err != nil {
+			s.respondError(incoming.ID, -32000, err.Error())
+			return
+		}
+		s.respond(incoming.ID, map[string]any{"terminalId": id})
+	case "x.ai/terminal/pty/load":
+		var req struct {
+			TerminalID string `json:"terminalId"`
+		}
+		if json.Unmarshal(incoming.Params, &req) != nil || req.TerminalID == "" {
+			s.respondError(incoming.ID, -32602, "terminalId is required")
+			return
+		}
+		result, err := s.terminals.load(req.TerminalID)
+		if err != nil {
+			s.respondError(incoming.ID, -32000, err.Error())
+			return
+		}
+		s.respond(incoming.ID, result)
+	case "x.ai/terminal/pty/resize":
+		var req struct {
+			TerminalID string `json:"terminalId"`
+			Rows       uint16 `json:"rows"`
+			Cols       uint16 `json:"cols"`
+		}
+		if json.Unmarshal(incoming.Params, &req) != nil || req.TerminalID == "" {
+			s.respondError(incoming.ID, -32602, "terminalId, rows and cols are required")
+			return
+		}
+		if err := s.terminals.resize(req.TerminalID, req.Rows, req.Cols); err != nil {
+			s.respondError(incoming.ID, -32000, err.Error())
+			return
+		}
+		s.respond(incoming.ID, map[string]any{})
+	case "x.ai/terminal/list":
+		s.respond(incoming.ID, map[string]any{"terminals": s.terminals.list()})
+	case "x.ai/terminal/kill":
+		var req struct {
+			TerminalID string `json:"terminalId"`
+		}
+		if json.Unmarshal(incoming.Params, &req) != nil || req.TerminalID == "" {
+			s.respondError(incoming.ID, -32602, "terminalId is required")
+			return
+		}
+		outcome, err := s.terminals.kill(req.TerminalID)
+		if err != nil {
+			s.respondError(incoming.ID, -32000, err.Error())
+			return
+		}
+		s.respond(incoming.ID, map[string]any{"outcome": outcome})
+	}
+}
+
+func defaultTerminalDimension(value *uint16, fallback uint16) uint16 {
+	if value == nil {
+		return fallback
+	}
+	return *value
+}
+
+func (s *Server) handleTerminalInput(raw json.RawMessage) {
+	if s.terminals == nil {
+		return
+	}
+	var req struct {
+		TerminalID string `json:"terminalId"`
+		Data       string `json:"data"`
+	}
+	if json.Unmarshal(raw, &req) != nil || req.TerminalID == "" {
+		return
+	}
+	data, err := base64.StdEncoding.DecodeString(req.Data)
+	if err != nil {
+		return
+	}
+	_ = s.terminals.writeInput(req.TerminalID, data)
+}
+
 func (s *Server) handleClose(incoming message) {
 	var params struct {
 		SessionID string `json:"sessionId"`
@@ -1072,6 +1191,9 @@ func (s *Server) lookupSession(id string) *session {
 }
 
 func (s *Server) closeAll() {
+	if s.terminals != nil {
+		s.terminals.closeAll()
+	}
 	s.mu.Lock()
 	sessions := make([]*session, 0, len(s.sessions))
 	for _, current := range s.sessions {

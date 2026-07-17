@@ -164,6 +164,11 @@ to the actual tool call, so protocol stdin is never consumed by a CLI prompt.
 `--approval auto` and `--approval deny` remain available for clients that
 intentionally want a fixed policy.
 
+Unix ACP clients may also create interactive terminals through
+`x.ai/terminal/pty/create`, stream base64 input and output, resize or reconnect
+with bounded output replay, list terminals, and terminate them. PTYs are owned
+by the ACP server connection and are cleaned up when it closes.
+
 Git repositories also expose compatible hunk tracker ACP extensions:
 `x.ai/hunk-tracker/get-hunks`, `get-files`, `get-summary`, `hunk-action`,
 `file-action`, and `all-action`.
