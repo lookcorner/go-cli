@@ -21,6 +21,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/config"
 	"github.com/lookcorner/go-cli/internal/mcp"
 	"github.com/lookcorner/go-cli/internal/session"
+	"github.com/lookcorner/go-cli/internal/skills"
 	"github.com/lookcorner/go-cli/internal/tools"
 	"github.com/lookcorner/go-cli/internal/workspace"
 )
@@ -115,6 +116,16 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	instructionFiles, err := ws.LoadRootInstructions()
+	if err != nil {
+		return err
+	}
+	projectInstructions := workspace.FormatInstructions(instructionFiles)
+	skillCatalog, err := skills.Discover(ws.Root())
+	if err != nil {
+		return err
+	}
+	cfg.SystemPrompt = joinInstructions(cfg.SystemPrompt, projectInstructions, skillCatalog.Summary())
 	mode := tools.PermissionMode(opts.approval)
 	if mode != tools.PermissionPrompt && mode != tools.PermissionAuto && mode != tools.PermissionDeny {
 		return fmt.Errorf("invalid --approval %q", opts.approval)
@@ -137,6 +148,12 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	client := api.NewClient(cfg.BaseURL, cfg.APIKey, httpClient)
 	approver := tools.PromptApprover{Mode: mode, Input: inputReader, Output: stderr}
 	registry := tools.NewRegistry(ws, approver)
+	if len(skillCatalog.Names()) > 0 {
+		if err := registry.Register(skillCatalog.Tool()); err != nil {
+			return err
+		}
+		fmt.Fprintf(stderr, "[gork] discovered %d skill(s)\n", len(skillCatalog.Names()))
+	}
 	mcpClients, err := startMCPServers(ctx, cfg, ws.Root(), registry, approver, stderr)
 	if err != nil {
 		return err
@@ -163,6 +180,16 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		fmt.Fprintln(stdout)
 	}
 	return nil
+}
+
+func joinInstructions(parts ...string) string {
+	var kept []string
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			kept = append(kept, trimmed)
+		}
+	}
+	return strings.Join(kept, "\n\n")
 }
 
 func interactiveLoop(

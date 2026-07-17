@@ -21,7 +21,7 @@ Status values: **done**, **partial**, **planned**.
 | MCP | partial | Stdio lifecycle, version negotiation, paginated tool discovery/calls and shutdown work; Streamable HTTP, resources, prompts, sampling and list-change reload remain |
 | ACP | planned | Agent Client Protocol server/client modes remain |
 | LSP tools | planned | Process lifecycle, JSON-RPC and diagnostics remain |
-| Skills / AGENTS.md | planned | Discovery, instruction scoping and reminders remain |
+| Skills / AGENTS.md | partial | Compatible root instruction/rules discovery, source-labelled injection, user/workspace skill discovery and lazy `skill` loading work; gitignore-aware nested discovery and conditional skills remain |
 | Git / worktrees / hunk tracking | planned | Worktree lifecycle and edit attribution remain |
 | Subagents | planned | Coordinator, roster and activity events remain |
 | Memory / compaction | planned | Context accounting, compaction and local memory index remain |

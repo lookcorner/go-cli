@@ -104,6 +104,21 @@ Server processes inherit the current environment, with optional per-server
 `env` overrides. They start in the selected workspace and are shut down when
 the agent exits.
 
+## Project instructions and skills
+
+At startup, Gork Go discovers project instruction files compatible with Gork
+Build (`AGENTS.md`, `Agents.md`, `AGENT.md`, `Claude.md`, `CLAUDE.md`,
+`.claude/CLAUDE.md`, and Markdown files under `.gork/rules`, `.claude/rules`,
+or `.cursor/rules`). Root instructions are injected with their source paths and
+the model is told to check for more deeply nested instructions before editing
+files below the root.
+
+Reusable skills are discovered from `.gork/skills`, `.agents/skills`, and
+`.claude/skills` in both the workspace and user home. Only skill metadata is
+included initially. The model calls the `skill` tool to load the full
+`SKILL.md` when a task matches it; workspace skills override same-named user
+skills.
+
 ## Privacy
 
 Gork Go does not include product analytics, research trace uploads, repository
