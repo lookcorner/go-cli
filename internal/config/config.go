@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,16 +16,19 @@ import (
 const defaultBaseURL = "https://api.x.ai/v1"
 
 type Config struct {
-	APIKey       string                     `json:"api_key,omitempty"`
-	BaseURL      string                     `json:"base_url,omitempty"`
-	Model        string                     `json:"model,omitempty"`
-	Backend      string                     `json:"backend,omitempty"`
-	SystemPrompt string                     `json:"system_prompt,omitempty"`
-	MaxSteps     int                        `json:"max_steps,omitempty"`
-	MCPServers   map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
-	LSPServers   map[string]LSPServerConfig `json:"lsp_servers,omitempty"`
-	Permission   PermissionConfig           `json:"permission,omitempty"`
-	HTTPTimeout  time.Duration              `json:"-"`
+	APIKey                      string                     `json:"api_key,omitempty"`
+	BaseURL                     string                     `json:"base_url,omitempty"`
+	Model                       string                     `json:"model,omitempty"`
+	Backend                     string                     `json:"backend,omitempty"`
+	SystemPrompt                string                     `json:"system_prompt,omitempty"`
+	MaxSteps                    int                        `json:"max_steps,omitempty"`
+	MCPServers                  map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
+	LSPServers                  map[string]LSPServerConfig `json:"lsp_servers,omitempty"`
+	Permission                  PermissionConfig           `json:"permission,omitempty"`
+	ContextWindow               int                        `json:"context_window,omitempty"`
+	AutoCompactThresholdPercent int                        `json:"auto_compact_threshold_percent,omitempty"`
+	Pruning                     PruningConfig              `json:"pruning"`
+	HTTPTimeout                 time.Duration              `json:"-"`
 }
 
 type PermissionConfig struct {
@@ -36,6 +40,15 @@ type PermissionRule struct {
 	Tool        string  `json:"tool,omitempty" toml:"tool"`
 	Pattern     *string `json:"pattern,omitempty" toml:"pattern"`
 	PatternMode string  `json:"pattern_mode,omitempty" toml:"pattern_mode"`
+}
+
+type PruningConfig struct {
+	Enabled           bool `json:"enabled"`
+	KeepLastNTurns    int  `json:"keep_last_n_turns"`
+	SoftTrimThreshold int  `json:"soft_trim_threshold"`
+	SoftTrimHead      int  `json:"soft_trim_head"`
+	SoftTrimTail      int  `json:"soft_trim_tail"`
+	HardClearAgeTurns int  `json:"hard_clear_age_turns"`
 }
 
 type MCPServerConfig struct {
@@ -64,36 +77,61 @@ func (c MCPServerConfig) IsEnabled() bool {
 }
 
 type fileConfig struct {
-	APIKey       string                     `json:"api_key,omitempty" toml:"api_key"`
-	BaseURL      string                     `json:"base_url,omitempty" toml:"base_url"`
-	Model        string                     `json:"model,omitempty" toml:"model_name"`
-	Backend      string                     `json:"backend,omitempty" toml:"backend"`
-	SystemPrompt string                     `json:"system_prompt,omitempty" toml:"system_prompt"`
-	MaxSteps     int                        `json:"max_steps,omitempty" toml:"max_steps"`
-	HTTPTimeout  string                     `json:"http_timeout,omitempty" toml:"http_timeout"`
-	MCPServers   map[string]MCPServerConfig `json:"mcp_servers,omitempty" toml:"mcp_servers"`
-	LSPServers   map[string]LSPServerConfig `json:"lsp_servers,omitempty" toml:"lsp_servers"`
-	Permission   PermissionConfig           `json:"permission,omitempty" toml:"permission"`
-	Models       struct {
+	APIKey        string                     `json:"api_key,omitempty" toml:"api_key"`
+	BaseURL       string                     `json:"base_url,omitempty" toml:"base_url"`
+	Model         string                     `json:"model,omitempty" toml:"model_name"`
+	Backend       string                     `json:"backend,omitempty" toml:"backend"`
+	SystemPrompt  string                     `json:"system_prompt,omitempty" toml:"system_prompt"`
+	MaxSteps      int                        `json:"max_steps,omitempty" toml:"max_steps"`
+	HTTPTimeout   string                     `json:"http_timeout,omitempty" toml:"http_timeout"`
+	MCPServers    map[string]MCPServerConfig `json:"mcp_servers,omitempty" toml:"mcp_servers"`
+	LSPServers    map[string]LSPServerConfig `json:"lsp_servers,omitempty" toml:"lsp_servers"`
+	Permission    PermissionConfig           `json:"permission,omitempty" toml:"permission"`
+	Session       sessionConfig              `json:"session,omitempty" toml:"session"`
+	ContextWindow int                        `json:"context_window,omitempty" toml:"context_window"`
+	Compaction    fileCompactionConfig       `json:"compaction,omitempty" toml:"compaction"`
+	Models        struct {
 		Default string `toml:"default"`
 	} `json:"-" toml:"models"`
 	ModelEntries map[string]modelConfig `json:"-" toml:"model"`
 }
 
 type modelConfig struct {
-	Model   string `toml:"model"`
-	BaseURL string `toml:"base_url"`
-	APIKey  string `toml:"api_key"`
-	Backend string `toml:"backend"`
-	EnvKey  any    `toml:"env_key"`
+	Model                       string `toml:"model"`
+	BaseURL                     string `toml:"base_url"`
+	APIKey                      string `toml:"api_key"`
+	Backend                     string `toml:"backend"`
+	EnvKey                      any    `toml:"env_key"`
+	ContextWindow               int    `toml:"context_window"`
+	AutoCompactThresholdPercent *int   `toml:"auto_compact_threshold_percent"`
+}
+
+type sessionConfig struct {
+	AutoCompactThresholdPercent *int `json:"auto_compact_threshold_percent,omitempty" toml:"auto_compact_threshold_percent"`
+}
+
+type fileCompactionConfig struct {
+	Pruning filePruningConfig `json:"pruning,omitempty" toml:"pruning"`
+}
+
+type filePruningConfig struct {
+	Enabled           *bool `json:"enabled,omitempty" toml:"enabled"`
+	KeepLastNTurns    *int  `json:"keep_last_n_turns,omitempty" toml:"keep_last_n_turns"`
+	SoftTrimThreshold *int  `json:"soft_trim_threshold,omitempty" toml:"soft_trim_threshold"`
+	SoftTrimHead      *int  `json:"soft_trim_head,omitempty" toml:"soft_trim_head"`
+	SoftTrimTail      *int  `json:"soft_trim_tail,omitempty" toml:"soft_trim_tail"`
+	HardClearAgeTurns *int  `json:"hard_clear_age_turns,omitempty" toml:"hard_clear_age_turns"`
 }
 
 func Load(path string) (Config, error) {
 	cfg := Config{
-		BaseURL:     defaultBaseURL,
-		Backend:     "responses",
-		MaxSteps:    20,
-		HTTPTimeout: 10 * time.Minute,
+		BaseURL:                     defaultBaseURL,
+		Backend:                     "responses",
+		MaxSteps:                    20,
+		HTTPTimeout:                 10 * time.Minute,
+		ContextWindow:               131072,
+		AutoCompactThresholdPercent: 85,
+		Pruning:                     PruningConfig{Enabled: true, KeepLastNTurns: 3, SoftTrimThreshold: 4000, SoftTrimHead: 1500, SoftTrimTail: 1500, HardClearAgeTurns: 10},
 	}
 	if path == "" {
 		var err error
@@ -134,6 +172,13 @@ func Load(path string) (Config, error) {
 		cfg.MCPServers = disk.MCPServers
 		cfg.LSPServers = disk.LSPServers
 		cfg.Permission = disk.Permission
+		if disk.ContextWindow > 0 {
+			cfg.ContextWindow = disk.ContextWindow
+		}
+		if disk.Session.AutoCompactThresholdPercent != nil {
+			cfg.AutoCompactThresholdPercent = *disk.Session.AutoCompactThresholdPercent
+		}
+		applyPruningConfig(&cfg.Pruning, disk.Compaction.Pruning)
 		if disk.HTTPTimeout != "" {
 			d, err := time.ParseDuration(disk.HTTPTimeout)
 			if err != nil {
@@ -148,6 +193,27 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
+func applyPruningConfig(target *PruningConfig, source filePruningConfig) {
+	if source.Enabled != nil {
+		target.Enabled = *source.Enabled
+	}
+	if source.KeepLastNTurns != nil {
+		target.KeepLastNTurns = *source.KeepLastNTurns
+	}
+	if source.SoftTrimThreshold != nil {
+		target.SoftTrimThreshold = *source.SoftTrimThreshold
+	}
+	if source.SoftTrimHead != nil {
+		target.SoftTrimHead = *source.SoftTrimHead
+	}
+	if source.SoftTrimTail != nil {
+		target.SoftTrimTail = *source.SoftTrimTail
+	}
+	if source.HardClearAgeTurns != nil {
+		target.HardClearAgeTurns = *source.HardClearAgeTurns
+	}
+}
+
 func applyEnv(cfg *Config) {
 	if value := firstEnv("GORK_API_KEY", "XAI_API_KEY", "OPENAI_API_KEY"); value != "" {
 		cfg.APIKey = value
@@ -160,6 +226,16 @@ func applyEnv(cfg *Config) {
 	}
 	if value := os.Getenv("GORK_BACKEND"); value != "" {
 		cfg.Backend = value
+	}
+	if value := os.Getenv("GROK_AUTO_COMPACT_THRESHOLD_PERCENT"); value != "" {
+		if parsed, err := strconv.Atoi(value); err == nil && parsed >= 0 && parsed <= 100 {
+			cfg.AutoCompactThresholdPercent = parsed
+		}
+	}
+	if value := os.Getenv("GROK_DEBUG_CONTEXT_WINDOW"); value != "" {
+		if parsed, err := strconv.Atoi(value); err == nil && parsed > 0 {
+			cfg.ContextWindow = parsed
+		}
 	}
 }
 
@@ -231,6 +307,12 @@ func applyModelConfig(disk *fileConfig) {
 	if entry.Backend != "" {
 		disk.Backend = entry.Backend
 	}
+	if entry.ContextWindow > 0 {
+		disk.ContextWindow = entry.ContextWindow
+	}
+	if entry.AutoCompactThresholdPercent != nil {
+		disk.Session.AutoCompactThresholdPercent = entry.AutoCompactThresholdPercent
+	}
 }
 
 func firstConfiguredEnv(value any) string {
@@ -270,6 +352,15 @@ func (c Config) Validate() error {
 	}
 	if c.MaxSteps < 1 {
 		return errors.New("max steps must be greater than zero")
+	}
+	if c.ContextWindow < 1 {
+		return errors.New("context window must be greater than zero")
+	}
+	if c.AutoCompactThresholdPercent < 0 || c.AutoCompactThresholdPercent > 100 {
+		return errors.New("auto compact threshold must be between 0 and 100")
+	}
+	if c.Pruning.KeepLastNTurns < 0 || c.Pruning.SoftTrimThreshold < 0 || c.Pruning.SoftTrimHead < 0 || c.Pruning.SoftTrimTail < 0 || c.Pruning.HardClearAgeTurns < 0 {
+		return errors.New("compaction pruning values must not be negative")
 	}
 	return nil
 }

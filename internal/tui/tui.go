@@ -185,6 +185,10 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.previousID = msg.result.ResponseID
 			m.status = fmt.Sprintf("ready · %d step(s)", msg.result.Steps)
+			if msg.result.InputTokens > 0 && msg.result.ContextWindow > 0 {
+				percent := msg.result.InputTokens * 100 / msg.result.ContextWindow
+				m.status += fmt.Sprintf(" · context %d/%d (%d%%)", msg.result.InputTokens, msg.result.ContextWindow, percent)
+			}
 		}
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)

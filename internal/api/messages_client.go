@@ -21,6 +21,7 @@ type MessagesClient struct {
 	mu      sync.Mutex
 	history []messagesMessage
 	nextID  atomic.Uint64
+	pruning PruningConfig
 }
 
 type messagesMessage struct {
@@ -45,8 +46,17 @@ type messagesTool struct {
 }
 
 func NewMessagesClient(baseURL, apiKey string, httpClient *http.Client) *MessagesClient {
-	return &MessagesClient{baseURL: strings.TrimRight(baseURL, "/"), apiKey: apiKey, http: httpClient}
+	return &MessagesClient{baseURL: strings.TrimRight(baseURL, "/"), apiKey: apiKey, http: httpClient, pruning: DefaultPruningConfig()}
 }
+
+func (c *MessagesClient) ResetHistory(summary string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.history = nil
+	_ = summary
+}
+
+func (c *MessagesClient) SetPruning(config PruningConfig) { c.pruning = config }
 
 func (c *MessagesClient) StreamResponse(ctx context.Context, request ResponseRequest, onText func(string)) (StreamResult, error) {
 	c.mu.Lock()
@@ -74,6 +84,7 @@ func (c *MessagesClient) StreamResponse(ctx context.Context, request ResponseReq
 			return StreamResult{}, fmt.Errorf("messages backend does not support input item type %q", item.Type)
 		}
 	}
+	pruneMessagesHistory(history, c.pruning)
 	definitions := make([]messagesTool, 0, len(request.Tools))
 	for _, definition := range request.Tools {
 		definitions = append(definitions, messagesTool{
@@ -82,8 +93,11 @@ func (c *MessagesClient) StreamResponse(ctx context.Context, request ResponseReq
 	}
 	payload := map[string]any{
 		"model": request.Model, "max_tokens": 32768, "system": request.Instructions,
-		"messages": history, "tools": definitions, "tool_choice": map[string]any{"type": "auto"},
-		"stream": true,
+		"messages": history, "stream": true,
+	}
+	if len(definitions) > 0 {
+		payload["tools"] = definitions
+		payload["tool_choice"] = map[string]any{"type": "auto"}
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -133,6 +147,21 @@ func (c *MessagesClient) StreamResponse(ctx context.Context, request ResponseReq
 	return result, nil
 }
 
+func pruneMessagesHistory(history []messagesMessage, cfg PruningConfig) {
+	turnsAfter := 0
+	for index := len(history) - 1; index >= 0; index-- {
+		message := &history[index]
+		if message.Role == "user" && !allToolResults(message.Content) {
+			turnsAfter++
+		}
+		for blockIndex := range message.Content {
+			if message.Content[blockIndex].Type == "tool_result" {
+				message.Content[blockIndex].Content = pruneToolResult(message.Content[blockIndex].Content, turnsAfter, cfg)
+			}
+		}
+	}
+}
+
 func allToolResults(blocks []messagesBlock) bool {
 	if len(blocks) == 0 {
 		return false
@@ -149,7 +178,11 @@ type messagesEvent struct {
 	Type    string `json:"type"`
 	Index   int    `json:"index,omitempty"`
 	Message struct {
-		ID string `json:"id"`
+		ID    string `json:"id"`
+		Usage struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		} `json:"usage"`
 	} `json:"message,omitempty"`
 	ContentBlock struct {
 		Type  string          `json:"type"`
@@ -163,6 +196,10 @@ type messagesEvent struct {
 		Text        string `json:"text,omitempty"`
 		PartialJSON string `json:"partial_json,omitempty"`
 	} `json:"delta,omitempty"`
+	Usage struct {
+		InputTokens  int `json:"input_tokens"`
+		OutputTokens int `json:"output_tokens"`
+	} `json:"usage,omitempty"`
 	Error *wireError `json:"error,omitempty"`
 }
 
@@ -200,6 +237,15 @@ func parseMessagesSSE(reader io.Reader, onText func(string)) (StreamResult, erro
 		switch event.Type {
 		case "message_start":
 			result.ResponseID = event.Message.ID
+			result.Usage.InputTokens = event.Message.Usage.InputTokens
+			result.Usage.OutputTokens = event.Message.Usage.OutputTokens
+		case "message_delta":
+			if event.Usage.InputTokens > 0 {
+				result.Usage.InputTokens = event.Usage.InputTokens
+			}
+			if event.Usage.OutputTokens > 0 {
+				result.Usage.OutputTokens = event.Usage.OutputTokens
+			}
 		case "content_block_start":
 			if event.ContentBlock.Type == "text" && event.ContentBlock.Text != "" {
 				result.Text += event.ContentBlock.Text
@@ -232,6 +278,7 @@ func parseMessagesSSE(reader io.Reader, onText func(string)) (StreamResult, erro
 	if err := scanner.Err(); err != nil {
 		return StreamResult{}, fmt.Errorf("read messages stream: %w", err)
 	}
+	result.Usage.TotalTokens = result.Usage.InputTokens + result.Usage.OutputTokens
 	indexes := make([]int, 0, len(builders))
 	for index := range builders {
 		indexes = append(indexes, index)
@@ -254,11 +301,18 @@ func parseMessagesJSON(reader io.Reader, onText func(string)) (StreamResult, err
 	var response struct {
 		ID      string          `json:"id"`
 		Content []messagesBlock `json:"content"`
+		Usage   struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		} `json:"usage"`
 	}
 	if err := json.NewDecoder(reader).Decode(&response); err != nil {
 		return StreamResult{}, fmt.Errorf("decode messages response: %w", err)
 	}
-	result := StreamResult{ResponseID: response.ID}
+	result := StreamResult{ResponseID: response.ID, Usage: Usage{
+		InputTokens: response.Usage.InputTokens, OutputTokens: response.Usage.OutputTokens,
+		TotalTokens: response.Usage.InputTokens + response.Usage.OutputTokens,
+	}}
 	for _, block := range response.Content {
 		switch block.Type {
 		case "text":

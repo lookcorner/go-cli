@@ -72,6 +72,11 @@ type wireError struct {
 type wireResponse struct {
 	ID     string            `json:"id"`
 	Output []json.RawMessage `json:"output"`
+	Usage  struct {
+		InputTokens  int `json:"input_tokens"`
+		OutputTokens int `json:"output_tokens"`
+		TotalTokens  int `json:"total_tokens"`
+	} `json:"usage"`
 }
 
 func parseSSE(reader io.Reader, onText func(string)) (StreamResult, error) {
@@ -116,6 +121,7 @@ func parseSSE(reader io.Reader, onText func(string)) (StreamResult, error) {
 				return StreamResult{}, fmt.Errorf("decode terminal response: %w", err)
 			}
 			result.ResponseID = response.ID
+			result.Usage = Usage{InputTokens: response.Usage.InputTokens, OutputTokens: response.Usage.OutputTokens, TotalTokens: response.Usage.TotalTokens}
 			for _, item := range response.Output {
 				appendToolCall(item, &result, seenCalls)
 			}
@@ -132,7 +138,9 @@ func parseJSON(reader io.Reader, onText func(string)) (StreamResult, error) {
 	if err := json.NewDecoder(reader).Decode(&response); err != nil {
 		return StreamResult{}, fmt.Errorf("decode response: %w", err)
 	}
-	result := StreamResult{ResponseID: response.ID}
+	result := StreamResult{ResponseID: response.ID, Usage: Usage{
+		InputTokens: response.Usage.InputTokens, OutputTokens: response.Usage.OutputTokens, TotalTokens: response.Usage.TotalTokens,
+	}}
 	seenCalls := make(map[string]struct{})
 	for _, raw := range response.Output {
 		var item struct {

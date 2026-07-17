@@ -21,6 +21,7 @@ type ChatClient struct {
 	mu      sync.Mutex
 	history []chatMessage
 	nextID  atomic.Uint64
+	pruning PruningConfig
 }
 
 type chatMessage struct {
@@ -52,8 +53,17 @@ type chatToolDefinition struct {
 }
 
 func NewChatClient(baseURL, apiKey string, httpClient *http.Client) *ChatClient {
-	return &ChatClient{baseURL: strings.TrimRight(baseURL, "/"), apiKey: apiKey, http: httpClient}
+	return &ChatClient{baseURL: strings.TrimRight(baseURL, "/"), apiKey: apiKey, http: httpClient, pruning: DefaultPruningConfig()}
 }
+
+func (c *ChatClient) ResetHistory(summary string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.history = nil
+	_ = summary
+}
+
+func (c *ChatClient) SetPruning(config PruningConfig) { c.pruning = config }
 
 func (c *ChatClient) StreamResponse(ctx context.Context, request ResponseRequest, onText func(string)) (StreamResult, error) {
 	c.mu.Lock()
@@ -75,6 +85,7 @@ func (c *ChatClient) StreamResponse(ctx context.Context, request ResponseRequest
 			return StreamResult{}, fmt.Errorf("chat backend does not support input item type %q", item.Type)
 		}
 	}
+	pruneChatHistory(history, c.pruning)
 	messages := make([]chatMessage, 0, len(history)+1)
 	if request.Instructions != "" {
 		messages = append(messages, chatMessage{Role: "system", Content: request.Instructions})
@@ -93,7 +104,11 @@ func (c *ChatClient) StreamResponse(ctx context.Context, request ResponseRequest
 	payload := map[string]any{
 		"model": request.Model, "messages": messages, "stream": true,
 		"stream_options": map[string]any{"include_usage": true},
-		"tools":          definitions, "tool_choice": "auto", "parallel_tool_calls": request.ParallelToolCalls,
+	}
+	if len(definitions) > 0 {
+		payload["tools"] = definitions
+		payload["tool_choice"] = "auto"
+		payload["parallel_tool_calls"] = request.ParallelToolCalls
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -140,8 +155,26 @@ func (c *ChatClient) StreamResponse(ctx context.Context, request ResponseRequest
 	return result, nil
 }
 
+func pruneChatHistory(history []chatMessage, cfg PruningConfig) {
+	turnsAfter := 0
+	for index := len(history) - 1; index >= 0; index-- {
+		message := &history[index]
+		if message.Role == "user" {
+			turnsAfter++
+		}
+		if message.Role == "tool" {
+			message.Content = pruneToolResult(message.Content, turnsAfter, cfg)
+		}
+	}
+}
+
 type chatChunk struct {
-	ID      string `json:"id"`
+	ID    string `json:"id"`
+	Usage *struct {
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
+		TotalTokens      int `json:"total_tokens"`
+	} `json:"usage,omitempty"`
 	Choices []struct {
 		Delta struct {
 			Content   string `json:"content"`
@@ -183,6 +216,9 @@ func parseChatSSE(reader io.Reader, onText func(string)) (StreamResult, error) {
 		}
 		if chunk.ID != "" {
 			result.ResponseID = chunk.ID
+		}
+		if chunk.Usage != nil {
+			result.Usage = Usage{InputTokens: chunk.Usage.PromptTokens, OutputTokens: chunk.Usage.CompletionTokens, TotalTokens: chunk.Usage.TotalTokens}
 		}
 		for _, choice := range chunk.Choices {
 			if choice.Delta.Content != "" {
@@ -230,7 +266,12 @@ func parseChatSSE(reader io.Reader, onText func(string)) (StreamResult, error) {
 
 func parseChatJSON(reader io.Reader, onText func(string)) (StreamResult, error) {
 	var response struct {
-		ID      string `json:"id"`
+		ID    string `json:"id"`
+		Usage struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+			TotalTokens      int `json:"total_tokens"`
+		} `json:"usage"`
 		Choices []struct {
 			Message chatMessage `json:"message"`
 		} `json:"choices"`
@@ -238,7 +279,9 @@ func parseChatJSON(reader io.Reader, onText func(string)) (StreamResult, error) 
 	if err := json.NewDecoder(reader).Decode(&response); err != nil {
 		return StreamResult{}, fmt.Errorf("decode chat response: %w", err)
 	}
-	result := StreamResult{ResponseID: response.ID}
+	result := StreamResult{ResponseID: response.ID, Usage: Usage{
+		InputTokens: response.Usage.PromptTokens, OutputTokens: response.Usage.CompletionTokens, TotalTokens: response.Usage.TotalTokens,
+	}}
 	for _, choice := range response.Choices {
 		result.Text += choice.Message.Content
 		if onText != nil && choice.Message.Content != "" {

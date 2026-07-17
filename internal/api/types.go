@@ -40,4 +40,11 @@ type StreamResult struct {
 	ResponseID string
 	Text       string
 	ToolCalls  []ToolCall
+	Usage      Usage
+}
+
+type Usage struct {
+	InputTokens  int `json:"input_tokens,omitempty"`
+	OutputTokens int `json:"output_tokens,omitempty"`
+	TotalTokens  int `json:"total_tokens,omitempty"`
 }

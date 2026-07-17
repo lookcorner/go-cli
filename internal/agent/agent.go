@@ -30,22 +30,31 @@ type ToolObserver interface {
 	ToolFinished(call api.ToolCall, output string, err error)
 }
 
+type HistoryResetter interface {
+	ResetHistory(summary string)
+}
+
 type Runner struct {
-	Client       ResponseStreamer
-	Tools        *tools.Registry
-	Logger       EventLogger
-	Model        string
-	Instructions string
-	MaxSteps     int
-	TextOutput   io.Writer
-	StatusOutput io.Writer
-	ToolObserver ToolObserver
+	Client                  ResponseStreamer
+	Tools                   *tools.Registry
+	Logger                  EventLogger
+	Model                   string
+	Instructions            string
+	MaxSteps                int
+	TextOutput              io.Writer
+	StatusOutput            io.Writer
+	ToolObserver            ToolObserver
+	ContextWindow           int
+	CompactThresholdPercent int
+	lastInputTokens         int
 }
 
 type Result struct {
-	ResponseID string
-	Text       string
-	Steps      int
+	ResponseID    string
+	Text          string
+	Steps         int
+	InputTokens   int
+	ContextWindow int
 }
 
 func (r *Runner) Run(ctx context.Context, prompt string) (Result, error) {
@@ -68,9 +77,25 @@ func (r *Runner) RunTurn(ctx context.Context, prompt, previousResponseID string)
 	} else {
 		instructions = defaultInstructions + "\n\nAdditional user instructions:\n" + instructions
 	}
+	summaryPrefix := ""
+	if r.shouldCompact(previousResponseID) {
+		summary, err := r.compact(ctx, previousResponseID)
+		if err != nil {
+			r.log("compaction_error", map[string]any{"error": err.Error(), "input_tokens": r.lastInputTokens})
+		} else {
+			previousResponseID = ""
+			r.lastInputTokens = 0
+			if resetter, ok := r.Client.(HistoryResetter); ok {
+				resetter.ResetHistory(summary)
+			}
+			summaryPrefix = "Previous conversation summary:\n" + summary + "\n\n"
+			r.log("context_compacted", map[string]any{"summary": summary})
+			r.status("context compacted")
+		}
+	}
 
 	r.log("user_prompt", map[string]any{"text": prompt})
-	input := []api.InputItem{{Type: "message", Role: "user", Content: prompt}}
+	input := []api.InputItem{{Type: "message", Role: "user", Content: summaryPrefix + prompt}}
 	var final Result
 
 	for step := 1; step <= r.MaxSteps; step++ {
@@ -94,10 +119,16 @@ func (r *Runner) RunTurn(ctx context.Context, prompt, previousResponseID string)
 			r.log("model_error", map[string]any{"step": step, "error": err.Error()})
 			return final, err
 		}
-		final = Result{ResponseID: streamed.ResponseID, Text: streamed.Text, Steps: step}
+		final = Result{
+			ResponseID: streamed.ResponseID, Text: streamed.Text, Steps: step,
+			InputTokens: streamed.Usage.InputTokens, ContextWindow: r.ContextWindow,
+		}
+		if streamed.Usage.InputTokens > 0 {
+			r.lastInputTokens = streamed.Usage.InputTokens
+		}
 		r.log("model_response", map[string]any{
 			"step": step, "response_id": streamed.ResponseID,
-			"text": streamed.Text, "tool_call_count": len(streamed.ToolCalls),
+			"text": streamed.Text, "tool_call_count": len(streamed.ToolCalls), "usage": streamed.Usage,
 		})
 
 		if len(streamed.ToolCalls) == 0 {
@@ -135,6 +166,35 @@ func (r *Runner) RunTurn(ctx context.Context, prompt, previousResponseID string)
 		}
 	}
 	return final, fmt.Errorf("agent reached maximum of %d model steps", r.MaxSteps)
+}
+
+func (r *Runner) shouldCompact(previousResponseID string) bool {
+	if previousResponseID == "" || r.ContextWindow <= 0 || r.lastInputTokens <= 0 {
+		return false
+	}
+	threshold := r.ContextWindow * r.CompactThresholdPercent / 100
+	return r.lastInputTokens >= threshold
+}
+
+func (r *Runner) compact(ctx context.Context, previousResponseID string) (string, error) {
+	request := api.ResponseRequest{
+		Model:        r.Model,
+		Instructions: "Create a precise successor-agent handoff summary. Preserve the user's goals, decisions, constraints, modified files, tool results, verification state, unresolved problems, and exact next actions. Do not claim unfinished work is complete.",
+		Input: []api.InputItem{{
+			Type: "message", Role: "user",
+			Content: "Summarize the conversation so a fresh agent context can continue without losing important implementation state.",
+		}},
+		PreviousResponseID: previousResponseID, Stream: true,
+	}
+	result, err := r.Client.StreamResponse(ctx, request, nil)
+	if err != nil {
+		return "", err
+	}
+	summary := strings.TrimSpace(result.Text)
+	if summary == "" {
+		return "", errors.New("compaction returned an empty summary")
+	}
+	return summary, nil
 }
 
 func (r *Runner) log(kind string, data any) {

@@ -51,6 +51,15 @@ are supported. The earlier JSON format remains accepted when passed with
 `--config`; an existing `$XDG_CONFIG_HOME/gork-go/config.json` is used as a
 fallback when `~/.grok/config.toml` does not exist.
 
+Model entries accept `context_window` and
+`auto_compact_threshold_percent`. The default threshold matches Gork Build at
+85%; `GROK_AUTO_COMPACT_THRESHOLD_PERCENT` has highest precedence. When the
+reported input-token usage reaches the threshold, Gork Go asks the current
+model for a successor handoff summary, starts a fresh response chain, and logs
+the compaction. Chat Completions and Anthropic histories are reset only after a
+summary succeeds. `[compaction.pruning]` supports the compatible old-tool-result
+soft/hard pruning fields shown in `config.example.toml`.
+
 The default model transport is the Responses API. For OpenAI-compatible
 providers that only expose Chat Completions, use `--backend chat_completions`
 or set `GORK_BACKEND=chat_completions`. The adapter preserves local multi-turn
@@ -96,7 +105,8 @@ The TUI streams model output as it arrives, keeps a scrollable transcript,
 supports Unicode input, displays tool status, cancels the current turn with
 Ctrl-C, and presents write/Shell/MCP approval prompts inside the alternate
 screen. Page Up/Page Down scroll, Ctrl-Q exits, and an optional prompt argument
-starts the first turn immediately.
+starts the first turn immediately. When providers report usage, the status line
+shows input tokens, context window and percentage.
 
 Use `--goal` for bounded autonomous continuation. The runtime keeps starting
 new turns until the model calls `update_goal` with `completed=true` or a genuine

@@ -25,7 +25,7 @@ Status values: **done**, **partial**, **planned**.
 | Skills / AGENTS.md | partial | Compatible root instruction/rules discovery, source-labelled injection, user/workspace skill discovery and lazy `skill` loading work; gitignore-aware nested discovery and conditional skills remain |
 | Git / worktrees / hunk tracking | planned | Worktree lifecycle and edit attribution remain |
 | Subagents | planned | Coordinator, roster and activity events remain |
-| Memory / compaction | planned | Context accounting, compaction and local memory index remain |
+| Memory / compaction | partial | Responses, Chat Completions and Anthropic usage accounting, compatible 85% threshold resolution, successful-summary fresh-chain compaction, TUI context status and configurable old-tool-result pruning work; two-pass prefire, memory flush, local memory index and manual `/compact` remain |
 | OS sandbox | planned | Landlock/Seatbelt, child seccomp and network policy remain |
 | Workspace server | planned | Hub server, previews, remote workspaces and supervision remain |
 | Markdown/media/Mermaid | planned | Terminal rendering and inline media remain |

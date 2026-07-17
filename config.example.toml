@@ -6,6 +6,19 @@ model = "YOUR_RESPONSES_API_MODEL"
 base_url = "https://api.x.ai/v1"
 backend = "responses"
 env_key = ["GORK_API_KEY", "XAI_API_KEY"]
+context_window = 131072
+auto_compact_threshold_percent = 85
+
+[session]
+auto_compact_threshold_percent = 85
+
+[compaction.pruning]
+enabled = true
+keep_last_n_turns = 3
+soft_trim_threshold = 4000
+soft_trim_head = 1500
+soft_trim_tail = 1500
+hard_clear_age_turns = 10
 
 [mcp_servers.example]
 command = "example-mcp-server"

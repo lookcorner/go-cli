@@ -20,8 +20,11 @@ func TestParseSSETextAndToolCall(t *testing.T) {
 		sseLine(t, map[string]any{"type": "response.output_item.done", "item": toolItem}),
 		"",
 		sseLine(t, map[string]any{
-			"type":     "response.completed",
-			"response": map[string]any{"id": "resp_1", "output": []any{toolItem}},
+			"type": "response.completed",
+			"response": map[string]any{
+				"id": "resp_1", "output": []any{toolItem},
+				"usage": map[string]any{"input_tokens": 123, "output_tokens": 7, "total_tokens": 130},
+			},
 		}),
 		"",
 		"data: [DONE]",
@@ -33,6 +36,9 @@ func TestParseSSETextAndToolCall(t *testing.T) {
 	}
 	if result.ResponseID != "resp_1" || result.Text != "hello world" || streamed.String() != result.Text {
 		t.Fatalf("unexpected result: %#v, streamed=%q", result, streamed.String())
+	}
+	if result.Usage.InputTokens != 123 || result.Usage.TotalTokens != 130 {
+		t.Fatalf("usage missing: %#v", result.Usage)
 	}
 	if len(result.ToolCalls) != 1 {
 		t.Fatalf("expected deduplicated tool call, got %#v", result.ToolCalls)

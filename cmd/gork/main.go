@@ -281,6 +281,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		Client: client, Tools: registry, Logger: logger,
 		Model: cfg.Model, Instructions: cfg.SystemPrompt, MaxSteps: cfg.MaxSteps,
 		TextOutput: stdout, StatusOutput: stderr,
+		ContextWindow: cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,
 	}
 	if opts.tui {
 		return tui.Run(ctx, runner, tuiBridge, prompt, opts.previousID, resumedTranscript, ws.Root(), cfg.Model)
@@ -314,11 +315,23 @@ func newModelClient(cfg config.Config) (agent.ResponseStreamer, error) {
 	case "responses":
 		return api.NewClient(cfg.BaseURL, cfg.APIKey, httpClient), nil
 	case "chat_completions":
-		return api.NewChatClient(cfg.BaseURL, cfg.APIKey, httpClient), nil
+		client := api.NewChatClient(cfg.BaseURL, cfg.APIKey, httpClient)
+		client.SetPruning(modelPruningConfig(cfg))
+		return client, nil
 	case "anthropic_messages":
-		return api.NewMessagesClient(cfg.BaseURL, cfg.APIKey, httpClient), nil
+		client := api.NewMessagesClient(cfg.BaseURL, cfg.APIKey, httpClient)
+		client.SetPruning(modelPruningConfig(cfg))
+		return client, nil
 	default:
 		return nil, fmt.Errorf("unsupported backend %q", cfg.Backend)
+	}
+}
+
+func modelPruningConfig(cfg config.Config) api.PruningConfig {
+	return api.PruningConfig{
+		Enabled: cfg.Pruning.Enabled, KeepLastNTurns: cfg.Pruning.KeepLastNTurns,
+		SoftTrimThreshold: cfg.Pruning.SoftTrimThreshold, SoftTrimHead: cfg.Pruning.SoftTrimHead,
+		SoftTrimTail: cfg.Pruning.SoftTrimTail, HardClearAgeTurns: cfg.Pruning.HardClearAgeTurns,
 	}
 }
 
@@ -435,6 +448,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			Client: modelClient, Tools: registry, Logger: logger,
 			Model: cfg.Model, Instructions: instructions, MaxSteps: cfg.MaxSteps,
 			TextOutput: textOutput, StatusOutput: statusOutput,
+			ContextWindow: cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,
 		}, closeRuntime, nil
 	}}
 	if err := server.Serve(ctx, stdin, stdout); err != nil {

@@ -21,6 +21,15 @@ model = "provider-model-id"
 base_url = "https://provider.example/v1"
 backend = "chat_completions"
 env_key = ["MISSING_KEY", "CUSTOM_PROVIDER_KEY"]
+context_window = 200000
+auto_compact_threshold_percent = 80
+
+[session]
+auto_compact_threshold_percent = 70
+
+[compaction.pruning]
+keep_last_n_turns = 5
+soft_trim_threshold = 6000
 
 [mcp_servers.fixture]
 command = "fixture-mcp"
@@ -57,6 +66,12 @@ pattern = ".env*"
 	}
 	if cfg.APIKey != "secret-from-env-key" {
 		t.Fatalf("unexpected API key resolution: %q", cfg.APIKey)
+	}
+	if cfg.ContextWindow != 200000 || cfg.AutoCompactThresholdPercent != 80 {
+		t.Fatalf("unexpected compaction config: window=%d threshold=%d", cfg.ContextWindow, cfg.AutoCompactThresholdPercent)
+	}
+	if cfg.Pruning.KeepLastNTurns != 5 || cfg.Pruning.SoftTrimThreshold != 6000 || cfg.Pruning.SoftTrimHead != 1500 {
+		t.Fatalf("unexpected pruning config: %#v", cfg.Pruning)
 	}
 	if cfg.MCPServers["fixture"].Command != "fixture-mcp" || cfg.MCPServers["fixture"].Env["TOKEN"] != "value" {
 		t.Fatalf("unexpected MCP config: %#v", cfg.MCPServers)

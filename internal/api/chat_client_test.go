@@ -32,6 +32,11 @@ func TestParseChatSSEIncrementalToolCall(t *testing.T) {
 			"id": "chat_1", "choices": []any{map[string]any{"delta": map[string]any{"tool_calls": []any{secondCallDelta}}}},
 		}),
 		"",
+		sseLine(t, map[string]any{
+			"id": "chat_1", "choices": []any{},
+			"usage": map[string]any{"prompt_tokens": 44, "completion_tokens": 6, "total_tokens": 50},
+		}),
+		"",
 		"data: [DONE]",
 	}, "\n")
 	result, err := parseChatSSE(strings.NewReader(stream), nil)
@@ -40,6 +45,9 @@ func TestParseChatSSEIncrementalToolCall(t *testing.T) {
 	}
 	if result.ResponseID != "chat_1" || result.Text != "checking " || len(result.ToolCalls) != 1 {
 		t.Fatalf("unexpected result: %#v", result)
+	}
+	if result.Usage.InputTokens != 44 || result.Usage.TotalTokens != 50 {
+		t.Fatalf("usage missing: %#v", result.Usage)
 	}
 	call := result.ToolCalls[0]
 	if call.CallID != "call_1" || call.Name != "read_file" || string(call.Arguments) != "{\"path\":\"README.md\"}" {

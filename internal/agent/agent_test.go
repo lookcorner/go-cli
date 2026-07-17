@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/lookcorner/go-cli/internal/api"
@@ -65,5 +66,38 @@ func TestRunnerExecutesToolLoop(t *testing.T) {
 	}
 	if second.Input[0].Type != "function_call_output" || second.Input[0].CallID != "call_1" {
 		t.Fatalf("unexpected tool output item: %#v", second.Input[0])
+	}
+}
+
+func TestRunnerCompactsAtUsageThresholdAndStartsFreshChain(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamer := &fakeStreamer{results: []api.StreamResult{
+		{ResponseID: "old-response", Text: "first answer", Usage: api.Usage{InputTokens: 900}},
+		{ResponseID: "summary-response", Text: "Preserve the implementation state."},
+		{ResponseID: "fresh-response", Text: "continued", Usage: api.Usage{InputTokens: 100}},
+	}}
+	runner := Runner{
+		Client: streamer, Tools: tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto}),
+		Model: "test-model", ContextWindow: 1000, CompactThresholdPercent: 85,
+	}
+	defer runner.Tools.Close()
+	if _, err := runner.RunTurn(context.Background(), "first", ""); err != nil {
+		t.Fatal(err)
+	}
+	result, err := runner.RunTurn(context.Background(), "continue", "old-response")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ResponseID != "fresh-response" || len(streamer.requests) != 3 {
+		t.Fatalf("unexpected compacted result: %#v requests=%d", result, len(streamer.requests))
+	}
+	if streamer.requests[1].PreviousResponseID != "old-response" || len(streamer.requests[1].Tools) != 0 {
+		t.Fatalf("invalid compaction request: %#v", streamer.requests[1])
+	}
+	if streamer.requests[2].PreviousResponseID != "" || !strings.Contains(streamer.requests[2].Input[0].Content.(string), "Preserve the implementation state") {
+		t.Fatalf("fresh chain did not receive summary: %#v", streamer.requests[2])
 	}
 }
