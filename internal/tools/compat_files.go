@@ -300,6 +300,7 @@ func (t *grepTool) Execute(ctx context.Context, raw json.RawMessage) (string, er
 type searchReplaceTool struct {
 	ws       *workspace.Workspace
 	approver Approver
+	rewind   *mutationCheckpoint
 }
 
 func (t *searchReplaceTool) Definition() api.ToolDefinition {
@@ -330,7 +331,7 @@ func (t *searchReplaceTool) Execute(ctx context.Context, raw json.RawMessage) (s
 	}
 	if args.OldString == "" {
 		encoded, _ := json.Marshal(map[string]string{"path": args.FilePath, "content": args.NewString})
-		if _, err := (&writeFileTool{ws: t.ws, approver: t.approver}).Execute(ctx, encoded); err != nil {
+		if _, err := (&writeFileTool{ws: t.ws, approver: t.approver, rewind: t.rewind}).Execute(ctx, encoded); err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("The file %s has been created successfully.", args.FilePath), nil
@@ -339,5 +340,5 @@ func (t *searchReplaceTool) Execute(ctx context.Context, raw json.RawMessage) (s
 		"path": args.FilePath, "old_text": args.OldString,
 		"new_text": args.NewString, "replace_all": args.ReplaceAll,
 	})
-	return (&editFileTool{ws: t.ws, approver: t.approver}).Execute(ctx, encoded)
+	return (&editFileTool{ws: t.ws, approver: t.approver, rewind: t.rewind}).Execute(ctx, encoded)
 }

@@ -126,18 +126,68 @@ type Registry struct {
 	goal       *GoalStore
 	readPolicy Approver
 	hunks      *HunkTracker
+	rewind     *mutationCheckpoint
+}
+
+type mutationCheckpoint struct {
+	mu          sync.RWMutex
+	store       *workspace.RewindStore
+	promptIndex func() int
+}
+
+func (c *mutationCheckpoint) before(path string) error {
+	if c == nil {
+		return nil
+	}
+	c.mu.RLock()
+	store, promptIndex := c.store, c.promptIndex
+	c.mu.RUnlock()
+	if store == nil || promptIndex == nil {
+		return nil
+	}
+	index := promptIndex()
+	if index < 0 {
+		return errors.New("file mutation has no active prompt checkpoint")
+	}
+	return store.CaptureBefore(index, path)
+}
+
+func (c *mutationCheckpoint) after(path string) error {
+	if c == nil {
+		return nil
+	}
+	c.mu.RLock()
+	store, promptIndex := c.store, c.promptIndex
+	c.mu.RUnlock()
+	if store == nil || promptIndex == nil {
+		return nil
+	}
+	return store.CaptureAfter(promptIndex(), path)
+}
+
+func (c *mutationCheckpoint) cancel(path string) {
+	if c == nil {
+		return
+	}
+	c.mu.RLock()
+	store, promptIndex := c.store, c.promptIndex
+	c.mu.RUnlock()
+	if store != nil && promptIndex != nil {
+		_ = store.Cancel(promptIndex(), path)
+	}
 }
 
 func NewRegistry(ws *workspace.Workspace, approver Approver) *Registry {
 	processes := NewProcessManager(ws, approver)
 	todos := newTodoStore()
 	goal := NewGoalStore()
+	rewind := &mutationCheckpoint{}
 	items := []Tool{
 		&readFileTool{ws: ws},
 		&listFilesTool{ws: ws},
 		&searchFilesTool{ws: ws},
-		&writeFileTool{ws: ws, approver: approver},
-		&editFileTool{ws: ws, approver: approver},
+		&writeFileTool{ws: ws, approver: approver, rewind: rewind},
+		&editFileTool{ws: ws, approver: approver, rewind: rewind},
 		&shellTool{ws: ws, approver: approver, timeout: 2 * time.Minute},
 		&startCommandTool{manager: processes},
 		&commandOutputTool{manager: processes},
@@ -147,16 +197,22 @@ func NewRegistry(ws *workspace.Workspace, approver Approver) *Registry {
 		&killTaskTool{manager: processes},
 		&listDirTool{ws: ws},
 		&grepTool{ws: ws},
-		&searchReplaceTool{ws: ws, approver: approver},
+		&searchReplaceTool{ws: ws, approver: approver, rewind: rewind},
 		&todoWriteTool{store: todos},
 		&updateGoalTool{store: goal},
 		&webFetchTool{approver: approver},
 	}
-	registry := &Registry{tools: make(map[string]Tool, len(items)), processes: processes, goal: goal, hunks: NewHunkTracker(ws)}
+	registry := &Registry{tools: make(map[string]Tool, len(items)), processes: processes, goal: goal, hunks: NewHunkTracker(ws), rewind: rewind}
 	for _, item := range items {
 		registry.tools[item.Definition().Name] = item
 	}
 	return registry
+}
+
+func (r *Registry) SetRewindStore(store *workspace.RewindStore, promptIndex func() int) {
+	r.rewind.mu.Lock()
+	r.rewind.store, r.rewind.promptIndex = store, promptIndex
+	r.rewind.mu.Unlock()
 }
 
 func (r *Registry) BeginGoal(objective string) error {
@@ -295,7 +351,7 @@ func mutationPath(name string, raw json.RawMessage) string {
 	if json.Unmarshal(raw, &values) != nil {
 		return ""
 	}
-	for _, key := range []string{"target_file", "path"} {
+	for _, key := range []string{"target_file", "path", "file_path"} {
 		if value, ok := values[key].(string); ok {
 			return value
 		}
@@ -615,6 +671,7 @@ func (t *searchFilesTool) Execute(_ context.Context, raw json.RawMessage) (strin
 type writeFileTool struct {
 	ws       *workspace.Workspace
 	approver Approver
+	rewind   *mutationCheckpoint
 }
 
 func (t *writeFileTool) Definition() api.ToolDefinition {
@@ -646,12 +703,19 @@ func (t *writeFileTool) Execute(ctx context.Context, raw json.RawMessage) (strin
 	if err := t.approver.Approve(ctx, "write_file", t.ws.Relative(path)); err != nil {
 		return "", err
 	}
+	if err := t.rewind.before(args.Path); err != nil {
+		return "", fmt.Errorf("checkpoint before write: %w", err)
+	}
 	mode := os.FileMode(0o644)
 	if info, err := os.Stat(path); err == nil {
 		mode = info.Mode().Perm()
 	}
 	if err := atomicWrite(path, []byte(args.Content), mode); err != nil {
+		t.rewind.cancel(args.Path)
 		return "", err
+	}
+	if err := t.rewind.after(args.Path); err != nil {
+		return "", fmt.Errorf("checkpoint after write: %w", err)
 	}
 	return fmt.Sprintf("wrote %d bytes to %s", len(args.Content), t.ws.Relative(path)), nil
 }
@@ -659,6 +723,7 @@ func (t *writeFileTool) Execute(ctx context.Context, raw json.RawMessage) (strin
 type editFileTool struct {
 	ws       *workspace.Workspace
 	approver Approver
+	rewind   *mutationCheckpoint
 }
 
 func (t *editFileTool) Definition() api.ToolDefinition {
@@ -723,6 +788,9 @@ func (t *editFileTool) Execute(ctx context.Context, raw json.RawMessage) (string
 	if err := t.approver.Approve(ctx, "edit_file", fmt.Sprintf("%s (%d replacement(s))", t.ws.Relative(path), count)); err != nil {
 		return "", err
 	}
+	if err := t.rewind.before(args.Path); err != nil {
+		return "", fmt.Errorf("checkpoint before edit: %w", err)
+	}
 	updated := ""
 	if len(normalized) > 0 {
 		if !args.ReplaceAll {
@@ -744,7 +812,11 @@ func (t *editFileTool) Execute(ctx context.Context, raw json.RawMessage) (string
 		return "", err
 	}
 	if err := atomicWrite(path, []byte(updated), info.Mode().Perm()); err != nil {
+		t.rewind.cancel(args.Path)
 		return "", err
+	}
+	if err := t.rewind.after(args.Path); err != nil {
+		return "", fmt.Errorf("checkpoint after edit: %w", err)
 	}
 	method := ""
 	if len(normalized) > 0 {

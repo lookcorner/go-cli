@@ -201,34 +201,45 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 	if visible := acceptedResponse["result"].(map[string]any)["hunks"].([]any); len(visible) != 0 {
 		t.Fatalf("accepted ACP hunk remained visible: %#v", acceptedResponse)
 	}
+	if err := os.WriteFile(filepath.Join(root, "made.txt"), []byte("external"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	encodeACP(t, encoder, map[string]any{
 		"jsonrpc": "2.0", "id": 36, "method": "x.ai/rewind/points",
 		"params": map[string]any{"sessionId": sessionID},
 	})
 	pointsResponse := decodeACP(t, decoder)
 	points := pointsResponse["result"].(map[string]any)["rewind_points"].([]any)
-	if len(points) != 1 || int(points[0].(map[string]any)["prompt_index"].(float64)) != 0 {
+	if len(points) != 1 {
+		t.Fatalf("unexpected ACP rewind points: %#v", pointsResponse)
+	}
+	point := points[0].(map[string]any)
+	if int(point["prompt_index"].(float64)) != 0 || point["has_file_changes"] != true || int(point["num_file_snapshots"].(float64)) != 1 {
 		t.Fatalf("unexpected ACP rewind points: %#v", pointsResponse)
 	}
 	encodeACP(t, encoder, map[string]any{
 		"jsonrpc": "2.0", "id": 37, "method": "x.ai/rewind/execute",
-		"params": map[string]any{"sessionId": sessionID, "targetPromptIndex": 0, "force": true, "mode": "all"},
+		"params": map[string]any{"sessionId": sessionID, "targetPromptIndex": 0, "force": false, "mode": "all"},
 	})
-	unsupported := decodeACP(t, decoder)
-	if unsupported["result"].(map[string]any)["success"] != false || !strings.Contains(unsupported["result"].(map[string]any)["error"].(string), "file rewind") {
-		t.Fatalf("unsupported file rewind was not rejected: %#v", unsupported)
+	preview := decodeACP(t, decoder)
+	previewResult := preview["result"].(map[string]any)
+	if previewResult["success"] != false || len(previewResult["clean_files"].([]any)) != 0 || len(previewResult["conflicts"].([]any)) != 1 || !strings.Contains(previewResult["error"].(string), "External modifications") {
+		t.Fatalf("unexpected all-mode rewind preview: %#v", preview)
 	}
 	encodeACP(t, encoder, map[string]any{
 		"jsonrpc": "2.0", "id": 38, "method": "x.ai/rewind/execute",
-		"params": map[string]any{"sessionId": sessionID, "targetPromptIndex": 0, "force": true, "mode": "conversation_only"},
+		"params": map[string]any{"sessionId": sessionID, "targetPromptIndex": 0, "force": true, "mode": "all"},
 	})
 	rewindUpdate := decodeACP(t, decoder)
 	if rewindUpdate["method"] != "session/update" || rewindUpdate["params"].(map[string]any)["update"].(map[string]any)["sessionUpdate"] != "rewind_marker" {
 		t.Fatalf("missing ACP rewind marker: %#v", rewindUpdate)
 	}
 	rewound := decodeACP(t, decoder)
-	if rewound["result"].(map[string]any)["success"] != true || rewound["result"].(map[string]any)["prompt_text"] != "create the file" {
+	if rewound["result"].(map[string]any)["success"] != true || rewound["result"].(map[string]any)["prompt_text"] != "create the file" || len(rewound["result"].(map[string]any)["reverted_files"].([]any)) != 1 {
 		t.Fatalf("unexpected ACP rewind response: %#v", rewound)
+	}
+	if _, err := os.Stat(filepath.Join(root, "made.txt")); !os.IsNotExist(err) {
+		t.Fatalf("all-mode rewind did not restore files: %v", err)
 	}
 	encodeACP(t, encoder, map[string]any{
 		"jsonrpc": "2.0", "id": 39, "method": "session/prompt",

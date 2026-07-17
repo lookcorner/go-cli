@@ -52,6 +52,70 @@ func TestEditFileRequiresUniqueMatch(t *testing.T) {
 	}
 }
 
+func TestRegistryCheckpointsOnlyApprovedMutations(t *testing.T) {
+	root := t.TempDir()
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := workspace.NewRewindStore(ws, filepath.Join(t.TempDir(), "rewind.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry(ws, PromptApprover{Mode: PermissionAuto})
+	defer registry.Close()
+	registry.SetRewindStore(store, func() int { return 0 })
+	if _, err := registry.Execute(context.Background(), "write_file", json.RawMessage(`{"path":"made.txt","content":"ok"}`)); err != nil {
+		t.Fatal(err)
+	}
+	denied := NewRegistry(ws, PromptApprover{Mode: PermissionDeny})
+	defer denied.Close()
+	denied.SetRewindStore(store, func() int { return 1 })
+	if _, err := denied.Execute(context.Background(), "write_file", json.RawMessage(`{"path":"denied.txt","content":"no"}`)); err == nil {
+		t.Fatal("denied write unexpectedly succeeded")
+	}
+	counts, err := store.Counts()
+	if err != nil || counts[0] != 1 || counts[1] != 0 {
+		t.Fatalf("unexpected checkpoint counts: %#v err=%v", counts, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "denied.txt")); !os.IsNotExist(err) {
+		t.Fatalf("denied write changed disk: %v", err)
+	}
+}
+
+func TestRegistryBlocksWriteWhenCheckpointCannotPersist(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target.txt")
+	if err := os.WriteFile(target, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	storePath := filepath.Join(t.TempDir(), "rewind.jsonl")
+	store, err := workspace.NewRewindStore(ws, storePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(storePath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(t.TempDir(), "outside.jsonl"), storePath); err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry(ws, PromptApprover{Mode: PermissionAuto})
+	defer registry.Close()
+	registry.SetRewindStore(store, func() int { return 0 })
+	if _, err := registry.Execute(context.Background(), "write_file", json.RawMessage(`{"path":"target.txt","content":"new"}`)); err == nil || !strings.Contains(err.Error(), "checkpoint before write") {
+		t.Fatalf("write did not fail closed: %v", err)
+	}
+	data, _ := os.ReadFile(target)
+	if string(data) != "old" {
+		t.Fatalf("write ran after checkpoint failure: %q", data)
+	}
+}
+
 func TestEditFileUnicodeTypographyFallback(t *testing.T) {
 	for name, test := range map[string]struct {
 		content string

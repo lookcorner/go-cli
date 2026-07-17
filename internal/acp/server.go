@@ -21,6 +21,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/api"
 	sessionlog "github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/tools"
+	"github.com/lookcorner/go-cli/internal/workspace"
 	worktrees "github.com/lookcorner/go-cli/internal/worktree"
 )
 
@@ -87,16 +88,20 @@ type message struct {
 }
 
 type session struct {
-	id       string
-	cwd      string
-	title    string
-	updated  time.Time
-	runner   *agent.Runner
-	close    func()
-	mu       sync.Mutex
-	previous string
-	cancel   context.CancelFunc
-	running  bool
+	id           string
+	cwd          string
+	title        string
+	updated      time.Time
+	runner       *agent.Runner
+	close        func()
+	mu           sync.Mutex
+	previous     string
+	cancel       context.CancelFunc
+	running      bool
+	promptIndex  int
+	activePrompt int
+	rewind       *workspace.RewindStore
+	logPath      string
 }
 
 type permissionResult struct {
@@ -688,6 +693,15 @@ func (s *Server) handleRewind(incoming message) {
 			s.respondError(incoming.ID, -32000, err.Error())
 			return
 		}
+		counts, err := current.rewind.Counts()
+		if err != nil {
+			s.respondError(incoming.ID, -32000, err.Error())
+			return
+		}
+		for index := range points {
+			points[index].NumFileSnapshots = counts[points[index].PromptIndex]
+			points[index].HasFileChanges = points[index].NumFileSnapshots > 0
+		}
 		s.respond(incoming.ID, map[string]any{"rewind_points": points})
 		return
 	}
@@ -719,10 +733,6 @@ func (s *Server) handleRewind(incoming message) {
 		s.respondError(incoming.ID, -32602, "invalid rewind mode")
 		return
 	}
-	if mode != "conversation_only" {
-		s.respond(incoming.ID, rewindResponse(*req.Target, mode, false, "file rewind checkpoints are unavailable; use conversation_only"))
-		return
-	}
 	current.mu.Lock()
 	defer current.mu.Unlock()
 	if current.running {
@@ -734,21 +744,50 @@ func (s *Server) handleRewind(incoming message) {
 		s.respond(incoming.ID, rewindResponse(*req.Target, mode, false, err.Error()))
 		return
 	}
+	wantsFiles := mode == "all" || mode == "files_only"
+	wantsConversation := mode == "all" || mode == "conversation_only"
+	filePreview := workspace.FileRewindPreview{CleanFiles: []string{}, Conflicts: []workspace.RewindConflict{}}
+	if wantsFiles {
+		filePreview, err = current.rewind.Preview(*req.Target)
+		if err != nil {
+			s.respondError(incoming.ID, -32000, err.Error())
+			return
+		}
+	}
+	response := rewindResponse(*req.Target, mode, false, "")
+	response["clean_files"] = filePreview.CleanFiles
+	response["conflicts"] = filePreview.Conflicts
 	if !req.Force {
-		s.respond(incoming.ID, rewindResponse(*req.Target, mode, false, ""))
+		if len(filePreview.Conflicts) > 0 {
+			response["error"] = "External modifications detected. Confirm to revert anyway."
+		}
+		s.respond(incoming.ID, response)
 		return
 	}
-	result, err := sessionlog.Rewind(path, *req.Target)
-	if err != nil {
-		s.respondError(incoming.ID, -32000, err.Error())
-		return
+	if wantsFiles {
+		reverted, latestPreview, restoreErr := current.rewind.Restore(*req.Target)
+		if restoreErr != nil {
+			s.respondError(incoming.ID, -32000, restoreErr.Error())
+			return
+		}
+		response["reverted_files"] = reverted
+		response["conflicts"] = latestPreview.Conflicts
 	}
-	current.previous = result.PreviousResponseID
-	current.runner.RewindHistory(result.Messages)
+	if wantsConversation {
+		result, rewindErr := sessionlog.Rewind(path, *req.Target)
+		if rewindErr != nil {
+			s.respondError(incoming.ID, -32000, rewindErr.Error())
+			return
+		}
+		current.previous = result.PreviousResponseID
+		current.runner.RewindHistory(result.Messages)
+		current.promptIndex = *req.Target
+		response["prompt_text"] = preview.PromptText
+		s.notify(sessionID, map[string]any{"sessionUpdate": "rewind_marker", "target_prompt_index": *req.Target})
+	}
 	current.updated = time.Now().UTC()
-	s.notify(sessionID, map[string]any{"sessionUpdate": "rewind_marker", "target_prompt_index": *req.Target})
-	response := rewindResponse(*req.Target, mode, true, "")
-	response["prompt_text"] = preview.PromptText
+	response["success"] = true
+	response["clean_files"] = []string{}
 	s.respond(incoming.ID, response)
 }
 
@@ -774,11 +813,39 @@ func (s *Server) startSession(ctx context.Context, id string, sessionConfig Sess
 	if closeRuntime == nil {
 		closeRuntime = func() {}
 	}
-	runner.ToolObserver = &sessionToolObserver{server: s, sessionID: id}
+	ws, err := workspace.Open(sessionConfig.CWD)
+	if err != nil {
+		closeRuntime()
+		return nil, err
+	}
+	sessionPath, pathErr := sessionlog.PathForID(s.SessionDir, id)
+	if pathErr != nil {
+		closeRuntime()
+		return nil, pathErr
+	}
+	checkpointPath := filepath.Join(filepath.Dir(sessionPath), "rewind", id+".jsonl")
+	rewind, err := workspace.NewRewindStore(ws, checkpointPath)
+	if err != nil {
+		closeRuntime()
+		return nil, err
+	}
+	promptIndex := 0
+	if points, pointsErr := sessionlog.RewindPoints(sessionPath); pointsErr == nil {
+		promptIndex = len(points)
+	} else if !errors.Is(pointsErr, os.ErrNotExist) {
+		closeRuntime()
+		return nil, pointsErr
+	}
 	created := &session{
 		id: id, cwd: sessionConfig.CWD, updated: time.Now().UTC(), previous: previous,
-		runner: runner, close: closeRuntime,
+		runner: runner, close: closeRuntime, promptIndex: promptIndex, activePrompt: -1, rewind: rewind, logPath: sessionPath,
 	}
+	runner.ToolObserver = &sessionToolObserver{server: s, sessionID: id}
+	runner.Tools.SetRewindStore(rewind, func() int {
+		created.mu.Lock()
+		defer created.mu.Unlock()
+		return created.activePrompt
+	})
 	s.mu.Lock()
 	if _, exists := s.sessions[id]; exists {
 		s.mu.Unlock()
@@ -825,6 +892,8 @@ func (s *Server) handlePrompt(parent context.Context, incoming message) {
 	runCtx, cancel := context.WithCancel(parent)
 	current.cancel = cancel
 	current.running = true
+	current.activePrompt = current.promptIndex
+	current.promptIndex++
 	if current.title == "" {
 		current.title = promptTitle(prompt)
 		s.notify(current.id, map[string]any{
@@ -839,6 +908,7 @@ func (s *Server) handlePrompt(parent context.Context, incoming message) {
 	go func() {
 		defer s.wg.Done()
 		result, err := current.runner.RunTurnParts(runCtx, prompt, content, previous)
+		points, pointsErr := sessionlog.RewindPoints(current.logPath)
 		stopReason := "end_turn"
 		if errors.Is(runCtx.Err(), context.Canceled) {
 			stopReason = "cancelled"
@@ -850,6 +920,10 @@ func (s *Server) handlePrompt(parent context.Context, incoming message) {
 			current.previous = result.ResponseID
 		}
 		current.running = false
+		current.activePrompt = -1
+		if pointsErr == nil {
+			current.promptIndex = len(points)
+		}
 		current.cancel = nil
 		current.updated = time.Now().UTC()
 		current.mu.Unlock()

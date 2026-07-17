@@ -165,10 +165,13 @@ to the actual tool call, so protocol stdin is never consumed by a CLI prompt.
 intentionally want a fixed policy.
 
 ACP sessions expose `x.ai/rewind/points` and `x.ai/rewind/execute` for
-conversation-only rewind. Rewinds append a timeline marker instead of deleting
-history, restore the selected Responses continuation ID, and rebuild visible
-Chat Completions or Anthropic history. File rewind modes fail explicitly until
-per-prompt file checkpoints are available.
+`all`, `conversation_only`, and `files_only` rewind (`code_only` remains an
+alias). Rewinds append a timeline marker instead of deleting history, restore
+the selected Responses continuation ID, and rebuild visible Chat Completions or
+Anthropic history. Before/after snapshots for `write_file`, `edit_file`, and
+`search_replace` are persisted with each prompt. Preview reports external file
+conflicts; `force: true` restores the earliest content and removes files created
+after the target checkpoint. Shell-created file changes are not checkpointed.
 
 Unix ACP clients may also create interactive terminals through
 `x.ai/terminal/pty/create`, stream base64 input and output, resize or reconnect
