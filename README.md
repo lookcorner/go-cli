@@ -15,6 +15,9 @@ feature-by-feature status.
 Interactive REPL and full-screen sessions accept `/compact` to summarize the
 current completed response chain and continue from a fresh context.
 
+Workspace instruction and skill discovery respects repository and global Git
+ignore rules through Git's own matching engine.
+
 ## Build
 
 Go 1.25 or newer is required.

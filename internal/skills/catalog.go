@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/lookcorner/go-cli/internal/api"
+	"github.com/lookcorner/go-cli/internal/workspace"
 )
 
 const (
@@ -48,7 +49,11 @@ func Discover(workspaceRoot string) (*Catalog, error) {
 		if root.path == "" {
 			continue
 		}
-		if err := catalog.scan(root.path, root.source); err != nil {
+		ignoreRoot := ""
+		if strings.HasPrefix(root.source, "workspace:") {
+			ignoreRoot = workspaceRoot
+		}
+		if err := catalog.scanWithIgnore(root.path, root.source, ignoreRoot); err != nil {
 			return nil, err
 		}
 	}
@@ -56,6 +61,10 @@ func Discover(workspaceRoot string) (*Catalog, error) {
 }
 
 func (c *Catalog) scan(root, source string) error {
+	return c.scanWithIgnore(root, source, "")
+}
+
+func (c *Catalog) scanWithIgnore(root, source, ignoreRoot string) error {
 	info, err := os.Stat(root)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -72,6 +81,12 @@ func (c *Catalog) scan(root, source string) error {
 		}
 		if len(c.byName) >= maxSkills {
 			return errors.New("skill discovery exceeded 500 skills")
+		}
+		if ignoreRoot != "" && workspace.IsGitIgnored(ignoreRoot, path) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		if entry.IsDir() || !strings.EqualFold(entry.Name(), "SKILL.md") {
 			return nil

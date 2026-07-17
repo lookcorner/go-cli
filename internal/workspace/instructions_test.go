@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -9,6 +10,11 @@ import (
 
 func TestLoadRootInstructions(t *testing.T) {
 	root := t.TempDir()
+	command := exec.Command("git", "init", "-q")
+	command.Dir = root
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, output)
+	}
 	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("root rule"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -17,6 +23,16 @@ func TestLoadRootInstructions(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(rulesDir, "go.md"), []byte("---\npaths: '*.go'\n---\ngo rule"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ignoredDir := filepath.Join(root, ".cursor", "rules")
+	if err := os.MkdirAll(ignoredDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ignoredDir, "ignored.md"), []byte("must not load"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte(".cursor/rules/\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	ws, err := Open(root)
@@ -36,6 +52,9 @@ func TestLoadRootInstructions(t *testing.T) {
 	}
 	if strings.Contains(formatted, "paths: '*.go'") {
 		t.Fatalf("rules frontmatter should be removed: %s", formatted)
+	}
+	if strings.Contains(formatted, "must not load") {
+		t.Fatalf("gitignored rule was loaded: %s", formatted)
 	}
 }
 

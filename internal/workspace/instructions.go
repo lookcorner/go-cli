@@ -66,6 +66,9 @@ func (w *Workspace) LoadRootInstructions() ([]InstructionFile, error) {
 	var files []InstructionFile
 	total := 0
 	for _, candidate := range candidates {
+		if IsGitIgnored(w.root, candidate) {
+			continue
+		}
 		if _, err := os.Lstat(candidate); err != nil {
 			if os.IsNotExist(err) {
 				continue

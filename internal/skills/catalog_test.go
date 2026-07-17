@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -59,5 +60,33 @@ func TestWorkspaceSkillOverridesUserSkill(t *testing.T) {
 	}
 	if catalog.byName["same"].Source != "workspace" {
 		t.Fatalf("workspace skill did not override: %#v", catalog.byName["same"])
+	}
+}
+
+func TestWorkspaceSkillsRespectGitignore(t *testing.T) {
+	root := t.TempDir()
+	command := exec.Command("git", "init", "-q")
+	command.Dir = root
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, output)
+	}
+	for name := range map[string]bool{"allowed": true, "ignored": true} {
+		dir := filepath.Join(root, ".gork", "skills", name)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("---\nname: "+name+"\n---\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte(".gork/skills/ignored/\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	catalog := &Catalog{byName: make(map[string]Skill)}
+	if err := catalog.scanWithIgnore(filepath.Join(root, ".gork", "skills"), "workspace:grok", root); err != nil {
+		t.Fatal(err)
+	}
+	if names := catalog.Names(); len(names) != 1 || names[0] != "allowed" {
+		t.Fatalf("unexpected gitignore-filtered skills: %#v", names)
 	}
 }
