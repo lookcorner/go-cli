@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"sort"
@@ -62,15 +63,20 @@ type response struct {
 }
 
 type Client struct {
-	name    string
-	cmd     *exec.Cmd
-	stdin   io.WriteCloser
-	pending map[string]chan response
-	nextID  atomic.Uint64
-	mu      sync.Mutex
-	writeMu sync.Mutex
-	done    chan struct{}
-	once    sync.Once
+	name             string
+	cmd              *exec.Cmd
+	stdin            io.WriteCloser
+	httpURL          string
+	httpClient       *http.Client
+	headers          map[string]string
+	sessionID        string
+	selectedProtocol string
+	pending          map[string]chan response
+	nextID           atomic.Uint64
+	mu               sync.Mutex
+	writeMu          sync.Mutex
+	done             chan struct{}
+	once             sync.Once
 }
 
 type InitializeResult struct {
@@ -193,6 +199,24 @@ func (c *Client) CallTool(ctx context.Context, name string, arguments map[string
 
 func (c *Client) call(ctx context.Context, method string, params any, out any) error {
 	id := c.nextID.Add(1)
+	if c.httpURL != "" {
+		message, err := c.httpRequest(ctx, map[string]any{
+			"jsonrpc": "2.0", "id": id, "method": method, "params": params,
+		}, true)
+		if err != nil {
+			return err
+		}
+		if message.Error != nil {
+			return message.Error
+		}
+		if out == nil {
+			return nil
+		}
+		if err := json.Unmarshal(message.Result, out); err != nil {
+			return fmt.Errorf("decode MCP %s result: %w", method, err)
+		}
+		return nil
+	}
 	idKey := fmt.Sprintf("%d", id)
 	ch := make(chan response, 1)
 	c.mu.Lock()
@@ -232,6 +256,10 @@ func (c *Client) notify(method string, params any) error {
 	message := map[string]any{"jsonrpc": "2.0", "method": method}
 	if params != nil {
 		message["params"] = params
+	}
+	if c.httpURL != "" {
+		_, err := c.httpRequest(context.Background(), message, false)
+		return err
 	}
 	return c.writeJSON(message)
 }
@@ -312,6 +340,9 @@ func (c *Client) failPending(err error) {
 }
 
 func (c *Client) Close() error {
+	if c.httpURL != "" {
+		return c.closeHTTP()
+	}
 	_ = c.stdin.Close()
 	wait := make(chan error, 1)
 	go func() { wait <- c.cmd.Wait() }()

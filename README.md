@@ -189,6 +189,16 @@ Server processes inherit the current environment, with optional per-server
 `env` overrides. They start in the selected workspace and are shut down when
 the agent exits.
 
+MCP Streamable HTTP endpoints use `url` instead of `command`. Gork sends the
+negotiated protocol and session headers, accepts both JSON and SSE responses,
+and closes stateful sessions with DELETE:
+
+```toml
+[mcp_servers.remote]
+url = "https://mcp.example.com/rpc"
+headers = { Authorization = "Bearer token" }
+```
+
 ## Language servers
 
 Language Server Protocol processes can also be configured per workspace. When

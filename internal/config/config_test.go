@@ -27,6 +27,10 @@ command = "fixture-mcp"
 args = ["--stdio"]
 env = { TOKEN = "value" }
 
+[mcp_servers.remote]
+url = "https://mcp.example/rpc"
+headers = { Authorization = "Bearer token" }
+
 [lsp_servers.gopls]
 command = "gopls"
 extensions = [".go"]
@@ -46,6 +50,9 @@ extensions = [".go"]
 	}
 	if cfg.MCPServers["fixture"].Command != "fixture-mcp" || cfg.MCPServers["fixture"].Env["TOKEN"] != "value" {
 		t.Fatalf("unexpected MCP config: %#v", cfg.MCPServers)
+	}
+	if cfg.MCPServers["remote"].URL != "https://mcp.example/rpc" || cfg.MCPServers["remote"].Headers["Authorization"] != "Bearer token" {
+		t.Fatalf("unexpected MCP HTTP config: %#v", cfg.MCPServers["remote"])
 	}
 	if cfg.LSPServers["gopls"].Command != "gopls" || len(cfg.LSPServers["gopls"].Extensions) != 1 {
 		t.Fatalf("unexpected LSP config: %#v", cfg.LSPServers)

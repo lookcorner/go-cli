@@ -532,10 +532,20 @@ func startMCPServers(
 	for _, name := range names {
 		server := cfg.MCPServers[name]
 		fmt.Fprintf(stderr, "[gork] starting MCP server: %s\n", name)
-		client, initialized, err := mcp.Start(ctx, mcp.ProcessConfig{
-			Name: name, Command: server.Command, Args: server.Args,
-			Env: server.Env, Dir: workspaceRoot, Stderr: stderr,
-		})
+		var client *mcp.Client
+		var initialized mcp.InitializeResult
+		var err error
+		if server.URL != "" {
+			client, initialized, err = mcp.StartHTTP(ctx, mcp.HTTPConfig{
+				Name: name, URL: server.URL, Headers: server.Headers,
+				Client: &http.Client{Timeout: cfg.HTTPTimeout},
+			})
+		} else {
+			client, initialized, err = mcp.Start(ctx, mcp.ProcessConfig{
+				Name: name, Command: server.Command, Args: server.Args,
+				Env: server.Env, Dir: workspaceRoot, Stderr: stderr,
+			})
+		}
 		if err != nil {
 			closeClients()
 			return nil, err

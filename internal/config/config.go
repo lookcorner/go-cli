@@ -30,6 +30,8 @@ type MCPServerConfig struct {
 	Command string            `json:"command" toml:"command"`
 	Args    []string          `json:"args,omitempty" toml:"args"`
 	Env     map[string]string `json:"env,omitempty" toml:"env"`
+	URL     string            `json:"url,omitempty" toml:"url"`
+	Headers map[string]string `json:"headers,omitempty" toml:"headers"`
 	Enabled *bool             `json:"enabled,omitempty" toml:"enabled"`
 }
 
