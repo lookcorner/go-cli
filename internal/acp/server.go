@@ -230,14 +230,15 @@ func (s *Server) handleResumeSessionInWorktree(ctx context.Context, incoming mes
 		s.respondError(incoming.ID, -32000, err.Error())
 		return
 	}
-	found := false
+	var persisted *sessionlog.Info
 	for _, item := range items {
 		if item.SessionID == req.SessionID {
-			found = true
+			copy := item
+			persisted = &copy
 			break
 		}
 	}
-	if !found {
+	if persisted == nil {
 		s.respondError(incoming.ID, -32000, "session not found locally and remote session registry is unavailable")
 		return
 	}
@@ -256,17 +257,34 @@ func (s *Server) handleResumeSessionInWorktree(ctx context.Context, incoming mes
 		s.respondError(incoming.ID, -32000, err.Error())
 		return
 	}
+	codeRestored := false
+	restoreSummary, restoreDegree := "", ""
+	if req.RestoreCode != nil && *req.RestoreCode {
+		if persisted.HeadCommit == "" {
+			restoreSummary = "restore skipped (session HEAD unavailable)"
+		} else {
+			outcome := worktrees.RestoreCommit(ctx, fork.WorktreePath, persisted.HeadCommit, req.SessionID)
+			codeRestored, restoreSummary, restoreDegree = worktrees.RestoreSummary(persisted.HeadCommit, outcome)
+		}
+	}
 	chat, updates, err := sessionlog.Fork(s.SessionDir, req.SessionID, newID, effective)
 	if err != nil {
 		_, _, _ = s.worktrees.Remove(ctx, worktrees.RemoveRequest{WorktreePath: fork.WorktreePath, Force: true})
 		s.respondError(incoming.ID, -32000, err.Error())
 		return
 	}
-	s.respond(incoming.ID, map[string]any{
+	response := map[string]any{
 		"sessionId": newID, "worktreePath": fork.WorktreePath, "effectiveCwd": effective,
 		"remoteRestored": false, "parentSessionId": req.SessionID,
-		"chatMessagesCopied": chat, "updatesCopied": updates, "codeRestored": false,
-	})
+		"chatMessagesCopied": chat, "updatesCopied": updates, "codeRestored": codeRestored,
+	}
+	if restoreSummary != "" {
+		response["restoreSummary"] = restoreSummary
+	}
+	if restoreDegree != "" {
+		response["restoreDegree"] = restoreDegree
+	}
+	s.respond(incoming.ID, response)
 }
 
 func (s *Server) handleRehydrateSession(ctx context.Context, incoming message) {

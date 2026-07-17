@@ -161,10 +161,11 @@ func PathForID(dir, id string) (string, error) {
 }
 
 type Info struct {
-	SessionID string    `json:"sessionId"`
-	CWD       string    `json:"cwd"`
-	Title     string    `json:"title,omitempty"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	SessionID  string    `json:"sessionId"`
+	CWD        string    `json:"cwd"`
+	HeadCommit string    `json:"headCommit,omitempty"`
+	Title      string    `json:"title,omitempty"`
+	UpdatedAt  time.Time `json:"updatedAt"`
 }
 
 func List(dir, cwd string) ([]Info, error) {
@@ -233,10 +234,14 @@ func readInfo(path, id string) (Info, error) {
 		switch event.Kind {
 		case "session_metadata":
 			var data struct {
-				CWD string `json:"cwd"`
+				CWD        string `json:"cwd"`
+				HeadCommit string `json:"headCommit"`
 			}
 			if json.Unmarshal(event.Data, &data) == nil && data.CWD != "" {
 				info.CWD = data.CWD
+				if data.HeadCommit != "" {
+					info.HeadCommit = data.HeadCommit
+				}
 			}
 		case "user_prompt":
 			if info.Title == "" {

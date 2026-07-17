@@ -1,5 +1,8 @@
 # Gork Go
 
+The implementation follows the lightweight DDD boundaries documented in
+[`ARCHITECTURE.md`](ARCHITECTURE.md).
+
 Gork Go is a Go reimplementation of [Gork Build](https://github.com/thedavidweng/gork-build),
 the privacy-oriented community build of the Grok Build coding agent.
 
@@ -181,6 +184,11 @@ new worktree (including a source subdirectory offset), and preserves loadable
 conversation history. Rehydrate recreates a missing linked worktree while
 keeping an existing local session ID. Remote registry/archive recovery is not
 yet available and returns an explicit error.
+
+New sessions record their Git HEAD. With `restoreCode: true`, worktree resume
+checks out that historical commit and reports `restoreDegree: "head_only"`.
+Dirty staged, unstaged, and untracked state in the new worktree is saved to a
+labeled stash before checkout; full archive restoration remains unavailable.
 
 Local mutations require confirmation by default:
 

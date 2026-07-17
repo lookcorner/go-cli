@@ -28,6 +28,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/tools"
 	"github.com/lookcorner/go-cli/internal/tui"
 	"github.com/lookcorner/go-cli/internal/workspace"
+	worktrees "github.com/lookcorner/go-cli/internal/worktree"
 )
 
 const version = "0.1.0-dev"
@@ -209,7 +210,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return err
 	}
 	if opts.resume == "" {
-		if err := logger.Append("session_metadata", map[string]any{"cwd": ws.Root()}); err != nil {
+		if err := logger.Append("session_metadata", sessionMetadata(context.Background(), ws.Root())); err != nil {
 			return err
 		}
 	}
@@ -393,7 +394,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			return nil, nil, err
 		}
 		if sessionConfig.ResumePath == "" {
-			if err := logger.Append("session_metadata", map[string]any{"cwd": ws.Root()}); err != nil {
+			if err := logger.Append("session_metadata", sessionMetadata(ctx, ws.Root())); err != nil {
 				_ = logger.Close()
 				_ = registry.Close()
 				return nil, nil, err
@@ -456,6 +457,14 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		return err
 	}
 	return nil
+}
+
+func sessionMetadata(ctx context.Context, cwd string) map[string]any {
+	metadata := map[string]any{"cwd": cwd}
+	if head, err := worktrees.Head(ctx, cwd); err == nil && head != "" {
+		metadata["headCommit"] = head
+	}
+	return metadata
 }
 
 func goalLoop(

@@ -358,11 +358,18 @@ func TestWorktreeExtensionsCreateListShowAndRemove(t *testing.T) {
 
 func runACPGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
+	_ = runACPGitOutput(t, dir, args...)
+}
+
+func runACPGitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
 	command := exec.Command("git", args...)
 	command.Dir = dir
-	if output, err := command.CombinedOutput(); err != nil {
+	output, err := command.CombinedOutput()
+	if err != nil {
 		t.Fatalf("git %v: %v: %s", args, err, output)
 	}
+	return string(output)
 }
 
 func TestSessionWorktreeResumeAndRehydrate(t *testing.T) {
@@ -375,15 +382,21 @@ func TestSessionWorktreeResumeAndRehydrate(t *testing.T) {
 	}
 	runACPGit(t, root, "add", "tracked.txt")
 	runACPGit(t, root, "commit", "-qm", "baseline")
+	historicalHead := strings.TrimSpace(runACPGitOutput(t, root, "rev-parse", "HEAD"))
 	sessionDir := t.TempDir()
 	logger, err := sessionlog.NewLoggerWithID(sessionDir, "resume-parent")
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = logger.Append("session_metadata", map[string]any{"cwd": root})
+	_ = logger.Append("session_metadata", map[string]any{"cwd": root, "headCommit": historicalHead})
 	_ = logger.Append("user_prompt", map[string]any{"text": "resume me"})
 	_ = logger.Append("model_response", map[string]any{"text": "ready", "response_id": "r1", "tool_call_count": 0})
 	_ = logger.Close()
+	if err := os.WriteFile(filepath.Join(root, "later.txt"), []byte("later\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runACPGit(t, root, "add", "later.txt")
+	runACPGit(t, root, "commit", "-qm", "later")
 
 	clientToAgentR, clientToAgentW := io.Pipe()
 	agentToClientR, agentToClientW := io.Pipe()
@@ -403,7 +416,7 @@ func TestSessionWorktreeResumeAndRehydrate(t *testing.T) {
 	}
 	encodeACP(t, encoder, map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "x.ai/git/worktree/resume_session",
-		"params": map[string]any{"sessionId": "resume-parent", "sourceCwd": root, "copyMode": "clean", "worktreeType": "linked"},
+		"params": map[string]any{"sessionId": "resume-parent", "sourceCwd": root, "copyMode": "clean", "worktreeType": "linked", "restoreCode": true},
 	})
 	resumed := decodeACP(t, decoder)
 	result := resumed["result"].(map[string]any)
@@ -411,6 +424,9 @@ func TestSessionWorktreeResumeAndRehydrate(t *testing.T) {
 		t.Fatalf("unexpected resume response: %#v", resumed)
 	}
 	resumedID, resumedPath := result["sessionId"].(string), result["worktreePath"].(string)
+	if result["codeRestored"] != true || result["restoreDegree"] != "head_only" || strings.TrimSpace(runACPGitOutput(t, resumedPath, "rev-parse", "HEAD")) != historicalHead {
+		t.Fatalf("historical HEAD was not restored: %#v", resumed)
+	}
 	if items, err := sessionlog.List(sessionDir, result["effectiveCwd"].(string)); err != nil || len(items) != 1 || items[0].SessionID != resumedID {
 		t.Fatalf("forked session not loadable: %#v err=%v", items, err)
 	}
