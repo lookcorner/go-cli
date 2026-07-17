@@ -1141,18 +1141,31 @@ func (o *sessionToolObserver) ToolStarted(call api.ToolCall) {
 	})
 }
 
-func (o *sessionToolObserver) ToolFinished(call api.ToolCall, output string, toolErr error) {
+func (o *sessionToolObserver) ToolFinished(call api.ToolCall, result tools.ExecutionResult, toolErr error) {
 	status := "completed"
 	if toolErr != nil {
 		status = "failed"
-		if output == "" {
-			output = toolErr.Error()
+		if result.Output == "" {
+			result.Output = toolErr.Error()
 		}
 	}
-	o.server.notify(o.sessionID, map[string]any{
+	update := map[string]any{
 		"sessionUpdate": "tool_call_update", "toolCallId": call.CallID,
-		"status": status, "rawOutput": output,
-	})
+		"status": status, "rawOutput": result.Output,
+	}
+	if len(result.Images) > 0 {
+		content := make([]any, 0, len(result.Images))
+		for _, image := range result.Images {
+			content = append(content, map[string]any{
+				"type": "content",
+				"content": map[string]any{
+					"type": "image", "data": base64.StdEncoding.EncodeToString(image.Data), "mimeType": image.MediaType,
+				},
+			})
+		}
+		update["content"] = content
+	}
+	o.server.notify(o.sessionID, update)
 }
 
 func acpToolKind(name string) string {

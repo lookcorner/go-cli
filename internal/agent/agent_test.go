@@ -22,6 +22,16 @@ type fakeStreamer struct {
 	results  []api.StreamResult
 }
 
+type recordingToolObserver struct {
+	results []tools.ExecutionResult
+}
+
+func (*recordingToolObserver) ToolStarted(api.ToolCall) {}
+
+func (o *recordingToolObserver) ToolFinished(_ api.ToolCall, result tools.ExecutionResult, _ error) {
+	o.results = append(o.results, result)
+}
+
 func (f *fakeStreamer) StreamResponse(_ context.Context, request api.ResponseRequest, onText func(string)) (api.StreamResult, error) {
 	f.requests = append(f.requests, request)
 	result := f.results[len(f.requests)-1]
@@ -97,7 +107,8 @@ func TestRunnerForwardsReadFileImages(t *testing.T) {
 		}},
 		{ResponseID: "resp_2", Text: "done"},
 	}}
-	runner := Runner{Client: streamer, Tools: tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto}), Model: "test", MaxSteps: 2}
+	observer := &recordingToolObserver{}
+	runner := Runner{Client: streamer, Tools: tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto}), ToolObserver: observer, Model: "test", MaxSteps: 2}
 	defer runner.Tools.Close()
 	if _, err := runner.Run(context.Background(), "inspect image"); err != nil {
 		t.Fatal(err)
@@ -109,6 +120,9 @@ func TestRunnerForwardsReadFileImages(t *testing.T) {
 	parts, ok := input[2].Content.([]api.ContentPart)
 	if !ok || len(parts) != 3 || parts[1].Type != "input_image" || parts[2].Type != "input_image" || !strings.HasPrefix(parts[1].ImageURL, "data:image/png;base64,") {
 		t.Fatalf("image content was not forwarded: %#v", input[2].Content)
+	}
+	if len(observer.results) != 2 || len(observer.results[0].Images) != 1 || observer.results[0].Images[0].MediaType != "image/png" {
+		t.Fatalf("tool observer lost image attachments: %#v", observer.results)
 	}
 }
 

@@ -263,6 +263,33 @@ func TestRenderPromptSupportsEmbeddedTextAndImages(t *testing.T) {
 	}
 }
 
+func TestACPToolUpdateIncludesImageContent(t *testing.T) {
+	var output strings.Builder
+	server := &Server{output: &output}
+	observer := &sessionToolObserver{server: server, sessionID: "session-1"}
+	observer.ToolFinished(api.ToolCall{CallID: "call-1"}, tools.ExecutionResult{
+		Output: "[PDF: doc.pdf (2 pages rendered, 2 total)]",
+		Images: []tools.ImageAttachment{
+			{MediaType: "image/jpeg", Data: []byte("page-one")},
+			{MediaType: "image/jpeg", Data: []byte("page-two")},
+		},
+	}, nil)
+	var notification map[string]any
+	if err := json.Unmarshal([]byte(output.String()), &notification); err != nil {
+		t.Fatal(err)
+	}
+	update := notification["params"].(map[string]any)["update"].(map[string]any)
+	content := update["content"].([]any)
+	if len(content) != 2 || update["status"] != "completed" {
+		t.Fatalf("unexpected tool update: %#v", update)
+	}
+	first := content[0].(map[string]any)
+	image := first["content"].(map[string]any)
+	if first["type"] != "content" || image["type"] != "image" || image["mimeType"] != "image/jpeg" || image["data"] != base64.StdEncoding.EncodeToString([]byte("page-one")) {
+		t.Fatalf("unexpected image content: %#v", first)
+	}
+}
+
 func TestWorktreeExtensionsCreateListShowAndRemove(t *testing.T) {
 	root := t.TempDir()
 	runACPGit(t, root, "init", "-q")

@@ -148,7 +148,8 @@ replays completed user/agent text and image history while resume reconnects with
 replay. Prompts accept embedded text/resources plus validated base64 or remote
 HTTP(S) images; audio is not yet supported. Text streams as
 `agent_message_chunk`, while tools emit correlated `tool_call` and
-`tool_call_update` lifecycle events. Stdio, Streamable HTTP, and standalone SSE
+`tool_call_update` lifecycle events; image and rendered PDF results are included
+as native ACP image content. Stdio, Streamable HTTP, and standalone SSE
 MCP servers supplied by the client in `session/new`, `session/load`, or
 `session/resume` are validated and merged with configured servers for that
 session. Stdio and standalone SSE servers may request permission-gated MCP

@@ -30,7 +30,7 @@ type EventLogger interface {
 
 type ToolObserver interface {
 	ToolStarted(call api.ToolCall)
-	ToolFinished(call api.ToolCall, output string, err error)
+	ToolFinished(call api.ToolCall, result tools.ExecutionResult, err error)
 }
 
 type HistoryResetter interface {
@@ -176,7 +176,7 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 			toolResult, toolErr := r.Tools.ExecuteResult(toolCtx, call.Name, call.Arguments)
 			output := toolResult.Output
 			if r.ToolObserver != nil {
-				r.ToolObserver.ToolFinished(call, output, toolErr)
+				r.ToolObserver.ToolFinished(call, toolResult, toolErr)
 			}
 			if toolErr != nil {
 				output = "ERROR: " + toolErr.Error()
