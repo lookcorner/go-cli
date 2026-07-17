@@ -12,13 +12,13 @@ Status values: **done**, **partial**, **planned**.
 | Workspace file tools | done | Read, list, regex search, atomic write and exact-text edit |
 | Tool permissions | partial | Prompt/auto/deny modes are present; command-prefix and managed policy rules remain |
 | Shell execution | partial | Timeout, combined capped output and workspace CWD; persistent PTY/background process support remains |
-| Session persistence | partial | Durable JSONL event records; restore, rewind, branching and migration remain |
+| Session persistence | partial | Durable JSONL event records and response-ID continuation; local restore, rewind, branching and migration remain |
 | Configuration | partial | JSON, environment and CLI layers; TOML compatibility and managed config remain |
 | Authentication | partial | API-key bearer auth; xAI OAuth/device flow and refresh storage remain |
 | Chat Completions backend | planned | Responses backend is implemented first |
 | Anthropic Messages backend | planned | Protocol adapter remains |
-| TUI | planned | Ratatui behavior will be reimplemented with a Go terminal UI layer |
-| MCP | planned | Client/server transports, tool discovery and lifecycle remain |
+| Interactive UI | partial | Multi-turn REPL and server-side continuation work; full-screen dashboard, rendering and input behavior remain |
+| MCP | partial | Stdio lifecycle, version negotiation, paginated tool discovery/calls and shutdown work; Streamable HTTP, resources, prompts, sampling and list-change reload remain |
 | ACP | planned | Agent Client Protocol server/client modes remain |
 | LSP tools | planned | Process lifecycle, JSON-RPC and diagnostics remain |
 | Skills / AGENTS.md | planned | Discovery, instruction scoping and reminders remain |

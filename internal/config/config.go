@@ -13,21 +13,34 @@ import (
 const defaultBaseURL = "https://api.x.ai/v1"
 
 type Config struct {
-	APIKey       string        `json:"api_key,omitempty"`
-	BaseURL      string        `json:"base_url,omitempty"`
-	Model        string        `json:"model,omitempty"`
-	SystemPrompt string        `json:"system_prompt,omitempty"`
-	MaxSteps     int           `json:"max_steps,omitempty"`
-	HTTPTimeout  time.Duration `json:"-"`
+	APIKey       string                     `json:"api_key,omitempty"`
+	BaseURL      string                     `json:"base_url,omitempty"`
+	Model        string                     `json:"model,omitempty"`
+	SystemPrompt string                     `json:"system_prompt,omitempty"`
+	MaxSteps     int                        `json:"max_steps,omitempty"`
+	MCPServers   map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
+	HTTPTimeout  time.Duration              `json:"-"`
+}
+
+type MCPServerConfig struct {
+	Command string            `json:"command"`
+	Args    []string          `json:"args,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
+	Enabled *bool             `json:"enabled,omitempty"`
+}
+
+func (c MCPServerConfig) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
 }
 
 type fileConfig struct {
-	APIKey       string `json:"api_key,omitempty"`
-	BaseURL      string `json:"base_url,omitempty"`
-	Model        string `json:"model,omitempty"`
-	SystemPrompt string `json:"system_prompt,omitempty"`
-	MaxSteps     int    `json:"max_steps,omitempty"`
-	HTTPTimeout  string `json:"http_timeout,omitempty"`
+	APIKey       string                     `json:"api_key,omitempty"`
+	BaseURL      string                     `json:"base_url,omitempty"`
+	Model        string                     `json:"model,omitempty"`
+	SystemPrompt string                     `json:"system_prompt,omitempty"`
+	MaxSteps     int                        `json:"max_steps,omitempty"`
+	HTTPTimeout  string                     `json:"http_timeout,omitempty"`
+	MCPServers   map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
 }
 
 func Load(path string) (Config, error) {
@@ -68,6 +81,7 @@ func Load(path string) (Config, error) {
 		if disk.MaxSteps > 0 {
 			cfg.MaxSteps = disk.MaxSteps
 		}
+		cfg.MCPServers = disk.MCPServers
 		if disk.HTTPTimeout != "" {
 			d, err := time.ParseDuration(disk.HTTPTimeout)
 			if err != nil {

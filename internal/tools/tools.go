@@ -58,7 +58,13 @@ func (a PromptApprover) Approve(_ context.Context, action, detail string) error 
 			return fmt.Errorf("permission prompt unavailable for %s", action)
 		}
 		fmt.Fprintf(a.Output, "\nAllow %s?\n  %s\n[y/N] ", action, detail)
-		line, err := bufio.NewReader(a.Input).ReadString('\n')
+		var line string
+		var err error
+		if reader, ok := a.Input.(interface{ ReadString(byte) (string, error) }); ok {
+			line, err = reader.ReadString('\n')
+		} else {
+			line, err = bufio.NewReader(a.Input).ReadString('\n')
+		}
 		if err != nil && !errors.Is(err, io.EOF) {
 			return fmt.Errorf("read approval: %w", err)
 		}
@@ -95,6 +101,21 @@ func NewRegistry(ws *workspace.Workspace, approver Approver) *Registry {
 		registry.tools[item.Definition().Name] = item
 	}
 	return registry
+}
+
+func (r *Registry) Register(tool Tool) error {
+	if tool == nil {
+		return errors.New("tool must not be nil")
+	}
+	name := tool.Definition().Name
+	if name == "" {
+		return errors.New("tool name must not be empty")
+	}
+	if _, exists := r.tools[name]; exists {
+		return fmt.Errorf("tool %q is already registered", name)
+	}
+	r.tools[name] = tool
+	return nil
 }
 
 func (r *Registry) Definitions() []api.ToolDefinition {

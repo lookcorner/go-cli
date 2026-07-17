@@ -2,5 +2,12 @@
   "base_url": "https://api.x.ai/v1",
   "model": "YOUR_RESPONSES_API_MODEL",
   "max_steps": 20,
-  "http_timeout": "10m"
+  "http_timeout": "10m",
+  "mcp_servers": {
+    "example": {
+      "command": "example-mcp-server",
+      "args": [],
+      "enabled": false
+    }
+  }
 }

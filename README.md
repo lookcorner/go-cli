@@ -58,6 +58,14 @@ Prompts can also be piped through stdin:
 printf '%s\n' 'explain the failing test' | ./gork --workspace .
 ```
 
+Use `--interactive` for a persistent multi-turn terminal session. The response
+ID from each turn is linked into the next turn without resending the entire
+conversation:
+
+```sh
+./gork --interactive --workspace .
+```
+
 Local mutations require confirmation by default:
 
 - `--approval prompt`: ask before every file mutation and shell command.
@@ -72,6 +80,29 @@ they are not yet kernel-sandboxed; approval remains a security boundary.
 
 Each run is recorded as a mode-0600 JSONL event log under the user cache
 directory. `--session-dir` selects another location.
+
+## MCP servers
+
+Stdio MCP servers can be configured in the same JSON file. Gork Go performs the
+MCP initialization handshake, discovers all paginated tools, exposes them to
+the model as `mcp__SERVER__TOOL`, and forwards tool results back into the agent
+loop. MCP tool calls use the same approval mode as local mutations because tool
+annotations are only hints and cannot be treated as a security boundary.
+
+```json
+{
+  "mcp_servers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/project"]
+    }
+  }
+}
+```
+
+Server processes inherit the current environment, with optional per-server
+`env` overrides. They start in the selected workspace and are shut down when
+the agent exits.
 
 ## Privacy
 

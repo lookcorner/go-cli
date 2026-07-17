@@ -46,7 +46,7 @@ func TestRunnerExecutesToolLoop(t *testing.T) {
 		Tools:  tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionDeny}),
 		Model:  "test-model", MaxSteps: 3, TextOutput: &output,
 	}
-	result, err := runner.Run(context.Background(), "inspect the readme")
+	result, err := runner.RunTurn(context.Background(), "inspect the readme", "resp_0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,6 +55,9 @@ func TestRunnerExecutesToolLoop(t *testing.T) {
 	}
 	if len(streamer.requests) != 2 {
 		t.Fatalf("expected two requests, got %d", len(streamer.requests))
+	}
+	if streamer.requests[0].PreviousResponseID != "resp_0" {
+		t.Fatalf("first request did not continue prior conversation: %#v", streamer.requests[0])
 	}
 	second := streamer.requests[1]
 	if second.PreviousResponseID != "resp_1" || len(second.Input) != 1 {

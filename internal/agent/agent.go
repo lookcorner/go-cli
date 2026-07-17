@@ -43,6 +43,10 @@ type Result struct {
 }
 
 func (r *Runner) Run(ctx context.Context, prompt string) (Result, error) {
+	return r.RunTurn(ctx, prompt, "")
+}
+
+func (r *Runner) RunTurn(ctx context.Context, prompt, previousResponseID string) (Result, error) {
 	if r.Client == nil || r.Tools == nil {
 		return Result{}, errors.New("agent client and tools are required")
 	}
@@ -61,7 +65,6 @@ func (r *Runner) Run(ctx context.Context, prompt string) (Result, error) {
 
 	r.log("user_prompt", map[string]any{"text": prompt})
 	input := []api.InputItem{{Type: "message", Role: "user", Content: prompt}}
-	previousResponseID := ""
 	var final Result
 
 	for step := 1; step <= r.MaxSteps; step++ {
