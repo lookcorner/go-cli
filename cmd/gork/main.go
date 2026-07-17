@@ -51,6 +51,16 @@ type options struct {
 	goal        bool
 	goalRuns    int
 	acp         bool
+	allow       stringListFlag
+	deny        stringListFlag
+}
+
+type stringListFlag []string
+
+func (f *stringListFlag) String() string { return strings.Join(*f, ",") }
+func (f *stringListFlag) Set(value string) error {
+	*f = append(*f, value)
+	return nil
 }
 
 func main() {
@@ -71,6 +81,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	flags.StringVar(&opts.backend, "backend", "", "model API backend: responses, chat_completions, or anthropic_messages")
 	flags.StringVar(&opts.system, "system", "", "additional agent instructions")
 	flags.StringVar(&opts.approval, "approval", "prompt", "write/shell approval: prompt, auto, or deny")
+	flags.Var(&opts.allow, "allow", "allow matching Tool(pattern) permission rule; repeatable")
+	flags.Var(&opts.deny, "deny", "deny matching Tool(pattern) permission rule; repeatable")
 	flags.StringVar(&opts.sessionDir, "session-dir", "", "session JSONL directory")
 	flags.IntVar(&opts.maxSteps, "max-steps", 0, "maximum model/tool iterations")
 	flags.DurationVar(&opts.timeout, "timeout", 0, "overall run timeout")
@@ -217,6 +229,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	} else {
 		approver = tools.PromptApprover{Mode: mode, Input: inputReader, Output: stderr}
 	}
+	approver, err = tools.NewRuleApprover(approver, opts.allow, opts.deny)
+	if err != nil {
+		return err
+	}
 	registry := tools.NewRegistry(ws, approver)
 	defer registry.Close()
 	if len(skillCatalog.Names()) > 0 {
@@ -316,6 +332,10 @@ func runACP(cfg config.Config, opts options, stdin io.Reader, stdout, stderr io.
 		approver := protocolApprover
 		if mode != tools.PermissionPrompt {
 			approver = tools.PromptApprover{Mode: mode}
+		}
+		approver, err = tools.NewRuleApprover(approver, opts.allow, opts.deny)
+		if err != nil {
+			return nil, nil, err
 		}
 		registry := tools.NewRegistry(ws, approver)
 		logger, err := session.NewLogger(opts.sessionDir)

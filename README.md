@@ -135,6 +135,15 @@ Local mutations require confirmation by default:
 - `--approval auto`: approve all available local tools. Use only in a trusted
   workspace and environment.
 
+Repeatable `--allow 'Tool(pattern)'` and `--deny 'Tool(pattern)'` rules refine
+the base mode. Deny always wins, allow bypasses the base prompt, and unmatched
+actions fall back to `--approval`. Bare patterns target Bash-compatible shell
+actions:
+
+```sh
+./gork --allow 'Bash(git *)' --deny 'Bash(git push --force*)' --workspace .
+```
+
 The Gork Build-compatible file surface includes `read_file`, `list_dir`,
 `grep`, and `search_replace`; text reads support positive or negative line
 offsets and use the original `LINE_NUMBER→LINE_CONTENT` format. The earlier
