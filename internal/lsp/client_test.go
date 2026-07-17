@@ -52,6 +52,9 @@ func TestLifecycleToolQueryAndDiagnostics(t *testing.T) {
 	if !strings.Contains(hover, "fixture hover") {
 		t.Fatalf("unexpected hover result: %s", hover)
 	}
+	if data, err := os.ReadFile(path); err != nil || string(data) != "package fixture\n" {
+		t.Fatalf("workspace/applyEdit was not applied: %q err=%v", data, err)
+	}
 	deadline := time.Now().Add(time.Second)
 	for {
 		diagnostics, err := manager.Tool().Execute(context.Background(), json.RawMessage(
@@ -136,18 +139,42 @@ func TestLSPHelperProcess(t *testing.T) {
 					},
 				}}},
 			})
+			writeLSPFixtureMessage(map[string]any{
+				"jsonrpc": "2.0", "id": 91, "method": "workspace/applyEdit",
+				"params": map[string]any{"label": "rename package", "edit": map[string]any{
+					"documentChanges": []any{map[string]any{
+						"textDocument": map[string]any{"uri": params.TextDocument.URI, "version": 1},
+						"edits": []any{map[string]any{
+							"range": map[string]any{
+								"start": map[string]any{"line": 0, "character": 8},
+								"end":   map[string]any{"line": 0, "character": 12},
+							},
+							"newText": "fixture",
+						}},
+					}},
+				}},
+			})
 			continue
 		}
 		if len(message.ID) == 0 {
 			continue
 		}
 		if message.Method == "" {
-			if string(message.ID) != "90" {
+			switch string(message.ID) {
+			case "90":
+				var values []any
+				if json.Unmarshal(message.Result, &values) != nil || len(values) != 3 || values[1] != "configured" || values[2] != nil || values[0].(map[string]any)["staticcheck"] != true {
+					os.Exit(9)
+				}
+			case "91":
+				var applied struct {
+					Applied bool `json:"applied"`
+				}
+				if json.Unmarshal(message.Result, &applied) != nil || !applied.Applied {
+					os.Exit(11)
+				}
+			default:
 				os.Exit(8)
-			}
-			var values []any
-			if json.Unmarshal(message.Result, &values) != nil || len(values) != 3 || values[1] != "configured" || values[2] != nil || values[0].(map[string]any)["staticcheck"] != true {
-				os.Exit(9)
 			}
 			continue
 		}
@@ -158,9 +185,14 @@ func TestLSPHelperProcess(t *testing.T) {
 		case "initialize":
 			var params struct {
 				InitializationOptions map[string]any `json:"initializationOptions"`
+				Capabilities          map[string]any `json:"capabilities"`
 			}
 			if json.Unmarshal(message.Params, &params) != nil || params.InitializationOptions["usePlaceholders"] != true {
 				os.Exit(10)
+			}
+			workspaceCaps, _ := params.Capabilities["workspace"].(map[string]any)
+			if workspaceCaps["workspaceEdit"] == nil {
+				os.Exit(12)
 			}
 			result = map[string]any{"capabilities": map[string]any{"hoverProvider": true}}
 		case "textDocument/hover":

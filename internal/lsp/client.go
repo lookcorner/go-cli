@@ -17,6 +17,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/lookcorner/go-cli/internal/workspace"
 )
 
 type ProcessConfig struct {
@@ -70,6 +72,8 @@ type Client struct {
 	documents   map[string]documentState
 	diagnostics map[string]json.RawMessage
 	settings    map[string]any
+	workspace   *workspace.Workspace
+	documentMu  sync.Mutex
 	writeMu     sync.Mutex
 	done        chan struct{}
 	once        sync.Once
@@ -79,8 +83,12 @@ func Start(ctx context.Context, cfg ProcessConfig) (*Client, error) {
 	if cfg.Name == "" || cfg.Command == "" || cfg.Root == "" {
 		return nil, errors.New("LSP name, command, and root are required")
 	}
+	ws, err := workspace.Open(cfg.Root)
+	if err != nil {
+		return nil, err
+	}
 	cmd := exec.CommandContext(ctx, cfg.Command, cfg.Args...)
-	cmd.Dir = cfg.Root
+	cmd.Dir = ws.Root()
 	cmd.Env = mergeEnv(os.Environ(), cfg.Env)
 	cmd.Stderr = cfg.Stderr
 	stdin, err := cmd.StdinPipe()
@@ -95,14 +103,14 @@ func Start(ctx context.Context, cfg ProcessConfig) (*Client, error) {
 		return nil, fmt.Errorf("start LSP server %q: %w", cfg.Name, err)
 	}
 	client := &Client{
-		name: cfg.Name, root: cfg.Root, extensions: normalizeExtensions(cfg.Extensions),
+		name: cfg.Name, root: ws.Root(), extensions: normalizeExtensions(cfg.Extensions),
 		cmd: cmd, stdin: stdin, pending: make(map[string]chan response),
 		documents: make(map[string]documentState), diagnostics: make(map[string]json.RawMessage),
-		settings: cfg.Settings,
-		done:     make(chan struct{}),
+		settings: cfg.Settings, workspace: ws,
+		done: make(chan struct{}),
 	}
 	go client.readLoop(stdout)
-	rootURI := fileURI(cfg.Root)
+	rootURI := fileURI(ws.Root())
 	initCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	var initialized any
@@ -110,7 +118,10 @@ func Start(ctx context.Context, cfg ProcessConfig) (*Client, error) {
 		"processId": os.Getpid(), "rootUri": rootURI,
 		"workspaceFolders": []any{map[string]any{"uri": rootURI, "name": filepath.Base(cfg.Root)}},
 		"capabilities": map[string]any{
-			"workspace": map[string]any{"workspaceFolders": true, "configuration": true},
+			"workspace": map[string]any{
+				"workspaceFolders": true, "configuration": true,
+				"workspaceEdit": map[string]any{"documentChanges": true, "failureHandling": "abort"},
+			},
 			"textDocument": map[string]any{
 				"hover": map[string]any{}, "definition": map[string]any{},
 				"references": map[string]any{}, "documentSymbol": map[string]any{},
@@ -152,6 +163,8 @@ func (c *Client) Request(ctx context.Context, method string, params any) (json.R
 }
 
 func (c *Client) SyncDocument(path string) (string, error) {
+	c.documentMu.Lock()
+	defer c.documentMu.Unlock()
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return "", err
@@ -333,6 +346,8 @@ func (c *Client) handleServerRequest(request rpcMessage) {
 		result = []any{map[string]any{"uri": fileURI(c.root), "name": filepath.Base(c.root)}}
 	case "client/registerCapability", "client/unregisterCapability":
 		result = nil
+	case "workspace/applyEdit":
+		result = c.applyWorkspaceEdit(request.Params)
 	default:
 		_ = c.writeMessage(map[string]any{
 			"jsonrpc": "2.0", "id": id,

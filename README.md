@@ -379,8 +379,11 @@ extensions = [".ts", ".tsx", ".js", ".jsx"]
 ```
 
 Servers use LSP's framed stdio JSON-RPC transport, receive the workspace root
-during initialization, and are shut down on exit. Extension filters are
-optional; entries may be written with or without the leading dot.
+during initialization, and are shut down on exit. Server-requested text edits
+are applied with workspace confinement, UTF-16 range and document-version
+checks, and atomic file replacement. LSP create/rename/delete resource
+operations are rejected. Extension filters are optional; entries may be
+written with or without the leading dot.
 
 ## Project instructions and skills
 
