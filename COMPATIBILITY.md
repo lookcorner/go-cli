@@ -11,7 +11,7 @@ Status values: **done**, **partial**, **planned**.
 | Headless agent loop | done | Multi-step model/tool loop with cancellation and a configurable limit |
 | Workspace file tools | done | Read, list, regex search, atomic write and exact-text edit |
 | Tool permissions | partial | Prompt/auto/deny modes are present; command-prefix and managed policy rules remain |
-| Shell execution | partial | Foreground timeout/capped output plus background start/status/output/kill, process groups and exit cleanup work; interactive PTY sessions and cgroups remain |
+| Shell execution | partial | Gork-compatible `run_terminal_cmd`, `get_task_output`, and `kill_task` support foreground exit status, background timeout/lifecycle, multi-task wait/poll, process groups and exit cleanup; persistent shell state, interactive PTY sessions and cgroups remain |
 | Session persistence | partial | Durable JSONL events, latest/path resume and completed-turn response-ID continuation work; local transcript reconstruction, rewind, branching and migrations remain |
 | Configuration | partial | JSON, environment and CLI layers; TOML compatibility and managed config remain |
 | Authentication | partial | API-key bearer auth; xAI OAuth/device flow and refresh storage remain |

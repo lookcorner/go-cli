@@ -100,6 +100,9 @@ func NewRegistry(ws *workspace.Workspace, approver Approver) *Registry {
 		&startCommandTool{manager: processes},
 		&commandOutputTool{manager: processes},
 		&killCommandTool{manager: processes},
+		&runTerminalCommandTool{manager: processes},
+		&taskOutputTool{manager: processes},
+		&killTaskTool{manager: processes},
 	}
 	registry := &Registry{tools: make(map[string]Tool, len(items)), processes: processes}
 	for _, item := range items {

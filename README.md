@@ -100,13 +100,17 @@ Local mutations require confirmation by default:
   workspace and environment.
 
 The built-in tools include `read_file`, `list_files`, `search_files`,
-`write_file`, `edit_file`, and `shell`. Long-lived processes use
+`write_file`, `edit_file`, and `shell`. The Gork Build-compatible command
+surface is `run_terminal_cmd`, `get_task_output`, and `kill_task`, including
+foreground exit-status output, background task IDs, multi-task polling/waiting,
+and process-group termination. The earlier aliases
 `start_background_command`, `get_background_command_output`, and
-`kill_background_command`; their output is captured in a bounded tail buffer,
-their process groups are terminated on request, and every remaining process is
-cleaned up when Gork exits. File operations resolve symlinks and reject paths
-outside the selected workspace. Shell commands start in the workspace, but
-they are not yet kernel-sandboxed; approval remains a security boundary.
+`kill_background_command` remain available. Output is captured in a bounded
+tail buffer, process groups are terminated on request, and every remaining
+process is cleaned up when Gork exits. File operations resolve symlinks and
+reject paths outside the selected workspace. Shell commands start in the
+workspace, but they are not yet kernel-sandboxed; approval remains a security
+boundary.
 
 Each run is recorded as a mode-0600 JSONL event log under the user cache
 directory. `--session-dir` selects another location.
