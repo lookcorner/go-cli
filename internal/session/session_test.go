@@ -60,3 +60,27 @@ func TestLatest(t *testing.T) {
 		t.Fatalf("unexpected latest session: %s", path)
 	}
 }
+
+func TestTranscriptStopsAtLastCompletedTurn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	content := "" +
+		`{"kind":"user_prompt","data":{"text":"first"}}` + "\n" +
+		`{"kind":"model_response","data":{"response_id":"r1","text":"checking ","tool_call_count":1}}` + "\n" +
+		`{"kind":"model_response","data":{"response_id":"r2","text":"done","tool_call_count":0}}` + "\n" +
+		`{"kind":"user_prompt","data":{"text":"incomplete"}}` + "\n" +
+		`{"kind":"model_response","data":{"response_id":"r3","text":"partial","tool_call_count":1}}` + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	messages, err := Transcript(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 2 || messages[0].Text != "first" || messages[1].Text != "checking done" {
+		t.Fatalf("unexpected transcript: %#v", messages)
+	}
+	formatted := FormatTranscript(messages)
+	if formatted != "You\nfirst\n\nGork\nchecking done" {
+		t.Fatalf("unexpected formatted transcript: %q", formatted)
+	}
+}

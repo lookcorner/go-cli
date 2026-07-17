@@ -171,6 +171,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return fmt.Errorf("--resume requires the responses backend; %s history is process-local", cfg.Backend)
 	}
 	var logger *session.Logger
+	var resumedTranscript string
 	if opts.resume != "" {
 		resumePath := opts.resume
 		if resumePath == "latest" {
@@ -179,7 +180,12 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 				return err
 			}
 		}
-		logger, opts.previousID, err = session.Resume(resumePath)
+		var messages []session.Message
+		messages, err = session.Transcript(resumePath)
+		if err == nil {
+			resumedTranscript = session.FormatTranscript(messages)
+			logger, opts.previousID, err = session.Resume(resumePath)
+		}
 	} else {
 		logger, err = session.NewLogger(opts.sessionDir)
 	}
@@ -241,10 +247,13 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		TextOutput: stdout, StatusOutput: stderr,
 	}
 	if opts.tui {
-		return tui.Run(ctx, runner, tuiBridge, prompt, opts.previousID, ws.Root(), cfg.Model)
+		return tui.Run(ctx, runner, tuiBridge, prompt, opts.previousID, resumedTranscript, ws.Root(), cfg.Model)
 	}
 	fmt.Fprintf(stderr, "[gork] workspace: %s\n[gork] session: %s\n", ws.Root(), displayPath(logger.Path()))
 	if opts.interactive {
+		if resumedTranscript != "" {
+			fmt.Fprintln(stdout, resumedTranscript)
+		}
 		return interactiveLoop(ctx, runner, inputReader, stdout, stderr, prompt, opts.previousID)
 	}
 	if opts.goal {

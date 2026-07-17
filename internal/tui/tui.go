@@ -115,7 +115,7 @@ type model struct {
 	initial    string
 }
 
-func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPrompt, previousID, workspace, modelName string) error {
+func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPrompt, previousID, initialTranscript, workspace, modelName string) error {
 	defer bridge.Close()
 	runner.TextOutput = bridge.TextWriter()
 	runner.StatusOutput = bridge.StatusWriter()
@@ -124,6 +124,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		modelName: modelName, previousID: previousID, width: 80, height: 24,
 		status: "ready", initial: strings.TrimSpace(initialPrompt),
 	}
+	m.transcript.WriteString(strings.TrimSpace(initialTranscript))
 	program := tea.NewProgram(m, tea.WithContext(ctx))
 	_, err := program.Run()
 	if errors.Is(err, tea.ErrInterrupted) || errors.Is(err, context.Canceled) {
