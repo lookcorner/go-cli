@@ -144,12 +144,52 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleClose(incoming)
 		case "x.ai/hunk-tracker/get-hunks", "x.ai/hunk-tracker/get-files", "x.ai/hunk-tracker/get-summary":
 			s.handleHunkQuery(ctx, incoming)
+		case "x.ai/hunk-tracker/hunk-action", "x.ai/hunk-tracker/file-action", "x.ai/hunk-tracker/all-action":
+			s.handleHunkAction(ctx, incoming)
 		default:
 			if len(incoming.ID) > 0 {
 				s.respondError(incoming.ID, -32601, "method not found")
 			}
 		}
 	}
+}
+
+func (s *Server) handleHunkAction(ctx context.Context, incoming message) {
+	var params struct {
+		SessionID string `json:"sessionId"`
+		HunkID    string `json:"hunkId"`
+		Path      string `json:"path"`
+		Action    string `json:"action"`
+	}
+	if json.Unmarshal(incoming.Params, &params) != nil || params.SessionID == "" {
+		s.respondError(incoming.ID, -32602, "sessionId is required")
+		return
+	}
+	if params.Action != "accept" && params.Action != "reject" {
+		s.respondError(incoming.ID, -32602, "action must be accept or reject")
+		return
+	}
+	current := s.lookupSession(params.SessionID)
+	if current == nil || current.runner == nil || current.runner.Tools == nil {
+		s.respondError(incoming.ID, -32602, "unknown session")
+		return
+	}
+	tracker := current.runner.Tools.HunkTracker()
+	var count int
+	var err error
+	switch incoming.Method {
+	case "x.ai/hunk-tracker/hunk-action":
+		count, err = tracker.HunkAction(ctx, params.HunkID, params.Action)
+	case "x.ai/hunk-tracker/file-action":
+		count, err = tracker.FileAction(ctx, params.Path, params.Action)
+	case "x.ai/hunk-tracker/all-action":
+		count, err = tracker.AllAction(ctx, params.Action)
+	}
+	if err != nil {
+		s.respond(incoming.ID, map[string]any{"success": false, "error": err.Error(), "affectedCount": 0})
+		return
+	}
+	s.respond(incoming.ID, map[string]any{"success": true, "affectedCount": count})
 }
 
 func (s *Server) handleHunkQuery(ctx context.Context, incoming message) {

@@ -49,10 +49,12 @@ type HunkTracker struct {
 	ws         *workspace.Workspace
 	mu         sync.RWMutex
 	agentPaths map[string]time.Time
+	accepted   map[string]bool
+	actionMu   sync.Mutex
 }
 
 func NewHunkTracker(ws *workspace.Workspace) *HunkTracker {
-	return &HunkTracker{ws: ws, agentPaths: make(map[string]time.Time)}
+	return &HunkTracker{ws: ws, agentPaths: make(map[string]time.Time), accepted: make(map[string]bool)}
 }
 
 func (t *HunkTracker) MarkAgent(path string) {
@@ -99,7 +101,9 @@ func (t *HunkTracker) Hunks(ctx context.Context, path, source string) ([]Hunk, e
 	}
 	hunks = hunks[:0]
 	for _, hunk := range unique {
-		hunks = append(hunks, hunk)
+		if !t.isAccepted(hunk.ID) {
+			hunks = append(hunks, hunk)
+		}
 	}
 	if source != "" && source != "all" {
 		filtered := hunks[:0]
@@ -117,6 +121,172 @@ func (t *HunkTracker) Hunks(ctx context.Context, path, source string) ([]Hunk, e
 		return hunks[i].Path < hunks[j].Path
 	})
 	return hunks, nil
+}
+
+// HunkAction accepts or rejects one currently visible hunk. Accepting hides
+// the hunk for this tracker session. Rejecting first verifies the exact text
+// at the recorded line range, then restores the old text atomically.
+func (t *HunkTracker) HunkAction(ctx context.Context, id, action string) (int, error) {
+	if strings.TrimSpace(id) == "" {
+		return 0, errors.New("hunkId is required")
+	}
+	hunks, err := t.Hunks(ctx, "", "all")
+	if err != nil {
+		return 0, err
+	}
+	for _, hunk := range hunks {
+		if hunk.ID == id {
+			return t.applyAction([]Hunk{hunk}, action)
+		}
+	}
+	return 0, fmt.Errorf("unknown or already accepted hunk %q", id)
+}
+
+// FileAction applies an action to every currently visible hunk for path.
+func (t *HunkTracker) FileAction(ctx context.Context, path, action string) (int, error) {
+	if strings.TrimSpace(path) == "" {
+		return 0, errors.New("path is required")
+	}
+	hunks, err := t.Hunks(ctx, path, "all")
+	if err != nil {
+		return 0, err
+	}
+	if len(hunks) == 0 {
+		return 0, fmt.Errorf("no visible hunks for %q", path)
+	}
+	return t.applyAction(hunks, action)
+}
+
+// AllAction applies an action to every currently visible hunk.
+func (t *HunkTracker) AllAction(ctx context.Context, action string) (int, error) {
+	hunks, err := t.Hunks(ctx, "", "all")
+	if err != nil {
+		return 0, err
+	}
+	if len(hunks) == 0 {
+		return 0, errors.New("no visible hunks")
+	}
+	return t.applyAction(hunks, action)
+}
+
+func (t *HunkTracker) applyAction(hunks []Hunk, action string) (int, error) {
+	if action != "accept" && action != "reject" {
+		return 0, errors.New("action must be accept or reject")
+	}
+	t.actionMu.Lock()
+	defer t.actionMu.Unlock()
+	if action == "accept" {
+		t.markAccepted(hunks)
+		return len(hunks), nil
+	}
+
+	byPath := make(map[string][]Hunk)
+	for _, hunk := range hunks {
+		byPath[hunk.Path] = append(byPath[hunk.Path], hunk)
+	}
+	type plannedWrite struct {
+		path     string
+		original []byte
+		updated  []byte
+		mode     os.FileMode
+		remove   bool
+	}
+	plans := make([]plannedWrite, 0, len(byPath))
+	for name, fileHunks := range byPath {
+		resolved, err := t.ws.Resolve(name)
+		if err != nil {
+			return 0, err
+		}
+		data, mode, missing, err := readForReject(resolved)
+		if err != nil {
+			return 0, err
+		}
+		sort.Slice(fileHunks, func(i, j int) bool { return fileHunks[i].NewStart > fileHunks[j].NewStart })
+		updated := string(data)
+		for _, hunk := range fileHunks {
+			updated, err = rejectText(updated, hunk)
+			if err != nil {
+				return 0, fmt.Errorf("reject %s hunk %s: %w", name, hunk.ID, err)
+			}
+		}
+		remove := !missing && updated == "" && len(fileHunks) == 1 && fileHunks[0].OldLines == 0 && string(data) == fileHunks[0].NewText
+		plans = append(plans, plannedWrite{path: resolved, original: data, updated: []byte(updated), mode: mode, remove: remove})
+	}
+	// Recheck every file after planning so a concurrent edit fails closed.
+	for _, plan := range plans {
+		current, _, _, err := readForReject(plan.path)
+		if err != nil {
+			return 0, err
+		}
+		if string(current) != string(plan.original) {
+			return 0, fmt.Errorf("%q changed while reject was being prepared", t.ws.Relative(plan.path))
+		}
+	}
+	for _, plan := range plans {
+		if plan.remove {
+			if err := os.Remove(plan.path); err != nil {
+				return 0, fmt.Errorf("remove rejected file %q: %w", t.ws.Relative(plan.path), err)
+			}
+			continue
+		}
+		if err := atomicWrite(plan.path, plan.updated, plan.mode); err != nil {
+			return 0, err
+		}
+	}
+	t.markAccepted(hunks)
+	return len(hunks), nil
+}
+
+func readForReject(path string) ([]byte, os.FileMode, bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, 0o644, true, nil
+		}
+		return nil, 0, false, err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, 0, false, fmt.Errorf("%q is not a regular file", path)
+	}
+	return data, info.Mode().Perm(), false, nil
+}
+
+func rejectText(current string, hunk Hunk) (string, error) {
+	lines := strings.SplitAfter(current, "\n")
+	start := hunk.NewStart - 1
+	if hunk.NewLines == 0 {
+		start = hunk.NewStart
+	}
+	if start < 0 {
+		start = 0
+	}
+	end := start + hunk.NewLines
+	if start > len(lines) || end > len(lines) {
+		return "", errors.New("recorded line range no longer exists")
+	}
+	if got := strings.Join(lines[start:end], ""); got != hunk.NewText {
+		return "", errors.New("current text does not exactly match the hunk")
+	}
+	return strings.Join(lines[:start], "") + hunk.OldText + strings.Join(lines[end:], ""), nil
+}
+
+func (t *HunkTracker) isAccepted(id string) bool {
+	t.mu.RLock()
+	accepted := t.accepted[id]
+	t.mu.RUnlock()
+	return accepted
+}
+
+func (t *HunkTracker) markAccepted(hunks []Hunk) {
+	t.mu.Lock()
+	for _, hunk := range hunks {
+		t.accepted[hunk.ID] = true
+	}
+	t.mu.Unlock()
 }
 
 func (t *HunkTracker) gitDiff(ctx context.Context, cached bool, path string) (string, error) {
@@ -171,6 +341,7 @@ func (t *HunkTracker) parseDiff(diff string) []Hunk {
 	var path string
 	var current *Hunk
 	var patch, oldText, newText strings.Builder
+	var previous byte
 	var result []Hunk
 	flush := func() {
 		if current == nil {
@@ -185,6 +356,7 @@ func (t *HunkTracker) parseDiff(diff string) []Hunk {
 		patch.Reset()
 		oldText.Reset()
 		newText.Reset()
+		previous = 0
 	}
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -206,15 +378,33 @@ func (t *HunkTracker) parseDiff(diff string) []Hunk {
 			continue
 		}
 		patch.WriteString(line + "\n")
+		if line == `\ No newline at end of file` {
+			if previous == '-' {
+				trimBuilderNewline(&oldText)
+			} else if previous == '+' {
+				trimBuilderNewline(&newText)
+			}
+			continue
+		}
 		if strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---") {
 			oldText.WriteString(strings.TrimPrefix(line, "-") + "\n")
+			previous = '-'
 		}
 		if strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++") {
 			newText.WriteString(strings.TrimPrefix(line, "+") + "\n")
+			previous = '+'
 		}
 	}
 	flush()
 	return result
+}
+
+func trimBuilderNewline(builder *strings.Builder) {
+	value := builder.String()
+	if strings.HasSuffix(value, "\n") {
+		builder.Reset()
+		builder.WriteString(strings.TrimSuffix(value, "\n"))
+	}
 }
 
 func (t *HunkTracker) untracked(ctx context.Context, path string) ([]Hunk, error) {

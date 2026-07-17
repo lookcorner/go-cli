@@ -154,6 +154,23 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 	if len(hunks) != 1 || hunks[0].(map[string]any)["path"] != "made.txt" || hunks[0].(map[string]any)["source"] != "agent" {
 		t.Fatalf("unexpected ACP hunks: %#v", hunkResponse)
 	}
+	encodeACP(t, encoder, map[string]any{
+		"jsonrpc": "2.0", "id": 34, "method": "x.ai/hunk-tracker/hunk-action",
+		"params": map[string]any{"sessionId": sessionID, "hunkId": hunks[0].(map[string]any)["id"], "action": "accept"},
+	})
+	actionResponse := decodeACP(t, decoder)
+	actionResult := actionResponse["result"].(map[string]any)
+	if actionResult["success"] != true || int(actionResult["affectedCount"].(float64)) != 1 {
+		t.Fatalf("unexpected hunk action response: %#v", actionResponse)
+	}
+	encodeACP(t, encoder, map[string]any{
+		"jsonrpc": "2.0", "id": 35, "method": "x.ai/hunk-tracker/get-hunks",
+		"params": map[string]any{"sessionId": sessionID, "source": "all"},
+	})
+	acceptedResponse := decodeACP(t, decoder)
+	if visible := acceptedResponse["result"].(map[string]any)["hunks"].([]any); len(visible) != 0 {
+		t.Fatalf("accepted ACP hunk remained visible: %#v", acceptedResponse)
+	}
 	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 4, "method": "session/close", "params": map[string]any{"sessionId": sessionID}})
 	closed := decodeACP(t, decoder)
 	if int(closed["id"].(float64)) != 4 {
