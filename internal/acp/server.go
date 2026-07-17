@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/api"
@@ -55,6 +57,9 @@ type message struct {
 
 type session struct {
 	id       string
+	cwd      string
+	title    string
+	updated  time.Time
 	runner   *agent.Runner
 	close    func()
 	mu       sync.Mutex
@@ -113,7 +118,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 					"loadSession":         false,
 					"promptCapabilities":  map[string]any{"image": false, "audio": false, "embeddedContext": true},
 					"mcpCapabilities":     map[string]any{"http": false, "sse": false},
-					"sessionCapabilities": map[string]any{"close": map[string]any{}},
+					"sessionCapabilities": map[string]any{"close": map[string]any{}, "list": map[string]any{}},
 					"auth":                map[string]any{},
 				},
 				"authMethods": []any{},
@@ -121,6 +126,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			})
 		case "session/new":
 			s.handleNewSession(ctx, incoming)
+		case "session/list":
+			s.handleListSessions(incoming)
 		case "session/prompt":
 			s.handlePrompt(ctx, incoming)
 		case "session/cancel":
@@ -178,7 +185,7 @@ func (s *Server) handleNewSession(ctx context.Context, incoming message) {
 		closeRuntime = func() {}
 	}
 	runner.ToolObserver = &sessionToolObserver{server: s, sessionID: id}
-	created := &session{id: id, runner: runner, close: closeRuntime}
+	created := &session{id: id, cwd: params.CWD, updated: time.Now().UTC(), runner: runner, close: closeRuntime}
 	s.mu.Lock()
 	s.sessions[id] = created
 	s.mu.Unlock()
@@ -218,6 +225,14 @@ func (s *Server) handlePrompt(parent context.Context, incoming message) {
 	runCtx, cancel := context.WithCancel(parent)
 	current.cancel = cancel
 	current.running = true
+	if current.title == "" {
+		current.title = promptTitle(prompt)
+		s.notify(current.id, map[string]any{
+			"sessionUpdate": "session_info_update", "title": current.title,
+			"updatedAt": time.Now().UTC().Format(time.RFC3339),
+		})
+	}
+	current.updated = time.Now().UTC()
 	previous := current.previous
 	current.mu.Unlock()
 	s.wg.Add(1)
@@ -236,11 +251,64 @@ func (s *Server) handlePrompt(parent context.Context, incoming message) {
 		}
 		current.running = false
 		current.cancel = nil
+		current.updated = time.Now().UTC()
 		current.mu.Unlock()
 		if err == nil || stopReason == "cancelled" {
 			s.respond(incoming.ID, map[string]any{"stopReason": stopReason})
 		}
 	}()
+}
+
+func (s *Server) handleListSessions(incoming message) {
+	var params struct {
+		CWD    string `json:"cwd"`
+		Cursor string `json:"cursor"`
+	}
+	if len(incoming.Params) > 0 && string(incoming.Params) != "null" {
+		if err := json.Unmarshal(incoming.Params, &params); err != nil {
+			s.respondError(incoming.ID, -32602, "invalid session list parameters")
+			return
+		}
+	}
+	if params.Cursor != "" {
+		s.respondError(incoming.ID, -32602, "invalid session list cursor")
+		return
+	}
+	type info struct {
+		SessionID string `json:"sessionId"`
+		CWD       string `json:"cwd"`
+		Title     string `json:"title,omitempty"`
+		UpdatedAt string `json:"updatedAt,omitempty"`
+	}
+	s.mu.Lock()
+	items := make([]info, 0, len(s.sessions))
+	for _, current := range s.sessions {
+		current.mu.Lock()
+		if params.CWD == "" || current.cwd == params.CWD {
+			items = append(items, info{
+				SessionID: current.id, CWD: current.cwd, Title: current.title,
+				UpdatedAt: current.updated.Format(time.RFC3339),
+			})
+		}
+		current.mu.Unlock()
+	}
+	s.mu.Unlock()
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].UpdatedAt == items[j].UpdatedAt {
+			return items[i].SessionID < items[j].SessionID
+		}
+		return items[i].UpdatedAt > items[j].UpdatedAt
+	})
+	s.respond(incoming.ID, map[string]any{"sessions": items})
+}
+
+func promptTitle(prompt string) string {
+	line := strings.TrimSpace(strings.SplitN(prompt, "\n", 2)[0])
+	runes := []rune(line)
+	if len(runes) > 80 {
+		return string(runes[:79]) + "…"
+	}
+	return line
 }
 
 func renderPrompt(blocks []promptBlock) ([]string, error) {

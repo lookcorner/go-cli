@@ -74,6 +74,10 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 	if promptCapabilities["embeddedContext"] != true || promptCapabilities["image"] != false {
 		t.Fatalf("unexpected prompt capabilities: %#v", promptCapabilities)
 	}
+	sessionCapabilities := initialize["result"].(map[string]any)["agentCapabilities"].(map[string]any)["sessionCapabilities"].(map[string]any)
+	if _, ok := sessionCapabilities["list"]; !ok {
+		t.Fatalf("session list capability missing: %#v", sessionCapabilities)
+	}
 	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 2, "method": "session/new", "params": map[string]any{
 		"cwd": root, "mcpServers": []any{map[string]any{
 			"name": "client-tools", "command": "/fixture-mcp", "args": []string{"--stdio"},
@@ -86,9 +90,20 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 		t.Fatalf("client MCP config was not forwarded: %#v", receivedConfig)
 	}
 	sessionID := created["result"].(map[string]any)["sessionId"].(string)
+	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 22, "method": "session/list", "params": map[string]any{"cwd": root}})
+	listed := decodeACP(t, decoder)
+	sessions := listed["result"].(map[string]any)["sessions"].([]any)
+	if len(sessions) != 1 || sessions[0].(map[string]any)["sessionId"] != sessionID {
+		t.Fatalf("unexpected session list: %#v", listed)
+	}
 	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 3, "method": "session/prompt", "params": map[string]any{
 		"sessionId": sessionID, "prompt": []any{map[string]any{"type": "text", "text": "create the file"}},
 	}})
+	titleUpdate := decodeACP(t, decoder)
+	infoUpdate := titleUpdate["params"].(map[string]any)["update"].(map[string]any)
+	if infoUpdate["sessionUpdate"] != "session_info_update" || infoUpdate["title"] != "create the file" {
+		t.Fatalf("unexpected session info update: %#v", titleUpdate)
+	}
 	toolStarted := decodeACP(t, decoder)
 	startedUpdate := toolStarted["params"].(map[string]any)["update"].(map[string]any)
 	if startedUpdate["sessionUpdate"] != "tool_call" || startedUpdate["toolCallId"] != "tool-1" {
@@ -192,6 +207,10 @@ func TestACPCancelReturnsCancelledStopReason(t *testing.T) {
 	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 2, "method": "session/prompt", "params": map[string]any{
 		"sessionId": sessionID, "prompt": []any{map[string]any{"type": "text", "text": "wait"}},
 	}})
+	titleUpdate := decodeACP(t, decoder)
+	if titleUpdate["method"] != "session/update" {
+		t.Fatalf("unexpected title update: %#v", titleUpdate)
+	}
 	select {
 	case <-streamer.started:
 	case <-time.After(time.Second):
