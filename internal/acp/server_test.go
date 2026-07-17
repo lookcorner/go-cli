@@ -13,6 +13,7 @@ import (
 
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/api"
+	sessionlog "github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/tools"
 	"github.com/lookcorner/go-cli/internal/workspace"
 )
@@ -50,7 +51,7 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 		{ResponseID: "response-2", Text: "finished"},
 	}}
 	factoryConfigs := make(chan SessionConfig, 1)
-	server := &Server{Factory: func(_ context.Context, cfg SessionConfig, approver tools.Approver, text, status io.Writer) (*agent.Runner, func(), error) {
+	server := &Server{SessionDir: t.TempDir(), Factory: func(_ context.Context, cfg SessionConfig, approver tools.Approver, text, status io.Writer) (*agent.Runner, func(), error) {
 		factoryConfigs <- cfg
 		ws, err := workspace.Open(cfg.CWD)
 		if err != nil {
@@ -75,7 +76,7 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 		t.Fatalf("unexpected prompt capabilities: %#v", promptCapabilities)
 	}
 	sessionCapabilities := initialize["result"].(map[string]any)["agentCapabilities"].(map[string]any)["sessionCapabilities"].(map[string]any)
-	if _, ok := sessionCapabilities["list"]; !ok {
+	if _, ok := sessionCapabilities["list"]; !ok || initialize["result"].(map[string]any)["agentCapabilities"].(map[string]any)["loadSession"] != true {
 		t.Fatalf("session list capability missing: %#v", sessionCapabilities)
 	}
 	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 2, "method": "session/new", "params": map[string]any{
@@ -187,7 +188,7 @@ func TestRenderPromptSupportsEmbeddedTextAndRejectsUnsupportedMedia(t *testing.T
 func TestACPCancelReturnsCancelledStopReason(t *testing.T) {
 	root := t.TempDir()
 	streamer := &blockingStreamer{started: make(chan struct{})}
-	server := &Server{Factory: func(_ context.Context, cfg SessionConfig, approver tools.Approver, text, status io.Writer) (*agent.Runner, func(), error) {
+	server := &Server{SessionDir: t.TempDir(), Factory: func(_ context.Context, cfg SessionConfig, approver tools.Approver, text, status io.Writer) (*agent.Runner, func(), error) {
 		ws, err := workspace.Open(cfg.CWD)
 		if err != nil {
 			return nil, nil, err
@@ -220,6 +221,78 @@ func TestACPCancelReturnsCancelledStopReason(t *testing.T) {
 	response := decodeACP(t, decoder)
 	if response["result"].(map[string]any)["stopReason"] != "cancelled" {
 		t.Fatalf("unexpected cancel response: %#v", response)
+	}
+	_ = inputW.Close()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ACP server did not stop")
+	}
+}
+
+func TestACPLoadReplaysAndResumeReconnectsPersistedSession(t *testing.T) {
+	sessionDir := t.TempDir()
+	workspaceRoot := t.TempDir()
+	logger, err := sessionlog.NewLoggerWithID(sessionDir, "persisted-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []struct {
+		kind string
+		data any
+	}{
+		{"session_metadata", map[string]any{"cwd": workspaceRoot}},
+		{"user_prompt", map[string]any{"text": "stored question"}},
+		{"model_response", map[string]any{"response_id": "stored-response", "text": "stored answer", "tool_call_count": 0}},
+	} {
+		if err := logger.Append(event.kind, event.data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{SessionDir: sessionDir, Factory: func(_ context.Context, cfg SessionConfig, approver tools.Approver, text, status io.Writer) (*agent.Runner, func(), error) {
+		ws, err := workspace.Open(cfg.CWD)
+		if err != nil {
+			return nil, nil, err
+		}
+		registry := tools.NewRegistry(ws, approver)
+		resumed, _, err := sessionlog.Resume(cfg.ResumePath)
+		if err != nil {
+			_ = registry.Close()
+			return nil, nil, err
+		}
+		return &agent.Runner{
+			Client: &fixtureStreamer{}, Tools: registry, Logger: resumed,
+			Model: "fixture", TextOutput: text, StatusOutput: status,
+		}, func() { _ = resumed.Close(); _ = registry.Close() }, nil
+	}}
+	inputR, inputW := io.Pipe()
+	outputR, outputW := io.Pipe()
+	done := make(chan error, 1)
+	go func() { done <- server.Serve(context.Background(), inputR, outputW) }()
+	encoder := json.NewEncoder(inputW)
+	decoder := json.NewDecoder(outputR)
+	loadParams := map[string]any{"sessionId": "persisted-1", "cwd": workspaceRoot, "mcpServers": []any{}}
+	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "session/load", "params": loadParams})
+	userReplay := decodeACP(t, decoder)
+	agentReplay := decodeACP(t, decoder)
+	loaded := decodeACP(t, decoder)
+	if userReplay["params"].(map[string]any)["update"].(map[string]any)["sessionUpdate"] != "user_message_chunk" ||
+		agentReplay["params"].(map[string]any)["update"].(map[string]any)["sessionUpdate"] != "agent_message_chunk" ||
+		loaded["result"].(map[string]any)["sessionId"] != "persisted-1" {
+		t.Fatalf("unexpected load sequence: %#v %#v %#v", userReplay, agentReplay, loaded)
+	}
+	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 2, "method": "session/close", "params": map[string]any{"sessionId": "persisted-1"}})
+	_ = decodeACP(t, decoder)
+	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 3, "method": "session/resume", "params": loadParams})
+	resumed := decodeACP(t, decoder)
+	if int(resumed["id"].(float64)) != 3 || resumed["result"].(map[string]any)["sessionId"] != "persisted-1" {
+		t.Fatalf("unexpected resume response: %#v", resumed)
 	}
 	_ = inputW.Close()
 	select {

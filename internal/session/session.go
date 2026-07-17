@@ -368,6 +368,8 @@ func lastCompletedResponseID(path string) (string, error) {
 	return last, nil
 }
 
+func CompletedResponseID(path string) (string, error) { return lastCompletedResponseID(path) }
+
 func (l *Logger) Path() string { return l.path }
 
 func (l *Logger) Append(kind string, data any) error {

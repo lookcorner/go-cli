@@ -14,6 +14,7 @@ import (
 
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/api"
+	sessionlog "github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/tools"
 )
 
@@ -22,6 +23,8 @@ const ProtocolVersion = 1
 type SessionConfig struct {
 	CWD        string
 	MCPServers []MCPServer
+	SessionID  string
+	ResumePath string
 }
 
 type MCPServer struct {
@@ -35,6 +38,7 @@ type Factory func(context.Context, SessionConfig, tools.Approver, io.Writer, io.
 
 type Server struct {
 	Factory     Factory
+	SessionDir  string
 	input       io.Reader
 	output      io.Writer
 	writeMu     sync.Mutex
@@ -115,10 +119,10 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.respond(incoming.ID, map[string]any{
 				"protocolVersion": ProtocolVersion,
 				"agentCapabilities": map[string]any{
-					"loadSession":         false,
+					"loadSession":         true,
 					"promptCapabilities":  map[string]any{"image": false, "audio": false, "embeddedContext": true},
 					"mcpCapabilities":     map[string]any{"http": false, "sse": false},
-					"sessionCapabilities": map[string]any{"close": map[string]any{}, "list": map[string]any{}},
+					"sessionCapabilities": map[string]any{"close": map[string]any{}, "list": map[string]any{}, "resume": map[string]any{}},
 					"auth":                map[string]any{},
 				},
 				"authMethods": []any{},
@@ -128,6 +132,10 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleNewSession(ctx, incoming)
 		case "session/list":
 			s.handleListSessions(incoming)
+		case "session/load":
+			s.handleRestoreSession(ctx, incoming, true)
+		case "session/resume":
+			s.handleRestoreSession(ctx, incoming, false)
 		case "session/prompt":
 			s.handlePrompt(ctx, incoming)
 		case "session/cancel":
@@ -159,8 +167,8 @@ func (s *Server) handleNewSession(ctx context.Context, incoming message) {
 		s.respondError(incoming.ID, -32602, "cwd is required")
 		return
 	}
-	id := fmt.Sprintf("gork-%d", s.nextSession.Add(1))
-	sessionConfig := SessionConfig{CWD: params.CWD, MCPServers: make([]MCPServer, 0, len(params.MCPServers))}
+	id := fmt.Sprintf("gork-%s-%d", time.Now().UTC().Format("20060102T150405.000000000Z"), s.nextSession.Add(1))
+	sessionConfig := SessionConfig{CWD: params.CWD, SessionID: id, MCPServers: make([]MCPServer, 0, len(params.MCPServers))}
 	for _, remote := range params.MCPServers {
 		if remote.Name == "" || remote.Command == "" {
 			s.respondError(incoming.ID, -32602, "stdio MCP servers require name and command")
@@ -174,22 +182,38 @@ func (s *Server) handleNewSession(ctx context.Context, incoming message) {
 			Name: remote.Name, Command: remote.Command, Args: remote.Args, Env: env,
 		})
 	}
+	_, err := s.startSession(ctx, id, sessionConfig, "")
+	if err != nil {
+		s.respondError(incoming.ID, -32000, err.Error())
+		return
+	}
+	s.respond(incoming.ID, map[string]any{"sessionId": id})
+}
+
+func (s *Server) startSession(ctx context.Context, id string, sessionConfig SessionConfig, previous string) (*session, error) {
 	approver := &serverApprover{server: s, sessionID: id}
 	writer := &sessionTextWriter{server: s, sessionID: id}
 	runner, closeRuntime, err := s.Factory(ctx, sessionConfig, approver, writer, io.Discard)
 	if err != nil {
-		s.respondError(incoming.ID, -32000, err.Error())
-		return
+		return nil, err
 	}
 	if closeRuntime == nil {
 		closeRuntime = func() {}
 	}
 	runner.ToolObserver = &sessionToolObserver{server: s, sessionID: id}
-	created := &session{id: id, cwd: params.CWD, updated: time.Now().UTC(), runner: runner, close: closeRuntime}
+	created := &session{
+		id: id, cwd: sessionConfig.CWD, updated: time.Now().UTC(), previous: previous,
+		runner: runner, close: closeRuntime,
+	}
 	s.mu.Lock()
+	if _, exists := s.sessions[id]; exists {
+		s.mu.Unlock()
+		closeRuntime()
+		return nil, errors.New("session is already active")
+	}
 	s.sessions[id] = created
 	s.mu.Unlock()
-	s.respond(incoming.ID, map[string]any{"sessionId": id})
+	return created, nil
 }
 
 func (s *Server) handlePrompt(parent context.Context, incoming message) {
@@ -259,6 +283,106 @@ func (s *Server) handlePrompt(parent context.Context, incoming message) {
 	}()
 }
 
+func (s *Server) handleRestoreSession(ctx context.Context, incoming message, replay bool) {
+	var params struct {
+		SessionID  string `json:"sessionId"`
+		CWD        string `json:"cwd"`
+		MCPServers []struct {
+			Name    string   `json:"name"`
+			Command string   `json:"command"`
+			Args    []string `json:"args"`
+			Env     []struct {
+				Name  string `json:"name"`
+				Value string `json:"value"`
+			} `json:"env"`
+		} `json:"mcpServers"`
+	}
+	if json.Unmarshal(incoming.Params, &params) != nil || params.SessionID == "" || params.CWD == "" {
+		s.respondError(incoming.ID, -32602, "sessionId and cwd are required")
+		return
+	}
+	path, err := sessionlog.PathForID(s.SessionDir, params.SessionID)
+	if err != nil {
+		s.respondError(incoming.ID, -32602, err.Error())
+		return
+	}
+	items, err := sessionlog.List(s.SessionDir, "")
+	if err != nil {
+		s.respondError(incoming.ID, -32000, err.Error())
+		return
+	}
+	found := false
+	for _, item := range items {
+		if item.SessionID == params.SessionID {
+			found = true
+			if item.CWD != params.CWD {
+				s.respondError(incoming.ID, -32602, "cwd does not match the stored session")
+				return
+			}
+			break
+		}
+	}
+	if !found {
+		s.respondError(incoming.ID, -32602, "unknown persisted session")
+		return
+	}
+	previous, err := sessionlog.CompletedResponseID(path)
+	if err != nil {
+		s.respondError(incoming.ID, -32000, err.Error())
+		return
+	}
+	config := SessionConfig{
+		CWD: params.CWD, SessionID: params.SessionID, ResumePath: path,
+		MCPServers: make([]MCPServer, 0, len(params.MCPServers)),
+	}
+	for _, remote := range params.MCPServers {
+		if remote.Name == "" || remote.Command == "" {
+			s.respondError(incoming.ID, -32602, "stdio MCP servers require name and command")
+			return
+		}
+		env := make(map[string]string, len(remote.Env))
+		for _, entry := range remote.Env {
+			env[entry.Name] = entry.Value
+		}
+		config.MCPServers = append(config.MCPServers, MCPServer{
+			Name: remote.Name, Command: remote.Command, Args: remote.Args, Env: env,
+		})
+	}
+	if _, err := s.startSession(ctx, params.SessionID, config, previous); err != nil {
+		s.respondError(incoming.ID, -32000, err.Error())
+		return
+	}
+	if replay {
+		messages, err := sessionlog.Transcript(path)
+		if err != nil {
+			s.closeSession(params.SessionID)
+			s.respondError(incoming.ID, -32000, err.Error())
+			return
+		}
+		for _, historical := range messages {
+			updateType := "agent_message_chunk"
+			if historical.Role == "user" {
+				updateType = "user_message_chunk"
+			}
+			s.notify(params.SessionID, map[string]any{
+				"sessionUpdate": updateType,
+				"content":       map[string]any{"type": "text", "text": historical.Text},
+			})
+		}
+	}
+	s.respond(incoming.ID, map[string]any{"sessionId": params.SessionID})
+}
+
+func (s *Server) closeSession(id string) {
+	s.mu.Lock()
+	current := s.sessions[id]
+	delete(s.sessions, id)
+	s.mu.Unlock()
+	if current != nil {
+		current.close()
+	}
+}
+
 func (s *Server) handleListSessions(incoming message) {
 	var params struct {
 		CWD    string `json:"cwd"`
@@ -280,19 +404,34 @@ func (s *Server) handleListSessions(incoming message) {
 		Title     string `json:"title,omitempty"`
 		UpdatedAt string `json:"updatedAt,omitempty"`
 	}
+	persisted, err := sessionlog.List(s.SessionDir, params.CWD)
+	if err != nil {
+		s.respondError(incoming.ID, -32000, err.Error())
+		return
+	}
+	byID := make(map[string]info, len(persisted))
+	for _, item := range persisted {
+		byID[item.SessionID] = info{
+			SessionID: item.SessionID, CWD: item.CWD, Title: item.Title,
+			UpdatedAt: item.UpdatedAt.Format(time.RFC3339),
+		}
+	}
 	s.mu.Lock()
-	items := make([]info, 0, len(s.sessions))
 	for _, current := range s.sessions {
 		current.mu.Lock()
 		if params.CWD == "" || current.cwd == params.CWD {
-			items = append(items, info{
+			byID[current.id] = info{
 				SessionID: current.id, CWD: current.cwd, Title: current.title,
 				UpdatedAt: current.updated.Format(time.RFC3339),
-			})
+			}
 		}
 		current.mu.Unlock()
 	}
 	s.mu.Unlock()
+	items := make([]info, 0, len(byID))
+	for _, item := range byID {
+		items = append(items, item)
+	}
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].UpdatedAt == items[j].UpdatedAt {
 			return items[i].SessionID < items[j].SessionID

@@ -118,8 +118,11 @@ editor/IDE integrations:
 
 Each `session/new` gets its own workspace, tool state, model history, local
 session log, MCP/LSP processes, and cleanup lifecycle. The baseline
-`initialize`, `session/new`, `session/prompt`, `session/update`,
-`session/cancel`, and `session/close` methods are supported. Text streams as
+`initialize`, `session/new`, `session/list`, `session/load`, `session/resume`,
+`session/prompt`, `session/update`, `session/cancel`, and `session/close`
+methods are supported. Persisted sessions use stable, path-safe IDs; load
+replays completed user/agent text history while resume reconnects without
+replay. Text streams as
 `agent_message_chunk`, while tools emit correlated `tool_call` and
 `tool_call_update` lifecycle events. Stdio MCP servers supplied by the client
 in `session/new` are merged with configured servers for that session. Default

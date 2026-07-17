@@ -329,7 +329,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	server := &acp.Server{Factory: func(
+	server := &acp.Server{SessionDir: opts.sessionDir, Factory: func(
 		sessionCtx context.Context,
 		sessionConfig acp.SessionConfig,
 		protocolApprover tools.Approver,
@@ -367,10 +367,24 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			return nil, nil, err
 		}
 		registry.SetReadPolicy(readPolicy)
-		logger, err := session.NewLogger(opts.sessionDir)
+		var logger *session.Logger
+		if sessionConfig.ResumePath != "" {
+			logger, _, err = session.Resume(sessionConfig.ResumePath)
+		} else if sessionConfig.SessionID != "" {
+			logger, err = session.NewLoggerWithID(opts.sessionDir, sessionConfig.SessionID)
+		} else {
+			logger, err = session.NewLogger(opts.sessionDir)
+		}
 		if err != nil {
 			_ = registry.Close()
 			return nil, nil, err
+		}
+		if sessionConfig.ResumePath == "" {
+			if err := logger.Append("session_metadata", map[string]any{"cwd": ws.Root()}); err != nil {
+				_ = logger.Close()
+				_ = registry.Close()
+				return nil, nil, err
+			}
 		}
 		var mcpClients []*mcp.Client
 		var lspManager *lsp.Manager
