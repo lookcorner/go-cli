@@ -46,6 +46,9 @@ func TestStreamableHTTPLifecycleJSONAndSSE(t *testing.T) {
 		var rpc struct {
 			ID     any    `json:"id"`
 			Method string `json:"method"`
+			Params struct {
+				Capabilities map[string]any `json:"capabilities"`
+			} `json:"params"`
 		}
 		if err := json.NewDecoder(request.Body).Decode(&rpc); err != nil {
 			t.Fatal(err)
@@ -62,6 +65,9 @@ func TestStreamableHTTPLifecycleJSONAndSSE(t *testing.T) {
 		}
 		switch rpc.Method {
 		case "initialize":
+			if _, advertised := rpc.Params.Capabilities["sampling"]; advertised {
+				t.Fatal("Streamable HTTP advertised sampling without a reverse channel")
+			}
 			response := httpResponse(http.StatusOK, "application/json", rpcResult(rpc.ID, map[string]any{
 				"protocolVersion": protocolVersion,
 				"capabilities":    map[string]any{"tools": map[string]any{}},
@@ -89,6 +95,9 @@ func TestStreamableHTTPLifecycleJSONAndSSE(t *testing.T) {
 		Name: "fixture", URL: "https://mcp.example/rpc",
 		Headers: map[string]string{"Authorization": "Bearer fixture"},
 		Client:  &http.Client{Transport: transport},
+		Sampling: func(context.Context, SamplingRequest) (SamplingResult, error) {
+			return SamplingResult{}, nil
+		},
 	})
 	if err != nil {
 		t.Fatal(err)

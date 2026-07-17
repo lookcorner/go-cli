@@ -69,7 +69,8 @@ func StartSSE(ctx context.Context, cfg HTTPConfig) (*Client, InitializeResult, e
 	client := &Client{
 		name: cfg.Name, ssePostURL: postURL.String(), sseStream: streamResponse.Body,
 		httpClient: httpClient, headers: cloneHeaders(cfg.Headers),
-		pending: make(map[string]chan response), done: make(chan struct{}),
+		sampling: cfg.Sampling,
+		pending:  make(map[string]chan response), done: make(chan struct{}),
 	}
 	go client.sseReadLoop(reader)
 	initCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
@@ -77,7 +78,7 @@ func StartSSE(ctx context.Context, cfg HTTPConfig) (*Client, InitializeResult, e
 	var initialized InitializeResult
 	if err := client.call(initCtx, "initialize", map[string]any{
 		"protocolVersion": protocolVersion,
-		"capabilities":    map[string]any{},
+		"capabilities":    clientCapabilities(cfg.Sampling),
 		"clientInfo":      map[string]any{"name": "gork-go", "title": "Gork Go", "version": "0.1.0"},
 	}, &initialized); err != nil {
 		_ = client.Close()

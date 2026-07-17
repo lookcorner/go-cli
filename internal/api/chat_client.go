@@ -110,6 +110,9 @@ func (c *ChatClient) StreamResponse(ctx context.Context, request ResponseRequest
 		"model": request.Model, "messages": messages, "stream": true,
 		"stream_options": map[string]any{"include_usage": true},
 	}
+	if request.MaxOutputTokens > 0 {
+		payload["max_completion_tokens"] = request.MaxOutputTokens
+	}
 	if len(definitions) > 0 {
 		payload["tools"] = definitions
 		payload["tool_choice"] = "auto"

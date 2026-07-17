@@ -32,6 +32,7 @@ type ResponseRequest struct {
 	ToolChoice         string           `json:"tool_choice,omitempty"`
 	ParallelToolCalls  bool             `json:"parallel_tool_calls"`
 	PreviousResponseID string           `json:"previous_response_id,omitempty"`
+	MaxOutputTokens    int64            `json:"max_output_tokens,omitempty"`
 	Stream             bool             `json:"stream"`
 }
 

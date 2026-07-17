@@ -20,6 +20,8 @@ type HTTPConfig struct {
 	URL     string
 	Headers map[string]string
 	Client  *http.Client
+	// Sampling is used by StartSSE. Streamable HTTP has no reverse channel yet.
+	Sampling SamplingHandler
 }
 
 func StartHTTP(ctx context.Context, cfg HTTPConfig) (*Client, InitializeResult, error) {

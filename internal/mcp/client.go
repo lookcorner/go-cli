@@ -27,12 +27,41 @@ var supportedProtocolVersions = map[string]bool{
 }
 
 type ProcessConfig struct {
-	Name    string
-	Command string
-	Args    []string
-	Env     map[string]string
-	Dir     string
-	Stderr  io.Writer
+	Name     string
+	Command  string
+	Args     []string
+	Env      map[string]string
+	Dir      string
+	Stderr   io.Writer
+	Sampling SamplingHandler
+}
+
+type SamplingHandler func(context.Context, SamplingRequest) (SamplingResult, error)
+
+type SamplingRequest struct {
+	Messages     []SamplingMessage `json:"messages"`
+	SystemPrompt string            `json:"systemPrompt,omitempty"`
+	MaxTokens    int64             `json:"maxTokens"`
+	Temperature  float64           `json:"temperature,omitempty"`
+}
+
+type SamplingMessage struct {
+	Role    string          `json:"role"`
+	Content SamplingContent `json:"content"`
+}
+
+type SamplingContent struct {
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	Data     string `json:"data,omitempty"`
+	MIMEType string `json:"mimeType,omitempty"`
+}
+
+type SamplingResult struct {
+	Role       string          `json:"role"`
+	Content    SamplingContent `json:"content"`
+	Model      string          `json:"model"`
+	StopReason string          `json:"stopReason,omitempty"`
 }
 
 type rpcError struct {
@@ -74,6 +103,7 @@ type Client struct {
 	sessionID        string
 	selectedProtocol string
 	notification     func(string)
+	sampling         SamplingHandler
 	pending          map[string]chan response
 	nextID           atomic.Uint64
 	mu               sync.Mutex
@@ -186,7 +216,8 @@ func Start(ctx context.Context, cfg ProcessConfig) (*Client, InitializeResult, e
 	}
 	client := &Client{
 		name: cfg.Name, cmd: cmd, stdin: stdin,
-		pending: make(map[string]chan response), done: make(chan struct{}),
+		sampling: cfg.Sampling,
+		pending:  make(map[string]chan response), done: make(chan struct{}),
 	}
 	go client.readLoop(stdout)
 
@@ -195,7 +226,7 @@ func Start(ctx context.Context, cfg ProcessConfig) (*Client, InitializeResult, e
 	var initialized InitializeResult
 	err = client.call(initCtx, "initialize", map[string]any{
 		"protocolVersion": protocolVersion,
-		"capabilities":    map[string]any{},
+		"capabilities":    clientCapabilities(cfg.Sampling),
 		"clientInfo": map[string]any{
 			"name": "gork-go", "title": "Gork Go", "version": "0.1.0",
 		},
@@ -442,6 +473,10 @@ func (c *Client) readLoop(reader io.Reader) {
 
 func (c *Client) dispatch(message rpcMessage) {
 	if len(message.ID) > 0 && message.Method != "" {
+		if message.Method == "sampling/createMessage" && c.sampling != nil {
+			go c.handleSampling(message)
+			return
+		}
 		c.respondUnsupported(message)
 		return
 	}
@@ -462,6 +497,40 @@ func (c *Client) dispatch(message rpcMessage) {
 			ch <- response{result: message.Result}
 		}
 	}
+}
+
+func (c *Client) handleSampling(request rpcMessage) {
+	var id any
+	if json.Unmarshal(request.ID, &id) != nil {
+		return
+	}
+	var params SamplingRequest
+	if err := json.Unmarshal(request.Params, &params); err != nil || params.MaxTokens < 1 || len(params.Messages) == 0 {
+		_ = c.writeJSON(map[string]any{
+			"jsonrpc": "2.0", "id": id,
+			"error": map[string]any{"code": -32602, "message": "invalid sampling request"},
+		})
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	result, err := c.sampling(ctx, params)
+	if err != nil {
+		_ = c.writeJSON(map[string]any{
+			"jsonrpc": "2.0", "id": id,
+			"error": map[string]any{"code": -32000, "message": err.Error()},
+		})
+		return
+	}
+	_ = c.writeJSON(map[string]any{"jsonrpc": "2.0", "id": id, "result": result})
+}
+
+func clientCapabilities(sampling SamplingHandler) map[string]any {
+	capabilities := map[string]any{}
+	if sampling != nil {
+		capabilities["sampling"] = map[string]any{}
+	}
+	return capabilities
 }
 
 func (c *Client) respondUnsupported(request rpcMessage) {

@@ -104,6 +104,9 @@ func (c *MessagesClient) StreamResponse(ctx context.Context, request ResponseReq
 		"model": request.Model, "max_tokens": 32768, "system": request.Instructions,
 		"messages": history, "stream": true,
 	}
+	if request.MaxOutputTokens > 0 {
+		payload["max_tokens"] = request.MaxOutputTokens
+	}
 	if len(definitions) > 0 {
 		payload["tools"] = definitions
 		payload["tool_choice"] = map[string]any{"type": "auto"}

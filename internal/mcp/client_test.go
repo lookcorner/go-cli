@@ -9,22 +9,39 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lookcorner/go-cli/internal/tools"
 )
 
 func TestStdioLifecycleAndToolCall(t *testing.T) {
+	sampled := make(chan SamplingRequest, 1)
 	client, initialized, err := Start(context.Background(), ProcessConfig{
 		Name:    "fixture",
 		Command: os.Args[0],
 		Args:    []string{"-test.run=TestMCPHelperProcess"},
-		Env:     map[string]string{"GORK_GO_MCP_HELPER": "1"},
+		Env:     map[string]string{"GORK_GO_MCP_HELPER": "1", "GORK_GO_MCP_SAMPLE": "1"},
 		Stderr:  io.Discard,
+		Sampling: func(_ context.Context, request SamplingRequest) (SamplingResult, error) {
+			sampled <- request
+			return SamplingResult{
+				Role: "assistant", Content: SamplingContent{Type: "text", Text: "sampled answer"},
+				Model: "fixture-model", StopReason: "endTurn",
+			}, nil
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer client.Close()
+	select {
+	case request := <-sampled:
+		if request.SystemPrompt != "Be concise" || request.MaxTokens != 64 || len(request.Messages) != 1 || request.Messages[0].Content.Text != "sample this" {
+			t.Fatalf("unexpected sampling request: %#v", request)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("MCP server sampling request was not handled")
+	}
 	if initialized.ProtocolVersion != protocolVersion || initialized.ServerInfo.Name != "fixture-server" {
 		t.Fatalf("unexpected initialize result: %#v", initialized)
 	}
@@ -88,16 +105,41 @@ func TestMCPHelperProcess(t *testing.T) {
 			ID     any            `json:"id"`
 			Method string         `json:"method"`
 			Params map[string]any `json:"params"`
+			Result map[string]any `json:"result"`
 		}
 		if err := json.Unmarshal(scanner.Bytes(), &request); err != nil {
 			os.Exit(2)
 		}
 		if request.ID == nil {
+			if request.Method == "notifications/initialized" && os.Getenv("GORK_GO_MCP_SAMPLE") == "1" {
+				_ = encoder.Encode(map[string]any{
+					"jsonrpc": "2.0", "id": 900, "method": "sampling/createMessage",
+					"params": map[string]any{
+						"systemPrompt": "Be concise", "maxTokens": 64,
+						"messages": []any{map[string]any{
+							"role": "user", "content": map[string]any{"type": "text", "text": "sample this"},
+						}},
+					},
+				})
+			}
+			continue
+		}
+		if request.Method == "" {
+			content, _ := request.Result["content"].(map[string]any)
+			if request.ID != float64(900) || content["text"] != "sampled answer" || request.Result["model"] != "fixture-model" {
+				os.Exit(3)
+			}
 			continue
 		}
 		var result any
 		switch request.Method {
 		case "initialize":
+			if os.Getenv("GORK_GO_MCP_SAMPLE") == "1" {
+				capabilities, _ := request.Params["capabilities"].(map[string]any)
+				if _, ok := capabilities["sampling"]; !ok {
+					os.Exit(4)
+				}
+			}
 			result = map[string]any{
 				"protocolVersion": protocolVersion,
 				"capabilities": map[string]any{

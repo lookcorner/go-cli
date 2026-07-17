@@ -646,6 +646,7 @@ func startMCPServers(
 	}
 	for _, name := range names {
 		server := cfg.MCPServers[name]
+		sampling := newMCPSamplingHandler(cfg, approver, name)
 		fmt.Fprintf(stderr, "[gork] starting MCP server: %s\n", name)
 		var client *mcp.Client
 		var initialized mcp.InitializeResult
@@ -656,6 +657,7 @@ func startMCPServers(
 			if transport != "" && transport != "sse" && transport != "http" && transport != "streamable-http" {
 				err = fmt.Errorf("MCP server %q has unsupported transport type %q", name, server.Type)
 			} else if transport == "sse" || strings.HasSuffix(strings.TrimRight(server.URL, "/"), "/sse") {
+				httpConfig.Sampling = sampling
 				client, initialized, err = mcp.StartSSE(ctx, httpConfig)
 			} else {
 				httpConfig.Client = &http.Client{Timeout: cfg.HTTPTimeout}
@@ -664,7 +666,7 @@ func startMCPServers(
 		} else {
 			client, initialized, err = mcp.Start(ctx, mcp.ProcessConfig{
 				Name: name, Command: server.Command, Args: server.Args,
-				Env: server.Env, Dir: workspaceRoot, Stderr: stderr,
+				Env: server.Env, Dir: workspaceRoot, Stderr: stderr, Sampling: sampling,
 			})
 		}
 		if err != nil {
@@ -743,6 +745,56 @@ func startMCPServers(
 		fmt.Fprintf(stderr, "[gork] MCP %s ready: %d tool(s)\n", serverLabel, len(remoteTools))
 	}
 	return clients, nil
+}
+
+func newMCPSamplingHandler(cfg config.Config, approver tools.Approver, serverName string) mcp.SamplingHandler {
+	return func(ctx context.Context, request mcp.SamplingRequest) (mcp.SamplingResult, error) {
+		if approver != nil {
+			if err := approver.Approve(ctx, "MCP sampling", serverName); err != nil {
+				return mcp.SamplingResult{}, err
+			}
+		}
+		client, err := newModelClient(cfg)
+		if err != nil {
+			return mcp.SamplingResult{}, err
+		}
+		return runMCPSampling(ctx, client, cfg.Model, request)
+	}
+}
+
+func runMCPSampling(ctx context.Context, client agent.ResponseStreamer, model string, request mcp.SamplingRequest) (mcp.SamplingResult, error) {
+	input := make([]api.InputItem, 0, len(request.Messages))
+	for _, message := range request.Messages {
+		if message.Role != "user" && message.Role != "assistant" {
+			return mcp.SamplingResult{}, fmt.Errorf("unsupported sampling message role %q", message.Role)
+		}
+		var content any
+		switch message.Content.Type {
+		case "text":
+			content = message.Content.Text
+		case "image":
+			if _, err := tools.DecodeImageAttachment(message.Content.MIMEType, message.Content.Data); err != nil {
+				return mcp.SamplingResult{}, fmt.Errorf("invalid sampling image: %w", err)
+			}
+			content = []api.ContentPart{{
+				Type: "input_image", ImageURL: "data:" + message.Content.MIMEType + ";base64," + message.Content.Data,
+			}}
+		default:
+			return mcp.SamplingResult{}, fmt.Errorf("unsupported sampling content type %q", message.Content.Type)
+		}
+		input = append(input, api.InputItem{Type: "message", Role: message.Role, Content: content})
+	}
+	result, err := client.StreamResponse(ctx, api.ResponseRequest{
+		Model: model, Instructions: request.SystemPrompt, Input: input,
+		MaxOutputTokens: request.MaxTokens, Stream: true,
+	}, nil)
+	if err != nil {
+		return mcp.SamplingResult{}, err
+	}
+	return mcp.SamplingResult{
+		Role: "assistant", Content: mcp.SamplingContent{Type: "text", Text: result.Text},
+		Model: model, StopReason: "endTurn",
+	}, nil
 }
 
 func displayPath(path string) string {
