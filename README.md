@@ -306,6 +306,17 @@ url = "https://mcp.example.com/rpc"
 headers = { Authorization = "Bearer token" }
 ```
 
+Legacy standalone SSE servers use the same URL form with `type = "sse"` (a
+URL ending in `/sse` is also detected automatically). Gork keeps the GET event
+stream open and sends JSON-RPC requests to the same-origin endpoint announced
+by the server:
+
+```toml
+[mcp_servers.legacy]
+url = "https://mcp.example/sse"
+type = "sse"
+```
+
 ## Language servers
 
 Language Server Protocol processes can also be configured per workspace. When

@@ -67,6 +67,8 @@ type Client struct {
 	cmd              *exec.Cmd
 	stdin            io.WriteCloser
 	httpURL          string
+	ssePostURL       string
+	sseStream        io.ReadCloser
 	httpClient       *http.Client
 	headers          map[string]string
 	sessionID        string
@@ -408,6 +410,9 @@ func (c *Client) writeJSON(value any) error {
 	encoded = append(encoded, '\n')
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
+	if c.ssePostURL != "" {
+		return c.postSSE(encoded)
+	}
 	if _, err := c.stdin.Write(encoded); err != nil {
 		return fmt.Errorf("write MCP message: %w", err)
 	}
@@ -426,33 +431,37 @@ func (c *Client) readLoop(reader io.Reader) {
 		if err := json.Unmarshal(line, &message); err != nil {
 			continue
 		}
-		if len(message.ID) > 0 && message.Method != "" {
-			c.respondUnsupported(message)
-			continue
-		}
-		if len(message.ID) == 0 {
-			if message.Method != "" {
-				c.handleNotification(message.Method)
-			}
-			continue
-		}
-		key := strings.Trim(string(message.ID), "\"")
-		c.mu.Lock()
-		ch := c.pending[key]
-		c.mu.Unlock()
-		if ch != nil {
-			if message.Error != nil {
-				ch <- response{err: message.Error}
-			} else {
-				ch <- response{result: message.Result}
-			}
-		}
+		c.dispatch(message)
 	}
 	err := scanner.Err()
 	if err == nil {
 		err = io.EOF
 	}
 	c.failPending(err)
+}
+
+func (c *Client) dispatch(message rpcMessage) {
+	if len(message.ID) > 0 && message.Method != "" {
+		c.respondUnsupported(message)
+		return
+	}
+	if len(message.ID) == 0 {
+		if message.Method != "" {
+			c.handleNotification(message.Method)
+		}
+		return
+	}
+	key := strings.Trim(string(message.ID), "\"")
+	c.mu.Lock()
+	ch := c.pending[key]
+	c.mu.Unlock()
+	if ch != nil {
+		if message.Error != nil {
+			ch <- response{err: message.Error}
+		} else {
+			ch <- response{result: message.Result}
+		}
+	}
 }
 
 func (c *Client) respondUnsupported(request rpcMessage) {
@@ -479,6 +488,13 @@ func (c *Client) failPending(err error) {
 }
 
 func (c *Client) Close() error {
+	if c.ssePostURL != "" {
+		if c.sseStream != nil {
+			_ = c.sseStream.Close()
+		}
+		c.failPending(io.EOF)
+		return nil
+	}
 	if c.httpURL != "" {
 		return c.closeHTTP()
 	}

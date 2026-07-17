@@ -40,6 +40,10 @@ env = { TOKEN = "value" }
 url = "https://mcp.example/rpc"
 headers = { Authorization = "Bearer token" }
 
+[mcp_servers.legacy]
+url = "https://mcp.example/sse"
+type = "sse"
+
 [lsp_servers.gopls]
 command = "gopls"
 extensions = [".go"]
@@ -78,6 +82,9 @@ pattern = ".env*"
 	}
 	if cfg.MCPServers["remote"].URL != "https://mcp.example/rpc" || cfg.MCPServers["remote"].Headers["Authorization"] != "Bearer token" {
 		t.Fatalf("unexpected MCP HTTP config: %#v", cfg.MCPServers["remote"])
+	}
+	if cfg.MCPServers["legacy"].Type != "sse" {
+		t.Fatalf("unexpected MCP SSE config: %#v", cfg.MCPServers["legacy"])
 	}
 	if cfg.LSPServers["gopls"].Command != "gopls" || len(cfg.LSPServers["gopls"].Extensions) != 1 {
 		t.Fatalf("unexpected LSP config: %#v", cfg.LSPServers)

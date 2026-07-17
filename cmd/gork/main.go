@@ -639,10 +639,16 @@ func startMCPServers(
 		var initialized mcp.InitializeResult
 		var err error
 		if server.URL != "" {
-			client, initialized, err = mcp.StartHTTP(ctx, mcp.HTTPConfig{
-				Name: name, URL: server.URL, Headers: server.Headers,
-				Client: &http.Client{Timeout: cfg.HTTPTimeout},
-			})
+			httpConfig := mcp.HTTPConfig{Name: name, URL: server.URL, Headers: server.Headers}
+			transport := strings.ToLower(strings.TrimSpace(server.Type))
+			if transport != "" && transport != "sse" && transport != "http" && transport != "streamable-http" {
+				err = fmt.Errorf("MCP server %q has unsupported transport type %q", name, server.Type)
+			} else if transport == "sse" || strings.HasSuffix(strings.TrimRight(server.URL, "/"), "/sse") {
+				client, initialized, err = mcp.StartSSE(ctx, httpConfig)
+			} else {
+				httpConfig.Client = &http.Client{Timeout: cfg.HTTPTimeout}
+				client, initialized, err = mcp.StartHTTP(ctx, httpConfig)
+			}
 		} else {
 			client, initialized, err = mcp.Start(ctx, mcp.ProcessConfig{
 				Name: name, Command: server.Command, Args: server.Args,
