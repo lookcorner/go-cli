@@ -234,8 +234,8 @@ both during URL validation and again when dialing (including redirects). Use a
 WebFetch permission with `pattern_mode = "domain"` for host-based rules.
 
 The Gork Build-compatible file surface includes `read_file`, `list_dir`,
-`grep`, and `search_replace`; text reads support positive or negative line
-offsets and use the original `LINE_NUMBER→LINE_CONTENT` format. The earlier
+`grep`, and `search_replace`; text and extracted PPTX reads support positive or
+negative line offsets and use the original `LINE_NUMBER→LINE_CONTENT` format. The earlier
 `list_files`, `search_files`, `write_file`, `edit_file`, and `shell` tools remain
 available. `list_dir` summarizes subdirectories that exceed its output budget
 with file counts and their most common extensions. `search_replace` preserves

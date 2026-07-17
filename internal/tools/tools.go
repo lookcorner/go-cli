@@ -26,6 +26,7 @@ import (
 
 const (
 	maxReadBytes   = 2 << 20
+	maxPPTXBytes   = 50 << 20
 	maxWriteBytes  = 4 << 20
 	maxOutputBytes = 256 << 10
 )
@@ -326,7 +327,7 @@ type readFileTool struct{ ws *workspace.Workspace }
 func (t *readFileTool) Definition() api.ToolDefinition {
 	return api.ToolDefinition{
 		Type: "function", Name: "read_file",
-		Description: "Read a file inside the workspace. Text results use 1-based LINE_NUMBER→LINE_CONTENT formatting.",
+		Description: "Read a text or PPTX file inside the workspace. Results use 1-based LINE_NUMBER→LINE_CONTENT formatting.",
 		Parameters: objectSchema(map[string]any{
 			"target_file": map[string]any{"type": "string", "description": "File path relative to the workspace."},
 			"offset":      map[string]any{"type": "integer", "description": "1-based starting line; negative values count from the end."},
@@ -366,13 +367,27 @@ func (t *readFileTool) Execute(_ context.Context, raw json.RawMessage) (string, 
 	}
 	defer file.Close()
 
-	reader := io.LimitReader(file, maxReadBytes+1)
+	readLimit := int64(maxReadBytes)
+	if strings.EqualFold(filepath.Ext(path), ".pptx") {
+		readLimit = maxPPTXBytes
+	}
+	reader := io.LimitReader(file, readLimit+1)
 	data, err := io.ReadAll(reader)
 	if err != nil {
 		return "", fmt.Errorf("read %q: %w", requestedPath, err)
 	}
-	if len(data) > maxReadBytes {
-		return "", fmt.Errorf("file %q exceeds %d bytes", requestedPath, maxReadBytes)
+	if int64(len(data)) > readLimit {
+		return "", fmt.Errorf("file %q exceeds %d bytes", requestedPath, readLimit)
+	}
+	if strings.EqualFold(filepath.Ext(path), ".pptx") {
+		text, err := extractPPTXText(data)
+		if err != nil {
+			return "", fmt.Errorf("read PPTX %q: %w", requestedPath, err)
+		}
+		data = []byte(text)
+		if len(data) > maxReadBytes {
+			return "", fmt.Errorf("extracted PPTX text from %q exceeds %d bytes", requestedPath, maxReadBytes)
+		}
 	}
 	if !utf8.Valid(data) || bytes.IndexByte(data, 0) >= 0 {
 		return "", fmt.Errorf("file %q is not UTF-8 text", requestedPath)
