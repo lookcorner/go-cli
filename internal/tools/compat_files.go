@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -15,25 +18,102 @@ import (
 
 type listDirTool struct{ ws *workspace.Workspace }
 
+const listDirMaxChars = 10_000
+
 func (t *listDirTool) Definition() api.ToolDefinition {
 	return api.ToolDefinition{
 		Type: "function", Name: "list_dir",
-		Description: "List files and directories below a workspace directory, excluding repository metadata.",
+		Description: "List a directory as a bounded tree. Hidden and Git-ignored entries are omitted.",
 		Parameters: objectSchema(map[string]any{
 			"target_directory": map[string]any{"type": "string", "description": "Directory path relative to the workspace."},
 		}, "target_directory"),
 	}
 }
 
-func (t *listDirTool) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
+func (t *listDirTool) Execute(_ context.Context, raw json.RawMessage) (string, error) {
 	var args struct {
 		TargetDirectory string `json:"target_directory"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return "", fmt.Errorf("decode list_dir arguments: %w", err)
 	}
-	encoded, _ := json.Marshal(map[string]string{"path": args.TargetDirectory})
-	return (&listFilesTool{ws: t.ws}).Execute(ctx, encoded)
+	root, err := t.ws.Resolve(args.TargetDirectory)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(root)
+	if err != nil {
+		return "", fmt.Errorf("read directory %q: %w", args.TargetDirectory, err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("%q is a file, not a directory", args.TargetDirectory)
+	}
+	type entry struct {
+		path  string
+		rel   string
+		isDir bool
+	}
+	var entries []entry
+	err = filepath.WalkDir(root, func(path string, item os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if path == root {
+			return nil
+		}
+		if strings.HasPrefix(item.Name(), ".") {
+			if item.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		entries = append(entries, entry{path: path, rel: filepath.ToSlash(rel), isDir: item.IsDir()})
+		if len(entries) >= 100_000 {
+			return errLimitReached
+		}
+		return nil
+	})
+	truncated := errors.Is(err, errLimitReached)
+	if err != nil && !truncated {
+		return "", fmt.Errorf("walk directory %q: %w", args.TargetDirectory, err)
+	}
+	paths := make([]string, len(entries))
+	for index := range entries {
+		paths[index] = entries[index].path
+	}
+	ignored := workspace.GitIgnored(workspace.GitRoot(t.ws.Root()), paths)
+	sort.Slice(entries, func(i, j int) bool {
+		left, right := strings.ToLower(entries[i].rel), strings.ToLower(entries[j].rel)
+		if left == right {
+			return entries[i].rel < entries[j].rel
+		}
+		return left < right
+	})
+	var output strings.Builder
+	fmt.Fprintf(&output, "- %s/\n", filepath.ToSlash(root))
+	for _, item := range entries {
+		if ignored[item.path] {
+			continue
+		}
+		line := strings.Repeat("  ", strings.Count(item.rel, "/")+1) + "- " + filepath.Base(item.path)
+		if item.isDir {
+			line += "/"
+		}
+		line += "\n"
+		if output.Len()+len(line) > listDirMaxChars {
+			truncated = true
+			break
+		}
+		output.WriteString(line)
+	}
+	if truncated {
+		output.WriteString("    ...\n\n    Note: this directory is too large to list fully. Try list_dir on a narrower path, or use grep / run_terminal_cmd.\n")
+	}
+	return strings.TrimRight(output.String(), "\n"), nil
 }
 
 type grepTool struct{ ws *workspace.Workspace }

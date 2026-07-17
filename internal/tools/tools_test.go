@@ -3,7 +3,9 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -213,5 +215,82 @@ func TestGorkFileToolCompatibility(t *testing.T) {
 	}
 	if string(data) != "new new\n" {
 		t.Fatalf("unexpected edited content: %q", data)
+	}
+}
+
+func TestListDirTreeRespectsGitIgnoreAndHiddenFiles(t *testing.T) {
+	root := t.TempDir()
+	command := exec.Command("git", "init", "-q")
+	command.Dir = root
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, output)
+	}
+	globalIgnore := filepath.Join(t.TempDir(), "global-ignore")
+	if err := os.WriteFile(globalIgnore, []byte("global.tmp\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	command = exec.Command("git", "config", "core.excludesFile", globalIgnore)
+	command.Dir = root
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git config: %v: %s", err, output)
+	}
+	files := map[string]string{
+		"visible.txt":           "visible",
+		"ignored.log":           "ignored",
+		"global.tmp":            "ignored globally",
+		".hidden":               "hidden",
+		"nested/keep.txt":       "keep",
+		"nested/private.secret": "secret",
+		"nested/.gitignore":     "*.secret\n",
+		".gitignore":            "*.log\nignored-dir/\n",
+		"ignored-dir/file.txt":  "ignored directory",
+	}
+	for name, content := range files {
+		path := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := (&listDirTool{ws: ws}).Execute(context.Background(), json.RawMessage(`{"target_directory":"."}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"- visible.txt", "- nested/", "- keep.txt"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("missing %q from tree:\n%s", want, output)
+		}
+	}
+	for _, absent := range []string{"ignored.log", "global.tmp", ".hidden", "private.secret", "ignored-dir"} {
+		if strings.Contains(output, absent) {
+			t.Fatalf("ignored entry %q appeared:\n%s", absent, output)
+		}
+	}
+}
+
+func TestListDirTreeUsesOutputBudget(t *testing.T) {
+	root := t.TempDir()
+	for index := range 150 {
+		name := fmt.Sprintf("%03d-%s.txt", index, strings.Repeat("x", 80))
+		if err := os.WriteFile(filepath.Join(root, name), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := (&listDirTool{ws: ws}).Execute(context.Background(), json.RawMessage(`{"target_directory":"."}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output, "too large to list fully") || strings.Contains(output, "149-") {
+		t.Fatalf("directory output was not budgeted: len=%d tail=%q", len(output), output[max(0, len(output)-200):])
 	}
 }

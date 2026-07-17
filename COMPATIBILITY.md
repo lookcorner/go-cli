@@ -9,7 +9,7 @@ Status values: **done**, **partial**, **planned**.
 | --- | --- | --- |
 | Responses API streaming | done | SSE text deltas, terminal response IDs, function calls and JSON fallback |
 | Headless agent loop | done | Multi-step model/tool loop with cancellation and a configurable limit |
-| Workspace file tools | partial | Gork-compatible `read_file`, `list_dir`, `grep`, and `search_replace` schemas cover text reads with negative offsets, ripgrep filters, atomic create/overwrite, exact/all replacement, CRLF preservation and safe Unicode typography fallback; document/image formats and full gitignore traversal remain |
+| Workspace file tools | partial | Gork-compatible `read_file`, `list_dir`, `grep`, and `search_replace` schemas cover text reads with negative offsets, Gitignore-aware bounded directory trees, ripgrep filters, atomic create/overwrite, exact/all replacement, CRLF preservation and safe Unicode typography fallback; document/image formats and large-directory extension summaries remain |
 | Tool permissions | partial | Prompt/auto/deny modes, repeatable CLI rules and compatible `[permission].rules` for any/bash/edit/read/grep/MCP/WebFetch (glob and domain) with deny→ask→allow precedence work; managed system policy remains |
 | Shell execution | partial | Gork-compatible tools support foreground exit status, background timeout/lifecycle, multi-task wait/poll, process groups, cleanup, and replayed cwd/environment/functions/aliases; shell-option parity, interactive PTY sessions and cgroups remain |
 | Session persistence | partial | Durable JSONL events, latest/path resume, completed-turn response-ID continuation and checkpoint-aligned local transcript reconstruction work; rewind, branching and migrations remain |
