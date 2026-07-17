@@ -256,11 +256,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 	registry.SetReadPolicy(readPolicy)
 	defer registry.Close()
-	if len(skillCatalog.Names()) > 0 {
+	if skillCatalog.Count() > 0 {
 		if err := registry.Register(skillCatalog.Tool()); err != nil {
 			return err
 		}
-		fmt.Fprintf(statusOutput, "[gork] discovered %d skill(s)\n", len(skillCatalog.Names()))
+		fmt.Fprintf(statusOutput, "[gork] discovered %d skill(s)\n", skillCatalog.Count())
 	}
 	mcpClients, err := startMCPServers(ctx, cfg, ws.Root(), registry, approver, statusOutput)
 	if err != nil {
@@ -279,7 +279,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		defer lspManager.Close()
 	}
 	runner := &agent.Runner{
-		Client: client, Tools: registry, Logger: logger,
+		Client: client, Tools: registry, Skills: skillCatalog, Logger: logger,
 		Model: cfg.Model, Instructions: cfg.SystemPrompt, MaxSteps: cfg.MaxSteps,
 		TextOutput: stdout, StatusOutput: stderr,
 		ContextWindow: cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,
@@ -412,7 +412,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			_ = registry.Close()
 			_ = logger.Close()
 		}
-		if len(catalog.Names()) > 0 {
+		if catalog.Count() > 0 {
 			if err := registry.Register(catalog.Tool()); err != nil {
 				cleanup()
 				return nil, nil, err
@@ -446,7 +446,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		var closeOnce sync.Once
 		closeRuntime := func() { closeOnce.Do(cleanup) }
 		return &agent.Runner{
-			Client: modelClient, Tools: registry, Logger: logger,
+			Client: modelClient, Tools: registry, Skills: catalog, Logger: logger,
 			Model: cfg.Model, Instructions: instructions, MaxSteps: cfg.MaxSteps,
 			TextOutput: textOutput, StatusOutput: statusOutput,
 			ContextWindow: cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,

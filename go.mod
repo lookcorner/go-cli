@@ -4,7 +4,9 @@ go 1.25.0
 
 require (
 	charm.land/bubbletea/v2 v2.0.6
+	github.com/bmatcuk/doublestar v1.3.4
 	github.com/pelletier/go-toml/v2 v2.2.4
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (

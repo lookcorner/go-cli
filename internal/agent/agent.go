@@ -10,6 +10,7 @@ import (
 
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/session"
+	"github.com/lookcorner/go-cli/internal/skills"
 	"github.com/lookcorner/go-cli/internal/tools"
 )
 
@@ -37,6 +38,7 @@ type HistoryResetter interface {
 type Runner struct {
 	Client                  ResponseStreamer
 	Tools                   *tools.Registry
+	Skills                  *skills.Catalog
 	Logger                  EventLogger
 	Model                   string
 	Instructions            string
@@ -161,6 +163,12 @@ func (r *Runner) RunTurn(ctx context.Context, prompt, previousResponseID string)
 			input = append(input, api.InputItem{
 				Type: "function_call_output", CallID: call.CallID, Output: output,
 			})
+			if toolErr == nil && r.Skills != nil {
+				if reminder := r.Skills.Activate(call.Name, call.Arguments); reminder != "" {
+					input = append(input, api.InputItem{Type: "message", Role: "user", Content: reminder})
+					r.log("skills_activated", map[string]any{"tool": call.Name})
+				}
+			}
 		}
 	}
 	return final, fmt.Errorf("agent reached maximum of %d model steps", r.MaxSteps)

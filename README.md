@@ -334,6 +334,8 @@ are scanned from the Git root through the workspace, and user skills honor
 `GROK_HOME`. Only skill metadata is included initially. The model calls the
 `skill` tool to load the full `SKILL.md` when a task matches it; deeper project
 skills override same-named user or parent skills.
+Skills with a `paths` list in YAML frontmatter stay hidden until a successful
+file read, directory listing, or edit touches a matching path.
 
 ## Privacy
 

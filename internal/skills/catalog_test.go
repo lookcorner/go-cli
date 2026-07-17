@@ -133,3 +133,47 @@ func TestDiscoverScopesSkillsFromHomeThroughWorkspace(t *testing.T) {
 		t.Fatalf("cursor home skill not discovered: %#v", got)
 	}
 }
+
+func TestConditionalSkillActivatesForMatchingToolPath(t *testing.T) {
+	root := t.TempDir()
+	skillDir := filepath.Join(root, "go-files")
+	if err := os.MkdirAll(skillDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	content := "---\nname: go-files\ndescription: Go guidance\npaths:\n  - 'src/{main,lib}.go'\n  - 'src/generated/**'\n  - '!src/generated/**'\n---\nUse Go guidance.\n"
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	catalog := &Catalog{root: root, byName: make(map[string]Skill), pending: make(map[string]Skill)}
+	if err := catalog.scan(root, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if names := catalog.Names(); len(names) != 0 || catalog.Count() != 1 {
+		t.Fatalf("conditional skill should start hidden: names=%#v count=%d", names, catalog.Count())
+	}
+	if reminder := catalog.Activate("grep", json.RawMessage(`{"path":"src/main.go"}`)); reminder != "" {
+		t.Fatalf("grep must not activate conditional skills: %s", reminder)
+	}
+	if reminder := catalog.Activate("read_file", json.RawMessage(`{"path":"src/other.go"}`)); reminder != "" {
+		t.Fatalf("nonmatching path activated skill: %s", reminder)
+	}
+	if reminder := catalog.Activate("read_file", json.RawMessage(`{"path":"src/generated/file.go"}`)); reminder != "" {
+		t.Fatalf("negated path activated skill: %s", reminder)
+	}
+	reminder := catalog.Activate("read_file", json.RawMessage(`{"path":"src/main.go"}`))
+	if !strings.Contains(reminder, "go-files") || len(catalog.Names()) != 1 {
+		t.Fatalf("matching path did not activate skill: reminder=%q names=%#v", reminder, catalog.Names())
+	}
+}
+
+func TestMatchesPathsChecksParentDirectories(t *testing.T) {
+	if !matchesPaths([]string{"src"}, "src/pkg/main.go") {
+		t.Fatal("directory pattern should match a file below that directory")
+	}
+	if !matchesPaths([]string{"**/*.go"}, "main.go") {
+		t.Fatal("doublestar pattern should match a root-level file")
+	}
+	if matchesPaths([]string{"src/**", "!src/generated/**"}, "src/generated/file.go") {
+		t.Fatal("later negation should exclude the generated path")
+	}
+}

@@ -11,8 +11,10 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/bmatcuk/doublestar"
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/workspace"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -25,10 +27,13 @@ type Skill struct {
 	Description string
 	Path        string
 	Source      string
+	Paths       []string
 }
 
 type Catalog struct {
-	byName map[string]Skill
+	root    string
+	byName  map[string]Skill
+	pending map[string]Skill
 }
 
 func Discover(workspaceRoot string) (*Catalog, error) {
@@ -67,7 +72,7 @@ func discover(workspaceRoot, home, grokHome string) (*Catalog, error) {
 			})
 		}
 	}
-	catalog := &Catalog{byName: make(map[string]Skill)}
+	catalog := &Catalog{root: workspaceRoot, byName: make(map[string]Skill), pending: make(map[string]Skill)}
 	for _, root := range roots {
 		if root.path == "" {
 			continue
@@ -94,9 +99,6 @@ func (c *Catalog) scan(root, source string) error {
 		if walkErr != nil {
 			return walkErr
 		}
-		if len(c.byName) >= maxSkills {
-			return errors.New("skill discovery exceeded 500 skills")
-		}
 		if entry.IsDir() || !strings.EqualFold(entry.Name(), "SKILL.md") {
 			return nil
 		}
@@ -114,18 +116,142 @@ func (c *Catalog) scan(root, source string) error {
 		if !utf8.Valid(data) {
 			return fmt.Errorf("skill %q is not UTF-8", path)
 		}
-		name, description := parseMetadata(string(data), filepath.Base(filepath.Dir(path)))
+		name, description, paths := parseMetadata(string(data), filepath.Base(filepath.Dir(path)))
 		if name == "" {
 			return nil
+		}
+		if _, active := c.byName[name]; !active {
+			if _, held := c.pending[name]; !held && len(c.byName)+len(c.pending) >= maxSkills {
+				return errors.New("skill discovery exceeded 500 skills")
+			}
 		}
 		real, err := filepath.EvalSymlinks(path)
 		if err != nil {
 			return fmt.Errorf("resolve skill %q: %w", path, err)
 		}
 		// Later roots have higher priority, so workspace skills override user skills.
-		c.byName[name] = Skill{Name: name, Description: description, Path: real, Source: source}
+		delete(c.byName, name)
+		delete(c.pending, name)
+		skill := Skill{Name: name, Description: description, Path: real, Source: source, Paths: paths}
+		if len(paths) == 0 {
+			c.byName[name] = skill
+		} else {
+			if c.pending == nil {
+				c.pending = make(map[string]Skill)
+			}
+			c.pending[name] = skill
+		}
 		return nil
 	})
+}
+
+func (c *Catalog) Count() int {
+	if c == nil {
+		return 0
+	}
+	return len(c.byName) + len(c.pending)
+}
+
+// Activate makes paths-gated skills visible after a successful file tool call.
+// It returns a synthetic reminder for the next model step.
+func (c *Catalog) Activate(toolName string, raw json.RawMessage) string {
+	if c == nil || len(c.pending) == 0 {
+		return ""
+	}
+	path := toolPath(toolName, raw)
+	if path == "" {
+		return ""
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(c.root, path)
+	}
+	rel, err := filepath.Rel(c.root, filepath.Clean(path))
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return ""
+	}
+	rel = filepath.ToSlash(rel)
+	var activated []string
+	for name, skill := range c.pending {
+		if matchesPaths(skill.Paths, rel) {
+			c.byName[name] = skill
+			delete(c.pending, name)
+			activated = append(activated, name)
+		}
+	}
+	if len(activated) == 0 {
+		return ""
+	}
+	sort.Strings(activated)
+	var output strings.Builder
+	output.WriteString("<system-reminder>\nNew skills became available after accessing ")
+	output.WriteString(rel)
+	output.WriteString(":\n")
+	for _, name := range activated {
+		skill := c.byName[name]
+		fmt.Fprintf(&output, "- %s: %s (%s)\n", name, skill.Description, skill.Source)
+	}
+	output.WriteString("Use the skill tool to load one when it matches the task.\n</system-reminder>")
+	return output.String()
+}
+
+func toolPath(name string, raw json.RawMessage) string {
+	switch name {
+	case "read_file", "write_file", "edit_file", "search_replace", "list_dir", "list_files":
+	default:
+		return ""
+	}
+	var values map[string]any
+	if err := json.Unmarshal(raw, &values); err != nil {
+		var encoded string
+		if json.Unmarshal(raw, &encoded) != nil || json.Unmarshal([]byte(encoded), &values) != nil {
+			return ""
+		}
+	}
+	for _, key := range []string{"target_file", "file_path", "target_directory", "path"} {
+		if value, ok := values[key].(string); ok && value != "" {
+			return value
+		}
+	}
+	if name == "list_dir" || name == "list_files" {
+		return "."
+	}
+	return ""
+}
+
+func matchesPaths(patterns []string, rel string) bool {
+	matched := false
+	for _, raw := range patterns {
+		pattern := strings.TrimSpace(raw)
+		if pattern == "" || strings.HasPrefix(pattern, "#") {
+			continue
+		}
+		negated := strings.HasPrefix(pattern, "!")
+		pattern = strings.TrimPrefix(pattern, "!")
+		pattern = strings.TrimPrefix(filepath.ToSlash(pattern), "/")
+		if strings.HasSuffix(pattern, "/") {
+			pattern += "**"
+		}
+		if !strings.Contains(pattern, "/") {
+			pattern = "**/" + pattern
+		}
+		if patternMatches(pattern, rel) {
+			matched = !negated
+		}
+	}
+	return matched
+}
+
+func patternMatches(pattern, rel string) bool {
+	for current := rel; current != "."; current = filepath.ToSlash(filepath.Dir(current)) {
+		matched, err := doublestar.Match(pattern, current)
+		if err != nil {
+			return false
+		}
+		if matched {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Catalog) Summary() string {
@@ -157,12 +283,16 @@ type Tool struct{ catalog *Catalog }
 
 func (t *Tool) Definition() api.ToolDefinition {
 	names := t.catalog.Names()
+	nameSchema := map[string]any{"type": "string"}
+	if len(names) > 0 {
+		nameSchema["enum"] = names
+	}
 	return api.ToolDefinition{
 		Type: "function", Name: "skill",
 		Description: "Load the complete SKILL.md instructions for one discovered skill. Available names: " + strings.Join(names, ", "),
 		Parameters: map[string]any{
 			"type":       "object",
-			"properties": map[string]any{"name": map[string]any{"type": "string", "enum": names}},
+			"properties": map[string]any{"name": nameSchema},
 			"required":   []string{"name"}, "additionalProperties": false,
 		},
 	}
@@ -189,30 +319,25 @@ func (t *Tool) Execute(_ context.Context, raw json.RawMessage) (string, error) {
 	return fmt.Sprintf("Skill: %s\nSource: %s\nPath: %s\n\n%s", skill.Name, skill.Source, skill.Path, data), nil
 }
 
-func parseMetadata(content, fallbackName string) (string, string) {
+func parseMetadata(content, fallbackName string) (string, string, []string) {
 	name := fallbackName
-	description := ""
 	if !strings.HasPrefix(content, "---\n") {
-		return name, description
+		return name, "", nil
 	}
 	end := strings.Index(content[4:], "\n---\n")
 	if end < 0 {
-		return name, description
+		return name, "", nil
 	}
-	for _, line := range strings.Split(content[4:4+end], "\n") {
-		key, value, ok := strings.Cut(line, ":")
-		if !ok {
-			continue
-		}
-		value = strings.Trim(strings.TrimSpace(value), `"'`)
-		switch strings.TrimSpace(key) {
-		case "name":
-			if value != "" {
-				name = value
-			}
-		case "description":
-			description = value
-		}
+	var metadata struct {
+		Name        string   `yaml:"name"`
+		Description string   `yaml:"description"`
+		Paths       []string `yaml:"paths"`
 	}
-	return name, description
+	if yaml.Unmarshal([]byte(content[4:4+end]), &metadata) != nil {
+		return name, "", nil
+	}
+	if metadata.Name != "" {
+		name = metadata.Name
+	}
+	return name, metadata.Description, metadata.Paths
 }
