@@ -7,7 +7,7 @@ implementation.
 ## Bounded contexts
 
 - `internal/session` owns session identity, JSONL events, transcript recovery,
-  metadata, and session forking.
+  metadata, artifact namespaces, and session forking.
 - `internal/worktree` owns worktree identity, lifecycle, Git state transfer,
   conflict rules, registry maintenance, and historical code restoration.
 - `internal/workspace` owns confined paths, instruction discovery, and durable

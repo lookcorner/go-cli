@@ -61,7 +61,7 @@ func (t *readFileTool) readPDFImages(ctx context.Context, raw json.RawMessage) (
 	if requestedPath == "" {
 		requestedPath = args.Path
 	}
-	path, err := t.ws.Resolve(requestedPath)
+	path, err := t.resolvePath(requestedPath)
 	if err != nil {
 		return ExecutionResult{}, strings.EqualFold(filepath.Ext(requestedPath), ".pdf"), err
 	}
@@ -146,7 +146,7 @@ func (t *readFileTool) readImage(raw json.RawMessage) (ExecutionResult, bool, er
 		requestedPath = args.Path
 	}
 	expectedType, knownExtension := imageTypes[strings.ToLower(filepath.Ext(requestedPath))]
-	path, err := t.ws.Resolve(requestedPath)
+	path, err := t.resolvePath(requestedPath)
 	if err != nil {
 		return ExecutionResult{}, knownExtension, err
 	}

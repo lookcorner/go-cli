@@ -713,6 +713,18 @@ func CompletedResponseID(path string) (string, error) { return lastCompletedResp
 
 func (l *Logger) Path() string { return l.path }
 
+func ArtifactDir(sessionPath string) (string, error) {
+	base := filepath.Base(sessionPath)
+	if filepath.Ext(base) != ".jsonl" {
+		return "", errors.New("session path must end in .jsonl")
+	}
+	id := strings.TrimSuffix(base, ".jsonl")
+	if !validSessionID.MatchString(id) {
+		return "", errors.New("invalid session ID")
+	}
+	return filepath.Join(filepath.Dir(sessionPath), "artifacts", id), nil
+}
+
 func (l *Logger) Append(kind string, data any) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()

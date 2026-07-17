@@ -10,6 +10,9 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,11 +22,16 @@ import (
 )
 
 const (
-	maxWebFetchBytes = 2 << 20
-	maxWebFetchURL   = 2000
-	maxWebRedirects  = 10
-	webFetchCacheTTL = 15 * time.Minute
-	maxWebCachePages = 128
+	maxWebFetchBytes     = 10 << 20
+	maxWebConvertedBytes = 64 << 20
+	maxWebInlineBytes    = 100_000
+	maxWebArtifactBytes  = 1 << 30
+	maxWebArtifactNumber = 1_000_000_000
+	defaultWebContext    = 128_000
+	maxWebFetchURL       = 2000
+	maxWebRedirects      = 10
+	webFetchCacheTTL     = 15 * time.Minute
+	maxWebCachePages     = 128
 )
 
 type crossHostRedirectError struct {
@@ -34,10 +42,13 @@ type crossHostRedirectError struct {
 func (e *crossHostRedirectError) Error() string { return "cross-host web redirect" }
 
 type webFetchTool struct {
-	approver     Approver
-	client       *http.Client
-	allowPrivate bool
-	cache        webFetchCache
+	approver      Approver
+	client        *http.Client
+	allowPrivate  bool
+	cache         webFetchCache
+	artifactDir   string
+	contextWindow int
+	artifactMu    sync.Mutex
 }
 
 type cachedWebPage struct {
@@ -195,12 +206,161 @@ func (t *webFetchTool) Execute(ctx context.Context, raw json.RawMessage) (string
 	if !utf8.Valid(data) {
 		return "", errors.New("web response is not valid UTF-8 text")
 	}
-	if len(data) > maxWebFetchBytes {
-		return "", fmt.Errorf("converted web response exceeds %d bytes", maxWebFetchBytes)
+	if len(data) > maxWebConvertedBytes {
+		return "", fmt.Errorf("converted web response exceeds %d bytes", maxWebConvertedBytes)
 	}
-	output := fmt.Sprintf("URL: %s\nContent-Type: %s\n\n%s", response.Request.URL, contentType, data)
-	t.cache.put(cacheKey, output, time.Now())
+	content := string(data)
+	truncated := len(content) > t.inlineBudget()
+	if truncated {
+		artifactPath, _ := t.saveWebArtifact(data, contentType)
+		content = boundedWebContent(content, t.inlineBudget(), artifactPath)
+	}
+	output := fmt.Sprintf("URL: %s\nContent-Type: %s\n\n%s", response.Request.URL, contentType, content)
+	if !truncated {
+		t.cache.put(cacheKey, output, time.Now())
+	}
 	return output, nil
+}
+
+func (t *webFetchTool) inlineBudget() int {
+	window := t.contextWindow
+	if window <= 0 {
+		window = defaultWebContext
+	}
+	if window >= (maxWebInlineBytes*100+11)/12 {
+		return maxWebInlineBytes
+	}
+	budget := int64(window) * 4 * 3 / 100
+	if budget < 1 {
+		return 1
+	}
+	if budget > maxWebInlineBytes {
+		return maxWebInlineBytes
+	}
+	return int(budget)
+}
+
+func boundedWebContent(content string, budget int, artifactPath string) string {
+	preview := truncateUTF8(content, budget)
+	hint := ""
+	if artifactPath != "" {
+		hint = " Full content saved to: " + artifactPath + "."
+		if hasLongWebLine(content) {
+			hint += " Use bash to query or slice this long-line file."
+		} else {
+			hint += " Use read_file with offsets and limits to read it in chunks."
+		}
+	}
+	return fmt.Sprintf("%s\n\n[web_fetch content truncated: showing first %d of %d bytes.%s]", preview, len(preview), len(content), hint)
+}
+
+func hasLongWebLine(content string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		if len(line) > 2000 {
+			return true
+		}
+	}
+	return false
+}
+
+func truncateUTF8(value string, limit int) string {
+	if len(value) <= limit {
+		return value
+	}
+	for limit > 0 && !utf8.RuneStart(value[limit]) {
+		limit--
+	}
+	return value[:limit]
+}
+
+func (t *webFetchTool) saveWebArtifact(data []byte, contentType string) (string, error) {
+	if t.artifactDir == "" {
+		return "", errors.New("session artifact directory is unavailable")
+	}
+	t.artifactMu.Lock()
+	defer t.artifactMu.Unlock()
+	for _, dir := range []string{filepath.Dir(t.artifactDir), t.artifactDir, filepath.Join(t.artifactDir, "web_fetch")} {
+		if err := ensurePrivateArtifactDir(dir); err != nil {
+			return "", err
+		}
+	}
+	dir := filepath.Join(t.artifactDir, "web_fetch")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", err
+	}
+	maxNumber, total := 0, int64(0)
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+		if stem, _, ok := strings.Cut(entry.Name(), "."); ok {
+			if number, parseErr := strconv.Atoi(stem); parseErr == nil && number > maxNumber {
+				maxNumber = number
+			}
+		}
+		if info, infoErr := entry.Info(); infoErr == nil && info.Mode().IsRegular() {
+			size := info.Size()
+			if size < 0 || size > maxWebArtifactBytes-total {
+				return "", errors.New("web_fetch artifact byte budget exceeded")
+			}
+			total += size
+		}
+	}
+	if total > maxWebArtifactBytes-int64(len(data)) {
+		return "", errors.New("web_fetch artifact byte budget exceeded")
+	}
+	if maxNumber >= maxWebArtifactNumber {
+		return "", errors.New("web_fetch artifact number exhausted")
+	}
+	extension := webArtifactExtension(contentType, data)
+	for number := maxNumber + 1; number <= maxWebArtifactNumber; number++ {
+		path := filepath.Join(dir, fmt.Sprintf("%d.%s", number, extension))
+		file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if os.IsExist(err) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		if _, err = file.Write(data); err == nil {
+			err = file.Sync()
+		}
+		if closeErr := file.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			_ = os.Remove(path)
+			return "", err
+		}
+		return path, nil
+	}
+	return "", errors.New("web_fetch artifact number exhausted")
+}
+
+func ensurePrivateArtifactDir(path string) error {
+	if err := os.Mkdir(path, 0o700); err != nil && !os.IsExist(err) {
+		return err
+	}
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return errors.New("web_fetch artifact path must be a non-symlink directory")
+	}
+	return os.Chmod(path, 0o700)
+}
+
+func webArtifactExtension(contentType string, data []byte) string {
+	mimeType := strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
+	switch mimeType {
+	case "markdown", "text/markdown":
+		return "md"
+	case "application/x-ndjson", "application/ndjson", "application/jsonl", "text/jsonl", "text/x-jsonl":
+		return "jsonl"
+	}
+	if mimeType == "application/json" || mimeType == "text/json" || strings.HasSuffix(mimeType, "+json") || json.Valid(data) {
+		return "json"
+	}
+	return "txt"
 }
 
 func isTextWebContent(mediaType string) bool {

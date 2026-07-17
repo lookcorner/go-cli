@@ -3,11 +3,17 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
+
+	"github.com/lookcorner/go-cli/internal/workspace"
 )
 
 type webRoundTripFunc func(*http.Request) (*http.Response, error)
@@ -205,5 +211,99 @@ func TestWebFetchRejectsBinaryContent(t *testing.T) {
 	tool := &webFetchTool{approver: PromptApprover{Mode: PermissionAuto}, client: client, allowPrivate: true}
 	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"url":"https://example.com/file"}`)); err == nil || !strings.Contains(err.Error(), "unsupported web content type") {
 		t.Fatalf("unexpected binary response error: %v", err)
+	}
+}
+
+func TestWebFetchPersistsOverflowArtifactAndSkipsCache(t *testing.T) {
+	body := strings.Repeat("complete artifact line\n", 1000)
+	requests := 0
+	client := &http.Client{Transport: webRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{
+			StatusCode: http.StatusOK, Status: "200 OK", Request: request,
+			Header: http.Header{"Content-Type": []string{"text/plain"}},
+			Body:   io.NopCloser(strings.NewReader(body)),
+		}, nil
+	})}
+	root := t.TempDir()
+	artifactRoot := filepath.Join(root, "artifacts", "session-1")
+	tool := &webFetchTool{
+		approver: PromptApprover{Mode: PermissionAuto}, client: client, allowPrivate: true,
+		artifactDir: artifactRoot, contextWindow: 1000,
+	}
+	for call := 1; call <= 2; call++ {
+		output, err := tool.Execute(context.Background(), json.RawMessage(`{"url":"https://example.com/large"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(artifactRoot, "web_fetch", fmt.Sprintf("%d.txt", call))
+		if !strings.Contains(output, "web_fetch content truncated") || !strings.Contains(output, path) || strings.Contains(output, body) {
+			t.Fatalf("unexpected overflow output: %q", output)
+		}
+		data, err := os.ReadFile(path)
+		info, statErr := os.Stat(path)
+		if err != nil || statErr != nil {
+			t.Fatalf("readErr=%v statErr=%v", err, statErr)
+		}
+		if string(data) != body || info.Mode().Perm() != 0o600 {
+			t.Fatalf("artifact=%q mode=%v", data, info.Mode().Perm())
+		}
+	}
+	if requests != 2 {
+		t.Fatalf("truncated fetch was cached: requests=%d", requests)
+	}
+	dirInfo, err := os.Stat(filepath.Join(artifactRoot, "web_fetch"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dirInfo.Mode().Perm() != 0o700 {
+		t.Fatalf("artifact directory mode=%v", dirInfo.Mode().Perm())
+	}
+	workspaceRoot := t.TempDir()
+	ws, _ := workspace.Open(workspaceRoot)
+	reader := &readFileTool{ws: ws, artifactRoot: artifactRoot}
+	read, err := reader.Execute(context.Background(), json.RawMessage(`{"target_file":"`+filepath.Join(artifactRoot, "web_fetch", "1.txt")+`","offset":2,"limit":2}`))
+	if err != nil || !strings.Contains(read, "complete artifact line") {
+		t.Fatalf("artifact recovery=%q err=%v", read, err)
+	}
+}
+
+func TestWebFetchArtifactRejectsSymlinkedRoot(t *testing.T) {
+	root, outside := t.TempDir(), t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "artifacts")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	tool := &webFetchTool{artifactDir: filepath.Join(root, "artifacts", "session")}
+	if _, err := tool.saveWebArtifact([]byte("secret"), "text/plain"); err == nil {
+		t.Fatal("symlinked artifact root was accepted")
+	}
+	entries, _ := os.ReadDir(outside)
+	if len(entries) != 0 {
+		t.Fatalf("artifact escaped session storage: %#v", entries)
+	}
+}
+
+func TestReadFileAbsoluteWorkspacePathBeforeArtifactsExist(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "workspace.txt")
+	if err := os.WriteFile(path, []byte("workspace content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ws, _ := workspace.Open(root)
+	reader := &readFileTool{ws: ws, artifactRoot: filepath.Join(t.TempDir(), "artifacts", "session")}
+	output, err := reader.Execute(context.Background(), json.RawMessage(`{"target_file":"`+path+`"}`))
+	if err != nil || !strings.Contains(output, "workspace content") {
+		t.Fatalf("absolute workspace read=%q err=%v", output, err)
+	}
+}
+
+func TestBoundedWebContentPreservesUTF8(t *testing.T) {
+	content := strings.Repeat("é", 100)
+	output := boundedWebContent(content, 31, "")
+	if !utf8.ValidString(output) || !strings.Contains(output, "showing first 30 of 200 bytes") {
+		t.Fatalf("invalid UTF-8 truncation: %q", output)
+	}
+	if webArtifactExtension("text/plain", []byte(`{"ok":true}`)) != "json" || webArtifactExtension("markdown", nil) != "md" {
+		t.Fatal("web artifact extension classification failed")
 	}
 }

@@ -127,6 +127,8 @@ type Registry struct {
 	readPolicy Approver
 	hunks      *HunkTracker
 	rewind     *mutationCheckpoint
+	readFile   *readFileTool
+	webFetch   *webFetchTool
 }
 
 type mutationCheckpoint struct {
@@ -182,8 +184,10 @@ func NewRegistry(ws *workspace.Workspace, approver Approver) *Registry {
 	todos := newTodoStore()
 	goal := NewGoalStore()
 	rewind := &mutationCheckpoint{}
+	readFile := &readFileTool{ws: ws}
+	webFetch := &webFetchTool{approver: approver}
 	items := []Tool{
-		&readFileTool{ws: ws},
+		readFile,
 		&listFilesTool{ws: ws},
 		&searchFilesTool{ws: ws},
 		&writeFileTool{ws: ws, approver: approver, rewind: rewind},
@@ -200,13 +204,27 @@ func NewRegistry(ws *workspace.Workspace, approver Approver) *Registry {
 		&searchReplaceTool{ws: ws, approver: approver, rewind: rewind},
 		&todoWriteTool{store: todos},
 		&updateGoalTool{store: goal},
-		&webFetchTool{approver: approver},
+		webFetch,
 	}
-	registry := &Registry{tools: make(map[string]Tool, len(items)), processes: processes, goal: goal, hunks: NewHunkTracker(ws), rewind: rewind}
+	registry := &Registry{
+		tools: make(map[string]Tool, len(items)), processes: processes, goal: goal,
+		hunks: NewHunkTracker(ws), rewind: rewind, readFile: readFile, webFetch: webFetch,
+	}
 	for _, item := range items {
 		registry.tools[item.Definition().Name] = item
 	}
 	return registry
+}
+
+func (r *Registry) ConfigureWebFetchArtifacts(dir string, contextWindow int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.webFetch != nil {
+		r.webFetch.artifactDir, r.webFetch.contextWindow = dir, contextWindow
+	}
+	if r.readFile != nil {
+		r.readFile.artifactRoot = dir
+	}
 }
 
 func (r *Registry) SetRewindStore(store *workspace.RewindStore, promptIndex func() int) {
@@ -407,14 +425,17 @@ func objectSchema(properties map[string]any, required ...string) map[string]any 
 	}
 }
 
-type readFileTool struct{ ws *workspace.Workspace }
+type readFileTool struct {
+	ws           *workspace.Workspace
+	artifactRoot string
+}
 
 func (t *readFileTool) Definition() api.ToolDefinition {
 	return api.ToolDefinition{
 		Type: "function", Name: "read_file",
-		Description: "Read text, PPTX, PNG, JPEG, GIF, WebP, or PDF files inside the workspace. PDFs render as page images by default or extract text with format=text. Text results use 1-based LINE_NUMBER→LINE_CONTENT formatting.",
+		Description: "Read text, PPTX, PNG, JPEG, GIF, WebP, or PDF files inside the workspace or the current session artifact directory. PDFs render as page images by default or extract text with format=text. Text results use 1-based LINE_NUMBER→LINE_CONTENT formatting.",
 		Parameters: objectSchema(map[string]any{
-			"target_file": map[string]any{"type": "string", "description": "File path relative to the workspace."},
+			"target_file": map[string]any{"type": "string", "description": "Path relative to the workspace, or an absolute current-session artifact path returned by a tool."},
 			"offset":      map[string]any{"type": "integer", "description": "1-based starting line; negative values count from the end."},
 			"limit":       map[string]any{"type": "integer", "minimum": 1, "maximum": 1000},
 			"pages":       map[string]any{"type": "string", "description": "Reserved page range for document formats."},
@@ -444,7 +465,7 @@ func (t *readFileTool) Execute(_ context.Context, raw json.RawMessage) (string, 
 	if requestedPath == "" {
 		return "", errors.New("target_file is required")
 	}
-	path, err := t.ws.Resolve(requestedPath)
+	path, err := t.resolvePath(requestedPath)
 	if err != nil {
 		return "", err
 	}
@@ -458,6 +479,10 @@ func (t *readFileTool) Execute(_ context.Context, raw json.RawMessage) (string, 
 	headerBytes, _ := file.ReadAt(header, 0)
 	isPDF := strings.EqualFold(filepath.Ext(path), ".pdf") || headerBytes == len(header) && bytes.Equal(header, []byte("%PDF-"))
 	readLimit := int64(maxReadBytes)
+	isArtifact := t.isArtifactPath(path)
+	if isArtifact {
+		readLimit = maxWebConvertedBytes
+	}
 	extension := strings.ToLower(filepath.Ext(path))
 	if isPDF {
 		readLimit = maxPDFBytes
@@ -534,7 +559,53 @@ func (t *readFileTool) Execute(_ context.Context, raw json.RawMessage) (string, 
 	for i := start; i <= end; i++ {
 		fmt.Fprintf(&output, "%d→%s\n", i, lines[i-1])
 	}
-	return output.String(), nil
+	result := output.String()
+	if isArtifact && len(result) > maxOutputBytes {
+		result = truncateUTF8(result, maxOutputBytes) + "\n[session artifact output truncated; read another line range or use bash for byte-oriented access]"
+	}
+	return result, nil
+}
+
+func (t *readFileTool) resolvePath(requested string) (string, error) {
+	if !filepath.IsAbs(requested) || t.artifactRoot == "" || !pathWithin(t.artifactRoot, requested) {
+		return t.ws.Resolve(requested)
+	}
+	for _, dir := range []string{filepath.Dir(t.artifactRoot), t.artifactRoot} {
+		info, err := os.Lstat(dir)
+		if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return "", errors.New("session artifact directory is unavailable or unsafe")
+		}
+	}
+	root, err := filepath.EvalSymlinks(t.artifactRoot)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(requested)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(root, resolved)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", errors.New("path escapes workspace and session artifacts")
+	}
+	return resolved, nil
+}
+
+func pathWithin(root, path string) bool {
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func (t *readFileTool) isArtifactPath(path string) bool {
+	if t.artifactRoot == "" {
+		return false
+	}
+	root, err := filepath.EvalSymlinks(t.artifactRoot)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(root, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 type listFilesTool struct{ ws *workspace.Workspace }

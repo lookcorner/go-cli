@@ -268,6 +268,11 @@ bounded public HTTP(S) text after approval, converts HTML to Markdown, resolves
 relative links, removes executable/embed content, and rejects binary responses.
 HTTP URLs are upgraded to HTTPS; redirects are limited and may not cross hosts.
 Successful text responses are cached in memory for 15 minutes, up to 128 pages.
+Converted pages larger than 3% of the configured model context are previewed
+inline and persisted under the current session's `web_fetch` artifacts. The
+returned path can be inspected with `read_file` (or `bash` for long-line data);
+path-bearing overflow responses are fetched and materialized again instead of
+being reused across sessions from cache.
 Loopback, private, link-local, multicast and unspecified addresses are rejected
 both during URL validation and again when dialing (including redirects). Use a
 WebFetch permission with `pattern_mode = "domain"` for host-based rules.

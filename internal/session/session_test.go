@@ -240,6 +240,16 @@ func TestForkCopiesTranscriptAndRebindsCWD(t *testing.T) {
 	}
 }
 
+func TestArtifactDirIsScopedToSessionID(t *testing.T) {
+	dir, err := ArtifactDir(filepath.Join(t.TempDir(), "session-1.jsonl"))
+	if err != nil || filepath.Base(dir) != "session-1" || filepath.Base(filepath.Dir(dir)) != "artifacts" {
+		t.Fatalf("artifact dir=%q err=%v", dir, err)
+	}
+	if _, err := ArtifactDir(filepath.Join(t.TempDir(), "bad$id.jsonl")); err == nil {
+		t.Fatal("invalid session artifact ID was accepted")
+	}
+}
+
 func TestForkAtPromptUsesLiveTimeline(t *testing.T) {
 	dir := t.TempDir()
 	logger, err := NewLoggerWithID(dir, "parent")
