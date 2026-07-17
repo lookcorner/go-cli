@@ -61,7 +61,10 @@ are supported. The earlier JSON format remains accepted when passed with
 `--config`; an existing `$XDG_CONFIG_HOME/gork-go/config.json` is used as a
 fallback when `~/.grok/config.toml` does not exist.
 
-Model entries accept `context_window` and
+`[models].web_search` may select another `[model.<name>]` Responses provider
+for the `web_search` tool; otherwise a Responses-backed main model is reused.
+`GORK_WEB_SEARCH_API_KEY`, `GORK_WEB_SEARCH_BASE_URL`, and
+`GORK_WEB_SEARCH_MODEL` provide environment overrides. Model entries accept `context_window` and
 `auto_compact_threshold_percent`. The default threshold matches Gork Build at
 85%; `GROK_AUTO_COMPACT_THRESHOLD_PERCENT` has highest precedence. When the
 reported input-token usage reaches the threshold, Gork Go asks the current

@@ -11,10 +11,15 @@ func TestLoadGrokTOMLModelAndServers(t *testing.T) {
 	t.Setenv("XAI_API_KEY", "")
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("CUSTOM_PROVIDER_KEY", "secret-from-env-key")
+	t.Setenv("CUSTOM_SEARCH_KEY", "search-secret")
+	t.Setenv("GORK_WEB_SEARCH_API_KEY", "")
+	t.Setenv("GORK_WEB_SEARCH_BASE_URL", "")
+	t.Setenv("GORK_WEB_SEARCH_MODEL", "")
 	path := filepath.Join(t.TempDir(), "config.toml")
 	data := []byte(`
 [models]
 default = "local"
+web_search = "search"
 
 [model.local]
 model = "provider-model-id"
@@ -23,6 +28,12 @@ backend = "chat_completions"
 env_key = ["MISSING_KEY", "CUSTOM_PROVIDER_KEY"]
 context_window = 200000
 auto_compact_threshold_percent = 80
+
+[model.search]
+model = "search-model-id"
+base_url = "https://search.example/v1/"
+backend = "responses"
+env_key = "CUSTOM_SEARCH_KEY"
 
 [session]
 auto_compact_threshold_percent = 70
@@ -71,6 +82,10 @@ pattern = ".env*"
 	if cfg.APIKey != "secret-from-env-key" {
 		t.Fatalf("unexpected API key resolution: %q", cfg.APIKey)
 	}
+	search, enabled := cfg.WebSearchEndpoint()
+	if !enabled || search.Model != "search-model-id" || search.BaseURL != "https://search.example/v1" || search.APIKey != "search-secret" {
+		t.Fatalf("unexpected web search config: %#v enabled=%v", search, enabled)
+	}
 	if cfg.ContextWindow != 200000 || cfg.AutoCompactThresholdPercent != 80 {
 		t.Fatalf("unexpected compaction config: window=%d threshold=%d", cfg.ContextWindow, cfg.AutoCompactThresholdPercent)
 	}
@@ -91,6 +106,48 @@ pattern = ".env*"
 	}
 	if len(cfg.Permission.Rules) != 2 || cfg.Permission.Rules[0].Action != "allow" || *cfg.Permission.Rules[1].Pattern != ".env*" {
 		t.Fatalf("unexpected permission config: %#v", cfg.Permission)
+	}
+}
+
+func TestWebSearchEndpointFallbackAndValidation(t *testing.T) {
+	cfg := Config{APIKey: "key", BaseURL: "https://api.example/v1/", Model: "model", Backend: "responses"}
+	search, enabled := cfg.WebSearchEndpoint()
+	if !enabled || search.APIKey != "key" || search.BaseURL != "https://api.example/v1" || search.Model != "model" {
+		t.Fatalf("unexpected fallback: %#v enabled=%v", search, enabled)
+	}
+	cfg.Backend = "anthropic_messages"
+	if _, enabled := cfg.WebSearchEndpoint(); enabled {
+		t.Fatal("non-Responses backend unexpectedly enabled implicit web search")
+	}
+	cfg.WebSearch = WebSearchConfig{Enabled: true, BaseURL: "https://search.example/v1", Model: "search"}
+	if search, enabled := cfg.WebSearchEndpoint(); !enabled || search.APIKey != "key" {
+		t.Fatalf("explicit search config did not inherit credentials: %#v", search)
+	}
+}
+
+func TestLoadRejectsUnknownWebSearchModel(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[models]\nweb_search = \"missing\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("undefined web search model was accepted")
+	}
+}
+
+func TestWebSearchEnvironmentOverrides(t *testing.T) {
+	t.Setenv("GORK_API_KEY", "main-key")
+	t.Setenv("GORK_MODEL", "main-model")
+	t.Setenv("GORK_WEB_SEARCH_API_KEY", "search-key")
+	t.Setenv("GORK_WEB_SEARCH_BASE_URL", "https://search.example/v1/")
+	t.Setenv("GORK_WEB_SEARCH_MODEL", "search-model")
+	cfg, err := Load(filepath.Join(t.TempDir(), "missing.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	search, enabled := cfg.WebSearchEndpoint()
+	if !enabled || search.APIKey != "search-key" || search.BaseURL != "https://search.example/v1" || search.Model != "search-model" {
+		t.Fatalf("unexpected environment search config: %#v enabled=%v", search, enabled)
 	}
 }
 

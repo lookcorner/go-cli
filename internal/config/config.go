@@ -31,6 +31,14 @@ type Config struct {
 	Pruning                     PruningConfig              `json:"pruning"`
 	Compat                      compat.Config              `json:"compat"`
 	HTTPTimeout                 time.Duration              `json:"-"`
+	WebSearch                   WebSearchConfig            `json:"web_search,omitempty"`
+}
+
+type WebSearchConfig struct {
+	Enabled bool   `json:"enabled,omitempty"`
+	APIKey  string `json:"api_key,omitempty"`
+	BaseURL string `json:"base_url,omitempty"`
+	Model   string `json:"model,omitempty"`
 }
 
 type PermissionConfig struct {
@@ -95,7 +103,8 @@ type fileConfig struct {
 	Compaction    fileCompactionConfig       `json:"compaction,omitempty" toml:"compaction"`
 	Compat        fileCompatConfig           `json:"compat,omitempty" toml:"compat"`
 	Models        struct {
-		Default string `toml:"default"`
+		Default   string `toml:"default"`
+		WebSearch string `toml:"web_search"`
 	} `json:"-" toml:"models"`
 	ModelEntries map[string]modelConfig `json:"-" toml:"model"`
 }
@@ -167,6 +176,21 @@ func Load(path string) (Config, error) {
 			return Config{}, fmt.Errorf("parse config %q: %w", path, err)
 		}
 		applyModelConfig(&disk)
+		if disk.Models.WebSearch != "" {
+			entry, ok := disk.ModelEntries[disk.Models.WebSearch]
+			if !ok {
+				return Config{}, fmt.Errorf("web search model %q is not defined", disk.Models.WebSearch)
+			}
+			if entry.Backend != "" && entry.Backend != "responses" {
+				return Config{}, errors.New("web search model backend must be responses")
+			}
+			cfg.WebSearch = WebSearchConfig{
+				Enabled: true, APIKey: entry.APIKey, BaseURL: entry.BaseURL, Model: entry.Model,
+			}
+			if cfg.WebSearch.APIKey == "" {
+				cfg.WebSearch.APIKey = firstConfiguredEnv(entry.EnvKey)
+			}
+		}
 		if disk.APIKey != "" {
 			cfg.APIKey = disk.APIKey
 		}
@@ -207,6 +231,7 @@ func Load(path string) (Config, error) {
 
 	applyEnv(&cfg)
 	cfg.BaseURL = strings.TrimRight(cfg.BaseURL, "/")
+	cfg.WebSearch.BaseURL = strings.TrimRight(cfg.WebSearch.BaseURL, "/")
 	return cfg, nil
 }
 
@@ -261,6 +286,18 @@ func applyEnv(cfg *Config) {
 	if value := os.Getenv("GORK_BACKEND"); value != "" {
 		cfg.Backend = value
 	}
+	if value := os.Getenv("GORK_WEB_SEARCH_API_KEY"); value != "" {
+		cfg.WebSearch.Enabled = true
+		cfg.WebSearch.APIKey = value
+	}
+	if value := os.Getenv("GORK_WEB_SEARCH_BASE_URL"); value != "" {
+		cfg.WebSearch.Enabled = true
+		cfg.WebSearch.BaseURL = value
+	}
+	if value := os.Getenv("GORK_WEB_SEARCH_MODEL"); value != "" {
+		cfg.WebSearch.Enabled = true
+		cfg.WebSearch.Model = value
+	}
 	if value := os.Getenv("GROK_AUTO_COMPACT_THRESHOLD_PERCENT"); value != "" {
 		if parsed, err := strconv.Atoi(value); err == nil && parsed >= 0 && parsed <= 100 {
 			cfg.AutoCompactThresholdPercent = parsed
@@ -273,6 +310,29 @@ func applyEnv(cfg *Config) {
 	}
 	applyCompatEnv(&cfg.Compat.Cursor, "CURSOR")
 	applyCompatEnv(&cfg.Compat.Claude, "CLAUDE")
+}
+
+func (c Config) WebSearchEndpoint() (WebSearchConfig, bool) {
+	search := c.WebSearch
+	if !search.Enabled {
+		if c.Backend != "responses" {
+			return WebSearchConfig{}, false
+		}
+		search.Enabled = true
+	}
+	if search.APIKey == "" {
+		search.APIKey = c.APIKey
+	}
+	if c.Backend == "responses" {
+		if search.BaseURL == "" {
+			search.BaseURL = c.BaseURL
+		}
+		if search.Model == "" {
+			search.Model = c.Model
+		}
+	}
+	search.BaseURL = strings.TrimRight(search.BaseURL, "/")
+	return search, true
 }
 
 func applyCompatEnv(target *compat.Vendor, vendor string) {
@@ -408,6 +468,9 @@ func (c Config) Validate() error {
 	}
 	if c.BaseURL == "" {
 		return errors.New("missing API base URL")
+	}
+	if search, enabled := c.WebSearchEndpoint(); enabled && (search.APIKey == "" || search.BaseURL == "" || search.Model == "") {
+		return errors.New("web search requires an API key, base URL, and model")
 	}
 	if c.MaxSteps < 1 {
 		return errors.New("max steps must be greater than zero")

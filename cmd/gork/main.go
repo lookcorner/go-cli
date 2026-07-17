@@ -247,8 +247,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return err
 	}
 	registry := tools.NewRegistry(ws, approver)
-	if cfg.Backend == "responses" {
-		if err := registry.Register(tools.NewWebSearchTool(cfg.BaseURL, cfg.APIKey, cfg.Model, &http.Client{Timeout: cfg.HTTPTimeout})); err != nil {
+	if search, enabled := cfg.WebSearchEndpoint(); enabled {
+		if err := registry.Register(tools.NewWebSearchTool(search.BaseURL, search.APIKey, search.Model, &http.Client{Timeout: cfg.HTTPTimeout})); err != nil {
 			return err
 		}
 	}
@@ -377,8 +377,8 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			return nil, nil, err
 		}
 		registry := tools.NewRegistry(ws, approver)
-		if cfg.Backend == "responses" {
-			if err := registry.Register(tools.NewWebSearchTool(cfg.BaseURL, cfg.APIKey, cfg.Model, &http.Client{Timeout: cfg.HTTPTimeout})); err != nil {
+		if search, enabled := cfg.WebSearchEndpoint(); enabled {
+			if err := registry.Register(tools.NewWebSearchTool(search.BaseURL, search.APIKey, search.Model, &http.Client{Timeout: cfg.HTTPTimeout})); err != nil {
 				_ = registry.Close()
 				return nil, nil, err
 			}

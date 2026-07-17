@@ -1,5 +1,6 @@
 [models]
 default = "gork-default"
+web_search = "gork-default"
 
 [model.gork-default]
 model = "YOUR_RESPONSES_API_MODEL"
