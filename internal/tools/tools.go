@@ -216,14 +216,26 @@ func NewRegistry(ws *workspace.Workspace, approver Approver) *Registry {
 	return registry
 }
 
-func (r *Registry) ConfigureWebFetchArtifacts(dir string, contextWindow int) {
+type WebFetchConfig struct {
+	ArtifactDir     string
+	ContextWindow   int
+	ProxyEndpoint   string
+	AllowedDomains  []string
+	RestrictDomains bool
+}
+
+func (r *Registry) ConfigureWebFetch(config WebFetchConfig) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.webFetch != nil {
-		r.webFetch.artifactDir, r.webFetch.contextWindow = dir, contextWindow
+		r.webFetch.artifactDir = config.ArtifactDir
+		r.webFetch.contextWindow = config.ContextWindow
+		r.webFetch.proxyEndpoint = config.ProxyEndpoint
+		r.webFetch.restrictDomains = config.RestrictDomains
+		r.webFetch.domainRules = buildWebDomainRules(config.AllowedDomains)
 	}
 	if r.readFile != nil {
-		r.readFile.artifactRoot = dir
+		r.readFile.artifactRoot = config.ArtifactDir
 	}
 }
 

@@ -43,13 +43,16 @@ type crossHostRedirectError struct {
 func (e *crossHostRedirectError) Error() string { return "cross-host web redirect" }
 
 type webFetchTool struct {
-	approver      Approver
-	client        *http.Client
-	allowPrivate  bool
-	cache         webFetchCache
-	artifactDir   string
-	contextWindow int
-	artifactMu    sync.Mutex
+	approver        Approver
+	client          *http.Client
+	allowPrivate    bool
+	cache           webFetchCache
+	artifactDir     string
+	contextWindow   int
+	proxyEndpoint   string
+	restrictDomains bool
+	domainRules     map[string][]string
+	artifactMu      sync.Mutex
 }
 
 type cachedWebPage struct {
@@ -122,12 +125,18 @@ func (t *webFetchTool) Execute(ctx context.Context, raw json.RawMessage) (string
 	if json.Unmarshal(raw, &args) != nil || strings.TrimSpace(args.URL) == "" {
 		return "", errors.New("url is required")
 	}
-	parsed, err := validateFetchURL(ctx, args.URL, t.allowPrivate)
+	parsed, err := parseFetchURL(args.URL)
 	if err != nil {
 		return "", err
 	}
 	if parsed.Scheme == "http" {
 		parsed.Scheme = "https"
+	}
+	if t.restrictDomains && !webDomainAllowed(t.domainRules, parsed) {
+		return fmt.Sprintf("Error: domain %s is not in the allowed domains list", parsed.Hostname()), nil
+	}
+	if err := validateFetchHost(ctx, parsed, t.allowPrivate); err != nil {
+		return "", err
 	}
 	if t.approver != nil {
 		if err := t.approver.Approve(ctx, "web fetch", parsed.String()); err != nil {
@@ -140,7 +149,10 @@ func (t *webFetchTool) Execute(ctx context.Context, raw json.RawMessage) (string
 	}
 	client := t.client
 	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{DialContext: safeDialContext}}
+		client, err = t.newHTTPClient()
+		if err != nil {
+			return "", err
+		}
 	}
 	copyClient := *client
 	previousRedirect := client.CheckRedirect
@@ -151,6 +163,9 @@ func (t *webFetchTool) Execute(ctx context.Context, raw json.RawMessage) (string
 		previous := via[len(via)-1].URL
 		if !sameWebHost(previous, request.URL) {
 			return &crossHostRedirectError{originalHost: previous.Hostname(), redirectURL: request.URL.String()}
+		}
+		if t.restrictDomains && !webDomainAllowed(t.domainRules, request.URL) {
+			return errors.New("redirect URL is not in the allowed domains list")
 		}
 		if _, err := validateFetchURL(request.Context(), request.URL.String(), t.allowPrivate); err != nil {
 			return err
@@ -249,6 +264,68 @@ func (t *webFetchTool) Execute(ctx context.Context, raw json.RawMessage) (string
 		t.cache.put(cacheKey, output, time.Now())
 	}
 	return output, nil
+}
+
+func (t *webFetchTool) newHTTPClient() (*http.Client, error) {
+	transport := &http.Transport{DialContext: safeDialContext}
+	if t.proxyEndpoint != "" {
+		proxy, err := url.Parse(t.proxyEndpoint)
+		if err != nil || (proxy.Scheme != "http" && proxy.Scheme != "https") || proxy.Hostname() == "" {
+			return nil, errors.New("web fetch proxy must be an absolute http(s) URL")
+		}
+		transport.Proxy = http.ProxyURL(proxy)
+		dialer := &net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}
+		transport.DialContext = dialer.DialContext
+	}
+	return &http.Client{Timeout: 60 * time.Second, Transport: transport}, nil
+}
+
+func buildWebDomainRules(entries []string) map[string][]string {
+	rules := make(map[string][]string)
+	for _, raw := range entries {
+		normalized := strings.ToLower(strings.TrimSpace(raw))
+		normalized = strings.TrimRight(normalized, "/.")
+		normalized = strings.TrimPrefix(normalized, "www.")
+		if normalized == "" {
+			continue
+		}
+		host, path, scoped := strings.Cut(normalized, "/")
+		if !scoped || path == "" {
+			rules[host] = []string{}
+			continue
+		}
+		if existing, found := rules[host]; found && len(existing) == 0 {
+			continue
+		}
+		prefix := "/" + strings.Trim(path, "/")
+		found := false
+		for _, existing := range rules[host] {
+			found = found || existing == prefix
+		}
+		if !found {
+			rules[host] = append(rules[host], prefix)
+		}
+	}
+	return rules
+}
+
+func webDomainAllowed(rules map[string][]string, parsed *url.URL) bool {
+	host := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
+	host = strings.TrimPrefix(host, "www.")
+	prefixes, found := rules[host]
+	if !found {
+		return false
+	}
+	if len(prefixes) == 0 {
+		return true
+	}
+	path := strings.ToLower(parsed.EscapedPath())
+	for _, prefix := range prefixes {
+		if path == prefix || strings.HasPrefix(path, prefix+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func (t *webFetchTool) inlineBudget() int {
@@ -444,6 +521,17 @@ func isTextWebContent(mediaType string) bool {
 }
 
 func validateFetchURL(ctx context.Context, raw string, allowPrivate bool) (*url.URL, error) {
+	parsed, err := parseFetchURL(raw)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateFetchHost(ctx, parsed, allowPrivate); err != nil {
+		return nil, err
+	}
+	return parsed, nil
+}
+
+func parseFetchURL(raw string) (*url.URL, error) {
 	if len(raw) > maxWebFetchURL {
 		return nil, fmt.Errorf("web_fetch URL exceeds %d characters", maxWebFetchURL)
 	}
@@ -454,23 +542,27 @@ func validateFetchURL(ctx context.Context, raw string, allowPrivate bool) (*url.
 	if !strings.Contains(parsed.Hostname(), ".") {
 		return nil, fmt.Errorf("web_fetch rejects single-label host %q", parsed.Hostname())
 	}
+	return parsed, nil
+}
+
+func validateFetchHost(ctx context.Context, parsed *url.URL, allowPrivate bool) error {
 	if allowPrivate {
-		return parsed, nil
+		return nil
 	}
 	addresses, err := net.DefaultResolver.LookupIPAddr(ctx, parsed.Hostname())
 	if err != nil {
-		return nil, fmt.Errorf("resolve URL host: %w", err)
+		return fmt.Errorf("resolve URL host: %w", err)
 	}
 	if len(addresses) == 0 {
-		return nil, errors.New("URL host resolved to no addresses")
+		return errors.New("URL host resolved to no addresses")
 	}
 	for _, address := range addresses {
 		ip := address.IP
 		if !isPublicIP(ip) {
-			return nil, fmt.Errorf("URL host resolves to a non-public address: %s", ip)
+			return fmt.Errorf("URL host resolves to a non-public address: %s", ip)
 		}
 	}
-	return parsed, nil
+	return nil
 }
 
 func sameWebHost(first, second *url.URL) bool {

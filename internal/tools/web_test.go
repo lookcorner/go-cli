@@ -10,6 +10,7 @@ import (
 	"image/png"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -425,5 +426,86 @@ func TestWebMediaMagicValidation(t *testing.T) {
 	}
 	if !validWebMediaMagic("image/x-custom", []byte("custom")) || webMediaExtension("image/x-custom") != "bin" {
 		t.Fatal("unknown media subtype compatibility failed")
+	}
+}
+
+func TestWebFetchDomainAllowlist(t *testing.T) {
+	rules := buildWebDomainRules([]string{"Example.com/Docs/", "www.allowed.example", "allowed.example/narrow"})
+	for raw, allowed := range map[string]bool{
+		"https://example.com/docs":          true,
+		"https://www.example.com/DOCS/page": true,
+		"https://example.com/docs-internal": false,
+		"https://allowed.example/anything":  true,
+		"https://other.example/docs":        false,
+	} {
+		parsed, _ := url.Parse(raw)
+		if got := webDomainAllowed(rules, parsed); got != allowed {
+			t.Fatalf("allowed(%s)=%v, want %v", raw, got, allowed)
+		}
+	}
+	parsed, _ := url.Parse("https://example.com/docs")
+	if webDomainAllowed(buildWebDomainRules(nil), parsed) {
+		t.Fatal("explicit empty domain rules allowed a fetch")
+	}
+}
+
+func TestWebFetchBlocksUnlistedDomainBeforeNetwork(t *testing.T) {
+	requests := 0
+	client := &http.Client{Transport: webRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{
+			StatusCode: http.StatusOK, Status: "200 OK", Request: request,
+			Header: http.Header{"Content-Type": []string{"text/plain"}}, Body: io.NopCloser(strings.NewReader("allowed")),
+		}, nil
+	})}
+	tool := &webFetchTool{
+		approver: PromptApprover{Mode: PermissionAuto}, client: client, allowPrivate: true,
+		restrictDomains: true, domainRules: buildWebDomainRules([]string{"example.com/docs"}),
+	}
+	blocked, err := tool.Execute(context.Background(), json.RawMessage(`{"url":"https://other.example/docs"}`))
+	if err != nil || !strings.Contains(blocked, "not in the allowed domains") || requests != 0 {
+		t.Fatalf("blocked output=%q requests=%d err=%v", blocked, requests, err)
+	}
+	allowed, err := tool.Execute(context.Background(), json.RawMessage(`{"url":"https://example.com/docs/page"}`))
+	if err != nil || !strings.Contains(allowed, "allowed") || requests != 1 {
+		t.Fatalf("allowed output=%q requests=%d err=%v", allowed, requests, err)
+	}
+}
+
+func TestWebFetchAllowlistBlocksRedirectOutsidePathPrefix(t *testing.T) {
+	requests := 0
+	client := &http.Client{Transport: webRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{
+			StatusCode: http.StatusFound, Status: "302 Found", Request: request,
+			Header: http.Header{"Location": []string{"/private"}}, Body: io.NopCloser(strings.NewReader("")),
+		}, nil
+	})}
+	tool := &webFetchTool{
+		approver: PromptApprover{Mode: PermissionAuto}, client: client, allowPrivate: true,
+		restrictDomains: true, domainRules: buildWebDomainRules([]string{"example.com/docs"}),
+	}
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"url":"https://example.com/docs/start"}`)); err == nil || !strings.Contains(err.Error(), "allowed domains") {
+		t.Fatalf("unexpected path redirect error: %v", err)
+	}
+	if requests != 1 {
+		t.Fatalf("blocked redirect made %d requests", requests)
+	}
+}
+
+func TestWebFetchHTTPProxyConfiguration(t *testing.T) {
+	tool := &webFetchTool{proxyEndpoint: "http://127.0.0.1:8080"}
+	client, err := tool.newHTTPClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := client.Transport.(*http.Transport)
+	requestURL, _ := url.Parse("https://example.com/page")
+	proxy, err := transport.Proxy(&http.Request{URL: requestURL})
+	if err != nil || proxy.String() != "http://127.0.0.1:8080" {
+		t.Fatalf("proxy=%v err=%v", proxy, err)
+	}
+	if _, err := (&webFetchTool{proxyEndpoint: "file:///tmp/proxy"}).newHTTPClient(); err == nil {
+		t.Fatal("invalid proxy URL was accepted")
 	}
 }

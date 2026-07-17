@@ -21,6 +21,11 @@ soft_trim_head = 1500
 soft_trim_tail = 1500
 hard_clear_age_turns = 10
 
+[toolset.web_fetch]
+# proxy_endpoint = "https://proxy.example:8443"
+# allowed_domains = ["docs.example.com", "example.com/docs"]
+# An explicit empty allowed_domains list blocks every web_fetch request.
+
 [mcp_servers.example]
 command = "example-mcp-server"
 args = []

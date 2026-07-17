@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -32,6 +33,7 @@ type Config struct {
 	Compat                      compat.Config              `json:"compat"`
 	HTTPTimeout                 time.Duration              `json:"-"`
 	WebSearch                   WebSearchConfig            `json:"web_search,omitempty"`
+	WebFetch                    WebFetchConfig             `json:"web_fetch,omitempty"`
 }
 
 type WebSearchConfig struct {
@@ -39,6 +41,13 @@ type WebSearchConfig struct {
 	APIKey  string `json:"api_key,omitempty"`
 	BaseURL string `json:"base_url,omitempty"`
 	Model   string `json:"model,omitempty"`
+}
+
+type WebFetchConfig struct {
+	ProxyEndpoint     string   `json:"proxy_endpoint,omitempty"`
+	AllowedDomains    []string `json:"allowed_domains,omitempty"`
+	ProxyConfigured   bool     `json:"-"`
+	DomainsConfigured bool     `json:"-"`
 }
 
 type PermissionConfig struct {
@@ -109,6 +118,14 @@ type fileConfig struct {
 		WebSearch string `toml:"web_search"`
 	} `json:"-" toml:"models"`
 	ModelEntries map[string]modelConfig `json:"-" toml:"model"`
+	Toolset      struct {
+		WebFetch fileWebFetchConfig `json:"web_fetch,omitempty" toml:"web_fetch"`
+	} `json:"toolset,omitempty" toml:"toolset"`
+}
+
+type fileWebFetchConfig struct {
+	ProxyEndpoint  *string  `json:"proxy_endpoint,omitempty" toml:"proxy_endpoint"`
+	AllowedDomains []string `json:"allowed_domains,omitempty" toml:"allowed_domains"`
 }
 
 type modelConfig struct {
@@ -214,6 +231,14 @@ func Load(path string) (Config, error) {
 		cfg.MCPServers = disk.MCPServers
 		cfg.LSPServers = disk.LSPServers
 		cfg.Permission = disk.Permission
+		if disk.Toolset.WebFetch.ProxyEndpoint != nil {
+			cfg.WebFetch.ProxyEndpoint = *disk.Toolset.WebFetch.ProxyEndpoint
+			cfg.WebFetch.ProxyConfigured = true
+		}
+		if disk.Toolset.WebFetch.AllowedDomains != nil {
+			cfg.WebFetch.AllowedDomains = append([]string(nil), disk.Toolset.WebFetch.AllowedDomains...)
+			cfg.WebFetch.DomainsConfigured = true
+		}
 		if disk.ContextWindow > 0 {
 			cfg.ContextWindow = disk.ContextWindow
 		}
@@ -299,6 +324,12 @@ func applyEnv(cfg *Config) {
 	if value := os.Getenv("GORK_WEB_SEARCH_MODEL"); value != "" {
 		cfg.WebSearch.Enabled = true
 		cfg.WebSearch.Model = value
+	}
+	if !cfg.WebFetch.ProxyConfigured {
+		if value := os.Getenv("GROK_WEB_FETCH_PROXY"); value != "" {
+			cfg.WebFetch.ProxyEndpoint = value
+			cfg.WebFetch.ProxyConfigured = true
+		}
 	}
 	if value := os.Getenv("GROK_AUTO_COMPACT_THRESHOLD_PERCENT"); value != "" {
 		if parsed, err := strconv.Atoi(value); err == nil && parsed >= 0 && parsed <= 100 {
@@ -485,6 +516,21 @@ func (c Config) Validate() error {
 	}
 	if c.Pruning.KeepLastNTurns < 0 || c.Pruning.SoftTrimThreshold < 0 || c.Pruning.SoftTrimHead < 0 || c.Pruning.SoftTrimTail < 0 || c.Pruning.HardClearAgeTurns < 0 {
 		return errors.New("compaction pruning values must not be negative")
+	}
+	if c.WebFetch.ProxyConfigured {
+		proxy, err := url.Parse(c.WebFetch.ProxyEndpoint)
+		if err != nil || (proxy.Scheme != "http" && proxy.Scheme != "https") || proxy.Hostname() == "" {
+			return errors.New("web fetch proxy_endpoint must be an absolute http(s) URL")
+		}
+	}
+	if c.WebFetch.DomainsConfigured {
+		for _, entry := range c.WebFetch.AllowedDomains {
+			entry = strings.TrimRight(strings.TrimSpace(entry), "/.")
+			host := strings.SplitN(entry, "/", 2)[0]
+			if host == "" || strings.ContainsAny(host, "@:\\") || strings.ContainsAny(entry, "?#") || !strings.Contains(host, ".") {
+				return fmt.Errorf("invalid web fetch allowed domain %q", entry)
+			}
+		}
 	}
 	return nil
 }

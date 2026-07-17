@@ -251,7 +251,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	registry.ConfigureWebFetchArtifacts(artifactDir, cfg.ContextWindow)
+	registry.ConfigureWebFetch(tools.WebFetchConfig{
+		ArtifactDir: artifactDir, ContextWindow: cfg.ContextWindow,
+		ProxyEndpoint: cfg.WebFetch.ProxyEndpoint, AllowedDomains: cfg.WebFetch.AllowedDomains,
+		RestrictDomains: cfg.WebFetch.DomainsConfigured,
+	})
 	if search, enabled := cfg.WebSearchEndpoint(); enabled {
 		if err := registry.Register(tools.NewWebSearchTool(search.BaseURL, search.APIKey, search.Model, &http.Client{Timeout: cfg.HTTPTimeout})); err != nil {
 			return err
@@ -415,7 +419,11 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			_ = registry.Close()
 			return nil, nil, err
 		}
-		registry.ConfigureWebFetchArtifacts(artifactDir, cfg.ContextWindow)
+		registry.ConfigureWebFetch(tools.WebFetchConfig{
+			ArtifactDir: artifactDir, ContextWindow: cfg.ContextWindow,
+			ProxyEndpoint: cfg.WebFetch.ProxyEndpoint, AllowedDomains: cfg.WebFetch.AllowedDomains,
+			RestrictDomains: cfg.WebFetch.DomainsConfigured,
+		})
 		if sessionConfig.ResumePath == "" {
 			model := cfg.Model
 			if sessionConfig.Model != "" {

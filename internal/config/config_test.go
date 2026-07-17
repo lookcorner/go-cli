@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -15,6 +16,7 @@ func TestLoadGrokTOMLModelAndServers(t *testing.T) {
 	t.Setenv("GORK_WEB_SEARCH_API_KEY", "")
 	t.Setenv("GORK_WEB_SEARCH_BASE_URL", "")
 	t.Setenv("GORK_WEB_SEARCH_MODEL", "")
+	t.Setenv("GROK_WEB_FETCH_PROXY", "https://env-proxy.example")
 	path := filepath.Join(t.TempDir(), "config.toml")
 	data := []byte(`
 [models]
@@ -60,6 +62,10 @@ command = "gopls"
 extensions = [".go"]
 initialization_options = { usePlaceholders = true }
 settings = { gopls = { staticcheck = true } }
+
+[toolset.web_fetch]
+proxy_endpoint = "https://toml-proxy.example"
+allowed_domains = ["example.com", "vercel.com/docs"]
 
 [[permission.rules]]
 action = "allow"
@@ -109,8 +115,41 @@ pattern = ".env*"
 	if cfg.LSPServers["gopls"].InitializationOptions["usePlaceholders"] != true || cfg.LSPServers["gopls"].Settings["gopls"].(map[string]any)["staticcheck"] != true {
 		t.Fatalf("unexpected LSP dynamic config: %#v", cfg.LSPServers["gopls"])
 	}
+	if cfg.WebFetch.ProxyEndpoint != "https://toml-proxy.example" || !cfg.WebFetch.ProxyConfigured || !cfg.WebFetch.DomainsConfigured || len(cfg.WebFetch.AllowedDomains) != 2 {
+		t.Fatalf("unexpected web fetch config: %#v", cfg.WebFetch)
+	}
 	if len(cfg.Permission.Rules) != 2 || cfg.Permission.Rules[0].Action != "allow" || *cfg.Permission.Rules[1].Pattern != ".env*" {
 		t.Fatalf("unexpected permission config: %#v", cfg.Permission)
+	}
+}
+
+func TestLoadWebFetchEnvAndExplicitEmptyDomains(t *testing.T) {
+	t.Setenv("GROK_WEB_FETCH_PROXY", "http://127.0.0.1:8080")
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[toolset.web_fetch]\nallowed_domains = []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.WebFetch.ProxyEndpoint != "http://127.0.0.1:8080" || !cfg.WebFetch.ProxyConfigured || !cfg.WebFetch.DomainsConfigured || len(cfg.WebFetch.AllowedDomains) != 0 {
+		t.Fatalf("unexpected web fetch env config: %#v", cfg.WebFetch)
+	}
+}
+
+func TestValidateWebFetchConfig(t *testing.T) {
+	base := Config{
+		APIKey: "key", BaseURL: "https://api.example/v1", Model: "model", Backend: "responses",
+		MaxSteps: 1, ContextWindow: 1000, AutoCompactThresholdPercent: 85,
+	}
+	base.WebFetch = WebFetchConfig{ProxyEndpoint: "file:///tmp/proxy", ProxyConfigured: true}
+	if err := base.Validate(); err == nil || !strings.Contains(err.Error(), "proxy_endpoint") {
+		t.Fatalf("unexpected proxy validation: %v", err)
+	}
+	base.WebFetch = WebFetchConfig{AllowedDomains: []string{"https://example.com"}, DomainsConfigured: true}
+	if err := base.Validate(); err == nil || !strings.Contains(err.Error(), "allowed domain") {
+		t.Fatalf("unexpected domain validation: %v", err)
 	}
 }
 
