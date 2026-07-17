@@ -13,9 +13,11 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
+	"github.com/lookcorner/go-cli/internal/acp"
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/config"
@@ -48,6 +50,7 @@ type options struct {
 	tui         bool
 	goal        bool
 	goalRuns    int
+	acp         bool
 }
 
 func main() {
@@ -78,6 +81,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	flags.BoolVar(&opts.tui, "tui", false, "start the full-screen terminal interface")
 	flags.BoolVar(&opts.goal, "goal", false, "keep running turns until update_goal completes or blocks the goal")
 	flags.IntVar(&opts.goalRuns, "goal-runs", 10, "maximum turns in --goal mode")
+	flags.BoolVar(&opts.acp, "acp", false, "serve Agent Client Protocol v1 over stdio")
 	flags.Usage = func() {
 		fmt.Fprintf(stderr, "Usage: gork [flags] [prompt]\n\n")
 		flags.PrintDefaults()
@@ -94,6 +98,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 	if opts.goal && (opts.tui || opts.interactive) {
 		return errors.New("--goal cannot be combined with --tui or --interactive")
+	}
+	if opts.acp && (opts.tui || opts.interactive || opts.goal) {
+		return errors.New("--acp cannot be combined with --tui, --interactive, or --goal")
 	}
 	if opts.goalRuns < 1 {
 		return errors.New("--goal-runs must be greater than zero")
@@ -120,6 +127,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 	if err := cfg.Validate(); err != nil {
 		return err
+	}
+	if opts.acp {
+		return runACP(cfg, opts, stdin, stdout, stderr)
 	}
 
 	inputReader := bufio.NewReader(stdin)
@@ -186,17 +196,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		defer cancel()
 	}
 
-	httpClient := &http.Client{Timeout: cfg.HTTPTimeout}
-	var client agent.ResponseStreamer
-	switch cfg.Backend {
-	case "responses":
-		client = api.NewClient(cfg.BaseURL, cfg.APIKey, httpClient)
-	case "chat_completions":
-		client = api.NewChatClient(cfg.BaseURL, cfg.APIKey, httpClient)
-	case "anthropic_messages":
-		client = api.NewMessagesClient(cfg.BaseURL, cfg.APIKey, httpClient)
-	default:
-		return fmt.Errorf("unsupported backend %q", cfg.Backend)
+	client, err := newModelClient(cfg)
+	if err != nil {
+		return err
 	}
 	var approver tools.Approver
 	var tuiBridge *tui.Bridge
@@ -257,6 +259,105 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 	if result.Text != "" && !strings.HasSuffix(result.Text, "\n") {
 		fmt.Fprintln(stdout)
+	}
+	return nil
+}
+
+func newModelClient(cfg config.Config) (agent.ResponseStreamer, error) {
+	httpClient := &http.Client{Timeout: cfg.HTTPTimeout}
+	switch cfg.Backend {
+	case "responses":
+		return api.NewClient(cfg.BaseURL, cfg.APIKey, httpClient), nil
+	case "chat_completions":
+		return api.NewChatClient(cfg.BaseURL, cfg.APIKey, httpClient), nil
+	case "anthropic_messages":
+		return api.NewMessagesClient(cfg.BaseURL, cfg.APIKey, httpClient), nil
+	default:
+		return nil, fmt.Errorf("unsupported backend %q", cfg.Backend)
+	}
+}
+
+func runACP(cfg config.Config, opts options, stdin io.Reader, stdout, stderr io.Writer) error {
+	mode := tools.PermissionMode(opts.approval)
+	if mode != tools.PermissionPrompt && mode != tools.PermissionAuto && mode != tools.PermissionDeny {
+		return fmt.Errorf("invalid --approval %q", opts.approval)
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	server := &acp.Server{Factory: func(
+		sessionCtx context.Context,
+		cwd string,
+		protocolApprover tools.Approver,
+		textOutput io.Writer,
+		statusOutput io.Writer,
+	) (*agent.Runner, func(), error) {
+		ws, err := workspace.Open(cwd)
+		if err != nil {
+			return nil, nil, err
+		}
+		instructionFiles, err := ws.LoadRootInstructions()
+		if err != nil {
+			return nil, nil, err
+		}
+		catalog, err := skills.Discover(ws.Root())
+		if err != nil {
+			return nil, nil, err
+		}
+		instructions := joinInstructions(cfg.SystemPrompt, workspace.FormatInstructions(instructionFiles), catalog.Summary())
+		approver := protocolApprover
+		if mode != tools.PermissionPrompt {
+			approver = tools.PromptApprover{Mode: mode}
+		}
+		registry := tools.NewRegistry(ws, approver)
+		logger, err := session.NewLogger(opts.sessionDir)
+		if err != nil {
+			_ = registry.Close()
+			return nil, nil, err
+		}
+		var mcpClients []*mcp.Client
+		var lspManager *lsp.Manager
+		cleanup := func() {
+			if lspManager != nil {
+				_ = lspManager.Close()
+			}
+			for _, client := range mcpClients {
+				_ = client.Close()
+			}
+			_ = registry.Close()
+			_ = logger.Close()
+		}
+		if len(catalog.Names()) > 0 {
+			if err := registry.Register(catalog.Tool()); err != nil {
+				cleanup()
+				return nil, nil, err
+			}
+		}
+		mcpClients, err = startMCPServers(sessionCtx, cfg, ws.Root(), registry, approver, statusOutput)
+		if err != nil {
+			cleanup()
+			return nil, nil, err
+		}
+		lspManager, err = startLSPServers(sessionCtx, cfg, ws, registry, statusOutput)
+		if err != nil {
+			cleanup()
+			return nil, nil, err
+		}
+		modelClient, err := newModelClient(cfg)
+		if err != nil {
+			cleanup()
+			return nil, nil, err
+		}
+		var closeOnce sync.Once
+		closeRuntime := func() { closeOnce.Do(cleanup) }
+		return &agent.Runner{
+			Client: modelClient, Tools: registry, Logger: logger,
+			Model: cfg.Model, Instructions: instructions, MaxSteps: cfg.MaxSteps,
+			TextOutput: textOutput, StatusOutput: statusOutput,
+		}, closeRuntime, nil
+	}}
+	if err := server.Serve(ctx, stdin, stdout); err != nil {
+		fmt.Fprintln(stderr, "[gork] ACP server failed:", err)
+		return err
 	}
 	return nil
 }

@@ -109,6 +109,22 @@ new turns until the model calls `update_goal` with `completed=true` or a genuine
 Progress-only `update_goal` calls keep the goal active. Goal mode is explicit
 and cannot be combined with the interactive REPL or TUI.
 
+Use `--acp` to run an Agent Client Protocol v1 agent over JSON-RPC stdio for
+editor/IDE integrations:
+
+```sh
+./gork --acp
+```
+
+Each `session/new` gets its own workspace, tool state, model history, local
+session log, MCP/LSP processes, and cleanup lifecycle. The baseline
+`initialize`, `session/new`, `session/prompt`, `session/update`,
+`session/cancel`, and `session/close` methods are supported. Text streams as
+`agent_message_chunk`; default prompt approvals use ACP's bidirectional
+`session/request_permission`, so protocol stdin is never consumed by a CLI
+prompt. `--approval auto` and `--approval deny` remain available for clients
+that intentionally want a fixed policy.
+
 Local mutations require confirmation by default:
 
 - `--approval prompt`: ask before every file mutation and shell command.
