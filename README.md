@@ -141,7 +141,7 @@ session log, MCP/LSP processes, and cleanup lifecycle. The baseline
 `initialize`, `session/new`, `session/list`, `session/load`, `session/resume`,
 `session/prompt`, `session/update`, `session/cancel`, and `session/close`
 methods are supported. Persisted sessions use stable, path-safe IDs; load
-replays completed user/agent text history while resume reconnects without
+replays completed user/agent text and image history while resume reconnects without
 replay. Prompts accept embedded text/resources plus validated base64 or remote
 HTTP(S) images; audio is not yet supported. Text streams as
 `agent_message_chunk`, while tools emit correlated `tool_call` and
@@ -231,7 +231,9 @@ tool = "bash"
 pattern = "git push *"
 ```
 
-The `web_fetch` tool retrieves bounded public HTTP(S) text after approval.
+The `web_search` tool uses the configured Responses model's native web-search
+capability and accepts optional domain filters. The `web_fetch` tool retrieves
+bounded public HTTP(S) text after approval.
 Loopback, private, link-local, multicast and unspecified addresses are rejected
 both during URL validation and again when dialing (including redirects). Use a
 WebFetch permission with `pattern_mode = "domain"` for host-based rules.
@@ -240,7 +242,8 @@ The Gork Build-compatible file surface includes `read_file`, `list_dir`,
 `grep`, and `search_replace`; text, extracted PPTX, and PDF `format: "text"`
 reads support positive or negative line offsets and use the original
 `LINE_NUMBER→LINE_CONTENT` format. PDF text reads accept `pages` ranges and
-require an explicit range when the document exceeds ten pages. PNG, JPEG, GIF,
+require an explicit range when the document exceeds ten pages. PDF image mode
+renders selected pages at 150 DPI through Poppler's `pdftoppm`. PNG, JPEG, GIF,
 and WebP reads are validated and forwarded as native image content to the
 Responses, Chat Completions, or Anthropic backend. The earlier
 `list_files`, `search_files`, `write_file`, `edit_file`, and `shell` tools remain
