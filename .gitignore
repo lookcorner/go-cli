@@ -1,0 +1,5 @@
+/gork
+/dist/
+/.gocache/
+*.test
+.DS_Store

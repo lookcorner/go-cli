@@ -1,0 +1,35 @@
+# Gork Build compatibility
+
+This file tracks behavioral compatibility against
+`thedavidweng/gork-build@b06c5682c48247f77900d62753349835c5ce1f3f`.
+
+Status values: **done**, **partial**, **planned**.
+
+| Area | Status | Current behavior / remaining work |
+| --- | --- | --- |
+| Responses API streaming | done | SSE text deltas, terminal response IDs, function calls and JSON fallback |
+| Headless agent loop | done | Multi-step model/tool loop with cancellation and a configurable limit |
+| Workspace file tools | done | Read, list, regex search, atomic write and exact-text edit |
+| Tool permissions | partial | Prompt/auto/deny modes are present; command-prefix and managed policy rules remain |
+| Shell execution | partial | Timeout, combined capped output and workspace CWD; persistent PTY/background process support remains |
+| Session persistence | partial | Durable JSONL event records; restore, rewind, branching and migration remain |
+| Configuration | partial | JSON, environment and CLI layers; TOML compatibility and managed config remain |
+| Authentication | partial | API-key bearer auth; xAI OAuth/device flow and refresh storage remain |
+| Chat Completions backend | planned | Responses backend is implemented first |
+| Anthropic Messages backend | planned | Protocol adapter remains |
+| TUI | planned | Ratatui behavior will be reimplemented with a Go terminal UI layer |
+| MCP | planned | Client/server transports, tool discovery and lifecycle remain |
+| ACP | planned | Agent Client Protocol server/client modes remain |
+| LSP tools | planned | Process lifecycle, JSON-RPC and diagnostics remain |
+| Skills / AGENTS.md | planned | Discovery, instruction scoping and reminders remain |
+| Git / worktrees / hunk tracking | planned | Worktree lifecycle and edit attribution remain |
+| Subagents | planned | Coordinator, roster and activity events remain |
+| Memory / compaction | planned | Context accounting, compaction and local memory index remain |
+| OS sandbox | planned | Landlock/Seatbelt, child seccomp and network policy remain |
+| Workspace server | planned | Hub server, previews, remote workspaces and supervision remain |
+| Markdown/media/Mermaid | planned | Terminal rendering and inline media remain |
+| Telemetry/privacy hard-offs | done | No analytics, research uploads, auto-update or retention opt-in code exists |
+
+Compatibility is verified with Go unit/integration tests and will additionally
+use captured protocol fixtures from the Rust implementation. A status is only
+changed to **done** after its relevant compatibility tests exist.

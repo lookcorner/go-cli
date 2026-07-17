@@ -1,0 +1,19 @@
+Gork Go
+Copyright 2026 The Gork Go contributors
+
+This product is an independent Go reimplementation of the community-maintained
+Gork Build project and the Grok Build coding-agent runtime.
+
+Gork Build includes software originally published by SpaceXAI as "Grok Build"
+under the Apache License, Version 2.0:
+
+  Gork Build: https://github.com/thedavidweng/gork-build
+  Grok Build: https://github.com/xai-org/grok-build
+  Copyright 2023-2026 SpaceXAI
+  Copyright 2026 The Gork Build contributors
+
+See LICENSE for the Apache License, Version 2.0.
+
+Grok, Grok Build, xAI, and SpaceXAI are trademarks of their respective owners.
+This project is not affiliated with, endorsed by, or sponsored by SpaceXAI or
+xAI.
