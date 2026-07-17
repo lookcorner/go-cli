@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/lookcorner/go-cli/internal/api"
 )
@@ -88,7 +90,36 @@ func (t *webFetchTool) Execute(ctx context.Context, raw json.RawMessage) (string
 	if len(data) > maxWebFetchBytes {
 		return "", fmt.Errorf("URL response exceeds %d bytes", maxWebFetchBytes)
 	}
-	return fmt.Sprintf("URL: %s\nContent-Type: %s\n\n%s", response.Request.URL, response.Header.Get("Content-Type"), data), nil
+	mediaType, _, _ := mime.ParseMediaType(response.Header.Get("Content-Type"))
+	mediaType = strings.ToLower(mediaType)
+	if mediaType == "" {
+		mediaType = "text/plain"
+		if len(data) > 0 {
+			mediaType, _, _ = mime.ParseMediaType(http.DetectContentType(data[:min(len(data), 512)]))
+		}
+	}
+	contentType := mediaType
+	if mediaType == "text/html" || mediaType == "application/xhtml+xml" {
+		markdown, err := htmlToMarkdown(data, response.Request.URL)
+		if err != nil {
+			return "", err
+		}
+		data = []byte(markdown)
+		contentType = "markdown"
+	} else if !isTextWebContent(mediaType) {
+		return "", fmt.Errorf("unsupported web content type %q", mediaType)
+	}
+	if !utf8.Valid(data) {
+		return "", errors.New("web response is not valid UTF-8 text")
+	}
+	if len(data) > maxWebFetchBytes {
+		return "", fmt.Errorf("converted web response exceeds %d bytes", maxWebFetchBytes)
+	}
+	return fmt.Sprintf("URL: %s\nContent-Type: %s\n\n%s", response.Request.URL, contentType, data), nil
+}
+
+func isTextWebContent(mediaType string) bool {
+	return strings.HasPrefix(mediaType, "text/") || mediaType == "application/json" || mediaType == "application/javascript" || mediaType == "application/xml" || strings.HasSuffix(mediaType, "+json") || strings.HasSuffix(mediaType, "+xml")
 }
 
 func validateFetchURL(ctx context.Context, raw string, allowPrivate bool) (*url.URL, error) {

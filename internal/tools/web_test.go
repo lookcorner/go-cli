@@ -53,3 +53,47 @@ func TestWebFetchDomainPermissionRule(t *testing.T) {
 		t.Fatal("domain deny rule was not enforced")
 	}
 }
+
+func TestWebFetchConvertsHTMLToMarkdown(t *testing.T) {
+	fixtureURL := "https://example.com/page"
+	html := `<!doctype html><html><head><title>ignored</title><script>secret()</script></head><body>
+<h1>Project</h1><p>Hello <strong>world</strong>. <a href="/docs">Read docs</a>.</p>
+<ol><li>First</li><li>Second</li></ol><pre><code>go test ./...
+done</code></pre><img alt="inline" src="data:image/png;base64,secret"></body></html>`
+	client := &http.Client{Transport: webRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK, Status: "200 OK", Request: request,
+			Header: http.Header{"Content-Type": []string{"text/html; charset=utf-8"}},
+			Body:   io.NopCloser(strings.NewReader(html)),
+		}, nil
+	})}
+	tool := &webFetchTool{approver: PromptApprover{Mode: PermissionAuto}, client: client, allowPrivate: true}
+	output, err := tool.Execute(context.Background(), json.RawMessage(`{"url":"`+fixtureURL+`"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"Content-Type: markdown", "# Project", "Hello **world**.", "[Read docs](https://example.com/docs)", "1. First", "2. Second", "```\ngo test ./...\ndone\n```"} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("markdown output missing %q:\n%s", expected, output)
+		}
+	}
+	for _, forbidden := range []string{"<h1>", "secret()", "base64,secret"} {
+		if strings.Contains(output, forbidden) {
+			t.Fatalf("markdown output retained %q:\n%s", forbidden, output)
+		}
+	}
+}
+
+func TestWebFetchRejectsBinaryContent(t *testing.T) {
+	client := &http.Client{Transport: webRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK, Status: "200 OK", Request: request,
+			Header: http.Header{"Content-Type": []string{"application/octet-stream"}},
+			Body:   io.NopCloser(strings.NewReader("\x00binary")),
+		}, nil
+	})}
+	tool := &webFetchTool{approver: PromptApprover{Mode: PermissionAuto}, client: client, allowPrivate: true}
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"url":"https://example.com/file"}`)); err == nil || !strings.Contains(err.Error(), "unsupported web content type") {
+		t.Fatalf("unexpected binary response error: %v", err)
+	}
+}

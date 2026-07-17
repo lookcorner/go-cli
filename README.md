@@ -243,7 +243,8 @@ pattern = "git push *"
 
 The `web_search` tool uses the configured Responses model's native web-search
 capability and accepts optional domain filters. The `web_fetch` tool retrieves
-bounded public HTTP(S) text after approval.
+bounded public HTTP(S) text after approval, converts HTML to Markdown, resolves
+relative links, removes executable/embed content, and rejects binary responses.
 Loopback, private, link-local, multicast and unspecified addresses are rejected
 both during URL validation and again when dialing (including redirects). Use a
 WebFetch permission with `pattern_mode = "domain"` for host-based rules.
