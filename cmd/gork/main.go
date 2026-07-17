@@ -167,12 +167,12 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	instructionFiles, err := ws.LoadInstructions()
+	instructionFiles, err := ws.LoadInstructions(cfg.Compat)
 	if err != nil {
 		return err
 	}
 	projectInstructions := workspace.FormatInstructions(instructionFiles)
-	skillCatalog, err := skills.Discover(ws.Root())
+	skillCatalog, err := skills.Discover(ws.Root(), cfg.Compat)
 	if err != nil {
 		return err
 	}
@@ -354,11 +354,11 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		if err != nil {
 			return nil, nil, err
 		}
-		instructionFiles, err := ws.LoadInstructions()
+		instructionFiles, err := ws.LoadInstructions(cfg.Compat)
 		if err != nil {
 			return nil, nil, err
 		}
-		catalog, err := skills.Discover(ws.Root())
+		catalog, err := skills.Discover(ws.Root(), cfg.Compat)
 		if err != nil {
 			return nil, nil, err
 		}

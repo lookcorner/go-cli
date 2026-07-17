@@ -11,6 +11,8 @@ implementation.
 - `internal/worktree` owns worktree identity, lifecycle, Git state transfer,
   conflict rules, registry maintenance, and historical code restoration.
 - `internal/agent` owns the model/tool turn loop and context compaction.
+- `internal/compat` owns resolved vendor compatibility values shared by
+  configuration, instruction discovery, and skill discovery.
 
 ## Adapters
 

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/lookcorner/go-cli/internal/api"
+	"github.com/lookcorner/go-cli/internal/compat"
 	"github.com/lookcorner/go-cli/internal/skills"
 	"github.com/lookcorner/go-cli/internal/tools"
 	"github.com/lookcorner/go-cli/internal/workspace"
@@ -89,7 +90,7 @@ func TestRunnerAnnouncesConditionalSkillAfterFileTool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	catalog, err := skills.Discover(ws.Root())
+	catalog, err := skills.Discover(ws.Root(), compat.Default())
 	if err != nil {
 		t.Fatal(err)
 	}

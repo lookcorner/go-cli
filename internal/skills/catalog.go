@@ -13,6 +13,7 @@ import (
 
 	"github.com/bmatcuk/doublestar"
 	"github.com/lookcorner/go-cli/internal/api"
+	"github.com/lookcorner/go-cli/internal/compat"
 	"github.com/lookcorner/go-cli/internal/workspace"
 	"gopkg.in/yaml.v3"
 )
@@ -36,16 +37,16 @@ type Catalog struct {
 	pending map[string]Skill
 }
 
-func Discover(workspaceRoot string) (*Catalog, error) {
+func Discover(workspaceRoot string, cfg compat.Config) (*Catalog, error) {
 	home, _ := os.UserHomeDir()
 	grokHome := os.Getenv("GROK_HOME")
 	if grokHome == "" && home != "" {
 		grokHome = filepath.Join(home, ".grok")
 	}
-	return discover(workspaceRoot, home, grokHome)
+	return discover(workspaceRoot, home, grokHome, cfg)
 }
 
-func discover(workspaceRoot, home, grokHome string) (*Catalog, error) {
+func discover(workspaceRoot, home, grokHome string, cfg compat.Config) (*Catalog, error) {
 	if real, err := filepath.EvalSymlinks(workspaceRoot); err == nil {
 		workspaceRoot = real
 	}
@@ -55,18 +56,28 @@ func discover(workspaceRoot, home, grokHome string) (*Catalog, error) {
 	}
 	var roots []root
 	if home != "" {
-		roots = append(roots,
-			root{filepath.Join(home, ".cursor", "skills"), "user:cursor"},
-			root{filepath.Join(home, ".claude", "skills"), "user:claude"},
-			root{filepath.Join(home, ".agents", "skills"), "user:agents"},
-		)
+		if cfg.Cursor.Skills {
+			roots = append(roots, root{filepath.Join(home, ".cursor", "skills"), "user:cursor"})
+		}
+		if cfg.Claude.Skills {
+			roots = append(roots, root{filepath.Join(home, ".claude", "skills"), "user:claude"})
+		}
+		roots = append(roots, root{filepath.Join(home, ".agents", "skills"), "user:agents"})
 	}
 	if grokHome != "" {
 		roots = append(roots, root{filepath.Join(grokHome, "skills"), "user:grok"})
 	}
 	gitRoot := workspace.GitRoot(workspaceRoot)
 	for _, scope := range workspace.ProjectScopes(gitRoot, workspaceRoot) {
-		for _, dir := range []string{".cursor", ".claude", ".agents", ".gork", ".grok"} {
+		var dirs []string
+		if cfg.Cursor.Skills {
+			dirs = append(dirs, ".cursor")
+		}
+		if cfg.Claude.Skills {
+			dirs = append(dirs, ".claude")
+		}
+		dirs = append(dirs, ".agents", ".gork", ".grok")
+		for _, dir := range dirs {
 			roots = append(roots, root{
 				filepath.Join(scope, dir, "skills"), "workspace:" + strings.TrimPrefix(dir, "."),
 			})

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/lookcorner/go-cli/internal/compat"
 )
 
 func TestLoadInstructions(t *testing.T) {
@@ -39,7 +41,7 @@ func TestLoadInstructions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	files, err := ws.loadInstructions("", "")
+	files, err := ws.loadInstructions("", "", compat.Default())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +65,7 @@ func TestLoadInstructionsWithNoFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	files, err := ws.loadInstructions("", "")
+	files, err := ws.loadInstructions("", "", compat.Default())
 	if err != nil || len(files) != 0 {
 		t.Fatalf("expected empty instructions, files=%#v err=%v", files, err)
 	}
@@ -95,7 +97,7 @@ func TestLoadInstructionsFromGitRootToWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := ws.loadInstructions("", "")
+	loaded, err := ws.loadInstructions("", "", compat.Default())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +150,7 @@ func TestLoadInstructionsIncludesHomeBeforeProject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := ws.loadInstructions(home, grokHome)
+	loaded, err := ws.loadInstructions(home, grokHome, compat.Default())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,6 +164,54 @@ func TestLoadInstructionsIncludesHomeBeforeProject(t *testing.T) {
 		}
 		if !filepath.IsAbs(loaded[index].Path) {
 			t.Fatalf("home instruction path should be absolute: %q", loaded[index].Path)
+		}
+	}
+}
+
+func TestInstructionCompatibilityGatesAreIndependent(t *testing.T) {
+	home := t.TempDir()
+	repo := t.TempDir()
+	command := exec.Command("git", "init", "-q")
+	command.Dir = repo
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, output)
+	}
+	files := map[string]string{
+		filepath.Join(home, ".claude", "AGENTS.md"):          "claude home agent",
+		filepath.Join(home, ".cursor", "AGENTS.md"):          "cursor home agent",
+		filepath.Join(repo, ".claude", "CLAUDE.md"):          "claude project agent",
+		filepath.Join(repo, ".claude", "rules", "claude.md"): "claude rule",
+		filepath.Join(repo, ".cursor", "rules", "cursor.md"): "cursor rule",
+		filepath.Join(repo, ".grok", "rules", "native.md"):   "native rule",
+	}
+	for path, content := range files {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ws, err := Open(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := compat.Default()
+	cfg.Cursor.Agents = false
+	cfg.Claude.Rules = false
+	loaded, err := ws.loadInstructions(home, filepath.Join(home, ".grok"), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	formatted := FormatInstructions(loaded)
+	for _, present := range []string{"claude home agent", "claude project agent", "cursor rule", "native rule"} {
+		if !strings.Contains(formatted, present) {
+			t.Fatalf("expected %q with independent gates: %s", present, formatted)
+		}
+	}
+	for _, absent := range []string{"cursor home agent", "claude rule"} {
+		if strings.Contains(formatted, absent) {
+			t.Fatalf("disabled surface %q was loaded: %s", absent, formatted)
 		}
 	}
 }

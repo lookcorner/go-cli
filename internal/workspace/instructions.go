@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/lookcorner/go-cli/internal/compat"
 )
 
 const (
@@ -24,12 +26,6 @@ var instructionNames = []string{
 	filepath.Join(".claude", "CLAUDE.local.md"),
 }
 
-var rulesDirectories = []string{
-	filepath.Join(".gork", "rules"),
-	filepath.Join(".claude", "rules"),
-	filepath.Join(".cursor", "rules"),
-}
-
 type InstructionFile struct {
 	Path    string
 	Content string
@@ -37,16 +33,16 @@ type InstructionFile struct {
 
 // LoadInstructions discovers user and project instructions, preserving scope
 // order so more specific project rules win.
-func (w *Workspace) LoadInstructions() ([]InstructionFile, error) {
+func (w *Workspace) LoadInstructions(cfg compat.Config) ([]InstructionFile, error) {
 	home, _ := os.UserHomeDir()
 	grokHome := os.Getenv("GROK_HOME")
 	if grokHome == "" && home != "" {
 		grokHome = filepath.Join(home, ".grok")
 	}
-	return w.loadInstructions(home, grokHome)
+	return w.loadInstructions(home, grokHome, cfg)
 }
 
-func (w *Workspace) loadInstructions(home, grokHome string) ([]InstructionFile, error) {
+func (w *Workspace) loadInstructions(home, grokHome string, cfg compat.Config) ([]InstructionFile, error) {
 	gitRoot := GitRoot(w.root)
 	type candidate struct {
 		path    string
@@ -57,10 +53,12 @@ func (w *Workspace) loadInstructions(home, grokHome string) ([]InstructionFile, 
 		scopes = append(scopes, candidate{path: grokHome})
 	}
 	if home != "" {
-		scopes = append(scopes,
-			candidate{path: filepath.Join(home, ".claude")},
-			candidate{path: filepath.Join(home, ".cursor")},
-		)
+		if cfg.Claude.Agents {
+			scopes = append(scopes, candidate{path: filepath.Join(home, ".claude")})
+		}
+		if cfg.Cursor.Agents {
+			scopes = append(scopes, candidate{path: filepath.Join(home, ".cursor")})
+		}
 	}
 	for _, path := range ProjectScopes(gitRoot, w.root) {
 		scopes = append(scopes, candidate{path: path, project: true})
@@ -69,10 +67,10 @@ func (w *Workspace) loadInstructions(home, grokHome string) ([]InstructionFile, 
 	var candidates []candidate
 	for _, scope := range scopes {
 		var scoped []candidate
-		for _, name := range instructionNames {
+		for _, name := range configuredInstructionNames(cfg) {
 			scoped = append(scoped, candidate{path: filepath.Join(scope.path, name), project: scope.project})
 		}
-		for _, relativeDir := range rulesDirectories {
+		for _, relativeDir := range configuredRulesDirectories(cfg) {
 			dir := filepath.Join(scope.path, relativeDir)
 			entries, err := os.ReadDir(dir)
 			if err != nil {
@@ -155,6 +153,25 @@ func (w *Workspace) loadInstructions(home, grokHome string) ([]InstructionFile, 
 		files = append(files, InstructionFile{Path: instructionPath(gitRoot, resolved, candidate.project), Content: string(data)})
 	}
 	return files, nil
+}
+
+func configuredInstructionNames(cfg compat.Config) []string {
+	names := instructionNames[:6]
+	if cfg.Claude.Agents {
+		names = instructionNames
+	}
+	return names
+}
+
+func configuredRulesDirectories(cfg compat.Config) []string {
+	dirs := []string{filepath.Join(".gork", "rules"), filepath.Join(".grok", "rules")}
+	if cfg.Claude.Rules {
+		dirs = append(dirs, filepath.Join(".claude", "rules"))
+	}
+	if cfg.Cursor.Rules {
+		dirs = append(dirs, filepath.Join(".cursor", "rules"))
+	}
+	return dirs
 }
 
 func instructionPath(root, path string, project bool) string {

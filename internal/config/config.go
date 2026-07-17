@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lookcorner/go-cli/internal/compat"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -28,6 +29,7 @@ type Config struct {
 	ContextWindow               int                        `json:"context_window,omitempty"`
 	AutoCompactThresholdPercent int                        `json:"auto_compact_threshold_percent,omitempty"`
 	Pruning                     PruningConfig              `json:"pruning"`
+	Compat                      compat.Config              `json:"compat"`
 	HTTPTimeout                 time.Duration              `json:"-"`
 }
 
@@ -90,6 +92,7 @@ type fileConfig struct {
 	Session       sessionConfig              `json:"session,omitempty" toml:"session"`
 	ContextWindow int                        `json:"context_window,omitempty" toml:"context_window"`
 	Compaction    fileCompactionConfig       `json:"compaction,omitempty" toml:"compaction"`
+	Compat        fileCompatConfig           `json:"compat,omitempty" toml:"compat"`
 	Models        struct {
 		Default string `toml:"default"`
 	} `json:"-" toml:"models"`
@@ -123,6 +126,17 @@ type filePruningConfig struct {
 	HardClearAgeTurns *int  `json:"hard_clear_age_turns,omitempty" toml:"hard_clear_age_turns"`
 }
 
+type fileVendorCompat struct {
+	Skills *bool `json:"skills,omitempty" toml:"skills"`
+	Rules  *bool `json:"rules,omitempty" toml:"rules"`
+	Agents *bool `json:"agents,omitempty" toml:"agents"`
+}
+
+type fileCompatConfig struct {
+	Cursor fileVendorCompat `json:"cursor,omitempty" toml:"cursor"`
+	Claude fileVendorCompat `json:"claude,omitempty" toml:"claude"`
+}
+
 func Load(path string) (Config, error) {
 	cfg := Config{
 		BaseURL:                     defaultBaseURL,
@@ -131,6 +145,7 @@ func Load(path string) (Config, error) {
 		HTTPTimeout:                 10 * time.Minute,
 		ContextWindow:               131072,
 		AutoCompactThresholdPercent: 85,
+		Compat:                      compat.Default(),
 		Pruning:                     PruningConfig{Enabled: true, KeepLastNTurns: 3, SoftTrimThreshold: 4000, SoftTrimHead: 1500, SoftTrimTail: 1500, HardClearAgeTurns: 10},
 	}
 	if path == "" {
@@ -179,6 +194,7 @@ func Load(path string) (Config, error) {
 			cfg.AutoCompactThresholdPercent = *disk.Session.AutoCompactThresholdPercent
 		}
 		applyPruningConfig(&cfg.Pruning, disk.Compaction.Pruning)
+		applyCompatConfig(&cfg.Compat, disk.Compat)
 		if disk.HTTPTimeout != "" {
 			d, err := time.ParseDuration(disk.HTTPTimeout)
 			if err != nil {
@@ -191,6 +207,23 @@ func Load(path string) (Config, error) {
 	applyEnv(&cfg)
 	cfg.BaseURL = strings.TrimRight(cfg.BaseURL, "/")
 	return cfg, nil
+}
+
+func applyCompatConfig(target *compat.Config, source fileCompatConfig) {
+	applyVendorCompat(&target.Cursor, source.Cursor)
+	applyVendorCompat(&target.Claude, source.Claude)
+}
+
+func applyVendorCompat(target *compat.Vendor, source fileVendorCompat) {
+	if source.Skills != nil {
+		target.Skills = *source.Skills
+	}
+	if source.Rules != nil {
+		target.Rules = *source.Rules
+	}
+	if source.Agents != nil {
+		target.Agents = *source.Agents
+	}
 }
 
 func applyPruningConfig(target *PruningConfig, source filePruningConfig) {
@@ -236,6 +269,31 @@ func applyEnv(cfg *Config) {
 		if parsed, err := strconv.Atoi(value); err == nil && parsed > 0 {
 			cfg.ContextWindow = parsed
 		}
+	}
+	applyCompatEnv(&cfg.Compat.Cursor, "CURSOR")
+	applyCompatEnv(&cfg.Compat.Claude, "CLAUDE")
+}
+
+func applyCompatEnv(target *compat.Vendor, vendor string) {
+	for surface, field := range map[string]*bool{
+		"SKILLS": &target.Skills,
+		"RULES":  &target.Rules,
+		"AGENTS": &target.Agents,
+	} {
+		if value, ok := envBool("GROK_" + vendor + "_" + surface + "_ENABLED"); ok {
+			*field = value
+		}
+	}
+}
+
+func envBool(name string) (bool, bool) {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
+	case "1", "true", "yes", "on", "enabled":
+		return true, true
+	case "0", "false", "no", "off", "disabled":
+		return false, true
+	default:
+		return false, false
 	}
 }
 

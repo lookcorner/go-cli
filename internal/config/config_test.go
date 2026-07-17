@@ -117,3 +117,37 @@ func TestDefaultPathMatchesGrok(t *testing.T) {
 		t.Fatalf("unexpected default path: %s", path)
 	}
 }
+
+func TestCompatConfigAndEnvironmentPrecedence(t *testing.T) {
+	for _, name := range []string{
+		"GROK_CURSOR_SKILLS_ENABLED", "GROK_CURSOR_RULES_ENABLED", "GROK_CURSOR_AGENTS_ENABLED",
+		"GROK_CLAUDE_SKILLS_ENABLED", "GROK_CLAUDE_RULES_ENABLED", "GROK_CLAUDE_AGENTS_ENABLED",
+	} {
+		t.Setenv(name, "")
+	}
+	t.Setenv("GROK_CURSOR_SKILLS_ENABLED", "yes")
+	t.Setenv("GROK_CURSOR_RULES_ENABLED", "invalid")
+	path := filepath.Join(t.TempDir(), "config.toml")
+	data := []byte(`
+[compat.cursor]
+skills = false
+rules = false
+agents = false
+
+[compat.claude]
+skills = false
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Compat.Cursor.Skills || cfg.Compat.Cursor.Rules || cfg.Compat.Cursor.Agents {
+		t.Fatalf("unexpected cursor compatibility resolution: %#v", cfg.Compat.Cursor)
+	}
+	if cfg.Compat.Claude.Skills || !cfg.Compat.Claude.Rules || !cfg.Compat.Claude.Agents {
+		t.Fatalf("unexpected claude compatibility resolution: %#v", cfg.Compat.Claude)
+	}
+}

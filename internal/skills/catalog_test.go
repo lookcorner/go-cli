@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/lookcorner/go-cli/internal/compat"
 )
 
 func TestCatalogScanAndTool(t *testing.T) {
@@ -122,7 +124,7 @@ func TestDiscoverScopesSkillsFromHomeThroughWorkspace(t *testing.T) {
 	writeSkill(filepath.Join(cwd, ".claude", "skills"), "shared", "cwd")
 	writeSkill(filepath.Join(home, ".cursor", "skills"), "cursor-only", "cursor")
 
-	catalog, err := discover(cwd, home, grokHome)
+	catalog, err := discover(cwd, home, grokHome, compat.Default())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,6 +133,38 @@ func TestDiscoverScopesSkillsFromHomeThroughWorkspace(t *testing.T) {
 	}
 	if got := catalog.byName["cursor-only"]; got.Source != "user:cursor" {
 		t.Fatalf("cursor home skill not discovered: %#v", got)
+	}
+}
+
+func TestSkillCompatibilityGatesAreIndependent(t *testing.T) {
+	home := t.TempDir()
+	repo := t.TempDir()
+	for _, file := range []struct {
+		root string
+		name string
+	}{
+		{filepath.Join(home, ".cursor", "skills"), "cursor-home"},
+		{filepath.Join(home, ".claude", "skills"), "claude-home"},
+		{filepath.Join(repo, ".cursor", "skills"), "cursor-project"},
+		{filepath.Join(repo, ".claude", "skills"), "claude-project"},
+	} {
+		dir := filepath.Join(file.root, file.name)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("---\nname: "+file.name+"\n---\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := compat.Default()
+	cfg.Cursor.Skills = false
+	catalog, err := discover(repo, home, filepath.Join(home, ".grok"), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(catalog.Names(), ",")
+	if strings.Contains(joined, "cursor-") || !strings.Contains(joined, "claude-home") || !strings.Contains(joined, "claude-project") {
+		t.Fatalf("unexpected gated skills: %s", joined)
 	}
 }
 

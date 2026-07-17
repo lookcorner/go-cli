@@ -337,6 +337,17 @@ skills override same-named user or parent skills.
 Skills with a `paths` list in YAML frontmatter stay hidden until a successful
 file read, directory listing, or edit touches a matching path.
 
+Claude and Cursor discovery surfaces default to enabled. They can be disabled
+independently in `config.toml`, with matching `GROK_<VENDOR>_<SURFACE>_ENABLED`
+environment variables taking precedence:
+
+```toml
+[compat.cursor]
+skills = false
+rules = false
+agents = false
+```
+
 ## Privacy
 
 Gork Go does not include product analytics, research trace uploads, repository
