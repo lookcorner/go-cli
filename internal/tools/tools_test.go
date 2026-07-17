@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -113,6 +114,47 @@ func TestRegistryBlocksWriteWhenCheckpointCannotPersist(t *testing.T) {
 	data, _ := os.ReadFile(target)
 	if string(data) != "old" {
 		t.Fatalf("write ran after checkpoint failure: %q", data)
+	}
+}
+
+func TestRegistryCheckpointsShellChanges(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture is Unix-specific")
+	}
+	root := t.TempDir()
+	path := filepath.Join(root, "existing.txt")
+	if err := os.WriteFile(path, []byte("before"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := workspace.NewRewindStore(ws, filepath.Join(t.TempDir(), "rewind.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry(ws, PromptApprover{Mode: PermissionAuto})
+	defer registry.Close()
+	registry.SetRewindStore(store, func() int { return 0 })
+	if _, err := registry.Execute(context.Background(), "shell", json.RawMessage(
+		`{"command":"printf after > existing.txt; printf new > created.txt"}`,
+	)); err != nil {
+		t.Fatal(err)
+	}
+	counts, err := store.Counts()
+	if err != nil || counts[0] != 2 {
+		t.Fatalf("unexpected shell checkpoints: %#v err=%v", counts, err)
+	}
+	if _, _, err := store.Restore(0); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	if string(data) != "before" {
+		t.Fatalf("shell edit was not restored: %q", data)
+	}
+	if _, err := os.Stat(filepath.Join(root, "created.txt")); !os.IsNotExist(err) {
+		t.Fatalf("shell-created file remained: %v", err)
 	}
 }
 

@@ -129,3 +129,75 @@ func TestRewindStoreCapturesFirstBeforeAndRejectsEscape(t *testing.T) {
 		t.Fatal("checkpoint accepted a path outside the workspace")
 	}
 }
+
+func TestRewindStoreCapturesShellWorkspaceChanges(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "modified.txt"), []byte("before"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "deleted.txt"), []byte("restore me"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "mode.txt"), []byte("same"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".git", "internal"), []byte("ignored"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewRewindStore(ws, filepath.Join(t.TempDir(), "rewind.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpoint, err := store.CaptureWorkspaceBefore(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "modified.txt"), []byte("after"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(root, "deleted.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "created.txt"), []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(root, "mode.txt"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".git", "internal"), []byte("changed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CaptureWorkspaceAfter(checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	counts, err := store.Counts()
+	if err != nil || counts[0] != 4 {
+		t.Fatalf("unexpected shell checkpoint count: %#v err=%v", counts, err)
+	}
+	if _, _, err := store.Restore(0); err != nil {
+		t.Fatal(err)
+	}
+	modified, _ := os.ReadFile(filepath.Join(root, "modified.txt"))
+	deleted, _ := os.ReadFile(filepath.Join(root, "deleted.txt"))
+	if string(modified) != "before" || string(deleted) != "restore me" {
+		t.Fatalf("shell changes were not restored: modified=%q deleted=%q", modified, deleted)
+	}
+	if _, err := os.Stat(filepath.Join(root, "created.txt")); !os.IsNotExist(err) {
+		t.Fatalf("shell-created file remained: %v", err)
+	}
+	mode, err := os.Stat(filepath.Join(root, "mode.txt"))
+	if err != nil || mode.Mode().Perm() != 0o600 {
+		t.Fatalf("shell mode change was not restored: mode=%v err=%v", mode, err)
+	}
+	internal, _ := os.ReadFile(filepath.Join(root, ".git", "internal"))
+	if string(internal) != "changed" {
+		t.Fatalf(".git contents were unexpectedly restored: %q", internal)
+	}
+}

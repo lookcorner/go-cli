@@ -33,6 +33,7 @@ type ProcessManager struct {
 	currentDir   string
 	environment  []string
 	shellPrelude string
+	rewind       *mutationCheckpoint
 }
 
 type backgroundProcess struct {
@@ -64,6 +65,10 @@ func (m *ProcessManager) StartWithTimeout(ctx context.Context, command string, t
 	if err := m.approver.Approve(ctx, "start background command", command); err != nil {
 		return "", err
 	}
+	checkpoint, err := m.rewind.beforeWorkspace()
+	if err != nil {
+		return "", fmt.Errorf("checkpoint before background command: %w", err)
+	}
 	cmd := shellCommand(command)
 	cmd.Dir, cmd.Env = m.shellSnapshot()
 	configureProcessGroup(cmd)
@@ -88,6 +93,9 @@ func (m *ProcessManager) StartWithTimeout(ctx context.Context, command string, t
 	m.mu.Unlock()
 	go func() {
 		err := cmd.Wait()
+		if checkpointErr := m.rewind.afterWorkspace(checkpoint); checkpointErr != nil {
+			err = errors.Join(err, fmt.Errorf("checkpoint after background command: %w", checkpointErr))
+		}
 		process.mu.Lock()
 		process.err = err
 		process.mu.Unlock()
@@ -119,6 +127,10 @@ func (m *ProcessManager) RunForeground(ctx context.Context, command string, time
 	}
 	if err := m.approver.Approve(ctx, "run terminal command", command); err != nil {
 		return "", err
+	}
+	checkpoint, err := m.rewind.beforeWorkspace()
+	if err != nil {
+		return "", fmt.Errorf("checkpoint before terminal command: %w", err)
 	}
 	m.stateMu.Lock()
 	defer m.stateMu.Unlock()
@@ -157,7 +169,11 @@ func (m *ProcessManager) RunForeground(ctx context.Context, command string, time
 	}
 	_ = waitErr
 	m.applyShellCapture(capture)
+	checkpointErr := m.rewind.afterWorkspace(checkpoint)
 	output := strings.TrimSpace(buffer.String())
+	if checkpointErr != nil {
+		return output, fmt.Errorf("checkpoint after terminal command: %w", checkpointErr)
+	}
 	if output == "" {
 		return "exit: " + status, nil
 	}

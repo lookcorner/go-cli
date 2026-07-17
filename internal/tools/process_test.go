@@ -39,14 +39,20 @@ func TestGorkTerminalToolBackgroundTaskProtocol(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell fixture is Unix-specific")
 	}
-	ws, err := workspace.Open(t.TempDir())
+	root := t.TempDir()
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := workspace.NewRewindStore(ws, filepath.Join(t.TempDir(), "rewind.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	manager := NewProcessManager(ws, PromptApprover{Mode: PermissionAuto})
+	manager.rewind = &mutationCheckpoint{store: store, promptIndex: func() int { return 0 }}
 	defer manager.Close()
 	started, err := (&runTerminalCommandTool{manager: manager}).Execute(context.Background(), json.RawMessage(
-		`{"command":"sleep 0.05; printf done","description":"exercise background task","timeout":0,"is_background":true}`,
+		`{"command":"sleep 0.05; printf done; printf created > made.txt","description":"exercise background task","timeout":0,"is_background":true}`,
 	))
 	if err != nil {
 		t.Fatal(err)
@@ -62,6 +68,16 @@ func TestGorkTerminalToolBackgroundTaskProtocol(t *testing.T) {
 	}
 	if !strings.Contains(output, "exited successfully") || !strings.Contains(output, "done") {
 		t.Fatalf("unexpected task output: %s", output)
+	}
+	counts, err := store.Counts()
+	if err != nil || counts[0] != 1 {
+		t.Fatalf("unexpected background checkpoints: %#v err=%v", counts, err)
+	}
+	if _, _, err := store.Restore(0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "made.txt")); !os.IsNotExist(err) {
+		t.Fatalf("background-created file remained: %v", err)
 	}
 }
 

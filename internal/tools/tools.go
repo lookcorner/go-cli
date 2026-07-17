@@ -137,6 +137,11 @@ type mutationCheckpoint struct {
 	promptIndex func() int
 }
 
+type workspaceMutation struct {
+	store      *workspace.RewindStore
+	checkpoint *workspace.WorkspaceCheckpoint
+}
+
 func (c *mutationCheckpoint) before(path string) error {
 	if c == nil {
 		return nil
@@ -179,11 +184,36 @@ func (c *mutationCheckpoint) cancel(path string) {
 	}
 }
 
+func (c *mutationCheckpoint) beforeWorkspace() (*workspaceMutation, error) {
+	if c == nil {
+		return nil, nil
+	}
+	c.mu.RLock()
+	store, promptIndex := c.store, c.promptIndex
+	c.mu.RUnlock()
+	if store == nil || promptIndex == nil {
+		return nil, nil
+	}
+	checkpoint, err := store.CaptureWorkspaceBefore(promptIndex())
+	if err != nil {
+		return nil, err
+	}
+	return &workspaceMutation{store: store, checkpoint: checkpoint}, nil
+}
+
+func (c *mutationCheckpoint) afterWorkspace(mutation *workspaceMutation) error {
+	if mutation == nil {
+		return nil
+	}
+	return mutation.store.CaptureWorkspaceAfter(mutation.checkpoint)
+}
+
 func NewRegistry(ws *workspace.Workspace, approver Approver) *Registry {
 	processes := NewProcessManager(ws, approver)
 	todos := newTodoStore()
 	goal := NewGoalStore()
 	rewind := &mutationCheckpoint{}
+	processes.rewind = rewind
 	readFile := &readFileTool{ws: ws}
 	webFetch := &webFetchTool{approver: approver}
 	items := []Tool{
@@ -192,7 +222,7 @@ func NewRegistry(ws *workspace.Workspace, approver Approver) *Registry {
 		&searchFilesTool{ws: ws},
 		&writeFileTool{ws: ws, approver: approver, rewind: rewind},
 		&editFileTool{ws: ws, approver: approver, rewind: rewind},
-		&shellTool{ws: ws, approver: approver, timeout: 2 * time.Minute},
+		&shellTool{ws: ws, approver: approver, timeout: 2 * time.Minute, rewind: rewind},
 		&startCommandTool{manager: processes},
 		&commandOutputTool{manager: processes},
 		&killCommandTool{manager: processes},
@@ -941,6 +971,7 @@ type shellTool struct {
 	ws       *workspace.Workspace
 	approver Approver
 	timeout  time.Duration
+	rewind   *mutationCheckpoint
 }
 
 func (t *shellTool) Definition() api.ToolDefinition {
@@ -966,6 +997,10 @@ func (t *shellTool) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	if err := t.approver.Approve(ctx, "shell", args.Command); err != nil {
 		return "", err
 	}
+	checkpoint, err := t.rewind.beforeWorkspace()
+	if err != nil {
+		return "", fmt.Errorf("checkpoint before shell command: %w", err)
+	}
 	commandCtx, cancel := context.WithTimeout(ctx, t.timeout)
 	defer cancel()
 	var command *exec.Cmd
@@ -978,12 +1013,16 @@ func (t *shellTool) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	var output cappedBuffer
 	command.Stdout = &output
 	command.Stderr = &output
-	err := command.Run()
+	err = command.Run()
+	checkpointErr := t.rewind.afterWorkspace(checkpoint)
 	if commandCtx.Err() != nil {
-		return output.String(), fmt.Errorf("command timed out after %s", t.timeout)
+		return output.String(), errors.Join(fmt.Errorf("command timed out after %s", t.timeout), checkpointErr)
 	}
 	if err != nil {
-		return output.String(), fmt.Errorf("command failed: %w", err)
+		return output.String(), errors.Join(fmt.Errorf("command failed: %w", err), checkpointErr)
+	}
+	if checkpointErr != nil {
+		return output.String(), fmt.Errorf("checkpoint after shell command: %w", checkpointErr)
 	}
 	if output.Len() == 0 {
 		return "command completed with no output", nil

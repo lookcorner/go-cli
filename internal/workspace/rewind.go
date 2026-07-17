@@ -36,6 +36,11 @@ type RewindStore struct {
 	captured map[string]bool
 }
 
+type WorkspaceCheckpoint struct {
+	promptIndex int
+	files       map[string]fileState
+}
+
 type fileState struct {
 	Exists bool   `json:"exists"`
 	Data   []byte `json:"data,omitempty"`
@@ -118,6 +123,68 @@ func (s *RewindStore) CaptureAfter(promptIndex int, path string) error {
 		return errors.New("rewind before-snapshot is missing")
 	}
 	return s.appendLocked(rewindEvent{Time: time.Now().UTC(), Kind: "after", PromptIndex: promptIndex, Path: rel, State: state})
+}
+
+// CaptureWorkspaceBefore holds the rewindable workspace state in memory until
+// a shell command finishes. Only changed files are written to the rewind log.
+func (s *RewindStore) CaptureWorkspaceBefore(promptIndex int) (*WorkspaceCheckpoint, error) {
+	if promptIndex < 0 {
+		return nil, errors.New("file mutation has no active prompt checkpoint")
+	}
+	files, err := s.workspaceFiles()
+	if err != nil {
+		return nil, err
+	}
+	return &WorkspaceCheckpoint{promptIndex: promptIndex, files: files}, nil
+}
+
+func (s *RewindStore) CaptureWorkspaceAfter(checkpoint *WorkspaceCheckpoint) error {
+	if checkpoint == nil {
+		return nil
+	}
+	after, err := s.workspaceFiles()
+	if err != nil {
+		return err
+	}
+	paths := make(map[string]bool, len(checkpoint.files)+len(after))
+	for path := range checkpoint.files {
+		paths[path] = true
+	}
+	for path := range after {
+		paths[path] = true
+	}
+	ordered := make([]string, 0, len(paths))
+	for path := range paths {
+		ordered = append(ordered, path)
+	}
+	sort.Strings(ordered)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, path := range ordered {
+		beforeState, beforeExists := checkpoint.files[path]
+		afterState, afterExists := after[path]
+		if !beforeExists {
+			beforeState = fileState{}
+		}
+		if !afterExists {
+			afterState = fileState{}
+		}
+		if sameFileState(beforeState, afterState) {
+			continue
+		}
+		key := rewindKey(checkpoint.promptIndex, path)
+		if !s.captured[key] {
+			if err := s.appendLocked(rewindEvent{Time: time.Now().UTC(), Kind: "before", PromptIndex: checkpoint.promptIndex, Path: path, State: beforeState}); err != nil {
+				return err
+			}
+			s.captured[key] = true
+		}
+		if err := s.appendLocked(rewindEvent{Time: time.Now().UTC(), Kind: "after", PromptIndex: checkpoint.promptIndex, Path: path, State: afterState}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *RewindStore) Cancel(promptIndex int, path string) error {
@@ -285,6 +352,49 @@ func (s *RewindStore) snapshot(path string) (string, fileState, error) {
 	return rel, fileState{Exists: true, Data: data, Mode: uint32(opened.Mode().Perm())}, nil
 }
 
+func (s *RewindStore) workspaceFiles() (map[string]fileState, error) {
+	files := make(map[string]fileState)
+	var candidates []string
+	err := filepath.WalkDir(s.ws.Root(), func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if path == s.ws.Root() {
+			return nil
+		}
+		if entry.IsDir() {
+			if entry.Name() == ".git" || IsGitIgnored(s.ws.Root(), path) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return nil
+		}
+		candidates = append(candidates, path)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("snapshot workspace: %w", err)
+	}
+	ignored := GitIgnored(s.ws.Root(), candidates)
+	for _, path := range candidates {
+		if ignored[path] {
+			continue
+		}
+		rel, state, err := s.snapshot(path)
+		if err != nil {
+			return nil, fmt.Errorf("snapshot workspace: %w", err)
+		}
+		files[rel] = state
+	}
+	return files, nil
+}
+
 func (s *RewindStore) restore(path string, state fileState) error {
 	resolved, err := s.ws.Resolve(path)
 	if err != nil {
@@ -415,7 +525,7 @@ func (s *RewindStore) rebuildCaptured(events []rewindEvent) {
 func rewindKey(index int, path string) string { return fmt.Sprintf("%d\x00%s", index, path) }
 
 func sameFileState(first, second fileState) bool {
-	return first.Exists == second.Exists && bytes.Equal(first.Data, second.Data)
+	return first.Exists == second.Exists && first.Mode == second.Mode && bytes.Equal(first.Data, second.Data)
 }
 
 func validateRewindFile(file *os.File, path string) (os.FileInfo, error) {
