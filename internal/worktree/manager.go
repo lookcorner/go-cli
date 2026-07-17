@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -93,10 +94,31 @@ type Record struct {
 	GitRef         string    `json:"gitRef,omitempty"`
 	HeadCommit     string    `json:"headCommit"`
 	SessionID      string    `json:"sessionId,omitempty"`
+	CreatorPID     int       `json:"creatorPid,omitempty"`
 	CreatedAt      time.Time `json:"createdAt"`
 	LastAccessedAt time.Time `json:"lastAccessedAt"`
 	Status         string    `json:"status"`
 	Label          string    `json:"label"`
+}
+
+type GCReport struct {
+	DeadRemoved    uint64 `json:"deadRemoved"`
+	ExpiredRemoved uint64 `json:"expiredRemoved"`
+	SkippedAlive   uint64 `json:"skippedAlive"`
+	RemoveFailed   uint64 `json:"removeFailed"`
+}
+
+type DBStats struct {
+	TotalRecords uint64 `json:"totalRecords"`
+	AliveCount   uint64 `json:"aliveCount"`
+	DeadCount    uint64 `json:"deadCount"`
+	DBFileBytes  uint64 `json:"dbFileBytes"`
+}
+
+type RebuildReport struct {
+	Discovered     uint64 `json:"discovered"`
+	Registered     uint64 `json:"registered"`
+	AlreadyTracked uint64 `json:"alreadyTracked"`
 }
 
 type Manager struct {
@@ -244,7 +266,7 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (Record, bool, 
 	record := Record{
 		ID: id, Path: dest, SourceRepo: mainRoot, RepoName: filepath.Base(mainRoot), Kind: "session",
 		CreationMode: req.WorktreeType, GitRef: req.GitRef, HeadCommit: commit,
-		SessionID: req.SessionID, CreatedAt: now, LastAccessedAt: now, Status: "alive", Label: label,
+		SessionID: req.SessionID, CreatorPID: os.Getpid(), CreatedAt: now, LastAccessedAt: now, Status: "alive", Label: label,
 	}
 	m.records[id] = record
 	if err := m.save(); err != nil {
@@ -641,6 +663,136 @@ func validateStandalone(record Record) error {
 }
 
 func (m *Manager) StatePath() string { return m.path }
+
+func (m *Manager) Stats() DBStats {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	stats := DBStats{TotalRecords: uint64(len(m.records))}
+	for _, record := range m.records {
+		if record.Status == "dead" {
+			stats.DeadCount++
+		} else {
+			stats.AliveCount++
+		}
+	}
+	if info, err := os.Stat(m.path); err == nil {
+		stats.DBFileBytes = uint64(info.Size())
+	}
+	return stats
+}
+
+func (m *Manager) GC(ctx context.Context, dryRun bool, maxAge *time.Duration, force bool) (GCReport, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var report GCReport
+	now := time.Now().UTC()
+	for id, record := range m.records {
+		_, statErr := os.Stat(record.Path)
+		missing := os.IsNotExist(statErr)
+		if record.Status == "dead" || missing {
+			report.DeadRemoved++
+			if !dryRun {
+				delete(m.records, id)
+			}
+			continue
+		}
+		if statErr != nil || maxAge == nil || !record.LastAccessedAt.Before(now.Add(-max(0, *maxAge))) {
+			continue
+		}
+		if !force && processAlive(record.CreatorPID) {
+			report.SkippedAlive++
+			continue
+		}
+		if dryRun {
+			report.ExpiredRemoved++
+			continue
+		}
+		if err := removeRecord(ctx, record, force); err != nil {
+			report.RemoveFailed++
+			continue
+		}
+		delete(m.records, id)
+		report.ExpiredRemoved++
+	}
+	if !dryRun {
+		return report, m.save()
+	}
+	return report, nil
+}
+
+func (m *Manager) Rebuild(ctx context.Context) (RebuildReport, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var report RebuildReport
+	entries, err := filepath.Glob(filepath.Join(m.base, "*", "*"))
+	if err != nil {
+		return report, err
+	}
+	for _, path := range entries {
+		info, err := os.Stat(path)
+		if err != nil || !info.IsDir() {
+			continue
+		}
+		gitInfo, err := os.Stat(filepath.Join(path, ".git"))
+		if err != nil {
+			continue
+		}
+		report.Discovered++
+		if m.recordByPath(path) != nil {
+			report.AlreadyTracked++
+			continue
+		}
+		root, err := mainRepositoryRoot(ctx, path)
+		if err != nil {
+			continue
+		}
+		mode := "linked"
+		if gitInfo.IsDir() {
+			mode = "standalone"
+			if origin, originErr := gitOutput(ctx, path, "config", "--get", "remote.origin.url"); originErr == nil && filepath.IsAbs(strings.TrimSpace(origin)) {
+				if resolved, resolveErr := filepath.EvalSymlinks(strings.TrimSpace(origin)); resolveErr == nil {
+					root = resolved
+				}
+			}
+		}
+		head, err := gitOutput(ctx, path, "rev-parse", "HEAD^{commit}")
+		if err != nil {
+			continue
+		}
+		now := time.Now().UTC()
+		id := "wt-" + randomHex(8)
+		m.records[id] = Record{ID: id, Path: path, SourceRepo: root, RepoName: filepath.Base(root), Kind: "session", CreationMode: mode, HeadCommit: strings.TrimSpace(head), CreatedAt: info.ModTime().UTC(), LastAccessedAt: now, Status: "alive", Label: filepath.Base(path)}
+		report.Registered++
+	}
+	if report.Registered > 0 {
+		return report, m.save()
+	}
+	return report, nil
+}
+
+func removeRecord(ctx context.Context, record Record, force bool) error {
+	if record.CreationMode == "standalone" {
+		if err := validateStandalone(record); err != nil {
+			return err
+		}
+		return os.RemoveAll(record.Path)
+	}
+	args := []string{"worktree", "remove"}
+	if force {
+		args = append(args, "--force")
+	}
+	args = append(args, record.Path)
+	_, err := gitOutput(ctx, record.SourceRepo, args...)
+	return err
+}
+
+func processAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	process, err := os.FindProcess(pid)
+	return err == nil && process.Signal(syscall.Signal(0)) == nil
+}
 
 func (m *Manager) recordByPath(path string) *Record {
 	clean := filepath.Clean(path)

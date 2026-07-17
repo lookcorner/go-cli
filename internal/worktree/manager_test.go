@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestManagerLinkedDirtyLifecycleAndPersistence(t *testing.T) {
@@ -213,6 +214,71 @@ func TestManagerCreateFromLinkedWorktreeKeepsMainRepoIdentity(t *testing.T) {
 	}
 	if _, _, err := manager.Remove(context.Background(), RemoveRequest{IDOrPath: first.ID, Force: true}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestManagerGCStatsAndRebuild(t *testing.T) {
+	root := newRepo(t)
+	manager, err := NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(manager.base, "repo", "managed")
+	record, _, err := manager.Create(context.Background(), CreateRequest{
+		SessionID: "gc-session", SourcePath: root, WorktreePath: dest, CopyMode: "clean", WorktreeType: "linked",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.mu.Lock()
+	record.LastAccessedAt = time.Now().Add(-48 * time.Hour)
+	record.CreatorPID = 0
+	manager.records[record.ID] = record
+	if err := manager.save(); err != nil {
+		manager.mu.Unlock()
+		t.Fatal(err)
+	}
+	manager.mu.Unlock()
+	stats := manager.Stats()
+	if stats.TotalRecords != 1 || stats.AliveCount != 1 || stats.DBFileBytes == 0 {
+		t.Fatalf("unexpected stats: %#v", stats)
+	}
+	age := 24 * time.Hour
+	dry, err := manager.GC(context.Background(), true, &age, true)
+	if err != nil || dry.ExpiredRemoved != 1 {
+		t.Fatalf("dry GC: %#v err=%v", dry, err)
+	}
+	if _, err := os.Stat(dest); err != nil || len(manager.List("", nil, true)) != 1 {
+		t.Fatalf("dry GC mutated state: stat=%v records=%d", err, len(manager.List("", nil, true)))
+	}
+
+	manager.mu.Lock()
+	delete(manager.records, record.ID)
+	if err := manager.save(); err != nil {
+		manager.mu.Unlock()
+		t.Fatal(err)
+	}
+	manager.mu.Unlock()
+	rebuilt, err := manager.Rebuild(context.Background())
+	if err != nil || rebuilt.Discovered != 1 || rebuilt.Registered != 1 {
+		t.Fatalf("rebuild: %#v err=%v", rebuilt, err)
+	}
+	items := manager.List("", nil, false)
+	if len(items) != 1 {
+		t.Fatalf("rebuild records: %#v", items)
+	}
+	manager.mu.Lock()
+	rebuiltRecord := items[0]
+	rebuiltRecord.LastAccessedAt = time.Now().Add(-48 * time.Hour)
+	rebuiltRecord.CreatorPID = 0
+	manager.records[rebuiltRecord.ID] = rebuiltRecord
+	manager.mu.Unlock()
+	real, err := manager.GC(context.Background(), false, &age, true)
+	if err != nil || real.ExpiredRemoved != 1 {
+		t.Fatalf("real GC: %#v err=%v", real, err)
+	}
+	if _, err := os.Stat(dest); !os.IsNotExist(err) {
+		t.Fatalf("expired worktree survived GC: %v", err)
 	}
 }
 

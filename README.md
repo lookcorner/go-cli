@@ -166,6 +166,13 @@ returns compatible `base`/`ours`/`theirs` conflict records otherwise.
 Fork creation preserves dirty state and resolves linked descendants back to
 the true main repository rather than nesting repository identity.
 
+Worktree management extensions `x.ai/git/worktree/gc`, `db/stats`,
+`db/rebuild`, and `db/path` are supported. GC accepts compatible duration
+strings such as `7d`, `24h`, `30m`, and `60s`; `dryRun` reports candidates
+without changing disk or registry state, while non-forced collection protects
+worktrees whose creator process is still alive. Database rebuild discovers
+linked and standalone worktrees under the managed worktree directory.
+
 Local mutations require confirmation by default:
 
 - `--approval prompt`: ask before every file mutation and shell command.

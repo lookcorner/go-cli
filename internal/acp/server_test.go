@@ -313,6 +313,27 @@ func TestWorktreeExtensionsCreateListShowAndRemove(t *testing.T) {
 	if forkRemoved := decodeACP(t, decoder); forkRemoved["result"].(map[string]any)["removed"] != true {
 		t.Fatalf("fork removal failed: %#v", forkRemoved)
 	}
+	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 42, "method": "x.ai/git/worktree/db/stats", "params": map[string]any{}})
+	stats := decodeACP(t, decoder)
+	if stats["result"].(map[string]any)["totalRecords"].(float64) != 1 {
+		t.Fatalf("unexpected worktree stats: %#v", stats)
+	}
+	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 43, "method": "x.ai/git/worktree/db/path", "params": map[string]any{}})
+	dbPath := decodeACP(t, decoder)
+	if !strings.HasSuffix(dbPath["result"].(map[string]any)["path"].(string), "worktrees.json") {
+		t.Fatalf("unexpected worktree DB path: %#v", dbPath)
+	}
+	encodeACP(t, encoder, map[string]any{
+		"jsonrpc": "2.0", "id": 44, "method": "x.ai/git/worktree/gc",
+		"params": map[string]any{"dryRun": true, "maxAge": "0s", "force": true},
+	})
+	gc := decodeACP(t, decoder)
+	if gc["result"].(map[string]any)["expiredRemoved"].(float64) != 1 {
+		t.Fatalf("unexpected worktree GC dry-run: %#v", gc)
+	}
+	if _, err := os.Stat(dest); err != nil {
+		t.Fatalf("GC dry-run removed worktree: %v", err)
+	}
 	encodeACP(t, encoder, map[string]any{
 		"jsonrpc": "2.0", "id": 5, "method": "x.ai/git/worktree/remove",
 		"params": map[string]any{"worktreePath": dest, "dryRun": true},

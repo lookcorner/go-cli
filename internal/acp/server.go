@@ -157,11 +157,62 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleWorktree(ctx, incoming)
 		case "x.ai/git/worktree/create_from_worktree", "x.ai/git/worktree/create_from_worktree_sync":
 			s.handleWorktreeFork(ctx, incoming)
+		case "x.ai/git/worktree/gc", "x.ai/git/worktree/db/stats", "x.ai/git/worktree/db/rebuild", "x.ai/git/worktree/db/path":
+			s.handleWorktreeManagement(ctx, incoming)
 		default:
 			if len(incoming.ID) > 0 {
 				s.respondError(incoming.ID, -32601, "method not found")
 			}
 		}
+	}
+}
+
+func (s *Server) handleWorktreeManagement(ctx context.Context, incoming message) {
+	switch incoming.Method {
+	case "x.ai/git/worktree/gc":
+		var req struct {
+			DryRun bool   `json:"dryRun"`
+			MaxAge string `json:"maxAge"`
+			Force  bool   `json:"force"`
+		}
+		if json.Unmarshal(incoming.Params, &req) != nil {
+			s.respondError(incoming.ID, -32602, "invalid worktree GC parameters")
+			return
+		}
+		var maxAge *time.Duration
+		if req.MaxAge != "" {
+			value, err := time.ParseDuration(req.MaxAge)
+			if err != nil {
+				if strings.HasSuffix(req.MaxAge, "d") {
+					days, dayErr := time.ParseDuration(strings.TrimSuffix(req.MaxAge, "d") + "h")
+					if dayErr == nil {
+						value, err = days*24, nil
+					}
+				}
+				if err != nil {
+					s.respondError(incoming.ID, -32602, "invalid maxAge; expected e.g. 7d, 24h, 30m, or 60s")
+					return
+				}
+			}
+			maxAge = &value
+		}
+		report, err := s.worktrees.GC(ctx, req.DryRun, maxAge, req.Force)
+		if err != nil {
+			s.respondError(incoming.ID, -32000, err.Error())
+			return
+		}
+		s.respond(incoming.ID, report)
+	case "x.ai/git/worktree/db/stats":
+		s.respond(incoming.ID, s.worktrees.Stats())
+	case "x.ai/git/worktree/db/rebuild":
+		report, err := s.worktrees.Rebuild(ctx)
+		if err != nil {
+			s.respondError(incoming.ID, -32000, err.Error())
+			return
+		}
+		s.respond(incoming.ID, report)
+	case "x.ai/git/worktree/db/path":
+		s.respond(incoming.ID, map[string]any{"path": s.worktrees.StatePath()})
 	}
 }
 
