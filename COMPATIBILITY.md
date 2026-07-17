@@ -23,7 +23,7 @@ Status values: **done**, **partial**, **planned**.
 | LSP tools | partial | Framed stdio JSON-RPC, initialization/shutdown, document sync, hover, definitions, references, symbols and published diagnostics work; dynamic configuration, progress, apply-edit and server-specific adapters remain |
 | Planning / goals | partial | `todo_write`, active-goal state, `update_goal`, bounded autonomous `--goal` continuation and terminal completion/block handling work; plan-mode UI, scheduled continuation and classifier verification remain |
 | Skills / AGENTS.md | partial | Compatible root instruction/rules discovery, source-labelled injection, user/workspace skill discovery and lazy `skill` loading work; gitignore-aware nested discovery and conditional skills remain |
-| Git / worktrees / hunk tracking | planned | Worktree lifecycle and edit attribution remain |
+| Git / worktrees / hunk tracking | partial | Git tracked/staged/untracked hunk parsing, stable IDs, file summaries, file-tool agent attribution and compatible ACP read-query extensions work; mixed-source per-hunk attribution, accept/reject actions, linked/standalone worktree lifecycle and persistence remain |
 | Subagents | planned | Coordinator, roster and activity events remain |
 | Memory / compaction | partial | Responses, Chat Completions and Anthropic usage accounting, compatible 85% threshold resolution, successful-summary fresh-chain compaction, TUI context status and configurable old-tool-result pruning work; two-pass prefire, memory flush, local memory index and manual `/compact` remain |
 | OS sandbox | planned | Landlock/Seatbelt, child seccomp and network policy remain |

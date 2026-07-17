@@ -142,11 +142,70 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleCancel(incoming.Params)
 		case "session/close":
 			s.handleClose(incoming)
+		case "x.ai/hunk-tracker/get-hunks", "x.ai/hunk-tracker/get-files", "x.ai/hunk-tracker/get-summary":
+			s.handleHunkQuery(ctx, incoming)
 		default:
 			if len(incoming.ID) > 0 {
 				s.respondError(incoming.ID, -32601, "method not found")
 			}
 		}
+	}
+}
+
+func (s *Server) handleHunkQuery(ctx context.Context, incoming message) {
+	var params struct {
+		SessionID string `json:"sessionId"`
+		Path      string `json:"path"`
+		Source    string `json:"source"`
+	}
+	if json.Unmarshal(incoming.Params, &params) != nil || params.SessionID == "" {
+		s.respondError(incoming.ID, -32602, "sessionId is required")
+		return
+	}
+	if params.Source != "" && params.Source != "all" && params.Source != "agent" && params.Source != "external" {
+		s.respondError(incoming.ID, -32602, "source must be agent, external, or all")
+		return
+	}
+	current := s.lookupSession(params.SessionID)
+	if current == nil || current.runner == nil || current.runner.Tools == nil {
+		s.respondError(incoming.ID, -32602, "unknown session")
+		return
+	}
+	tracker := current.runner.Tools.HunkTracker()
+	switch incoming.Method {
+	case "x.ai/hunk-tracker/get-hunks":
+		hunks, err := tracker.Hunks(ctx, params.Path, params.Source)
+		if err != nil {
+			s.respondError(incoming.ID, -32000, err.Error())
+			return
+		}
+		s.respond(incoming.ID, map[string]any{"hunks": hunks})
+	case "x.ai/hunk-tracker/get-files":
+		files, err := tracker.Files(ctx)
+		if err != nil {
+			s.respondError(incoming.ID, -32000, err.Error())
+			return
+		}
+		s.respond(incoming.ID, map[string]any{"files": files})
+	case "x.ai/hunk-tracker/get-summary":
+		files, err := tracker.Files(ctx)
+		if err != nil {
+			s.respondError(incoming.ID, -32000, err.Error())
+			return
+		}
+		var hunks, additions, deletions, agentFiles int
+		for _, file := range files {
+			hunks += file.HunkCount
+			additions += file.Additions
+			deletions += file.Deletions
+			if file.IsAgentFile {
+				agentFiles++
+			}
+		}
+		s.respond(incoming.ID, map[string]any{
+			"fileCount": len(files), "hunkCount": hunks, "agentFileCount": agentFiles,
+			"additions": additions, "deletions": deletions,
+		})
 	}
 }
 

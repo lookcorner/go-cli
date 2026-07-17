@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -44,6 +45,11 @@ func (f *fixtureStreamer) StreamResponse(ctx context.Context, _ api.ResponseRequ
 
 func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 	root := t.TempDir()
+	gitInit := exec.Command("git", "init", "-q")
+	gitInit.Dir = root
+	if output, err := gitInit.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, output)
+	}
 	streamer := &fixtureStreamer{results: []api.StreamResult{
 		{ResponseID: "response-1", ToolCalls: []api.ToolCall{{
 			CallID: "tool-1", Name: "write_file", Arguments: json.RawMessage(`{"path":"made.txt","content":"ok"}`),
@@ -138,6 +144,15 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(root, "made.txt"))
 	if err != nil || string(data) != "ok" {
 		t.Fatalf("tool did not run: data=%q err=%v", data, err)
+	}
+	encodeACP(t, encoder, map[string]any{
+		"jsonrpc": "2.0", "id": 33, "method": "x.ai/hunk-tracker/get-hunks",
+		"params": map[string]any{"sessionId": sessionID, "source": "agent"},
+	})
+	hunkResponse := decodeACP(t, decoder)
+	hunks := hunkResponse["result"].(map[string]any)["hunks"].([]any)
+	if len(hunks) != 1 || hunks[0].(map[string]any)["path"] != "made.txt" || hunks[0].(map[string]any)["source"] != "agent" {
+		t.Fatalf("unexpected ACP hunks: %#v", hunkResponse)
 	}
 	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 4, "method": "session/close", "params": map[string]any{"sessionId": sessionID}})
 	closed := decodeACP(t, decoder)

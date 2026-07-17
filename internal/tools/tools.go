@@ -106,6 +106,7 @@ type Registry struct {
 	processes  *ProcessManager
 	goal       *GoalStore
 	readPolicy Approver
+	hunks      *HunkTracker
 }
 
 func NewRegistry(ws *workspace.Workspace, approver Approver) *Registry {
@@ -132,7 +133,7 @@ func NewRegistry(ws *workspace.Workspace, approver Approver) *Registry {
 		&updateGoalTool{store: goal},
 		&webFetchTool{approver: approver},
 	}
-	registry := &Registry{tools: make(map[string]Tool, len(items)), processes: processes, goal: goal}
+	registry := &Registry{tools: make(map[string]Tool, len(items)), processes: processes, goal: goal, hunks: NewHunkTracker(ws)}
 	for _, item := range items {
 		registry.tools[item.Definition().Name] = item
 	}
@@ -152,6 +153,8 @@ func (r *Registry) GoalSnapshot() GoalSnapshot {
 	}
 	return r.goal.Snapshot()
 }
+
+func (r *Registry) HunkTracker() *HunkTracker { return r.hunks }
 
 func (r *Registry) SetReadPolicy(approver Approver) {
 	r.mu.Lock()
@@ -245,7 +248,29 @@ func (r *Registry) Execute(ctx context.Context, name string, arguments json.RawM
 			}
 		}
 	}
-	return tool.Execute(ctx, arguments)
+	output, executeErr := tool.Execute(ctx, arguments)
+	if executeErr == nil && r.hunks != nil {
+		if path := mutationPath(name, arguments); path != "" {
+			r.hunks.MarkAgent(path)
+		}
+	}
+	return output, executeErr
+}
+
+func mutationPath(name string, raw json.RawMessage) string {
+	if name != "write_file" && name != "edit_file" && name != "search_replace" {
+		return ""
+	}
+	var values map[string]any
+	if json.Unmarshal(raw, &values) != nil {
+		return ""
+	}
+	for _, key := range []string{"target_file", "path"} {
+		if value, ok := values[key].(string); ok {
+			return value
+		}
+	}
+	return ""
 }
 
 func readPolicyTarget(name string, raw json.RawMessage) (string, string) {

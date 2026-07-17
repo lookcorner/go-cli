@@ -141,6 +141,12 @@ to the actual tool call, so protocol stdin is never consumed by a CLI prompt.
 `--approval auto` and `--approval deny` remain available for clients that
 intentionally want a fixed policy.
 
+Git repositories also expose the compatible read-only hunk tracker ACP
+extensions `x.ai/hunk-tracker/get-hunks`, `get-files`, and `get-summary`.
+Tracked, staged, and text untracked changes are included; mutations performed
+through Gork file tools are attributed to the agent, while other files are
+reported as external.
+
 Local mutations require confirmation by default:
 
 - `--approval prompt`: ask before every file mutation and shell command.
