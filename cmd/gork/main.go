@@ -199,6 +199,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		approver = tools.PromptApprover{Mode: mode, Input: inputReader, Output: stderr}
 	}
 	registry := tools.NewRegistry(ws, approver)
+	defer registry.Close()
 	if len(skillCatalog.Names()) > 0 {
 		if err := registry.Register(skillCatalog.Tool()); err != nil {
 			return err

@@ -99,8 +99,12 @@ Local mutations require confirmation by default:
 - `--approval auto`: approve all available local tools. Use only in a trusted
   workspace and environment.
 
-The built-in tools are `read_file`, `list_files`, `search_files`, `write_file`,
-`edit_file`, and `shell`. File operations resolve symlinks and reject paths
+The built-in tools include `read_file`, `list_files`, `search_files`,
+`write_file`, `edit_file`, and `shell`. Long-lived processes use
+`start_background_command`, `get_background_command_output`, and
+`kill_background_command`; their output is captured in a bounded tail buffer,
+their process groups are terminated on request, and every remaining process is
+cleaned up when Gork exits. File operations resolve symlinks and reject paths
 outside the selected workspace. Shell commands start in the workspace, but
 they are not yet kernel-sandboxed; approval remains a security boundary.
 

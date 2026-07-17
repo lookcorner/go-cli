@@ -84,10 +84,12 @@ type Tool interface {
 }
 
 type Registry struct {
-	tools map[string]Tool
+	tools     map[string]Tool
+	processes *ProcessManager
 }
 
 func NewRegistry(ws *workspace.Workspace, approver Approver) *Registry {
+	processes := NewProcessManager(ws, approver)
 	items := []Tool{
 		&readFileTool{ws: ws},
 		&listFilesTool{ws: ws},
@@ -95,12 +97,22 @@ func NewRegistry(ws *workspace.Workspace, approver Approver) *Registry {
 		&writeFileTool{ws: ws, approver: approver},
 		&editFileTool{ws: ws, approver: approver},
 		&shellTool{ws: ws, approver: approver, timeout: 2 * time.Minute},
+		&startCommandTool{manager: processes},
+		&commandOutputTool{manager: processes},
+		&killCommandTool{manager: processes},
 	}
-	registry := &Registry{tools: make(map[string]Tool, len(items))}
+	registry := &Registry{tools: make(map[string]Tool, len(items)), processes: processes}
 	for _, item := range items {
 		registry.tools[item.Definition().Name] = item
 	}
 	return registry
+}
+
+func (r *Registry) Close() error {
+	if r.processes == nil {
+		return nil
+	}
+	return r.processes.Close()
 }
 
 func (r *Registry) Register(tool Tool) error {
