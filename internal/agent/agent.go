@@ -47,6 +47,7 @@ type Runner struct {
 	ContextWindow           int
 	CompactThresholdPercent int
 	lastInputTokens         int
+	pendingSummary          string
 }
 
 type Result struct {
@@ -77,21 +78,18 @@ func (r *Runner) RunTurn(ctx context.Context, prompt, previousResponseID string)
 	} else {
 		instructions = defaultInstructions + "\n\nAdditional user instructions:\n" + instructions
 	}
-	summaryPrefix := ""
 	if r.shouldCompact(previousResponseID) {
-		summary, err := r.compact(ctx, previousResponseID)
+		_, err := r.Compact(ctx, previousResponseID)
 		if err != nil {
 			r.log("compaction_error", map[string]any{"error": err.Error(), "input_tokens": r.lastInputTokens})
 		} else {
 			previousResponseID = ""
-			r.lastInputTokens = 0
-			if resetter, ok := r.Client.(HistoryResetter); ok {
-				resetter.ResetHistory(summary)
-			}
-			summaryPrefix = "Previous conversation summary:\n" + summary + "\n\n"
-			r.log("context_compacted", map[string]any{"summary": summary})
-			r.status("context compacted")
 		}
+	}
+	summaryPrefix := ""
+	if r.pendingSummary != "" {
+		summaryPrefix = "Previous conversation summary:\n" + r.pendingSummary + "\n\n"
+		r.pendingSummary = ""
 	}
 
 	r.log("user_prompt", map[string]any{"text": prompt})
@@ -176,7 +174,10 @@ func (r *Runner) shouldCompact(previousResponseID string) bool {
 	return r.lastInputTokens >= threshold
 }
 
-func (r *Runner) compact(ctx context.Context, previousResponseID string) (string, error) {
+func (r *Runner) Compact(ctx context.Context, previousResponseID string) (string, error) {
+	if previousResponseID == "" {
+		return "", errors.New("no completed response is available to compact")
+	}
 	request := api.ResponseRequest{
 		Model:        r.Model,
 		Instructions: "Create a precise successor-agent handoff summary. Preserve the user's goals, decisions, constraints, modified files, tool results, verification state, unresolved problems, and exact next actions. Do not claim unfinished work is complete.",
@@ -194,6 +195,13 @@ func (r *Runner) compact(ctx context.Context, previousResponseID string) (string
 	if summary == "" {
 		return "", errors.New("compaction returned an empty summary")
 	}
+	r.lastInputTokens = 0
+	r.pendingSummary = summary
+	if resetter, ok := r.Client.(HistoryResetter); ok {
+		resetter.ResetHistory(summary)
+	}
+	r.log("context_compacted", map[string]any{"summary": summary})
+	r.status("context compacted")
 	return summary, nil
 }
 

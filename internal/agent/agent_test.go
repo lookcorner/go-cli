@@ -101,3 +101,29 @@ func TestRunnerCompactsAtUsageThresholdAndStartsFreshChain(t *testing.T) {
 		t.Fatalf("fresh chain did not receive summary: %#v", streamer.requests[2])
 	}
 }
+
+func TestRunnerManualCompactQueuesSummaryForNextTurn(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamer := &fakeStreamer{results: []api.StreamResult{
+		{ResponseID: "summary-response", Text: "Keep the exact implementation state."},
+		{ResponseID: "fresh-response", Text: "continued"},
+	}}
+	runner := Runner{Client: streamer, Tools: tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto}), Model: "test-model"}
+	defer runner.Tools.Close()
+	if summary, err := runner.Compact(context.Background(), "old-response"); err != nil || summary != "Keep the exact implementation state." {
+		t.Fatalf("manual compact: summary=%q err=%v", summary, err)
+	}
+	if _, err := runner.RunTurn(context.Background(), "continue", ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(streamer.requests) != 2 || streamer.requests[0].PreviousResponseID != "old-response" {
+		t.Fatalf("unexpected compact requests: %#v", streamer.requests)
+	}
+	content, _ := streamer.requests[1].Input[0].Content.(string)
+	if streamer.requests[1].PreviousResponseID != "" || !strings.Contains(content, "Keep the exact implementation state.") {
+		t.Fatalf("summary was not injected into fresh turn: %#v", streamer.requests[1])
+	}
+}

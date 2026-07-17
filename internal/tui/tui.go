@@ -26,6 +26,7 @@ type turnDoneEvent struct {
 	result agent.Result
 	err    error
 }
+type compactDoneEvent struct{ err error }
 
 type Bridge struct {
 	ctx    context.Context
@@ -190,6 +191,15 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				m.status += fmt.Sprintf(" · context %d/%d (%d%%)", msg.result.InputTokens, msg.result.ContextWindow, percent)
 			}
 		}
+	case compactDoneEvent:
+		m.running = false
+		m.turnCancel = nil
+		if msg.err != nil {
+			m.status = "compact failed: " + msg.err.Error()
+		} else {
+			m.previousID = ""
+			m.status = "context compacted"
+		}
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
@@ -252,9 +262,13 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		m.input = nil
 		m.running = true
-		m.beginTurn(prompt)
 		turnCtx, cancel := context.WithCancel(m.ctx)
 		m.turnCancel = cancel
+		if prompt == "/compact" {
+			m.status = "compacting context"
+			return m, runCompact(turnCtx, m.runner, m.previousID)
+		}
+		m.beginTurn(prompt)
 		return m, runTurn(turnCtx, m.runner, prompt, m.previousID)
 	case tea.KeyBackspace:
 		if len(m.input) > 0 {
@@ -296,6 +310,13 @@ func runTurn(ctx context.Context, runner *agent.Runner, prompt, previousID strin
 	return func() tea.Msg {
 		result, err := runner.RunTurn(ctx, prompt, previousID)
 		return turnDoneEvent{result: result, err: err}
+	}
+}
+
+func runCompact(ctx context.Context, runner *agent.Runner, previousID string) tea.Cmd {
+	return func() tea.Msg {
+		_, err := runner.Compact(ctx, previousID)
+		return compactDoneEvent{err: err}
 	}
 }
 

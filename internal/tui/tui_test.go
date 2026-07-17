@@ -71,3 +71,15 @@ func TestSliceFromBottom(t *testing.T) {
 		t.Fatalf("unexpected scrolled slice: %s", got)
 	}
 }
+
+func TestCompactCommandDoesNotEnterTranscript(t *testing.T) {
+	bridge := NewBridge(context.Background(), tools.PermissionAuto)
+	defer bridge.Close()
+	m := &model{ctx: context.Background(), runner: &agent.Runner{}, bridge: bridge, previousID: "response-1", status: "ready"}
+	m.input = []rune("/compact")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command == nil || !m.running || m.transcript.Len() != 0 || m.status != "compacting context" {
+		t.Fatalf("compact command entered normal turn: running=%v status=%q transcript=%q", m.running, m.status, m.transcript.String())
+	}
+}

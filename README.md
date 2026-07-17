@@ -12,6 +12,9 @@ function-tool loop, workspace confinement, explicit mutation approval and
 local JSONL session records. See [COMPATIBILITY.md](COMPATIBILITY.md) for the
 feature-by-feature status.
 
+Interactive REPL and full-screen sessions accept `/compact` to summarize the
+current completed response chain and continue from a fresh context.
+
 ## Build
 
 Go 1.25 or newer is required.

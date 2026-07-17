@@ -583,7 +583,15 @@ func interactiveLoop(
 		case "/exit", "/quit":
 			return nil
 		case "/help":
-			fmt.Fprintln(stderr, "Commands: /help, /exit. Every other line is sent as a prompt.")
+			fmt.Fprintln(stderr, "Commands: /compact, /help, /exit. Every other line is sent as a prompt.")
+			prompt = ""
+			continue
+		case "/compact":
+			if _, err := runner.Compact(ctx, previousResponseID); err != nil {
+				fmt.Fprintln(stderr, "[gork] compact failed:", err)
+			} else {
+				previousResponseID = ""
+			}
 			prompt = ""
 			continue
 		}
