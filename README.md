@@ -296,7 +296,8 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/project"]
 
 Server processes inherit the current environment, with optional per-server
 `env` overrides. They start in the selected workspace and are shut down when
-the agent exits.
+the agent exits. Text, structured, and validated image tool results are
+forwarded to the model without flattening images into JSON text.
 
 MCP Streamable HTTP endpoints use `url` instead of `command`. Gork sends the
 negotiated protocol and session headers, accepts both JSON and SSE responses,

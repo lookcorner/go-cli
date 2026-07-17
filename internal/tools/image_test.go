@@ -48,6 +48,12 @@ func TestReadFileReturnsValidatedImageAttachment(t *testing.T) {
 	if len(result.Images[0].Data) == 0 {
 		t.Fatal("image attachment was empty")
 	}
+	if _, err := NewImageAttachment("image/jpeg", result.Images[0].Data); err == nil {
+		t.Fatal("image MIME mismatch was accepted")
+	}
+	if _, err := DecodeImageAttachment("image/png", "not-base64"); err == nil {
+		t.Fatal("invalid base64 image was accepted")
+	}
 }
 
 func TestReadFileRejectsInvalidImageData(t *testing.T) {

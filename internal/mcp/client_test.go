@@ -43,6 +43,10 @@ func TestStdioLifecycleAndToolCall(t *testing.T) {
 	if output != "echo: hello" {
 		t.Fatalf("unexpected tool output: %q", output)
 	}
+	imageResult, err := adapters[0].ExecuteResult(context.Background(), json.RawMessage(`{"message":"image"}`))
+	if err != nil || len(imageResult.Images) != 1 || imageResult.Images[0].MediaType != "image/png" || !strings.Contains(imageResult.Output, "[Image: image/png, 1x1]") {
+		t.Fatalf("unexpected MCP image result=%#v err=%v", imageResult, err)
+	}
 	resources := NewResourceAdapters(client, "fixture")
 	listed, err := resources[0].Execute(context.Background(), json.RawMessage(`{}`))
 	if err != nil || !strings.Contains(listed, "file:///fixture/readme.md") {
@@ -112,9 +116,19 @@ func TestMCPHelperProcess(t *testing.T) {
 			}}}
 		case "tools/call":
 			arguments, _ := request.Params["arguments"].(map[string]any)
-			result = map[string]any{"content": []any{map[string]any{
-				"type": "text", "text": fmt.Sprintf("echo: %v", arguments["message"]),
-			}}}
+			if arguments["message"] == "image" {
+				result = map[string]any{"content": []any{
+					map[string]any{"type": "text", "text": "fixture image"},
+					map[string]any{
+						"type": "image", "mimeType": "image/png",
+						"data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+					},
+				}}
+			} else {
+				result = map[string]any{"content": []any{map[string]any{
+					"type": "text", "text": fmt.Sprintf("echo: %v", arguments["message"]),
+				}}}
+			}
 		case "resources/list":
 			result = map[string]any{"resources": []any{map[string]any{
 				"uri": "file:///fixture/readme.md", "name": "readme", "mimeType": "text/markdown",

@@ -3,6 +3,7 @@ package tools
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,6 +29,8 @@ var imageTypes = map[string]string{
 	".png":  "image/png",
 	".webp": "image/webp",
 }
+
+var _ ResultTool = (*readFileTool)(nil)
 
 func (t *readFileTool) ExecuteResult(ctx context.Context, raw json.RawMessage) (ExecutionResult, error) {
 	result, imageFile, err := t.readImage(raw)
@@ -82,18 +85,44 @@ func (t *readFileTool) readImage(raw json.RawMessage) (ExecutionResult, bool, er
 	if err != nil {
 		return ExecutionResult{}, knownExtension, fmt.Errorf("read image %q: %w", requestedPath, err)
 	}
-	if len(data) > maxImageBytes {
-		return ExecutionResult{}, true, fmt.Errorf("image %q exceeds %d bytes", requestedPath, maxImageBytes)
-	}
-	config, _, err := image.DecodeConfig(bytes.NewReader(data))
-	if err != nil || config.Width < 1 || config.Height < 1 || int64(config.Width)*int64(config.Height) > 100_000_000 {
-		if err == nil {
-			err = errors.New("invalid image dimensions")
-		}
+	attachment, err := NewImageAttachment(mediaType, data)
+	if err != nil {
 		return ExecutionResult{}, true, fmt.Errorf("decode image %q: %w", requestedPath, err)
 	}
 	return ExecutionResult{
-		Output: fmt.Sprintf("[Image: %s (%s, %dx%d)]", requestedPath, mediaType, config.Width, config.Height),
-		Images: []ImageAttachment{{MediaType: mediaType, Data: data}},
+		Output: fmt.Sprintf("[Image: %s (%s, %dx%d)]", requestedPath, mediaType, attachment.Width, attachment.Height),
+		Images: []ImageAttachment{attachment},
 	}, true, nil
+}
+
+func DecodeImageAttachment(mediaType, data string) (ImageAttachment, error) {
+	if base64.StdEncoding.DecodedLen(len(data)) > maxImageBytes {
+		return ImageAttachment{}, fmt.Errorf("image exceeds %d bytes", maxImageBytes)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(data)
+	if err != nil {
+		return ImageAttachment{}, errors.New("image data is not valid base64")
+	}
+	return NewImageAttachment(mediaType, decoded)
+}
+
+func NewImageAttachment(mediaType string, data []byte) (ImageAttachment, error) {
+	if len(data) > maxImageBytes {
+		return ImageAttachment{}, fmt.Errorf("image exceeds %d bytes", maxImageBytes)
+	}
+	expected := map[string]string{"image/gif": "gif", "image/jpeg": "jpeg", "image/png": "png", "image/webp": "webp"}[mediaType]
+	if expected == "" {
+		return ImageAttachment{}, fmt.Errorf("unsupported image media type %q", mediaType)
+	}
+	config, format, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return ImageAttachment{}, err
+	}
+	if format != expected {
+		return ImageAttachment{}, fmt.Errorf("image data is %s, not %s", format, expected)
+	}
+	if config.Width < 1 || config.Height < 1 || int64(config.Width)*int64(config.Height) > 100_000_000 {
+		return ImageAttachment{}, errors.New("invalid image dimensions")
+	}
+	return ImageAttachment{MediaType: mediaType, Data: data, Width: config.Width, Height: config.Height}, nil
 }

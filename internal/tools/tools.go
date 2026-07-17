@@ -86,6 +86,11 @@ type Tool interface {
 	Execute(context.Context, json.RawMessage) (string, error)
 }
 
+type ResultTool interface {
+	Tool
+	ExecuteResult(context.Context, json.RawMessage) (ExecutionResult, error)
+}
+
 type ExecutionResult struct {
 	Output string
 	Images []ImageAttachment
@@ -94,6 +99,8 @@ type ExecutionResult struct {
 type ImageAttachment struct {
 	MediaType string
 	Data      []byte
+	Width     int
+	Height    int
 }
 
 type ToolCallContext struct {
@@ -267,8 +274,8 @@ func (r *Registry) ExecuteResult(ctx context.Context, name string, arguments jso
 	}
 	var result ExecutionResult
 	var executeErr error
-	if reader, ok := tool.(*readFileTool); ok {
-		result, executeErr = reader.ExecuteResult(ctx, arguments)
+	if rich, ok := tool.(ResultTool); ok {
+		result, executeErr = rich.ExecuteResult(ctx, arguments)
 	} else {
 		result.Output, executeErr = tool.Execute(ctx, arguments)
 	}
