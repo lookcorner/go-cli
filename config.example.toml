@@ -24,7 +24,8 @@ hard_clear_age_turns = 10
 [toolset.web_fetch]
 # proxy_endpoint = "https://proxy.example:8443"
 # allowed_domains = ["docs.example.com", "example.com/docs"]
-# An explicit empty allowed_domains list blocks every web_fetch request.
+# Omit allowed_domains to use the built-in documentation-domain list.
+# An explicit empty list blocks every web_fetch request.
 
 [mcp_servers.example]
 command = "example-mcp-server"

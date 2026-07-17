@@ -449,6 +449,37 @@ func TestWebFetchDomainAllowlist(t *testing.T) {
 	}
 }
 
+func TestWebFetchDefaultAndExplicitDomainPolicies(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry(ws, PromptApprover{Mode: PermissionAuto})
+	defer registry.Close()
+	registry.ConfigureWebFetch(WebFetchConfig{})
+	for raw, allowed := range map[string]bool{
+		"https://docs.rs/serde/latest":      true,
+		"https://vercel.com/docs/functions": true,
+		"https://vercel.com/templates":      false,
+		"https://example.com/docs":          false,
+	} {
+		parsed, _ := url.Parse(raw)
+		if got := webDomainAllowed(registry.webFetch.domainRules, parsed); got != allowed {
+			t.Fatalf("default allowed(%s)=%v, want %v", raw, got, allowed)
+		}
+	}
+	registry.ConfigureWebFetch(WebFetchConfig{AllowedDomains: []string{"example.com"}, RestrictDomains: true})
+	docs, _ := url.Parse("https://docs.rs")
+	custom, _ := url.Parse("https://example.com/docs")
+	if webDomainAllowed(registry.webFetch.domainRules, docs) || !webDomainAllowed(registry.webFetch.domainRules, custom) {
+		t.Fatal("configured domain list did not replace the defaults")
+	}
+	registry.ConfigureWebFetch(WebFetchConfig{RestrictDomains: true})
+	if webDomainAllowed(registry.webFetch.domainRules, docs) {
+		t.Fatal("explicit empty domain policy did not block the default allowlist")
+	}
+}
+
 func TestWebFetchBlocksUnlistedDomainBeforeNetwork(t *testing.T) {
 	requests := 0
 	client := &http.Client{Transport: webRoundTripFunc(func(request *http.Request) (*http.Response, error) {

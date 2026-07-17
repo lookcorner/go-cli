@@ -215,7 +215,10 @@ func NewRegistry(ws *workspace.Workspace, approver Approver) *Registry {
 	rewind := &mutationCheckpoint{}
 	processes.rewind = rewind
 	readFile := &readFileTool{ws: ws}
-	webFetch := &webFetchTool{approver: approver}
+	webFetch := &webFetchTool{
+		approver: approver, restrictDomains: true,
+		domainRules: buildWebDomainRules(defaultWebAllowedDomains),
+	}
 	items := []Tool{
 		readFile,
 		&listFilesTool{ws: ws},
@@ -258,11 +261,15 @@ func (r *Registry) ConfigureWebFetch(config WebFetchConfig) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.webFetch != nil {
+		domains := config.AllowedDomains
+		if !config.RestrictDomains {
+			domains = defaultWebAllowedDomains
+		}
 		r.webFetch.artifactDir = config.ArtifactDir
 		r.webFetch.contextWindow = config.ContextWindow
 		r.webFetch.proxyEndpoint = config.ProxyEndpoint
-		r.webFetch.restrictDomains = config.RestrictDomains
-		r.webFetch.domainRules = buildWebDomainRules(config.AllowedDomains)
+		r.webFetch.restrictDomains = true
+		r.webFetch.domainRules = buildWebDomainRules(domains)
 	}
 	if r.readFile != nil {
 		r.readFile.artifactRoot = config.ArtifactDir
