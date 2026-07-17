@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -159,12 +161,155 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleWorktreeFork(ctx, incoming)
 		case "x.ai/git/worktree/gc", "x.ai/git/worktree/db/stats", "x.ai/git/worktree/db/rebuild", "x.ai/git/worktree/db/path":
 			s.handleWorktreeManagement(ctx, incoming)
+		case "x.ai/git/worktree/resume_session":
+			s.handleResumeSessionInWorktree(ctx, incoming)
+		case "x.ai/session/rehydrate":
+			s.handleRehydrateSession(ctx, incoming)
+		case "x.ai/session/resolve_local_for_worktree_resume":
+			s.handleResolveLocalSession(ctx, incoming)
 		default:
 			if len(incoming.ID) > 0 {
 				s.respondError(incoming.ID, -32601, "method not found")
 			}
 		}
 	}
+}
+
+func (s *Server) handleResolveLocalSession(ctx context.Context, incoming message) {
+	var req struct {
+		SessionID string `json:"sessionId"`
+		CWD       string `json:"cwd"`
+	}
+	if json.Unmarshal(incoming.Params, &req) != nil || req.SessionID == "" || req.CWD == "" {
+		s.respondError(incoming.ID, -32602, "sessionId and cwd are required")
+		return
+	}
+	items, err := sessionlog.List(s.SessionDir, "")
+	if err != nil {
+		s.respondError(incoming.ID, -32000, err.Error())
+		return
+	}
+	for _, item := range items {
+		if item.SessionID != req.SessionID {
+			continue
+		}
+		kind := "exactCwd"
+		requested, requestErr := filepath.EvalSymlinks(req.CWD)
+		stored, storedErr := filepath.EvalSymlinks(item.CWD)
+		if requestErr != nil || storedErr != nil || requested != stored {
+			requestRoot, requestRootErr := worktrees.MainRoot(ctx, req.CWD)
+			storedRoot, storedRootErr := worktrees.MainRoot(ctx, item.CWD)
+			if requestRootErr != nil || storedRootErr != nil || requestRoot != storedRoot {
+				break
+			}
+			kind = "sameRepoDifferentCwd"
+		}
+		s.respond(incoming.ID, map[string]any{
+			"found": true, "resolvedSessionId": item.SessionID, "resolvedCwd": item.CWD, "resolutionKind": kind,
+		})
+		return
+	}
+	s.respond(incoming.ID, map[string]any{"found": false})
+}
+
+func (s *Server) handleResumeSessionInWorktree(ctx context.Context, incoming message) {
+	var req struct {
+		SessionID    string `json:"sessionId"`
+		SourceCWD    string `json:"sourceCwd"`
+		CopyMode     string `json:"copyMode"`
+		WorktreeType string `json:"worktreeType"`
+		RestoreCode  *bool  `json:"restoreCode"`
+		GitRef       string `json:"gitRef"`
+	}
+	if json.Unmarshal(incoming.Params, &req) != nil || req.SessionID == "" || req.SourceCWD == "" {
+		s.respondError(incoming.ID, -32602, "sessionId and sourceCwd are required")
+		return
+	}
+	items, err := sessionlog.List(s.SessionDir, "")
+	if err != nil {
+		s.respondError(incoming.ID, -32000, err.Error())
+		return
+	}
+	found := false
+	for _, item := range items {
+		if item.SessionID == req.SessionID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		s.respondError(incoming.ID, -32000, "session not found locally and remote session registry is unavailable")
+		return
+	}
+	newID := fmt.Sprintf("gork-%s-%d", time.Now().UTC().Format("20060102T150405.000000000Z"), s.nextSession.Add(1))
+	fork, _, err := s.worktrees.CreateFromWorktree(ctx, worktrees.ForkRequest{
+		SourceWorktreePath: req.SourceCWD, NewSessionID: newID, CopyMode: req.CopyMode,
+		GitRef: req.GitRef, WorktreeType: req.WorktreeType, Label: "resume-" + req.SessionID,
+	})
+	if err != nil {
+		s.respondError(incoming.ID, -32000, err.Error())
+		return
+	}
+	effective, err := worktrees.EffectiveCWD(ctx, req.SourceCWD, fork.WorktreePath)
+	if err != nil {
+		_, _, _ = s.worktrees.Remove(ctx, worktrees.RemoveRequest{WorktreePath: fork.WorktreePath, Force: true})
+		s.respondError(incoming.ID, -32000, err.Error())
+		return
+	}
+	chat, updates, err := sessionlog.Fork(s.SessionDir, req.SessionID, newID, effective)
+	if err != nil {
+		_, _, _ = s.worktrees.Remove(ctx, worktrees.RemoveRequest{WorktreePath: fork.WorktreePath, Force: true})
+		s.respondError(incoming.ID, -32000, err.Error())
+		return
+	}
+	s.respond(incoming.ID, map[string]any{
+		"sessionId": newID, "worktreePath": fork.WorktreePath, "effectiveCwd": effective,
+		"remoteRestored": false, "parentSessionId": req.SessionID,
+		"chatMessagesCopied": chat, "updatesCopied": updates, "codeRestored": false,
+	})
+}
+
+func (s *Server) handleRehydrateSession(ctx context.Context, incoming message) {
+	var req struct {
+		SessionID    string `json:"sessionId"`
+		SourceCWD    string `json:"sourceCwd"`
+		RepoRoot     string `json:"repoRoot"`
+		WorktreePath string `json:"worktreePath"`
+	}
+	if json.Unmarshal(incoming.Params, &req) != nil || req.SessionID == "" || req.SourceCWD == "" || req.RepoRoot == "" {
+		s.respondError(incoming.ID, -32602, "sessionId, sourceCwd, and repoRoot are required")
+		return
+	}
+	path, err := sessionlog.PathForID(s.SessionDir, req.SessionID)
+	if err != nil {
+		s.respondError(incoming.ID, -32602, err.Error())
+		return
+	}
+	if _, err := os.Stat(path); err != nil {
+		s.respondError(incoming.ID, -32000, "local session state is unavailable and remote registry restore is unsupported")
+		return
+	}
+	worktreePath := req.WorktreePath
+	if worktreePath == "" {
+		worktreePath = req.SourceCWD
+	}
+	created := false
+	if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
+		_, _, createErr := s.worktrees.Create(ctx, worktrees.CreateRequest{
+			SessionID: req.SessionID, SourcePath: req.RepoRoot, WorktreePath: worktreePath,
+			CopyMode: "clean", WorktreeType: "linked", Label: filepath.Base(worktreePath),
+		})
+		if createErr != nil {
+			s.respondError(incoming.ID, -32000, createErr.Error())
+			return
+		}
+		created = true
+	}
+	s.respond(incoming.ID, map[string]any{
+		"sessionId": req.SessionID, "worktreePath": worktreePath, "effectiveCwd": req.SourceCWD,
+		"codebaseRestored": created, "sessionStateRestored": false, "memoryRestored": false,
+		"warnings": []string{},
+	})
 }
 
 func (s *Server) handleWorktreeManagement(ctx context.Context, incoming message) {

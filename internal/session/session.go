@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -22,6 +23,89 @@ type Event struct {
 	Time time.Time `json:"time"`
 	Kind string    `json:"kind"`
 	Data any       `json:"data,omitempty"`
+}
+
+// Fork copies a validated session event stream to a new session ID and appends
+// metadata that binds the fork to its new working directory.
+func Fork(dir, sourceID, newID, cwd string) (chatMessages, updates int, err error) {
+	source, err := PathForID(dir, sourceID)
+	if err != nil {
+		return 0, 0, err
+	}
+	if err := validateSessionFile(source); err != nil {
+		return 0, 0, err
+	}
+	dest, err := PathForID(dir, newID)
+	if err != nil {
+		return 0, 0, err
+	}
+	in, err := os.Open(source)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return 0, 0, fmt.Errorf("create forked session: %w", err)
+	}
+	cleanup := true
+	defer func() {
+		_ = out.Close()
+		if cleanup {
+			_ = os.Remove(dest)
+		}
+	}()
+	limited := io.LimitReader(in, maxSessionBytes+1)
+	data, err := io.ReadAll(limited)
+	if err != nil || len(data) > maxSessionBytes {
+		return 0, 0, errors.New("source session is too large")
+	}
+	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	scanner.Buffer(make([]byte, 64<<10), 8<<20)
+	for scanner.Scan() {
+		var event struct {
+			Kind string `json:"kind"`
+		}
+		if json.Unmarshal(scanner.Bytes(), &event) != nil {
+			return 0, 0, errors.New("malformed source session event")
+		}
+		switch event.Kind {
+		case "user_prompt", "model_response":
+			chatMessages++
+		default:
+			updates++
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return 0, 0, err
+	}
+	if len(data) > 0 && data[len(data)-1] != '\n' {
+		data = append(data, '\n')
+	}
+	if _, err := out.Write(data); err != nil {
+		return 0, 0, err
+	}
+	for _, event := range []Event{
+		{Time: time.Now().UTC(), Kind: "session_metadata", Data: map[string]any{"cwd": cwd}},
+		{Time: time.Now().UTC(), Kind: "session_forked", Data: map[string]any{"parent_session_id": sourceID}},
+	} {
+		encoded, marshalErr := json.Marshal(event)
+		if marshalErr != nil {
+			return 0, 0, marshalErr
+		}
+		if _, err := out.Write(append(encoded, '\n')); err != nil {
+			return 0, 0, err
+		}
+		updates++
+	}
+	if err := out.Sync(); err != nil {
+		return 0, 0, err
+	}
+	if err := out.Close(); err != nil {
+		return 0, 0, err
+	}
+	cleanup = false
+	return chatMessages, updates, nil
 }
 
 type Message struct {

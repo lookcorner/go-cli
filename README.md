@@ -173,6 +173,15 @@ without changing disk or registry state, while non-forced collection protects
 worktrees whose creator process is still alive. Database rebuild discovers
 linked and standalone worktrees under the managed worktree directory.
 
+Local session-aware worktree flows are available through
+`x.ai/session/resolve_local_for_worktree_resume`,
+`x.ai/git/worktree/resume_session`, and `x.ai/session/rehydrate`. Resume copies
+the validated JSONL event stream to a new session ID, rebinds its CWD to the
+new worktree (including a source subdirectory offset), and preserves loadable
+conversation history. Rehydrate recreates a missing linked worktree while
+keeping an existing local session ID. Remote registry/archive recovery is not
+yet available and returns an explicit error.
+
 Local mutations require confirmation by default:
 
 - `--approval prompt`: ask before every file mutation and shell command.

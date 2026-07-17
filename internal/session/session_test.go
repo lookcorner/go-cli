@@ -115,3 +115,36 @@ func TestNamedSessionMetadataAndList(t *testing.T) {
 		t.Fatal("unsafe session ID was accepted")
 	}
 }
+
+func TestForkCopiesTranscriptAndRebindsCWD(t *testing.T) {
+	dir := t.TempDir()
+	logger, err := NewLoggerWithID(dir, "parent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []struct {
+		kind string
+		data any
+	}{
+		{"session_metadata", map[string]any{"cwd": "/old"}},
+		{"user_prompt", map[string]any{"text": "hello"}},
+		{"model_response", map[string]any{"text": "world", "response_id": "r1", "tool_call_count": 0}},
+	} {
+		if err := logger.Append(event.kind, event.data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = logger.Close()
+	chat, updates, err := Fork(dir, "parent", "child", "/new")
+	if err != nil || chat != 2 || updates != 3 {
+		t.Fatalf("fork counts: chat=%d updates=%d err=%v", chat, updates, err)
+	}
+	items, err := List(dir, "/new")
+	if err != nil || len(items) != 1 || items[0].SessionID != "child" {
+		t.Fatalf("forked session metadata: %#v err=%v", items, err)
+	}
+	messages, err := Transcript(filepath.Join(dir, "child.jsonl"))
+	if err != nil || len(messages) != 2 || messages[0].Text != "hello" || messages[1].Text != "world" {
+		t.Fatalf("forked transcript: %#v err=%v", messages, err)
+	}
+}

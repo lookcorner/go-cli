@@ -315,6 +315,38 @@ func mainRepositoryRoot(ctx context.Context, worktreeRoot string) (string, error
 	return filepath.Dir(common), nil
 }
 
+func EffectiveCWD(ctx context.Context, sourceCWD, newRoot string) (string, error) {
+	root, err := gitOutput(ctx, sourceCWD, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return "", err
+	}
+	root, err = filepath.EvalSymlinks(strings.TrimSpace(root))
+	if err != nil {
+		return "", err
+	}
+	source, err := filepath.EvalSymlinks(sourceCWD)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(root, source)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", errors.New("sourceCwd is outside its Git worktree")
+	}
+	return filepath.Join(newRoot, rel), nil
+}
+
+func MainRoot(ctx context.Context, cwd string) (string, error) {
+	root, err := gitOutput(ctx, cwd, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return "", err
+	}
+	root, err = filepath.EvalSymlinks(strings.TrimSpace(root))
+	if err != nil {
+		return "", err
+	}
+	return mainRepositoryRoot(ctx, root)
+}
+
 func (m *Manager) List(repo string, types []string, includeAll bool) []Record {
 	m.mu.Lock()
 	defer m.mu.Unlock()

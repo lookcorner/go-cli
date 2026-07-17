@@ -365,6 +365,87 @@ func runACPGit(t *testing.T, dir string, args ...string) {
 	}
 }
 
+func TestSessionWorktreeResumeAndRehydrate(t *testing.T) {
+	root := t.TempDir()
+	runACPGit(t, root, "init", "-q")
+	runACPGit(t, root, "config", "user.name", "Fixture")
+	runACPGit(t, root, "config", "user.email", "fixture@example.invalid")
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("base\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runACPGit(t, root, "add", "tracked.txt")
+	runACPGit(t, root, "commit", "-qm", "baseline")
+	sessionDir := t.TempDir()
+	logger, err := sessionlog.NewLoggerWithID(sessionDir, "resume-parent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = logger.Append("session_metadata", map[string]any{"cwd": root})
+	_ = logger.Append("user_prompt", map[string]any{"text": "resume me"})
+	_ = logger.Append("model_response", map[string]any{"text": "ready", "response_id": "r1", "tool_call_count": 0})
+	_ = logger.Close()
+
+	clientToAgentR, clientToAgentW := io.Pipe()
+	agentToClientR, agentToClientW := io.Pipe()
+	server := &Server{SessionDir: sessionDir, Factory: func(context.Context, SessionConfig, tools.Approver, io.Writer, io.Writer) (*agent.Runner, func(), error) {
+		return nil, nil, errors.New("session factory should not be called")
+	}}
+	done := make(chan error, 1)
+	go func() { done <- server.Serve(context.Background(), clientToAgentR, agentToClientW) }()
+	encoder, decoder := json.NewEncoder(clientToAgentW), json.NewDecoder(agentToClientR)
+	encodeACP(t, encoder, map[string]any{
+		"jsonrpc": "2.0", "id": 0, "method": "x.ai/session/resolve_local_for_worktree_resume",
+		"params": map[string]any{"sessionId": "resume-parent", "cwd": root},
+	})
+	resolved := decodeACP(t, decoder)
+	if result := resolved["result"].(map[string]any); result["found"] != true || result["resolutionKind"] != "exactCwd" {
+		t.Fatalf("unexpected local resolution: %#v", resolved)
+	}
+	encodeACP(t, encoder, map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "x.ai/git/worktree/resume_session",
+		"params": map[string]any{"sessionId": "resume-parent", "sourceCwd": root, "copyMode": "clean", "worktreeType": "linked"},
+	})
+	resumed := decodeACP(t, decoder)
+	result := resumed["result"].(map[string]any)
+	if result["parentSessionId"] != "resume-parent" || result["remoteRestored"] != false || result["chatMessagesCopied"].(float64) != 2 {
+		t.Fatalf("unexpected resume response: %#v", resumed)
+	}
+	resumedID, resumedPath := result["sessionId"].(string), result["worktreePath"].(string)
+	if items, err := sessionlog.List(sessionDir, result["effectiveCwd"].(string)); err != nil || len(items) != 1 || items[0].SessionID != resumedID {
+		t.Fatalf("forked session not loadable: %#v err=%v", items, err)
+	}
+	encodeACP(t, encoder, map[string]any{
+		"jsonrpc": "2.0", "id": 10, "method": "x.ai/session/resolve_local_for_worktree_resume",
+		"params": map[string]any{"sessionId": "resume-parent", "cwd": resumedPath},
+	})
+	resolvedSibling := decodeACP(t, decoder)
+	if result := resolvedSibling["result"].(map[string]any); result["found"] != true || result["resolutionKind"] != "sameRepoDifferentCwd" {
+		t.Fatalf("unexpected sibling resolution: %#v", resolvedSibling)
+	}
+	rehydratedPath := filepath.Join(t.TempDir(), "rehydrated")
+	encodeACP(t, encoder, map[string]any{
+		"jsonrpc": "2.0", "id": 2, "method": "x.ai/session/rehydrate",
+		"params": map[string]any{"sessionId": "resume-parent", "sourceCwd": rehydratedPath, "repoRoot": root, "worktreePath": rehydratedPath},
+	})
+	rehydrated := decodeACP(t, decoder)
+	if rehydrated["result"].(map[string]any)["codebaseRestored"] != true {
+		t.Fatalf("unexpected rehydrate response: %#v", rehydrated)
+	}
+	if _, err := os.Stat(filepath.Join(rehydratedPath, "tracked.txt")); err != nil {
+		t.Fatalf("rehydrated worktree missing: %v", err)
+	}
+	for id, path := range map[int]string{3: resumedPath, 4: rehydratedPath} {
+		encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": id, "method": "x.ai/git/worktree/remove", "params": map[string]any{"worktreePath": path, "force": true}})
+		if response := decodeACP(t, decoder); response["result"].(map[string]any)["removed"] != true {
+			t.Fatalf("cleanup failed: %#v", response)
+		}
+	}
+	_ = clientToAgentW.Close()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestACPCancelReturnsCancelledStopReason(t *testing.T) {
 	root := t.TempDir()
 	streamer := &blockingStreamer{started: make(chan struct{})}
