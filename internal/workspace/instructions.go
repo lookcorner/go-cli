@@ -35,24 +35,51 @@ type InstructionFile struct {
 	Content string
 }
 
-// LoadInstructions discovers project instructions from the Git root through
-// the current workspace, preserving that order so deeper rules win.
+// LoadInstructions discovers user and project instructions, preserving scope
+// order so more specific project rules win.
 func (w *Workspace) LoadInstructions() ([]InstructionFile, error) {
+	home, _ := os.UserHomeDir()
+	grokHome := os.Getenv("GROK_HOME")
+	if grokHome == "" && home != "" {
+		grokHome = filepath.Join(home, ".grok")
+	}
+	return w.loadInstructions(home, grokHome)
+}
+
+func (w *Workspace) loadInstructions(home, grokHome string) ([]InstructionFile, error) {
 	gitRoot := GitRoot(w.root)
-	var candidates []string
-	for _, scope := range instructionScopes(gitRoot, w.root) {
-		var scoped []string
+	type candidate struct {
+		path    string
+		project bool
+	}
+	var scopes []candidate
+	if grokHome != "" {
+		scopes = append(scopes, candidate{path: grokHome})
+	}
+	if home != "" {
+		scopes = append(scopes,
+			candidate{path: filepath.Join(home, ".claude")},
+			candidate{path: filepath.Join(home, ".cursor")},
+		)
+	}
+	for _, path := range instructionScopes(gitRoot, w.root) {
+		scopes = append(scopes, candidate{path: path, project: true})
+	}
+
+	var candidates []candidate
+	for _, scope := range scopes {
+		var scoped []candidate
 		for _, name := range instructionNames {
-			scoped = append(scoped, filepath.Join(scope, name))
+			scoped = append(scoped, candidate{path: filepath.Join(scope.path, name), project: scope.project})
 		}
 		for _, relativeDir := range rulesDirectories {
-			dir := filepath.Join(scope, relativeDir)
+			dir := filepath.Join(scope.path, relativeDir)
 			entries, err := os.ReadDir(dir)
 			if err != nil {
 				if os.IsNotExist(err) {
 					continue
 				}
-				return nil, fmt.Errorf("read rules directory %q: %w", displayInstructionPath(gitRoot, dir), err)
+				return nil, fmt.Errorf("read rules directory %q: %w", instructionPath(gitRoot, dir, scope.project), err)
 			}
 			var rules []string
 			for _, entry := range entries {
@@ -61,7 +88,9 @@ func (w *Workspace) LoadInstructions() ([]InstructionFile, error) {
 				}
 			}
 			sort.Strings(rules)
-			scoped = append(scoped, rules...)
+			for _, rule := range rules {
+				scoped = append(scoped, candidate{path: rule, project: scope.project})
+			}
 		}
 		candidates = append(candidates, scoped...)
 	}
@@ -71,21 +100,21 @@ func (w *Workspace) LoadInstructions() ([]InstructionFile, error) {
 	var files []InstructionFile
 	total := 0
 	for _, candidate := range candidates {
-		if IsGitIgnored(gitRoot, candidate) {
+		if candidate.project && IsGitIgnored(gitRoot, candidate.path) {
 			continue
 		}
-		if _, err := os.Lstat(candidate); err != nil {
+		if _, err := os.Lstat(candidate.path); err != nil {
 			if os.IsNotExist(err) {
 				continue
 			}
-			return nil, fmt.Errorf("stat instruction candidate %q: %w", displayInstructionPath(gitRoot, candidate), err)
+			return nil, fmt.Errorf("stat instruction candidate %q: %w", instructionPath(gitRoot, candidate.path, candidate.project), err)
 		}
-		resolved, err := filepath.EvalSymlinks(candidate)
+		resolved, err := filepath.EvalSymlinks(candidate.path)
 		if err != nil {
-			return nil, fmt.Errorf("resolve instruction file %q: %w", displayInstructionPath(gitRoot, candidate), err)
+			return nil, fmt.Errorf("resolve instruction file %q: %w", instructionPath(gitRoot, candidate.path, candidate.project), err)
 		}
-		if !pathWithin(gitRoot, resolved) {
-			return nil, fmt.Errorf("instruction file %q escapes Git root", displayInstructionPath(gitRoot, candidate))
+		if candidate.project && !pathWithin(gitRoot, resolved) {
+			return nil, fmt.Errorf("instruction file %q escapes Git root", displayInstructionPath(gitRoot, candidate.path))
 		}
 		if _, duplicate := seen[resolved]; duplicate {
 			continue
@@ -95,7 +124,7 @@ func (w *Workspace) LoadInstructions() ([]InstructionFile, error) {
 			if os.IsNotExist(err) {
 				continue
 			}
-			return nil, fmt.Errorf("stat instruction file %q: %w", displayInstructionPath(gitRoot, resolved), err)
+			return nil, fmt.Errorf("stat instruction file %q: %w", instructionPath(gitRoot, resolved, candidate.project), err)
 		}
 		if !info.Mode().IsRegular() {
 			continue
@@ -111,21 +140,28 @@ func (w *Workspace) LoadInstructions() ([]InstructionFile, error) {
 			continue
 		}
 		if info.Size() > maxInstructionFileBytes {
-			return nil, fmt.Errorf("instruction file %q exceeds %d bytes", displayInstructionPath(gitRoot, resolved), maxInstructionFileBytes)
+			return nil, fmt.Errorf("instruction file %q exceeds %d bytes", instructionPath(gitRoot, resolved, candidate.project), maxInstructionFileBytes)
 		}
 		data, err := os.ReadFile(resolved)
 		if err != nil {
-			return nil, fmt.Errorf("read instruction file %q: %w", displayInstructionPath(gitRoot, resolved), err)
+			return nil, fmt.Errorf("read instruction file %q: %w", instructionPath(gitRoot, resolved, candidate.project), err)
 		}
 		total += len(data)
 		if total > maxInstructionsBytes {
-			return nil, fmt.Errorf("combined project instructions exceed %d bytes", maxInstructionsBytes)
+			return nil, fmt.Errorf("combined instructions exceed %d bytes", maxInstructionsBytes)
 		}
 		seen[resolved] = struct{}{}
 		seenFiles = append(seenFiles, info)
-		files = append(files, InstructionFile{Path: displayInstructionPath(gitRoot, resolved), Content: string(data)})
+		files = append(files, InstructionFile{Path: instructionPath(gitRoot, resolved, candidate.project), Content: string(data)})
 	}
 	return files, nil
+}
+
+func instructionPath(root, path string, project bool) string {
+	if project {
+		return displayInstructionPath(root, path)
+	}
+	return filepath.ToSlash(path)
 }
 
 func instructionScopes(root, cwd string) []string {

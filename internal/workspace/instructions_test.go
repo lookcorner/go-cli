@@ -39,7 +39,7 @@ func TestLoadInstructions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	files, err := ws.LoadInstructions()
+	files, err := ws.loadInstructions("", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestLoadInstructionsWithNoFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	files, err := ws.LoadInstructions()
+	files, err := ws.loadInstructions("", "")
 	if err != nil || len(files) != 0 {
 		t.Fatalf("expected empty instructions, files=%#v err=%v", files, err)
 	}
@@ -95,7 +95,7 @@ func TestLoadInstructionsFromGitRootToWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := ws.LoadInstructions()
+	loaded, err := ws.loadInstructions("", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,6 +106,62 @@ func TestLoadInstructionsFromGitRootToWorkspace(t *testing.T) {
 	for index, path := range want {
 		if !strings.EqualFold(loaded[index].Path, path) {
 			t.Fatalf("instruction %d path = %q, want %q; all=%#v", index, loaded[index].Path, path, loaded)
+		}
+	}
+}
+
+func TestLoadInstructionsIncludesHomeBeforeProject(t *testing.T) {
+	home := t.TempDir()
+	grokHome := filepath.Join(home, "custom-grok-home")
+	repo := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(filepath.Join(repo, "service"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command("git", "init", "-q")
+	command.Dir = repo
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, output)
+	}
+	paths := []struct {
+		path    string
+		content string
+	}{
+		{filepath.Join(grokHome, "AGENTS.md"), "grok home"},
+		{filepath.Join(home, ".claude", "CLAUDE.md"), "claude home"},
+		{filepath.Join(home, ".cursor", "AGENTS.md"), "cursor home"},
+		{filepath.Join(repo, "AGENTS.md"), "project root"},
+		{filepath.Join(repo, "service", "AGENTS.md"), "project service"},
+	}
+	for _, file := range paths {
+		if err := os.MkdirAll(filepath.Dir(file.path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(file.path, []byte(file.content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("*.md\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, err := Open(filepath.Join(repo, "service"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := ws.loadInstructions(home, grokHome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 3 {
+		t.Fatalf("expected only three non-project home instructions, got %#v", loaded)
+	}
+	want := []string{"grok home", "claude home", "cursor home"}
+	for index, content := range want {
+		if loaded[index].Content != content {
+			t.Fatalf("instruction %d content = %q, want %q; all=%#v", index, loaded[index].Content, content, loaded)
+		}
+		if !filepath.IsAbs(loaded[index].Path) {
+			t.Fatalf("home instruction path should be absolute: %q", loaded[index].Path)
 		}
 	}
 }
