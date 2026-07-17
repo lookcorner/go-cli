@@ -58,6 +58,8 @@ type = "sse"
 [lsp_servers.gopls]
 command = "gopls"
 extensions = [".go"]
+initialization_options = { usePlaceholders = true }
+settings = { gopls = { staticcheck = true } }
 
 [[permission.rules]]
 action = "allow"
@@ -103,6 +105,9 @@ pattern = ".env*"
 	}
 	if cfg.LSPServers["gopls"].Command != "gopls" || len(cfg.LSPServers["gopls"].Extensions) != 1 {
 		t.Fatalf("unexpected LSP config: %#v", cfg.LSPServers)
+	}
+	if cfg.LSPServers["gopls"].InitializationOptions["usePlaceholders"] != true || cfg.LSPServers["gopls"].Settings["gopls"].(map[string]any)["staticcheck"] != true {
+		t.Fatalf("unexpected LSP dynamic config: %#v", cfg.LSPServers["gopls"])
 	}
 	if len(cfg.Permission.Rules) != 2 || cfg.Permission.Rules[0].Action != "allow" || *cfg.Permission.Rules[1].Pattern != ".env*" {
 		t.Fatalf("unexpected permission config: %#v", cfg.Permission)

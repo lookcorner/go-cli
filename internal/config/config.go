@@ -72,11 +72,13 @@ type MCPServerConfig struct {
 }
 
 type LSPServerConfig struct {
-	Command    string            `json:"command" toml:"command"`
-	Args       []string          `json:"args,omitempty" toml:"args"`
-	Env        map[string]string `json:"env,omitempty" toml:"env"`
-	Extensions []string          `json:"extensions,omitempty" toml:"extensions"`
-	Enabled    *bool             `json:"enabled,omitempty" toml:"enabled"`
+	Command               string            `json:"command" toml:"command"`
+	Args                  []string          `json:"args,omitempty" toml:"args"`
+	Env                   map[string]string `json:"env,omitempty" toml:"env"`
+	Extensions            []string          `json:"extensions,omitempty" toml:"extensions"`
+	InitializationOptions map[string]any    `json:"initialization_options,omitempty" toml:"initialization_options"`
+	Settings              map[string]any    `json:"settings,omitempty" toml:"settings"`
+	Enabled               *bool             `json:"enabled,omitempty" toml:"enabled"`
 }
 
 func (c LSPServerConfig) IsEnabled() bool {

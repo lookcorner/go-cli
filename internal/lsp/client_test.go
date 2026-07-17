@@ -26,6 +26,10 @@ func TestLifecycleToolQueryAndDiagnostics(t *testing.T) {
 		Args:       []string{"-test.run=TestLSPHelperProcess"},
 		Env:        map[string]string{"GORK_GO_LSP_HELPER": "1"},
 		Extensions: []string{"go"}, Root: root, Stderr: io.Discard,
+		InitializationOptions: map[string]any{"usePlaceholders": true},
+		Settings: map[string]any{
+			"gopls": map[string]any{"staticcheck": true, "nested": map[string]any{"value": "configured"}},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -98,6 +102,23 @@ func TestLSPHelperProcess(t *testing.T) {
 		if message.Method == "exit" {
 			os.Exit(0)
 		}
+		if message.Method == "workspace/didChangeConfiguration" {
+			var params struct {
+				Settings map[string]any `json:"settings"`
+			}
+			if json.Unmarshal(message.Params, &params) != nil || params.Settings["gopls"] == nil {
+				os.Exit(7)
+			}
+			writeLSPFixtureMessage(map[string]any{
+				"jsonrpc": "2.0", "id": 90, "method": "workspace/configuration",
+				"params": map[string]any{"items": []any{
+					map[string]any{"section": "gopls"},
+					map[string]any{"section": "gopls.nested.value"},
+					map[string]any{"section": "missing"},
+				}},
+			})
+			continue
+		}
 		if message.Method == "textDocument/didOpen" {
 			var params struct {
 				TextDocument struct {
@@ -120,11 +141,27 @@ func TestLSPHelperProcess(t *testing.T) {
 		if len(message.ID) == 0 {
 			continue
 		}
+		if message.Method == "" {
+			if string(message.ID) != "90" {
+				os.Exit(8)
+			}
+			var values []any
+			if json.Unmarshal(message.Result, &values) != nil || len(values) != 3 || values[1] != "configured" || values[2] != nil || values[0].(map[string]any)["staticcheck"] != true {
+				os.Exit(9)
+			}
+			continue
+		}
 		var id any
 		_ = json.Unmarshal(message.ID, &id)
 		var result any
 		switch message.Method {
 		case "initialize":
+			var params struct {
+				InitializationOptions map[string]any `json:"initializationOptions"`
+			}
+			if json.Unmarshal(message.Params, &params) != nil || params.InitializationOptions["usePlaceholders"] != true {
+				os.Exit(10)
+			}
 			result = map[string]any{"capabilities": map[string]any{"hoverProvider": true}}
 		case "textDocument/hover":
 			result = map[string]any{"contents": map[string]any{"kind": "plaintext", "value": "fixture hover"}}

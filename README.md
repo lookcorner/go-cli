@@ -85,6 +85,10 @@ Anthropic-compatible Messages endpoints are available with
 `anthropic-version` headers, streams text and `input_json_delta` events, and
 maintains the required assistant `tool_use` / user `tool_result` block ordering.
 
+LSP server entries accept `initialization_options` and `settings`. Settings are
+sent after initialization and returned to server-initiated
+`workspace/configuration` requests by section.
+
 API keys may be put in the config for compatibility, but environment variables
 are preferred so secrets are not stored in a plain-text file.
 

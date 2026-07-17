@@ -20,13 +20,15 @@ import (
 )
 
 type ProcessConfig struct {
-	Name       string
-	Command    string
-	Args       []string
-	Env        map[string]string
-	Extensions []string
-	Root       string
-	Stderr     io.Writer
+	Name                  string
+	Command               string
+	Args                  []string
+	Env                   map[string]string
+	Extensions            []string
+	InitializationOptions map[string]any
+	Settings              map[string]any
+	Root                  string
+	Stderr                io.Writer
 }
 
 type rpcError struct {
@@ -67,6 +69,7 @@ type Client struct {
 	pending     map[string]chan response
 	documents   map[string]documentState
 	diagnostics map[string]json.RawMessage
+	settings    map[string]any
 	writeMu     sync.Mutex
 	done        chan struct{}
 	once        sync.Once
@@ -95,14 +98,15 @@ func Start(ctx context.Context, cfg ProcessConfig) (*Client, error) {
 		name: cfg.Name, root: cfg.Root, extensions: normalizeExtensions(cfg.Extensions),
 		cmd: cmd, stdin: stdin, pending: make(map[string]chan response),
 		documents: make(map[string]documentState), diagnostics: make(map[string]json.RawMessage),
-		done: make(chan struct{}),
+		settings: cfg.Settings,
+		done:     make(chan struct{}),
 	}
 	go client.readLoop(stdout)
 	rootURI := fileURI(cfg.Root)
 	initCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	var initialized any
-	err = client.call(initCtx, "initialize", map[string]any{
+	initializeParams := map[string]any{
 		"processId": os.Getpid(), "rootUri": rootURI,
 		"workspaceFolders": []any{map[string]any{"uri": rootURI, "name": filepath.Base(cfg.Root)}},
 		"capabilities": map[string]any{
@@ -114,7 +118,11 @@ func Start(ctx context.Context, cfg ProcessConfig) (*Client, error) {
 			},
 		},
 		"clientInfo": map[string]any{"name": "gork-go", "version": "0.1.0"},
-	}, &initialized)
+	}
+	if cfg.InitializationOptions != nil {
+		initializeParams["initializationOptions"] = cfg.InitializationOptions
+	}
+	err = client.call(initCtx, "initialize", initializeParams, &initialized)
 	if err != nil {
 		_ = client.Close()
 		return nil, fmt.Errorf("initialize LSP server %q: %w", cfg.Name, err)
@@ -122,6 +130,12 @@ func Start(ctx context.Context, cfg ProcessConfig) (*Client, error) {
 	if err := client.notify("initialized", map[string]any{}); err != nil {
 		_ = client.Close()
 		return nil, err
+	}
+	if cfg.Settings != nil {
+		if err := client.notify("workspace/didChangeConfiguration", map[string]any{"settings": cfg.Settings}); err != nil {
+			_ = client.Close()
+			return nil, err
+		}
 	}
 	return client, nil
 }
@@ -305,10 +319,16 @@ func (c *Client) handleServerRequest(request rpcMessage) {
 	switch request.Method {
 	case "workspace/configuration":
 		var params struct {
-			Items []any `json:"items"`
+			Items []struct {
+				Section string `json:"section"`
+			} `json:"items"`
 		}
 		_ = json.Unmarshal(request.Params, &params)
-		result = make([]any, len(params.Items))
+		values := make([]any, len(params.Items))
+		for index, item := range params.Items {
+			values[index] = configurationValue(c.settings, item.Section)
+		}
+		result = values
 	case "workspace/workspaceFolders":
 		result = []any{map[string]any{"uri": fileURI(c.root), "name": filepath.Base(c.root)}}
 	case "client/registerCapability", "client/unregisterCapability":
@@ -321,6 +341,27 @@ func (c *Client) handleServerRequest(request rpcMessage) {
 		return
 	}
 	_ = c.writeMessage(map[string]any{"jsonrpc": "2.0", "id": id, "result": result})
+}
+
+func configurationValue(settings map[string]any, section string) any {
+	if section == "" {
+		return settings
+	}
+	if value, ok := settings[section]; ok {
+		return value
+	}
+	var value any = settings
+	for _, key := range strings.Split(section, ".") {
+		object, ok := value.(map[string]any)
+		if !ok {
+			return nil
+		}
+		value, ok = object[key]
+		if !ok {
+			return nil
+		}
+	}
+	return value
 }
 
 func (c *Client) failPending(err error) {

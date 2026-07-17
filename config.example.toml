@@ -44,4 +44,6 @@ pattern = "git push --force*"
 command = "gopls"
 args = []
 extensions = [".go"]
+initialization_options = { usePlaceholders = true }
+settings = { gopls = { staticcheck = true } }
 enabled = false

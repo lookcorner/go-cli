@@ -536,7 +536,9 @@ func startLSPServers(
 		fmt.Fprintf(stderr, "[gork] starting LSP server: %s\n", name)
 		client, err := lsp.Start(ctx, lsp.ProcessConfig{
 			Name: name, Command: server.Command, Args: server.Args,
-			Env: server.Env, Extensions: server.Extensions, Root: ws.Root(), Stderr: stderr,
+			Env: server.Env, Extensions: server.Extensions,
+			InitializationOptions: server.InitializationOptions, Settings: server.Settings,
+			Root: ws.Root(), Stderr: stderr,
 		})
 		if err != nil {
 			_ = manager.Close()
