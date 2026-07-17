@@ -82,6 +82,10 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 	if promptCapabilities["embeddedContext"] != true || promptCapabilities["image"] != true || promptCapabilities["audio"] != false {
 		t.Fatalf("unexpected prompt capabilities: %#v", promptCapabilities)
 	}
+	mcpCapabilities := initialize["result"].(map[string]any)["agentCapabilities"].(map[string]any)["mcpCapabilities"].(map[string]any)
+	if mcpCapabilities["http"] != true || mcpCapabilities["sse"] != true {
+		t.Fatalf("unexpected MCP capabilities: %#v", mcpCapabilities)
+	}
 	sessionCapabilities := initialize["result"].(map[string]any)["agentCapabilities"].(map[string]any)["sessionCapabilities"].(map[string]any)
 	if _, ok := sessionCapabilities["list"]; !ok || initialize["result"].(map[string]any)["agentCapabilities"].(map[string]any)["loadSession"] != true {
 		t.Fatalf("session list capability missing: %#v", sessionCapabilities)
@@ -90,11 +94,18 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 		"cwd": root, "mcpServers": []any{map[string]any{
 			"name": "client-tools", "command": "/fixture-mcp", "args": []string{"--stdio"},
 			"env": []any{map[string]any{"name": "TOKEN", "value": "secret"}},
+		}, map[string]any{
+			"type": "http", "name": "remote-http", "url": "https://mcp.example/rpc",
+			"headers": []any{map[string]any{"name": "Authorization", "value": "Bearer token"}},
+		}, map[string]any{
+			"type": "sse", "name": "remote-sse", "url": "https://mcp.example/sse",
 		}},
 	}})
 	created := decodeACP(t, decoder)
 	receivedConfig := <-factoryConfigs
-	if len(receivedConfig.MCPServers) != 1 || receivedConfig.MCPServers[0].Env["TOKEN"] != "secret" {
+	if len(receivedConfig.MCPServers) != 3 || receivedConfig.MCPServers[0].Env["TOKEN"] != "secret" ||
+		receivedConfig.MCPServers[1].Type != "http" || receivedConfig.MCPServers[1].Headers["Authorization"] != "Bearer token" ||
+		receivedConfig.MCPServers[2].Type != "sse" {
 		t.Fatalf("client MCP config was not forwarded: %#v", receivedConfig)
 	}
 	sessionID := created["result"].(map[string]any)["sessionId"].(string)
@@ -185,6 +196,25 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("ACP server did not stop at EOF")
+	}
+}
+
+func TestParseMCPServersRejectsInvalidWireValues(t *testing.T) {
+	tests := []string{
+		`[{"name":"missing-command"}]`,
+		`[{"type":"http","name":"bad-url","url":"file:///tmp/socket"}]`,
+		`[{"type":"sse","name":"bad-header","url":"https://example.com/sse","headers":[{"name":"Bad Header","value":"x"}]}]`,
+		`[{"type":"http","name":"bad-value","url":"https://example.com/mcp","headers":[{"name":"X-Test","value":"x\r\ny"}]}]`,
+		`[{"type":"websocket","name":"unknown"}]`,
+	}
+	for _, raw := range tests {
+		var params []mcpServerParam
+		if err := json.Unmarshal([]byte(raw), &params); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := parseMCPServers(params); err == nil {
+			t.Errorf("invalid MCP servers were accepted: %s", raw)
+		}
 	}
 }
 

@@ -425,7 +425,8 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		}
 		for _, remote := range sessionConfig.MCPServers {
 			sessionCfg.MCPServers[remote.Name] = config.MCPServerConfig{
-				Command: remote.Command, Args: remote.Args, Env: remote.Env,
+				Type: remote.Type, Command: remote.Command, Args: remote.Args, Env: remote.Env,
+				URL: remote.URL, Headers: remote.Headers,
 			}
 		}
 		mcpClients, err = startMCPServers(sessionCtx, sessionCfg, ws.Root(), registry, approver, statusOutput)

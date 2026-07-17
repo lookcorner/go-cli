@@ -145,8 +145,10 @@ replays completed user/agent text history while resume reconnects without
 replay. Prompts accept embedded text/resources plus validated base64 or remote
 HTTP(S) images; audio is not yet supported. Text streams as
 `agent_message_chunk`, while tools emit correlated `tool_call` and
-`tool_call_update` lifecycle events. Stdio MCP servers supplied by the client
-in `session/new` are merged with configured servers for that session. Default
+`tool_call_update` lifecycle events. Stdio, Streamable HTTP, and standalone SSE
+MCP servers supplied by the client in `session/new`, `session/load`, or
+`session/resume` are validated and merged with configured servers for that
+session. Default
 prompt approvals use ACP's bidirectional `session/request_permission`, linked
 to the actual tool call, so protocol stdin is never consumed by a CLI prompt.
 `--approval auto` and `--approval deny` remain available for clients that

@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -32,10 +34,29 @@ type SessionConfig struct {
 }
 
 type MCPServer struct {
+	Type    string
 	Name    string
 	Command string
 	Args    []string
 	Env     map[string]string
+	URL     string
+	Headers map[string]string
+}
+
+type mcpServerParam struct {
+	Type    string   `json:"type"`
+	Name    string   `json:"name"`
+	Command string   `json:"command"`
+	Args    []string `json:"args"`
+	Env     []struct {
+		Name  string `json:"name"`
+		Value string `json:"value"`
+	} `json:"env"`
+	URL     string `json:"url"`
+	Headers []struct {
+		Name  string `json:"name"`
+		Value string `json:"value"`
+	} `json:"headers"`
 }
 
 type Factory func(context.Context, SessionConfig, tools.Approver, io.Writer, io.Writer) (*agent.Runner, func(), error)
@@ -133,7 +154,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				"agentCapabilities": map[string]any{
 					"loadSession":         true,
 					"promptCapabilities":  map[string]any{"image": true, "audio": false, "embeddedContext": true},
-					"mcpCapabilities":     map[string]any{"http": false, "sse": false},
+					"mcpCapabilities":     map[string]any{"http": true, "sse": true},
 					"sessionCapabilities": map[string]any{"close": map[string]any{}, "list": map[string]any{}, "resume": map[string]any{}},
 					"auth":                map[string]any{},
 				},
@@ -599,37 +620,21 @@ func (s *Server) handleHunkQuery(ctx context.Context, incoming message) {
 
 func (s *Server) handleNewSession(ctx context.Context, incoming message) {
 	var params struct {
-		CWD        string `json:"cwd"`
-		MCPServers []struct {
-			Name    string   `json:"name"`
-			Command string   `json:"command"`
-			Args    []string `json:"args"`
-			Env     []struct {
-				Name  string `json:"name"`
-				Value string `json:"value"`
-			} `json:"env"`
-		} `json:"mcpServers"`
+		CWD        string           `json:"cwd"`
+		MCPServers []mcpServerParam `json:"mcpServers"`
 	}
 	if json.Unmarshal(incoming.Params, &params) != nil || params.CWD == "" {
 		s.respondError(incoming.ID, -32602, "cwd is required")
 		return
 	}
 	id := fmt.Sprintf("gork-%s-%d", time.Now().UTC().Format("20060102T150405.000000000Z"), s.nextSession.Add(1))
-	sessionConfig := SessionConfig{CWD: params.CWD, SessionID: id, MCPServers: make([]MCPServer, 0, len(params.MCPServers))}
-	for _, remote := range params.MCPServers {
-		if remote.Name == "" || remote.Command == "" {
-			s.respondError(incoming.ID, -32602, "stdio MCP servers require name and command")
-			return
-		}
-		env := make(map[string]string, len(remote.Env))
-		for _, entry := range remote.Env {
-			env[entry.Name] = entry.Value
-		}
-		sessionConfig.MCPServers = append(sessionConfig.MCPServers, MCPServer{
-			Name: remote.Name, Command: remote.Command, Args: remote.Args, Env: env,
-		})
+	servers, err := parseMCPServers(params.MCPServers)
+	if err != nil {
+		s.respondError(incoming.ID, -32602, err.Error())
+		return
 	}
-	_, err := s.startSession(ctx, id, sessionConfig, "")
+	sessionConfig := SessionConfig{CWD: params.CWD, SessionID: id, MCPServers: servers}
+	_, err = s.startSession(ctx, id, sessionConfig, "")
 	if err != nil {
 		s.respondError(incoming.ID, -32000, err.Error())
 		return
@@ -734,17 +739,9 @@ func (s *Server) handlePrompt(parent context.Context, incoming message) {
 
 func (s *Server) handleRestoreSession(ctx context.Context, incoming message, replay bool) {
 	var params struct {
-		SessionID  string `json:"sessionId"`
-		CWD        string `json:"cwd"`
-		MCPServers []struct {
-			Name    string   `json:"name"`
-			Command string   `json:"command"`
-			Args    []string `json:"args"`
-			Env     []struct {
-				Name  string `json:"name"`
-				Value string `json:"value"`
-			} `json:"env"`
-		} `json:"mcpServers"`
+		SessionID  string           `json:"sessionId"`
+		CWD        string           `json:"cwd"`
+		MCPServers []mcpServerParam `json:"mcpServers"`
 	}
 	if json.Unmarshal(incoming.Params, &params) != nil || params.SessionID == "" || params.CWD == "" {
 		s.respondError(incoming.ID, -32602, "sessionId and cwd are required")
@@ -780,23 +777,12 @@ func (s *Server) handleRestoreSession(ctx context.Context, incoming message, rep
 		s.respondError(incoming.ID, -32000, err.Error())
 		return
 	}
-	config := SessionConfig{
-		CWD: params.CWD, SessionID: params.SessionID, ResumePath: path,
-		MCPServers: make([]MCPServer, 0, len(params.MCPServers)),
+	servers, err := parseMCPServers(params.MCPServers)
+	if err != nil {
+		s.respondError(incoming.ID, -32602, err.Error())
+		return
 	}
-	for _, remote := range params.MCPServers {
-		if remote.Name == "" || remote.Command == "" {
-			s.respondError(incoming.ID, -32602, "stdio MCP servers require name and command")
-			return
-		}
-		env := make(map[string]string, len(remote.Env))
-		for _, entry := range remote.Env {
-			env[entry.Name] = entry.Value
-		}
-		config.MCPServers = append(config.MCPServers, MCPServer{
-			Name: remote.Name, Command: remote.Command, Args: remote.Args, Env: env,
-		})
-	}
+	config := SessionConfig{CWD: params.CWD, SessionID: params.SessionID, ResumePath: path, MCPServers: servers}
 	if _, err := s.startSession(ctx, params.SessionID, config, previous); err != nil {
 		s.respondError(incoming.ID, -32000, err.Error())
 		return
@@ -820,6 +806,58 @@ func (s *Server) handleRestoreSession(ctx context.Context, incoming message, rep
 		}
 	}
 	s.respond(incoming.ID, map[string]any{"sessionId": params.SessionID})
+}
+
+func parseMCPServers(params []mcpServerParam) ([]MCPServer, error) {
+	servers := make([]MCPServer, 0, len(params))
+	for _, param := range params {
+		if param.Name == "" {
+			return nil, errors.New("MCP servers require a name")
+		}
+		switch param.Type {
+		case "":
+			if param.Command == "" {
+				return nil, fmt.Errorf("stdio MCP server %q requires a command", param.Name)
+			}
+			env := make(map[string]string, len(param.Env))
+			for _, entry := range param.Env {
+				if entry.Name == "" {
+					return nil, fmt.Errorf("stdio MCP server %q has an empty environment name", param.Name)
+				}
+				env[entry.Name] = entry.Value
+			}
+			servers = append(servers, MCPServer{Name: param.Name, Command: param.Command, Args: param.Args, Env: env})
+		case "http", "sse":
+			endpoint, err := url.Parse(param.URL)
+			if err != nil || (endpoint.Scheme != "http" && endpoint.Scheme != "https") || endpoint.Host == "" {
+				return nil, fmt.Errorf("%s MCP server %q requires a valid HTTP(S) URL", param.Type, param.Name)
+			}
+			headers := make(map[string]string, len(param.Headers))
+			for _, header := range param.Headers {
+				if !validHTTPHeaderName(header.Name) || strings.ContainsAny(header.Value, "\r\n") {
+					return nil, fmt.Errorf("%s MCP server %q has an invalid header", param.Type, param.Name)
+				}
+				headers[http.CanonicalHeaderKey(header.Name)] = header.Value
+			}
+			servers = append(servers, MCPServer{Type: param.Type, Name: param.Name, URL: endpoint.String(), Headers: headers})
+		default:
+			return nil, fmt.Errorf("MCP server %q has unsupported type %q", param.Name, param.Type)
+		}
+	}
+	return servers, nil
+}
+
+func validHTTPHeaderName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, char := range name {
+		if char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9' || strings.ContainsRune("!#$%&'*+-.^_`|~", char) {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func (s *Server) closeSession(id string) {
