@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 )
@@ -125,6 +126,16 @@ func (r permissionRule) matches(action, detail string) bool {
 	}
 	if strings.EqualFold(r.action, "Grep") {
 		return action == "grep policy" && r.pattern.MatchString(detail)
+	}
+	if strings.EqualFold(r.action, "WebFetch") {
+		return action == "web fetch" && r.pattern.MatchString(detail)
+	}
+	if strings.EqualFold(r.action, "WebFetchDomain") {
+		if action != "web fetch" {
+			return false
+		}
+		parsed, err := url.Parse(detail)
+		return err == nil && r.pattern.MatchString(parsed.Hostname())
 	}
 	return strings.EqualFold(strings.ReplaceAll(r.action, "_", " "), strings.ReplaceAll(action, "_", " ")) && r.pattern.MatchString(detail)
 }

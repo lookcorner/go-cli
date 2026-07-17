@@ -162,6 +162,11 @@ tool = "bash"
 pattern = "git push *"
 ```
 
+The `web_fetch` tool retrieves bounded public HTTP(S) text after approval.
+Loopback, private, link-local, multicast and unspecified addresses are rejected
+both during URL validation and again when dialing (including redirects). Use a
+WebFetch permission with `pattern_mode = "domain"` for host-based rules.
+
 The Gork Build-compatible file surface includes `read_file`, `list_dir`,
 `grep`, and `search_replace`; text reads support positive or negative line
 offsets and use the original `LINE_NUMBER→LINE_CONTENT` format. The earlier

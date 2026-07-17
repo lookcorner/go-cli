@@ -728,13 +728,16 @@ func permissionRules(permission config.PermissionConfig, cliAllow, cliDeny []str
 		case "grep":
 			tool = "Grep"
 		case "webfetch":
-			return nil, nil, nil, fmt.Errorf("permission rule %d targets unsupported webfetch tool", index+1)
+			tool = "WebFetch"
 		default:
 			return nil, nil, nil, fmt.Errorf("permission rule %d has unknown tool %q", index+1, rule.Tool)
 		}
 		mode := strings.ToLower(strings.TrimSpace(rule.PatternMode))
-		if mode != "" && mode != "glob" {
+		if mode != "" && mode != "glob" && !(mode == "domain" && tool == "WebFetch") {
 			return nil, nil, nil, fmt.Errorf("permission rule %d uses unsupported pattern_mode %q", index+1, rule.PatternMode)
+		}
+		if mode == "domain" {
+			tool = "WebFetchDomain"
 		}
 		pattern := "*"
 		if rule.Pattern != nil {

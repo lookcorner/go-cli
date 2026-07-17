@@ -130,6 +130,7 @@ func NewRegistry(ws *workspace.Workspace, approver Approver) *Registry {
 		&searchReplaceTool{ws: ws, approver: approver},
 		&todoWriteTool{store: todos},
 		&updateGoalTool{store: goal},
+		&webFetchTool{approver: approver},
 	}
 	registry := &Registry{tools: make(map[string]Tool, len(items)), processes: processes, goal: goal}
 	for _, item := range items {
