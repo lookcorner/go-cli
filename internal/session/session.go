@@ -1,13 +1,17 @@
 package session
 
 import (
+	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
 )
+
+const maxSessionBytes = 64 << 20
 
 type Event struct {
 	Time time.Time `json:"time"`
@@ -23,11 +27,11 @@ type Logger struct {
 
 func NewLogger(dir string) (*Logger, error) {
 	if dir == "" {
-		cache, err := os.UserCacheDir()
+		var err error
+		dir, err = DefaultDir()
 		if err != nil {
-			return nil, fmt.Errorf("resolve cache directory: %w", err)
+			return nil, err
 		}
-		dir = filepath.Join(cache, "gork-go", "sessions")
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("create session directory: %w", err)
@@ -39,6 +43,112 @@ func NewLogger(dir string) (*Logger, error) {
 		return nil, fmt.Errorf("create session log: %w", err)
 	}
 	return &Logger{file: file, path: path}, nil
+}
+
+func DefaultDir() (string, error) {
+	cache, err := os.UserCacheDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve cache directory: %w", err)
+	}
+	return filepath.Join(cache, "gork-go", "sessions"), nil
+}
+
+// Resume opens an existing session log for append and returns the most recent
+// response ID from a completed model turn (a response with no pending tools).
+func Resume(path string) (*Logger, string, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, "", fmt.Errorf("stat session log: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return nil, "", errors.New("session log must be a regular, non-symlink file")
+	}
+	if info.Size() > maxSessionBytes {
+		return nil, "", fmt.Errorf("session log exceeds %d bytes", maxSessionBytes)
+	}
+	responseID, err := lastCompletedResponseID(path)
+	if err != nil {
+		return nil, "", err
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		return nil, "", fmt.Errorf("open session log for resume: %w", err)
+	}
+	logger := &Logger{file: file, path: path}
+	if err := logger.Append("session_resumed", map[string]any{"previous_response_id": responseID}); err != nil {
+		file.Close()
+		return nil, "", err
+	}
+	return logger, responseID, nil
+}
+
+func Latest(dir string) (string, error) {
+	if dir == "" {
+		var err error
+		dir, err = DefaultDir()
+		if err != nil {
+			return "", err
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", fmt.Errorf("read session directory: %w", err)
+	}
+	latest := ""
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".jsonl" {
+			continue
+		}
+		if entry.Name() > latest {
+			latest = entry.Name()
+		}
+	}
+	if latest == "" {
+		return "", errors.New("no session logs found")
+	}
+	return filepath.Join(dir, latest), nil
+}
+
+func lastCompletedResponseID(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("open session log: %w", err)
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64<<10), 8<<20)
+	last := ""
+	line := 0
+	for scanner.Scan() {
+		line++
+		var event struct {
+			Kind string          `json:"kind"`
+			Data json.RawMessage `json:"data"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			return "", fmt.Errorf("parse session line %d: %w", line, err)
+		}
+		if event.Kind != "model_response" {
+			continue
+		}
+		var data struct {
+			ResponseID    string `json:"response_id"`
+			ToolCallCount int    `json:"tool_call_count"`
+		}
+		if err := json.Unmarshal(event.Data, &data); err != nil {
+			return "", fmt.Errorf("parse model response on session line %d: %w", line, err)
+		}
+		if data.ResponseID != "" && data.ToolCallCount == 0 {
+			last = data.ResponseID
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("read session log: %w", err)
+	}
+	if last == "" {
+		return "", errors.New("session has no completed model response to resume")
+	}
+	return last, nil
 }
 
 func (l *Logger) Path() string { return l.path }

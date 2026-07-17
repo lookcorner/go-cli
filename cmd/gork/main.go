@@ -41,6 +41,7 @@ type options struct {
 	showVersion bool
 	interactive bool
 	previousID  string
+	resume      string
 }
 
 func main() {
@@ -66,6 +67,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	flags.BoolVar(&opts.showVersion, "version", false, "print version")
 	flags.BoolVar(&opts.interactive, "interactive", false, "start an interactive multi-turn session")
 	flags.StringVar(&opts.previousID, "previous-response-id", "", "continue a stored Responses API conversation")
+	flags.StringVar(&opts.resume, "resume", "", "resume a JSONL session path or 'latest'")
 	flags.Usage = func() {
 		fmt.Fprintf(stderr, "Usage: gork [flags] [prompt]\n\n")
 		flags.PrintDefaults()
@@ -130,7 +132,22 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if mode != tools.PermissionPrompt && mode != tools.PermissionAuto && mode != tools.PermissionDeny {
 		return fmt.Errorf("invalid --approval %q", opts.approval)
 	}
-	logger, err := session.NewLogger(opts.sessionDir)
+	if opts.resume != "" && opts.previousID != "" {
+		return errors.New("--resume and --previous-response-id cannot be used together")
+	}
+	var logger *session.Logger
+	if opts.resume != "" {
+		resumePath := opts.resume
+		if resumePath == "latest" {
+			resumePath, err = session.Latest(opts.sessionDir)
+			if err != nil {
+				return err
+			}
+		}
+		logger, opts.previousID, err = session.Resume(resumePath)
+	} else {
+		logger, err = session.NewLogger(opts.sessionDir)
+	}
 	if err != nil {
 		return err
 	}

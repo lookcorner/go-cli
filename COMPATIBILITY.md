@@ -12,7 +12,7 @@ Status values: **done**, **partial**, **planned**.
 | Workspace file tools | done | Read, list, regex search, atomic write and exact-text edit |
 | Tool permissions | partial | Prompt/auto/deny modes are present; command-prefix and managed policy rules remain |
 | Shell execution | partial | Timeout, combined capped output and workspace CWD; persistent PTY/background process support remains |
-| Session persistence | partial | Durable JSONL event records and response-ID continuation; local restore, rewind, branching and migration remain |
+| Session persistence | partial | Durable JSONL events, latest/path resume and completed-turn response-ID continuation work; local transcript reconstruction, rewind, branching and migrations remain |
 | Configuration | partial | JSON, environment and CLI layers; TOML compatibility and managed config remain |
 | Authentication | partial | API-key bearer auth; xAI OAuth/device flow and refresh storage remain |
 | Chat Completions backend | planned | Responses backend is implemented first |

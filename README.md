@@ -81,6 +81,17 @@ they are not yet kernel-sandboxed; approval remains a security boundary.
 Each run is recorded as a mode-0600 JSONL event log under the user cache
 directory. `--session-dir` selects another location.
 
+Resume the most recent completed turn, or a specific session log, with:
+
+```sh
+./gork --interactive --resume latest --workspace .
+./gork --resume /path/to/session.jsonl "continue the implementation"
+```
+
+Resume refuses symlinks, oversized logs, malformed events, and sessions whose
+only model response still has pending tool calls. This prevents a new prompt
+from being attached to a half-finished tool transaction.
+
 ## MCP servers
 
 Stdio MCP servers can be configured in the same JSON file. Gork Go performs the
