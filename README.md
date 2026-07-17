@@ -103,7 +103,9 @@ The built-in tools include `read_file`, `list_files`, `search_files`,
 `write_file`, `edit_file`, and `shell`. The Gork Build-compatible command
 surface is `run_terminal_cmd`, `get_task_output`, and `kill_task`, including
 foreground exit-status output, background task IDs, multi-task polling/waiting,
-and process-group termination. The earlier aliases
+process-group termination, and persistent cwd/environment/function/alias state
+between foreground calls. Background commands inherit a state snapshot without
+changing the foreground session when they finish. The earlier aliases
 `start_background_command`, `get_background_command_output`, and
 `kill_background_command` remain available. Output is captured in a bounded
 tail buffer, process groups are terminated on request, and every remaining

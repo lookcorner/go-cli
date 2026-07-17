@@ -3,6 +3,8 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -59,6 +61,67 @@ func TestGorkTerminalToolBackgroundTaskProtocol(t *testing.T) {
 	}
 	if !strings.Contains(output, "exited successfully") || !strings.Contains(output, "done") {
 		t.Fatalf("unexpected task output: %s", output)
+	}
+}
+
+func TestPersistentShellDirectoryAndEnvironment(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("persistent shell fixture is Unix-specific")
+	}
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "nested"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewProcessManager(ws, PromptApprover{Mode: PermissionAuto})
+	defer manager.Close()
+	tool := &runTerminalCommandTool{manager: manager}
+	if _, err := tool.Execute(context.Background(), json.RawMessage(
+		`{"command":"cd nested; export GORK_STATE_TEST=preserved","description":"change shell state"}`,
+	)); err != nil {
+		t.Fatal(err)
+	}
+	output, err := tool.Execute(context.Background(), json.RawMessage(
+		`{"command":"printf '%s|%s' \"$PWD\" \"$GORK_STATE_TEST\"","description":"read shell state"}`,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output, filepath.Join(root, "nested")+"|preserved") {
+		t.Fatalf("shell state was not preserved: %s", output)
+	}
+	if _, err := tool.Execute(context.Background(), json.RawMessage(
+		`{"command":"gork_state_fn() { printf function-ok; }; alias gork_state_alias='printf alias-ok'","description":"define shell function and alias"}`,
+	)); err != nil {
+		t.Fatal(err)
+	}
+	definitions, err := tool.Execute(context.Background(), json.RawMessage(
+		`{"command":"gork_state_fn; printf '|'; gork_state_alias","description":"use shell function and alias"}`,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(definitions, "function-ok|alias-ok") {
+		t.Fatalf("shell definitions were not preserved: %s", definitions)
+	}
+	started, err := tool.Execute(context.Background(), json.RawMessage(
+		`{"command":"printf '%s|%s' \"$PWD\" \"$GORK_STATE_TEST\"","description":"inherit state in background","is_background":true}`,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(started, "task_1") {
+		t.Fatalf("unexpected task: %s", started)
+	}
+	background, err := manager.WaitOutput(context.Background(), "task_1", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(background, filepath.Join(root, "nested")+"|preserved") {
+		t.Fatalf("background task did not inherit shell state: %s", background)
 	}
 }
 

@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -21,12 +23,16 @@ import (
 const backgroundOutputBytes = 1 << 20
 
 type ProcessManager struct {
-	ws        *workspace.Workspace
-	approver  Approver
-	nextID    atomic.Uint64
-	mu        sync.Mutex
-	processes map[string]*backgroundProcess
-	closed    bool
+	ws           *workspace.Workspace
+	approver     Approver
+	nextID       atomic.Uint64
+	mu           sync.Mutex
+	processes    map[string]*backgroundProcess
+	closed       bool
+	stateMu      sync.Mutex
+	currentDir   string
+	environment  []string
+	shellPrelude string
 }
 
 type backgroundProcess struct {
@@ -41,7 +47,10 @@ type backgroundProcess struct {
 }
 
 func NewProcessManager(ws *workspace.Workspace, approver Approver) *ProcessManager {
-	return &ProcessManager{ws: ws, approver: approver, processes: make(map[string]*backgroundProcess)}
+	return &ProcessManager{
+		ws: ws, approver: approver, processes: make(map[string]*backgroundProcess),
+		currentDir: ws.Root(), environment: os.Environ(),
+	}
 }
 
 func (m *ProcessManager) Start(ctx context.Context, command string) (string, error) {
@@ -56,7 +65,7 @@ func (m *ProcessManager) StartWithTimeout(ctx context.Context, command string, t
 		return "", err
 	}
 	cmd := shellCommand(command)
-	cmd.Dir = m.ws.Root()
+	cmd.Dir, cmd.Env = m.shellSnapshot()
 	configureProcessGroup(cmd)
 	buffer := &tailBuffer{limit: backgroundOutputBytes}
 	cmd.Stdout = buffer
@@ -111,8 +120,13 @@ func (m *ProcessManager) RunForeground(ctx context.Context, command string, time
 	if err := m.approver.Approve(ctx, "run terminal command", command); err != nil {
 		return "", err
 	}
-	cmd := shellCommand(command)
-	cmd.Dir = m.ws.Root()
+	m.stateMu.Lock()
+	defer m.stateMu.Unlock()
+	cmd, capture, err := m.persistentShellCommand(command)
+	if err != nil {
+		return "", err
+	}
+	defer capture.cleanup()
 	configureProcessGroup(cmd)
 	buffer := &tailBuffer{limit: backgroundOutputBytes}
 	cmd.Stdout = buffer
@@ -142,11 +156,176 @@ func (m *ProcessManager) RunForeground(ctx context.Context, command string, time
 		waitErr = terminateAndWait(cmd, wait)
 	}
 	_ = waitErr
+	m.applyShellCapture(capture)
 	output := strings.TrimSpace(buffer.String())
 	if output == "" {
 		return "exit: " + status, nil
 	}
 	return "exit: " + status + "\n" + output, nil
+}
+
+type shellCapture struct {
+	cwdPath     string
+	envPath     string
+	scriptPath  string
+	commandPath string
+}
+
+func (c shellCapture) cleanup() {
+	_ = os.Remove(c.cwdPath)
+	_ = os.Remove(c.envPath)
+	_ = os.Remove(c.scriptPath)
+	_ = os.Remove(c.commandPath)
+}
+
+func (m *ProcessManager) shellSnapshot() (string, []string) {
+	m.stateMu.Lock()
+	defer m.stateMu.Unlock()
+	return m.currentDir, setEnvironment(m.environment, map[string]string{
+		"GORK_AGENT": "1", "TERM": "dumb", "NO_COLOR": "1", "FORCE_COLOR": "0",
+	})
+}
+
+func (m *ProcessManager) persistentShellCommand(command string) (*exec.Cmd, shellCapture, error) {
+	capture := shellCapture{}
+	if runtime.GOOS == "windows" {
+		cmd := shellCommand(command)
+		cmd.Dir = m.currentDir
+		cmd.Env = append([]string(nil), m.environment...)
+		return cmd, capture, nil
+	}
+	cwdFile, err := os.CreateTemp("", "gork-shell-cwd-*")
+	if err != nil {
+		return nil, capture, fmt.Errorf("create shell cwd capture: %w", err)
+	}
+	capture.cwdPath = cwdFile.Name()
+	if err := cwdFile.Close(); err != nil {
+		capture.cleanup()
+		return nil, capture, err
+	}
+	envFile, err := os.CreateTemp("", "gork-shell-env-*")
+	if err != nil {
+		capture.cleanup()
+		return nil, capture, fmt.Errorf("create shell environment capture: %w", err)
+	}
+	capture.envPath = envFile.Name()
+	if err := envFile.Close(); err != nil {
+		capture.cleanup()
+		return nil, capture, err
+	}
+	scriptFile, err := os.CreateTemp("", "gork-shell-script-*")
+	if err != nil {
+		capture.cleanup()
+		return nil, capture, fmt.Errorf("create shell script capture: %w", err)
+	}
+	capture.scriptPath = scriptFile.Name()
+	if err := scriptFile.Close(); err != nil {
+		capture.cleanup()
+		return nil, capture, err
+	}
+	commandFile, err := os.CreateTemp("", "gork-shell-command-*")
+	if err != nil {
+		capture.cleanup()
+		return nil, capture, fmt.Errorf("create shell command file: %w", err)
+	}
+	capture.commandPath = commandFile.Name()
+	if _, err := commandFile.WriteString(command); err != nil {
+		_ = commandFile.Close()
+		capture.cleanup()
+		return nil, capture, fmt.Errorf("write shell command file: %w", err)
+	}
+	if err := commandFile.Close(); err != nil {
+		capture.cleanup()
+		return nil, capture, err
+	}
+	dumpScript := ":"
+	bootstrap := ""
+	switch filepath.Base(selectedShell()) {
+	case "bash":
+		dumpScript = "{ declare -f; alias -p; }"
+		bootstrap = "shopt -s expand_aliases\n"
+	case "zsh":
+		dumpScript = "{ typeset -f; alias -L; }"
+	}
+	trap := "trap '__gork_status=$?; pwd > \"$GORK_GO_STATE_CWD\"; /usr/bin/env -0 > \"$GORK_GO_STATE_ENV\"; " + dumpScript + " > \"$GORK_GO_STATE_SCRIPT\"; trap - EXIT; exit \"$__gork_status\"' EXIT\n"
+	wrapped := bootstrap + m.shellPrelude + "\n" + trap + ". \"$GORK_GO_COMMAND_FILE\""
+	cmd := shellCommand(wrapped)
+	cmd.Dir = m.currentDir
+	cmd.Env = setEnvironment(m.environment, map[string]string{
+		"GORK_GO_STATE_CWD":    capture.cwdPath,
+		"GORK_GO_STATE_ENV":    capture.envPath,
+		"GORK_GO_STATE_SCRIPT": capture.scriptPath,
+		"GORK_GO_COMMAND_FILE": capture.commandPath,
+		"GORK_AGENT":           "1",
+		"TERM":                 "dumb",
+		"NO_COLOR":             "1",
+		"FORCE_COLOR":          "0",
+	})
+	return cmd, capture, nil
+}
+
+func (m *ProcessManager) applyShellCapture(capture shellCapture) {
+	if capture.cwdPath == "" || capture.envPath == "" {
+		return
+	}
+	if data, err := readShellCapture(capture.cwdPath, 64<<10); err == nil {
+		cwd := strings.TrimSpace(string(data))
+		if info, statErr := os.Stat(cwd); cwd != "" && statErr == nil && info.IsDir() {
+			m.currentDir = cwd
+		}
+	}
+	if data, err := readShellCapture(capture.envPath, 4<<20); err == nil {
+		entries := strings.Split(string(data), "\x00")
+		filtered := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			if entry == "" || strings.HasPrefix(entry, "GORK_GO_STATE_CWD=") || strings.HasPrefix(entry, "GORK_GO_STATE_ENV=") || strings.HasPrefix(entry, "GORK_GO_STATE_SCRIPT=") || strings.HasPrefix(entry, "GORK_GO_COMMAND_FILE=") {
+				continue
+			}
+			filtered = append(filtered, entry)
+		}
+		if len(filtered) > 0 {
+			m.environment = filtered
+		}
+	}
+	if data, err := readShellCapture(capture.scriptPath, 4<<20); err == nil {
+		m.shellPrelude = string(data)
+	}
+}
+
+func readShellCapture(path string, limit int64) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, errors.New("shell state capture exceeds size limit")
+	}
+	return data, nil
+}
+
+func setEnvironment(base []string, values map[string]string) []string {
+	result := append([]string(nil), base...)
+	indexes := make(map[string]int, len(result))
+	for index, entry := range result {
+		if key, _, ok := strings.Cut(entry, "="); ok {
+			indexes[key] = index
+		}
+	}
+	for key, value := range values {
+		entry := key + "=" + value
+		if index, exists := indexes[key]; exists {
+			result[index] = entry
+		} else {
+			indexes[key] = len(result)
+			result = append(result, entry)
+		}
+	}
+	return result
 }
 
 func terminateAndWait(cmd *exec.Cmd, wait <-chan error) error {
@@ -307,7 +486,16 @@ func shellCommand(command string) *exec.Cmd {
 	if runtime.GOOS == "windows" {
 		return exec.Command("cmd.exe", "/C", command)
 	}
-	return exec.Command("/bin/sh", "-lc", command)
+	return exec.Command(selectedShell(), "-lc", command)
+}
+
+func selectedShell() string {
+	shell := os.Getenv("SHELL")
+	base := filepath.Base(shell)
+	if (base != "bash" && base != "zsh") || shell == "" {
+		shell = "/bin/sh"
+	}
+	return shell
 }
 
 type tailBuffer struct {
