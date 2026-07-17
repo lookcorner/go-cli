@@ -237,7 +237,9 @@ The Gork Build-compatible file surface includes `read_file`, `list_dir`,
 `grep`, and `search_replace`; text reads support positive or negative line
 offsets and use the original `LINE_NUMBER→LINE_CONTENT` format. The earlier
 `list_files`, `search_files`, `write_file`, `edit_file`, and `shell` tools remain
-available. `todo_write` maintains the ordered task list across tool calls with
+available. `search_replace` preserves CRLF files and safely matches common
+rich-text typography such as smart quotes, em dashes, ellipses, and
+non-breaking spaces. `todo_write` maintains the ordered task list across tool calls with
 replace, merge, partial-status-update, and duplicate-ID behavior matching the
 reference runtime. `update_goal` reports progress and terminal state when
 `--goal` is active and rejects calls outside goal mode. The compatible command

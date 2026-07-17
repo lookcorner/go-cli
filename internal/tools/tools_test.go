@@ -50,6 +50,79 @@ func TestEditFileRequiresUniqueMatch(t *testing.T) {
 	}
 }
 
+func TestEditFileUnicodeTypographyFallback(t *testing.T) {
+	for name, test := range map[string]struct {
+		content string
+		oldText string
+		newText string
+		want    string
+	}{
+		"smart quotes": {"say \u201chello\u201d\n", `"hello"`, `"goodbye"`, "say \"goodbye\"\n"},
+		"em dash":      {"foo\u2014bar\n", "foo--bar", "foo-bar", "foo-bar\n"},
+		"nbsp":         {"hello\u00a0world\n", "hello world", "hello_world", "hello_world\n"},
+		"ellipsis":     {"wait\u2026\n", "wait...", "done", "done\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "sample.txt")
+			if err := os.WriteFile(path, []byte(test.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			ws, err := workspace.Open(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tool := editFileTool{ws: ws, approver: PromptApprover{Mode: PermissionAuto}}
+			raw, _ := json.Marshal(map[string]any{"path": "sample.txt", "old_text": test.oldText, "new_text": test.newText})
+			result, err := tool.Execute(context.Background(), raw)
+			if err != nil || !strings.Contains(result, "Unicode normalization") {
+				t.Fatalf("normalized edit result=%q err=%v", result, err)
+			}
+			data, err := os.ReadFile(path)
+			if err != nil || string(data) != test.want {
+				t.Fatalf("content=%q want=%q err=%v", data, test.want, err)
+			}
+		})
+	}
+}
+
+func TestEditFilePreservesCRLF(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "sample.txt")
+	if err := os.WriteFile(path, []byte("first\r\nsecond\r\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool := editFileTool{ws: ws, approver: PromptApprover{Mode: PermissionAuto}}
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"path":"sample.txt","old_text":"first\nsecond","new_text":"updated\nlines"}`)); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != "updated\r\nlines\r\n" {
+		t.Fatalf("CRLF was not preserved: %q err=%v", data, err)
+	}
+}
+
+func TestEditFileRejectsPartialUnicodeExpansion(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "sample.txt")
+	if err := os.WriteFile(path, []byte("before\u2014after\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool := editFileTool{ws: ws, approver: PromptApprover{Mode: PermissionAuto}}
+	_, err = tool.Execute(context.Background(), json.RawMessage(`{"path":"sample.txt","old_text":"-","new_text":"x"}`))
+	if err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("partial em-dash match should fail closed: %v", err)
+	}
+}
+
 func TestRegistryReplaceAtomicallyUpdatesDefinitions(t *testing.T) {
 	ws, err := workspace.Open(t.TempDir())
 	if err != nil {

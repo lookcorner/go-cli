@@ -631,7 +631,22 @@ func (t *editFileTool) Execute(ctx context.Context, raw json.RawMessage) (string
 	if len(data) > maxWriteBytes || !utf8.Valid(data) {
 		return "", fmt.Errorf("file %q is too large or is not UTF-8", args.Path)
 	}
-	count := strings.Count(string(data), args.OldText)
+	original := string(data)
+	hasCRLF := strings.Contains(original, "\r\n")
+	matchText := original
+	if hasCRLF {
+		matchText = strings.ReplaceAll(matchText, "\r\n", "\n")
+	}
+	count := strings.Count(matchText, args.OldText)
+	var normalized []normalizedMatch
+	if count == 0 {
+		var ambiguous bool
+		normalized, ambiguous = findNormalizedMatches(matchText, args.OldText)
+		if ambiguous {
+			return "", errors.New("old_text has an ambiguous Unicode-normalized match; provide more ASCII context")
+		}
+		count = len(normalized)
+	}
 	if count == 0 {
 		return "", errors.New("old_text was not found")
 	}
@@ -641,11 +656,22 @@ func (t *editFileTool) Execute(ctx context.Context, raw json.RawMessage) (string
 	if err := t.approver.Approve(ctx, "edit_file", fmt.Sprintf("%s (%d replacement(s))", t.ws.Relative(path), count)); err != nil {
 		return "", err
 	}
-	replacements := 1
-	if args.ReplaceAll {
-		replacements = -1
+	updated := ""
+	if len(normalized) > 0 {
+		if !args.ReplaceAll {
+			normalized = normalized[:1]
+		}
+		updated = replaceNormalizedMatches(matchText, normalized, args.NewText)
+	} else {
+		replacements := 1
+		if args.ReplaceAll {
+			replacements = -1
+		}
+		updated = strings.Replace(matchText, args.OldText, args.NewText, replacements)
 	}
-	updated := strings.Replace(string(data), args.OldText, args.NewText, replacements)
+	if hasCRLF {
+		updated = strings.ReplaceAll(strings.ReplaceAll(updated, "\r\n", "\n"), "\n", "\r\n")
+	}
 	info, err := os.Stat(path)
 	if err != nil {
 		return "", err
@@ -653,7 +679,11 @@ func (t *editFileTool) Execute(ctx context.Context, raw json.RawMessage) (string
 	if err := atomicWrite(path, []byte(updated), info.Mode().Perm()); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("edited %s (%d replacement(s))", t.ws.Relative(path), count), nil
+	method := ""
+	if len(normalized) > 0 {
+		method = " via Unicode normalization"
+	}
+	return fmt.Sprintf("edited %s (%d replacement(s)%s)", t.ws.Relative(path), count, method), nil
 }
 
 func atomicWrite(path string, data []byte, mode os.FileMode) error {
