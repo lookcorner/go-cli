@@ -33,6 +33,7 @@ type options struct {
 	workspace   string
 	model       string
 	baseURL     string
+	backend     string
 	system      string
 	approval    string
 	sessionDir  string
@@ -59,6 +60,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	flags.StringVar(&opts.workspace, "workspace", ".", "workspace directory")
 	flags.StringVar(&opts.model, "model", "", "model ID (or GORK_MODEL)")
 	flags.StringVar(&opts.baseURL, "base-url", "", "Responses-compatible API base URL")
+	flags.StringVar(&opts.backend, "backend", "", "model API backend: responses or chat_completions")
 	flags.StringVar(&opts.system, "system", "", "additional agent instructions")
 	flags.StringVar(&opts.approval, "approval", "prompt", "write/shell approval: prompt, auto, or deny")
 	flags.StringVar(&opts.sessionDir, "session-dir", "", "session JSONL directory")
@@ -89,6 +91,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 	if opts.baseURL != "" {
 		cfg.BaseURL = strings.TrimRight(opts.baseURL, "/")
+	}
+	if opts.backend != "" {
+		cfg.Backend = opts.backend
 	}
 	if opts.system != "" {
 		cfg.SystemPrompt = opts.system
@@ -135,6 +140,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if opts.resume != "" && opts.previousID != "" {
 		return errors.New("--resume and --previous-response-id cannot be used together")
 	}
+	if opts.resume != "" && cfg.Backend != "responses" {
+		return fmt.Errorf("--resume requires the responses backend; %s history is process-local", cfg.Backend)
+	}
 	var logger *session.Logger
 	if opts.resume != "" {
 		resumePath := opts.resume
@@ -162,7 +170,15 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 
 	httpClient := &http.Client{Timeout: cfg.HTTPTimeout}
-	client := api.NewClient(cfg.BaseURL, cfg.APIKey, httpClient)
+	var client agent.ResponseStreamer
+	switch cfg.Backend {
+	case "responses":
+		client = api.NewClient(cfg.BaseURL, cfg.APIKey, httpClient)
+	case "chat_completions":
+		client = api.NewChatClient(cfg.BaseURL, cfg.APIKey, httpClient)
+	default:
+		return fmt.Errorf("unsupported backend %q", cfg.Backend)
+	}
 	approver := tools.PromptApprover{Mode: mode, Input: inputReader, Output: stderr}
 	registry := tools.NewRegistry(ws, approver)
 	if len(skillCatalog.Names()) > 0 {

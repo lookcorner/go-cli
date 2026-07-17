@@ -1,0 +1,258 @@
+package api
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"sort"
+	"strings"
+	"sync"
+	"sync/atomic"
+)
+
+type ChatClient struct {
+	baseURL string
+	apiKey  string
+	http    *http.Client
+	mu      sync.Mutex
+	history []chatMessage
+	nextID  atomic.Uint64
+}
+
+type chatMessage struct {
+	Role       string         `json:"role"`
+	Content    string         `json:"content,omitempty"`
+	ToolCalls  []chatToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string         `json:"tool_call_id,omitempty"`
+}
+
+type chatToolCall struct {
+	ID       string       `json:"id"`
+	Type     string       `json:"type"`
+	Function chatFunction `json:"function"`
+}
+
+type chatFunction struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+type chatToolDefinition struct {
+	Type     string `json:"type"`
+	Function struct {
+		Name        string         `json:"name"`
+		Description string         `json:"description"`
+		Parameters  map[string]any `json:"parameters"`
+		Strict      bool           `json:"strict,omitempty"`
+	} `json:"function"`
+}
+
+func NewChatClient(baseURL, apiKey string, httpClient *http.Client) *ChatClient {
+	return &ChatClient{baseURL: strings.TrimRight(baseURL, "/"), apiKey: apiKey, http: httpClient}
+}
+
+func (c *ChatClient) StreamResponse(ctx context.Context, request ResponseRequest, onText func(string)) (StreamResult, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	history := append([]chatMessage(nil), c.history...)
+	for _, item := range request.Input {
+		switch item.Type {
+		case "message":
+			content, ok := item.Content.(string)
+			if !ok {
+				encoded, _ := json.Marshal(item.Content)
+				content = string(encoded)
+			}
+			history = append(history, chatMessage{Role: item.Role, Content: content})
+		case "function_call_output":
+			history = append(history, chatMessage{Role: "tool", Content: item.Output, ToolCallID: item.CallID})
+		default:
+			return StreamResult{}, fmt.Errorf("chat backend does not support input item type %q", item.Type)
+		}
+	}
+	messages := make([]chatMessage, 0, len(history)+1)
+	if request.Instructions != "" {
+		messages = append(messages, chatMessage{Role: "system", Content: request.Instructions})
+	}
+	messages = append(messages, history...)
+	definitions := make([]chatToolDefinition, 0, len(request.Tools))
+	for _, definition := range request.Tools {
+		var converted chatToolDefinition
+		converted.Type = "function"
+		converted.Function.Name = definition.Name
+		converted.Function.Description = definition.Description
+		converted.Function.Parameters = definition.Parameters
+		converted.Function.Strict = definition.Strict
+		definitions = append(definitions, converted)
+	}
+	payload := map[string]any{
+		"model": request.Model, "messages": messages, "stream": true,
+		"stream_options": map[string]any{"include_usage": true},
+		"tools":          definitions, "tool_choice": "auto", "parallel_tool_calls": request.ParallelToolCalls,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return StreamResult{}, fmt.Errorf("encode chat request: %w", err)
+	}
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return StreamResult{}, fmt.Errorf("build chat request: %w", err)
+	}
+	httpRequest.Header.Set("Authorization", "Bearer "+c.apiKey)
+	httpRequest.Header.Set("Content-Type", "application/json")
+	httpRequest.Header.Set("Accept", "text/event-stream")
+	httpRequest.Header.Set("User-Agent", "gork-go/0.1")
+	resp, err := c.http.Do(httpRequest)
+	if err != nil {
+		return StreamResult{}, fmt.Errorf("send chat request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		limited, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		return StreamResult{}, fmt.Errorf("chat API returned %s: %s", resp.Status, strings.TrimSpace(string(limited)))
+	}
+	var result StreamResult
+	if strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
+		result, err = parseChatSSE(resp.Body, onText)
+	} else {
+		result, err = parseChatJSON(resp.Body, onText)
+	}
+	if err != nil {
+		return StreamResult{}, err
+	}
+	if result.ResponseID == "" {
+		result.ResponseID = fmt.Sprintf("chat_%d", c.nextID.Add(1))
+	}
+	assistant := chatMessage{Role: "assistant", Content: result.Text}
+	for _, call := range result.ToolCalls {
+		assistant.ToolCalls = append(assistant.ToolCalls, chatToolCall{
+			ID: call.CallID, Type: "function",
+			Function: chatFunction{Name: call.Name, Arguments: string(call.Arguments)},
+		})
+	}
+	history = append(history, assistant)
+	c.history = history
+	return result, nil
+}
+
+type chatChunk struct {
+	ID      string `json:"id"`
+	Choices []struct {
+		Delta struct {
+			Content   string `json:"content"`
+			ToolCalls []struct {
+				Index    int    `json:"index"`
+				ID       string `json:"id"`
+				Function struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				} `json:"function"`
+			} `json:"tool_calls"`
+		} `json:"delta"`
+	} `json:"choices"`
+}
+
+type chatCallBuilder struct {
+	id        string
+	name      string
+	arguments strings.Builder
+}
+
+func parseChatSSE(reader io.Reader, onText func(string)) (StreamResult, error) {
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 64<<10), 8<<20)
+	result := StreamResult{}
+	builders := make(map[int]*chatCallBuilder)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if data == "" || data == "[DONE]" {
+			continue
+		}
+		var chunk chatChunk
+		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+			return StreamResult{}, fmt.Errorf("decode chat SSE chunk: %w", err)
+		}
+		if chunk.ID != "" {
+			result.ResponseID = chunk.ID
+		}
+		for _, choice := range chunk.Choices {
+			if choice.Delta.Content != "" {
+				result.Text += choice.Delta.Content
+				if onText != nil {
+					onText(choice.Delta.Content)
+				}
+			}
+			for _, call := range choice.Delta.ToolCalls {
+				builder := builders[call.Index]
+				if builder == nil {
+					builder = &chatCallBuilder{}
+					builders[call.Index] = builder
+				}
+				if call.ID != "" {
+					builder.id = call.ID
+				}
+				if call.Function.Name != "" {
+					builder.name = call.Function.Name
+				}
+				builder.arguments.WriteString(call.Function.Arguments)
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return StreamResult{}, fmt.Errorf("read chat stream: %w", err)
+	}
+	indexes := make([]int, 0, len(builders))
+	for index := range builders {
+		indexes = append(indexes, index)
+	}
+	sort.Ints(indexes)
+	for _, index := range indexes {
+		builder := builders[index]
+		arguments := builder.arguments.String()
+		if arguments == "" {
+			arguments = "{}"
+		}
+		result.ToolCalls = append(result.ToolCalls, ToolCall{
+			ID: builder.id, CallID: builder.id, Name: builder.name, Arguments: json.RawMessage(arguments),
+		})
+	}
+	return result, nil
+}
+
+func parseChatJSON(reader io.Reader, onText func(string)) (StreamResult, error) {
+	var response struct {
+		ID      string `json:"id"`
+		Choices []struct {
+			Message chatMessage `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.NewDecoder(reader).Decode(&response); err != nil {
+		return StreamResult{}, fmt.Errorf("decode chat response: %w", err)
+	}
+	result := StreamResult{ResponseID: response.ID}
+	for _, choice := range response.Choices {
+		result.Text += choice.Message.Content
+		if onText != nil && choice.Message.Content != "" {
+			onText(choice.Message.Content)
+		}
+		for _, call := range choice.Message.ToolCalls {
+			arguments := call.Function.Arguments
+			if arguments == "" {
+				arguments = "{}"
+			}
+			result.ToolCalls = append(result.ToolCalls, ToolCall{
+				ID: call.ID, CallID: call.ID, Name: call.Function.Name, Arguments: json.RawMessage(arguments),
+			})
+		}
+	}
+	return result, nil
+}

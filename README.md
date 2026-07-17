@@ -43,6 +43,13 @@ corresponding user config directory on other platforms.
 }
 ```
 
+The default model transport is the Responses API. For OpenAI-compatible
+providers that only expose Chat Completions, use `--backend chat_completions`
+or set `GORK_BACKEND=chat_completions`. The adapter preserves local multi-turn
+message history, streams text, reassembles incremental function-call arguments,
+and feeds tool results back as `tool` messages. Cross-process `--resume` needs
+server-side response IDs and is therefore limited to the Responses backend.
+
 API keys may be put in the config for compatibility, but environment variables
 are preferred so secrets are not stored in a plain-text file.
 

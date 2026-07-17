@@ -16,6 +16,7 @@ type Config struct {
 	APIKey       string                     `json:"api_key,omitempty"`
 	BaseURL      string                     `json:"base_url,omitempty"`
 	Model        string                     `json:"model,omitempty"`
+	Backend      string                     `json:"backend,omitempty"`
 	SystemPrompt string                     `json:"system_prompt,omitempty"`
 	MaxSteps     int                        `json:"max_steps,omitempty"`
 	MCPServers   map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
@@ -37,6 +38,7 @@ type fileConfig struct {
 	APIKey       string                     `json:"api_key,omitempty"`
 	BaseURL      string                     `json:"base_url,omitempty"`
 	Model        string                     `json:"model,omitempty"`
+	Backend      string                     `json:"backend,omitempty"`
 	SystemPrompt string                     `json:"system_prompt,omitempty"`
 	MaxSteps     int                        `json:"max_steps,omitempty"`
 	HTTPTimeout  string                     `json:"http_timeout,omitempty"`
@@ -46,6 +48,7 @@ type fileConfig struct {
 func Load(path string) (Config, error) {
 	cfg := Config{
 		BaseURL:     defaultBaseURL,
+		Backend:     "responses",
 		MaxSteps:    20,
 		HTTPTimeout: 10 * time.Minute,
 	}
@@ -74,6 +77,9 @@ func Load(path string) (Config, error) {
 		}
 		if disk.Model != "" {
 			cfg.Model = disk.Model
+		}
+		if disk.Backend != "" {
+			cfg.Backend = disk.Backend
 		}
 		if disk.SystemPrompt != "" {
 			cfg.SystemPrompt = disk.SystemPrompt
@@ -106,6 +112,9 @@ func applyEnv(cfg *Config) {
 	if value := os.Getenv("GORK_MODEL"); value != "" {
 		cfg.Model = value
 	}
+	if value := os.Getenv("GORK_BACKEND"); value != "" {
+		cfg.Backend = value
+	}
 }
 
 func firstEnv(names ...string) string {
@@ -131,6 +140,9 @@ func (c Config) Validate() error {
 	}
 	if c.Model == "" {
 		return errors.New("missing model: pass --model or set GORK_MODEL")
+	}
+	if c.Backend != "responses" && c.Backend != "chat_completions" {
+		return fmt.Errorf("unsupported backend %q: use responses or chat_completions", c.Backend)
 	}
 	if c.BaseURL == "" {
 		return errors.New("missing API base URL")

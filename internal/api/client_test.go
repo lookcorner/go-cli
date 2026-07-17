@@ -1,22 +1,30 @@
 package api
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
 
 func TestParseSSETextAndToolCall(t *testing.T) {
+	toolItem := map[string]any{
+		"type": "function_call", "id": "fc_1", "call_id": "call_1",
+		"name": "read_file", "arguments": "{\"path\":\"README.md\"}",
+	}
 	stream := strings.Join([]string{
-		`event: response.output_text.delta`,
-		`data: {"type":"response.output_text.delta","delta":"hello "}`,
-		``,
-		`data: {"type":"response.output_text.delta","delta":"world"}`,
-		``,
-		`data: {"type":"response.output_item.done","item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"read_file","arguments":"{\"path\":\"README.md\"}"}}`,
-		``,
-		`data: {"type":"response.completed","response":{"id":"resp_1","output":[{"type":"function_call","id":"fc_1","call_id":"call_1","name":"read_file","arguments":"{\"path\":\"README.md\"}"}]}}`,
-		``,
-		`data: [DONE]`,
+		"event: response.output_text.delta",
+		sseLine(t, map[string]any{"type": "response.output_text.delta", "delta": "hello "}),
+		"",
+		sseLine(t, map[string]any{"type": "response.output_text.delta", "delta": "world"}),
+		"",
+		sseLine(t, map[string]any{"type": "response.output_item.done", "item": toolItem}),
+		"",
+		sseLine(t, map[string]any{
+			"type":     "response.completed",
+			"response": map[string]any{"id": "resp_1", "output": []any{toolItem}},
+		}),
+		"",
+		"data: [DONE]",
 	}, "\n")
 	var streamed strings.Builder
 	result, err := parseSSE(strings.NewReader(stream), func(delta string) { streamed.WriteString(delta) })
@@ -35,8 +43,20 @@ func TestParseSSETextAndToolCall(t *testing.T) {
 }
 
 func TestParseSSEError(t *testing.T) {
-	_, err := parseSSE(strings.NewReader("data: {\"type\":\"error\",\"error\":{\"message\":\"bad request\"}}\n"), nil)
+	line := sseLine(t, map[string]any{
+		"type": "error", "error": map[string]any{"message": "bad request"},
+	})
+	_, err := parseSSE(strings.NewReader(line+"\n"), nil)
 	if err == nil || !strings.Contains(err.Error(), "bad request") {
 		t.Fatalf("expected API error, got %v", err)
 	}
+}
+
+func sseLine(t *testing.T, value any) string {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return "data: " + string(encoded)
 }
