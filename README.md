@@ -273,6 +273,10 @@ inline and persisted under the current session's `web_fetch` artifacts. The
 returned path can be inspected with `read_file` (or `bash` for long-line data);
 path-bearing overflow responses are fetched and materialized again instead of
 being reused across sessions from cache.
+Fetched PDFs, PNG/JPEG/GIF/WebP images, and videos are likewise saved under the
+current session's `downloads`, `images`, or `videos` artifact directory. Known
+image/video formats are checked against their magic bytes, SVG is rejected,
+and downloaded PDFs/images can be reopened through `read_file`.
 Loopback, private, link-local, multicast and unspecified addresses are rejected
 both during URL validation and again when dialing (including redirects). Use a
 WebFetch permission with `pattern_mode = "domain"` for host-based rules.

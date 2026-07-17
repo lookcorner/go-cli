@@ -1,9 +1,13 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"io"
 	"net/http"
 	"os"
@@ -305,5 +309,121 @@ func TestBoundedWebContentPreservesUTF8(t *testing.T) {
 	}
 	if webArtifactExtension("text/plain", []byte(`{"ok":true}`)) != "json" || webArtifactExtension("markdown", nil) != "md" {
 		t.Fatal("web artifact extension classification failed")
+	}
+}
+
+func TestWebFetchDownloadsSessionMedia(t *testing.T) {
+	pdfData := makePDF("Downloaded PDF")
+	canvas := image.NewNRGBA(image.Rect(0, 0, 1, 1))
+	canvas.Set(0, 0, color.NRGBA{R: 255, A: 255})
+	var pngData bytes.Buffer
+	if err := png.Encode(&pngData, canvas); err != nil {
+		t.Fatal(err)
+	}
+	mp4Data := []byte{0, 0, 0, 24, 'f', 't', 'y', 'p', 'i', 's', 'o', 'm'}
+	requests := 0
+	client := &http.Client{Transport: webRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requests++
+		contentType, body := "", []byte(nil)
+		switch request.URL.Path {
+		case "/document":
+			contentType, body = "application/pdf", pdfData
+		case "/image":
+			contentType, body = "image/png", pngData.Bytes()
+		case "/video":
+			contentType, body = "video/mp4", mp4Data
+		default:
+			t.Fatalf("unexpected media URL: %s", request.URL)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK, Status: "200 OK", Request: request,
+			Header: http.Header{"Content-Type": []string{contentType}}, Body: io.NopCloser(bytes.NewReader(body)),
+		}, nil
+	})}
+	artifactRoot := filepath.Join(t.TempDir(), "artifacts", "session-media")
+	tool := &webFetchTool{
+		approver: PromptApprover{Mode: PermissionAuto}, client: client, allowPrivate: true, artifactDir: artifactRoot,
+	}
+	for _, test := range []struct {
+		url, kind, relative string
+		data                []byte
+	}{
+		{"https://example.com/document", "PDF downloaded", "downloads/1.pdf", pdfData},
+		{"https://example.com/image", "Image downloaded", "images/1.png", pngData.Bytes()},
+		{"https://example.com/video", "Video downloaded", "videos/1.mp4", mp4Data},
+	} {
+		output, err := tool.Execute(context.Background(), json.RawMessage(`{"url":"`+test.url+`"}`))
+		path := filepath.Join(artifactRoot, filepath.FromSlash(test.relative))
+		if err != nil || !strings.Contains(output, test.kind) || !strings.Contains(output, path) {
+			t.Fatalf("media output=%q err=%v", output, err)
+		}
+		stored, readErr := os.ReadFile(path)
+		info, statErr := os.Stat(path)
+		if readErr != nil || statErr != nil {
+			t.Fatalf("readErr=%v statErr=%v", readErr, statErr)
+		}
+		if !bytes.Equal(stored, test.data) || info.Mode().Perm() != 0o600 {
+			t.Fatalf("stored media mismatch for %s, mode=%v", test.relative, info.Mode().Perm())
+		}
+	}
+	ws, _ := workspace.Open(t.TempDir())
+	reader := &readFileTool{ws: ws, artifactRoot: artifactRoot}
+	pdfText, err := reader.Execute(context.Background(), json.RawMessage(`{"target_file":"`+filepath.Join(artifactRoot, "downloads", "1.pdf")+`","format":"text","pages":"1"}`))
+	if err != nil || !strings.Contains(pdfText, "Downloaded PDF") {
+		t.Fatalf("downloaded PDF recovery=%q err=%v", pdfText, err)
+	}
+	imageResult, err := reader.ExecuteResult(context.Background(), json.RawMessage(`{"target_file":"`+filepath.Join(artifactRoot, "images", "1.png")+`"}`))
+	if err != nil || len(imageResult.Images) != 1 || imageResult.Images[0].MediaType != "image/png" {
+		t.Fatalf("downloaded image recovery=%#v err=%v", imageResult, err)
+	}
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"url":"https://example.com/image"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 4 {
+		t.Fatalf("media fetch was cached: requests=%d", requests)
+	}
+	if _, err := os.Stat(filepath.Join(artifactRoot, "images", "2.png")); err != nil {
+		t.Fatalf("second image was not materialized: %v", err)
+	}
+}
+
+func TestWebFetchRejectsSpoofedMediaAndSVG(t *testing.T) {
+	contentType := "image/png"
+	client := &http.Client{Transport: webRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK, Status: "200 OK", Request: request,
+			Header: http.Header{"Content-Type": []string{contentType}},
+			Body:   io.NopCloser(strings.NewReader("<script>alert(1)</script>")),
+		}, nil
+	})}
+	tool := &webFetchTool{
+		approver: PromptApprover{Mode: PermissionAuto}, client: client, allowPrivate: true,
+		artifactDir: filepath.Join(t.TempDir(), "artifacts", "session"),
+	}
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"url":"https://example.com/spoof"}`)); err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("spoofed PNG error=%v", err)
+	}
+	contentType = "image/svg+xml"
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"url":"https://example.com/svg"}`)); err == nil || !strings.Contains(err.Error(), "unsupported") {
+		t.Fatalf("SVG error=%v", err)
+	}
+}
+
+func TestWebMediaMagicValidation(t *testing.T) {
+	valid := map[string][]byte{
+		"image/png":  {0x89, 0x50, 0x4e, 0x47},
+		"image/jpeg": {0xff, 0xd8, 0xff},
+		"image/gif":  []byte("GIF89a"),
+		"image/webp": []byte("RIFFxxxxWEBP"),
+		"video/mp4":  {0, 0, 0, 24, 'f', 't', 'y', 'p'},
+		"video/webm": {0x1a, 0x45, 0xdf, 0xa3},
+	}
+	for mediaType, data := range valid {
+		if !validWebMediaMagic(mediaType, data) || validWebMediaMagic(mediaType, []byte("<html>")) {
+			t.Fatalf("unexpected magic validation for %s", mediaType)
+		}
+	}
+	if !validWebMediaMagic("image/x-custom", []byte("custom")) || webMediaExtension("image/x-custom") != "bin" {
+		t.Fatal("unknown media subtype compatibility failed")
 	}
 }

@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -192,6 +193,34 @@ func (t *webFetchTool) Execute(ctx context.Context, raw json.RawMessage) (string
 			mediaType, _, _ = mime.ParseMediaType(http.DetectContentType(data[:min(len(data), 512)]))
 		}
 	}
+	if mediaType == "application/pdf" {
+		if !validWebPDF(data) {
+			return "", fmt.Errorf("web content type %q does not match response bytes", mediaType)
+		}
+		path, err := t.saveSessionArtifact(data, "downloads", "pdf")
+		if err != nil {
+			return "", fmt.Errorf("save fetched PDF: %w", err)
+		}
+		return fmt.Sprintf("URL: %s\nContent-Type: %s\n\nPDF downloaded (%d bytes) and saved to %s. Use read_file to view its contents.", response.Request.URL, mediaType, len(data), path), nil
+	}
+	if isWebImage(mediaType) || isWebVideo(mediaType) {
+		if !validWebMediaMagic(mediaType, data) {
+			return "", fmt.Errorf("web content type %q does not match response bytes", mediaType)
+		}
+		kind, dir := "Image", "images"
+		if isWebVideo(mediaType) {
+			kind, dir = "Video", "videos"
+		}
+		path, err := t.saveSessionArtifact(data, dir, webMediaExtension(mediaType))
+		if err != nil {
+			return "", fmt.Errorf("save fetched %s: %w", strings.ToLower(kind), err)
+		}
+		hint := ""
+		if kind == "Image" {
+			hint = " Use read_file to view its contents."
+		}
+		return fmt.Sprintf("URL: %s\nContent-Type: %s\n\n%s downloaded (%d bytes, %s) and saved to %s.%s", response.Request.URL, mediaType, kind, len(data), mediaType, path, hint), nil
+	}
 	contentType := mediaType
 	if mediaType == "text/html" || mediaType == "application/xhtml+xml" {
 		markdown, err := htmlToMarkdown(data, response.Request.URL)
@@ -274,17 +303,21 @@ func truncateUTF8(value string, limit int) string {
 }
 
 func (t *webFetchTool) saveWebArtifact(data []byte, contentType string) (string, error) {
+	return t.saveSessionArtifact(data, "web_fetch", webArtifactExtension(contentType, data))
+}
+
+func (t *webFetchTool) saveSessionArtifact(data []byte, subdir, extension string) (string, error) {
 	if t.artifactDir == "" {
 		return "", errors.New("session artifact directory is unavailable")
 	}
 	t.artifactMu.Lock()
 	defer t.artifactMu.Unlock()
-	for _, dir := range []string{filepath.Dir(t.artifactDir), t.artifactDir, filepath.Join(t.artifactDir, "web_fetch")} {
+	dir := filepath.Join(t.artifactDir, subdir)
+	for _, dir := range []string{filepath.Dir(t.artifactDir), t.artifactDir, dir} {
 		if err := ensurePrivateArtifactDir(dir); err != nil {
 			return "", err
 		}
 	}
-	dir := filepath.Join(t.artifactDir, "web_fetch")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return "", err
@@ -313,7 +346,6 @@ func (t *webFetchTool) saveWebArtifact(data []byte, contentType string) (string,
 	if maxNumber >= maxWebArtifactNumber {
 		return "", errors.New("web_fetch artifact number exhausted")
 	}
-	extension := webArtifactExtension(contentType, data)
 	for number := maxNumber + 1; number <= maxWebArtifactNumber; number++ {
 		path := filepath.Join(dir, fmt.Sprintf("%d.%s", number, extension))
 		file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
@@ -336,6 +368,47 @@ func (t *webFetchTool) saveWebArtifact(data []byte, contentType string) (string,
 		return path, nil
 	}
 	return "", errors.New("web_fetch artifact number exhausted")
+}
+
+func isWebImage(mediaType string) bool {
+	return strings.HasPrefix(mediaType, "image/") && mediaType != "image/svg+xml"
+}
+
+func validWebPDF(data []byte) bool {
+	return bytes.Contains(data[:min(len(data), 1024)], []byte("%PDF-"))
+}
+
+func isWebVideo(mediaType string) bool { return strings.HasPrefix(mediaType, "video/") }
+
+func validWebMediaMagic(mediaType string, data []byte) bool {
+	switch mediaType {
+	case "image/png":
+		return bytes.HasPrefix(data, []byte{0x89, 0x50, 0x4e, 0x47})
+	case "image/jpeg":
+		return bytes.HasPrefix(data, []byte{0xff, 0xd8, 0xff})
+	case "image/gif":
+		return bytes.HasPrefix(data, []byte("GIF8"))
+	case "image/webp":
+		return len(data) >= 12 && string(data[:4]) == "RIFF" && string(data[8:12]) == "WEBP"
+	case "video/mp4":
+		return len(data) >= 8 && string(data[4:8]) == "ftyp"
+	case "video/webm":
+		return bytes.HasPrefix(data, []byte{0x1a, 0x45, 0xdf, 0xa3})
+	default:
+		return true
+	}
+}
+
+func webMediaExtension(mediaType string) string {
+	extension := map[string]string{
+		"image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp",
+		"image/bmp": "bmp", "image/tiff": "tiff", "video/mp4": "mp4", "video/webm": "webm",
+		"video/quicktime": "mov", "video/x-msvideo": "avi",
+	}[mediaType]
+	if extension == "" {
+		return "bin"
+	}
+	return extension
 }
 
 func ensurePrivateArtifactDir(path string) error {
@@ -364,6 +437,9 @@ func webArtifactExtension(contentType string, data []byte) string {
 }
 
 func isTextWebContent(mediaType string) bool {
+	if mediaType == "image/svg+xml" {
+		return false
+	}
 	return strings.HasPrefix(mediaType, "text/") || mediaType == "application/json" || mediaType == "application/javascript" || mediaType == "application/xml" || strings.HasSuffix(mediaType, "+json") || strings.HasSuffix(mediaType, "+xml")
 }
 
