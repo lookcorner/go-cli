@@ -30,6 +30,23 @@ type CreateRequest struct {
 	Label                   string   `json:"label"`
 }
 
+type ForkRequest struct {
+	SourceWorktreePath string `json:"sourceWorktreePath"`
+	NewSessionID       string `json:"newSessionId"`
+	CopyMode           string `json:"copyMode"`
+	GitRef             string `json:"gitRef"`
+	WorktreeType       string `json:"worktreeType"`
+	Label              string `json:"label"`
+}
+
+type ForkResponse struct {
+	Status        string  `json:"status"`
+	NewSessionID  string  `json:"newSessionId"`
+	WorktreePath  string  `json:"worktreePath"`
+	Commit        *string `json:"commit,omitempty"`
+	SourceGitRoot string  `json:"sourceGitRoot,omitempty"`
+}
+
 type RemoveRequest struct {
 	WorktreePath string `json:"worktreePath"`
 	IDOrPath     string `json:"idOrPath"`
@@ -146,6 +163,10 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (Record, bool, 
 	if err != nil {
 		return Record{}, false, err
 	}
+	mainRoot, err := mainRepositoryRoot(ctx, root)
+	if err != nil {
+		return Record{}, false, err
+	}
 	ref := req.GitRef
 	if ref == "" {
 		ref = "HEAD"
@@ -161,7 +182,7 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (Record, bool, 
 	}
 	dest := req.WorktreePath
 	if dest == "" {
-		dest = filepath.Join(m.base, sanitizeLabel(filepath.Base(root)), label)
+		dest = filepath.Join(m.base, sanitizeLabel(filepath.Base(mainRoot)), label)
 	}
 	dest, err = filepath.Abs(dest)
 	if err != nil {
@@ -169,7 +190,7 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (Record, bool, 
 	}
 	if existing := m.recordByPath(dest); existing != nil {
 		if _, statErr := os.Stat(dest); statErr == nil {
-			if existing.SourceRepo != root || existing.SessionID != req.SessionID {
+			if existing.SourceRepo != mainRoot || existing.SessionID != req.SessionID {
 				return Record{}, false, fmt.Errorf("worktree destination is registered to another source or session: %s", dest)
 			}
 			existing.LastAccessedAt = time.Now().UTC()
@@ -221,7 +242,7 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (Record, bool, 
 	now := time.Now().UTC()
 	id := "wt-" + randomHex(8)
 	record := Record{
-		ID: id, Path: dest, SourceRepo: root, RepoName: filepath.Base(root), Kind: "session",
+		ID: id, Path: dest, SourceRepo: mainRoot, RepoName: filepath.Base(mainRoot), Kind: "session",
 		CreationMode: req.WorktreeType, GitRef: req.GitRef, HeadCommit: commit,
 		SessionID: req.SessionID, CreatedAt: now, LastAccessedAt: now, Status: "alive", Label: label,
 	}
@@ -232,6 +253,44 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (Record, bool, 
 		return Record{}, false, err
 	}
 	return record, false, nil
+}
+
+func (m *Manager) CreateFromWorktree(ctx context.Context, req ForkRequest) (ForkResponse, bool, error) {
+	if req.SourceWorktreePath == "" || req.NewSessionID == "" {
+		return ForkResponse{}, false, errors.New("sourceWorktreePath and newSessionId are required")
+	}
+	record, existed, err := m.Create(ctx, CreateRequest{
+		SessionID: req.NewSessionID, SourcePath: req.SourceWorktreePath,
+		CopyMode: req.CopyMode, GitRef: req.GitRef, WorktreeType: req.WorktreeType, Label: req.Label,
+	})
+	if err != nil {
+		return ForkResponse{}, false, err
+	}
+	commit := record.HeadCommit
+	status := "created"
+	if existed {
+		status = "exists"
+	}
+	return ForkResponse{Status: status, NewSessionID: req.NewSessionID, WorktreePath: record.Path, Commit: &commit, SourceGitRoot: record.SourceRepo}, existed, nil
+}
+
+func mainRepositoryRoot(ctx context.Context, worktreeRoot string) (string, error) {
+	common, err := gitOutput(ctx, worktreeRoot, "rev-parse", "--git-common-dir")
+	if err != nil {
+		return "", err
+	}
+	common = strings.TrimSpace(common)
+	if !filepath.IsAbs(common) {
+		common = filepath.Join(worktreeRoot, common)
+	}
+	common, err = filepath.EvalSymlinks(common)
+	if err != nil {
+		return "", err
+	}
+	if filepath.Base(common) != ".git" {
+		return worktreeRoot, nil
+	}
+	return filepath.Dir(common), nil
 }
 
 func (m *Manager) List(repo string, types []string, includeAll bool) []Record {

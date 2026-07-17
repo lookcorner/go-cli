@@ -178,6 +178,44 @@ func TestManagerApplyMergeReportsConflictsAndAppliesSafeFiles(t *testing.T) {
 	}
 }
 
+func TestManagerCreateFromLinkedWorktreeKeepsMainRepoIdentity(t *testing.T) {
+	root := newRepo(t)
+	manager, err := NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstPath := filepath.Join(t.TempDir(), "first")
+	first, _, err := manager.Create(context.Background(), CreateRequest{
+		SessionID: "parent", SourcePath: root, WorktreePath: firstPath, CopyMode: "clean", WorktreeType: "linked",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(firstPath, "tracked.txt"), []byte("fork dirty\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fork, _, err := manager.CreateFromWorktree(context.Background(), ForkRequest{
+		SourceWorktreePath: firstPath, NewSessionID: "child", CopyMode: "dirty", WorktreeType: "linked", Label: "child",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, ok := manager.Show(fork.WorktreePath)
+	if !ok || child.SourceRepo != first.SourceRepo || child.SourceRepo == firstPath {
+		t.Fatalf("fork source identity is nested: parent=%#v child=%#v", first, child)
+	}
+	data, err := os.ReadFile(filepath.Join(fork.WorktreePath, "tracked.txt"))
+	if err != nil || string(data) != "fork dirty\n" {
+		t.Fatalf("fork dirty state missing: %q err=%v", data, err)
+	}
+	if _, _, err := manager.Remove(context.Background(), RemoveRequest{WorktreePath: fork.WorktreePath, Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := manager.Remove(context.Background(), RemoveRequest{IDOrPath: first.ID, Force: true}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSanitizeLabel(t *testing.T) {
 	if got := sanitizeLabel("  Feature__One..!  "); got != "feature-one" {
 		t.Fatalf("sanitizeLabel = %q", got)

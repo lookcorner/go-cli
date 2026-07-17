@@ -155,11 +155,47 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleHunkAction(ctx, incoming)
 		case "x.ai/git/worktree/create", "x.ai/git/worktree/list", "x.ai/git/worktree/show", "x.ai/git/worktree/remove", "x.ai/git/worktree/apply":
 			s.handleWorktree(ctx, incoming)
+		case "x.ai/git/worktree/create_from_worktree", "x.ai/git/worktree/create_from_worktree_sync":
+			s.handleWorktreeFork(ctx, incoming)
 		default:
 			if len(incoming.ID) > 0 {
 				s.respondError(incoming.ID, -32601, "method not found")
 			}
 		}
+	}
+}
+
+func (s *Server) handleWorktreeFork(ctx context.Context, incoming message) {
+	var req worktrees.ForkRequest
+	if json.Unmarshal(incoming.Params, &req) != nil {
+		s.respondError(incoming.ID, -32602, "invalid create-from-worktree parameters")
+		return
+	}
+	result, existed, err := s.worktrees.CreateFromWorktree(ctx, req)
+	if err != nil {
+		s.respondError(incoming.ID, -32000, err.Error())
+		return
+	}
+	if incoming.Method == "x.ai/git/worktree/create_from_worktree_sync" {
+		s.respond(incoming.ID, result)
+		return
+	}
+	status := "creating"
+	if existed {
+		status = "exists"
+	}
+	s.respond(incoming.ID, map[string]any{
+		"status": status, "sessionId": req.NewSessionID, "worktreePath": result.WorktreePath,
+		"sourceGitRoot": result.SourceGitRoot,
+	})
+	if !existed {
+		s.write(map[string]any{
+			"jsonrpc": "2.0", "method": "x.ai/git/worktree/status",
+			"params": map[string]any{
+				"status": "created", "sessionId": req.NewSessionID, "worktreePath": result.WorktreePath,
+				"commit": *result.Commit, "sourceGitRoot": result.SourceGitRoot,
+			},
+		})
 	}
 }
 

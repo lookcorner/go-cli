@@ -287,6 +287,32 @@ func TestWorktreeExtensionsCreateListShowAndRemove(t *testing.T) {
 	if data, err := os.ReadFile(filepath.Join(root, "tracked.txt")); err != nil || string(data) != "applied\n" {
 		t.Fatalf("ACP apply did not update source: %q err=%v", data, err)
 	}
+	if err := os.WriteFile(filepath.Join(dest, "fork-only.txt"), []byte("forked\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	encodeACP(t, encoder, map[string]any{
+		"jsonrpc": "2.0", "id": 40, "method": "x.ai/git/worktree/create_from_worktree_sync",
+		"params": map[string]any{
+			"sourceWorktreePath": dest, "newSessionId": "fork-session", "copyMode": "dirty",
+			"worktreeType": "linked", "label": "fork-child",
+		},
+	})
+	forked := decodeACP(t, decoder)
+	forkResult := forked["result"].(map[string]any)
+	if forkResult["status"] != "created" || forkResult["newSessionId"] != "fork-session" {
+		t.Fatalf("unexpected worktree fork: %#v", forked)
+	}
+	forkPath := forkResult["worktreePath"].(string)
+	if data, err := os.ReadFile(filepath.Join(forkPath, "fork-only.txt")); err != nil || string(data) != "forked\n" {
+		t.Fatalf("fork did not copy dirty state: %q err=%v", data, err)
+	}
+	encodeACP(t, encoder, map[string]any{
+		"jsonrpc": "2.0", "id": 41, "method": "x.ai/git/worktree/remove",
+		"params": map[string]any{"worktreePath": forkPath, "force": true},
+	})
+	if forkRemoved := decodeACP(t, decoder); forkRemoved["result"].(map[string]any)["removed"] != true {
+		t.Fatalf("fork removal failed: %#v", forkRemoved)
+	}
 	encodeACP(t, encoder, map[string]any{
 		"jsonrpc": "2.0", "id": 5, "method": "x.ai/git/worktree/remove",
 		"params": map[string]any{"worktreePath": dest, "dryRun": true},
