@@ -42,8 +42,9 @@ type messagesBlock struct {
 
 type messagesSource struct {
 	Type      string `json:"type"`
-	MediaType string `json:"media_type"`
-	Data      string `json:"data"`
+	MediaType string `json:"media_type,omitempty"`
+	Data      string `json:"data,omitempty"`
+	URL       string `json:"url,omitempty"`
 }
 
 type messagesTool struct {
@@ -171,6 +172,10 @@ func messagesContent(content any) ([]messagesBlock, error) {
 		case "input_text":
 			blocks = append(blocks, messagesBlock{Type: "text", Text: part.Text})
 		case "input_image":
+			if strings.HasPrefix(part.ImageURL, "https://") || strings.HasPrefix(part.ImageURL, "http://") {
+				blocks = append(blocks, messagesBlock{Type: "image", Source: &messagesSource{Type: "url", URL: part.ImageURL}})
+				continue
+			}
 			header, data, found := strings.Cut(part.ImageURL, ",")
 			mediaType := strings.TrimSuffix(strings.TrimPrefix(header, "data:"), ";base64")
 			if !found || !strings.HasSuffix(header, ";base64") || !strings.HasPrefix(mediaType, "image/") || data == "" {

@@ -79,7 +79,7 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 		t.Fatalf("unexpected initialize response: %#v", initialize)
 	}
 	promptCapabilities := initialize["result"].(map[string]any)["agentCapabilities"].(map[string]any)["promptCapabilities"].(map[string]any)
-	if promptCapabilities["embeddedContext"] != true || promptCapabilities["image"] != false {
+	if promptCapabilities["embeddedContext"] != true || promptCapabilities["image"] != true || promptCapabilities["audio"] != false {
 		t.Fatalf("unexpected prompt capabilities: %#v", promptCapabilities)
 	}
 	sessionCapabilities := initialize["result"].(map[string]any)["agentCapabilities"].(map[string]any)["sessionCapabilities"].(map[string]any)
@@ -188,32 +188,46 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 	}
 }
 
-func TestRenderPromptSupportsEmbeddedTextAndRejectsUnsupportedMedia(t *testing.T) {
+func TestRenderPromptSupportsEmbeddedTextAndImages(t *testing.T) {
 	var embedded promptBlock
 	embedded.Type = "resource"
 	embedded.Resource.URI = "file:///workspace/context.md"
 	embedded.Resource.MimeType = "text/markdown"
 	embedded.Resource.Text = "# Context"
-	parts, err := renderPrompt([]promptBlock{
+	prompt, content, err := renderPrompt([]promptBlock{
 		{Type: "text", Text: "Use this context"},
 		embedded,
 		{Type: "resource_link", Name: "spec", URI: "file:///workspace/spec.md"},
+		{Type: "image", MimeType: "image/png", Data: "aGVsbG8="},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	joined := strings.Join(parts, "\n\n")
-	if !strings.Contains(joined, "Embedded resource file:///workspace/context.md (text/markdown):\n# Context") {
-		t.Fatalf("embedded resource missing from prompt: %q", joined)
+	if !strings.Contains(prompt, "Embedded resource file:///workspace/context.md (text/markdown):\n# Context") {
+		t.Fatalf("embedded resource missing from prompt: %q", prompt)
 	}
-	if _, err := renderPrompt([]promptBlock{{Type: "image"}}); err == nil {
-		t.Fatal("expected unsupported image error")
+	if len(content) != 4 || content[3].Type != "input_image" || content[3].ImageURL != "data:image/png;base64,aGVsbG8=" {
+		t.Fatalf("image missing from prompt content: %#v", content)
+	}
+	_, remote, err := renderPrompt([]promptBlock{{Type: "image", URI: "https://example.com/image.png"}})
+	if err != nil || len(remote) != 1 || remote[0].ImageURL != "https://example.com/image.png" {
+		t.Fatalf("remote image was not preserved: content=%#v err=%v", remote, err)
+	}
+	for _, block := range []promptBlock{
+		{Type: "image"},
+		{Type: "image", MimeType: "image/svg+xml", Data: "PHN2Zz4="},
+		{Type: "image", MimeType: "image/png", Data: "not-base64"},
+		{Type: "audio"},
+	} {
+		if _, _, err := renderPrompt([]promptBlock{block}); err == nil {
+			t.Errorf("expected unsupported media error for %#v", block)
+		}
 	}
 	var blob promptBlock
 	blob.Type = "resource"
 	blob.Resource.URI = "file:///workspace/data.bin"
 	blob.Resource.Blob = "AA=="
-	if _, err := renderPrompt([]promptBlock{blob}); err == nil {
+	if _, _, err := renderPrompt([]promptBlock{blob}); err == nil {
 		t.Fatal("expected unsupported binary resource error")
 	}
 }

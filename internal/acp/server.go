@@ -2,6 +2,7 @@ package acp
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -85,6 +86,8 @@ type permissionResult struct {
 type promptBlock struct {
 	Type     string `json:"type"`
 	Text     string `json:"text"`
+	Data     string `json:"data"`
+	MimeType string `json:"mimeType"`
 	URI      string `json:"uri"`
 	Name     string `json:"name"`
 	Resource struct {
@@ -129,7 +132,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				"protocolVersion": ProtocolVersion,
 				"agentCapabilities": map[string]any{
 					"loadSession":         true,
-					"promptCapabilities":  map[string]any{"image": false, "audio": false, "embeddedContext": true},
+					"promptCapabilities":  map[string]any{"image": true, "audio": false, "embeddedContext": true},
 					"mcpCapabilities":     map[string]any{"http": false, "sse": false},
 					"sessionCapabilities": map[string]any{"close": map[string]any{}, "list": map[string]any{}, "resume": map[string]any{}},
 					"auth":                map[string]any{},
@@ -674,15 +677,17 @@ func (s *Server) handlePrompt(parent context.Context, incoming message) {
 		s.respondError(incoming.ID, -32602, "unknown session")
 		return
 	}
-	parts, err := renderPrompt(params.Prompt)
+	prompt, content, err := renderPrompt(params.Prompt)
 	if err != nil {
 		s.respondError(incoming.ID, -32602, err.Error())
 		return
 	}
-	prompt := strings.TrimSpace(strings.Join(parts, "\n\n"))
-	if prompt == "" {
-		s.respondError(incoming.ID, -32602, "prompt must contain text or resource links")
+	if len(content) == 0 {
+		s.respondError(incoming.ID, -32602, "prompt must contain text, resources, or images")
 		return
+	}
+	if prompt == "" {
+		prompt = "Image prompt"
 	}
 	current.mu.Lock()
 	if current.running {
@@ -706,7 +711,7 @@ func (s *Server) handlePrompt(parent context.Context, incoming message) {
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		result, err := current.runner.RunTurn(runCtx, prompt, previous)
+		result, err := current.runner.RunTurnParts(runCtx, prompt, content, previous)
 		stopReason := "end_turn"
 		if errors.Is(runCtx.Err(), context.Canceled) {
 			stopReason = "cancelled"
@@ -894,41 +899,71 @@ func promptTitle(prompt string) string {
 	return line
 }
 
-func renderPrompt(blocks []promptBlock) ([]string, error) {
-	parts := make([]string, 0, len(blocks))
+func renderPrompt(blocks []promptBlock) (string, []api.ContentPart, error) {
+	var textParts []string
+	content := make([]api.ContentPart, 0, len(blocks))
+	addText := func(text string) {
+		textParts = append(textParts, text)
+		content = append(content, api.ContentPart{Type: "input_text", Text: text})
+	}
 	for _, block := range blocks {
 		switch block.Type {
 		case "text":
 			if block.Text != "" {
-				parts = append(parts, block.Text)
+				addText(block.Text)
 			}
 		case "resource_link":
 			if block.Name == "" || block.URI == "" {
-				return nil, errors.New("resource links require name and uri")
+				return "", nil, errors.New("resource links require name and uri")
 			}
-			parts = append(parts, fmt.Sprintf("Referenced resource %s: %s", block.Name, block.URI))
+			addText(fmt.Sprintf("Referenced resource %s: %s", block.Name, block.URI))
 		case "resource":
 			if block.Resource.URI == "" {
-				return nil, errors.New("embedded resources require a uri")
+				return "", nil, errors.New("embedded resources require a uri")
 			}
 			if block.Resource.Text == "" {
 				if block.Resource.Blob != "" {
-					return nil, errors.New("binary embedded resources are not supported")
+					return "", nil, errors.New("binary embedded resources are not supported")
 				}
-				return nil, errors.New("embedded text resources require text")
+				return "", nil, errors.New("embedded text resources require text")
 			}
 			header := "Embedded resource " + block.Resource.URI
 			if block.Resource.MimeType != "" {
 				header += " (" + block.Resource.MimeType + ")"
 			}
-			parts = append(parts, header+":\n"+block.Resource.Text)
-		case "image", "audio":
-			return nil, fmt.Errorf("%s prompt content is not supported", block.Type)
+			addText(header + ":\n" + block.Resource.Text)
+		case "image":
+			imageURL, err := promptImageURL(block)
+			if err != nil {
+				return "", nil, err
+			}
+			content = append(content, api.ContentPart{Type: "input_image", ImageURL: imageURL})
+		case "audio":
+			return "", nil, errors.New("audio prompt content is not supported")
 		default:
-			return nil, fmt.Errorf("unsupported prompt content type %q", block.Type)
+			return "", nil, fmt.Errorf("unsupported prompt content type %q", block.Type)
 		}
 	}
-	return parts, nil
+	return strings.TrimSpace(strings.Join(textParts, "\n\n")), content, nil
+}
+
+func promptImageURL(block promptBlock) (string, error) {
+	if block.Data == "" {
+		if strings.HasPrefix(block.URI, "https://") || strings.HasPrefix(block.URI, "http://") {
+			return block.URI, nil
+		}
+		return "", errors.New("images require base64 data or an HTTP(S) uri")
+	}
+	if block.MimeType != "image/png" && block.MimeType != "image/jpeg" && block.MimeType != "image/gif" && block.MimeType != "image/webp" {
+		return "", fmt.Errorf("unsupported image mime type %q", block.MimeType)
+	}
+	if base64.StdEncoding.DecodedLen(len(block.Data)) > 20<<20 {
+		return "", errors.New("image prompt exceeds 20 MB")
+	}
+	if _, err := base64.StdEncoding.DecodeString(block.Data); err != nil {
+		return "", errors.New("image prompt data is not valid base64")
+	}
+	return "data:" + block.MimeType + ";base64," + block.Data, nil
 }
 
 func (s *Server) handleCancel(raw json.RawMessage) {

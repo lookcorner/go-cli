@@ -66,6 +66,17 @@ func (r *Runner) Run(ctx context.Context, prompt string) (Result, error) {
 }
 
 func (r *Runner) RunTurn(ctx context.Context, prompt, previousResponseID string) (Result, error) {
+	return r.runTurn(ctx, prompt, prompt, previousResponseID)
+}
+
+func (r *Runner) RunTurnParts(ctx context.Context, prompt string, parts []api.ContentPart, previousResponseID string) (Result, error) {
+	if len(parts) == 0 {
+		return Result{}, errors.New("prompt content must not be empty")
+	}
+	return r.runTurn(ctx, prompt, parts, previousResponseID)
+}
+
+func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previousResponseID string) (Result, error) {
 	if r.Client == nil || r.Tools == nil {
 		return Result{}, errors.New("agent client and tools are required")
 	}
@@ -94,9 +105,17 @@ func (r *Runner) RunTurn(ctx context.Context, prompt, previousResponseID string)
 		summaryPrefix = "Previous conversation summary:\n" + r.pendingSummary + "\n\n"
 		r.pendingSummary = ""
 	}
+	if summaryPrefix != "" {
+		switch value := content.(type) {
+		case string:
+			content = summaryPrefix + value
+		case []api.ContentPart:
+			content = append([]api.ContentPart{{Type: "input_text", Text: summaryPrefix}}, value...)
+		}
+	}
 
 	r.log("user_prompt", map[string]any{"text": prompt})
-	input := []api.InputItem{{Type: "message", Role: "user", Content: summaryPrefix + prompt}}
+	input := []api.InputItem{{Type: "message", Role: "user", Content: content}}
 	var final Result
 
 	for step := 1; step <= r.MaxSteps; step++ {

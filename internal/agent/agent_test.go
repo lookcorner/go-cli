@@ -111,6 +111,27 @@ func TestRunnerForwardsReadFileImages(t *testing.T) {
 	}
 }
 
+func TestRunnerAcceptsMultimodalPromptParts(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamer := &fakeStreamer{results: []api.StreamResult{{ResponseID: "resp_1", Text: "done"}}}
+	runner := Runner{Client: streamer, Tools: tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto}), Model: "test", MaxSteps: 1}
+	defer runner.Tools.Close()
+	parts := []api.ContentPart{
+		{Type: "input_text", Text: "inspect"},
+		{Type: "input_image", ImageURL: "data:image/png;base64,cG5n"},
+	}
+	if _, err := runner.RunTurnParts(context.Background(), "inspect image", parts, ""); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := streamer.requests[0].Input[0].Content.([]api.ContentPart)
+	if !ok || len(got) != 2 || got[1].ImageURL != parts[1].ImageURL {
+		t.Fatalf("multimodal prompt was not preserved: %#v", streamer.requests[0].Input)
+	}
+}
+
 func TestRunnerAnnouncesConditionalSkillAfterFileTool(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

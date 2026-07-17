@@ -134,8 +134,12 @@ func TestMessagesClientMapsImageContent(t *testing.T) {
 	if string(encoded) != want {
 		t.Fatalf("unexpected messages image content: %s", encoded)
 	}
-	if _, err := messagesContent([]ContentPart{{Type: "input_image", ImageURL: "https://example.com/image.png"}}); err == nil {
-		t.Fatal("non-data image URL was accepted")
+	remote, err := messagesContent([]ContentPart{{Type: "input_image", ImageURL: "https://example.com/image.png"}})
+	if err != nil || len(remote) != 1 || remote[0].Source.Type != "url" || remote[0].Source.URL != "https://example.com/image.png" {
+		t.Fatalf("remote image URL was not mapped: blocks=%#v err=%v", remote, err)
+	}
+	if _, err := messagesContent([]ContentPart{{Type: "input_image", ImageURL: "file:///tmp/image.png"}}); err == nil {
+		t.Fatal("unsafe image URL was accepted")
 	}
 }
 

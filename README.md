@@ -142,7 +142,8 @@ session log, MCP/LSP processes, and cleanup lifecycle. The baseline
 `session/prompt`, `session/update`, `session/cancel`, and `session/close`
 methods are supported. Persisted sessions use stable, path-safe IDs; load
 replays completed user/agent text history while resume reconnects without
-replay. Text streams as
+replay. Prompts accept embedded text/resources plus validated base64 or remote
+HTTP(S) images; audio is not yet supported. Text streams as
 `agent_message_chunk`, while tools emit correlated `tool_call` and
 `tool_call_update` lifecycle events. Stdio MCP servers supplied by the client
 in `session/new` are merged with configured servers for that session. Default
