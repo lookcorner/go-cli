@@ -120,5 +120,11 @@ func (r permissionRule) matches(action, detail string) bool {
 	if strings.EqualFold(r.action, "Mcp") {
 		return action == "MCP tool" && r.pattern.MatchString(detail)
 	}
+	if strings.EqualFold(r.action, "Read") {
+		return action == "read policy" && r.pattern.MatchString(detail)
+	}
+	if strings.EqualFold(r.action, "Grep") {
+		return action == "grep policy" && r.pattern.MatchString(detail)
+	}
 	return strings.EqualFold(strings.ReplaceAll(r.action, "_", " "), strings.ReplaceAll(action, "_", " ")) && r.pattern.MatchString(detail)
 }

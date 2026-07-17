@@ -100,9 +100,10 @@ func ToolCallFromContext(ctx context.Context) (ToolCallContext, bool) {
 }
 
 type Registry struct {
-	tools     map[string]Tool
-	processes *ProcessManager
-	goal      *GoalStore
+	tools      map[string]Tool
+	processes  *ProcessManager
+	goal       *GoalStore
+	readPolicy Approver
 }
 
 func NewRegistry(ws *workspace.Workspace, approver Approver) *Registry {
@@ -149,6 +150,8 @@ func (r *Registry) GoalSnapshot() GoalSnapshot {
 	return r.goal.Snapshot()
 }
 
+func (r *Registry) SetReadPolicy(approver Approver) { r.readPolicy = approver }
+
 func (r *Registry) Close() error {
 	if r.processes == nil {
 		return nil
@@ -189,7 +192,39 @@ func (r *Registry) Execute(ctx context.Context, name string, arguments json.RawM
 	if err != nil {
 		return "", err
 	}
+	if r.readPolicy != nil {
+		if action, detail := readPolicyTarget(name, arguments); action != "" {
+			if err := r.readPolicy.Approve(ctx, action, detail); err != nil {
+				return "", err
+			}
+		}
+	}
 	return tool.Execute(ctx, arguments)
+}
+
+func readPolicyTarget(name string, raw json.RawMessage) (string, string) {
+	var values map[string]any
+	if json.Unmarshal(raw, &values) != nil {
+		return "", ""
+	}
+	first := func(keys ...string) string {
+		for _, key := range keys {
+			if value, ok := values[key].(string); ok && value != "" {
+				return value
+			}
+		}
+		return "."
+	}
+	switch name {
+	case "read_file":
+		return "read policy", first("target_file", "path")
+	case "list_dir", "list_files":
+		return "read policy", first("target_directory", "path")
+	case "grep", "search_files":
+		return "grep policy", first("query", "pattern")
+	default:
+		return "", ""
+	}
 }
 
 func normalizeArguments(raw json.RawMessage) (json.RawMessage, error) {

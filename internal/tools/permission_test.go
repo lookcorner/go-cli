@@ -2,8 +2,13 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/lookcorner/go-cli/internal/workspace"
 )
 
 type recordingApprover struct{ calls int }
@@ -11,6 +16,34 @@ type recordingApprover struct{ calls int }
 func (a *recordingApprover) Approve(context.Context, string, string) error {
 	a.calls++
 	return nil
+}
+
+func TestRegistryAppliesReadAndGrepPolicies(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "secret.txt"), []byte("token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := PromptApprover{Mode: PermissionAuto}
+	policy, err := NewPolicyApprover(base, base, nil, nil, []string{"Read(secret*)", "Grep(token)"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry(ws, base)
+	defer registry.Close()
+	registry.SetReadPolicy(policy)
+	if _, err := registry.Execute(context.Background(), "read_file", json.RawMessage(`{"target_file":"secret.txt"}`)); err == nil {
+		t.Fatal("read deny rule was not enforced")
+	}
+	if _, err := registry.Execute(context.Background(), "grep", json.RawMessage(`{"query":"token"}`)); err == nil {
+		t.Fatal("grep deny rule was not enforced")
+	}
+	if output, err := registry.Execute(context.Background(), "list_dir", json.RawMessage(`{"target_directory":"."}`)); err != nil || !strings.Contains(output, "secret.txt") {
+		t.Fatalf("unmatched read should default allow: %q err=%v", output, err)
+	}
 }
 
 func TestRuleApproverDenyPrecedesAllowAndFallsBack(t *testing.T) {

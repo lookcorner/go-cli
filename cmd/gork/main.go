@@ -241,6 +241,14 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return err
 	}
 	registry := tools.NewRegistry(ws, approver)
+	readPolicy, err := tools.NewPolicyApprover(
+		tools.PromptApprover{Mode: tools.PermissionAuto}, askApprover,
+		allowRules, askRules, denyRules,
+	)
+	if err != nil {
+		return err
+	}
+	registry.SetReadPolicy(readPolicy)
 	defer registry.Close()
 	if len(skillCatalog.Names()) > 0 {
 		if err := registry.Register(skillCatalog.Tool()); err != nil {
@@ -345,6 +353,15 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			return nil, nil, err
 		}
 		registry := tools.NewRegistry(ws, approver)
+		readPolicy, err := tools.NewPolicyApprover(
+			tools.PromptApprover{Mode: tools.PermissionAuto}, protocolApprover,
+			allowRules, askRules, denyRules,
+		)
+		if err != nil {
+			_ = registry.Close()
+			return nil, nil, err
+		}
+		registry.SetReadPolicy(readPolicy)
 		logger, err := session.NewLogger(opts.sessionDir)
 		if err != nil {
 			_ = registry.Close()
@@ -655,8 +672,10 @@ func permissionRules(permission config.PermissionConfig, cliAllow, cliDeny []str
 			tool = "Edit"
 		case "mcp":
 			tool = "Mcp"
-		case "read", "grep":
-			return nil, nil, nil, fmt.Errorf("permission rule %d targets unsupported %s policy", index+1, tool)
+		case "read":
+			tool = "Read"
+		case "grep":
+			tool = "Grep"
 		case "webfetch":
 			return nil, nil, nil, fmt.Errorf("permission rule %d targets unsupported webfetch tool", index+1)
 		default:
