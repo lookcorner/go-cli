@@ -52,28 +52,40 @@ func (b *Bridge) Approve(ctx context.Context, action, detail string) error {
 	case tools.PermissionDeny:
 		return fmt.Errorf("permission denied for %s", action)
 	case tools.PermissionPrompt:
-		reply := make(chan bool, 1)
-		request := approvalEvent{action: action, detail: detail, reply: reply}
-		select {
-		case b.events <- request:
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-b.ctx.Done():
-			return b.ctx.Err()
-		}
-		select {
-		case allowed := <-reply:
-			if allowed {
-				return nil
-			}
-			return fmt.Errorf("permission denied for %s", action)
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-b.ctx.Done():
-			return b.ctx.Err()
-		}
+		return b.prompt(ctx, action, detail)
 	default:
 		return fmt.Errorf("unknown permission mode %q", b.mode)
+	}
+}
+
+type promptApprover struct{ bridge *Bridge }
+
+func PromptApprover(bridge *Bridge) tools.Approver { return promptApprover{bridge: bridge} }
+
+func (a promptApprover) Approve(ctx context.Context, action, detail string) error {
+	return a.bridge.prompt(ctx, action, detail)
+}
+
+func (b *Bridge) prompt(ctx context.Context, action, detail string) error {
+	reply := make(chan bool, 1)
+	request := approvalEvent{action: action, detail: detail, reply: reply}
+	select {
+	case b.events <- request:
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-b.ctx.Done():
+		return b.ctx.Err()
+	}
+	select {
+	case allowed := <-reply:
+		if allowed {
+			return nil
+		}
+		return fmt.Errorf("permission denied for %s", action)
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-b.ctx.Done():
+		return b.ctx.Err()
 	}
 }
 

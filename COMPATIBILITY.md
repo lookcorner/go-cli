@@ -10,7 +10,7 @@ Status values: **done**, **partial**, **planned**.
 | Responses API streaming | done | SSE text deltas, terminal response IDs, function calls and JSON fallback |
 | Headless agent loop | done | Multi-step model/tool loop with cancellation and a configurable limit |
 | Workspace file tools | partial | Gork-compatible `read_file`, `list_dir`, `grep`, and `search_replace` schemas cover text reads with negative offsets, ripgrep filters, atomic create/overwrite and exact/all replacement; document/image formats, full gitignore traversal and Unicode-normalized editing remain |
-| Tool permissions | partial | Prompt/auto/deny modes and repeatable Gork-style allow/deny `Tool(pattern)` rules with deny precedence work; managed system policy and persistent project rules remain |
+| Tool permissions | partial | Prompt/auto/deny modes, repeatable CLI rules and compatible `[permission].rules` for any/bash/edit/MCP with deny→ask→allow precedence work; read/grep/WebFetch rules and managed system policy remain |
 | Shell execution | partial | Gork-compatible tools support foreground exit status, background timeout/lifecycle, multi-task wait/poll, process groups, cleanup, and replayed cwd/environment/functions/aliases; shell-option parity, interactive PTY sessions and cgroups remain |
 | Session persistence | partial | Durable JSONL events, latest/path resume, completed-turn response-ID continuation and checkpoint-aligned local transcript reconstruction work; rewind, branching and migrations remain |
 | Configuration | partial | Gork-compatible `~/.grok/config.toml`, model selection/custom providers, MCP/LSP tables, legacy JSON, environment and CLI layers work; full UI/toolset fields, requirements and managed config remain |

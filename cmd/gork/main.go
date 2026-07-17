@@ -137,11 +137,15 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if opts.maxSteps > 0 {
 		cfg.MaxSteps = opts.maxSteps
 	}
+	allowRules, askRules, denyRules, err := permissionRules(cfg.Permission, opts.allow, opts.deny)
+	if err != nil {
+		return err
+	}
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
 	if opts.acp {
-		return runACP(cfg, opts, stdin, stdout, stderr)
+		return runACP(cfg, opts, allowRules, askRules, denyRules, stdin, stdout, stderr)
 	}
 
 	inputReader := bufio.NewReader(stdin)
@@ -219,17 +223,20 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return err
 	}
 	var approver tools.Approver
+	var askApprover tools.Approver
 	var tuiBridge *tui.Bridge
 	statusOutput := stderr
 	if opts.tui {
 		tuiBridge = tui.NewBridge(ctx, mode)
 		defer tuiBridge.Close()
 		approver = tuiBridge
+		askApprover = tui.PromptApprover(tuiBridge)
 		statusOutput = tuiBridge.StatusWriter()
 	} else {
 		approver = tools.PromptApprover{Mode: mode, Input: inputReader, Output: stderr}
+		askApprover = tools.PromptApprover{Mode: tools.PermissionPrompt, Input: inputReader, Output: stderr}
 	}
-	approver, err = tools.NewRuleApprover(approver, opts.allow, opts.deny)
+	approver, err = tools.NewPolicyApprover(approver, askApprover, allowRules, askRules, denyRules)
 	if err != nil {
 		return err
 	}
@@ -302,7 +309,7 @@ func newModelClient(cfg config.Config) (agent.ResponseStreamer, error) {
 	}
 }
 
-func runACP(cfg config.Config, opts options, stdin io.Reader, stdout, stderr io.Writer) error {
+func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	mode := tools.PermissionMode(opts.approval)
 	if mode != tools.PermissionPrompt && mode != tools.PermissionAuto && mode != tools.PermissionDeny {
 		return fmt.Errorf("invalid --approval %q", opts.approval)
@@ -333,7 +340,7 @@ func runACP(cfg config.Config, opts options, stdin io.Reader, stdout, stderr io.
 		if mode != tools.PermissionPrompt {
 			approver = tools.PromptApprover{Mode: mode}
 		}
-		approver, err = tools.NewRuleApprover(approver, opts.allow, opts.deny)
+		approver, err = tools.NewPolicyApprover(approver, protocolApprover, allowRules, askRules, denyRules)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -629,4 +636,51 @@ func displayPath(path string) string {
 		}
 	}
 	return path
+}
+
+func permissionRules(permission config.PermissionConfig, cliAllow, cliDeny []string) (allow, ask, deny []string, err error) {
+	allow = append(allow, cliAllow...)
+	deny = append(deny, cliDeny...)
+	for index, rule := range permission.Rules {
+		tool := strings.TrimSpace(rule.Tool)
+		if tool == "" {
+			tool = "any"
+		}
+		switch strings.ToLower(tool) {
+		case "any":
+			tool = "Any"
+		case "bash":
+			tool = "Bash"
+		case "edit":
+			tool = "Edit"
+		case "mcp":
+			tool = "Mcp"
+		case "read", "grep":
+			return nil, nil, nil, fmt.Errorf("permission rule %d targets unsupported %s policy", index+1, tool)
+		case "webfetch":
+			return nil, nil, nil, fmt.Errorf("permission rule %d targets unsupported webfetch tool", index+1)
+		default:
+			return nil, nil, nil, fmt.Errorf("permission rule %d has unknown tool %q", index+1, rule.Tool)
+		}
+		mode := strings.ToLower(strings.TrimSpace(rule.PatternMode))
+		if mode != "" && mode != "glob" {
+			return nil, nil, nil, fmt.Errorf("permission rule %d uses unsupported pattern_mode %q", index+1, rule.PatternMode)
+		}
+		pattern := "*"
+		if rule.Pattern != nil {
+			pattern = *rule.Pattern
+		}
+		encoded := tool + "(" + pattern + ")"
+		switch strings.ToLower(strings.TrimSpace(rule.Action)) {
+		case "allow":
+			allow = append(allow, encoded)
+		case "ask":
+			ask = append(ask, encoded)
+		case "deny", "":
+			deny = append(deny, encoded)
+		default:
+			return nil, nil, nil, fmt.Errorf("permission rule %d has unknown action %q", index+1, rule.Action)
+		}
+	}
+	return allow, ask, deny, nil
 }

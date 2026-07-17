@@ -47,3 +47,20 @@ func TestRuleApproverRejectsMalformedRules(t *testing.T) {
 		t.Fatal("expected malformed rule error")
 	}
 }
+
+func TestPolicyApproverAskPrecedesAllow(t *testing.T) {
+	base := &recordingApprover{}
+	asker := &recordingApprover{}
+	approver, err := NewPolicyApprover(base, asker,
+		[]string{"Bash(git *)"}, []string{"Bash(git push *)"}, nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := approver.Approve(context.Background(), "shell", "git push origin main"); err != nil {
+		t.Fatal(err)
+	}
+	if asker.calls != 1 || base.calls != 0 {
+		t.Fatalf("ask did not precede allow: asker=%d base=%d", asker.calls, base.calls)
+	}
+}

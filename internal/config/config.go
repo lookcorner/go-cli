@@ -23,7 +23,19 @@ type Config struct {
 	MaxSteps     int                        `json:"max_steps,omitempty"`
 	MCPServers   map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
 	LSPServers   map[string]LSPServerConfig `json:"lsp_servers,omitempty"`
+	Permission   PermissionConfig           `json:"permission,omitempty"`
 	HTTPTimeout  time.Duration              `json:"-"`
+}
+
+type PermissionConfig struct {
+	Rules []PermissionRule `json:"rules,omitempty" toml:"rules"`
+}
+
+type PermissionRule struct {
+	Action      string  `json:"action" toml:"action"`
+	Tool        string  `json:"tool,omitempty" toml:"tool"`
+	Pattern     *string `json:"pattern,omitempty" toml:"pattern"`
+	PatternMode string  `json:"pattern_mode,omitempty" toml:"pattern_mode"`
 }
 
 type MCPServerConfig struct {
@@ -61,6 +73,7 @@ type fileConfig struct {
 	HTTPTimeout  string                     `json:"http_timeout,omitempty" toml:"http_timeout"`
 	MCPServers   map[string]MCPServerConfig `json:"mcp_servers,omitempty" toml:"mcp_servers"`
 	LSPServers   map[string]LSPServerConfig `json:"lsp_servers,omitempty" toml:"lsp_servers"`
+	Permission   PermissionConfig           `json:"permission,omitempty" toml:"permission"`
 	Models       struct {
 		Default string `toml:"default"`
 	} `json:"-" toml:"models"`
@@ -120,6 +133,7 @@ func Load(path string) (Config, error) {
 		}
 		cfg.MCPServers = disk.MCPServers
 		cfg.LSPServers = disk.LSPServers
+		cfg.Permission = disk.Permission
 		if disk.HTTPTimeout != "" {
 			d, err := time.ParseDuration(disk.HTTPTimeout)
 			if err != nil {

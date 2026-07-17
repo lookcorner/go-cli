@@ -144,6 +144,21 @@ actions:
 ./gork --allow 'Bash(git *)' --deny 'Bash(git push --force*)' --workspace .
 ```
 
+Persistent rules use Gork Build's `[permission]` schema. Rule precedence is
+deny, then ask, then allow, regardless of declaration order:
+
+```toml
+[[permission.rules]]
+action = "allow"
+tool = "bash"
+pattern = "git *"
+
+[[permission.rules]]
+action = "ask"
+tool = "bash"
+pattern = "git push *"
+```
+
 The Gork Build-compatible file surface includes `read_file`, `list_dir`,
 `grep`, and `search_replace`; text reads support positive or negative line
 offsets and use the original `LINE_NUMBER→LINE_CONTENT` format. The earlier

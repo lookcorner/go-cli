@@ -34,6 +34,16 @@ headers = { Authorization = "Bearer token" }
 [lsp_servers.gopls]
 command = "gopls"
 extensions = [".go"]
+
+[[permission.rules]]
+action = "allow"
+tool = "bash"
+pattern = "git *"
+
+[[permission.rules]]
+action = "deny"
+tool = "edit"
+pattern = ".env*"
 `)
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
@@ -56,6 +66,9 @@ extensions = [".go"]
 	}
 	if cfg.LSPServers["gopls"].Command != "gopls" || len(cfg.LSPServers["gopls"].Extensions) != 1 {
 		t.Fatalf("unexpected LSP config: %#v", cfg.LSPServers)
+	}
+	if len(cfg.Permission.Rules) != 2 || cfg.Permission.Rules[0].Action != "allow" || *cfg.Permission.Rules[1].Pattern != ".env*" {
+		t.Fatalf("unexpected permission config: %#v", cfg.Permission)
 	}
 }
 
