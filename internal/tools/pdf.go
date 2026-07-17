@@ -51,6 +51,25 @@ func extractPDFText(data []byte, pages string) (text string, err error) {
 	return output.String(), nil
 }
 
+func selectPDFPages(data []byte, pages string) (selected []int, total int, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			selected, total = nil, 0
+			err = fmt.Errorf("parse PDF: %v", recovered)
+		}
+	}()
+	document, err := pdfreader.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return nil, 0, fmt.Errorf("open PDF: %w", err)
+	}
+	total = document.NumPage()
+	if total == 0 {
+		return nil, 0, errors.New("PDF has no pages")
+	}
+	selected, err = parsePDFPages(pages, total)
+	return selected, total, err
+}
+
 func parsePDFPages(spec string, pageCount int) ([]int, error) {
 	if strings.TrimSpace(spec) == "" {
 		if pageCount > pdfAutoReadPages {

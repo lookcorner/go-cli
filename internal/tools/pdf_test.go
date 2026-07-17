@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -97,5 +98,28 @@ func TestReadFileExtractsPDFText(t *testing.T) {
 	}
 	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"target_file":"doc.pdf"}`)); err == nil || !strings.Contains(err.Error(), "format \"text\"") {
 		t.Fatalf("default image mode should remain explicit, got %v", err)
+	}
+}
+
+func TestReadFileRendersPDFPages(t *testing.T) {
+	if _, err := exec.LookPath("pdftoppm"); err != nil {
+		t.Skip("pdftoppm is not installed")
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "doc.pdf"), makePDF("First", "Second"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry(ws, PromptApprover{Mode: PermissionAuto})
+	defer registry.Close()
+	result, err := registry.ExecuteResult(context.Background(), "read_file", json.RawMessage(`{"target_file":"doc.pdf","pages":"2"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output != "[PDF: doc.pdf (1 pages rendered, 2 total)]" || len(result.Images) != 1 || result.Images[0].MediaType != "image/jpeg" || result.Images[0].Width < 1 || result.Images[0].Height < 1 {
+		t.Fatalf("unexpected PDF render result: %#v", result)
 	}
 }

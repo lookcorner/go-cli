@@ -356,7 +356,7 @@ type readFileTool struct{ ws *workspace.Workspace }
 func (t *readFileTool) Definition() api.ToolDefinition {
 	return api.ToolDefinition{
 		Type: "function", Name: "read_file",
-		Description: "Read text, PPTX, PNG, JPEG, GIF, or WebP files, or extract PDF text, inside the workspace. Text results use 1-based LINE_NUMBER→LINE_CONTENT formatting.",
+		Description: "Read text, PPTX, PNG, JPEG, GIF, WebP, or PDF files inside the workspace. PDFs render as page images by default or extract text with format=text. Text results use 1-based LINE_NUMBER→LINE_CONTENT formatting.",
 		Parameters: objectSchema(map[string]any{
 			"target_file": map[string]any{"type": "string", "description": "File path relative to the workspace."},
 			"offset":      map[string]any{"type": "integer", "description": "1-based starting line; negative values count from the end."},

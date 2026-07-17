@@ -14,8 +14,10 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	_ "golang.org/x/image/webp"
 )
@@ -33,12 +35,102 @@ var imageTypes = map[string]string{
 var _ ResultTool = (*readFileTool)(nil)
 
 func (t *readFileTool) ExecuteResult(ctx context.Context, raw json.RawMessage) (ExecutionResult, error) {
+	result, pdfFile, err := t.readPDFImages(ctx, raw)
+	if pdfFile || err != nil {
+		return result, err
+	}
 	result, imageFile, err := t.readImage(raw)
 	if imageFile || err != nil {
 		return result, err
 	}
 	result.Output, err = t.Execute(ctx, raw)
 	return result, err
+}
+
+func (t *readFileTool) readPDFImages(ctx context.Context, raw json.RawMessage) (ExecutionResult, bool, error) {
+	var args struct {
+		TargetFile string `json:"target_file"`
+		Path       string `json:"path"`
+		Pages      string `json:"pages"`
+		Format     string `json:"format"`
+	}
+	if json.Unmarshal(raw, &args) != nil || args.Format == "text" {
+		return ExecutionResult{}, false, nil
+	}
+	requestedPath := args.TargetFile
+	if requestedPath == "" {
+		requestedPath = args.Path
+	}
+	path, err := t.ws.Resolve(requestedPath)
+	if err != nil {
+		return ExecutionResult{}, strings.EqualFold(filepath.Ext(requestedPath), ".pdf"), err
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		if strings.EqualFold(filepath.Ext(requestedPath), ".pdf") {
+			return ExecutionResult{}, true, fmt.Errorf("open %q: %w", requestedPath, err)
+		}
+		return ExecutionResult{}, false, nil
+	}
+	defer file.Close()
+	header := make([]byte, 5)
+	headerBytes, _ := file.Read(header)
+	isPDF := strings.EqualFold(filepath.Ext(path), ".pdf") || headerBytes == len(header) && bytes.Equal(header, []byte("%PDF-"))
+	if !isPDF {
+		return ExecutionResult{}, false, nil
+	}
+	if args.Format != "" && args.Format != "image" {
+		return ExecutionResult{}, true, fmt.Errorf("invalid PDF format %q; supported values are image and text", args.Format)
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return ExecutionResult{}, true, err
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maxPDFBytes+1))
+	if err != nil {
+		return ExecutionResult{}, true, fmt.Errorf("read PDF %q: %w", requestedPath, err)
+	}
+	if len(data) > maxPDFBytes {
+		return ExecutionResult{}, true, fmt.Errorf("PDF %q exceeds %d bytes", requestedPath, maxPDFBytes)
+	}
+	pages, total, err := selectPDFPages(data, args.Pages)
+	if err != nil {
+		return ExecutionResult{}, true, fmt.Errorf("read PDF %q: %w", requestedPath, err)
+	}
+	pdftoppm, err := exec.LookPath("pdftoppm")
+	if err != nil {
+		return ExecutionResult{}, true, errors.New("PDF image output requires pdftoppm (Poppler)")
+	}
+	tempDir, err := os.MkdirTemp("", "gork-pdf-*")
+	if err != nil {
+		return ExecutionResult{}, true, err
+	}
+	defer os.RemoveAll(tempDir)
+	renderCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	images := make([]ImageAttachment, 0, len(pages))
+	for _, page := range pages {
+		prefix := filepath.Join(tempDir, fmt.Sprintf("page-%d", page))
+		command := exec.CommandContext(renderCtx, pdftoppm, "-jpeg", "-jpegopt", "quality=85", "-r", "150", "-f", fmt.Sprint(page), "-l", fmt.Sprint(page), "-singlefile", path, prefix)
+		if output, err := command.CombinedOutput(); err != nil {
+			if errors.Is(renderCtx.Err(), context.DeadlineExceeded) {
+				return ExecutionResult{}, true, errors.New("PDF rendering timed out after 60 seconds")
+			}
+			return ExecutionResult{}, true, fmt.Errorf("render PDF page %d: %w: %s", page, err, strings.TrimSpace(string(output)))
+		}
+		imageData, err := os.ReadFile(prefix + ".jpg")
+		if err != nil {
+			return ExecutionResult{}, true, fmt.Errorf("read rendered PDF page %d: %w", page, err)
+		}
+		attachment, err := NewImageAttachment("image/jpeg", imageData)
+		if err != nil {
+			return ExecutionResult{}, true, fmt.Errorf("decode rendered PDF page %d: %w", page, err)
+		}
+		images = append(images, attachment)
+	}
+	return ExecutionResult{
+		Output: fmt.Sprintf("[PDF: %s (%d pages rendered, %d total)]", requestedPath, len(images), total),
+		Images: images,
+	}, true, nil
 }
 
 func (t *readFileTool) readImage(raw json.RawMessage) (ExecutionResult, bool, error) {
