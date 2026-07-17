@@ -29,6 +29,7 @@ const ProtocolVersion = 1
 
 type SessionConfig struct {
 	CWD        string
+	Model      string
 	MCPServers []MCPServer
 	SessionID  string
 	ResumePath string
@@ -200,6 +201,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleRehydrateSession(ctx, incoming)
 		case "x.ai/session/resolve_local_for_worktree_resume":
 			s.handleResolveLocalSession(ctx, incoming)
+		case "x.ai/session/fork":
+			s.handleSessionFork(incoming)
 		case "x.ai/rewind/points", "x.ai/rewind/execute":
 			s.handleRewind(incoming)
 		case "x.ai/terminal/pty/create", "x.ai/terminal/pty/load", "x.ai/terminal/pty/resize", "x.ai/terminal/list", "x.ai/terminal/kill":
@@ -306,7 +309,7 @@ func (s *Server) handleResumeSessionInWorktree(ctx context.Context, incoming mes
 			codeRestored, restoreSummary, restoreDegree = worktrees.RestoreSummary(persisted.HeadCommit, outcome)
 		}
 	}
-	chat, updates, err := sessionlog.Fork(s.SessionDir, req.SessionID, newID, effective)
+	chat, updates, err := sessionlog.Fork(s.SessionDir, req.SessionID, newID, effective, "", nil)
 	if err != nil {
 		_, _, _ = s.worktrees.Remove(ctx, worktrees.RemoveRequest{WorktreePath: fork.WorktreePath, Force: true})
 		s.respondError(incoming.ID, -32000, err.Error())
@@ -322,6 +325,63 @@ func (s *Server) handleResumeSessionInWorktree(ctx context.Context, incoming mes
 	}
 	if restoreDegree != "" {
 		response["restoreDegree"] = restoreDegree
+	}
+	s.respond(incoming.ID, response)
+}
+
+func (s *Server) handleSessionFork(incoming message) {
+	var req struct {
+		SourceSessionID   string `json:"sourceSessionId"`
+		SourceCWD         string `json:"sourceCwd"`
+		NewCWD            string `json:"newCwd"`
+		NewSessionID      string `json:"newSessionId"`
+		NewModelID        string `json:"newModelId"`
+		TargetPromptIndex *int   `json:"targetPromptIndex"`
+	}
+	if json.Unmarshal(incoming.Params, &req) != nil || req.SourceSessionID == "" || req.SourceCWD == "" || req.NewCWD == "" {
+		s.respondError(incoming.ID, -32602, "sourceSessionId, sourceCwd, and newCwd are required")
+		return
+	}
+	items, err := sessionlog.List(s.SessionDir, "")
+	if err != nil {
+		s.respondError(incoming.ID, -32000, err.Error())
+		return
+	}
+	found := false
+	for _, item := range items {
+		if item.SessionID == req.SourceSessionID && item.CWD == req.SourceCWD {
+			found = true
+			break
+		}
+	}
+	if !found {
+		s.respondError(incoming.ID, -32602, "source session and cwd do not match a persisted session")
+		return
+	}
+	if current := s.lookupSession(req.SourceSessionID); current != nil {
+		current.mu.Lock()
+		running := current.running
+		current.mu.Unlock()
+		if running {
+			s.respondError(incoming.ID, -32000, "cannot fork while a prompt is running")
+			return
+		}
+	}
+	newID := req.NewSessionID
+	if newID == "" {
+		newID = fmt.Sprintf("gork-%s-%d", time.Now().UTC().Format("20060102T150405.000000000Z"), s.nextSession.Add(1))
+	}
+	chat, updates, err := sessionlog.Fork(s.SessionDir, req.SourceSessionID, newID, req.NewCWD, req.NewModelID, req.TargetPromptIndex)
+	if err != nil {
+		s.respondError(incoming.ID, -32000, err.Error())
+		return
+	}
+	response := map[string]any{
+		"newSessionId": newID, "chatMessagesCopied": chat, "updatesCopied": updates,
+		"planStateCopied": false, "newCwd": req.NewCWD, "parentSessionId": req.SourceSessionID,
+	}
+	if req.NewModelID != "" {
+		response["newModelId"] = req.NewModelID
 	}
 	s.respond(incoming.ID, response)
 }
@@ -954,9 +1014,11 @@ func (s *Server) handleRestoreSession(ctx context.Context, incoming message, rep
 		return
 	}
 	found := false
+	model := ""
 	for _, item := range items {
 		if item.SessionID == params.SessionID {
 			found = true
+			model = item.ModelID
 			if item.CWD != params.CWD {
 				s.respondError(incoming.ID, -32602, "cwd does not match the stored session")
 				return
@@ -978,7 +1040,7 @@ func (s *Server) handleRestoreSession(ctx context.Context, incoming message, rep
 		s.respondError(incoming.ID, -32602, err.Error())
 		return
 	}
-	config := SessionConfig{CWD: params.CWD, SessionID: params.SessionID, ResumePath: path, MCPServers: servers}
+	config := SessionConfig{CWD: params.CWD, Model: model, SessionID: params.SessionID, ResumePath: path, MCPServers: servers}
 	if _, err := s.startSession(ctx, params.SessionID, config, previous); err != nil {
 		s.respondError(incoming.ID, -32000, err.Error())
 		return

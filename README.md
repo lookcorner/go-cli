@@ -164,6 +164,11 @@ to the actual tool call, so protocol stdin is never consumed by a CLI prompt.
 `--approval auto` and `--approval deny` remain available for clients that
 intentionally want a fixed policy.
 
+`x.ai/session/fork` creates a persisted child session without starting it. It
+supports client-provided IDs, model overrides, a new working directory, and
+inclusive `targetPromptIndex` truncation; later load/resume uses the stored
+model override.
+
 ACP sessions expose `x.ai/rewind/points` and `x.ai/rewind/execute` for
 `all`, `conversation_only`, and `files_only` rewind (`code_only` remains an
 alias). Rewinds append a timeline marker instead of deleting history, restore

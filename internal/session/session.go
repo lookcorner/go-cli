@@ -52,9 +52,9 @@ type RewindResult struct {
 	Messages           []Message
 }
 
-// Fork copies a validated session event stream to a new session ID and appends
-// metadata that binds the fork to its new working directory.
-func Fork(dir, sourceID, newID, cwd string) (chatMessages, updates int, err error) {
+// Fork copies a validated session event stream to a new session ID. A target
+// keeps that prompt and its completed turn, but omits later prompts.
+func Fork(dir, sourceID, newID, cwd, modelID string, target *int) (chatMessages, updates int, err error) {
 	source, err := PathForID(dir, sourceID)
 	if err != nil {
 		return 0, 0, err
@@ -87,6 +87,29 @@ func Fork(dir, sourceID, newID, cwd string) (chatMessages, updates int, err erro
 	if err != nil || len(data) > maxSessionBytes {
 		return 0, 0, errors.New("source session is too large")
 	}
+	if target != nil {
+		events, starts, _, timelineErr := liveTimeline(source)
+		if timelineErr != nil {
+			return 0, 0, timelineErr
+		}
+		if *target < 0 || *target >= len(starts) {
+			return 0, 0, fmt.Errorf("cannot fork at prompt #%d; valid targets are 0..%d", *target, len(starts)-1)
+		}
+		cut := len(events)
+		if *target+1 < len(starts) {
+			cut = starts[*target+1]
+		}
+		var selected bytes.Buffer
+		for _, event := range events[:cut] {
+			encoded, marshalErr := json.Marshal(event)
+			if marshalErr != nil {
+				return 0, 0, marshalErr
+			}
+			selected.Write(encoded)
+			selected.WriteByte('\n')
+		}
+		data = selected.Bytes()
+	}
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
 	scanner.Buffer(make([]byte, 64<<10), 8<<20)
 	for scanner.Scan() {
@@ -112,9 +135,17 @@ func Fork(dir, sourceID, newID, cwd string) (chatMessages, updates int, err erro
 	if _, err := out.Write(data); err != nil {
 		return 0, 0, err
 	}
+	metadata := map[string]any{"cwd": cwd}
+	if modelID != "" {
+		metadata["modelId"] = modelID
+	}
+	forked := map[string]any{"parent_session_id": sourceID}
+	if target != nil {
+		forked["target_prompt_index"] = *target
+	}
 	for _, event := range []Event{
-		{Time: time.Now().UTC(), Kind: "session_metadata", Data: map[string]any{"cwd": cwd}},
-		{Time: time.Now().UTC(), Kind: "session_forked", Data: map[string]any{"parent_session_id": sourceID}},
+		{Time: time.Now().UTC(), Kind: "session_metadata", Data: metadata},
+		{Time: time.Now().UTC(), Kind: "session_forked", Data: forked},
 	} {
 		encoded, marshalErr := json.Marshal(event)
 		if marshalErr != nil {
@@ -123,7 +154,6 @@ func Fork(dir, sourceID, newID, cwd string) (chatMessages, updates int, err erro
 		if _, err := out.Write(append(encoded, '\n')); err != nil {
 			return 0, 0, err
 		}
-		updates++
 	}
 	if err := out.Sync(); err != nil {
 		return 0, 0, err
@@ -200,6 +230,7 @@ type Info struct {
 	SessionID  string    `json:"sessionId"`
 	CWD        string    `json:"cwd"`
 	HeadCommit string    `json:"headCommit,omitempty"`
+	ModelID    string    `json:"modelId,omitempty"`
 	Title      string    `json:"title,omitempty"`
 	UpdatedAt  time.Time `json:"updatedAt"`
 }
@@ -272,11 +303,15 @@ func readInfo(path, id string) (Info, error) {
 			var data struct {
 				CWD        string `json:"cwd"`
 				HeadCommit string `json:"headCommit"`
+				ModelID    string `json:"modelId"`
 			}
 			if json.Unmarshal(event.Data, &data) == nil && data.CWD != "" {
 				info.CWD = data.CWD
 				if data.HeadCommit != "" {
 					info.HeadCommit = data.HeadCommit
+				}
+				if data.ModelID != "" {
+					info.ModelID = data.ModelID
 				}
 			}
 		case "user_prompt":

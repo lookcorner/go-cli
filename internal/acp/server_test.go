@@ -47,6 +47,73 @@ func (f *fixtureStreamer) StreamResponse(ctx context.Context, request api.Respon
 	return result, nil
 }
 
+func TestSessionForkContractAndModelResume(t *testing.T) {
+	sessionDir, sourceCWD, newCWD := t.TempDir(), t.TempDir(), t.TempDir()
+	logger, err := sessionlog.NewLoggerWithID(sessionDir, "parent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []struct {
+		kind string
+		data any
+	}{
+		{"session_metadata", map[string]any{"cwd": sourceCWD, "modelId": "old-model"}},
+		{"user_prompt", map[string]any{"text": "first"}},
+		{"model_response", map[string]any{"text": "one", "response_id": "r1", "tool_call_count": 0}},
+		{"user_prompt", map[string]any{"text": "second"}},
+		{"model_response", map[string]any{"text": "two", "response_id": "r2", "tool_call_count": 0}},
+	} {
+		if err := logger.Append(event.kind, event.data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = logger.Close()
+	configs := make(chan SessionConfig, 1)
+	server := &Server{SessionDir: sessionDir, Factory: func(_ context.Context, cfg SessionConfig, _ tools.Approver, _, _ io.Writer) (*agent.Runner, func(), error) {
+		configs <- cfg
+		return nil, nil, errors.New("stop after config capture")
+	}}
+	clientToAgentR, clientToAgentW := io.Pipe()
+	agentToClientR, agentToClientW := io.Pipe()
+	done := make(chan error, 1)
+	go func() { done <- server.Serve(context.Background(), clientToAgentR, agentToClientW) }()
+	encoder, decoder := json.NewEncoder(clientToAgentW), json.NewDecoder(agentToClientR)
+	target := 0
+	encodeACP(t, encoder, map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "x.ai/session/fork",
+		"params": map[string]any{
+			"sourceSessionId": "parent", "sourceCwd": sourceCWD, "newCwd": newCWD,
+			"newSessionId": "child", "newModelId": "new-model", "targetPromptIndex": target,
+		},
+	})
+	forked := decodeACP(t, decoder)
+	result := forked["result"].(map[string]any)
+	if result["newSessionId"] != "child" || result["parentSessionId"] != "parent" || result["newModelId"] != "new-model" || result["chatMessagesCopied"].(float64) != 2 {
+		t.Fatalf("unexpected fork response: %#v", forked)
+	}
+	items, err := sessionlog.List(sessionDir, newCWD)
+	if err != nil || len(items) != 1 || items[0].ModelID != "new-model" {
+		t.Fatalf("fork metadata: %#v err=%v", items, err)
+	}
+	path, _ := sessionlog.PathForID(sessionDir, "child")
+	messages, err := sessionlog.Transcript(path)
+	if err != nil || len(messages) != 2 || messages[1].Text != "one" {
+		t.Fatalf("fork transcript: %#v err=%v", messages, err)
+	}
+	encodeACP(t, encoder, map[string]any{
+		"jsonrpc": "2.0", "id": 2, "method": "session/resume",
+		"params": map[string]any{"sessionId": "child", "cwd": newCWD},
+	})
+	if cfg := <-configs; cfg.Model != "new-model" || cfg.ResumePath != path {
+		t.Fatalf("fork model was not resumed: %#v", cfg)
+	}
+	_ = decodeACP(t, decoder)
+	_ = clientToAgentW.Close()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 	root := t.TempDir()
 	gitInit := exec.Command("git", "init", "-q")

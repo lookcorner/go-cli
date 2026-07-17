@@ -210,7 +210,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return err
 	}
 	if opts.resume == "" {
-		if err := logger.Append("session_metadata", sessionMetadata(context.Background(), ws.Root())); err != nil {
+		if err := logger.Append("session_metadata", sessionMetadata(context.Background(), ws.Root(), cfg.Model)); err != nil {
 			return err
 		}
 	}
@@ -405,7 +405,11 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			return nil, nil, err
 		}
 		if sessionConfig.ResumePath == "" {
-			if err := logger.Append("session_metadata", sessionMetadata(ctx, ws.Root())); err != nil {
+			model := cfg.Model
+			if sessionConfig.Model != "" {
+				model = sessionConfig.Model
+			}
+			if err := logger.Append("session_metadata", sessionMetadata(ctx, ws.Root(), model)); err != nil {
 				_ = logger.Close()
 				_ = registry.Close()
 				return nil, nil, err
@@ -430,6 +434,9 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			}
 		}
 		sessionCfg := cfg
+		if sessionConfig.Model != "" {
+			sessionCfg.Model = sessionConfig.Model
+		}
 		sessionCfg.MCPServers = make(map[string]config.MCPServerConfig, len(cfg.MCPServers)+len(sessionConfig.MCPServers))
 		for name, configured := range cfg.MCPServers {
 			sessionCfg.MCPServers[name] = configured
@@ -450,7 +457,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			cleanup()
 			return nil, nil, err
 		}
-		modelClient, err := newModelClient(cfg)
+		modelClient, err := newModelClient(sessionCfg)
 		if err != nil {
 			cleanup()
 			return nil, nil, err
@@ -459,7 +466,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		closeRuntime := func() { closeOnce.Do(cleanup) }
 		return &agent.Runner{
 			Client: modelClient, Tools: registry, Skills: catalog, Logger: logger,
-			Model: cfg.Model, Instructions: instructions, MaxSteps: cfg.MaxSteps,
+			Model: sessionCfg.Model, Instructions: instructions, MaxSteps: cfg.MaxSteps,
 			TextOutput: textOutput, StatusOutput: statusOutput,
 			ContextWindow: cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,
 		}, closeRuntime, nil
@@ -471,8 +478,8 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 	return nil
 }
 
-func sessionMetadata(ctx context.Context, cwd string) map[string]any {
-	metadata := map[string]any{"cwd": cwd}
+func sessionMetadata(ctx context.Context, cwd, model string) map[string]any {
+	metadata := map[string]any{"cwd": cwd, "modelId": model}
 	if head, err := worktrees.Head(ctx, cwd); err == nil && head != "" {
 		metadata["headCommit"] = head
 	}

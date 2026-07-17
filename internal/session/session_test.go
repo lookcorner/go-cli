@@ -226,17 +226,49 @@ func TestForkCopiesTranscriptAndRebindsCWD(t *testing.T) {
 		}
 	}
 	_ = logger.Close()
-	chat, updates, err := Fork(dir, "parent", "child", "/new")
-	if err != nil || chat != 2 || updates != 3 {
+	chat, updates, err := Fork(dir, "parent", "child", "/new", "grok-test", nil)
+	if err != nil || chat != 2 || updates != 1 {
 		t.Fatalf("fork counts: chat=%d updates=%d err=%v", chat, updates, err)
 	}
 	items, err := List(dir, "/new")
-	if err != nil || len(items) != 1 || items[0].SessionID != "child" {
+	if err != nil || len(items) != 1 || items[0].SessionID != "child" || items[0].ModelID != "grok-test" {
 		t.Fatalf("forked session metadata: %#v err=%v", items, err)
 	}
 	messages, err := Transcript(filepath.Join(dir, "child.jsonl"))
 	if err != nil || len(messages) != 2 || messages[0].Text != "hello" || messages[1].Text != "world" {
 		t.Fatalf("forked transcript: %#v err=%v", messages, err)
+	}
+}
+
+func TestForkAtPromptUsesLiveTimeline(t *testing.T) {
+	dir := t.TempDir()
+	logger, err := NewLoggerWithID(dir, "parent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []struct {
+		kind string
+		data any
+	}{
+		{"session_metadata", map[string]any{"cwd": "/old"}},
+		{"user_prompt", map[string]any{"text": "first"}},
+		{"model_response", map[string]any{"text": "one", "response_id": "r1", "tool_call_count": 0}},
+		{"user_prompt", map[string]any{"text": "second"}},
+		{"model_response", map[string]any{"text": "two", "response_id": "r2", "tool_call_count": 0}},
+	} {
+		if err := logger.Append(event.kind, event.data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = logger.Close()
+	target := 0
+	chat, _, err := Fork(dir, "parent", "child", "/new", "", &target)
+	if err != nil || chat != 2 {
+		t.Fatalf("fork at prompt: chat=%d err=%v", chat, err)
+	}
+	messages, err := Transcript(filepath.Join(dir, "child.jsonl"))
+	if err != nil || len(messages) != 2 || messages[0].Text != "first" || messages[1].Text != "one" {
+		t.Fatalf("forked timeline: %#v err=%v", messages, err)
 	}
 }
 
