@@ -48,8 +48,10 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 		}}},
 		{ResponseID: "response-2", Text: "finished"},
 	}}
-	server := &Server{Factory: func(_ context.Context, cwd string, approver tools.Approver, text, status io.Writer) (*agent.Runner, func(), error) {
-		ws, err := workspace.Open(cwd)
+	factoryConfigs := make(chan SessionConfig, 1)
+	server := &Server{Factory: func(_ context.Context, cfg SessionConfig, approver tools.Approver, text, status io.Writer) (*agent.Runner, func(), error) {
+		factoryConfigs <- cfg
+		ws, err := workspace.Open(cfg.CWD)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -67,23 +69,46 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 	if int(initialize["id"].(float64)) != 1 {
 		t.Fatalf("unexpected initialize response: %#v", initialize)
 	}
-	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 2, "method": "session/new", "params": map[string]any{"cwd": root, "mcpServers": []any{}}})
+	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 2, "method": "session/new", "params": map[string]any{
+		"cwd": root, "mcpServers": []any{map[string]any{
+			"name": "client-tools", "command": "/fixture-mcp", "args": []string{"--stdio"},
+			"env": []any{map[string]any{"name": "TOKEN", "value": "secret"}},
+		}},
+	}})
 	created := decodeACP(t, decoder)
+	receivedConfig := <-factoryConfigs
+	if len(receivedConfig.MCPServers) != 1 || receivedConfig.MCPServers[0].Env["TOKEN"] != "secret" {
+		t.Fatalf("client MCP config was not forwarded: %#v", receivedConfig)
+	}
 	sessionID := created["result"].(map[string]any)["sessionId"].(string)
 	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 3, "method": "session/prompt", "params": map[string]any{
 		"sessionId": sessionID, "prompt": []any{map[string]any{"type": "text", "text": "create the file"}},
 	}})
+	toolStarted := decodeACP(t, decoder)
+	startedUpdate := toolStarted["params"].(map[string]any)["update"].(map[string]any)
+	if startedUpdate["sessionUpdate"] != "tool_call" || startedUpdate["toolCallId"] != "tool-1" {
+		t.Fatalf("unexpected tool start: %#v", toolStarted)
+	}
 	permission := decodeACP(t, decoder)
 	if permission["method"] != "session/request_permission" {
 		t.Fatalf("unexpected permission request: %#v", permission)
+	}
+	permissionTool := permission["params"].(map[string]any)["toolCall"].(map[string]any)
+	if permissionTool["toolCallId"] != "tool-1" {
+		t.Fatalf("permission did not reference tool call: %#v", permission)
 	}
 	encodeACP(t, encoder, map[string]any{
 		"jsonrpc": "2.0", "id": permission["id"],
 		"result": map[string]any{"outcome": map[string]any{"outcome": "selected", "optionId": "allow_once"}},
 	})
-	update := decodeACP(t, decoder)
-	if update["method"] != "session/update" {
-		t.Fatalf("unexpected stream update: %#v", update)
+	toolFinished := decodeACP(t, decoder)
+	finishedUpdate := toolFinished["params"].(map[string]any)["update"].(map[string]any)
+	if finishedUpdate["sessionUpdate"] != "tool_call_update" || finishedUpdate["status"] != "completed" {
+		t.Fatalf("unexpected tool finish: %#v", toolFinished)
+	}
+	textUpdate := decodeACP(t, decoder)
+	if textUpdate["method"] != "session/update" {
+		t.Fatalf("unexpected stream update: %#v", textUpdate)
 	}
 	completed := decodeACP(t, decoder)
 	if int(completed["id"].(float64)) != 3 || completed["result"].(map[string]any)["stopReason"] != "end_turn" {
@@ -107,8 +132,8 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 func TestACPCancelReturnsCancelledStopReason(t *testing.T) {
 	root := t.TempDir()
 	streamer := &blockingStreamer{started: make(chan struct{})}
-	server := &Server{Factory: func(_ context.Context, cwd string, approver tools.Approver, text, status io.Writer) (*agent.Runner, func(), error) {
-		ws, err := workspace.Open(cwd)
+	server := &Server{Factory: func(_ context.Context, cfg SessionConfig, approver tools.Approver, text, status io.Writer) (*agent.Runner, func(), error) {
+		ws, err := workspace.Open(cfg.CWD)
 		if err != nil {
 			return nil, nil, err
 		}

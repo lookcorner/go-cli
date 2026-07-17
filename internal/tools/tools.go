@@ -83,6 +83,22 @@ type Tool interface {
 	Execute(context.Context, json.RawMessage) (string, error)
 }
 
+type ToolCallContext struct {
+	ID   string
+	Name string
+}
+
+type toolCallContextKey struct{}
+
+func WithToolCall(ctx context.Context, id, name string) context.Context {
+	return context.WithValue(ctx, toolCallContextKey{}, ToolCallContext{ID: id, Name: name})
+}
+
+func ToolCallFromContext(ctx context.Context) (ToolCallContext, bool) {
+	value, ok := ctx.Value(toolCallContextKey{}).(ToolCallContext)
+	return value, ok
+}
+
 type Registry struct {
 	tools     map[string]Tool
 	processes *ProcessManager

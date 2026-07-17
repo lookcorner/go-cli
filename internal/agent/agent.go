@@ -25,6 +25,11 @@ type EventLogger interface {
 	Append(kind string, data any) error
 }
 
+type ToolObserver interface {
+	ToolStarted(call api.ToolCall)
+	ToolFinished(call api.ToolCall, output string, err error)
+}
+
 type Runner struct {
 	Client       ResponseStreamer
 	Tools        *tools.Registry
@@ -34,6 +39,7 @@ type Runner struct {
 	MaxSteps     int
 	TextOutput   io.Writer
 	StatusOutput io.Writer
+	ToolObserver ToolObserver
 }
 
 type Result struct {
@@ -108,7 +114,14 @@ func (r *Runner) RunTurn(ctx context.Context, prompt, previousResponseID string)
 				"step": step, "call_id": call.CallID, "name": call.Name,
 				"arguments": json.RawMessage(call.Arguments),
 			})
-			output, toolErr := r.Tools.Execute(ctx, call.Name, call.Arguments)
+			if r.ToolObserver != nil {
+				r.ToolObserver.ToolStarted(call)
+			}
+			toolCtx := tools.WithToolCall(ctx, call.CallID, call.Name)
+			output, toolErr := r.Tools.Execute(toolCtx, call.Name, call.Arguments)
+			if r.ToolObserver != nil {
+				r.ToolObserver.ToolFinished(call, output, toolErr)
+			}
 			if toolErr != nil {
 				output = "ERROR: " + toolErr.Error()
 			}

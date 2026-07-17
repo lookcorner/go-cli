@@ -11,12 +11,25 @@ import (
 	"sync/atomic"
 
 	"github.com/lookcorner/go-cli/internal/agent"
+	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/tools"
 )
 
 const ProtocolVersion = 1
 
-type Factory func(context.Context, string, tools.Approver, io.Writer, io.Writer) (*agent.Runner, func(), error)
+type SessionConfig struct {
+	CWD        string
+	MCPServers []MCPServer
+}
+
+type MCPServer struct {
+	Name    string
+	Command string
+	Args    []string
+	Env     map[string]string
+}
+
+type Factory func(context.Context, SessionConfig, tools.Approver, io.Writer, io.Writer) (*agent.Runner, func(), error)
 
 type Server struct {
 	Factory     Factory
@@ -111,16 +124,39 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 
 func (s *Server) handleNewSession(ctx context.Context, incoming message) {
 	var params struct {
-		CWD string `json:"cwd"`
+		CWD        string `json:"cwd"`
+		MCPServers []struct {
+			Name    string   `json:"name"`
+			Command string   `json:"command"`
+			Args    []string `json:"args"`
+			Env     []struct {
+				Name  string `json:"name"`
+				Value string `json:"value"`
+			} `json:"env"`
+		} `json:"mcpServers"`
 	}
 	if json.Unmarshal(incoming.Params, &params) != nil || params.CWD == "" {
 		s.respondError(incoming.ID, -32602, "cwd is required")
 		return
 	}
 	id := fmt.Sprintf("gork-%d", s.nextSession.Add(1))
+	sessionConfig := SessionConfig{CWD: params.CWD, MCPServers: make([]MCPServer, 0, len(params.MCPServers))}
+	for _, remote := range params.MCPServers {
+		if remote.Name == "" || remote.Command == "" {
+			s.respondError(incoming.ID, -32602, "stdio MCP servers require name and command")
+			return
+		}
+		env := make(map[string]string, len(remote.Env))
+		for _, entry := range remote.Env {
+			env[entry.Name] = entry.Value
+		}
+		sessionConfig.MCPServers = append(sessionConfig.MCPServers, MCPServer{
+			Name: remote.Name, Command: remote.Command, Args: remote.Args, Env: env,
+		})
+	}
 	approver := &serverApprover{server: s, sessionID: id}
 	writer := &sessionTextWriter{server: s, sessionID: id}
-	runner, closeRuntime, err := s.Factory(ctx, params.CWD, approver, writer, io.Discard)
+	runner, closeRuntime, err := s.Factory(ctx, sessionConfig, approver, writer, io.Discard)
 	if err != nil {
 		s.respondError(incoming.ID, -32000, err.Error())
 		return
@@ -128,6 +164,7 @@ func (s *Server) handleNewSession(ctx context.Context, incoming message) {
 	if closeRuntime == nil {
 		closeRuntime = func() {}
 	}
+	runner.ToolObserver = &sessionToolObserver{server: s, sessionID: id}
 	created := &session{id: id, runner: runner, close: closeRuntime}
 	s.mu.Lock()
 	s.sessions[id] = created
@@ -308,6 +345,50 @@ func (w *sessionTextWriter) Write(data []byte) (int, error) {
 	return len(data), nil
 }
 
+type sessionToolObserver struct {
+	server    *Server
+	sessionID string
+}
+
+func (o *sessionToolObserver) ToolStarted(call api.ToolCall) {
+	o.server.notify(o.sessionID, map[string]any{
+		"sessionUpdate": "tool_call", "toolCallId": call.CallID,
+		"title": call.Name, "kind": acpToolKind(call.Name), "status": "in_progress",
+		"rawInput": json.RawMessage(call.Arguments),
+	})
+}
+
+func (o *sessionToolObserver) ToolFinished(call api.ToolCall, output string, toolErr error) {
+	status := "completed"
+	if toolErr != nil {
+		status = "failed"
+		if output == "" {
+			output = toolErr.Error()
+		}
+	}
+	o.server.notify(o.sessionID, map[string]any{
+		"sessionUpdate": "tool_call_update", "toolCallId": call.CallID,
+		"status": status, "rawOutput": output,
+	})
+}
+
+func acpToolKind(name string) string {
+	switch name {
+	case "read_file", "list_dir", "list_files", "get_task_output", "get_background_command_output", "lsp":
+		return "read"
+	case "grep", "search_files":
+		return "search"
+	case "write_file", "edit_file", "search_replace":
+		return "edit"
+	case "run_terminal_cmd", "shell", "start_background_command", "kill_task", "kill_background_command":
+		return "execute"
+	case "todo_write", "update_goal":
+		return "think"
+	default:
+		return "other"
+	}
+}
+
 type serverApprover struct {
 	server    *Server
 	sessionID string
@@ -315,6 +396,10 @@ type serverApprover struct {
 
 func (a *serverApprover) Approve(ctx context.Context, action, detail string) error {
 	id := fmt.Sprintf("gork-permission-%d", a.server.nextRequest.Add(1))
+	toolCallID := id
+	if call, ok := tools.ToolCallFromContext(ctx); ok && call.ID != "" {
+		toolCallID = call.ID
+	}
 	result := make(chan permissionResult, 1)
 	a.server.mu.Lock()
 	a.server.pending[id] = result
@@ -324,7 +409,7 @@ func (a *serverApprover) Approve(ctx context.Context, action, detail string) err
 		"jsonrpc": "2.0", "id": id, "method": "session/request_permission",
 		"params": map[string]any{
 			"sessionId": a.sessionID,
-			"toolCall":  map[string]any{"toolCallId": id, "title": action + ": " + detail, "status": "pending", "rawInput": detail},
+			"toolCall":  map[string]any{"toolCallId": toolCallID, "title": action + ": " + detail, "status": "pending", "rawInput": detail},
 			"options": []any{
 				map[string]any{"optionId": "allow_once", "name": "Allow once", "kind": "allow_once"},
 				map[string]any{"optionId": "reject_once", "name": "Reject", "kind": "reject_once"},

@@ -120,10 +120,13 @@ Each `session/new` gets its own workspace, tool state, model history, local
 session log, MCP/LSP processes, and cleanup lifecycle. The baseline
 `initialize`, `session/new`, `session/prompt`, `session/update`,
 `session/cancel`, and `session/close` methods are supported. Text streams as
-`agent_message_chunk`; default prompt approvals use ACP's bidirectional
-`session/request_permission`, so protocol stdin is never consumed by a CLI
-prompt. `--approval auto` and `--approval deny` remain available for clients
-that intentionally want a fixed policy.
+`agent_message_chunk`, while tools emit correlated `tool_call` and
+`tool_call_update` lifecycle events. Stdio MCP servers supplied by the client
+in `session/new` are merged with configured servers for that session. Default
+prompt approvals use ACP's bidirectional `session/request_permission`, linked
+to the actual tool call, so protocol stdin is never consumed by a CLI prompt.
+`--approval auto` and `--approval deny` remain available for clients that
+intentionally want a fixed policy.
 
 Local mutations require confirmation by default:
 

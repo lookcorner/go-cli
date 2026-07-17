@@ -286,12 +286,12 @@ func runACP(cfg config.Config, opts options, stdin io.Reader, stdout, stderr io.
 	defer stop()
 	server := &acp.Server{Factory: func(
 		sessionCtx context.Context,
-		cwd string,
+		sessionConfig acp.SessionConfig,
 		protocolApprover tools.Approver,
 		textOutput io.Writer,
 		statusOutput io.Writer,
 	) (*agent.Runner, func(), error) {
-		ws, err := workspace.Open(cwd)
+		ws, err := workspace.Open(sessionConfig.CWD)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -332,7 +332,17 @@ func runACP(cfg config.Config, opts options, stdin io.Reader, stdout, stderr io.
 				return nil, nil, err
 			}
 		}
-		mcpClients, err = startMCPServers(sessionCtx, cfg, ws.Root(), registry, approver, statusOutput)
+		sessionCfg := cfg
+		sessionCfg.MCPServers = make(map[string]config.MCPServerConfig, len(cfg.MCPServers)+len(sessionConfig.MCPServers))
+		for name, configured := range cfg.MCPServers {
+			sessionCfg.MCPServers[name] = configured
+		}
+		for _, remote := range sessionConfig.MCPServers {
+			sessionCfg.MCPServers[remote.Name] = config.MCPServerConfig{
+				Command: remote.Command, Args: remote.Args, Env: remote.Env,
+			}
+		}
+		mcpClients, err = startMCPServers(sessionCtx, sessionCfg, ws.Root(), registry, approver, statusOutput)
 		if err != nil {
 			cleanup()
 			return nil, nil, err
