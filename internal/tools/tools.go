@@ -26,6 +26,7 @@ import (
 
 const (
 	maxReadBytes   = 2 << 20
+	maxPDFBytes    = 50 << 20
 	maxPPTXBytes   = 50 << 20
 	maxWriteBytes  = 4 << 20
 	maxOutputBytes = 256 << 10
@@ -327,7 +328,7 @@ type readFileTool struct{ ws *workspace.Workspace }
 func (t *readFileTool) Definition() api.ToolDefinition {
 	return api.ToolDefinition{
 		Type: "function", Name: "read_file",
-		Description: "Read a text or PPTX file inside the workspace. Results use 1-based LINE_NUMBER→LINE_CONTENT formatting.",
+		Description: "Read a text or PPTX file, or extract PDF text, inside the workspace. Results use 1-based LINE_NUMBER→LINE_CONTENT formatting.",
 		Parameters: objectSchema(map[string]any{
 			"target_file": map[string]any{"type": "string", "description": "File path relative to the workspace."},
 			"offset":      map[string]any{"type": "integer", "description": "1-based starting line; negative values count from the end."},
@@ -346,6 +347,8 @@ func (t *readFileTool) Execute(_ context.Context, raw json.RawMessage) (string, 
 		Limit      int    `json:"limit"`
 		StartLine  int    `json:"start_line"`
 		EndLine    int    `json:"end_line"`
+		Pages      string `json:"pages"`
+		Format     string `json:"format"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return "", fmt.Errorf("decode read_file arguments: %w", err)
@@ -367,8 +370,14 @@ func (t *readFileTool) Execute(_ context.Context, raw json.RawMessage) (string, 
 	}
 	defer file.Close()
 
+	header := make([]byte, 5)
+	headerBytes, _ := file.ReadAt(header, 0)
+	isPDF := strings.EqualFold(filepath.Ext(path), ".pdf") || headerBytes == len(header) && bytes.Equal(header, []byte("%PDF-"))
 	readLimit := int64(maxReadBytes)
-	if strings.EqualFold(filepath.Ext(path), ".pptx") {
+	extension := strings.ToLower(filepath.Ext(path))
+	if isPDF {
+		readLimit = maxPDFBytes
+	} else if extension == ".pptx" {
 		readLimit = maxPPTXBytes
 	}
 	reader := io.LimitReader(file, readLimit+1)
@@ -379,7 +388,22 @@ func (t *readFileTool) Execute(_ context.Context, raw json.RawMessage) (string, 
 	if int64(len(data)) > readLimit {
 		return "", fmt.Errorf("file %q exceeds %d bytes", requestedPath, readLimit)
 	}
-	if strings.EqualFold(filepath.Ext(path), ".pptx") {
+	if isPDF {
+		if args.Format != "text" {
+			if args.Format != "" && args.Format != "image" {
+				return "", fmt.Errorf("invalid PDF format %q; supported values are image and text", args.Format)
+			}
+			return "", errors.New("PDF image output is not supported yet; use format \"text\"")
+		}
+		text, err := extractPDFText(data, args.Pages)
+		if err != nil {
+			return "", fmt.Errorf("read PDF %q: %w", requestedPath, err)
+		}
+		data = []byte(text)
+		if len(data) > maxReadBytes {
+			return "", fmt.Errorf("extracted PDF text from %q exceeds %d bytes", requestedPath, maxReadBytes)
+		}
+	} else if extension == ".pptx" {
 		text, err := extractPPTXText(data)
 		if err != nil {
 			return "", fmt.Errorf("read PPTX %q: %w", requestedPath, err)
