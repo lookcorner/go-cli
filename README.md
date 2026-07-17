@@ -11,14 +11,16 @@ feature-by-feature status.
 
 ## Build
 
-Go 1.24 or newer is required.
+Go 1.25 or newer is required.
 
 ```sh
 go test ./...
 go build -o gork ./cmd/gork
 ```
 
-The runtime currently uses only the Go standard library.
+The headless runtime uses the Go standard library; the full-screen UI pins
+[Bubble Tea v2](https://github.com/charmbracelet/bubbletea) and its terminal
+runtime dependencies.
 
 ## Configure
 
@@ -77,6 +79,18 @@ conversation:
 ```sh
 ./gork --interactive --workspace .
 ```
+
+Use `--tui` for the full-screen interface:
+
+```sh
+./gork --tui --workspace .
+```
+
+The TUI streams model output as it arrives, keeps a scrollable transcript,
+supports Unicode input, displays tool status, cancels the current turn with
+Ctrl-C, and presents write/Shell/MCP approval prompts inside the alternate
+screen. Page Up/Page Down scroll, Ctrl-Q exits, and an optional prompt argument
+starts the first turn immediately.
 
 Local mutations require confirmation by default:
 

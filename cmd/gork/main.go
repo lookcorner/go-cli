@@ -23,6 +23,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/skills"
 	"github.com/lookcorner/go-cli/internal/tools"
+	"github.com/lookcorner/go-cli/internal/tui"
 	"github.com/lookcorner/go-cli/internal/workspace"
 )
 
@@ -43,6 +44,7 @@ type options struct {
 	interactive bool
 	previousID  string
 	resume      string
+	tui         bool
 }
 
 func main() {
@@ -70,6 +72,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	flags.BoolVar(&opts.interactive, "interactive", false, "start an interactive multi-turn session")
 	flags.StringVar(&opts.previousID, "previous-response-id", "", "continue a stored Responses API conversation")
 	flags.StringVar(&opts.resume, "resume", "", "resume a JSONL session path or 'latest'")
+	flags.BoolVar(&opts.tui, "tui", false, "start the full-screen terminal interface")
 	flags.Usage = func() {
 		fmt.Fprintf(stderr, "Usage: gork [flags] [prompt]\n\n")
 		flags.PrintDefaults()
@@ -80,6 +83,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if opts.showVersion {
 		fmt.Fprintln(stdout, version)
 		return nil
+	}
+	if opts.tui && opts.interactive {
+		return errors.New("--tui and --interactive are mutually exclusive")
 	}
 
 	cfg, err := config.Load(opts.configPath)
@@ -107,14 +113,14 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 
 	inputReader := bufio.NewReader(stdin)
 	prompt := strings.TrimSpace(strings.Join(flags.Args(), " "))
-	if prompt == "" && !opts.interactive {
+	if prompt == "" && !opts.interactive && !opts.tui {
 		data, err := io.ReadAll(io.LimitReader(inputReader, 4<<20))
 		if err != nil {
 			return fmt.Errorf("read prompt: %w", err)
 		}
 		prompt = strings.TrimSpace(string(data))
 	}
-	if prompt == "" && !opts.interactive {
+	if prompt == "" && !opts.interactive && !opts.tui {
 		flags.Usage()
 		return errors.New("prompt is required as arguments or stdin")
 	}
@@ -181,15 +187,25 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	default:
 		return fmt.Errorf("unsupported backend %q", cfg.Backend)
 	}
-	approver := tools.PromptApprover{Mode: mode, Input: inputReader, Output: stderr}
+	var approver tools.Approver
+	var tuiBridge *tui.Bridge
+	statusOutput := stderr
+	if opts.tui {
+		tuiBridge = tui.NewBridge(ctx, mode)
+		defer tuiBridge.Close()
+		approver = tuiBridge
+		statusOutput = tuiBridge.StatusWriter()
+	} else {
+		approver = tools.PromptApprover{Mode: mode, Input: inputReader, Output: stderr}
+	}
 	registry := tools.NewRegistry(ws, approver)
 	if len(skillCatalog.Names()) > 0 {
 		if err := registry.Register(skillCatalog.Tool()); err != nil {
 			return err
 		}
-		fmt.Fprintf(stderr, "[gork] discovered %d skill(s)\n", len(skillCatalog.Names()))
+		fmt.Fprintf(statusOutput, "[gork] discovered %d skill(s)\n", len(skillCatalog.Names()))
 	}
-	mcpClients, err := startMCPServers(ctx, cfg, ws.Root(), registry, approver, stderr)
+	mcpClients, err := startMCPServers(ctx, cfg, ws.Root(), registry, approver, statusOutput)
 	if err != nil {
 		return err
 	}
@@ -202,6 +218,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		Client: client, Tools: registry, Logger: logger,
 		Model: cfg.Model, Instructions: cfg.SystemPrompt, MaxSteps: cfg.MaxSteps,
 		TextOutput: stdout, StatusOutput: stderr,
+	}
+	if opts.tui {
+		return tui.Run(ctx, runner, tuiBridge, prompt, opts.previousID, ws.Root(), cfg.Model)
 	}
 	fmt.Fprintf(stderr, "[gork] workspace: %s\n[gork] session: %s\n", ws.Root(), displayPath(logger.Path()))
 	if opts.interactive {
