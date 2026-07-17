@@ -237,7 +237,9 @@ The Gork Build-compatible file surface includes `read_file`, `list_dir`,
 `grep`, and `search_replace`; text reads support positive or negative line
 offsets and use the original `LINE_NUMBER→LINE_CONTENT` format. The earlier
 `list_files`, `search_files`, `write_file`, `edit_file`, and `shell` tools remain
-available. `search_replace` preserves CRLF files and safely matches common
+available. `list_dir` summarizes subdirectories that exceed its output budget
+with file counts and their most common extensions. `search_replace` preserves
+CRLF files and safely matches common
 rich-text typography such as smart quotes, em dashes, ellipses, and
 non-breaking spaces. `todo_write` maintains the ordered task list across tool calls with
 replace, merge, partial-status-update, and duplicate-ID behavior matching the
@@ -336,7 +338,7 @@ are scanned from the Git root through the workspace, and user skills honor
 `GROK_HOME`. Only skill metadata is included initially. The model calls the
 `skill` tool to load the full `SKILL.md` when a task matches it; deeper project
 skills override same-named user or parent skills.
-Skills with a `paths` list in YAML frontmatter stay hidden until a successful
+Skills with a scalar or list `paths` value in YAML frontmatter stay hidden until a successful
 file read, directory listing, or edit touches a matching path.
 
 Claude and Cursor discovery surfaces default to enabled. They can be disabled

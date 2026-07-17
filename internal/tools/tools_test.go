@@ -294,3 +294,49 @@ func TestListDirTreeUsesOutputBudget(t *testing.T) {
 		t.Fatalf("directory output was not budgeted: len=%d tail=%q", len(output), output[max(0, len(output)-200):])
 	}
 }
+
+func TestListDirSummarizesLargeSubdirectory(t *testing.T) {
+	root := t.TempDir()
+	command := exec.Command("git", "init", "-q")
+	command.Dir = root
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, output)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("*.skip\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for extension, count := range map[string]int{"go": 70, "txt": 40, "": 20, "md": 10, "skip": 30} {
+		for index := range count {
+			name := fmt.Sprintf("%03d-%s", index, strings.Repeat(extension+"x", 35))
+			if extension != "" {
+				name += "." + extension
+			}
+			path := filepath.Join(root, "many", name)
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "sibling.txt"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := (&listDirTool{ws: ws}).Execute(context.Background(), json.RawMessage(`{"target_directory":"."}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"- many/", "[140 files in subtree: 70 *.go, 40 *.txt, 20 *no-ext, ...]", "- sibling.txt"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("missing %q from summarized tree:\n%s", want, output)
+		}
+	}
+	if strings.Contains(output, "000-") || strings.Contains(output, "too large to list fully") {
+		t.Fatalf("collapsed subtree should replace individual entries without truncating:\n%s", output)
+	}
+}

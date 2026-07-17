@@ -20,10 +20,59 @@ type listDirTool struct{ ws *workspace.Workspace }
 
 const listDirMaxChars = 10_000
 
+type dirSummary struct {
+	total int
+	byExt map[string]int
+}
+
+func (s *dirSummary) add(path string) {
+	if s.byExt == nil {
+		s.byExt = make(map[string]int)
+	}
+	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(path)), ".")
+	if ext == "" {
+		ext = "no-ext"
+	}
+	s.total++
+	s.byExt[ext]++
+}
+
+func (s dirSummary) String() string {
+	type bucket struct {
+		ext   string
+		count int
+	}
+	buckets := make([]bucket, 0, len(s.byExt))
+	for ext, count := range s.byExt {
+		buckets = append(buckets, bucket{ext, count})
+	}
+	sort.Slice(buckets, func(i, j int) bool {
+		return buckets[i].count > buckets[j].count || buckets[i].count == buckets[j].count && buckets[i].ext < buckets[j].ext
+	})
+	parts, shown := make([]string, 0, 3), 0
+	for _, item := range buckets[:min(3, len(buckets))] {
+		name := "*." + item.ext
+		if item.ext == "no-ext" {
+			name = "*no-ext"
+		}
+		parts = append(parts, fmt.Sprintf("%d %s", item.count, name))
+		shown += item.count
+	}
+	suffix := ""
+	if shown < s.total {
+		suffix = ", ..."
+	}
+	word := "files"
+	if s.total == 1 {
+		word = "file"
+	}
+	return fmt.Sprintf("[%d %s in subtree: %s%s]", s.total, word, strings.Join(parts, ", "), suffix)
+}
+
 func (t *listDirTool) Definition() api.ToolDefinition {
 	return api.ToolDefinition{
 		Type: "function", Name: "list_dir",
-		Description: "List a directory as a bounded tree. Hidden and Git-ignored entries are omitted.",
+		Description: "List a directory as a bounded tree. Hidden and Git-ignored entries are omitted; large subdirectories are summarized by file extension.",
 		Parameters: objectSchema(map[string]any{
 			"target_directory": map[string]any{"type": "string", "description": "Directory path relative to the workspace."},
 		}, "target_directory"),
@@ -86,6 +135,13 @@ func (t *listDirTool) Execute(_ context.Context, raw json.RawMessage) (string, e
 		paths[index] = entries[index].path
 	}
 	ignored := workspace.GitIgnored(workspace.GitRoot(t.ws.Root()), paths)
+	visible := entries[:0]
+	for _, item := range entries {
+		if !ignored[item.path] {
+			visible = append(visible, item)
+		}
+	}
+	entries = visible
 	sort.Slice(entries, func(i, j int) bool {
 		left, right := strings.ToLower(entries[i].rel), strings.ToLower(entries[j].rel)
 		if left == right {
@@ -93,17 +149,47 @@ func (t *listDirTool) Execute(_ context.Context, raw json.RawMessage) (string, e
 		}
 		return left < right
 	})
+	summaries := make(map[string]*dirSummary)
+	subtreeChars := make(map[string]int)
+	for _, item := range entries {
+		lineChars := len(strings.Repeat("  ", strings.Count(item.rel, "/")+1) + "- " + filepath.Base(item.path) + "\n")
+		if item.isDir {
+			lineChars++
+		}
+		for parent := filepath.ToSlash(filepath.Dir(item.rel)); parent != "."; parent = filepath.ToSlash(filepath.Dir(parent)) {
+			subtreeChars[parent] += lineChars
+			if !item.isDir {
+				summary := summaries[parent]
+				if summary == nil {
+					summary = &dirSummary{}
+					summaries[parent] = summary
+				}
+				summary.add(item.path)
+			}
+		}
+	}
 	var output strings.Builder
 	fmt.Fprintf(&output, "- %s/\n", filepath.ToSlash(root))
+	skipPrefix := ""
 	for _, item := range entries {
-		if ignored[item.path] {
+		if skipPrefix != "" && strings.HasPrefix(item.rel, skipPrefix) {
 			continue
 		}
+		skipPrefix = ""
 		line := strings.Repeat("  ", strings.Count(item.rel, "/")+1) + "- " + filepath.Base(item.path)
 		if item.isDir {
 			line += "/"
 		}
 		line += "\n"
+		if summary := summaries[item.rel]; item.isDir && summary != nil && output.Len()+len(line)+subtreeChars[item.rel] > listDirMaxChars {
+			summaryLine := strings.Repeat("  ", strings.Count(item.rel, "/")+2) + summary.String() + "\n"
+			if output.Len()+len(line)+len(summaryLine) <= listDirMaxChars {
+				output.WriteString(line)
+				output.WriteString(summaryLine)
+				skipPrefix = item.rel + "/"
+				continue
+			}
+		}
 		if output.Len()+len(line) > listDirMaxChars {
 			truncated = true
 			break
