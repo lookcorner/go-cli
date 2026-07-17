@@ -90,6 +90,7 @@ type Registry struct {
 
 func NewRegistry(ws *workspace.Workspace, approver Approver) *Registry {
 	processes := NewProcessManager(ws, approver)
+	todos := newTodoStore()
 	items := []Tool{
 		&readFileTool{ws: ws},
 		&listFilesTool{ws: ws},
@@ -106,6 +107,7 @@ func NewRegistry(ws *workspace.Workspace, approver Approver) *Registry {
 		&listDirTool{ws: ws},
 		&grepTool{ws: ws},
 		&searchReplaceTool{ws: ws, approver: approver},
+		&todoWriteTool{store: todos},
 	}
 	registry := &Registry{tools: make(map[string]Tool, len(items)), processes: processes}
 	for _, item := range items {

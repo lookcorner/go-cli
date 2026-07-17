@@ -21,6 +21,7 @@ Status values: **done**, **partial**, **planned**.
 | MCP | partial | Stdio lifecycle, version negotiation, paginated tool discovery/calls and shutdown work; Streamable HTTP, resources, prompts, sampling and list-change reload remain |
 | ACP | planned | Agent Client Protocol server/client modes remain |
 | LSP tools | partial | Framed stdio JSON-RPC, initialization/shutdown, document sync, hover, definitions, references, symbols and published diagnostics work; dynamic configuration, progress, apply-edit and server-specific adapters remain |
+| Planning / goals | partial | `todo_write` preserves ordered state and compatible replace/merge/partial-update behavior; plan-mode prompts, active goal orchestration, classifier verification and `update_goal` remain |
 | Skills / AGENTS.md | partial | Compatible root instruction/rules discovery, source-labelled injection, user/workspace skill discovery and lazy `skill` loading work; gitignore-aware nested discovery and conditional skills remain |
 | Git / worktrees / hunk tracking | planned | Worktree lifecycle and edit attribution remain |
 | Subagents | planned | Coordinator, roster and activity events remain |
