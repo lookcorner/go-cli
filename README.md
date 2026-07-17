@@ -50,6 +50,11 @@ message history, streams text, reassembles incremental function-call arguments,
 and feeds tool results back as `tool` messages. Cross-process `--resume` needs
 server-side response IDs and is therefore limited to the Responses backend.
 
+Anthropic-compatible Messages endpoints are available with
+`--backend anthropic_messages`. That adapter uses the `x-api-key` and
+`anthropic-version` headers, streams text and `input_json_delta` events, and
+maintains the required assistant `tool_use` / user `tool_result` block ordering.
+
 API keys may be put in the config for compatibility, but environment variables
 are preferred so secrets are not stored in a plain-text file.
 

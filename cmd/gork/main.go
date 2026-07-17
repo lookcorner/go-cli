@@ -60,7 +60,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	flags.StringVar(&opts.workspace, "workspace", ".", "workspace directory")
 	flags.StringVar(&opts.model, "model", "", "model ID (or GORK_MODEL)")
 	flags.StringVar(&opts.baseURL, "base-url", "", "Responses-compatible API base URL")
-	flags.StringVar(&opts.backend, "backend", "", "model API backend: responses or chat_completions")
+	flags.StringVar(&opts.backend, "backend", "", "model API backend: responses, chat_completions, or anthropic_messages")
 	flags.StringVar(&opts.system, "system", "", "additional agent instructions")
 	flags.StringVar(&opts.approval, "approval", "prompt", "write/shell approval: prompt, auto, or deny")
 	flags.StringVar(&opts.sessionDir, "session-dir", "", "session JSONL directory")
@@ -176,6 +176,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		client = api.NewClient(cfg.BaseURL, cfg.APIKey, httpClient)
 	case "chat_completions":
 		client = api.NewChatClient(cfg.BaseURL, cfg.APIKey, httpClient)
+	case "anthropic_messages":
+		client = api.NewMessagesClient(cfg.BaseURL, cfg.APIKey, httpClient)
 	default:
 		return fmt.Errorf("unsupported backend %q", cfg.Backend)
 	}

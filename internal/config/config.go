@@ -141,8 +141,8 @@ func (c Config) Validate() error {
 	if c.Model == "" {
 		return errors.New("missing model: pass --model or set GORK_MODEL")
 	}
-	if c.Backend != "responses" && c.Backend != "chat_completions" {
-		return fmt.Errorf("unsupported backend %q: use responses or chat_completions", c.Backend)
+	if c.Backend != "responses" && c.Backend != "chat_completions" && c.Backend != "anthropic_messages" {
+		return fmt.Errorf("unsupported backend %q: use responses, chat_completions, or anthropic_messages", c.Backend)
 	}
 	if c.BaseURL == "" {
 		return errors.New("missing API base URL")

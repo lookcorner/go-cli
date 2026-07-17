@@ -16,7 +16,7 @@ Status values: **done**, **partial**, **planned**.
 | Configuration | partial | JSON, environment and CLI layers; TOML compatibility and managed config remain |
 | Authentication | partial | API-key bearer auth; xAI OAuth/device flow and refresh storage remain |
 | Chat Completions backend | done | Streaming text, incremental tool calls, tool-result messages and process-local multi-turn history are covered by protocol tests |
-| Anthropic Messages backend | planned | Protocol adapter remains |
+| Anthropic Messages backend | done | Streaming content blocks, incremental JSON tool input, tool results, headers and process-local history are covered by protocol tests |
 | Interactive UI | partial | Multi-turn REPL and server-side continuation work; full-screen dashboard, rendering and input behavior remain |
 | MCP | partial | Stdio lifecycle, version negotiation, paginated tool discovery/calls and shutdown work; Streamable HTTP, resources, prompts, sampling and list-change reload remain |
 | ACP | planned | Agent Client Protocol server/client modes remain |
