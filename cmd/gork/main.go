@@ -551,17 +551,36 @@ func startMCPServers(
 			return nil, err
 		}
 		clients = append(clients, client)
-		listCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-		remoteTools, err := client.ListTools(listCtx)
-		cancel()
-		if err != nil {
-			closeClients()
-			return nil, fmt.Errorf("list tools from MCP server %q: %w", name, err)
+		var remoteTools []mcp.ToolInfo
+		if initialized.Capabilities.Tools != nil {
+			listCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			remoteTools, err = client.ListTools(listCtx)
+			cancel()
+			if err != nil {
+				closeClients()
+				return nil, fmt.Errorf("list tools from MCP server %q: %w", name, err)
+			}
 		}
 		for _, adapter := range mcp.NewToolAdapters(client, name, remoteTools, approver) {
 			if err := registry.Register(adapter); err != nil {
 				closeClients()
 				return nil, fmt.Errorf("register MCP tool from %q: %w", name, err)
+			}
+		}
+		if initialized.Capabilities.Resources != nil {
+			for _, adapter := range mcp.NewResourceAdapters(client, name) {
+				if err := registry.Register(adapter); err != nil {
+					closeClients()
+					return nil, fmt.Errorf("register MCP resource tool from %q: %w", name, err)
+				}
+			}
+		}
+		if initialized.Capabilities.Prompts != nil {
+			for _, adapter := range mcp.NewPromptAdapters(client, name) {
+				if err := registry.Register(adapter); err != nil {
+					closeClients()
+					return nil, fmt.Errorf("register MCP prompt tool from %q: %w", name, err)
+				}
 			}
 		}
 		serverLabel := initialized.ServerInfo.Name

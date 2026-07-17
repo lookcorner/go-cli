@@ -43,6 +43,24 @@ func TestStdioLifecycleAndToolCall(t *testing.T) {
 	if output != "echo: hello" {
 		t.Fatalf("unexpected tool output: %q", output)
 	}
+	resources := NewResourceAdapters(client, "fixture")
+	listed, err := resources[0].Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil || !strings.Contains(listed, "file:///fixture/readme.md") {
+		t.Fatalf("unexpected resource list: %q err=%v", listed, err)
+	}
+	read, err := resources[1].Execute(context.Background(), json.RawMessage(`{"uri":"file:///fixture/readme.md"}`))
+	if err != nil || !strings.Contains(read, "fixture resource") {
+		t.Fatalf("unexpected resource contents: %q err=%v", read, err)
+	}
+	prompts := NewPromptAdapters(client, "fixture")
+	promptList, err := prompts[0].Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil || !strings.Contains(promptList, "review") {
+		t.Fatalf("unexpected prompt list: %q err=%v", promptList, err)
+	}
+	rendered, err := prompts[1].Execute(context.Background(), json.RawMessage(`{"name":"review","arguments":{"focus":"tests"}}`))
+	if err != nil || !strings.Contains(rendered, "Review tests") {
+		t.Fatalf("unexpected rendered prompt: %q err=%v", rendered, err)
+	}
 }
 
 func TestModelToolNameIsValidAndBounded(t *testing.T) {
@@ -78,8 +96,10 @@ func TestMCPHelperProcess(t *testing.T) {
 		case "initialize":
 			result = map[string]any{
 				"protocolVersion": protocolVersion,
-				"capabilities":    map[string]any{"tools": map[string]any{}},
-				"serverInfo":      map[string]any{"name": "fixture-server", "version": "1.0"},
+				"capabilities": map[string]any{
+					"tools": map[string]any{}, "resources": map[string]any{}, "prompts": map[string]any{},
+				},
+				"serverInfo": map[string]any{"name": "fixture-server", "version": "1.0"},
 			}
 		case "tools/list":
 			result = map[string]any{"tools": []any{map[string]any{
@@ -95,6 +115,27 @@ func TestMCPHelperProcess(t *testing.T) {
 			result = map[string]any{"content": []any{map[string]any{
 				"type": "text", "text": fmt.Sprintf("echo: %v", arguments["message"]),
 			}}}
+		case "resources/list":
+			result = map[string]any{"resources": []any{map[string]any{
+				"uri": "file:///fixture/readme.md", "name": "readme", "mimeType": "text/markdown",
+			}}}
+		case "resources/read":
+			result = map[string]any{"contents": []any{map[string]any{
+				"uri": request.Params["uri"], "mimeType": "text/markdown", "text": "fixture resource",
+			}}}
+		case "prompts/list":
+			result = map[string]any{"prompts": []any{map[string]any{
+				"name": "review", "description": "Review code",
+				"arguments": []any{map[string]any{"name": "focus", "required": true}},
+			}}}
+		case "prompts/get":
+			arguments, _ := request.Params["arguments"].(map[string]any)
+			result = map[string]any{
+				"description": "Rendered review",
+				"messages": []any{map[string]any{
+					"role": "user", "content": map[string]any{"type": "text", "text": fmt.Sprintf("Review %v", arguments["focus"])},
+				}},
+			}
 		default:
 			_ = encoder.Encode(map[string]any{
 				"jsonrpc": "2.0", "id": request.ID,

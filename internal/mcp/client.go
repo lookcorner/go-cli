@@ -85,6 +85,13 @@ type InitializeResult struct {
 		Tools *struct {
 			ListChanged bool `json:"listChanged,omitempty"`
 		} `json:"tools,omitempty"`
+		Resources *struct {
+			Subscribe   bool `json:"subscribe,omitempty"`
+			ListChanged bool `json:"listChanged,omitempty"`
+		} `json:"resources,omitempty"`
+		Prompts *struct {
+			ListChanged bool `json:"listChanged,omitempty"`
+		} `json:"prompts,omitempty"`
 	} `json:"capabilities"`
 	ServerInfo struct {
 		Name    string `json:"name"`
@@ -112,6 +119,45 @@ type ToolResult struct {
 	} `json:"content"`
 	StructuredContent map[string]any `json:"structuredContent,omitempty"`
 	IsError           bool           `json:"isError,omitempty"`
+}
+
+type ResourceInfo struct {
+	URI         string         `json:"uri"`
+	Name        string         `json:"name"`
+	Title       string         `json:"title,omitempty"`
+	Description string         `json:"description,omitempty"`
+	MIMEType    string         `json:"mimeType,omitempty"`
+	Size        int64          `json:"size,omitempty"`
+	Annotations map[string]any `json:"annotations,omitempty"`
+}
+
+type ResourceContents struct {
+	URI      string `json:"uri"`
+	MIMEType string `json:"mimeType,omitempty"`
+	Text     string `json:"text,omitempty"`
+	Blob     string `json:"blob,omitempty"`
+}
+
+type PromptInfo struct {
+	Name        string `json:"name"`
+	Title       string `json:"title,omitempty"`
+	Description string `json:"description,omitempty"`
+	Arguments   []struct {
+		Name        string `json:"name"`
+		Description string `json:"description,omitempty"`
+		Required    bool   `json:"required,omitempty"`
+	} `json:"arguments,omitempty"`
+}
+
+type PromptMessage struct {
+	Role    string `json:"role"`
+	Content struct {
+		Type     string `json:"type"`
+		Text     string `json:"text,omitempty"`
+		Data     string `json:"data,omitempty"`
+		MIMEType string `json:"mimeType,omitempty"`
+		URI      string `json:"uri,omitempty"`
+	} `json:"content"`
 }
 
 func Start(ctx context.Context, cfg ProcessConfig) (*Client, InitializeResult, error) {
@@ -195,6 +241,80 @@ func (c *Client) CallTool(ctx context.Context, name string, arguments map[string
 	var result ToolResult
 	err := c.call(ctx, "tools/call", map[string]any{"name": name, "arguments": arguments}, &result)
 	return result, err
+}
+
+func (c *Client) ListResources(ctx context.Context) ([]ResourceInfo, error) {
+	var all []ResourceInfo
+	err := c.listPages(ctx, "resources/list", func(result json.RawMessage) (string, error) {
+		var page struct {
+			Resources  []ResourceInfo `json:"resources"`
+			NextCursor string         `json:"nextCursor,omitempty"`
+		}
+		if err := json.Unmarshal(result, &page); err != nil {
+			return "", err
+		}
+		all = append(all, page.Resources...)
+		return page.NextCursor, nil
+	})
+	sort.Slice(all, func(i, j int) bool { return all[i].URI < all[j].URI })
+	return all, err
+}
+
+func (c *Client) ReadResource(ctx context.Context, uri string) ([]ResourceContents, error) {
+	var result struct {
+		Contents []ResourceContents `json:"contents"`
+	}
+	err := c.call(ctx, "resources/read", map[string]any{"uri": uri}, &result)
+	return result.Contents, err
+}
+
+func (c *Client) ListPrompts(ctx context.Context) ([]PromptInfo, error) {
+	var all []PromptInfo
+	err := c.listPages(ctx, "prompts/list", func(result json.RawMessage) (string, error) {
+		var page struct {
+			Prompts    []PromptInfo `json:"prompts"`
+			NextCursor string       `json:"nextCursor,omitempty"`
+		}
+		if err := json.Unmarshal(result, &page); err != nil {
+			return "", err
+		}
+		all = append(all, page.Prompts...)
+		return page.NextCursor, nil
+	})
+	sort.Slice(all, func(i, j int) bool { return all[i].Name < all[j].Name })
+	return all, err
+}
+
+func (c *Client) GetPrompt(ctx context.Context, name string, arguments map[string]string) (string, []PromptMessage, error) {
+	var result struct {
+		Description string          `json:"description,omitempty"`
+		Messages    []PromptMessage `json:"messages"`
+	}
+	err := c.call(ctx, "prompts/get", map[string]any{"name": name, "arguments": arguments}, &result)
+	return result.Description, result.Messages, err
+}
+
+func (c *Client) listPages(ctx context.Context, method string, consume func(json.RawMessage) (string, error)) error {
+	cursor := ""
+	for page := 0; page < 100; page++ {
+		params := map[string]any{}
+		if cursor != "" {
+			params["cursor"] = cursor
+		}
+		var raw json.RawMessage
+		if err := c.call(ctx, method, params, &raw); err != nil {
+			return err
+		}
+		next, err := consume(raw)
+		if err != nil {
+			return fmt.Errorf("decode MCP %s result: %w", method, err)
+		}
+		if next == "" {
+			return nil
+		}
+		cursor = next
+	}
+	return fmt.Errorf("MCP %s exceeded 100 pages", method)
 }
 
 func (c *Client) call(ctx context.Context, method string, params any, out any) error {
