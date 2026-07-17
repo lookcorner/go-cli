@@ -98,6 +98,17 @@ Ctrl-C, and presents write/Shell/MCP approval prompts inside the alternate
 screen. Page Up/Page Down scroll, Ctrl-Q exits, and an optional prompt argument
 starts the first turn immediately.
 
+Use `--goal` for bounded autonomous continuation. The runtime keeps starting
+new turns until the model calls `update_goal` with `completed=true` or a genuine
+`blocked_reason`; `--goal-runs` controls the safety cap (default 10):
+
+```sh
+./gork --goal --goal-runs 8 --workspace . "implement and verify the feature"
+```
+
+Progress-only `update_goal` calls keep the goal active. Goal mode is explicit
+and cannot be combined with the interactive REPL or TUI.
+
 Local mutations require confirmation by default:
 
 - `--approval prompt`: ask before every file mutation and shell command.
@@ -111,7 +122,9 @@ offsets and use the original `LINE_NUMBER→LINE_CONTENT` format. The earlier
 `list_files`, `search_files`, `write_file`, `edit_file`, and `shell` tools remain
 available. `todo_write` maintains the ordered task list across tool calls with
 replace, merge, partial-status-update, and duplicate-ID behavior matching the
-reference runtime. The compatible command surface is `run_terminal_cmd`,
+reference runtime. `update_goal` reports progress and terminal state when
+`--goal` is active and rejects calls outside goal mode. The compatible command
+surface is `run_terminal_cmd`,
 `get_task_output`, and `kill_task`, including
 foreground exit-status output, background task IDs, multi-task polling/waiting,
 process-group termination, and persistent cwd/environment/function/alias state

@@ -46,6 +46,8 @@ type options struct {
 	previousID  string
 	resume      string
 	tui         bool
+	goal        bool
+	goalRuns    int
 }
 
 func main() {
@@ -74,6 +76,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	flags.StringVar(&opts.previousID, "previous-response-id", "", "continue a stored Responses API conversation")
 	flags.StringVar(&opts.resume, "resume", "", "resume a JSONL session path or 'latest'")
 	flags.BoolVar(&opts.tui, "tui", false, "start the full-screen terminal interface")
+	flags.BoolVar(&opts.goal, "goal", false, "keep running turns until update_goal completes or blocks the goal")
+	flags.IntVar(&opts.goalRuns, "goal-runs", 10, "maximum turns in --goal mode")
 	flags.Usage = func() {
 		fmt.Fprintf(stderr, "Usage: gork [flags] [prompt]\n\n")
 		flags.PrintDefaults()
@@ -87,6 +91,12 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 	if opts.tui && opts.interactive {
 		return errors.New("--tui and --interactive are mutually exclusive")
+	}
+	if opts.goal && (opts.tui || opts.interactive) {
+		return errors.New("--goal cannot be combined with --tui or --interactive")
+	}
+	if opts.goalRuns < 1 {
+		return errors.New("--goal-runs must be greater than zero")
 	}
 
 	cfg, err := config.Load(opts.configPath)
@@ -235,6 +245,12 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if opts.interactive {
 		return interactiveLoop(ctx, runner, inputReader, stdout, stderr, prompt, opts.previousID)
 	}
+	if opts.goal {
+		if err := registry.BeginGoal(prompt); err != nil {
+			return err
+		}
+		return goalLoop(ctx, runner, registry, stdout, stderr, prompt, opts.previousID, opts.goalRuns)
+	}
 	result, err := runner.RunTurn(ctx, prompt, opts.previousID)
 	if err != nil {
 		return err
@@ -243,6 +259,40 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		fmt.Fprintln(stdout)
 	}
 	return nil
+}
+
+func goalLoop(
+	ctx context.Context,
+	runner *agent.Runner,
+	registry *tools.Registry,
+	stdout io.Writer,
+	stderr io.Writer,
+	objective string,
+	previousResponseID string,
+	maxRuns int,
+) error {
+	prompt := objective
+	for run := 1; run <= maxRuns; run++ {
+		fmt.Fprintf(stderr, "[gork] goal run %d/%d\n", run, maxRuns)
+		result, err := runner.RunTurn(ctx, prompt, previousResponseID)
+		if err != nil {
+			return err
+		}
+		previousResponseID = result.ResponseID
+		if result.Text != "" && !strings.HasSuffix(result.Text, "\n") {
+			fmt.Fprintln(stdout)
+		}
+		snapshot := registry.GoalSnapshot()
+		switch snapshot.Status {
+		case "completed":
+			fmt.Fprintln(stderr, "[gork] goal completed:", snapshot.Message)
+			return nil
+		case "blocked":
+			return fmt.Errorf("goal blocked: %s", snapshot.Message)
+		}
+		prompt = "Continue working toward the active goal. Verify the remaining work, then call update_goal with progress, completed=true only when fully achieved, or blocked_reason only if genuinely stuck."
+	}
+	return fmt.Errorf("goal remains active after %d runs", maxRuns)
 }
 
 func startLSPServers(

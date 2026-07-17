@@ -86,11 +86,13 @@ type Tool interface {
 type Registry struct {
 	tools     map[string]Tool
 	processes *ProcessManager
+	goal      *GoalStore
 }
 
 func NewRegistry(ws *workspace.Workspace, approver Approver) *Registry {
 	processes := NewProcessManager(ws, approver)
 	todos := newTodoStore()
+	goal := NewGoalStore()
 	items := []Tool{
 		&readFileTool{ws: ws},
 		&listFilesTool{ws: ws},
@@ -108,12 +110,27 @@ func NewRegistry(ws *workspace.Workspace, approver Approver) *Registry {
 		&grepTool{ws: ws},
 		&searchReplaceTool{ws: ws, approver: approver},
 		&todoWriteTool{store: todos},
+		&updateGoalTool{store: goal},
 	}
-	registry := &Registry{tools: make(map[string]Tool, len(items)), processes: processes}
+	registry := &Registry{tools: make(map[string]Tool, len(items)), processes: processes, goal: goal}
 	for _, item := range items {
 		registry.tools[item.Definition().Name] = item
 	}
 	return registry
+}
+
+func (r *Registry) BeginGoal(objective string) error {
+	if r.goal == nil {
+		return errors.New("goal store is unavailable")
+	}
+	return r.goal.Begin(objective)
+}
+
+func (r *Registry) GoalSnapshot() GoalSnapshot {
+	if r.goal == nil {
+		return GoalSnapshot{}
+	}
+	return r.goal.Snapshot()
 }
 
 func (r *Registry) Close() error {
