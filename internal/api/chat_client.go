@@ -26,9 +26,19 @@ type ChatClient struct {
 
 type chatMessage struct {
 	Role       string         `json:"role"`
-	Content    string         `json:"content,omitempty"`
+	Content    any            `json:"content,omitempty"`
 	ToolCalls  []chatToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string         `json:"tool_call_id,omitempty"`
+}
+
+type chatContentPart struct {
+	Type     string        `json:"type"`
+	Text     string        `json:"text,omitempty"`
+	ImageURL *chatImageURL `json:"image_url,omitempty"`
+}
+
+type chatImageURL struct {
+	URL string `json:"url"`
 }
 
 type chatToolCall struct {
@@ -73,12 +83,7 @@ func (c *ChatClient) StreamResponse(ctx context.Context, request ResponseRequest
 	for _, item := range request.Input {
 		switch item.Type {
 		case "message":
-			content, ok := item.Content.(string)
-			if !ok {
-				encoded, _ := json.Marshal(item.Content)
-				content = string(encoded)
-			}
-			history = append(history, chatMessage{Role: item.Role, Content: content})
+			history = append(history, chatMessage{Role: item.Role, Content: chatContent(item.Content)})
 		case "function_call_output":
 			history = append(history, chatMessage{Role: "tool", Content: item.Output, ToolCallID: item.CallID})
 		default:
@@ -163,9 +168,32 @@ func pruneChatHistory(history []chatMessage, cfg PruningConfig) {
 			turnsAfter++
 		}
 		if message.Role == "tool" {
-			message.Content = pruneToolResult(message.Content, turnsAfter, cfg)
+			if content, ok := message.Content.(string); ok {
+				message.Content = pruneToolResult(content, turnsAfter, cfg)
+			}
 		}
 	}
+}
+
+func chatContent(content any) any {
+	parts, ok := content.([]ContentPart)
+	if !ok {
+		if text, ok := content.(string); ok {
+			return text
+		}
+		encoded, _ := json.Marshal(content)
+		return string(encoded)
+	}
+	converted := make([]chatContentPart, 0, len(parts))
+	for _, part := range parts {
+		switch part.Type {
+		case "input_text":
+			converted = append(converted, chatContentPart{Type: "text", Text: part.Text})
+		case "input_image":
+			converted = append(converted, chatContentPart{Type: "image_url", ImageURL: &chatImageURL{URL: part.ImageURL}})
+		}
+	}
+	return converted
 }
 
 type chatChunk struct {
@@ -283,9 +311,10 @@ func parseChatJSON(reader io.Reader, onText func(string)) (StreamResult, error) 
 		InputTokens: response.Usage.PromptTokens, OutputTokens: response.Usage.CompletionTokens, TotalTokens: response.Usage.TotalTokens,
 	}}
 	for _, choice := range response.Choices {
-		result.Text += choice.Message.Content
-		if onText != nil && choice.Message.Content != "" {
-			onText(choice.Message.Content)
+		content, _ := choice.Message.Content.(string)
+		result.Text += content
+		if onText != nil && content != "" {
+			onText(content)
 		}
 		for _, call := range choice.Message.ToolCalls {
 			arguments := call.Function.Arguments

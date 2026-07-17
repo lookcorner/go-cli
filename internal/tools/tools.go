@@ -86,6 +86,16 @@ type Tool interface {
 	Execute(context.Context, json.RawMessage) (string, error)
 }
 
+type ExecutionResult struct {
+	Output string
+	Images []ImageAttachment
+}
+
+type ImageAttachment struct {
+	MediaType string
+	Data      []byte
+}
+
 type ToolCallContext struct {
 	ID   string
 	Name string
@@ -232,31 +242,42 @@ func (r *Registry) Definitions() []api.ToolDefinition {
 }
 
 func (r *Registry) Execute(ctx context.Context, name string, arguments json.RawMessage) (string, error) {
+	result, err := r.ExecuteResult(ctx, name, arguments)
+	return result.Output, err
+}
+
+func (r *Registry) ExecuteResult(ctx context.Context, name string, arguments json.RawMessage) (ExecutionResult, error) {
 	r.mu.RLock()
 	tool, ok := r.tools[name]
 	readPolicy := r.readPolicy
 	r.mu.RUnlock()
 	if !ok {
-		return "", fmt.Errorf("unknown tool %q", name)
+		return ExecutionResult{}, fmt.Errorf("unknown tool %q", name)
 	}
 	arguments, err := normalizeArguments(arguments)
 	if err != nil {
-		return "", err
+		return ExecutionResult{}, err
 	}
 	if readPolicy != nil {
 		if action, detail := readPolicyTarget(name, arguments); action != "" {
 			if err := readPolicy.Approve(ctx, action, detail); err != nil {
-				return "", err
+				return ExecutionResult{}, err
 			}
 		}
 	}
-	output, executeErr := tool.Execute(ctx, arguments)
+	var result ExecutionResult
+	var executeErr error
+	if reader, ok := tool.(*readFileTool); ok {
+		result, executeErr = reader.ExecuteResult(ctx, arguments)
+	} else {
+		result.Output, executeErr = tool.Execute(ctx, arguments)
+	}
 	if executeErr == nil && r.hunks != nil {
 		if path := mutationPath(name, arguments); path != "" {
 			r.hunks.MarkAgent(path)
 		}
 	}
-	return output, executeErr
+	return result, executeErr
 }
 
 func mutationPath(name string, raw json.RawMessage) string {
@@ -328,7 +349,7 @@ type readFileTool struct{ ws *workspace.Workspace }
 func (t *readFileTool) Definition() api.ToolDefinition {
 	return api.ToolDefinition{
 		Type: "function", Name: "read_file",
-		Description: "Read a text or PPTX file, or extract PDF text, inside the workspace. Results use 1-based LINE_NUMBER→LINE_CONTENT formatting.",
+		Description: "Read text, PPTX, PNG, JPEG, GIF, or WebP files, or extract PDF text, inside the workspace. Text results use 1-based LINE_NUMBER→LINE_CONTENT formatting.",
 		Parameters: objectSchema(map[string]any{
 			"target_file": map[string]any{"type": "string", "description": "File path relative to the workspace."},
 			"offset":      map[string]any{"type": "integer", "description": "1-based starting line; negative values count from the end."},

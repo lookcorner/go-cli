@@ -237,7 +237,9 @@ The Gork Build-compatible file surface includes `read_file`, `list_dir`,
 `grep`, and `search_replace`; text, extracted PPTX, and PDF `format: "text"`
 reads support positive or negative line offsets and use the original
 `LINE_NUMBER→LINE_CONTENT` format. PDF text reads accept `pages` ranges and
-require an explicit range when the document exceeds ten pages. The earlier
+require an explicit range when the document exceeds ten pages. PNG, JPEG, GIF,
+and WebP reads are validated and forwarded as native image content to the
+Responses, Chat Completions, or Anthropic backend. The earlier
 `list_files`, `search_files`, `write_file`, `edit_file`, and `shell` tools remain
 available. `list_dir` summarizes subdirectories that exceed its output budget
 with file counts and their most common extensions. `search_replace` preserves

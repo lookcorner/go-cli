@@ -117,3 +117,57 @@ func TestMessagesClientCarriesToolHistory(t *testing.T) {
 		t.Fatalf("unexpected roles: %#v", roles)
 	}
 }
+
+func TestMessagesClientMapsImageContent(t *testing.T) {
+	blocks, err := messagesContent([]ContentPart{
+		{Type: "input_text", Text: "inspect"},
+		{Type: "input_image", ImageURL: "data:image/png;base64,cG5n"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(blocks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `[{"type":"text","text":"inspect"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"cG5n"}}]`
+	if string(encoded) != want {
+		t.Fatalf("unexpected messages image content: %s", encoded)
+	}
+	if _, err := messagesContent([]ContentPart{{Type: "input_image", ImageURL: "https://example.com/image.png"}}); err == nil {
+		t.Fatal("non-data image URL was accepted")
+	}
+}
+
+func TestMessagesClientCombinesToolResultAndImage(t *testing.T) {
+	var request map[string]any
+	httpClient := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK, Status: "200 OK",
+			Header: http.Header{"Content-Type": []string{"application/json"}},
+			Body:   io.NopCloser(strings.NewReader(`{"id":"msg_1","content":[{"type":"text","text":"ok"}]}`)), Request: r,
+		}, nil
+	})}
+	client := NewMessagesClient("https://example.invalid/v1", "key", httpClient)
+	_, err := client.StreamResponse(context.Background(), ResponseRequest{Model: "model", Input: []InputItem{
+		{Type: "function_call_output", CallID: "tool_1", Output: "image metadata"},
+		{Type: "message", Role: "user", Content: []ContentPart{
+			{Type: "input_text", Text: "inspect"},
+			{Type: "input_image", ImageURL: "data:image/png;base64,cG5n"},
+		}},
+	}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages := request["messages"].([]any)
+	if len(messages) != 1 {
+		t.Fatalf("tool result and image were split across user messages: %#v", messages)
+	}
+	content := messages[0].(map[string]any)["content"].([]any)
+	if len(content) != 3 || content[0].(map[string]any)["type"] != "tool_result" || content[2].(map[string]any)["type"] != "image" {
+		t.Fatalf("unexpected combined content: %#v", content)
+	}
+}

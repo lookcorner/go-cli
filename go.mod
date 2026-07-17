@@ -7,6 +7,7 @@ require (
 	github.com/bmatcuk/doublestar v1.3.4
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
 	github.com/pelletier/go-toml/v2 v2.2.4
+	golang.org/x/image v0.44.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 

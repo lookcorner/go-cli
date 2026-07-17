@@ -18,6 +18,12 @@ type InputItem struct {
 	Output  string `json:"output,omitempty"`
 }
 
+type ContentPart struct {
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ImageURL string `json:"image_url,omitempty"`
+}
+
 type ResponseRequest struct {
 	Model              string           `json:"model"`
 	Instructions       string           `json:"instructions,omitempty"`

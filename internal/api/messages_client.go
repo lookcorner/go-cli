@@ -37,6 +37,13 @@ type messagesBlock struct {
 	Input     json.RawMessage `json:"input,omitempty"`
 	ToolUseID string          `json:"tool_use_id,omitempty"`
 	Content   string          `json:"content,omitempty"`
+	Source    *messagesSource `json:"source,omitempty"`
+}
+
+type messagesSource struct {
+	Type      string `json:"type"`
+	MediaType string `json:"media_type"`
+	Data      string `json:"data"`
 }
 
 type messagesTool struct {
@@ -65,17 +72,18 @@ func (c *MessagesClient) StreamResponse(ctx context.Context, request ResponseReq
 	for _, item := range request.Input {
 		switch item.Type {
 		case "message":
-			content, ok := item.Content.(string)
-			if !ok {
-				encoded, _ := json.Marshal(item.Content)
-				content = string(encoded)
+			blocks, err := messagesContent(item.Content)
+			if err != nil {
+				return StreamResult{}, err
 			}
-			history = append(history, messagesMessage{
-				Role: item.Role, Content: []messagesBlock{{Type: "text", Text: content}},
-			})
+			if len(history) > 0 && history[len(history)-1].Role == item.Role {
+				history[len(history)-1].Content = append(history[len(history)-1].Content, blocks...)
+			} else {
+				history = append(history, messagesMessage{Role: item.Role, Content: blocks})
+			}
 		case "function_call_output":
 			block := messagesBlock{Type: "tool_result", ToolUseID: item.CallID, Content: item.Output}
-			if len(history) > 0 && history[len(history)-1].Role == "user" && allToolResults(history[len(history)-1].Content) {
+			if len(history) > 0 && history[len(history)-1].Role == "user" {
 				history[len(history)-1].Content = append(history[len(history)-1].Content, block)
 			} else {
 				history = append(history, messagesMessage{Role: "user", Content: []messagesBlock{block}})
@@ -145,6 +153,33 @@ func (c *MessagesClient) StreamResponse(ctx context.Context, request ResponseReq
 	history = append(history, assistant)
 	c.history = history
 	return result, nil
+}
+
+func messagesContent(content any) ([]messagesBlock, error) {
+	parts, ok := content.([]ContentPart)
+	if !ok {
+		text, ok := content.(string)
+		if !ok {
+			encoded, _ := json.Marshal(content)
+			text = string(encoded)
+		}
+		return []messagesBlock{{Type: "text", Text: text}}, nil
+	}
+	blocks := make([]messagesBlock, 0, len(parts))
+	for _, part := range parts {
+		switch part.Type {
+		case "input_text":
+			blocks = append(blocks, messagesBlock{Type: "text", Text: part.Text})
+		case "input_image":
+			header, data, found := strings.Cut(part.ImageURL, ",")
+			mediaType := strings.TrimSuffix(strings.TrimPrefix(header, "data:"), ";base64")
+			if !found || !strings.HasSuffix(header, ";base64") || !strings.HasPrefix(mediaType, "image/") || data == "" {
+				return nil, fmt.Errorf("messages backend received an invalid image data URL")
+			}
+			blocks = append(blocks, messagesBlock{Type: "image", Source: &messagesSource{Type: "base64", MediaType: mediaType, Data: data}})
+		}
+	}
+	return blocks, nil
 }
 
 func pruneMessagesHistory(history []messagesMessage, cfg PruningConfig) {

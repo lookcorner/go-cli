@@ -125,6 +125,21 @@ func TestChatClientCarriesToolHistory(t *testing.T) {
 	}
 }
 
+func TestChatClientMapsImageContent(t *testing.T) {
+	content := chatContent([]ContentPart{
+		{Type: "input_text", Text: "inspect"},
+		{Type: "input_image", ImageURL: "data:image/png;base64,cG5n"},
+	})
+	encoded, err := json.Marshal(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `[{"type":"text","text":"inspect"},{"type":"image_url","image_url":{"url":"data:image/png;base64,cG5n"}}]`
+	if string(encoded) != want {
+		t.Fatalf("unexpected chat image content: %s", encoded)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {

@@ -71,6 +71,46 @@ func TestRunnerExecutesToolLoop(t *testing.T) {
 	}
 }
 
+func TestRunnerForwardsReadFileImages(t *testing.T) {
+	root := t.TempDir()
+	toolsTestImage := filepath.Join(root, "screen.png")
+	file, err := os.Create(toolsTestImage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pngData := []byte{137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0, 144, 119, 83, 222, 0, 0, 0, 12, 73, 68, 65, 84, 8, 215, 99, 248, 207, 192, 0, 0, 3, 1, 1, 0, 24, 221, 141, 176, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130}
+	if _, err := file.Write(pngData); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamer := &fakeStreamer{results: []api.StreamResult{
+		{ResponseID: "resp_1", ToolCalls: []api.ToolCall{
+			{CallID: "call_1", Name: "read_file", Arguments: json.RawMessage(`{"target_file":"screen.png"}`)},
+			{CallID: "call_2", Name: "read_file", Arguments: json.RawMessage(`{"target_file":"screen.png"}`)},
+		}},
+		{ResponseID: "resp_2", Text: "done"},
+	}}
+	runner := Runner{Client: streamer, Tools: tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto}), Model: "test", MaxSteps: 2}
+	defer runner.Tools.Close()
+	if _, err := runner.Run(context.Background(), "inspect image"); err != nil {
+		t.Fatal(err)
+	}
+	input := streamer.requests[1].Input
+	if len(input) != 3 || input[0].Type != "function_call_output" || input[1].Type != "function_call_output" || input[2].Type != "message" {
+		t.Fatalf("unexpected image continuation: %#v", input)
+	}
+	parts, ok := input[2].Content.([]api.ContentPart)
+	if !ok || len(parts) != 3 || parts[1].Type != "input_image" || parts[2].Type != "input_image" || !strings.HasPrefix(parts[1].ImageURL, "data:image/png;base64,") {
+		t.Fatalf("image content was not forwarded: %#v", input[2].Content)
+	}
+}
+
 func TestRunnerAnnouncesConditionalSkillAfterFileTool(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

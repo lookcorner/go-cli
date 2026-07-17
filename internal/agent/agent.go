@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -139,6 +140,7 @@ func (r *Runner) RunTurn(ctx context.Context, prompt, previousResponseID string)
 		}
 		previousResponseID = streamed.ResponseID
 		input = make([]api.InputItem, 0, len(streamed.ToolCalls))
+		var imageParts []api.ContentPart
 		for _, call := range streamed.ToolCalls {
 			r.status("tool %s", call.Name)
 			r.log("tool_call", map[string]any{
@@ -149,7 +151,8 @@ func (r *Runner) RunTurn(ctx context.Context, prompt, previousResponseID string)
 				r.ToolObserver.ToolStarted(call)
 			}
 			toolCtx := tools.WithToolCall(ctx, call.CallID, call.Name)
-			output, toolErr := r.Tools.Execute(toolCtx, call.Name, call.Arguments)
+			toolResult, toolErr := r.Tools.ExecuteResult(toolCtx, call.Name, call.Arguments)
+			output := toolResult.Output
 			if r.ToolObserver != nil {
 				r.ToolObserver.ToolFinished(call, output, toolErr)
 			}
@@ -158,17 +161,30 @@ func (r *Runner) RunTurn(ctx context.Context, prompt, previousResponseID string)
 			}
 			r.log("tool_result", map[string]any{
 				"step": step, "call_id": call.CallID, "name": call.Name,
-				"output": output, "failed": toolErr != nil,
+				"output": output, "failed": toolErr != nil, "image_count": len(toolResult.Images),
 			})
 			input = append(input, api.InputItem{
 				Type: "function_call_output", CallID: call.CallID, Output: output,
 			})
+			if toolErr == nil && len(toolResult.Images) > 0 {
+				if len(imageParts) == 0 {
+					imageParts = append(imageParts, api.ContentPart{Type: "input_text", Text: "Images returned by file tools."})
+				}
+				for _, image := range toolResult.Images {
+					imageParts = append(imageParts, api.ContentPart{
+						Type: "input_image", ImageURL: "data:" + image.MediaType + ";base64," + base64.StdEncoding.EncodeToString(image.Data),
+					})
+				}
+			}
 			if toolErr == nil && r.Skills != nil {
 				if reminder := r.Skills.Activate(call.Name, call.Arguments); reminder != "" {
 					input = append(input, api.InputItem{Type: "message", Role: "user", Content: reminder})
 					r.log("skills_activated", map[string]any{"tool": call.Name})
 				}
 			}
+		}
+		if len(imageParts) > 0 {
+			input = append(input, api.InputItem{Type: "message", Role: "user", Content: imageParts})
 		}
 	}
 	return final, fmt.Errorf("agent reached maximum of %d model steps", r.MaxSteps)
