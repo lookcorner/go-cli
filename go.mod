@@ -2,7 +2,10 @@ module github.com/lookcorner/go-cli
 
 go 1.25.0
 
-require charm.land/bubbletea/v2 v2.0.6
+require (
+	charm.land/bubbletea/v2 v2.0.6
+	github.com/pelletier/go-toml/v2 v2.2.4
+)
 
 require (
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect

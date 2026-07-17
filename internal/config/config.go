@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 const defaultBaseURL = "https://api.x.ai/v1"
@@ -25,18 +27,18 @@ type Config struct {
 }
 
 type MCPServerConfig struct {
-	Command string            `json:"command"`
-	Args    []string          `json:"args,omitempty"`
-	Env     map[string]string `json:"env,omitempty"`
-	Enabled *bool             `json:"enabled,omitempty"`
+	Command string            `json:"command" toml:"command"`
+	Args    []string          `json:"args,omitempty" toml:"args"`
+	Env     map[string]string `json:"env,omitempty" toml:"env"`
+	Enabled *bool             `json:"enabled,omitempty" toml:"enabled"`
 }
 
 type LSPServerConfig struct {
-	Command    string            `json:"command"`
-	Args       []string          `json:"args,omitempty"`
-	Env        map[string]string `json:"env,omitempty"`
-	Extensions []string          `json:"extensions,omitempty"`
-	Enabled    *bool             `json:"enabled,omitempty"`
+	Command    string            `json:"command" toml:"command"`
+	Args       []string          `json:"args,omitempty" toml:"args"`
+	Env        map[string]string `json:"env,omitempty" toml:"env"`
+	Extensions []string          `json:"extensions,omitempty" toml:"extensions"`
+	Enabled    *bool             `json:"enabled,omitempty" toml:"enabled"`
 }
 
 func (c LSPServerConfig) IsEnabled() bool {
@@ -48,15 +50,27 @@ func (c MCPServerConfig) IsEnabled() bool {
 }
 
 type fileConfig struct {
-	APIKey       string                     `json:"api_key,omitempty"`
-	BaseURL      string                     `json:"base_url,omitempty"`
-	Model        string                     `json:"model,omitempty"`
-	Backend      string                     `json:"backend,omitempty"`
-	SystemPrompt string                     `json:"system_prompt,omitempty"`
-	MaxSteps     int                        `json:"max_steps,omitempty"`
-	HTTPTimeout  string                     `json:"http_timeout,omitempty"`
-	MCPServers   map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
-	LSPServers   map[string]LSPServerConfig `json:"lsp_servers,omitempty"`
+	APIKey       string                     `json:"api_key,omitempty" toml:"api_key"`
+	BaseURL      string                     `json:"base_url,omitempty" toml:"base_url"`
+	Model        string                     `json:"model,omitempty" toml:"model_name"`
+	Backend      string                     `json:"backend,omitempty" toml:"backend"`
+	SystemPrompt string                     `json:"system_prompt,omitempty" toml:"system_prompt"`
+	MaxSteps     int                        `json:"max_steps,omitempty" toml:"max_steps"`
+	HTTPTimeout  string                     `json:"http_timeout,omitempty" toml:"http_timeout"`
+	MCPServers   map[string]MCPServerConfig `json:"mcp_servers,omitempty" toml:"mcp_servers"`
+	LSPServers   map[string]LSPServerConfig `json:"lsp_servers,omitempty" toml:"lsp_servers"`
+	Models       struct {
+		Default string `toml:"default"`
+	} `json:"-" toml:"models"`
+	ModelEntries map[string]modelConfig `json:"-" toml:"model"`
+}
+
+type modelConfig struct {
+	Model   string `toml:"model"`
+	BaseURL string `toml:"base_url"`
+	APIKey  string `toml:"api_key"`
+	Backend string `toml:"backend"`
+	EnvKey  any    `toml:"env_key"`
 }
 
 func Load(path string) (Config, error) {
@@ -68,7 +82,7 @@ func Load(path string) (Config, error) {
 	}
 	if path == "" {
 		var err error
-		path, err = DefaultPath()
+		path, err = discoverDefaultPath()
 		if err != nil {
 			return Config{}, err
 		}
@@ -80,9 +94,10 @@ func Load(path string) (Config, error) {
 	}
 	if err == nil {
 		var disk fileConfig
-		if err := json.Unmarshal(data, &disk); err != nil {
+		if err := unmarshalConfig(path, data, &disk); err != nil {
 			return Config{}, fmt.Errorf("parse config %q: %w", path, err)
 		}
+		applyModelConfig(&disk)
 		if disk.APIKey != "" {
 			cfg.APIKey = disk.APIKey
 		}
@@ -142,11 +157,86 @@ func firstEnv(names ...string) string {
 }
 
 func DefaultPath() (string, error) {
-	dir, err := os.UserConfigDir()
+	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", fmt.Errorf("resolve user config directory: %w", err)
+		return "", fmt.Errorf("resolve user home directory: %w", err)
 	}
-	return filepath.Join(dir, "gork-go", "config.json"), nil
+	return filepath.Join(home, ".grok", "config.toml"), nil
+}
+
+func discoverDefaultPath() (string, error) {
+	legacy, err := DefaultPath()
+	if err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(legacy); err == nil {
+		return legacy, nil
+	}
+	configDir, err := os.UserConfigDir()
+	if err == nil {
+		jsonPath := filepath.Join(configDir, "gork-go", "config.json")
+		if _, statErr := os.Stat(jsonPath); statErr == nil {
+			return jsonPath, nil
+		}
+	}
+	return legacy, nil
+}
+
+func unmarshalConfig(path string, data []byte, target *fileConfig) error {
+	if strings.EqualFold(filepath.Ext(path), ".toml") {
+		return toml.Unmarshal(data, target)
+	}
+	if err := json.Unmarshal(data, target); err == nil {
+		return nil
+	}
+	return toml.Unmarshal(data, target)
+}
+
+func applyModelConfig(disk *fileConfig) {
+	selected := disk.Models.Default
+	if disk.Model == "" && selected != "" {
+		disk.Model = selected
+	}
+	entry, ok := disk.ModelEntries[selected]
+	if !ok {
+		return
+	}
+	if entry.Model != "" {
+		disk.Model = entry.Model
+	}
+	if entry.BaseURL != "" {
+		disk.BaseURL = entry.BaseURL
+	}
+	if entry.APIKey != "" {
+		disk.APIKey = entry.APIKey
+	} else if key := firstConfiguredEnv(entry.EnvKey); key != "" {
+		disk.APIKey = key
+	}
+	if entry.Backend != "" {
+		disk.Backend = entry.Backend
+	}
+}
+
+func firstConfiguredEnv(value any) string {
+	var names []string
+	switch typed := value.(type) {
+	case string:
+		names = []string{typed}
+	case []any:
+		for _, item := range typed {
+			if name, ok := item.(string); ok {
+				names = append(names, name)
+			}
+		}
+	case []string:
+		names = typed
+	}
+	for _, name := range names {
+		if value := os.Getenv(name); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func (c Config) Validate() error {

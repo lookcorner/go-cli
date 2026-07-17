@@ -32,18 +32,24 @@ export GORK_MODEL="a-responses-compatible-model"
 ```
 
 The default API base URL is `https://api.x.ai/v1`. Override it with
-`GORK_BASE_URL`, `--base-url`, or a JSON config file. The default config file
-is `$XDG_CONFIG_HOME/gork-go/config.json` on Unix-like systems and the
-corresponding user config directory on other platforms.
+`GORK_BASE_URL`, `--base-url`, or a config file. The default path matches Gork
+Build: `~/.grok/config.toml`.
 
-```json
-{
-  "base_url": "https://api.x.ai/v1",
-  "model": "YOUR_RESPONSES_API_MODEL",
-  "max_steps": 20,
-  "http_timeout": "10m"
-}
+```toml
+[models]
+default = "gork-default"
+
+[model.gork-default]
+model = "YOUR_RESPONSES_API_MODEL"
+base_url = "https://api.x.ai/v1"
+backend = "responses"
+env_key = ["GORK_API_KEY", "XAI_API_KEY"]
 ```
+
+Gork-style `[model.<name>]` custom providers and `[mcp_servers.<name>]` tables
+are supported. The earlier JSON format remains accepted when passed with
+`--config`; an existing `$XDG_CONFIG_HOME/gork-go/config.json` is used as a
+fallback when `~/.grok/config.toml` does not exist.
 
 The default model transport is the Responses API. For OpenAI-compatible
 providers that only expose Chat Completions, use `--backend chat_completions`
@@ -141,15 +147,10 @@ the model as `mcp__SERVER__TOOL`, and forwards tool results back into the agent
 loop. MCP tool calls use the same approval mode as local mutations because tool
 annotations are only hints and cannot be treated as a security boundary.
 
-```json
-{
-  "mcp_servers": {
-    "filesystem": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/project"]
-    }
-  }
-}
+```toml
+[mcp_servers.filesystem]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "/project"]
 ```
 
 Server processes inherit the current environment, with optional per-server
@@ -163,20 +164,15 @@ at least one is enabled, Gork exposes a single `lsp` tool for hover text,
 definitions, references, document/workspace symbols, and published diagnostics.
 Paths are still confined to the selected workspace.
 
-```json
-{
-  "lsp_servers": {
-    "gopls": {
-      "command": "gopls",
-      "extensions": [".go"]
-    },
-    "typescript": {
-      "command": "typescript-language-server",
-      "args": ["--stdio"],
-      "extensions": [".ts", ".tsx", ".js", ".jsx"]
-    }
-  }
-}
+```toml
+[lsp_servers.gopls]
+command = "gopls"
+extensions = [".go"]
+
+[lsp_servers.typescript]
+command = "typescript-language-server"
+args = ["--stdio"]
+extensions = [".ts", ".tsx", ".js", ".jsx"]
 ```
 
 Servers use LSP's framed stdio JSON-RPC transport, receive the workspace root

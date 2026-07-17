@@ -13,7 +13,7 @@ Status values: **done**, **partial**, **planned**.
 | Tool permissions | partial | Prompt/auto/deny modes are present; command-prefix and managed policy rules remain |
 | Shell execution | partial | Gork-compatible tools support foreground exit status, background timeout/lifecycle, multi-task wait/poll, process groups, cleanup, and replayed cwd/environment/functions/aliases; shell-option parity, interactive PTY sessions and cgroups remain |
 | Session persistence | partial | Durable JSONL events, latest/path resume and completed-turn response-ID continuation work; local transcript reconstruction, rewind, branching and migrations remain |
-| Configuration | partial | JSON, environment and CLI layers; TOML compatibility and managed config remain |
+| Configuration | partial | Gork-compatible `~/.grok/config.toml`, model selection/custom providers, MCP/LSP tables, legacy JSON, environment and CLI layers work; full UI/toolset fields, requirements and managed config remain |
 | Authentication | partial | API-key bearer auth; xAI OAuth/device flow and refresh storage remain |
 | Chat Completions backend | done | Streaming text, incremental tool calls, tool-result messages and process-local multi-turn history are covered by protocol tests |
 | Anthropic Messages backend | done | Streaming content blocks, incremental JSON tool input, tool results, headers and process-local history are covered by protocol tests |

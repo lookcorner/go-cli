@@ -1,0 +1,19 @@
+[models]
+default = "gork-default"
+
+[model.gork-default]
+model = "YOUR_RESPONSES_API_MODEL"
+base_url = "https://api.x.ai/v1"
+backend = "responses"
+env_key = ["GORK_API_KEY", "XAI_API_KEY"]
+
+[mcp_servers.example]
+command = "example-mcp-server"
+args = []
+enabled = false
+
+[lsp_servers.gopls]
+command = "gopls"
+args = []
+extensions = [".go"]
+enabled = false
