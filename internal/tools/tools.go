@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -100,6 +101,7 @@ func ToolCallFromContext(ctx context.Context) (ToolCallContext, bool) {
 }
 
 type Registry struct {
+	mu         sync.RWMutex
 	tools      map[string]Tool
 	processes  *ProcessManager
 	goal       *GoalStore
@@ -150,7 +152,11 @@ func (r *Registry) GoalSnapshot() GoalSnapshot {
 	return r.goal.Snapshot()
 }
 
-func (r *Registry) SetReadPolicy(approver Approver) { r.readPolicy = approver }
+func (r *Registry) SetReadPolicy(approver Approver) {
+	r.mu.Lock()
+	r.readPolicy = approver
+	r.mu.Unlock()
+}
 
 func (r *Registry) Close() error {
 	if r.processes == nil {
@@ -167,6 +173,8 @@ func (r *Registry) Register(tool Tool) error {
 	if name == "" {
 		return errors.New("tool name must not be empty")
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if _, exists := r.tools[name]; exists {
 		return fmt.Errorf("tool %q is already registered", name)
 	}
@@ -174,7 +182,41 @@ func (r *Registry) Register(tool Tool) error {
 	return nil
 }
 
+func (r *Registry) Replace(oldNames []string, replacements []Tool) ([]string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	old := make(map[string]bool, len(oldNames))
+	for _, name := range oldNames {
+		old[name] = true
+	}
+	newNames := make([]string, 0, len(replacements))
+	seen := make(map[string]bool, len(replacements))
+	for _, replacement := range replacements {
+		if replacement == nil {
+			return nil, errors.New("replacement tool must not be nil")
+		}
+		name := replacement.Definition().Name
+		if name == "" || seen[name] {
+			return nil, fmt.Errorf("invalid duplicate replacement tool %q", name)
+		}
+		if _, exists := r.tools[name]; exists && !old[name] {
+			return nil, fmt.Errorf("tool %q is already registered", name)
+		}
+		seen[name] = true
+		newNames = append(newNames, name)
+	}
+	for name := range old {
+		delete(r.tools, name)
+	}
+	for index, replacement := range replacements {
+		r.tools[newNames[index]] = replacement
+	}
+	return newNames, nil
+}
+
 func (r *Registry) Definitions() []api.ToolDefinition {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	definitions := make([]api.ToolDefinition, 0, len(r.tools))
 	for _, tool := range r.tools {
 		definitions = append(definitions, tool.Definition())
@@ -184,7 +226,10 @@ func (r *Registry) Definitions() []api.ToolDefinition {
 }
 
 func (r *Registry) Execute(ctx context.Context, name string, arguments json.RawMessage) (string, error) {
+	r.mu.RLock()
 	tool, ok := r.tools[name]
+	readPolicy := r.readPolicy
+	r.mu.RUnlock()
 	if !ok {
 		return "", fmt.Errorf("unknown tool %q", name)
 	}
@@ -192,9 +237,9 @@ func (r *Registry) Execute(ctx context.Context, name string, arguments json.RawM
 	if err != nil {
 		return "", err
 	}
-	if r.readPolicy != nil {
+	if readPolicy != nil {
 		if action, detail := readPolicyTarget(name, arguments); action != "" {
-			if err := r.readPolicy.Approve(ctx, action, detail); err != nil {
+			if err := readPolicy.Approve(ctx, action, detail); err != nil {
 				return "", err
 			}
 		}

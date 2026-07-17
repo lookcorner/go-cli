@@ -10,6 +10,19 @@ import (
 	"testing"
 )
 
+func TestEventStreamDispatchesNotificationBeforeResponse(t *testing.T) {
+	stream := "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/tools/list_changed\"}\n\n" +
+		"data: {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{}}\n\n"
+	var notification string
+	message, err := readMCPEventStream(strings.NewReader(stream), func(method string) { notification = method })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if notification != "notifications/tools/list_changed" || string(message.ID) != "7" {
+		t.Fatalf("unexpected stream result: notification=%q message=%#v", notification, message)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) { return f(request) }

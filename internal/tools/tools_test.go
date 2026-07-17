@@ -8,8 +8,16 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/workspace"
 )
+
+type fixtureTool struct{ name string }
+
+func (t fixtureTool) Definition() api.ToolDefinition {
+	return api.ToolDefinition{Type: "function", Name: t.name, Parameters: map[string]any{"type": "object"}}
+}
+func (t fixtureTool) Execute(context.Context, json.RawMessage) (string, error) { return t.name, nil }
 
 func TestEditFileRequiresUniqueMatch(t *testing.T) {
 	root := t.TempDir()
@@ -39,6 +47,28 @@ func TestEditFileRequiresUniqueMatch(t *testing.T) {
 	}
 	if string(data) != "new\nnew\n" {
 		t.Fatalf("unexpected file content: %q", data)
+	}
+}
+
+func TestRegistryReplaceAtomicallyUpdatesDefinitions(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry(ws, PromptApprover{Mode: PermissionAuto})
+	defer registry.Close()
+	if err := registry.Register(fixtureTool{name: "dynamic_old"}); err != nil {
+		t.Fatal(err)
+	}
+	names, err := registry.Replace([]string{"dynamic_old"}, []Tool{fixtureTool{name: "dynamic_new"}})
+	if err != nil || len(names) != 1 || names[0] != "dynamic_new" {
+		t.Fatalf("unexpected replacement: %#v err=%v", names, err)
+	}
+	if _, err := registry.Execute(context.Background(), "dynamic_old", json.RawMessage(`{}`)); err == nil {
+		t.Fatal("old tool remained registered")
+	}
+	if output, err := registry.Execute(context.Background(), "dynamic_new", json.RawMessage(`{}`)); err != nil || output != "dynamic_new" {
+		t.Fatalf("new tool unavailable: %q err=%v", output, err)
 	}
 }
 

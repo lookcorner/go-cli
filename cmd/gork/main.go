@@ -614,11 +614,43 @@ func startMCPServers(
 				return nil, fmt.Errorf("list tools from MCP server %q: %w", name, err)
 			}
 		}
-		for _, adapter := range mcp.NewToolAdapters(client, name, remoteTools, approver) {
+		toolAdapters := mcp.NewToolAdapters(client, name, remoteTools, approver)
+		remoteNames := make([]string, 0, len(toolAdapters))
+		for _, adapter := range toolAdapters {
 			if err := registry.Register(adapter); err != nil {
 				closeClients()
 				return nil, fmt.Errorf("register MCP tool from %q: %w", name, err)
 			}
+			remoteNames = append(remoteNames, adapter.Definition().Name)
+		}
+		if initialized.Capabilities.Tools != nil && initialized.Capabilities.Tools.ListChanged {
+			var reloadMu sync.Mutex
+			client.SetNotificationHandler(func(method string) {
+				if method != "notifications/tools/list_changed" {
+					return
+				}
+				reloadMu.Lock()
+				defer reloadMu.Unlock()
+				reloadCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+				updated, listErr := client.ListTools(reloadCtx)
+				cancel()
+				if listErr != nil {
+					fmt.Fprintf(stderr, "[gork] MCP %s tool reload failed: %v\n", name, listErr)
+					return
+				}
+				updatedAdapters := mcp.NewToolAdapters(client, name, updated, approver)
+				replacements := make([]tools.Tool, 0, len(updatedAdapters))
+				for _, adapter := range updatedAdapters {
+					replacements = append(replacements, adapter)
+				}
+				newNames, replaceErr := registry.Replace(remoteNames, replacements)
+				if replaceErr != nil {
+					fmt.Fprintf(stderr, "[gork] MCP %s tool reload failed: %v\n", name, replaceErr)
+					return
+				}
+				remoteNames = newNames
+				fmt.Fprintf(stderr, "[gork] MCP %s tools reloaded: %d tool(s)\n", name, len(newNames))
+			})
 		}
 		if initialized.Capabilities.Resources != nil {
 			for _, adapter := range mcp.NewResourceAdapters(client, name) {

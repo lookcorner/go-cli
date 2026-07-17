@@ -115,7 +115,7 @@ func (c *Client) httpRequest(ctx context.Context, value any, expectResponse bool
 	}
 	mediaType, _, _ := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	if mediaType == "text/event-stream" {
-		return readMCPEventStream(response.Body)
+		return readMCPEventStream(response.Body, c.handleNotification)
 	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, 16<<20+1))
 	if err != nil {
@@ -131,7 +131,7 @@ func (c *Client) httpRequest(ctx context.Context, value any, expectResponse bool
 	return message, nil
 }
 
-func readMCPEventStream(reader io.Reader) (rpcMessage, error) {
+func readMCPEventStream(reader io.Reader, onNotification func(string)) (rpcMessage, error) {
 	scanner := bufio.NewScanner(io.LimitReader(reader, 16<<20+1))
 	scanner.Buffer(make([]byte, 64<<10), 16<<20)
 	var dataLines []string
@@ -142,8 +142,13 @@ func readMCPEventStream(reader io.Reader) (rpcMessage, error) {
 				continue
 			}
 			var message rpcMessage
-			if err := json.Unmarshal([]byte(strings.Join(dataLines, "\n")), &message); err == nil && len(message.ID) > 0 {
-				return message, nil
+			if err := json.Unmarshal([]byte(strings.Join(dataLines, "\n")), &message); err == nil {
+				if len(message.ID) > 0 {
+					return message, nil
+				}
+				if message.Method != "" && onNotification != nil {
+					onNotification(message.Method)
+				}
 			}
 			dataLines = nil
 			continue
@@ -157,8 +162,13 @@ func readMCPEventStream(reader io.Reader) (rpcMessage, error) {
 	}
 	if len(dataLines) > 0 {
 		var message rpcMessage
-		if err := json.Unmarshal([]byte(strings.Join(dataLines, "\n")), &message); err == nil && len(message.ID) > 0 {
-			return message, nil
+		if err := json.Unmarshal([]byte(strings.Join(dataLines, "\n")), &message); err == nil {
+			if len(message.ID) > 0 {
+				return message, nil
+			}
+			if message.Method != "" && onNotification != nil {
+				onNotification(message.Method)
+			}
 		}
 	}
 	return rpcMessage{}, errors.New("MCP event stream ended without a response")

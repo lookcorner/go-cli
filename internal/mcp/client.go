@@ -71,6 +71,7 @@ type Client struct {
 	headers          map[string]string
 	sessionID        string
 	selectedProtocol string
+	notification     func(string)
 	pending          map[string]chan response
 	nextID           atomic.Uint64
 	mu               sync.Mutex
@@ -241,6 +242,21 @@ func (c *Client) CallTool(ctx context.Context, name string, arguments map[string
 	var result ToolResult
 	err := c.call(ctx, "tools/call", map[string]any{"name": name, "arguments": arguments}, &result)
 	return result, err
+}
+
+func (c *Client) SetNotificationHandler(handler func(method string)) {
+	c.mu.Lock()
+	c.notification = handler
+	c.mu.Unlock()
+}
+
+func (c *Client) handleNotification(method string) {
+	c.mu.Lock()
+	handler := c.notification
+	c.mu.Unlock()
+	if handler != nil {
+		go handler(method)
+	}
 }
 
 func (c *Client) ListResources(ctx context.Context) ([]ResourceInfo, error) {
@@ -415,6 +431,9 @@ func (c *Client) readLoop(reader io.Reader) {
 			continue
 		}
 		if len(message.ID) == 0 {
+			if message.Method != "" {
+				c.handleNotification(message.Method)
+			}
 			continue
 		}
 		key := strings.Trim(string(message.ID), "\"")
