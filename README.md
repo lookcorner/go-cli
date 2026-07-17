@@ -145,6 +145,33 @@ Server processes inherit the current environment, with optional per-server
 `env` overrides. They start in the selected workspace and are shut down when
 the agent exits.
 
+## Language servers
+
+Language Server Protocol processes can also be configured per workspace. When
+at least one is enabled, Gork exposes a single `lsp` tool for hover text,
+definitions, references, document/workspace symbols, and published diagnostics.
+Paths are still confined to the selected workspace.
+
+```json
+{
+  "lsp_servers": {
+    "gopls": {
+      "command": "gopls",
+      "extensions": [".go"]
+    },
+    "typescript": {
+      "command": "typescript-language-server",
+      "args": ["--stdio"],
+      "extensions": [".ts", ".tsx", ".js", ".jsx"]
+    }
+  }
+}
+```
+
+Servers use LSP's framed stdio JSON-RPC transport, receive the workspace root
+during initialization, and are shut down on exit. Extension filters are
+optional; entries may be written with or without the leading dot.
+
 ## Project instructions and skills
 
 At startup, Gork Go discovers project instruction files compatible with Gork

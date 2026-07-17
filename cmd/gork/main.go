@@ -19,6 +19,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/config"
+	"github.com/lookcorner/go-cli/internal/lsp"
 	"github.com/lookcorner/go-cli/internal/mcp"
 	"github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/skills"
@@ -215,6 +216,13 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			_ = mcpClient.Close()
 		}
 	}()
+	lspManager, err := startLSPServers(ctx, cfg, ws, registry, statusOutput)
+	if err != nil {
+		return err
+	}
+	if lspManager != nil {
+		defer lspManager.Close()
+	}
 	runner := &agent.Runner{
 		Client: client, Tools: registry, Logger: logger,
 		Model: cfg.Model, Instructions: cfg.SystemPrompt, MaxSteps: cfg.MaxSteps,
@@ -235,6 +243,49 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		fmt.Fprintln(stdout)
 	}
 	return nil
+}
+
+func startLSPServers(
+	ctx context.Context,
+	cfg config.Config,
+	ws *workspace.Workspace,
+	registry *tools.Registry,
+	stderr io.Writer,
+) (*lsp.Manager, error) {
+	names := make([]string, 0, len(cfg.LSPServers))
+	for name, server := range cfg.LSPServers {
+		if server.IsEnabled() {
+			names = append(names, name)
+		}
+	}
+	if len(names) == 0 {
+		return nil, nil
+	}
+	sort.Strings(names)
+	manager := lsp.NewManager(ws)
+	for _, name := range names {
+		server := cfg.LSPServers[name]
+		fmt.Fprintf(stderr, "[gork] starting LSP server: %s\n", name)
+		client, err := lsp.Start(ctx, lsp.ProcessConfig{
+			Name: name, Command: server.Command, Args: server.Args,
+			Env: server.Env, Extensions: server.Extensions, Root: ws.Root(), Stderr: stderr,
+		})
+		if err != nil {
+			_ = manager.Close()
+			return nil, err
+		}
+		if err := manager.Add(client); err != nil {
+			_ = client.Close()
+			_ = manager.Close()
+			return nil, err
+		}
+		fmt.Fprintf(stderr, "[gork] LSP %s ready\n", name)
+	}
+	if err := registry.Register(manager.Tool()); err != nil {
+		_ = manager.Close()
+		return nil, fmt.Errorf("register LSP tool: %w", err)
+	}
+	return manager, nil
 }
 
 func joinInstructions(parts ...string) string {

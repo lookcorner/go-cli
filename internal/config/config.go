@@ -20,6 +20,7 @@ type Config struct {
 	SystemPrompt string                     `json:"system_prompt,omitempty"`
 	MaxSteps     int                        `json:"max_steps,omitempty"`
 	MCPServers   map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
+	LSPServers   map[string]LSPServerConfig `json:"lsp_servers,omitempty"`
 	HTTPTimeout  time.Duration              `json:"-"`
 }
 
@@ -28,6 +29,18 @@ type MCPServerConfig struct {
 	Args    []string          `json:"args,omitempty"`
 	Env     map[string]string `json:"env,omitempty"`
 	Enabled *bool             `json:"enabled,omitempty"`
+}
+
+type LSPServerConfig struct {
+	Command    string            `json:"command"`
+	Args       []string          `json:"args,omitempty"`
+	Env        map[string]string `json:"env,omitempty"`
+	Extensions []string          `json:"extensions,omitempty"`
+	Enabled    *bool             `json:"enabled,omitempty"`
+}
+
+func (c LSPServerConfig) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
 }
 
 func (c MCPServerConfig) IsEnabled() bool {
@@ -43,6 +56,7 @@ type fileConfig struct {
 	MaxSteps     int                        `json:"max_steps,omitempty"`
 	HTTPTimeout  string                     `json:"http_timeout,omitempty"`
 	MCPServers   map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
+	LSPServers   map[string]LSPServerConfig `json:"lsp_servers,omitempty"`
 }
 
 func Load(path string) (Config, error) {
@@ -88,6 +102,7 @@ func Load(path string) (Config, error) {
 			cfg.MaxSteps = disk.MaxSteps
 		}
 		cfg.MCPServers = disk.MCPServers
+		cfg.LSPServers = disk.LSPServers
 		if disk.HTTPTimeout != "" {
 			d, err := time.ParseDuration(disk.HTTPTimeout)
 			if err != nil {

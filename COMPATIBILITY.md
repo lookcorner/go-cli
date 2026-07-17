@@ -20,7 +20,7 @@ Status values: **done**, **partial**, **planned**.
 | Interactive UI | partial | Multi-turn REPL plus Bubble Tea v2 full-screen streaming, Unicode input, scrolling, cancellation, status and approval UI work; Markdown/media, dashboard panes, mouse and advanced editing remain |
 | MCP | partial | Stdio lifecycle, version negotiation, paginated tool discovery/calls and shutdown work; Streamable HTTP, resources, prompts, sampling and list-change reload remain |
 | ACP | planned | Agent Client Protocol server/client modes remain |
-| LSP tools | planned | Process lifecycle, JSON-RPC and diagnostics remain |
+| LSP tools | partial | Framed stdio JSON-RPC, initialization/shutdown, document sync, hover, definitions, references, symbols and published diagnostics work; dynamic configuration, progress, apply-edit and server-specific adapters remain |
 | Skills / AGENTS.md | partial | Compatible root instruction/rules discovery, source-labelled injection, user/workspace skill discovery and lazy `skill` loading work; gitignore-aware nested discovery and conditional skills remain |
 | Git / worktrees / hunk tracking | planned | Worktree lifecycle and edit attribution remain |
 | Subagents | planned | Coordinator, roster and activity events remain |

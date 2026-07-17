@@ -10,5 +10,13 @@
       "args": [],
       "enabled": false
     }
+  },
+  "lsp_servers": {
+    "gopls": {
+      "command": "gopls",
+      "args": [],
+      "extensions": [".go"],
+      "enabled": false
+    }
   }
 }
