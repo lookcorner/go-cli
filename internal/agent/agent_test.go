@@ -11,6 +11,7 @@ import (
 
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/compat"
+	"github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/skills"
 	"github.com/lookcorner/go-cli/internal/tools"
 	"github.com/lookcorner/go-cli/internal/workspace"
@@ -117,11 +118,16 @@ func TestRunnerAcceptsMultimodalPromptParts(t *testing.T) {
 		t.Fatal(err)
 	}
 	streamer := &fakeStreamer{results: []api.StreamResult{{ResponseID: "resp_1", Text: "done"}}}
-	runner := Runner{Client: streamer, Tools: tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto}), Model: "test", MaxSteps: 1}
+	sessionDir := t.TempDir()
+	logger, err := session.NewLoggerWithID(sessionDir, "multimodal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := Runner{Client: streamer, Tools: tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto}), Logger: logger, Model: "test", MaxSteps: 1}
 	defer runner.Tools.Close()
 	parts := []api.ContentPart{
 		{Type: "input_text", Text: "inspect"},
-		{Type: "input_image", ImageURL: "data:image/png;base64,cG5n"},
+		{Type: "input_image", ImageURL: "https://example.com/image.png"},
 	}
 	if _, err := runner.RunTurnParts(context.Background(), "inspect image", parts, ""); err != nil {
 		t.Fatal(err)
@@ -129,6 +135,13 @@ func TestRunnerAcceptsMultimodalPromptParts(t *testing.T) {
 	got, ok := streamer.requests[0].Input[0].Content.([]api.ContentPart)
 	if !ok || len(got) != 2 || got[1].ImageURL != parts[1].ImageURL {
 		t.Fatalf("multimodal prompt was not preserved: %#v", streamer.requests[0].Input)
+	}
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	messages, err := session.Transcript(filepath.Join(sessionDir, "multimodal.jsonl"))
+	if err != nil || len(messages) != 2 || len(messages[0].Content) != 2 || messages[0].Content[1].URI != parts[1].ImageURL {
+		t.Fatalf("multimodal prompt was not persisted: %#v err=%v", messages, err)
 	}
 }
 

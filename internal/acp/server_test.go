@@ -2,6 +2,7 @@ package acp
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -561,17 +562,18 @@ func TestACPLoadReplaysAndResumeReconnectsPersistedSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, event := range []struct {
-		kind string
-		data any
-	}{
-		{"session_metadata", map[string]any{"cwd": workspaceRoot}},
-		{"user_prompt", map[string]any{"text": "stored question"}},
-		{"model_response", map[string]any{"response_id": "stored-response", "text": "stored answer", "tool_call_count": 0}},
-	} {
-		if err := logger.Append(event.kind, event.data); err != nil {
-			t.Fatal(err)
-		}
+	if err := logger.Append("session_metadata", map[string]any{"cwd": workspaceRoot}); err != nil {
+		t.Fatal(err)
+	}
+	imageData := base64.StdEncoding.EncodeToString([]byte{137, 80, 78, 71, 13, 10, 26, 10})
+	if err := logger.AppendPrompt("stored question", []sessionlog.Content{
+		{Type: "text", Text: "stored question"},
+		{Type: "image", URI: "data:image/png;base64," + imageData},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append("model_response", map[string]any{"response_id": "stored-response", "text": "stored answer", "tool_call_count": 0}); err != nil {
+		t.Fatal(err)
 	}
 	if err := logger.Close(); err != nil {
 		t.Fatal(err)
@@ -600,13 +602,15 @@ func TestACPLoadReplaysAndResumeReconnectsPersistedSession(t *testing.T) {
 	decoder := json.NewDecoder(outputR)
 	loadParams := map[string]any{"sessionId": "persisted-1", "cwd": workspaceRoot, "mcpServers": []any{}}
 	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "session/load", "params": loadParams})
-	userReplay := decodeACP(t, decoder)
+	userTextReplay := decodeACP(t, decoder)
+	userImageReplay := decodeACP(t, decoder)
 	agentReplay := decodeACP(t, decoder)
 	loaded := decodeACP(t, decoder)
-	if userReplay["params"].(map[string]any)["update"].(map[string]any)["sessionUpdate"] != "user_message_chunk" ||
+	if userTextReplay["params"].(map[string]any)["update"].(map[string]any)["sessionUpdate"] != "user_message_chunk" ||
+		userImageReplay["params"].(map[string]any)["update"].(map[string]any)["content"].(map[string]any)["data"] != imageData ||
 		agentReplay["params"].(map[string]any)["update"].(map[string]any)["sessionUpdate"] != "agent_message_chunk" ||
 		loaded["result"].(map[string]any)["sessionId"] != "persisted-1" {
-		t.Fatalf("unexpected load sequence: %#v %#v %#v", userReplay, agentReplay, loaded)
+		t.Fatalf("unexpected load sequence: %#v %#v %#v %#v", userTextReplay, userImageReplay, agentReplay, loaded)
 	}
 	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 2, "method": "session/close", "params": map[string]any{"sessionId": "persisted-1"}})
 	_ = decodeACP(t, decoder)

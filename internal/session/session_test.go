@@ -1,10 +1,14 @@
 package session
 
 import (
+	"encoding/base64"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+var testPNG = []byte{137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0, 144, 119, 83, 222, 0, 0, 0, 12, 73, 68, 65, 84, 8, 215, 99, 248, 207, 192, 0, 0, 3, 1, 1, 0, 24, 221, 141, 176, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130}
 
 func TestResumeUsesLastCompletedResponse(t *testing.T) {
 	dir := t.TempDir()
@@ -67,7 +71,7 @@ func TestTranscriptStopsAtLastCompletedTurn(t *testing.T) {
 		`{"kind":"user_prompt","data":{"text":"first"}}` + "\n" +
 		`{"kind":"model_response","data":{"response_id":"r1","text":"checking ","tool_call_count":1}}` + "\n" +
 		`{"kind":"model_response","data":{"response_id":"r2","text":"done","tool_call_count":0}}` + "\n" +
-		`{"kind":"user_prompt","data":{"text":"incomplete"}}` + "\n" +
+		`{"kind":"user_prompt","data":{"text":"incomplete","content":[{"type":"image","uri":"../missing.png","mimeType":"image/png"}]}}` + "\n" +
 		`{"kind":"model_response","data":{"response_id":"r3","text":"partial","tool_call_count":1}}` + "\n"
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
@@ -82,6 +86,93 @@ func TestTranscriptStopsAtLastCompletedTurn(t *testing.T) {
 	formatted := FormatTranscript(messages)
 	if formatted != "You\nfirst\n\nGork\nchecking done" {
 		t.Fatalf("unexpected formatted transcript: %q", formatted)
+	}
+}
+
+func TestPromptImagesPersistOutsideJSONLAndReplay(t *testing.T) {
+	dir := t.TempDir()
+	logger, err := NewLoggerWithID(dir, "images")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := base64.StdEncoding.EncodeToString(testPNG)
+	content := []Content{
+		{Type: "text", Text: "inspect this"},
+		{Type: "image", URI: "data:image/png;base64," + encoded},
+		{Type: "image", URI: "https://example.com/remote.png"},
+	}
+	if err := logger.AppendPrompt("inspect this", content); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append("model_response", map[string]any{"response_id": "r1", "text": "done", "tool_call_count": 0}); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	logData, err := os.ReadFile(filepath.Join(dir, "images.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(logData), encoded) {
+		t.Fatal("base64 image was written into the JSONL log")
+	}
+	assets, err := os.ReadDir(filepath.Join(dir, "assets"))
+	if err != nil || len(assets) != 1 {
+		t.Fatalf("unexpected assets: %#v err=%v", assets, err)
+	}
+	info, err := assets[0].Info()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("unexpected asset permissions: %v", info.Mode().Perm())
+	}
+	messages, err := Transcript(filepath.Join(dir, "images.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 2 || len(messages[0].Content) != 3 || messages[0].Content[1].Data != encoded || messages[0].Content[2].URI != "https://example.com/remote.png" {
+		t.Fatalf("unexpected multimodal transcript: %#v", messages)
+	}
+	formatted := FormatTranscript(messages)
+	if strings.Contains(formatted, encoded) || !strings.Contains(formatted, "[Image]") || !strings.Contains(formatted, "[Image: https://example.com/remote.png]") {
+		t.Fatalf("unexpected formatted transcript: %q", formatted)
+	}
+}
+
+func TestTranscriptRejectsEscapingImageAsset(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "unsafe.jsonl")
+	content := "" +
+		`{"kind":"user_prompt","data":{"text":"inspect","content":[{"type":"image","uri":"../secret.png","mimeType":"image/png"}]}}` + "\n" +
+		`{"kind":"model_response","data":{"response_id":"r1","text":"done","tool_call_count":0}}` + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Transcript(path); err == nil || !strings.Contains(err.Error(), "invalid session image path") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestTranscriptRejectsSymlinkedAssetsDirectory(t *testing.T) {
+	dir := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "image.png"), testPNG, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "assets")); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "unsafe.jsonl")
+	content := "" +
+		`{"kind":"user_prompt","data":{"text":"inspect","content":[{"type":"image","uri":"assets/image.png","mimeType":"image/png"}]}}` + "\n" +
+		`{"kind":"model_response","data":{"response_id":"r1","text":"done","tool_call_count":0}}` + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Transcript(path); err == nil || !strings.Contains(err.Error(), "non-symlink directory") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

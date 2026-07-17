@@ -2,10 +2,15 @@ package session
 
 import (
 	"bufio"
+	"bytes"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -16,6 +21,7 @@ import (
 )
 
 const maxSessionBytes = 64 << 20
+const maxImageBytes = 20 << 20
 
 var validSessionID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 
@@ -109,8 +115,17 @@ func Fork(dir, sourceID, newID, cwd string) (chatMessages, updates int, err erro
 }
 
 type Message struct {
-	Role string
-	Text string
+	Role    string
+	Text    string
+	Content []Content
+}
+
+type Content struct {
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	URI      string `json:"uri,omitempty"`
+	MimeType string `json:"mimeType,omitempty"`
+	Data     string `json:"-"`
 }
 
 type Logger struct {
@@ -351,13 +366,14 @@ func Transcript(path string) ([]Message, error) {
 		switch event.Kind {
 		case "user_prompt":
 			var data struct {
-				Text string `json:"text"`
+				Text    string    `json:"text"`
+				Content []Content `json:"content"`
 			}
 			if err := json.Unmarshal(event.Data, &data); err != nil {
 				return nil, fmt.Errorf("parse user prompt on session line %d: %w", line, err)
 			}
-			if data.Text != "" {
-				current = append(current, Message{Role: "user", Text: data.Text})
+			if data.Text != "" || len(data.Content) > 0 {
+				current = append(current, Message{Role: "user", Text: data.Text, Content: data.Content})
 			}
 		case "model_response":
 			var data struct {
@@ -386,6 +402,20 @@ func Transcript(path string) ([]Message, error) {
 	if completed == nil {
 		return nil, errors.New("session has no completed transcript to resume")
 	}
+	for messageIndex := range completed {
+		for contentIndex := range completed[messageIndex].Content {
+			part := &completed[messageIndex].Content[contentIndex]
+			switch part.Type {
+			case "text":
+			case "image":
+				if err := loadImage(path, part); err != nil {
+					return nil, fmt.Errorf("load transcript image: %w", err)
+				}
+			default:
+				return nil, fmt.Errorf("unsupported transcript content type %q", part.Type)
+			}
+		}
+	}
 	return completed, nil
 }
 
@@ -396,7 +426,24 @@ func FormatTranscript(messages []Message) string {
 		if message.Role == "user" {
 			label = "You"
 		}
-		parts = append(parts, label+"\n"+message.Text)
+		body := message.Text
+		if len(message.Content) > 0 {
+			var content []string
+			for _, part := range message.Content {
+				switch part.Type {
+				case "text":
+					content = append(content, part.Text)
+				case "image":
+					if strings.HasPrefix(part.URI, "http://") || strings.HasPrefix(part.URI, "https://") {
+						content = append(content, "[Image: "+part.URI+"]")
+					} else {
+						content = append(content, "[Image]")
+					}
+				}
+			}
+			body = strings.Join(content, "\n")
+		}
+		parts = append(parts, label+"\n"+body)
 	}
 	return strings.Join(parts, "\n\n")
 }
@@ -464,6 +511,50 @@ func (l *Logger) Path() string { return l.path }
 func (l *Logger) Append(kind string, data any) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	return l.appendLocked(kind, data)
+}
+
+func (l *Logger) AppendPrompt(text string, content []Content) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.file == nil {
+		return nil
+	}
+	persisted := make([]Content, 0, len(content))
+	var created []string
+	for _, part := range content {
+		switch part.Type {
+		case "text":
+			if part.Text != "" {
+				persisted = append(persisted, Content{Type: "text", Text: part.Text})
+			}
+		case "image":
+			stored, path, err := l.persistImage(part.URI)
+			if err != nil {
+				removeFiles(created)
+				return err
+			}
+			persisted = append(persisted, stored)
+			if path != "" {
+				created = append(created, path)
+			}
+		default:
+			removeFiles(created)
+			return fmt.Errorf("unsupported prompt content type %q", part.Type)
+		}
+	}
+	data := struct {
+		Text    string    `json:"text"`
+		Content []Content `json:"content,omitempty"`
+	}{Text: text, Content: persisted}
+	if err := l.appendLocked("user_prompt", data); err != nil {
+		removeFiles(created)
+		return err
+	}
+	return nil
+}
+
+func (l *Logger) appendLocked(kind string, data any) error {
 	if l.file == nil {
 		return nil
 	}
@@ -477,6 +568,136 @@ func (l *Logger) Append(kind string, data any) error {
 		return fmt.Errorf("write session event: %w", err)
 	}
 	return l.file.Sync()
+}
+
+func (l *Logger) persistImage(rawURL string) (Content, string, error) {
+	if strings.HasPrefix(rawURL, "http://") || strings.HasPrefix(rawURL, "https://") {
+		parsed, err := url.Parse(rawURL)
+		if err != nil || parsed.Host == "" {
+			return Content{}, "", errors.New("image has an invalid HTTP(S) URI")
+		}
+		return Content{Type: "image", URI: rawURL}, "", nil
+	}
+	if !strings.HasPrefix(rawURL, "data:") {
+		return Content{}, "", errors.New("image must use a base64 data URL or HTTP(S) URI")
+	}
+	mediaType, encoded, ok := strings.Cut(strings.TrimPrefix(rawURL, "data:"), ";base64,")
+	if !ok {
+		return Content{}, "", errors.New("image must use a base64 data URL or HTTP(S) URI")
+	}
+	ext, ok := imageExtension(mediaType)
+	if !ok {
+		return Content{}, "", fmt.Errorf("unsupported image mime type %q", mediaType)
+	}
+	if base64.StdEncoding.DecodedLen(len(encoded)) > maxImageBytes {
+		return Content{}, "", errors.New("image exceeds 20 MB")
+	}
+	data, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil || !validImage(mediaType, data) {
+		return Content{}, "", errors.New("image data does not match its mime type")
+	}
+	assets := filepath.Join(filepath.Dir(l.path), "assets")
+	if err := os.MkdirAll(assets, 0o700); err != nil {
+		return Content{}, "", fmt.Errorf("create session assets: %w", err)
+	}
+	assetsInfo, err := os.Lstat(assets)
+	if err != nil || assetsInfo.Mode()&os.ModeSymlink != 0 || !assetsInfo.IsDir() {
+		return Content{}, "", errors.New("session assets must be a non-symlink directory")
+	}
+	random := make([]byte, 16)
+	if _, err := rand.Read(random); err != nil {
+		return Content{}, "", fmt.Errorf("name session image: %w", err)
+	}
+	name := "image-" + hex.EncodeToString(random) + "." + ext
+	path := filepath.Join(assets, name)
+	temporary, err := os.CreateTemp(assets, ".image-*")
+	if err != nil {
+		return Content{}, "", fmt.Errorf("create session image: %w", err)
+	}
+	tempPath := temporary.Name()
+	defer os.Remove(tempPath)
+	if _, err = temporary.Write(data); err == nil {
+		err = temporary.Sync()
+	}
+	if closeErr := temporary.Close(); err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		err = os.Rename(tempPath, path)
+	}
+	if err != nil {
+		return Content{}, "", fmt.Errorf("save session image: %w", err)
+	}
+	return Content{Type: "image", URI: filepath.ToSlash(filepath.Join("assets", name)), MimeType: mediaType}, path, nil
+}
+
+func loadImage(sessionPath string, content *Content) error {
+	if strings.HasPrefix(content.URI, "http://") || strings.HasPrefix(content.URI, "https://") {
+		parsed, err := url.Parse(content.URI)
+		if err != nil || parsed.Host == "" {
+			return errors.New("invalid remote image URI")
+		}
+		return nil
+	}
+	clean := filepath.Clean(filepath.FromSlash(content.URI))
+	if filepath.IsAbs(clean) || clean == "." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || filepath.Dir(clean) != "assets" {
+		return errors.New("invalid session image path")
+	}
+	assets := filepath.Join(filepath.Dir(sessionPath), "assets")
+	assetsInfo, err := os.Lstat(assets)
+	if err != nil || assetsInfo.Mode()&os.ModeSymlink != 0 || !assetsInfo.IsDir() {
+		return errors.New("session assets must be a non-symlink directory")
+	}
+	path := filepath.Join(filepath.Dir(sessionPath), clean)
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() > maxImageBytes {
+		return errors.New("session image must be a regular file no larger than 20 MB")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	if _, ok := imageExtension(content.MimeType); !ok || !validImage(content.MimeType, data) {
+		return errors.New("session image data does not match its mime type")
+	}
+	content.Data = base64.StdEncoding.EncodeToString(data)
+	return nil
+}
+
+func imageExtension(mediaType string) (string, bool) {
+	switch mediaType {
+	case "image/png":
+		return "png", true
+	case "image/jpeg":
+		return "jpg", true
+	case "image/gif":
+		return "gif", true
+	case "image/webp":
+		return "webp", true
+	default:
+		return "", false
+	}
+}
+
+func validImage(mediaType string, data []byte) bool {
+	switch mediaType {
+	case "image/png":
+		return len(data) >= 8 && bytes.Equal(data[:8], []byte("\x89PNG\r\n\x1a\n"))
+	case "image/jpeg":
+		return len(data) >= 4 && bytes.Equal(data[:3], []byte{0xff, 0xd8, 0xff}) && bytes.Equal(data[len(data)-2:], []byte{0xff, 0xd9})
+	case "image/gif":
+		return bytes.HasPrefix(data, []byte("GIF87a")) || bytes.HasPrefix(data, []byte("GIF89a"))
+	case "image/webp":
+		return len(data) >= 12 && bytes.Equal(data[:4], []byte("RIFF")) && bytes.Equal(data[8:12], []byte("WEBP"))
+	default:
+		return false
+	}
+}
+
+func removeFiles(paths []string) {
+	for _, path := range paths {
+		_ = os.Remove(path)
+	}
 }
 
 func (l *Logger) Close() error {

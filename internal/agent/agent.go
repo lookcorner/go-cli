@@ -25,6 +25,7 @@ type ResponseStreamer interface {
 
 type EventLogger interface {
 	Append(kind string, data any) error
+	AppendPrompt(text string, content []session.Content) error
 }
 
 type ToolObserver interface {
@@ -100,6 +101,9 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 			previousResponseID = ""
 		}
 	}
+	if err := r.logPrompt(prompt, content); err != nil {
+		return Result{}, fmt.Errorf("persist user prompt: %w", err)
+	}
 	summaryPrefix := ""
 	if r.pendingSummary != "" {
 		summaryPrefix = "Previous conversation summary:\n" + r.pendingSummary + "\n\n"
@@ -114,7 +118,6 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 		}
 	}
 
-	r.log("user_prompt", map[string]any{"text": prompt})
 	input := []api.InputItem{{Type: "message", Role: "user", Content: content}}
 	var final Result
 
@@ -252,6 +255,28 @@ func (r *Runner) log(kind string, data any) {
 	if r.Logger != nil {
 		_ = r.Logger.Append(kind, data)
 	}
+}
+
+func (r *Runner) logPrompt(text string, value any) error {
+	if r.Logger == nil {
+		return nil
+	}
+	parts, ok := value.([]api.ContentPart)
+	if !ok {
+		return r.Logger.AppendPrompt(text, nil)
+	}
+	content := make([]session.Content, 0, len(parts))
+	for _, part := range parts {
+		switch part.Type {
+		case "input_text":
+			content = append(content, session.Content{Type: "text", Text: part.Text})
+		case "input_image":
+			content = append(content, session.Content{Type: "image", URI: part.ImageURL})
+		default:
+			return fmt.Errorf("unsupported prompt content type %q", part.Type)
+		}
+	}
+	return r.Logger.AppendPrompt(text, content)
 }
 
 func (r *Runner) status(format string, args ...any) {

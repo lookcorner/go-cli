@@ -799,10 +799,28 @@ func (s *Server) handleRestoreSession(ctx context.Context, incoming message, rep
 			if historical.Role == "user" {
 				updateType = "user_message_chunk"
 			}
-			s.notify(params.SessionID, map[string]any{
-				"sessionUpdate": updateType,
-				"content":       map[string]any{"type": "text", "text": historical.Text},
-			})
+			if historical.Role != "user" || len(historical.Content) == 0 {
+				s.notify(params.SessionID, map[string]any{
+					"sessionUpdate": updateType,
+					"content":       map[string]any{"type": "text", "text": historical.Text},
+				})
+				continue
+			}
+			for _, part := range historical.Content {
+				content := map[string]any{"type": part.Type}
+				if part.Type == "text" {
+					content["text"] = part.Text
+				} else if part.Data != "" {
+					content["data"] = part.Data
+					content["mimeType"] = part.MimeType
+				} else {
+					content["uri"] = part.URI
+				}
+				s.notify(params.SessionID, map[string]any{
+					"sessionUpdate": updateType,
+					"content":       content,
+				})
+			}
 		}
 	}
 	s.respond(incoming.ID, map[string]any{"sessionId": params.SessionID})
