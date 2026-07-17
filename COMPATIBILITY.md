@@ -9,7 +9,7 @@ Status values: **done**, **partial**, **planned**.
 | --- | --- | --- |
 | Responses API streaming | done | SSE text deltas, terminal response IDs, function calls and JSON fallback |
 | Headless agent loop | done | Multi-step model/tool loop with cancellation and a configurable limit |
-| Workspace file tools | done | Read, list, regex search, atomic write and exact-text edit |
+| Workspace file tools | partial | Gork-compatible `read_file`, `list_dir`, `grep`, and `search_replace` schemas cover text reads with negative offsets, ripgrep filters, atomic create/overwrite and exact/all replacement; document/image formats, full gitignore traversal and Unicode-normalized editing remain |
 | Tool permissions | partial | Prompt/auto/deny modes are present; command-prefix and managed policy rules remain |
 | Shell execution | partial | Gork-compatible tools support foreground exit status, background timeout/lifecycle, multi-task wait/poll, process groups, cleanup, and replayed cwd/environment/functions/aliases; shell-option parity, interactive PTY sessions and cgroups remain |
 | Session persistence | partial | Durable JSONL events, latest/path resume and completed-turn response-ID continuation work; local transcript reconstruction, rewind, branching and migrations remain |

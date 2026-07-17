@@ -60,3 +60,55 @@ func TestRegistryNormalizesStringArguments(t *testing.T) {
 		t.Fatalf("unexpected output: %s", output)
 	}
 }
+
+func TestGorkFileToolCompatibility(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "sample.go"), []byte("one\nTwo\nthree\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry(ws, PromptApprover{Mode: PermissionAuto})
+	defer registry.Close()
+	read, err := registry.Execute(context.Background(), "read_file", json.RawMessage(
+		`{"target_file":"sample.go","offset":-2,"limit":1}`,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if read != "3→three\n" {
+		t.Fatalf("unexpected read output: %q", read)
+	}
+	listed, err := registry.Execute(context.Background(), "list_dir", json.RawMessage(
+		`{"target_directory":"."}`,
+	))
+	if err != nil || !strings.Contains(listed, "sample.go") {
+		t.Fatalf("unexpected list output=%q err=%v", listed, err)
+	}
+	found, err := registry.Execute(context.Background(), "grep", json.RawMessage(
+		`{"pattern":"two","glob":"*.go","-i":true,"head_limit":10}`,
+	))
+	if err != nil || !strings.Contains(found, "sample.go:2:Two") {
+		t.Fatalf("unexpected grep output=%q err=%v", found, err)
+	}
+	created, err := registry.Execute(context.Background(), "search_replace", json.RawMessage(
+		`{"file_path":"created.txt","old_string":"","new_string":"old old\n"}`,
+	))
+	if err != nil || !strings.Contains(created, "created successfully") {
+		t.Fatalf("unexpected create output=%q err=%v", created, err)
+	}
+	if _, err := registry.Execute(context.Background(), "search_replace", json.RawMessage(
+		`{"file_path":"created.txt","old_string":"old","new_string":"new","replace_all":true}`,
+	)); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "created.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "new new\n" {
+		t.Fatalf("unexpected edited content: %q", data)
+	}
+}

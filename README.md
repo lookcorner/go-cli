@@ -99,9 +99,12 @@ Local mutations require confirmation by default:
 - `--approval auto`: approve all available local tools. Use only in a trusted
   workspace and environment.
 
-The built-in tools include `read_file`, `list_files`, `search_files`,
-`write_file`, `edit_file`, and `shell`. The Gork Build-compatible command
-surface is `run_terminal_cmd`, `get_task_output`, and `kill_task`, including
+The Gork Build-compatible file surface includes `read_file`, `list_dir`,
+`grep`, and `search_replace`; text reads support positive or negative line
+offsets and use the original `LINE_NUMBER→LINE_CONTENT` format. The earlier
+`list_files`, `search_files`, `write_file`, `edit_file`, and `shell` tools remain
+available. The compatible command surface is `run_terminal_cmd`,
+`get_task_output`, and `kill_task`, including
 foreground exit-status output, background task IDs, multi-task polling/waiting,
 process-group termination, and persistent cwd/environment/function/alias state
 between foreground calls. Background commands inherit a state snapshot without

@@ -103,6 +103,9 @@ func NewRegistry(ws *workspace.Workspace, approver Approver) *Registry {
 		&runTerminalCommandTool{manager: processes},
 		&taskOutputTool{manager: processes},
 		&killTaskTool{manager: processes},
+		&listDirTool{ws: ws},
+		&grepTool{ws: ws},
+		&searchReplaceTool{ws: ws, approver: approver},
 	}
 	registry := &Registry{tools: make(map[string]Tool, len(items)), processes: processes}
 	for _, item := range items {
@@ -182,52 +185,82 @@ type readFileTool struct{ ws *workspace.Workspace }
 func (t *readFileTool) Definition() api.ToolDefinition {
 	return api.ToolDefinition{
 		Type: "function", Name: "read_file",
-		Description: "Read a UTF-8 text file inside the workspace with optional 1-based line bounds.",
+		Description: "Read a file inside the workspace. Text results use 1-based LINE_NUMBER→LINE_CONTENT formatting.",
 		Parameters: objectSchema(map[string]any{
-			"path":       map[string]any{"type": "string"},
-			"start_line": map[string]any{"type": "integer", "minimum": 1},
-			"end_line":   map[string]any{"type": "integer", "minimum": 1},
-		}, "path"),
+			"target_file": map[string]any{"type": "string", "description": "File path relative to the workspace."},
+			"offset":      map[string]any{"type": "integer", "description": "1-based starting line; negative values count from the end."},
+			"limit":       map[string]any{"type": "integer", "minimum": 1, "maximum": 1000},
+			"pages":       map[string]any{"type": "string", "description": "Reserved page range for document formats."},
+			"format":      map[string]any{"type": "string", "enum": []string{"image", "text"}},
+		}, "target_file"),
 	}
 }
 
 func (t *readFileTool) Execute(_ context.Context, raw json.RawMessage) (string, error) {
 	var args struct {
-		Path      string `json:"path"`
-		StartLine int    `json:"start_line"`
-		EndLine   int    `json:"end_line"`
+		TargetFile string `json:"target_file"`
+		Path       string `json:"path"`
+		Offset     *int   `json:"offset"`
+		Limit      int    `json:"limit"`
+		StartLine  int    `json:"start_line"`
+		EndLine    int    `json:"end_line"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return "", fmt.Errorf("decode read_file arguments: %w", err)
 	}
-	path, err := t.ws.Resolve(args.Path)
+	requestedPath := args.TargetFile
+	if requestedPath == "" {
+		requestedPath = args.Path
+	}
+	if requestedPath == "" {
+		return "", errors.New("target_file is required")
+	}
+	path, err := t.ws.Resolve(requestedPath)
 	if err != nil {
 		return "", err
 	}
 	file, err := os.Open(path)
 	if err != nil {
-		return "", fmt.Errorf("open %q: %w", args.Path, err)
+		return "", fmt.Errorf("open %q: %w", requestedPath, err)
 	}
 	defer file.Close()
 
 	reader := io.LimitReader(file, maxReadBytes+1)
 	data, err := io.ReadAll(reader)
 	if err != nil {
-		return "", fmt.Errorf("read %q: %w", args.Path, err)
+		return "", fmt.Errorf("read %q: %w", requestedPath, err)
 	}
 	if len(data) > maxReadBytes {
-		return "", fmt.Errorf("file %q exceeds %d bytes", args.Path, maxReadBytes)
+		return "", fmt.Errorf("file %q exceeds %d bytes", requestedPath, maxReadBytes)
 	}
 	if !utf8.Valid(data) || bytes.IndexByte(data, 0) >= 0 {
-		return "", fmt.Errorf("file %q is not UTF-8 text", args.Path)
+		return "", fmt.Errorf("file %q is not UTF-8 text", requestedPath)
 	}
 	lines := strings.Split(string(data), "\n")
-	start := args.StartLine
+	start := 1
+	if args.Offset != nil {
+		start = *args.Offset
+		if start < 0 {
+			start = len(lines) + start + 1
+		}
+	} else if args.StartLine > 0 {
+		start = args.StartLine
+	}
 	if start < 1 {
 		start = 1
 	}
-	end := args.EndLine
-	if end < 1 || end > len(lines) {
+	limit := args.Limit
+	if limit < 1 {
+		limit = 1000
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	end := start + limit - 1
+	if args.Offset == nil && args.Limit == 0 && args.EndLine > 0 {
+		end = args.EndLine
+	}
+	if end > len(lines) {
 		end = len(lines)
 	}
 	if start > end || start > len(lines) {
@@ -235,7 +268,7 @@ func (t *readFileTool) Execute(_ context.Context, raw json.RawMessage) (string, 
 	}
 	var output strings.Builder
 	for i := start; i <= end; i++ {
-		fmt.Fprintf(&output, "%6d\t%s\n", i, lines[i-1])
+		fmt.Fprintf(&output, "%d→%s\n", i, lines[i-1])
 	}
 	return output.String(), nil
 }
