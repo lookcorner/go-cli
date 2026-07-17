@@ -33,8 +33,10 @@ type Skill struct {
 
 type Catalog struct {
 	root    string
+	compat  compat.Config
 	byName  map[string]Skill
 	pending map[string]Skill
+	checked map[string]bool
 }
 
 func Discover(workspaceRoot string, cfg compat.Config) (*Catalog, error) {
@@ -83,16 +85,34 @@ func discover(workspaceRoot, home, grokHome string, cfg compat.Config) (*Catalog
 			})
 		}
 	}
-	catalog := &Catalog{root: workspaceRoot, byName: make(map[string]Skill), pending: make(map[string]Skill)}
+	catalog := &Catalog{
+		root: workspaceRoot, compat: cfg,
+		byName: make(map[string]Skill), pending: make(map[string]Skill), checked: make(map[string]bool),
+	}
 	for _, root := range roots {
 		if root.path == "" {
 			continue
 		}
-		if err := catalog.scan(root.path, root.source); err != nil {
+		if err := catalog.scanOnce(root.path, root.source); err != nil {
 			return nil, err
 		}
 	}
 	return catalog, nil
+}
+
+func (c *Catalog) scanOnce(root, source string) error {
+	root = filepath.Clean(root)
+	if c.checked[root] {
+		return nil
+	}
+	if err := c.scan(root, source); err != nil {
+		return err
+	}
+	if c.checked == nil {
+		c.checked = make(map[string]bool)
+	}
+	c.checked[root] = true
+	return nil
 }
 
 func (c *Catalog) scan(root, source string) error {
@@ -141,10 +161,11 @@ func (c *Catalog) scan(root, source string) error {
 			return fmt.Errorf("resolve skill %q: %w", path, err)
 		}
 		// Later roots have higher priority, so workspace skills override user skills.
+		active, wasActive := c.byName[name]
 		delete(c.byName, name)
 		delete(c.pending, name)
 		skill := Skill{Name: name, Description: description, Path: real, Source: source, Paths: paths}
-		if len(paths) == 0 {
+		if len(paths) == 0 || wasActive && active.Path == real {
 			c.byName[name] = skill
 		} else {
 			if c.pending == nil {
@@ -163,10 +184,10 @@ func (c *Catalog) Count() int {
 	return len(c.byName) + len(c.pending)
 }
 
-// Activate makes paths-gated skills visible after a successful file tool call.
-// It returns a synthetic reminder for the next model step.
+// Activate updates skill visibility after a successful file tool call and
+// returns a synthetic reminder for the next model step.
 func (c *Catalog) Activate(toolName string, raw json.RawMessage) string {
-	if c == nil || len(c.pending) == 0 {
+	if c == nil {
 		return ""
 	}
 	path := toolPath(toolName, raw)
@@ -181,11 +202,20 @@ func (c *Catalog) Activate(toolName string, raw json.RawMessage) string {
 		return ""
 	}
 	rel = filepath.ToSlash(rel)
-	var activated []string
+	before := make(map[string]string, len(c.byName))
+	for name, skill := range c.byName {
+		before[name] = skill.Path
+	}
 	for name, skill := range c.pending {
 		if matchesPaths(skill.Paths, rel) {
 			c.byName[name] = skill
 			delete(c.pending, name)
+		}
+	}
+	c.discoverForPath(path)
+	var activated []string
+	for name, skill := range c.byName {
+		if before[name] != skill.Path {
 			activated = append(activated, name)
 		}
 	}
@@ -203,6 +233,51 @@ func (c *Catalog) Activate(toolName string, raw json.RawMessage) string {
 	}
 	output.WriteString("Use the skill tool to load one when it matches the task.\n</system-reminder>")
 	return output.String()
+}
+
+func (c *Catalog) discoverForPath(path string) {
+	if strings.EqualFold(filepath.Base(path), "SKILL.md") {
+		if source := c.skillSource(path); source != "" {
+			_ = c.scan(filepath.Dir(path), source)
+		}
+		return
+	}
+	for _, scope := range workspace.ProjectScopes(c.root, path) {
+		for _, dir := range c.skillConfigDirs() {
+			_ = c.scanOnce(filepath.Join(scope, dir, "skills"), "workspace:"+strings.TrimPrefix(dir, "."))
+		}
+	}
+}
+
+func (c *Catalog) skillConfigDirs() []string {
+	var dirs []string
+	if c.compat.Cursor.Skills {
+		dirs = append(dirs, ".cursor")
+	}
+	if c.compat.Claude.Skills {
+		dirs = append(dirs, ".claude")
+	}
+	return append(dirs, ".agents", ".gork", ".grok")
+}
+
+func (c *Catalog) skillSource(path string) string {
+	for dir := filepath.Dir(path); dir != c.root && pathWithin(c.root, dir); dir = filepath.Dir(dir) {
+		if filepath.Base(dir) != "skills" {
+			continue
+		}
+		configDir := filepath.Base(filepath.Dir(dir))
+		for _, allowed := range c.skillConfigDirs() {
+			if configDir == allowed {
+				return "workspace:" + strings.TrimPrefix(configDir, ".")
+			}
+		}
+	}
+	return ""
+}
+
+func pathWithin(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func toolPath(name string, raw json.RawMessage) string {

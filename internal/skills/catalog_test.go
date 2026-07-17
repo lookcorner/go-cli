@@ -211,3 +211,69 @@ func TestMatchesPathsChecksParentDirectories(t *testing.T) {
 		t.Fatal("later negation should exclude the generated path")
 	}
 }
+
+func TestCatalogDiscoversSkillsBelowInitialWorkspace(t *testing.T) {
+	root := t.TempDir()
+	catalog, err := discover(root, "", "", compat.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	skillDir := filepath.Join(root, "service", ".grok", "skills", "service-review")
+	if err := os.MkdirAll(skillDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: service-review\ndescription: Review service code\n---\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reminder := catalog.Activate("read_file", json.RawMessage(`{"path":"service/main.go"}`))
+	if !strings.Contains(reminder, "service-review") || catalog.byName["service-review"].Source != "workspace:grok" {
+		t.Fatalf("nested skill was not discovered: reminder=%q catalog=%#v", reminder, catalog.byName)
+	}
+}
+
+func TestCatalogRegistersDirectlyTouchedSkillFile(t *testing.T) {
+	root := t.TempDir()
+	existingDir := filepath.Join(root, ".grok", "skills", "existing")
+	if err := os.MkdirAll(existingDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(existingDir, "SKILL.md"), []byte("---\nname: existing\n---\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := discover(root, "", "", compat.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	newPath := filepath.Join(root, ".grok", "skills", "new-skill", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(newPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(newPath, []byte("---\nname: new-skill\ndescription: Added now\n---\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reminder := catalog.Activate("write_file", json.RawMessage(`{"path":".grok/skills/new-skill/SKILL.md"}`))
+	if !strings.Contains(reminder, "new-skill") {
+		t.Fatalf("directly touched skill was not registered: %q", reminder)
+	}
+}
+
+func TestDynamicallyDiscoveredConditionalSkillWaitsForNextTouch(t *testing.T) {
+	root := t.TempDir()
+	catalog, err := discover(root, "", "", compat.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	skillDir := filepath.Join(root, "service", ".agents", "skills", "go-only")
+	if err := os.MkdirAll(skillDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: go-only\npaths: ['service/**']\n---\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if reminder := catalog.Activate("read_file", json.RawMessage(`{"path":"service/first.go"}`)); reminder != "" {
+		t.Fatalf("new conditional skill activated on its discovery touch: %q", reminder)
+	}
+	if reminder := catalog.Activate("read_file", json.RawMessage(`{"path":"service/second.go"}`)); !strings.Contains(reminder, "go-only") {
+		t.Fatalf("conditional skill did not activate on the next touch: %q", reminder)
+	}
+}
