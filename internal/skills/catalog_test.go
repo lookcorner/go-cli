@@ -41,6 +41,67 @@ func TestCatalogScanAndTool(t *testing.T) {
 	}
 }
 
+func TestParseMetadataNormalizesNames(t *testing.T) {
+	for input, want := range map[string]string{
+		"narrate_crash_video": "narrate-crash-video",
+		"tool-v1.2":           "tool-v1-2",
+		" spaced  name ":      "spaced-name",
+	} {
+		name, _, _ := parseMetadata("---\nname: "+input+"\n---\n", "fallback")
+		if name != want {
+			t.Errorf("parseMetadata name %q = %q, want %q", input, name, want)
+		}
+	}
+	name, description, _ := parseMetadata("---\nname: 日本語\ndescription: kept\n---\n", "valid.dir")
+	if name != "valid-dir" || description != "kept" {
+		t.Fatalf("invalid name did not use normalized directory fallback: name=%q description=%q", name, description)
+	}
+}
+
+func TestParseMetadataPaths(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  []string
+	}{
+		{"scalar", "src/**, docs", []string{"src", "docs"}},
+		{"space", `"my dir/**"`, []string{"my dir"}},
+		{"braces", "a/{b,c}/{d,e}, docs", []string{"a/{b,c}/{d,e}", "docs"}},
+		{"list", "[src/**, docs]", []string{"src", "docs"}},
+		{"match all", `"**"`, nil},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, got := parseMetadata("---\nname: x\npaths: "+test.value+"\n---\n", "x")
+			if strings.Join(got, "|") != strings.Join(test.want, "|") {
+				t.Fatalf("paths = %#v, want %#v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestParseMetadataDescriptionFallback(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{"prose before heading", "Does a real thing.\n\n# Title\n", "Does a real thing."},
+		{"prose after heading", "# Title\n\nDoes a real thing.\n", "Does a real thing."},
+		{"heading only", "# Only A Title\n", "Only A Title"},
+		{"skip structure", "![CI](badge.svg)\n\n> Old.\n\n- metadata\n\nFormats staged files.\n", "Formats staged files."},
+		{"name fallback", "| A | B |\n|---|---|\n", "x"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, got, _ := parseMetadata("---\nname: x\n---\n\n"+test.body, "x")
+			if got != test.want {
+				t.Fatalf("description = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestWorkspaceSkillOverridesUserSkill(t *testing.T) {
 	userRoot := t.TempDir()
 	workspaceRoot := t.TempDir()

@@ -406,24 +406,150 @@ func (t *Tool) Execute(_ context.Context, raw json.RawMessage) (string, error) {
 }
 
 func parseMetadata(content, fallbackName string) (string, string, []string) {
+	fallbackName = normalizeSkillName(fallbackName)
 	name := fallbackName
+	body := content
 	if !strings.HasPrefix(content, "---\n") {
-		return name, "", nil
+		return name, descriptionFromBody(body, name), nil
 	}
 	end := strings.Index(content[4:], "\n---\n")
 	if end < 0 {
-		return name, "", nil
+		return name, descriptionFromBody(body, name), nil
 	}
+	body = content[4+end+5:]
 	var metadata struct {
-		Name        string   `yaml:"name"`
-		Description string   `yaml:"description"`
-		Paths       []string `yaml:"paths"`
+		Name        yaml.Node `yaml:"name"`
+		Description yaml.Node `yaml:"description"`
+		Paths       yaml.Node `yaml:"paths"`
 	}
 	if yaml.Unmarshal([]byte(content[4:4+end]), &metadata) != nil {
-		return name, "", nil
+		return name, descriptionFromBody(body, name), nil
 	}
-	if metadata.Name != "" {
-		name = metadata.Name
+	if metadata.Name.Kind == yaml.ScalarNode {
+		if candidate := normalizeSkillName(metadata.Name.Value); candidate != "" {
+			name = candidate
+		}
 	}
-	return name, metadata.Description, metadata.Paths
+	description := ""
+	if metadata.Description.Kind == yaml.ScalarNode {
+		description = strings.TrimSpace(metadata.Description.Value)
+	}
+	if description == "" {
+		description = descriptionFromBody(body, name)
+	}
+	return name, description, parseSkillPaths(metadata.Paths)
+}
+
+func normalizeSkillName(name string) string {
+	var slug strings.Builder
+	hyphen := false
+	for _, char := range strings.ToLower(strings.TrimSpace(name)) {
+		if char >= 'a' && char <= 'z' || char >= '0' && char <= '9' {
+			slug.WriteRune(char)
+			hyphen = false
+		} else if slug.Len() > 0 && !hyphen {
+			slug.WriteByte('-')
+			hyphen = true
+		}
+	}
+	return strings.Trim(slug.String(), "-")
+}
+
+func parseSkillPaths(node yaml.Node) []string {
+	var raw []string
+	switch node.Kind {
+	case yaml.ScalarNode:
+		raw = splitSkillPaths(node.Value)
+	case yaml.SequenceNode:
+		for _, item := range node.Content {
+			if item.Kind == yaml.ScalarNode {
+				raw = append(raw, splitSkillPaths(item.Value)...)
+			}
+		}
+	}
+	paths := raw[:0]
+	for _, path := range raw {
+		path = strings.TrimSpace(path)
+		path = strings.TrimSuffix(path, "/**")
+		if path != "" {
+			paths = append(paths, path)
+		}
+	}
+	for _, path := range paths {
+		if path != "**" {
+			return paths
+		}
+	}
+	return nil
+}
+
+func splitSkillPaths(value string) []string {
+	var paths []string
+	start, depth := 0, 0
+	for index, char := range value {
+		switch char {
+		case '{':
+			depth++
+		case '}':
+			depth--
+		case ',':
+			if depth <= 0 {
+				paths = append(paths, strings.TrimSpace(value[start:index]))
+				start = index + 1
+			}
+		}
+	}
+	return append(paths, strings.TrimSpace(value[start:]))
+}
+
+func descriptionFromBody(body, fallback string) string {
+	lines := strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n")
+	var heading string
+	for index := 0; index < len(lines); {
+		line := strings.TrimSpace(lines[index])
+		if line == "" {
+			index++
+			continue
+		}
+		if strings.HasPrefix(line, "```") || strings.HasPrefix(line, "~~~") {
+			marker := line[:3]
+			for index++; index < len(lines) && !strings.HasPrefix(strings.TrimSpace(lines[index]), marker); index++ {
+			}
+			index++
+			continue
+		}
+		if strings.HasPrefix(line, "#") {
+			if heading == "" {
+				heading = strings.TrimSpace(strings.TrimLeft(line, "#"))
+			}
+			index++
+			continue
+		}
+		if structuralMarkdown(line) {
+			index++
+			continue
+		}
+		var paragraph []string
+		for ; index < len(lines); index++ {
+			line = strings.TrimSpace(lines[index])
+			if line == "" || strings.HasPrefix(line, "#") || structuralMarkdown(line) {
+				break
+			}
+			paragraph = append(paragraph, line)
+		}
+		if len(paragraph) > 0 {
+			return strings.Join(strings.Fields(strings.Join(paragraph, " ")), " ")
+		}
+	}
+	if heading != "" {
+		return heading
+	}
+	return fallback
+}
+
+func structuralMarkdown(line string) bool {
+	return strings.HasPrefix(line, "![") || strings.HasPrefix(line, ">") ||
+		strings.HasPrefix(line, "|") || strings.HasPrefix(line, "-") ||
+		strings.HasPrefix(line, "*") || strings.HasPrefix(line, "+") ||
+		len(line) > 2 && line[0] >= '0' && line[0] <= '9' && (line[1] == '.' || line[1] == ')')
 }
