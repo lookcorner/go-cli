@@ -208,6 +208,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if opts.resume == "" {
+		if err := logger.Append("session_metadata", map[string]any{"cwd": ws.Root()}); err != nil {
+			return err
+		}
+	}
 	defer logger.Close()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

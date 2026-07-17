@@ -84,3 +84,34 @@ func TestTranscriptStopsAtLastCompletedTurn(t *testing.T) {
 		t.Fatalf("unexpected formatted transcript: %q", formatted)
 	}
 }
+
+func TestNamedSessionMetadataAndList(t *testing.T) {
+	dir := t.TempDir()
+	logger, err := NewLoggerWithID(dir, "acp-session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append("session_metadata", map[string]any{"cwd": "/workspace/project"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append("user_prompt", map[string]any{"text": "Implement the persistent session support\nwith tests"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	items, err := List(dir, "/workspace/project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].SessionID != "acp-session-1" || items[0].Title != "Implement the persistent session support" {
+		t.Fatalf("unexpected session list: %#v", items)
+	}
+	path, err := PathForID(dir, "acp-session-1")
+	if err != nil || filepath.Base(path) != "acp-session-1.jsonl" {
+		t.Fatalf("unexpected session path: %q err=%v", path, err)
+	}
+	if _, err := PathForID(dir, "../escape"); err == nil {
+		t.Fatal("unsafe session ID was accepted")
+	}
+}

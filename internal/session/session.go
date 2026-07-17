@@ -7,12 +7,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 )
 
 const maxSessionBytes = 64 << 20
+
+var validSessionID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 
 type Event struct {
 	Time time.Time `json:"time"`
@@ -32,6 +36,11 @@ type Logger struct {
 }
 
 func NewLogger(dir string) (*Logger, error) {
+	id := time.Now().UTC().Format("20060102T150405.000000000Z")
+	return NewLoggerWithID(dir, id)
+}
+
+func NewLoggerWithID(dir, id string) (*Logger, error) {
 	if dir == "" {
 		var err error
 		dir, err = DefaultDir()
@@ -42,13 +51,130 @@ func NewLogger(dir string) (*Logger, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("create session directory: %w", err)
 	}
-	id := time.Now().UTC().Format("20060102T150405.000000000Z")
+	if !validSessionID.MatchString(id) {
+		return nil, errors.New("invalid session ID")
+	}
 	path := filepath.Join(dir, id+".jsonl")
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("create session log: %w", err)
 	}
 	return &Logger{file: file, path: path}, nil
+}
+
+func PathForID(dir, id string) (string, error) {
+	if !validSessionID.MatchString(id) {
+		return "", errors.New("invalid session ID")
+	}
+	if dir == "" {
+		var err error
+		dir, err = DefaultDir()
+		if err != nil {
+			return "", err
+		}
+	}
+	return filepath.Join(dir, id+".jsonl"), nil
+}
+
+type Info struct {
+	SessionID string    `json:"sessionId"`
+	CWD       string    `json:"cwd"`
+	Title     string    `json:"title,omitempty"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+func List(dir, cwd string) ([]Info, error) {
+	if dir == "" {
+		var err error
+		dir, err = DefaultDir()
+		if err != nil {
+			return nil, err
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return []Info{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read session directory: %w", err)
+	}
+	items := make([]Info, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".jsonl" {
+			continue
+		}
+		id := strings.TrimSuffix(entry.Name(), ".jsonl")
+		if !validSessionID.MatchString(id) {
+			continue
+		}
+		info, readErr := readInfo(filepath.Join(dir, entry.Name()), id)
+		if readErr != nil || info.CWD == "" || (cwd != "" && info.CWD != cwd) {
+			continue
+		}
+		items = append(items, info)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].UpdatedAt.Equal(items[j].UpdatedAt) {
+			return items[i].SessionID < items[j].SessionID
+		}
+		return items[i].UpdatedAt.After(items[j].UpdatedAt)
+	})
+	return items, nil
+}
+
+func readInfo(path, id string) (Info, error) {
+	if err := validateSessionFile(path); err != nil {
+		return Info{}, err
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return Info{}, err
+	}
+	defer file.Close()
+	stat, _ := file.Stat()
+	info := Info{SessionID: id}
+	if stat != nil {
+		info.UpdatedAt = stat.ModTime().UTC()
+	}
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64<<10), 8<<20)
+	for scanner.Scan() {
+		var event struct {
+			Kind string          `json:"kind"`
+			Data json.RawMessage `json:"data"`
+		}
+		if json.Unmarshal(scanner.Bytes(), &event) != nil {
+			return Info{}, errors.New("malformed session event")
+		}
+		switch event.Kind {
+		case "session_metadata":
+			var data struct {
+				CWD string `json:"cwd"`
+			}
+			if json.Unmarshal(event.Data, &data) == nil && data.CWD != "" {
+				info.CWD = data.CWD
+			}
+		case "user_prompt":
+			if info.Title == "" {
+				var data struct {
+					Text string `json:"text"`
+				}
+				if json.Unmarshal(event.Data, &data) == nil {
+					info.Title = titleFromText(data.Text)
+				}
+			}
+		}
+	}
+	return info, scanner.Err()
+}
+
+func titleFromText(text string) string {
+	line := strings.TrimSpace(strings.SplitN(text, "\n", 2)[0])
+	runes := []rune(line)
+	if len(runes) > 80 {
+		return string(runes[:79]) + "…"
+	}
+	return line
 }
 
 func DefaultDir() (string, error) {
