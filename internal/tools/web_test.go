@@ -19,6 +19,9 @@ func TestWebFetchReadsBoundedTextAndRejectsPrivateByDefault(t *testing.T) {
 		t.Fatal("loopback URL was accepted")
 	}
 	client := &http.Client{Transport: webRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Scheme != "https" {
+			t.Fatalf("web_fetch did not upgrade HTTP to HTTPS: %s", request.URL)
+		}
 		return &http.Response{
 			StatusCode: http.StatusOK, Status: "200 OK", Request: request,
 			Header: http.Header{"Content-Type": []string{"text/plain"}},
@@ -34,6 +37,73 @@ func TestWebFetchReadsBoundedTextAndRejectsPrivateByDefault(t *testing.T) {
 	}
 	if !strings.Contains(output, "fixture page") || !strings.Contains(output, "Content-Type: text/plain") {
 		t.Fatalf("unexpected fetch output: %q", output)
+	}
+}
+
+func TestWebFetchURLValidationBounds(t *testing.T) {
+	if _, err := validateFetchURL(context.Background(), "https://localhost/page", true); err == nil || !strings.Contains(err.Error(), "single-label") {
+		t.Fatalf("unexpected single-label error: %v", err)
+	}
+	tooLong := "https://example.com/" + strings.Repeat("x", maxWebFetchURL)
+	if _, err := validateFetchURL(context.Background(), tooLong, true); err == nil || !strings.Contains(err.Error(), "exceeds 2000") {
+		t.Fatalf("unexpected URL length error: %v", err)
+	}
+}
+
+func TestWebFetchStopsAtCrossHostRedirect(t *testing.T) {
+	requests := 0
+	client := &http.Client{Transport: webRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{
+			StatusCode: http.StatusFound, Status: "302 Found", Request: request,
+			Header: http.Header{"Location": []string{"https://other.example/result"}},
+			Body:   io.NopCloser(strings.NewReader("")),
+		}, nil
+	})}
+	tool := &webFetchTool{approver: PromptApprover{Mode: PermissionAuto}, client: client, allowPrivate: true}
+	output, err := tool.Execute(context.Background(), json.RawMessage(`{"url":"https://example.com/start"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 || !strings.Contains(output, "cross-host redirect from example.com to https://other.example/result") {
+		t.Fatalf("unexpected redirect output=%q requests=%d", output, requests)
+	}
+}
+
+func TestWebFetchFollowsSameHostRedirectIgnoringWWW(t *testing.T) {
+	requests := 0
+	client := &http.Client{Transport: webRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requests++
+		if requests == 1 {
+			return &http.Response{
+				StatusCode: http.StatusFound, Status: "302 Found", Request: request,
+				Header: http.Header{"Location": []string{"https://www.example.com/final"}},
+				Body:   io.NopCloser(strings.NewReader("")),
+			}, nil
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK, Status: "200 OK", Request: request,
+			Header: http.Header{"Content-Type": []string{"text/plain"}},
+			Body:   io.NopCloser(strings.NewReader("redirected content")),
+		}, nil
+	})}
+	tool := &webFetchTool{approver: PromptApprover{Mode: PermissionAuto}, client: client, allowPrivate: true}
+	output, err := tool.Execute(context.Background(), json.RawMessage(`{"url":"https://example.com/start"}`))
+	if err != nil || requests != 2 || !strings.Contains(output, "redirected content") || !strings.Contains(output, "https://www.example.com/final") {
+		t.Fatalf("unexpected same-host redirect: output=%q requests=%d err=%v", output, requests, err)
+	}
+}
+
+func TestWebFetchLimitsRedirects(t *testing.T) {
+	client := &http.Client{Transport: webRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusFound, Status: "302 Found", Request: request,
+			Header: http.Header{"Location": []string{"/again"}}, Body: io.NopCloser(strings.NewReader("")),
+		}, nil
+	})}
+	tool := &webFetchTool{approver: PromptApprover{Mode: PermissionAuto}, client: client, allowPrivate: true}
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"url":"https://example.com/start"}`)); err == nil || !strings.Contains(err.Error(), "too many redirects") {
+		t.Fatalf("unexpected redirect limit error: %v", err)
 	}
 }
 

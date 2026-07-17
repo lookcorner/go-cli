@@ -17,7 +17,18 @@ import (
 	"github.com/lookcorner/go-cli/internal/api"
 )
 
-const maxWebFetchBytes = 2 << 20
+const (
+	maxWebFetchBytes = 2 << 20
+	maxWebFetchURL   = 2000
+	maxWebRedirects  = 10
+)
+
+type crossHostRedirectError struct {
+	originalHost string
+	redirectURL  string
+}
+
+func (e *crossHostRedirectError) Error() string { return "cross-host web redirect" }
 
 type webFetchTool struct {
 	approver     Approver
@@ -46,6 +57,9 @@ func (t *webFetchTool) Execute(ctx context.Context, raw json.RawMessage) (string
 	if err != nil {
 		return "", err
 	}
+	if parsed.Scheme == "http" {
+		parsed.Scheme = "https"
+	}
 	if t.approver != nil {
 		if err := t.approver.Approve(ctx, "web fetch", parsed.String()); err != nil {
 			return "", err
@@ -58,8 +72,12 @@ func (t *webFetchTool) Execute(ctx context.Context, raw json.RawMessage) (string
 	copyClient := *client
 	previousRedirect := client.CheckRedirect
 	copyClient.CheckRedirect = func(request *http.Request, via []*http.Request) error {
-		if len(via) >= 10 {
+		if len(via) >= maxWebRedirects {
 			return errors.New("too many redirects")
+		}
+		previous := via[len(via)-1].URL
+		if !sameWebHost(previous, request.URL) {
+			return &crossHostRedirectError{originalHost: previous.Hostname(), redirectURL: request.URL.String()}
 		}
 		if _, err := validateFetchURL(request.Context(), request.URL.String(), t.allowPrivate); err != nil {
 			return err
@@ -77,6 +95,10 @@ func (t *webFetchTool) Execute(ctx context.Context, raw json.RawMessage) (string
 	request.Header.Set("User-Agent", "gork-go/0.1")
 	response, err := copyClient.Do(request)
 	if err != nil {
+		var redirect *crossHostRedirectError
+		if errors.As(err, &redirect) {
+			return fmt.Sprintf("Error: cross-host redirect from %s to %s. Make a new web_fetch call with the redirect URL if needed.", redirect.originalHost, redirect.redirectURL), nil
+		}
 		return "", fmt.Errorf("fetch URL: %w", err)
 	}
 	defer response.Body.Close()
@@ -123,9 +145,15 @@ func isTextWebContent(mediaType string) bool {
 }
 
 func validateFetchURL(ctx context.Context, raw string, allowPrivate bool) (*url.URL, error) {
+	if len(raw) > maxWebFetchURL {
+		return nil, fmt.Errorf("web_fetch URL exceeds %d characters", maxWebFetchURL)
+	}
 	parsed, err := url.Parse(raw)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" || parsed.User != nil {
 		return nil, errors.New("web_fetch requires an absolute public http(s) URL without credentials")
+	}
+	if !strings.Contains(parsed.Hostname(), ".") {
+		return nil, fmt.Errorf("web_fetch rejects single-label host %q", parsed.Hostname())
 	}
 	if allowPrivate {
 		return parsed, nil
@@ -144,6 +172,11 @@ func validateFetchURL(ctx context.Context, raw string, allowPrivate bool) (*url.
 		}
 	}
 	return parsed, nil
+}
+
+func sameWebHost(first, second *url.URL) bool {
+	stripWWW := func(host string) string { return strings.TrimPrefix(strings.ToLower(host), "www.") }
+	return stripWWW(first.Hostname()) == stripWWW(second.Hostname())
 }
 
 func safeDialContext(ctx context.Context, network, address string) (net.Conn, error) {
