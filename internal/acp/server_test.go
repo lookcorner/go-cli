@@ -3,6 +3,7 @@ package acp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -214,6 +215,92 @@ func TestRenderPromptSupportsEmbeddedTextAndRejectsUnsupportedMedia(t *testing.T
 	blob.Resource.Blob = "AA=="
 	if _, err := renderPrompt([]promptBlock{blob}); err == nil {
 		t.Fatal("expected unsupported binary resource error")
+	}
+}
+
+func TestWorktreeExtensionsCreateListShowAndRemove(t *testing.T) {
+	root := t.TempDir()
+	runACPGit(t, root, "init", "-q")
+	runACPGit(t, root, "config", "user.name", "Fixture")
+	runACPGit(t, root, "config", "user.email", "fixture@example.invalid")
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("base\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runACPGit(t, root, "add", "tracked.txt")
+	runACPGit(t, root, "commit", "-qm", "baseline")
+	dest := filepath.Join(t.TempDir(), "worktree")
+
+	clientToAgentR, clientToAgentW := io.Pipe()
+	agentToClientR, agentToClientW := io.Pipe()
+	server := &Server{
+		SessionDir: t.TempDir(),
+		Factory: func(context.Context, SessionConfig, tools.Approver, io.Writer, io.Writer) (*agent.Runner, func(), error) {
+			return nil, nil, errors.New("session factory should not be called")
+		},
+	}
+	done := make(chan error, 1)
+	go func() { done <- server.Serve(context.Background(), clientToAgentR, agentToClientW) }()
+	encoder := json.NewEncoder(clientToAgentW)
+	decoder := json.NewDecoder(agentToClientR)
+	encodeACP(t, encoder, map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "x.ai/git/worktree/create",
+		"params": map[string]any{
+			"sessionId": "wt-session", "sourcePath": root, "worktreePath": dest,
+			"copyMode": "clean", "worktreeType": "linked", "label": "ACP Test",
+		},
+	})
+	created := decodeACP(t, decoder)
+	createdResult := created["result"].(map[string]any)
+	if createdResult["status"] != "creating" || createdResult["worktreePath"] != dest {
+		t.Fatalf("unexpected create response: %#v", created)
+	}
+	notification := decodeACP(t, decoder)
+	if notification["method"] != "x.ai/git/worktree/status" || notification["params"].(map[string]any)["status"] != "created" {
+		t.Fatalf("unexpected worktree notification: %#v", notification)
+	}
+	encodeACP(t, encoder, map[string]any{
+		"jsonrpc": "2.0", "id": 2, "method": "x.ai/git/worktree/list", "params": map[string]any{},
+	})
+	listed := decodeACP(t, decoder)
+	records := listed["result"].([]any)
+	if len(records) != 1 || records[0].(map[string]any)["path"] != dest {
+		t.Fatalf("unexpected worktree list: %#v", listed)
+	}
+	encodeACP(t, encoder, map[string]any{
+		"jsonrpc": "2.0", "id": 3, "method": "x.ai/git/worktree/show", "params": map[string]any{"idOrPath": dest},
+	})
+	shown := decodeACP(t, decoder)
+	if shown["result"].(map[string]any)["sessionId"] != "wt-session" {
+		t.Fatalf("unexpected worktree show: %#v", shown)
+	}
+	encodeACP(t, encoder, map[string]any{
+		"jsonrpc": "2.0", "id": 4, "method": "x.ai/git/worktree/remove",
+		"params": map[string]any{"worktreePath": dest, "dryRun": true},
+	})
+	dryRun := decodeACP(t, decoder)
+	if dryRun["result"].(map[string]any)["removed"] != false {
+		t.Fatalf("unexpected worktree dry-run: %#v", dryRun)
+	}
+	encodeACP(t, encoder, map[string]any{
+		"jsonrpc": "2.0", "id": 5, "method": "x.ai/git/worktree/remove",
+		"params": map[string]any{"worktreePath": dest, "force": true},
+	})
+	removed := decodeACP(t, decoder)
+	if removed["result"].(map[string]any)["removed"] != true {
+		t.Fatalf("unexpected worktree remove: %#v", removed)
+	}
+	_ = clientToAgentW.Close()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func runACPGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	command := exec.Command("git", args...)
+	command.Dir = dir
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v: %s", args, err, output)
 	}
 }
 

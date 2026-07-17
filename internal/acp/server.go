@@ -16,6 +16,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/api"
 	sessionlog "github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/tools"
+	worktrees "github.com/lookcorner/go-cli/internal/worktree"
 )
 
 const ProtocolVersion = 1
@@ -48,6 +49,7 @@ type Server struct {
 	nextSession atomic.Uint64
 	nextRequest atomic.Uint64
 	wg          sync.WaitGroup
+	worktrees   *worktrees.Manager
 }
 
 type message struct {
@@ -98,6 +100,11 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 	s.input, s.output = input, output
 	s.sessions = make(map[string]*session)
 	s.pending = make(map[string]chan permissionResult)
+	manager, err := worktrees.NewManager(s.SessionDir)
+	if err != nil {
+		return err
+	}
+	s.worktrees = manager
 	decoder := json.NewDecoder(input)
 	for {
 		var incoming message
@@ -146,11 +153,87 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleHunkQuery(ctx, incoming)
 		case "x.ai/hunk-tracker/hunk-action", "x.ai/hunk-tracker/file-action", "x.ai/hunk-tracker/all-action":
 			s.handleHunkAction(ctx, incoming)
+		case "x.ai/git/worktree/create", "x.ai/git/worktree/list", "x.ai/git/worktree/show", "x.ai/git/worktree/remove":
+			s.handleWorktree(ctx, incoming)
 		default:
 			if len(incoming.ID) > 0 {
 				s.respondError(incoming.ID, -32601, "method not found")
 			}
 		}
+	}
+}
+
+func (s *Server) handleWorktree(ctx context.Context, incoming message) {
+	if s.worktrees == nil {
+		s.respondError(incoming.ID, -32000, "worktree manager unavailable")
+		return
+	}
+	switch incoming.Method {
+	case "x.ai/git/worktree/create":
+		var req worktrees.CreateRequest
+		if json.Unmarshal(incoming.Params, &req) != nil {
+			s.respondError(incoming.ID, -32602, "invalid worktree create parameters")
+			return
+		}
+		record, existed, err := s.worktrees.Create(ctx, req)
+		if err != nil {
+			s.respondError(incoming.ID, -32000, err.Error())
+			return
+		}
+		status := "creating"
+		if existed {
+			status = "exists"
+		}
+		s.respond(incoming.ID, map[string]any{
+			"status": status, "sessionId": req.SessionID, "worktreePath": record.Path,
+			"sourceGitRoot": record.SourceRepo,
+		})
+		if !existed {
+			s.write(map[string]any{
+				"jsonrpc": "2.0", "method": "x.ai/git/worktree/status",
+				"params": map[string]any{
+					"status": "created", "sessionId": req.SessionID, "worktreePath": record.Path,
+					"commit": record.HeadCommit, "sourceGitRoot": record.SourceRepo,
+				},
+			})
+		}
+	case "x.ai/git/worktree/list":
+		var req struct {
+			Repo       string   `json:"repo"`
+			Types      []string `json:"type"`
+			IncludeAll bool     `json:"includeAll"`
+		}
+		if json.Unmarshal(incoming.Params, &req) != nil {
+			s.respondError(incoming.ID, -32602, "invalid worktree list parameters")
+			return
+		}
+		s.respond(incoming.ID, s.worktrees.List(req.Repo, req.Types, req.IncludeAll))
+	case "x.ai/git/worktree/show":
+		var req struct {
+			IDOrPath string `json:"idOrPath"`
+		}
+		if json.Unmarshal(incoming.Params, &req) != nil || req.IDOrPath == "" {
+			s.respondError(incoming.ID, -32602, "idOrPath is required")
+			return
+		}
+		record, ok := s.worktrees.Show(req.IDOrPath)
+		if !ok {
+			s.respond(incoming.ID, nil)
+			return
+		}
+		s.respond(incoming.ID, record)
+	case "x.ai/git/worktree/remove":
+		var req worktrees.RemoveRequest
+		if json.Unmarshal(incoming.Params, &req) != nil {
+			s.respondError(incoming.ID, -32602, "invalid worktree remove parameters")
+			return
+		}
+		removed, path, err := s.worktrees.Remove(ctx, req)
+		if err != nil {
+			s.respondError(incoming.ID, -32000, err.Error())
+			return
+		}
+		s.respond(incoming.ID, map[string]any{"removed": removed, "resolvedPath": path})
 	}
 }
 

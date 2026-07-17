@@ -1,0 +1,134 @@
+package worktree
+
+import (
+	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestManagerLinkedDirtyLifecycleAndPersistence(t *testing.T) {
+	root := newRepo(t)
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("modified\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "staged.txt"), []byte("staged\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, root, "add", "staged.txt")
+	if err := os.WriteFile(filepath.Join(root, "untracked.txt"), []byte("untracked\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	state := t.TempDir()
+	dest := filepath.Join(t.TempDir(), "linked")
+	manager, err := NewManager(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, existed, err := manager.Create(context.Background(), CreateRequest{
+		SessionID: "session-1", SourcePath: root, WorktreePath: dest,
+		CopyMode: "dirty", WorktreeType: "linked", Label: "Feature One",
+	})
+	if err != nil || existed {
+		t.Fatalf("create linked: record=%#v existed=%v err=%v", record, existed, err)
+	}
+	for name, want := range map[string]string{
+		"tracked.txt": "modified\n", "staged.txt": "staged\n", "untracked.txt": "untracked\n",
+	} {
+		data, err := os.ReadFile(filepath.Join(dest, name))
+		if err != nil || string(data) != want {
+			t.Fatalf("%s = %q, want %q (err=%v)", name, data, want, err)
+		}
+	}
+	status := runGitOutput(t, dest, "status", "--porcelain")
+	if !strings.Contains(status, "A  staged.txt") || !strings.Contains(status, " M tracked.txt") || !strings.Contains(status, "?? untracked.txt") {
+		t.Fatalf("dirty state was not preserved:\n%s", status)
+	}
+	reloaded, err := NewManager(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shown, ok := reloaded.Show(record.ID)
+	if !ok || shown.Path != dest || len(reloaded.List("", nil, false)) != 1 {
+		t.Fatalf("persisted record missing: shown=%#v ok=%v", shown, ok)
+	}
+	removed, resolved, err := reloaded.Remove(context.Background(), RemoveRequest{IDOrPath: record.ID, Force: true})
+	if err != nil || !removed || resolved != dest {
+		t.Fatalf("remove linked: removed=%v path=%q err=%v", removed, resolved, err)
+	}
+	if _, err := os.Stat(dest); !os.IsNotExist(err) {
+		t.Fatalf("linked worktree still exists: %v", err)
+	}
+}
+
+func TestManagerStandaloneAndSafeRemove(t *testing.T) {
+	root := newRepo(t)
+	manager, err := NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(t.TempDir(), "standalone")
+	record, _, err := manager.Create(context.Background(), CreateRequest{
+		SessionID: "session-2", SourcePath: root, WorktreePath: dest,
+		CopyMode: "clean", WorktreeType: "standalone",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(dest, ".git"))
+	if err != nil || !info.IsDir() {
+		t.Fatalf("standalone .git is not a directory: %v", err)
+	}
+	removed, resolved, err := manager.Remove(context.Background(), RemoveRequest{IDOrPath: record.ID, DryRun: true})
+	if err != nil || removed || resolved != dest {
+		t.Fatalf("dry run: removed=%v path=%q err=%v", removed, resolved, err)
+	}
+	outside := t.TempDir()
+	if _, _, err := manager.Remove(context.Background(), RemoveRequest{WorktreePath: outside, Force: true}); err == nil {
+		t.Fatal("unregistered directory was accepted for removal")
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Fatalf("unregistered directory was touched: %v", err)
+	}
+	if _, _, err := manager.Remove(context.Background(), RemoveRequest{IDOrPath: record.ID}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSanitizeLabel(t *testing.T) {
+	if got := sanitizeLabel("  Feature__One..!  "); got != "feature-one" {
+		t.Fatalf("sanitizeLabel = %q", got)
+	}
+}
+
+func newRepo(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	runGit(t, root, "init", "-q")
+	runGit(t, root, "config", "user.name", "Fixture")
+	runGit(t, root, "config", "user.email", "fixture@example.invalid")
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("original\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, root, "add", "tracked.txt")
+	runGit(t, root, "commit", "-qm", "baseline")
+	return root
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	_ = runGitOutput(t, dir, args...)
+}
+
+func runGitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	command := exec.Command("git", args...)
+	command.Dir = dir
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v: %s", args, err, output)
+	}
+	return string(output)
+}
