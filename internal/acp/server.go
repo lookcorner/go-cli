@@ -153,7 +153,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleHunkQuery(ctx, incoming)
 		case "x.ai/hunk-tracker/hunk-action", "x.ai/hunk-tracker/file-action", "x.ai/hunk-tracker/all-action":
 			s.handleHunkAction(ctx, incoming)
-		case "x.ai/git/worktree/create", "x.ai/git/worktree/list", "x.ai/git/worktree/show", "x.ai/git/worktree/remove":
+		case "x.ai/git/worktree/create", "x.ai/git/worktree/list", "x.ai/git/worktree/show", "x.ai/git/worktree/remove", "x.ai/git/worktree/apply":
 			s.handleWorktree(ctx, incoming)
 		default:
 			if len(incoming.ID) > 0 {
@@ -234,6 +234,18 @@ func (s *Server) handleWorktree(ctx context.Context, incoming message) {
 			return
 		}
 		s.respond(incoming.ID, map[string]any{"removed": removed, "resolvedPath": path})
+	case "x.ai/git/worktree/apply":
+		var req worktrees.ApplyRequest
+		if json.Unmarshal(incoming.Params, &req) != nil {
+			s.respondError(incoming.ID, -32602, "invalid worktree apply parameters")
+			return
+		}
+		result, err := s.worktrees.Apply(ctx, req)
+		if err != nil {
+			s.respondError(incoming.ID, -32000, err.Error())
+			return
+		}
+		s.respond(incoming.ID, result)
 	}
 }
 

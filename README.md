@@ -151,14 +151,17 @@ hidden for the current session, while rejection restores the recorded old text
 only when the current line range still exactly matches the hunk. A stale hunk
 fails closed instead of overwriting newer edits.
 
-The ACP server also supports `x.ai/git/worktree/create`, `list`, `show`, and
-`remove`. Creation accepts the compatible `linked`, `standalone`, and `git`
+The ACP server also supports `x.ai/git/worktree/create`, `list`, `show`,
+`apply`, and `remove`. Creation accepts the compatible `linked`, `standalone`, and `git`
 types plus `clean` or `dirty` copy modes. Dirty creation preserves staged,
 unstaged, and text/binary untracked files; an explicit `gitRef` always creates
 a clean checkout. Managed worktrees are persisted in `worktrees.json` beside
 the session state and fresh creation emits `x.ai/git/worktree/status`. Removal
 accepts only registered worktree IDs or paths, supports `dryRun`, and requires
 `force` when Git refuses to remove a dirty linked worktree.
+`apply` supports `overwrite` and conflict-aware `merge`: merge writes a file
+only while the main checkout still matches its current HEAD version, and
+returns compatible `base`/`ours`/`theirs` conflict records otherwise.
 
 Local mutations require confirmation by default:
 

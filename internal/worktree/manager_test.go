@@ -97,6 +97,87 @@ func TestManagerStandaloneAndSafeRemove(t *testing.T) {
 	}
 }
 
+func TestManagerApplyOverwrite(t *testing.T) {
+	root := newRepo(t)
+	manager, err := NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(t.TempDir(), "apply-overwrite")
+	record, _, err := manager.Create(context.Background(), CreateRequest{
+		SessionID: "apply-1", SourcePath: root, WorktreePath: dest, CopyMode: "clean", WorktreeType: "linked",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _, _ = manager.Remove(context.Background(), RemoveRequest{IDOrPath: record.ID, Force: true})
+	})
+	if err := os.WriteFile(filepath.Join(dest, "tracked.txt"), []byte("from worktree\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dest, "new.txt"), []byte("new\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	response, err := manager.Apply(context.Background(), ApplyRequest{
+		SessionID: "apply-1", WorktreePath: dest, Mode: "overwrite",
+	})
+	if err != nil || response.Status != "success" || len(response.Files) != 2 || response.GitRoot != record.SourceRepo {
+		t.Fatalf("apply overwrite: %#v err=%v", response, err)
+	}
+	for name, want := range map[string]string{"tracked.txt": "from worktree\n", "new.txt": "new\n"} {
+		data, err := os.ReadFile(filepath.Join(root, name))
+		if err != nil || string(data) != want {
+			t.Fatalf("applied %s = %q, want %q (err=%v)", name, data, want, err)
+		}
+	}
+}
+
+func TestManagerApplyMergeReportsConflictsAndAppliesSafeFiles(t *testing.T) {
+	root := newRepo(t)
+	manager, err := NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(t.TempDir(), "apply-merge")
+	record, _, err := manager.Create(context.Background(), CreateRequest{
+		SessionID: "apply-2", SourcePath: root, WorktreePath: dest, CopyMode: "clean", WorktreeType: "linked",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _, _ = manager.Remove(context.Background(), RemoveRequest{IDOrPath: record.ID, Force: true})
+	})
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("ours\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dest, "tracked.txt"), []byte("theirs\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dest, "safe.txt"), []byte("safe\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	response, err := manager.Apply(context.Background(), ApplyRequest{
+		SessionID: "apply-2", WorktreePath: dest, Mode: "merge",
+	})
+	if err != nil || response.Status != "conflicts" || len(response.Conflicts) != 1 || len(response.Files) != 1 {
+		t.Fatalf("apply merge: %#v err=%v", response, err)
+	}
+	conflict := response.Conflicts[0]
+	if conflict.Path != "tracked.txt" || conflict.Base == nil || *conflict.Base != "original\n" || conflict.Ours == nil || *conflict.Ours != "ours\n" || conflict.Theirs == nil || *conflict.Theirs != "theirs\n" {
+		t.Fatalf("unexpected conflict: %#v", conflict)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "tracked.txt"))
+	if err != nil || string(data) != "ours\n" {
+		t.Fatalf("conflict overwrote ours: %q err=%v", data, err)
+	}
+	data, err = os.ReadFile(filepath.Join(root, "safe.txt"))
+	if err != nil || string(data) != "safe\n" {
+		t.Fatalf("safe file was not applied: %q err=%v", data, err)
+	}
+}
+
 func TestSanitizeLabel(t *testing.T) {
 	if got := sanitizeLabel("  Feature__One..!  "); got != "feature-one" {
 		t.Fatalf("sanitizeLabel = %q", got)

@@ -37,6 +37,35 @@ type RemoveRequest struct {
 	DryRun       bool   `json:"dryRun"`
 }
 
+type ApplyRequest struct {
+	SessionID    string `json:"sessionId"`
+	WorktreePath string `json:"worktreePath"`
+	Mode         string `json:"mode"`
+}
+
+type FileChange struct {
+	Path      string `json:"path"`
+	OldPath   string `json:"oldPath,omitempty"`
+	Type      string `json:"type"`
+	Additions uint64 `json:"additions"`
+	Deletions uint64 `json:"deletions"`
+}
+
+type FileConflict struct {
+	Path   string  `json:"path"`
+	Type   string  `json:"type"`
+	Base   *string `json:"base"`
+	Ours   *string `json:"ours"`
+	Theirs *string `json:"theirs"`
+}
+
+type ApplyResponse struct {
+	Status    string         `json:"status"`
+	Files     []FileChange   `json:"files"`
+	GitRoot   string         `json:"gitRoot,omitempty"`
+	Conflicts []FileConflict `json:"conflicts,omitempty"`
+}
+
 type Record struct {
 	ID             string    `json:"id"`
 	Path           string    `json:"path"`
@@ -294,6 +323,234 @@ func (m *Manager) Remove(ctx context.Context, req RemoveRequest) (bool, string, 
 		return false, record.Path, err
 	}
 	return true, record.Path, nil
+}
+
+func (m *Manager) Apply(ctx context.Context, req ApplyRequest) (ApplyResponse, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if req.SessionID == "" || req.WorktreePath == "" {
+		return ApplyResponse{}, errors.New("sessionId and worktreePath are required")
+	}
+	if req.Mode == "" {
+		req.Mode = "overwrite"
+	}
+	if req.Mode != "overwrite" && req.Mode != "merge" {
+		return ApplyResponse{}, errors.New("mode must be overwrite or merge")
+	}
+	abs, err := filepath.Abs(req.WorktreePath)
+	if err != nil {
+		return ApplyResponse{}, err
+	}
+	record := m.recordByPath(abs)
+	if record == nil || record.SessionID != req.SessionID {
+		return ApplyResponse{}, errors.New("worktree is not registered to this session")
+	}
+	base, err := gitOutput(ctx, record.SourceRepo, "rev-parse", "HEAD^{commit}")
+	if err != nil {
+		return ApplyResponse{}, err
+	}
+	base = strings.TrimSpace(base)
+	if _, err := gitOutput(ctx, record.Path, "cat-file", "-e", base+"^{commit}"); err != nil {
+		if _, fetchErr := gitOutput(ctx, record.Path, "fetch", "--no-tags", record.SourceRepo, base); fetchErr != nil {
+			return ApplyResponse{}, fmt.Errorf("load main repository HEAD into worktree: %w", fetchErr)
+		}
+	}
+	changes, err := changedFiles(ctx, record.Path, base)
+	if err != nil {
+		return ApplyResponse{}, err
+	}
+	response := ApplyResponse{Status: "success", Files: make([]FileChange, 0), GitRoot: record.SourceRepo}
+	for _, change := range changes {
+		if err := safeRelative(change.Path); err != nil {
+			return ApplyResponse{}, err
+		}
+		baseData := gitFile(ctx, record.Path, base, change.Path)
+		ours, oursMode, err := readOptional(filepath.Join(record.SourceRepo, filepath.FromSlash(change.Path)))
+		if err != nil {
+			return ApplyResponse{}, err
+		}
+		theirs, theirsMode, err := readOptional(filepath.Join(record.Path, filepath.FromSlash(change.Path)))
+		if err != nil {
+			return ApplyResponse{}, err
+		}
+		if req.Mode == "overwrite" || optionalBytesEqual(baseData, ours) {
+			mode := oursMode
+			if theirsMode != 0 {
+				mode = theirsMode
+			}
+			if mode == 0 {
+				mode = 0o644
+			}
+			if err := applyContent(filepath.Join(record.SourceRepo, filepath.FromSlash(change.Path)), theirs, mode); err != nil {
+				return ApplyResponse{}, err
+			}
+			response.Files = append(response.Files, change)
+			continue
+		}
+		if !optionalBytesEqual(baseData, theirs) {
+			baseText, err := optionalText(baseData)
+			if err != nil {
+				return ApplyResponse{}, fmt.Errorf("binary merge conflict in %s", change.Path)
+			}
+			oursText, err := optionalText(ours)
+			if err != nil {
+				return ApplyResponse{}, fmt.Errorf("binary merge conflict in %s", change.Path)
+			}
+			theirsText, err := optionalText(theirs)
+			if err != nil {
+				return ApplyResponse{}, fmt.Errorf("binary merge conflict in %s", change.Path)
+			}
+			response.Conflicts = append(response.Conflicts, FileConflict{
+				Path: change.Path, Type: change.Type, Base: baseText, Ours: oursText, Theirs: theirsText,
+			})
+		}
+	}
+	if len(response.Conflicts) > 0 {
+		response.Status = "conflicts"
+		response.GitRoot = ""
+	}
+	return response, nil
+}
+
+func changedFiles(ctx context.Context, worktreePath, base string) ([]FileChange, error) {
+	data, err := gitBytes(ctx, worktreePath, "diff", "--name-status", "-z", base, "--")
+	if err != nil {
+		return nil, err
+	}
+	parts := bytes.Split(data, []byte{0})
+	changes := make(map[string]FileChange)
+	for index := 0; index < len(parts) && len(parts[index]) > 0; {
+		status := string(parts[index])
+		index++
+		if index >= len(parts) {
+			return nil, errors.New("invalid git name-status output")
+		}
+		oldPath := ""
+		path := filepath.ToSlash(string(parts[index]))
+		index++
+		kind := changeType(status)
+		if (strings.HasPrefix(status, "R") || strings.HasPrefix(status, "C")) && index < len(parts) {
+			oldPath, path = path, filepath.ToSlash(string(parts[index]))
+			index++
+		}
+		changes[path] = FileChange{Path: path, OldPath: oldPath, Type: kind}
+	}
+	untracked, err := gitBytes(ctx, worktreePath, "ls-files", "--others", "--exclude-standard", "-z")
+	if err != nil {
+		return nil, err
+	}
+	for _, raw := range bytes.Split(untracked, []byte{0}) {
+		if len(raw) > 0 {
+			path := filepath.ToSlash(string(raw))
+			changes[path] = FileChange{Path: path, Type: "untracked"}
+		}
+	}
+	result := make([]FileChange, 0, len(changes))
+	for _, change := range changes {
+		result = append(result, change)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Path < result[j].Path })
+	return result, nil
+}
+
+func changeType(status string) string {
+	switch {
+	case strings.HasPrefix(status, "A"):
+		return "create"
+	case strings.HasPrefix(status, "D"):
+		return "delete"
+	case strings.HasPrefix(status, "R"):
+		return "rename"
+	case strings.HasPrefix(status, "C"):
+		return "copy"
+	case strings.HasPrefix(status, "T"):
+		return "typechange"
+	default:
+		return "edit"
+	}
+}
+
+func gitFile(ctx context.Context, dir, commit, path string) []byte {
+	data, err := gitBytes(ctx, dir, "show", commit+":"+path)
+	if err != nil {
+		return nil
+	}
+	return data
+}
+
+func readOptional(path string) ([]byte, os.FileMode, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, 0, nil
+		}
+		return nil, 0, err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, 0, fmt.Errorf("%q is not a regular file", path)
+	}
+	return data, info.Mode().Perm(), nil
+}
+
+func optionalBytesEqual(left, right []byte) bool {
+	return (left == nil) == (right == nil) && bytes.Equal(left, right)
+}
+
+func optionalText(data []byte) (*string, error) {
+	if data == nil {
+		return nil, nil
+	}
+	if bytes.IndexByte(data, 0) >= 0 {
+		return nil, errors.New("binary content")
+	}
+	text := string(data)
+	return &text, nil
+}
+
+func applyContent(path string, data []byte, mode os.FileMode) error {
+	if data == nil {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	temp, err := os.CreateTemp(filepath.Dir(path), ".gork-go-apply-*")
+	if err != nil {
+		return err
+	}
+	name := temp.Name()
+	defer os.Remove(name)
+	if err := temp.Chmod(mode); err != nil {
+		temp.Close()
+		return err
+	}
+	if _, err := temp.Write(data); err != nil {
+		temp.Close()
+		return err
+	}
+	if err := temp.Sync(); err != nil {
+		temp.Close()
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(name, path)
+}
+
+func safeRelative(path string) error {
+	clean := filepath.Clean(filepath.FromSlash(path))
+	if clean == "." || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("unsafe worktree change path %q", path)
+	}
+	return nil
 }
 
 func validateStandalone(record Record) error {

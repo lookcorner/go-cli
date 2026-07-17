@@ -273,8 +273,22 @@ func TestWorktreeExtensionsCreateListShowAndRemove(t *testing.T) {
 	if shown["result"].(map[string]any)["sessionId"] != "wt-session" {
 		t.Fatalf("unexpected worktree show: %#v", shown)
 	}
+	if err := os.WriteFile(filepath.Join(dest, "tracked.txt"), []byte("applied\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	encodeACP(t, encoder, map[string]any{
-		"jsonrpc": "2.0", "id": 4, "method": "x.ai/git/worktree/remove",
+		"jsonrpc": "2.0", "id": 4, "method": "x.ai/git/worktree/apply",
+		"params": map[string]any{"sessionId": "wt-session", "worktreePath": dest, "mode": "merge"},
+	})
+	applied := decodeACP(t, decoder)
+	if applied["result"].(map[string]any)["status"] != "success" {
+		t.Fatalf("unexpected worktree apply: %#v", applied)
+	}
+	if data, err := os.ReadFile(filepath.Join(root, "tracked.txt")); err != nil || string(data) != "applied\n" {
+		t.Fatalf("ACP apply did not update source: %q err=%v", data, err)
+	}
+	encodeACP(t, encoder, map[string]any{
+		"jsonrpc": "2.0", "id": 5, "method": "x.ai/git/worktree/remove",
 		"params": map[string]any{"worktreePath": dest, "dryRun": true},
 	})
 	dryRun := decodeACP(t, decoder)
@@ -282,7 +296,7 @@ func TestWorktreeExtensionsCreateListShowAndRemove(t *testing.T) {
 		t.Fatalf("unexpected worktree dry-run: %#v", dryRun)
 	}
 	encodeACP(t, encoder, map[string]any{
-		"jsonrpc": "2.0", "id": 5, "method": "x.ai/git/worktree/remove",
+		"jsonrpc": "2.0", "id": 6, "method": "x.ai/git/worktree/remove",
 		"params": map[string]any{"worktreePath": dest, "force": true},
 	})
 	removed := decodeACP(t, decoder)
