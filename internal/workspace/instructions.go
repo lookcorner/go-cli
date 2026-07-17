@@ -62,7 +62,7 @@ func (w *Workspace) loadInstructions(home, grokHome string) ([]InstructionFile, 
 			candidate{path: filepath.Join(home, ".cursor")},
 		)
 	}
-	for _, path := range instructionScopes(gitRoot, w.root) {
+	for _, path := range ProjectScopes(gitRoot, w.root) {
 		scopes = append(scopes, candidate{path: path, project: true})
 	}
 
@@ -164,7 +164,8 @@ func instructionPath(root, path string, project bool) string {
 	return filepath.ToSlash(path)
 }
 
-func instructionScopes(root, cwd string) []string {
+// ProjectScopes returns directories from a repository root through cwd.
+func ProjectScopes(root, cwd string) []string {
 	var reversed []string
 	for current := cwd; pathWithin(root, current); current = filepath.Dir(current) {
 		reversed = append(reversed, current)

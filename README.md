@@ -328,11 +328,12 @@ or `.cursor/rules`). Root instructions are injected with their source paths and
 the model is told to check for more deeply nested instructions before editing
 files below the root.
 
-Reusable skills are discovered from `.gork/skills`, `.agents/skills`, and
-`.claude/skills` in both the workspace and user home. Only skill metadata is
-included initially. The model calls the `skill` tool to load the full
-`SKILL.md` when a task matches it; workspace skills override same-named user
-skills.
+Reusable skills are discovered from `.grok/skills`, `.gork/skills`,
+`.agents/skills`, `.claude/skills`, and `.cursor/skills`. Project directories
+are scanned from the Git root through the workspace, and user skills honor
+`GROK_HOME`. Only skill metadata is included initially. The model calls the
+`skill` tool to load the full `SKILL.md` when a task matches it; deeper project
+skills override same-named user or parent skills.
 
 ## Privacy
 

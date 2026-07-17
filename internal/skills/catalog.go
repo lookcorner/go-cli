@@ -33,27 +33,46 @@ type Catalog struct {
 
 func Discover(workspaceRoot string) (*Catalog, error) {
 	home, _ := os.UserHomeDir()
-	roots := []struct {
+	grokHome := os.Getenv("GROK_HOME")
+	if grokHome == "" && home != "" {
+		grokHome = filepath.Join(home, ".grok")
+	}
+	return discover(workspaceRoot, home, grokHome)
+}
+
+func discover(workspaceRoot, home, grokHome string) (*Catalog, error) {
+	if real, err := filepath.EvalSymlinks(workspaceRoot); err == nil {
+		workspaceRoot = real
+	}
+	type root struct {
 		path   string
 		source string
-	}{
-		{filepath.Join(home, ".grok", "skills"), "user:grok"},
-		{filepath.Join(home, ".agents", "skills"), "user:agents"},
-		{filepath.Join(home, ".claude", "skills"), "user:claude"},
-		{filepath.Join(workspaceRoot, ".gork", "skills"), "workspace:grok"},
-		{filepath.Join(workspaceRoot, ".agents", "skills"), "workspace:agents"},
-		{filepath.Join(workspaceRoot, ".claude", "skills"), "workspace:claude"},
+	}
+	var roots []root
+	if home != "" {
+		roots = append(roots,
+			root{filepath.Join(home, ".cursor", "skills"), "user:cursor"},
+			root{filepath.Join(home, ".claude", "skills"), "user:claude"},
+			root{filepath.Join(home, ".agents", "skills"), "user:agents"},
+		)
+	}
+	if grokHome != "" {
+		roots = append(roots, root{filepath.Join(grokHome, "skills"), "user:grok"})
+	}
+	gitRoot := workspace.GitRoot(workspaceRoot)
+	for _, scope := range workspace.ProjectScopes(gitRoot, workspaceRoot) {
+		for _, dir := range []string{".cursor", ".claude", ".agents", ".gork", ".grok"} {
+			roots = append(roots, root{
+				filepath.Join(scope, dir, "skills"), "workspace:" + strings.TrimPrefix(dir, "."),
+			})
+		}
 	}
 	catalog := &Catalog{byName: make(map[string]Skill)}
 	for _, root := range roots {
 		if root.path == "" {
 			continue
 		}
-		ignoreRoot := ""
-		if strings.HasPrefix(root.source, "workspace:") {
-			ignoreRoot = workspaceRoot
-		}
-		if err := catalog.scanWithIgnore(root.path, root.source, ignoreRoot); err != nil {
+		if err := catalog.scan(root.path, root.source); err != nil {
 			return nil, err
 		}
 	}
@@ -61,10 +80,6 @@ func Discover(workspaceRoot string) (*Catalog, error) {
 }
 
 func (c *Catalog) scan(root, source string) error {
-	return c.scanWithIgnore(root, source, "")
-}
-
-func (c *Catalog) scanWithIgnore(root, source, ignoreRoot string) error {
 	info, err := os.Stat(root)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -81,12 +96,6 @@ func (c *Catalog) scanWithIgnore(root, source, ignoreRoot string) error {
 		}
 		if len(c.byName) >= maxSkills {
 			return errors.New("skill discovery exceeded 500 skills")
-		}
-		if ignoreRoot != "" && workspace.IsGitIgnored(ignoreRoot, path) {
-			if entry.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
 		}
 		if entry.IsDir() || !strings.EqualFold(entry.Name(), "SKILL.md") {
 			return nil

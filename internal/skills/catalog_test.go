@@ -63,7 +63,7 @@ func TestWorkspaceSkillOverridesUserSkill(t *testing.T) {
 	}
 }
 
-func TestWorkspaceSkillsRespectGitignore(t *testing.T) {
+func TestWorkspaceSkillsLoadWhenGitignored(t *testing.T) {
 	root := t.TempDir()
 	command := exec.Command("git", "init", "-q")
 	command.Dir = root
@@ -83,10 +83,53 @@ func TestWorkspaceSkillsRespectGitignore(t *testing.T) {
 		t.Fatal(err)
 	}
 	catalog := &Catalog{byName: make(map[string]Skill)}
-	if err := catalog.scanWithIgnore(filepath.Join(root, ".gork", "skills"), "workspace:grok", root); err != nil {
+	if err := catalog.scan(filepath.Join(root, ".gork", "skills"), "workspace:grok"); err != nil {
 		t.Fatal(err)
 	}
-	if names := catalog.Names(); len(names) != 1 || names[0] != "allowed" {
-		t.Fatalf("unexpected gitignore-filtered skills: %#v", names)
+	if names := catalog.Names(); len(names) != 2 || names[0] != "allowed" || names[1] != "ignored" {
+		t.Fatalf("gitignored skill directories should still load: %#v", names)
+	}
+}
+
+func TestDiscoverScopesSkillsFromHomeThroughWorkspace(t *testing.T) {
+	home := t.TempDir()
+	grokHome := filepath.Join(home, "custom-grok-home")
+	repo := filepath.Join(t.TempDir(), "repo")
+	cwd := filepath.Join(repo, "services", "api")
+	if err := os.MkdirAll(cwd, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command("git", "init", "-q")
+	command.Dir = repo
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, output)
+	}
+
+	writeSkill := func(root, name, body string) {
+		t.Helper()
+		dir := filepath.Join(root, name)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		content := "---\nname: " + name + "\ndescription: " + body + "\n---\n" + body
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeSkill(filepath.Join(grokHome, "skills"), "shared", "user")
+	writeSkill(filepath.Join(repo, ".grok", "skills"), "shared", "repo")
+	writeSkill(filepath.Join(repo, "services", ".agents", "skills"), "shared", "service")
+	writeSkill(filepath.Join(cwd, ".claude", "skills"), "shared", "cwd")
+	writeSkill(filepath.Join(home, ".cursor", "skills"), "cursor-only", "cursor")
+
+	catalog, err := discover(cwd, home, grokHome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := catalog.byName["shared"]; got.Description != "cwd" || got.Source != "workspace:claude" {
+		t.Fatalf("deepest skill should win: %#v", got)
+	}
+	if got := catalog.byName["cursor-only"]; got.Source != "user:cursor" {
+		t.Fatalf("cursor home skill not discovered: %#v", got)
 	}
 }
