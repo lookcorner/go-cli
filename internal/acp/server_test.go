@@ -272,6 +272,48 @@ func TestSessionAdminExtensionWireContract(t *testing.T) {
 	}
 }
 
+func TestSessionSummariesWireContract(t *testing.T) {
+	dir, firstCWD, secondCWD := t.TempDir(), t.TempDir(), t.TempDir()
+	for _, fixture := range []struct {
+		id, cwd, prompt string
+	}{{"summary-one", firstCWD, "First summary"}, {"summary-two", secondCWD, "Second summary"}} {
+		logger, err := sessionlog.NewLoggerWithID(dir, fixture.id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = logger.Append("session_metadata", map[string]any{"cwd": fixture.cwd, "modelId": "test-model"})
+		_ = logger.Append("user_prompt", map[string]any{"text": fixture.prompt})
+		_ = logger.Close()
+	}
+	var output bytes.Buffer
+	server := &Server{SessionDir: dir, output: &output}
+	call := func(id int, method, params string) map[string]any {
+		t.Helper()
+		output.Reset()
+		server.handleSessionSummaries(message{ID: json.RawMessage(strconv.Itoa(id)), Method: method, Params: json.RawMessage(params)})
+		var response map[string]any
+		if err := json.NewDecoder(&output).Decode(&response); err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}
+
+	listed := call(1, "x.ai/session_summaries/session_list", `{"workspace_directory":`+strconv.Quote(firstCWD)+`}`)
+	summaries := listed["result"].(map[string]any)["session_summaries"].([]any)
+	if len(summaries) != 1 || summaries[0].(map[string]any)["session_summary"] != "First summary" {
+		t.Fatalf("unexpected session summaries: %#v", listed)
+	}
+	overview := call(2, "x.ai/session_summaries/workspace_list", `{}`)
+	all := overview["result"].(map[string]any)["all_sessions"].(map[string]any)
+	if len(all[firstCWD].([]any)) != 1 || len(all[secondCWD].([]any)) != 1 {
+		t.Fatalf("unexpected workspace summaries: %#v", overview)
+	}
+	recent := call(3, "x.ai/session_summaries/workspace_list_recent", `{"limit":1}`)
+	if rows := recent["result"].([]any); len(rows) != 1 {
+		t.Fatalf("unexpected recent summaries: %#v", recent)
+	}
+}
+
 func TestStaticExtensionsAndCompactCommand(t *testing.T) {
 	var output bytes.Buffer
 	streamer := &fixtureStreamer{results: []api.StreamResult{{Text: "preserve the implementation state"}}}

@@ -212,6 +212,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleSessionFork(incoming)
 		case "x.ai/session/info", "x.ai/session/rename", "x.ai/session/delete", "x.ai/session/search", "x.ai/prompt_history":
 			s.handleSessionAdmin(incoming)
+		case "x.ai/session_summaries/session_list", "x.ai/session_summaries/workspace_list", "x.ai/session_summaries/workspace_list_recent":
+			s.handleSessionSummaries(incoming)
 		case "x.ai/commands/list", "x.ai/workspaces/list":
 			s.handleStaticExtension(incoming)
 		case "x.ai/skills/list", "x.ai/skills/config":
@@ -364,6 +366,60 @@ func (s *Server) handleSessionAdmin(incoming message) {
 			s.respondError(incoming.ID, -32602, err.Error())
 		} else {
 			s.respond(incoming.ID, map[string]any{"prompts": prompts})
+		}
+	}
+}
+
+func (s *Server) handleSessionSummaries(incoming message) {
+	var req struct {
+		WorkspaceDirectory string `json:"workspace_directory"`
+		Limit              *int   `json:"limit"`
+	}
+	if json.Unmarshal(incoming.Params, &req) != nil {
+		s.respondError(incoming.ID, -32602, "invalid session summaries parameters")
+		return
+	}
+	switch incoming.Method {
+	case "x.ai/session_summaries/session_list":
+		if req.WorkspaceDirectory == "" {
+			s.respondError(incoming.ID, -32602, "workspace_directory is required")
+			return
+		}
+		summaries, err := sessionlog.Summaries(s.SessionDir, req.WorkspaceDirectory, 0)
+		if err != nil {
+			s.respondError(incoming.ID, -32000, err.Error())
+		} else {
+			s.respond(incoming.ID, map[string]any{"session_summaries": summaries})
+		}
+	case "x.ai/session_summaries/workspace_list":
+		summaries, err := sessionlog.Summaries(s.SessionDir, "", 0)
+		if err != nil {
+			s.respondError(incoming.ID, -32000, err.Error())
+			return
+		}
+		grouped := make(map[string][]sessionlog.Summary)
+		for _, summary := range summaries {
+			grouped[summary.Info.CWD] = append(grouped[summary.Info.CWD], summary)
+		}
+		s.respond(incoming.ID, map[string]any{"all_sessions": grouped})
+	case "x.ai/session_summaries/workspace_list_recent":
+		if req.Limit == nil || *req.Limit < 0 {
+			s.respondError(incoming.ID, -32602, "limit must not be negative")
+			return
+		}
+		if *req.Limit == 0 {
+			s.respond(incoming.ID, []sessionlog.Summary{})
+			return
+		}
+		limit := *req.Limit
+		if limit > 10_000 {
+			limit = 10_000
+		}
+		summaries, err := sessionlog.Summaries(s.SessionDir, "", limit)
+		if err != nil {
+			s.respondError(incoming.ID, -32000, err.Error())
+		} else {
+			s.respond(incoming.ID, summaries)
 		}
 	}
 }

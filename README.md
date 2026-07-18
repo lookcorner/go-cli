@@ -271,6 +271,10 @@ session logs. Workspace history is returned newest-first, while `session_id`
 queries preserve chronological prompt indices; `filter_session_id` provides a
 newest-first session filter without maintaining a second history database.
 
+The `x.ai/session_summaries/session_list`, `workspace_list`, and
+`workspace_list_recent` extensions expose the same logs as reference-shaped
+summary snapshots for workspace history and recent-session views.
+
 `x.ai/workspaces/list` returns the reference-compatible partial `no_oauth`
 response because this local build has no cloud workspace backend.
 
