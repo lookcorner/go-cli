@@ -196,6 +196,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleHunkAction(ctx, incoming)
 		case "x.ai/git/worktree/create", "x.ai/git/worktree/list", "x.ai/git/worktree/show", "x.ai/git/worktree/remove", "x.ai/git/worktree/apply":
 			s.handleWorktree(ctx, incoming)
+		case "x.ai/git/git_repo_root", "x.ai/git/status", "x.ai/git/stage", "x.ai/git/unstage", "x.ai/git/discard", "x.ai/git/current_commit":
+			s.handleGit(ctx, incoming)
 		case "x.ai/git/worktree/create_from_worktree", "x.ai/git/worktree/create_from_worktree_sync":
 			s.handleWorktreeFork(ctx, incoming)
 		case "x.ai/git/worktree/gc", "x.ai/git/worktree/db/stats", "x.ai/git/worktree/db/rebuild", "x.ai/git/worktree/db/path":
@@ -218,6 +220,81 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			if len(incoming.ID) > 0 {
 				s.respondError(incoming.ID, -32601, "method not found")
 			}
+		}
+	}
+}
+
+func (s *Server) handleGit(ctx context.Context, incoming message) {
+	if incoming.Method == "x.ai/git/git_repo_root" {
+		var req struct {
+			CWD string `json:"currentWorkingDirectory"`
+		}
+		if json.Unmarshal(incoming.Params, &req) != nil || req.CWD == "" {
+			s.respondError(incoming.ID, -32602, "currentWorkingDirectory is required")
+			return
+		}
+		root, err := worktrees.GitRoot(ctx, req.CWD)
+		if err != nil {
+			s.respond(incoming.ID, "NotGitRepo")
+			return
+		}
+		s.respond(incoming.ID, map[string]any{"GitRepo": map[string]any{"gitRoot": root}})
+		return
+	}
+	var req struct {
+		SessionID        string   `json:"sessionId"`
+		GitRoot          string   `json:"gitRoot"`
+		Paths            []string `json:"paths"`
+		IncludeUntracked *bool    `json:"includeUntracked"`
+		IncludeStats     bool     `json:"includeStats"`
+		Scope            string   `json:"scope"`
+	}
+	if json.Unmarshal(incoming.Params, &req) != nil {
+		s.respondError(incoming.ID, -32602, "invalid git parameters")
+		return
+	}
+	root := req.GitRoot
+	if root == "" && req.SessionID != "" {
+		if session := s.lookupSession(req.SessionID); session != nil {
+			root = session.cwd
+		}
+	}
+	root, err := worktrees.ValidateGitRoot(ctx, root)
+	if err != nil {
+		s.respondError(incoming.ID, -32602, err.Error())
+		return
+	}
+	extResult := func(value any, err error) {
+		if err != nil {
+			s.respond(incoming.ID, map[string]any{"result": nil, "error": err.Error()})
+		} else {
+			s.respond(incoming.ID, map[string]any{"result": value})
+		}
+	}
+	switch incoming.Method {
+	case "x.ai/git/status":
+		includeUntracked := true
+		if req.IncludeUntracked != nil {
+			includeUntracked = *req.IncludeUntracked
+		}
+		result, err := worktrees.Status(ctx, root, includeUntracked, req.IncludeStats)
+		extResult(result, err)
+	case "x.ai/git/stage":
+		paths, err := worktrees.Stage(ctx, root, req.Paths)
+		extResult(map[string]any{"paths": paths}, err)
+	case "x.ai/git/unstage":
+		err := worktrees.Unstage(ctx, root, req.Paths)
+		extResult(map[string]any{}, err)
+	case "x.ai/git/discard":
+		includeUntracked := req.IncludeUntracked != nil && *req.IncludeUntracked
+		err := worktrees.Discard(ctx, root, req.Paths, req.Scope, includeUntracked)
+		extResult(map[string]any{}, err)
+	case "x.ai/git/current_commit":
+		commit, err := worktrees.CurrentCommit(ctx, root)
+		if err != nil {
+			extResult(nil, err)
+		} else {
+			extResult(commit, nil)
 		}
 	}
 }

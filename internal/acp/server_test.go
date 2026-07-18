@@ -1,6 +1,7 @@
 package acp
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -20,6 +22,53 @@ import (
 	"github.com/lookcorner/go-cli/internal/tools"
 	"github.com/lookcorner/go-cli/internal/workspace"
 )
+
+func TestGitExtensionWireContract(t *testing.T) {
+	root := t.TempDir()
+	runACPGit(t, root, "init", "-q")
+	runACPGit(t, root, "config", "user.name", "Fixture")
+	runACPGit(t, root, "config", "user.email", "fixture@example.invalid")
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("base\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runACPGit(t, root, "add", "tracked.txt")
+	runACPGit(t, root, "commit", "-qm", "baseline")
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("changed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	server := &Server{output: &output}
+	server.handleGit(context.Background(), message{ID: json.RawMessage("1"), Method: "x.ai/git/status", Params: json.RawMessage(`{"gitRoot":` + strconv.Quote(root) + `}`)})
+	var response map[string]any
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	extension := response["result"].(map[string]any)
+	status := extension["result"].(map[string]any)
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status["root"] != resolvedRoot || len(status["unstaged"].([]any)) != 1 || extension["error"] != nil {
+		t.Fatalf("unexpected status wire response: %#v", response)
+	}
+	output.Reset()
+	server.handleGit(context.Background(), message{ID: json.RawMessage("2"), Method: "x.ai/git/current_commit", Params: json.RawMessage(`{"gitRoot":` + strconv.Quote(root) + `}`)})
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if result := response["result"].(map[string]any)["result"]; result != strings.TrimSpace(runACPGitOutput(t, root, "rev-parse", "HEAD")) {
+		t.Fatalf("unexpected current commit response: %#v", response)
+	}
+	output.Reset()
+	server.handleGit(context.Background(), message{ID: json.RawMessage("3"), Method: "x.ai/git/git_repo_root", Params: json.RawMessage(`{"currentWorkingDirectory":` + strconv.Quote(root) + `}`)})
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if got := response["result"].(map[string]any)["GitRepo"].(map[string]any)["gitRoot"]; got != resolvedRoot {
+		t.Fatalf("unexpected repo root response: %#v", response)
+	}
+}
 
 type fixtureStreamer struct {
 	mu       sync.Mutex
