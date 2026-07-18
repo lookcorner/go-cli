@@ -266,6 +266,11 @@ only the validated JSONL log and its exact artifact directory, and search
 supports workspace filtering, pagination, ranked title/content matches, and
 optional snippets without a separate index service.
 
+`x.ai/prompt_history` reads user prompts directly from the same append-only
+session logs. Workspace history is returned newest-first, while `session_id`
+queries preserve chronological prompt indices; `filter_session_id` provides a
+newest-first session filter without maintaining a second history database.
+
 `x.ai/workspaces/list` returns the reference-compatible partial `no_oauth`
 response because this local build has no cloud workspace backend.
 

@@ -36,6 +36,89 @@ type SearchResult struct {
 	Bootstrapping bool        `json:"bootstrapping"`
 }
 
+type promptRecord struct {
+	text      string
+	time      time.Time
+	sessionID string
+	index     int
+}
+
+func PromptHistory(dir, cwd, sessionID string, newestFirst bool) ([]string, error) {
+	if strings.TrimSpace(cwd) == "" {
+		return nil, errors.New("cwd is required")
+	}
+	items, err := List(dir, cwd)
+	if err != nil {
+		return nil, err
+	}
+	var records []promptRecord
+	for _, item := range items {
+		if sessionID != "" && item.SessionID != sessionID {
+			continue
+		}
+		path, err := PathForID(dir, item.SessionID)
+		if err != nil {
+			continue
+		}
+		prompts, err := promptRecords(path, item.SessionID)
+		if err == nil {
+			records = append(records, prompts...)
+		}
+	}
+	sort.SliceStable(records, func(i, j int) bool {
+		if records[i].time.Equal(records[j].time) {
+			if records[i].sessionID == records[j].sessionID {
+				if newestFirst {
+					return records[i].index > records[j].index
+				}
+				return records[i].index < records[j].index
+			}
+			return records[i].sessionID < records[j].sessionID
+		}
+		if newestFirst {
+			return records[i].time.After(records[j].time)
+		}
+		return records[i].time.Before(records[j].time)
+	})
+	prompts := make([]string, 0, len(records))
+	for _, record := range records {
+		if record.text != "" && (len(prompts) == 0 || prompts[len(prompts)-1] != record.text) {
+			prompts = append(prompts, record.text)
+			if len(prompts) == 10_000 {
+				break
+			}
+		}
+	}
+	return prompts, nil
+}
+
+func promptRecords(path, sessionID string) ([]promptRecord, error) {
+	if err := validateSessionFile(path); err != nil {
+		return nil, err
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	var records []promptRecord
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64<<10), 8<<20)
+	for scanner.Scan() {
+		var event storedEvent
+		if json.Unmarshal(scanner.Bytes(), &event) != nil || event.Kind != "user_prompt" {
+			continue
+		}
+		var data struct {
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(event.Data, &data) == nil {
+			records = append(records, promptRecord{text: data.Text, time: event.Time, sessionID: sessionID, index: len(records)})
+		}
+	}
+	return records, scanner.Err()
+}
+
 func InfoByID(dir, id string) (Info, error) {
 	path, err := PathForID(dir, id)
 	if err != nil {

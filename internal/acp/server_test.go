@@ -251,7 +251,16 @@ func TestSessionAdminExtensionWireContract(t *testing.T) {
 		t.Fatalf("unexpected search response: %#v", response)
 	}
 	output.Reset()
-	server.handleSessionAdmin(message{ID: json.RawMessage("4"), Method: "x.ai/session/delete", Params: json.RawMessage(`{"sessionId":"admin-session"}`)})
+	server.handleSessionAdmin(message{ID: json.RawMessage("4"), Method: "x.ai/prompt_history", Params: json.RawMessage(`{"cwd":` + strconv.Quote(cwd) + `,"session_id":"admin-session"}`)})
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	prompts := response["result"].(map[string]any)["prompts"].([]any)
+	if len(prompts) != 1 || prompts[0] != "searchable prompt" {
+		t.Fatalf("unexpected prompt history response: %#v", response)
+	}
+	output.Reset()
+	server.handleSessionAdmin(message{ID: json.RawMessage("5"), Method: "x.ai/session/delete", Params: json.RawMessage(`{"sessionId":"admin-session"}`)})
 	if err := json.NewDecoder(&output).Decode(&response); err != nil {
 		t.Fatal(err)
 	}

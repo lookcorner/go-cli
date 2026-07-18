@@ -3,7 +3,9 @@ package session
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestSessionAdminRenameSearchAndDelete(t *testing.T) {
@@ -64,6 +66,49 @@ func TestSessionAdminRenameSearchAndDelete(t *testing.T) {
 	}
 	if _, err := os.Stat(artifact); !os.IsNotExist(err) {
 		t.Fatalf("artifact directory survived delete: %v", err)
+	}
+}
+
+func TestPromptHistoryOrderingAndScope(t *testing.T) {
+	dir, cwd := t.TempDir(), t.TempDir()
+	first, err := NewLoggerWithID(dir, "history-one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = first.Append("session_metadata", map[string]any{"cwd": cwd})
+	_ = first.Append("user_prompt", map[string]any{"text": "first"})
+	_ = first.Append("user_prompt", map[string]any{"text": "repeat"})
+	_ = first.Close()
+	time.Sleep(time.Millisecond)
+	second, err := NewLoggerWithID(dir, "history-two")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = second.Append("session_metadata", map[string]any{"cwd": cwd})
+	_ = second.Append("user_prompt", map[string]any{"text": "repeat"})
+	_ = second.Append("user_prompt", map[string]any{"text": "latest"})
+	_ = second.Close()
+
+	all, err := PromptHistory(dir, cwd, "", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(all, ","), "latest,repeat,first"; got != want {
+		t.Fatalf("all history=%q want=%q", got, want)
+	}
+	chronological, err := PromptHistory(dir, cwd, "history-one", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(chronological, ","), "first,repeat"; got != want {
+		t.Fatalf("session history=%q want=%q", got, want)
+	}
+	filtered, err := PromptHistory(dir, cwd, "history-one", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(filtered, ","), "repeat,first"; got != want {
+		t.Fatalf("filtered history=%q want=%q", got, want)
 	}
 }
 

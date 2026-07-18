@@ -210,7 +210,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleResolveLocalSession(ctx, incoming)
 		case "x.ai/session/fork":
 			s.handleSessionFork(incoming)
-		case "x.ai/session/info", "x.ai/session/rename", "x.ai/session/delete", "x.ai/session/search":
+		case "x.ai/session/info", "x.ai/session/rename", "x.ai/session/delete", "x.ai/session/search", "x.ai/prompt_history":
 			s.handleSessionAdmin(incoming)
 		case "x.ai/commands/list", "x.ai/workspaces/list":
 			s.handleStaticExtension(incoming)
@@ -234,13 +234,16 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 
 func (s *Server) handleSessionAdmin(incoming message) {
 	var req struct {
-		SessionID      string `json:"sessionId"`
-		Title          string `json:"title"`
-		CWD            string `json:"cwd"`
-		Query          string `json:"query"`
-		Limit          int    `json:"limit"`
-		Offset         int    `json:"offset"`
-		IncludeContent bool   `json:"includeContent"`
+		SessionID            string `json:"sessionId"`
+		Title                string `json:"title"`
+		CWD                  string `json:"cwd"`
+		Query                string `json:"query"`
+		Limit                int    `json:"limit"`
+		Offset               int    `json:"offset"`
+		IncludeContent       bool   `json:"includeContent"`
+		PromptSessionID      string `json:"session_id"`
+		FilterSessionID      string `json:"filter_session_id"`
+		FilterSessionIDCamel string `json:"filterSessionId"`
 	}
 	if json.Unmarshal(incoming.Params, &req) != nil {
 		s.respondError(incoming.ID, -32602, "invalid session parameters")
@@ -342,6 +345,26 @@ func (s *Server) handleSessionAdmin(incoming message) {
 			Query: req.Query, CWD: req.CWD, Limit: req.Limit, Offset: req.Offset, IncludeContent: req.IncludeContent,
 		})
 		extResult(result, err)
+	case "x.ai/prompt_history":
+		sessionID, newestFirst := req.PromptSessionID, false
+		if sessionID == "" {
+			sessionID = req.SessionID
+		}
+		filterSessionID := req.FilterSessionID
+		if filterSessionID == "" {
+			filterSessionID = req.FilterSessionIDCamel
+		}
+		if filterSessionID != "" {
+			sessionID, newestFirst = filterSessionID, true
+		} else if sessionID == "" {
+			newestFirst = true
+		}
+		prompts, err := sessionlog.PromptHistory(s.SessionDir, req.CWD, sessionID, newestFirst)
+		if err != nil {
+			s.respondError(incoming.ID, -32602, err.Error())
+		} else {
+			s.respond(incoming.ID, map[string]any{"prompts": prompts})
+		}
 	}
 }
 
