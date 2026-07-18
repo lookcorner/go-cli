@@ -196,7 +196,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleHunkAction(ctx, incoming)
 		case "x.ai/git/worktree/create", "x.ai/git/worktree/list", "x.ai/git/worktree/show", "x.ai/git/worktree/remove", "x.ai/git/worktree/apply":
 			s.handleWorktree(ctx, incoming)
-		case "x.ai/git/git_repo_root", "x.ai/git/status", "x.ai/git/stage", "x.ai/git/stage/content", "x.ai/git/unstage", "x.ai/git/discard", "x.ai/git/current_commit", "x.ai/git/info", "x.ai/git/branches", "x.ai/git/stash", "x.ai/git/checkout", "x.ai/git/checkout_commit", "x.ai/git/commit", "x.ai/git/files", "x.ai/git/diffs":
+		case "x.ai/git/git_repo_root", "x.ai/git/status", "x.ai/git/stage", "x.ai/git/stage/content", "x.ai/git/unstage", "x.ai/git/discard", "x.ai/git/current_commit", "x.ai/git/info", "x.ai/git/branches", "x.ai/git/stash", "x.ai/git/checkout", "x.ai/git/checkout_session_head", "x.ai/git/checkout_commit", "x.ai/git/commit", "x.ai/git/files", "x.ai/git/diffs":
 			s.handleGit(ctx, incoming)
 		case "x.ai/git/worktree/create_from_worktree", "x.ai/git/worktree/create_from_worktree_sync":
 			s.handleWorktreeFork(ctx, incoming)
@@ -565,6 +565,32 @@ func (s *Server) handleGit(ctx context.Context, incoming message) {
 	}
 	if json.Unmarshal(incoming.Params, &req) != nil {
 		s.respondError(incoming.ID, -32602, "invalid git parameters")
+		return
+	}
+	if incoming.Method == "x.ai/git/checkout_session_head" {
+		if req.SessionID == "" {
+			s.respondError(incoming.ID, -32602, "sessionId is required")
+			return
+		}
+		persisted, err := sessionlog.InfoByID(s.SessionDir, req.SessionID)
+		if err != nil {
+			s.respondError(incoming.ID, -32602, "session not found: "+req.SessionID)
+			return
+		}
+		if persisted.HeadCommit == "" {
+			s.respondError(incoming.ID, -32602, "session "+req.SessionID+" has no persisted HEAD commit")
+			return
+		}
+		root := req.GitRoot
+		if root == "" {
+			root = persisted.CWD
+		}
+		root, err = worktrees.ValidateGitRoot(ctx, root)
+		if err != nil {
+			s.respondError(incoming.ID, -32602, err.Error())
+			return
+		}
+		s.respond(incoming.ID, worktrees.CheckoutCommit(ctx, root, persisted.HeadCommit, req.StashIfDirty))
 		return
 	}
 	root := req.GitRoot

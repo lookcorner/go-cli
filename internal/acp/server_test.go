@@ -124,6 +124,44 @@ func TestGitExtensionWireContract(t *testing.T) {
 	}
 }
 
+func TestCheckoutSessionHeadWireContract(t *testing.T) {
+	root := t.TempDir()
+	runACPGit(t, root, "init", "-q")
+	runACPGit(t, root, "config", "user.name", "Fixture")
+	runACPGit(t, root, "config", "user.email", "fixture@example.invalid")
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("first\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runACPGit(t, root, "add", "tracked.txt")
+	runACPGit(t, root, "commit", "-qm", "first")
+	first := strings.TrimSpace(runACPGitOutput(t, root, "rev-parse", "HEAD"))
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("second\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runACPGit(t, root, "commit", "-qam", "second")
+
+	sessionDir := t.TempDir()
+	logger, err := sessionlog.NewLoggerWithID(sessionDir, "checkout-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = logger.Append("session_metadata", map[string]any{"cwd": root, "headCommit": first})
+	_ = logger.Close()
+	var output bytes.Buffer
+	server := &Server{SessionDir: sessionDir, output: &output}
+	server.handleGit(context.Background(), message{ID: json.RawMessage("1"), Method: "x.ai/git/checkout_session_head", Params: json.RawMessage(`{"sessionId":"checkout-session"}`)})
+	var response map[string]any
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if result := response["result"].(map[string]any); result["checked_out"] != true || result["fetched"] != false {
+		t.Fatalf("unexpected checkout session HEAD response: %#v", response)
+	}
+	if got := strings.TrimSpace(runACPGitOutput(t, root, "rev-parse", "HEAD")); got != first {
+		t.Fatalf("HEAD=%q want=%q", got, first)
+	}
+}
+
 func TestFSExtensionWireContract(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "read.txt"), []byte("hello\n"), 0o600); err != nil {
