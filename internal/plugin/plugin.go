@@ -19,6 +19,12 @@ type Config struct {
 	ProjectTrusted bool
 }
 
+type Settings struct {
+	Paths    []string
+	Enabled  []string
+	Disabled []string
+}
+
 type Plugin struct {
 	ID          string
 	Name        string
@@ -112,6 +118,11 @@ func Inventory(workspaceRoot string, cfg Config) ([]Plugin, error) {
 		grokHome = filepath.Join(home, ".grok")
 	}
 	return discoverInventory(workspaceRoot, home, grokHome, cfg)
+}
+
+func ResolvePath(path, workspaceRoot string) string {
+	home, _ := os.UserHomeDir()
+	return resolvePath(path, home, workspaceRoot)
 }
 
 func discover(workspaceRoot, home, grokHome string, cfg Config) ([]Plugin, error) {

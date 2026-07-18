@@ -808,6 +808,32 @@ func TestUpdateSkillsPreservesOtherConfiguration(t *testing.T) {
 	}
 }
 
+func TestUpdatePluginsPreservesOtherConfiguration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("model_name = \"grok\"\n\n[plugins]\npaths = [\"old\"]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdatePlugins(path, func(settings *PluginsConfig) {
+		settings.Paths = append(settings.Paths, "new")
+		settings.Enabled = []string{"review"}
+		settings.Disabled = []string{"legacy"}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := toml.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	plugins := raw["plugins"].(map[string]any)
+	if raw["model_name"] != "grok" || strings.Join(anyStrings(plugins["paths"]), "|") != "old|new" || strings.Join(anyStrings(plugins["enabled"]), "|") != "review" || strings.Join(anyStrings(plugins["disabled"]), "|") != "legacy" {
+		t.Fatalf("unexpected plugins config: %#v", raw)
+	}
+}
+
 func anyStrings(value any) []string {
 	items, _ := value.([]any)
 	result := make([]string, 0, len(items))

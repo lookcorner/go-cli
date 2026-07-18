@@ -750,10 +750,10 @@ func TestPluginsListExtensionWireContract(t *testing.T) {
 		ID: "project/12345678/review-tools", Name: "review-tools", Scope: "project", Root: root,
 		Version: "1.0.0", SkillDirs: []string{skillRoot}, MCPConfig: mcpPath, Enabled: false, Trusted: false,
 	}}
-	current := &session{id: "plugin-session", runner: &agent.Runner{Plugins: plugins}}
+	current := &session{id: "plugin-session", runner: &agent.Runner{PluginInventory: func() []plugin.Plugin { return plugins }}}
 	var output bytes.Buffer
 	server := &Server{output: &output, sessions: map[string]*session{"plugin-session": current}}
-	server.handlePlugins(message{ID: json.RawMessage("1"), Method: "x.ai/plugins/list", Params: json.RawMessage(`{"sessionId":"plugin-session"}`)})
+	server.handlePlugins(context.Background(), message{ID: json.RawMessage("1"), Method: "x.ai/plugins/list", Params: json.RawMessage(`{"sessionId":"plugin-session"}`)})
 	var response map[string]any
 	if err := json.NewDecoder(&output).Decode(&response); err != nil {
 		t.Fatal(err)
@@ -764,6 +764,75 @@ func TestPluginsListExtensionWireContract(t *testing.T) {
 	if result["error"] != nil || len(items) != 1 || item["enabled"] != false || item["trusted"] != false || item["scope"] != "project" || item["skillCount"].(float64) != 1 || item["mcpServerCount"].(float64) != 1 || item["mcpStatus"] != "blocked" {
 		t.Fatalf("unexpected plugins list: %#v", response)
 	}
+}
+
+func TestPluginActionUpdatesInventoryAndSkills(t *testing.T) {
+	root := t.TempDir()
+	pluginRoot := filepath.Join(root, "plugin")
+	if err := os.MkdirAll(filepath.Join(pluginRoot, "skills", "review"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginRoot, "skills", "review", "SKILL.md"), []byte("---\nname: review\ndescription: Review\n---\nReview.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginRoot, "plugin.json"), []byte(`{"name":"review-tools"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginRoot, ".mcp.json"), []byte(`{"mcpServers":{"review":{"command":"review"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := skills.Discover(root, skills.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := plugin.Settings{}
+	var inventory []plugin.Plugin
+	runner := &agent.Runner{Skills: catalog}
+	runner.PluginInventory = func() []plugin.Plugin { return append([]plugin.Plugin(nil), inventory...) }
+	runner.UpdatePlugins = func(_ context.Context, update func(*plugin.Settings)) ([]plugin.Plugin, error) {
+		if update != nil {
+			update(&settings)
+		}
+		inventory, err = plugin.Inventory(root, plugin.Config{
+			Paths: settings.Paths, Enabled: settings.Enabled, Disabled: settings.Disabled, ProjectTrusted: true,
+		})
+		if err == nil {
+			err = catalog.ReconfigurePlugins(enabledPluginFixtures(inventory))
+		}
+		return append([]plugin.Plugin(nil), inventory...), err
+	}
+	current := &session{id: "plugin-action", cwd: root, runner: runner}
+	var output bytes.Buffer
+	server := &Server{output: &output, sessions: map[string]*session{"plugin-action": current}}
+
+	server.handlePlugins(context.Background(), message{ID: json.RawMessage("1"), Method: "x.ai/plugins/action", Params: json.RawMessage(`{"sessionId":"plugin-action","action":{"type":"add","path":` + strconv.Quote(pluginRoot) + `}}`)})
+	var response map[string]any
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	outcome := response["result"].(map[string]any)["result"].(map[string]any)
+	if outcome["status"] != "success" || outcome["requiresRestart"] != true || len(inventory) != 1 || strings.Join(catalog.Names(), "|") != "review-tools:review" {
+		t.Fatalf("unexpected add outcome=%#v inventory=%#v skills=%#v", outcome, inventory, catalog.Names())
+	}
+	output.Reset()
+	server.handlePlugins(context.Background(), message{ID: json.RawMessage("2"), Method: "x.ai/plugins/action", Params: json.RawMessage(`{"sessionId":"plugin-action","action":{"type":"disable","plugin_id":` + strconv.Quote(inventory[0].ID) + `}}`)})
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	outcome = response["result"].(map[string]any)["result"].(map[string]any)
+	if outcome["status"] != "success" || outcome["requiresRestart"] != true || inventory[0].Enabled || len(catalog.Names()) != 0 {
+		t.Fatalf("unexpected disable outcome=%#v inventory=%#v skills=%#v", outcome, inventory, catalog.Names())
+	}
+}
+
+func enabledPluginFixtures(inventory []plugin.Plugin) []plugin.Plugin {
+	var enabled []plugin.Plugin
+	for _, item := range inventory {
+		if item.Enabled {
+			enabled = append(enabled, item)
+		}
+	}
+	return enabled
 }
 
 type fixtureStreamer struct {

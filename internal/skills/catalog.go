@@ -255,6 +255,21 @@ func (c *Catalog) Reconfigure(settings Settings) error {
 	cfg.Paths = append([]string(nil), settings.Paths...)
 	cfg.Ignore = append([]string(nil), settings.Ignore...)
 	cfg.Disabled = append([]string(nil), settings.Disabled...)
+	return c.rebuild(cfg)
+}
+
+func (c *Catalog) ReconfigurePlugins(plugins []plugin.Plugin) error {
+	if c == nil {
+		return nil
+	}
+	c.mu.RLock()
+	cfg := cloneConfig(c.config)
+	c.mu.RUnlock()
+	cfg.Plugins = append([]plugin.Plugin(nil), plugins...)
+	return c.rebuild(cfg)
+}
+
+func (c *Catalog) rebuild(cfg Config) error {
 	fresh, err := Discover(c.root, cfg)
 	if err != nil {
 		return err

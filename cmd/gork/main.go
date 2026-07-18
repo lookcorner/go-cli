@@ -735,6 +735,13 @@ func modelPruningConfig(cfg config.Config) api.PruningConfig {
 	}
 }
 
+type sessionPluginState struct {
+	root      string
+	trusted   bool
+	catalog   *skills.Catalog
+	inventory []plugin.Plugin
+}
+
 func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []string, tokenProvider api.TokenProvider, stdin io.Reader, stdout, stderr io.Writer) error {
 	mode := tools.PermissionMode(opts.approval)
 	if mode != tools.PermissionPrompt && mode != tools.PermissionAuto && mode != tools.PermissionDeny {
@@ -742,9 +749,10 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	var skillsMu sync.Mutex
+	var extensionsMu sync.Mutex
 	dynamicSkills := cloneSkillsConfig(cfg.Skills)
-	catalogs := make(map[*skills.Catalog]bool)
+	dynamicPlugins := clonePluginsConfig(cfg.Plugins)
+	pluginStates := make(map[*sessionPluginState]bool)
 	server := &acp.Server{SessionDir: opts.sessionDir, Factory: func(
 		sessionCtx context.Context,
 		sessionConfig acp.SessionConfig,
@@ -764,10 +772,11 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		if !projectTrusted {
 			fmt.Fprintln(statusOutput, "[gork] project executable configuration is disabled for this untrusted workspace")
 		}
-		skillsMu.Lock()
+		extensionsMu.Lock()
 		sessionBase := cfg
 		sessionBase.Skills = cloneSkillsConfig(dynamicSkills)
-		skillsMu.Unlock()
+		sessionBase.Plugins = clonePluginsConfig(dynamicPlugins)
+		extensionsMu.Unlock()
 		sessionCfg, catalog, plugins, err := discoverWorkspace(ws.Root(), sessionBase, projectTrusted)
 		if err != nil {
 			return nil, nil, err
@@ -843,11 +852,9 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			_ = registry.Close()
 			_ = logger.Close()
 		}
-		if catalog.Count() > 0 {
-			if err := registry.Register(catalog.Tool()); err != nil {
-				cleanup()
-				return nil, nil, err
-			}
+		if err := registry.Register(catalog.Tool()); err != nil {
+			cleanup()
+			return nil, nil, err
 		}
 		if sessionConfig.Model != "" {
 			sessionCfg.Model = sessionConfig.Model
@@ -869,16 +876,20 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		}
 		watchCtx, stopSkills := context.WithCancel(sessionCtx)
 		catalog.Watch(watchCtx, time.Second)
-		skillsMu.Lock()
-		catalogs[catalog] = true
-		skillsMu.Unlock()
+		pluginState := &sessionPluginState{
+			root: ws.Root(), trusted: projectTrusted, catalog: catalog,
+			inventory: append([]plugin.Plugin(nil), plugins...),
+		}
+		extensionsMu.Lock()
+		pluginStates[pluginState] = true
+		extensionsMu.Unlock()
 		var closeOnce sync.Once
 		closeRuntime := func() {
 			closeOnce.Do(func() {
 				stopSkills()
-				skillsMu.Lock()
-				delete(catalogs, catalog)
-				skillsMu.Unlock()
+				extensionsMu.Lock()
+				delete(pluginStates, pluginState)
+				extensionsMu.Unlock()
 				cleanup()
 			})
 		}
@@ -895,13 +906,13 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 				return skills.Settings{}, err
 			}
 			settings := cloneSkillsConfig(reloaded.Skills)
-			skillsMu.Lock()
+			extensionsMu.Lock()
 			dynamicSkills = cloneSkillsConfig(settings)
-			activeCatalogs := make([]*skills.Catalog, 0, len(catalogs))
-			for active := range catalogs {
-				activeCatalogs = append(activeCatalogs, active)
+			activeCatalogs := make([]*skills.Catalog, 0, len(pluginStates))
+			for state := range pluginStates {
+				activeCatalogs = append(activeCatalogs, state.catalog)
 			}
-			skillsMu.Unlock()
+			extensionsMu.Unlock()
 			for _, active := range activeCatalogs {
 				if err := active.Reconfigure(skillSettings(settings)); err != nil {
 					return skills.Settings{}, err
@@ -909,13 +920,58 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			}
 			return skillSettings(settings), nil
 		}
+		pluginInventory := func() []plugin.Plugin {
+			extensionsMu.Lock()
+			defer extensionsMu.Unlock()
+			return append([]plugin.Plugin(nil), pluginState.inventory...)
+		}
+		updatePlugins := func(_ context.Context, update func(*plugin.Settings)) ([]plugin.Plugin, error) {
+			if update != nil {
+				if err := config.UpdatePlugins(opts.configPath, func(stored *config.PluginsConfig) {
+					settings := pluginSettings(*stored)
+					update(&settings)
+					*stored = storedPluginSettings(settings)
+				}); err != nil {
+					return nil, err
+				}
+			}
+			reloaded, err := config.Load(opts.configPath)
+			if err != nil {
+				return nil, err
+			}
+			settings := clonePluginsConfig(reloaded.Plugins)
+			extensionsMu.Lock()
+			dynamicPlugins = clonePluginsConfig(settings)
+			states := make([]*sessionPluginState, 0, len(pluginStates))
+			for state := range pluginStates {
+				states = append(states, state)
+			}
+			extensionsMu.Unlock()
+			for _, state := range states {
+				inventory, err := plugin.Inventory(state.root, plugin.Config{
+					Paths: settings.Paths, Enabled: settings.Enabled, Disabled: settings.Disabled,
+					ProjectTrusted: state.trusted,
+				})
+				if err != nil {
+					return nil, err
+				}
+				if err := state.catalog.ReconfigurePlugins(enabledPlugins(inventory)); err != nil {
+					return nil, err
+				}
+				extensionsMu.Lock()
+				state.inventory = append([]plugin.Plugin(nil), inventory...)
+				extensionsMu.Unlock()
+			}
+			return pluginInventory(), nil
+		}
 		return &agent.Runner{
-			Client: modelClient, Tools: registry, Skills: catalog, Plugins: plugins, Logger: logger,
+			Client: modelClient, Tools: registry, Skills: catalog, PluginInventory: pluginInventory, Logger: logger,
 			Model: sessionCfg.Model, Instructions: instructions, MaxSteps: cfg.MaxSteps,
 			TextOutput: textOutput, StatusOutput: statusOutput,
 			ContextWindow: cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,
 			UpdateMCPServers: mcpRuntime.Update, MCPServers: mcpRuntime.Configs,
-			UpdateSkills: updateSkills,
+			UpdateSkills:  updateSkills,
+			UpdatePlugins: updatePlugins,
 		}, closeRuntime, nil
 	}}
 	if err := server.Serve(ctx, stdin, stdout); err != nil {
@@ -930,6 +986,37 @@ func cloneSkillsConfig(source config.SkillsConfig) config.SkillsConfig {
 		Paths: append([]string(nil), source.Paths...), Ignore: append([]string(nil), source.Ignore...),
 		Disabled: append([]string(nil), source.Disabled...),
 	}
+}
+
+func clonePluginsConfig(source config.PluginsConfig) config.PluginsConfig {
+	return config.PluginsConfig{
+		Paths: append([]string(nil), source.Paths...), Enabled: append([]string(nil), source.Enabled...),
+		Disabled: append([]string(nil), source.Disabled...),
+	}
+}
+
+func pluginSettings(source config.PluginsConfig) plugin.Settings {
+	return plugin.Settings{
+		Paths: append([]string(nil), source.Paths...), Enabled: append([]string(nil), source.Enabled...),
+		Disabled: append([]string(nil), source.Disabled...),
+	}
+}
+
+func storedPluginSettings(source plugin.Settings) config.PluginsConfig {
+	return config.PluginsConfig{
+		Paths: append([]string(nil), source.Paths...), Enabled: append([]string(nil), source.Enabled...),
+		Disabled: append([]string(nil), source.Disabled...),
+	}
+}
+
+func enabledPlugins(inventory []plugin.Plugin) []plugin.Plugin {
+	enabled := make([]plugin.Plugin, 0, len(inventory))
+	for _, item := range inventory {
+		if item.Enabled {
+			enabled = append(enabled, item)
+		}
+	}
+	return enabled
 }
 
 func skillSettings(source config.SkillsConfig) skills.Settings {

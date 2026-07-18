@@ -47,7 +47,7 @@ type Runner struct {
 	Client                  ResponseStreamer
 	Tools                   *tools.Registry
 	Skills                  *skills.Catalog
-	Plugins                 []plugin.Plugin
+	PluginInventory         func() []plugin.Plugin
 	Logger                  EventLogger
 	SessionID               string
 	Model                   string
@@ -61,6 +61,7 @@ type Runner struct {
 	UpdateMCPServers        func(context.Context, []mcp.ServerConfig) error
 	MCPServers              func() []mcp.ServerConfig
 	UpdateSkills            func(context.Context, func(*skills.Settings)) (skills.Settings, error)
+	UpdatePlugins           func(context.Context, func(*plugin.Settings)) ([]plugin.Plugin, error)
 	lastInputTokens         int
 	pendingSummary          string
 }

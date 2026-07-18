@@ -643,8 +643,11 @@ Enabled plugins may also contribute `.mcp.json`/inline `mcpServers` and
 unstamped-build behavior; release builds require folder trust before an enabled
 project plugin may start MCP or LSP processes. ACP sessions expose enabled and
 disabled inventory through `x.ai/plugins/list`, including scope, trust, skill,
-and MCP summaries. Plugin hooks, agents, actions, installation, marketplaces,
-and updates are not yet implemented.
+and MCP summaries. `x.ai/plugins/action` persists local path add/remove and
+plugin enable/disable, while reload re-runs discovery. Inventory and
+skill/command components update immediately; actions affecting MCP or LSP
+components return `requiresRestart`. Plugin hooks, agents, installation,
+marketplaces, and updates are not yet implemented.
 
 The `[skills]` config accepts additional directories or individual `SKILL.md`
 files. Paths support `~`; relative paths resolve from the workspace. `ignore`
