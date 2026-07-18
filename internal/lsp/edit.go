@@ -25,11 +25,16 @@ type lspTextEdit struct {
 }
 
 type editOperation struct {
+	kind         string
 	uri          string
 	path         string
+	newURI       string
+	newPath      string
 	version      *int
 	failedChange *int
 	edits        []workspace.TextEdit
+	overwrite    bool
+	ignoreExists bool
 }
 
 func (c *Client) applyWorkspaceEdit(raw json.RawMessage) map[string]any {
@@ -43,11 +48,7 @@ func (c *Client) applyWorkspaceEdit(raw json.RawMessage) map[string]any {
 		return map[string]any{"applied": false, "failureReason": err.Error()}
 	}
 	for _, operation := range operations {
-		content, err := c.workspace.ApplyTextEdits(operation.path, operation.edits)
-		if err != nil {
-			return workspaceEditFailure(err, operation.failedChange)
-		}
-		if err := c.recordAppliedDocument(operation.uri, content); err != nil {
+		if err := c.applyEditOperation(operation); err != nil {
 			return workspaceEditFailure(err, operation.failedChange)
 		}
 	}
@@ -71,7 +72,7 @@ func decodeWorkspaceEdit(raw json.RawMessage) ([]editOperation, error) {
 	}
 	sort.Strings(keys)
 	for _, uri := range keys {
-		operations = append(operations, editOperation{uri: uri, edits: convertTextEdits(params.Edit.Changes[uri])})
+		operations = append(operations, editOperation{kind: "text", uri: uri, edits: convertTextEdits(params.Edit.Changes[uri])})
 	}
 	for documentIndex, rawChange := range params.Edit.DocumentChanges {
 		var probe struct {
@@ -81,7 +82,37 @@ func decodeWorkspaceEdit(raw json.RawMessage) ([]editOperation, error) {
 			return nil, errors.New("invalid workspace document change")
 		}
 		if probe.Kind != "" {
-			return nil, fmt.Errorf("workspace resource operation %q is not supported", probe.Kind)
+			var resource struct {
+				Kind    string `json:"kind"`
+				URI     string `json:"uri"`
+				OldURI  string `json:"oldUri"`
+				NewURI  string `json:"newUri"`
+				Options struct {
+					Overwrite         bool `json:"overwrite"`
+					IgnoreIfExists    bool `json:"ignoreIfExists"`
+					IgnoreIfNotExists bool `json:"ignoreIfNotExists"`
+				} `json:"options"`
+			}
+			if json.Unmarshal(rawChange, &resource) != nil {
+				return nil, errors.New("invalid workspace resource operation")
+			}
+			index := documentIndex
+			operation := editOperation{kind: resource.Kind, failedChange: &index, overwrite: resource.Options.Overwrite}
+			switch resource.Kind {
+			case "create":
+				operation.uri, operation.ignoreExists = resource.URI, resource.Options.IgnoreIfExists
+			case "rename":
+				operation.uri, operation.newURI, operation.ignoreExists = resource.OldURI, resource.NewURI, resource.Options.IgnoreIfExists
+			case "delete":
+				operation.uri, operation.ignoreExists = resource.URI, resource.Options.IgnoreIfNotExists
+			default:
+				return nil, fmt.Errorf("workspace resource operation %q is not supported", resource.Kind)
+			}
+			if operation.uri == "" || (operation.kind == "rename" && operation.newURI == "") {
+				return nil, errors.New("workspace resource operation has an empty URI")
+			}
+			operations = append(operations, operation)
+			continue
 		}
 		var change struct {
 			TextDocument struct {
@@ -95,7 +126,7 @@ func decodeWorkspaceEdit(raw json.RawMessage) ([]editOperation, error) {
 		}
 		index := documentIndex
 		operations = append(operations, editOperation{
-			uri: change.TextDocument.URI, version: change.TextDocument.Version,
+			kind: "text", uri: change.TextDocument.URI, version: change.TextDocument.Version,
 			failedChange: &index, edits: convertTextEdits(change.Edits),
 		})
 	}
@@ -140,11 +171,24 @@ func (c *Client) prepareEditOperations(operations []editOperation) error {
 			return err
 		}
 		uri := fileURI(resolved)
-		if _, duplicate := seen[uri]; duplicate {
-			return fmt.Errorf("workspace edit contains duplicate document %q", uri)
+		if operations[index].kind == "text" {
+			if _, duplicate := seen[uri]; duplicate {
+				return fmt.Errorf("workspace edit contains duplicate document %q", uri)
+			}
+			seen[uri] = struct{}{}
 		}
-		seen[uri] = struct{}{}
 		operations[index].uri, operations[index].path = uri, resolved
+		if operations[index].kind == "rename" {
+			path, err := pathFromFileURI(operations[index].newURI)
+			if err != nil {
+				return err
+			}
+			resolved, err := c.workspace.Resolve(path)
+			if err != nil {
+				return err
+			}
+			operations[index].newURI, operations[index].newPath = fileURI(resolved), resolved
+		}
 		if operations[index].version == nil {
 			continue
 		}
@@ -156,6 +200,37 @@ func (c *Client) prepareEditOperations(operations []editOperation) error {
 		}
 	}
 	return nil
+}
+
+func (c *Client) applyEditOperation(operation editOperation) error {
+	switch operation.kind {
+	case "text":
+		content, err := c.workspace.ApplyTextEdits(operation.path, operation.edits)
+		if err != nil {
+			return err
+		}
+		return c.recordAppliedDocument(operation.uri, content)
+	case "create":
+		changed, err := c.workspace.CreateFile(operation.path, operation.overwrite, operation.ignoreExists)
+		if err != nil || !changed {
+			return err
+		}
+		return c.recordAppliedDocument(operation.uri, "")
+	case "rename":
+		changed, err := c.workspace.RenameFile(operation.path, operation.newPath, operation.overwrite, operation.ignoreExists)
+		if err != nil || !changed {
+			return err
+		}
+		return c.recordRenamedDocument(operation.uri, operation.newURI)
+	case "delete":
+		changed, err := c.workspace.DeleteFile(operation.path, operation.ignoreExists)
+		if err != nil || !changed {
+			return err
+		}
+		return c.recordDeletedDocument(operation.uri)
+	default:
+		return fmt.Errorf("unsupported workspace edit operation %q", operation.kind)
+	}
 }
 
 func (c *Client) recordAppliedDocument(uri, content string) error {
@@ -174,6 +249,42 @@ func (c *Client) recordAppliedDocument(uri, content string) error {
 		"textDocument":   map[string]any{"uri": uri, "version": state.version},
 		"contentChanges": []any{map[string]any{"text": content}},
 	})
+}
+
+func (c *Client) recordDeletedDocument(uri string) error {
+	c.mu.Lock()
+	_, open := c.documents[uri]
+	delete(c.documents, uri)
+	delete(c.diagnostics, uri)
+	c.mu.Unlock()
+	if !open {
+		return nil
+	}
+	return c.notify("textDocument/didClose", map[string]any{"textDocument": map[string]any{"uri": uri}})
+}
+
+func (c *Client) recordRenamedDocument(oldURI, newURI string) error {
+	c.mu.Lock()
+	state, open := c.documents[oldURI]
+	if open {
+		delete(c.documents, oldURI)
+		c.documents[newURI] = state
+	}
+	if diagnostics, exists := c.diagnostics[oldURI]; exists {
+		delete(c.diagnostics, oldURI)
+		c.diagnostics[newURI] = diagnostics
+	}
+	c.mu.Unlock()
+	if !open {
+		return nil
+	}
+	if err := c.notify("textDocument/didClose", map[string]any{"textDocument": map[string]any{"uri": oldURI}}); err != nil {
+		return err
+	}
+	path, _ := pathFromFileURI(newURI)
+	return c.notify("textDocument/didOpen", map[string]any{"textDocument": map[string]any{
+		"uri": newURI, "languageId": languageID(path), "version": state.version, "text": state.content,
+	}})
 }
 
 func pathFromFileURI(value string) (string, error) {

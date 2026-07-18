@@ -39,3 +39,37 @@ func TestWorkspaceEditPreflightRejectsStaleAndEscapingChanges(t *testing.T) {
 		t.Fatalf("failed preflight changed file: %q", data)
 	}
 }
+
+func TestWorkspaceEditAppliesFileResourceOperationsInOrder(t *testing.T) {
+	root := t.TempDir()
+	original := filepath.Join(root, "main.go")
+	if err := os.WriteFile(original, []byte("package main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ws, _ := workspace.Open(root)
+	createdURI := fileURI(filepath.Join(root, "created.go"))
+	renamed := filepath.Join(root, "renamed.go")
+	renamedURI := fileURI(renamed)
+	originalURI := fileURI(original)
+	client := &Client{root: ws.Root(), workspace: ws, documents: make(map[string]documentState), diagnostics: make(map[string]json.RawMessage)}
+	request := json.RawMessage(`{"edit":{"documentChanges":[` +
+		`{"kind":"create","uri":"` + createdURI + `"},` +
+		`{"textDocument":{"uri":"` + createdURI + `"},"edits":[{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}},"newText":"package generated\n"}]},` +
+		`{"kind":"rename","oldUri":"` + createdURI + `","newUri":"` + renamedURI + `"},` +
+		`{"kind":"delete","uri":"` + originalURI + `"}` +
+		`]}}`)
+	result := client.applyWorkspaceEdit(request)
+	if result["applied"] != true {
+		t.Fatalf("resource edit failed: %#v", result)
+	}
+	data, err := os.ReadFile(renamed)
+	if err != nil || string(data) != "package generated\n" {
+		t.Fatalf("renamed content=%q err=%v", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "created.go")); !os.IsNotExist(err) {
+		t.Fatalf("rename source remained: %v", err)
+	}
+	if _, err := os.Stat(original); !os.IsNotExist(err) {
+		t.Fatalf("deleted file remained: %v", err)
+	}
+}

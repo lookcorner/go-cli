@@ -191,7 +191,9 @@ func TestLSPHelperProcess(t *testing.T) {
 				os.Exit(10)
 			}
 			workspaceCaps, _ := params.Capabilities["workspace"].(map[string]any)
-			if workspaceCaps["workspaceEdit"] == nil {
+			workspaceEdit, _ := workspaceCaps["workspaceEdit"].(map[string]any)
+			resourceOperations, _ := workspaceEdit["resourceOperations"].([]any)
+			if len(resourceOperations) != 3 {
 				os.Exit(12)
 			}
 			result = map[string]any{"capabilities": map[string]any{"hoverProvider": true}}

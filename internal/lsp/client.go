@@ -120,7 +120,10 @@ func Start(ctx context.Context, cfg ProcessConfig) (*Client, error) {
 		"capabilities": map[string]any{
 			"workspace": map[string]any{
 				"workspaceFolders": true, "configuration": true,
-				"workspaceEdit": map[string]any{"documentChanges": true, "failureHandling": "abort"},
+				"workspaceEdit": map[string]any{
+					"documentChanges": true, "failureHandling": "abort",
+					"resourceOperations": []string{"create", "rename", "delete"},
+				},
 			},
 			"textDocument": map[string]any{
 				"hover": map[string]any{}, "definition": map[string]any{},
