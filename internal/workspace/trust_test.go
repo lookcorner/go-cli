@@ -177,6 +177,21 @@ func TestProjectExecutionConfigPresent(t *testing.T) {
 	}
 }
 
+func TestProjectHookSourcesRequireFolderTrust(t *testing.T) {
+	for _, relative := range []string{
+		filepath.Join(".grok", "hooks", "guard.json"),
+		filepath.Join(".cursor", "hooks.json"),
+		filepath.Join(".claude", "settings.json"),
+		filepath.Join(".claude", "settings.local.json"),
+	} {
+		root := t.TempDir()
+		writeTrustFile(t, filepath.Join(root, relative), `{"hooks":{"SessionStart":[]}}`)
+		if !ProjectExecutionConfigPresent(root) {
+			t.Fatalf("project hook source %q did not trigger trust", relative)
+		}
+	}
+}
+
 func writeTrustFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {

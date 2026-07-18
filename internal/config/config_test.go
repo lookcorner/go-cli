@@ -703,14 +703,15 @@ func TestInvalidManagedConfigStopsLoading(t *testing.T) {
 
 func TestCompatConfigAndEnvironmentPrecedence(t *testing.T) {
 	for _, name := range []string{
-		"GROK_CURSOR_SKILLS_ENABLED", "GROK_CURSOR_RULES_ENABLED", "GROK_CURSOR_AGENTS_ENABLED", "GROK_CURSOR_MCPS_ENABLED",
-		"GROK_CLAUDE_SKILLS_ENABLED", "GROK_CLAUDE_RULES_ENABLED", "GROK_CLAUDE_AGENTS_ENABLED", "GROK_CLAUDE_MCPS_ENABLED",
+		"GROK_CURSOR_SKILLS_ENABLED", "GROK_CURSOR_RULES_ENABLED", "GROK_CURSOR_AGENTS_ENABLED", "GROK_CURSOR_MCPS_ENABLED", "GROK_CURSOR_HOOKS_ENABLED",
+		"GROK_CLAUDE_SKILLS_ENABLED", "GROK_CLAUDE_RULES_ENABLED", "GROK_CLAUDE_AGENTS_ENABLED", "GROK_CLAUDE_MCPS_ENABLED", "GROK_CLAUDE_HOOKS_ENABLED",
 	} {
 		t.Setenv(name, "")
 	}
 	t.Setenv("GROK_CURSOR_SKILLS_ENABLED", "yes")
 	t.Setenv("GROK_CURSOR_RULES_ENABLED", "invalid")
 	t.Setenv("GROK_CURSOR_MCPS_ENABLED", "on")
+	t.Setenv("GROK_CURSOR_HOOKS_ENABLED", "true")
 	path := filepath.Join(t.TempDir(), "config.toml")
 	data := []byte(`
 [compat.cursor]
@@ -718,10 +719,12 @@ skills = false
 rules = false
 agents = false
 mcps = false
+hooks = false
 
 [compat.claude]
 skills = false
 mcps = false
+hooks = false
 `)
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
@@ -730,10 +733,10 @@ mcps = false
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.Compat.Cursor.Skills || cfg.Compat.Cursor.Rules || cfg.Compat.Cursor.Agents || !cfg.Compat.Cursor.Mcps {
+	if !cfg.Compat.Cursor.Skills || cfg.Compat.Cursor.Rules || cfg.Compat.Cursor.Agents || !cfg.Compat.Cursor.Mcps || !cfg.Compat.Cursor.Hooks {
 		t.Fatalf("unexpected cursor compatibility resolution: %#v", cfg.Compat.Cursor)
 	}
-	if cfg.Compat.Claude.Skills || !cfg.Compat.Claude.Rules || !cfg.Compat.Claude.Agents || cfg.Compat.Claude.Mcps {
+	if cfg.Compat.Claude.Skills || !cfg.Compat.Claude.Rules || !cfg.Compat.Claude.Agents || cfg.Compat.Claude.Mcps || cfg.Compat.Claude.Hooks {
 		t.Fatalf("unexpected claude compatibility resolution: %#v", cfg.Compat.Claude)
 	}
 }

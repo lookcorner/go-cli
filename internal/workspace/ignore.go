@@ -8,17 +8,24 @@ import (
 )
 
 func GitRoot(cwd string) string {
+	if root, ok := FindGitRoot(cwd); ok {
+		return root
+	}
+	return cwd
+}
+
+func FindGitRoot(cwd string) (string, bool) {
 	command := exec.Command("git", "rev-parse", "--show-toplevel")
 	command.Dir = cwd
 	output, err := command.Output()
 	if err != nil {
-		return cwd
+		return "", false
 	}
 	root, err := filepath.EvalSymlinks(strings.TrimSpace(string(output)))
 	if err != nil {
-		return cwd
+		return "", false
 	}
-	return root
+	return root, true
 }
 
 // GitIgnored returns the paths ignored by Git using one check-ignore process.

@@ -378,14 +378,16 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if lspManager != nil {
 		defer lspManager.Close()
 	}
-	hookCatalog := hooks.DiscoverPlugins(plugins)
+	hookCatalog := hooks.Discover(hooks.Config{
+		WorkspaceRoot: ws.Root(), Compat: cfg.Compat, ProjectTrusted: projectTrusted, Plugins: plugins,
+	})
 	hookRuntime := &hooks.Runtime{
 		Catalog: hookCatalog, WorkspaceRoot: ws.Root(), SessionID: logger.ID(), Model: cfg.Model,
 	}
 	defer hookRuntime.SessionEnded(context.Background(), "closed")
 	runner := &agent.Runner{
 		Client: client, Tools: registry, Skills: skillCatalog, Logger: logger,
-		HookCatalog: hookCatalog, HookPolicy: hookRuntime, ProjectTrusted: projectTrusted,
+		HookCatalog: hookCatalog, HookPolicy: hookRuntime,
 		SessionID: logger.ID(),
 		Model:     cfg.Model, Instructions: cfg.SystemPrompt, MaxSteps: cfg.MaxSteps,
 		TextOutput: stdout, StatusOutput: stderr,
@@ -873,6 +875,7 @@ type sessionPluginState struct {
 	inventory []plugin.Plugin
 	hooks     *hooks.Catalog
 	hookRun   *hooks.Runtime
+	hookCfg   hooks.Config
 }
 
 func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []string, tokenProvider api.TokenProvider, stdin io.Reader, stdout, stderr io.Writer) error {
@@ -1028,7 +1031,10 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			lspSource: sessionBase,
 			inventory: append([]plugin.Plugin(nil), plugins...),
 		}
-		pluginState.hooks = hooks.DiscoverPlugins(plugins)
+		pluginState.hookCfg = hooks.Config{
+			WorkspaceRoot: ws.Root(), Compat: sessionCfg.Compat, ProjectTrusted: projectTrusted, Plugins: plugins,
+		}
+		pluginState.hooks = hooks.Discover(pluginState.hookCfg)
 		pluginState.hookRun = &hooks.Runtime{
 			Catalog: pluginState.hooks, WorkspaceRoot: ws.Root(), SessionID: logger.ID(), Model: sessionCfg.Model,
 		}
@@ -1130,13 +1136,15 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			extensionsMu.Unlock()
 			for _, state := range states {
 				state.updateMu.Lock()
+				trusted := workspace.ResolveFolderTrust(state.root, cfg.FolderTrustEnabled, false) == workspace.TrustTrusted
 				extensionsMu.Lock()
 				previousInventory := append([]plugin.Plugin(nil), state.inventory...)
+				previousTrusted := state.trusted
 				mcpSource := state.mcpSource
 				extensionsMu.Unlock()
 				inventory, err := plugin.Inventory(state.root, plugin.Config{
 					Paths: settings.Paths, Enabled: settings.Enabled, Disabled: settings.Disabled,
-					ProjectTrusted: state.trusted,
+					ProjectTrusted: trusted,
 				})
 				if err != nil {
 					state.updateMu.Unlock()
@@ -1147,7 +1155,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 					return nil, err
 				}
 				mcpBase := mcpSource
-				mcpBase.MCPServers = config.DiscoverMCPServers(state.root, mcpBase, enabledPlugins(inventory), state.trusted)
+				mcpBase.MCPServers = config.DiscoverMCPServers(state.root, mcpBase, enabledPlugins(inventory), trusted)
 				if err := state.mcp.UpdateBase(updateCtx, mcpBase); err != nil {
 					rollbackErr := state.catalog.ReconfigurePlugins(enabledPlugins(previousInventory))
 					state.updateMu.Unlock()
@@ -1157,14 +1165,14 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 					return nil, err
 				}
 				lspBase := state.lspSource
-				lspBase.LSPServers = config.DiscoverLSPServers(state.root, lspBase, enabledPlugins(inventory), state.trusted)
+				lspBase.LSPServers = config.DiscoverLSPServers(state.root, lspBase, enabledPlugins(inventory), trusted)
 				if err := state.updateLSP(lspBase); err != nil {
 					var rollbackErr error
 					if catalogErr := state.catalog.ReconfigurePlugins(enabledPlugins(previousInventory)); catalogErr != nil {
 						rollbackErr = errors.Join(rollbackErr, catalogErr)
 					}
 					previousMCP := mcpSource
-					previousMCP.MCPServers = config.DiscoverMCPServers(state.root, previousMCP, enabledPlugins(previousInventory), state.trusted)
+					previousMCP.MCPServers = config.DiscoverMCPServers(state.root, previousMCP, enabledPlugins(previousInventory), previousTrusted)
 					if mcpErr := state.mcp.UpdateBase(updateCtx, previousMCP); mcpErr != nil {
 						rollbackErr = errors.Join(rollbackErr, mcpErr)
 					}
@@ -1173,8 +1181,11 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 				}
 				extensionsMu.Lock()
 				state.inventory = append([]plugin.Plugin(nil), inventory...)
+				state.trusted = trusted
 				extensionsMu.Unlock()
-				state.hooks.ReplacePlugins(inventory)
+				state.hookCfg.Plugins = inventory
+				state.hookCfg.ProjectTrusted = trusted
+				state.hooks.Reconfigure(state.hookCfg)
 				state.updateMu.Unlock()
 			}
 			return pluginInventory(), nil
@@ -1196,12 +1207,16 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		}
 		return &agent.Runner{
 			Client: modelClient, Tools: registry, Skills: catalog, PluginInventory: pluginInventory, Logger: logger,
-			HookCatalog: pluginState.hooks, HookPolicy: pluginState.hookRun, ProjectTrusted: projectTrusted,
+			HookCatalog: pluginState.hooks, HookPolicy: pluginState.hookRun,
 			ReloadHooks: func() error {
+				pluginState.updateMu.Lock()
+				defer pluginState.updateMu.Unlock()
 				extensionsMu.Lock()
 				inventory := append([]plugin.Plugin(nil), pluginState.inventory...)
 				extensionsMu.Unlock()
-				pluginState.hooks.ReplacePlugins(inventory)
+				pluginState.hookCfg.Plugins = inventory
+				pluginState.hookCfg.ProjectTrusted = workspace.ResolveFolderTrust(pluginState.root, cfg.FolderTrustEnabled, false) == workspace.TrustTrusted
+				pluginState.hooks.Reconfigure(pluginState.hookCfg)
 				return nil
 			},
 			Model: sessionCfg.Model, Instructions: instructions, MaxSteps: cfg.MaxSteps,

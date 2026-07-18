@@ -13,6 +13,7 @@ func (s *Server) handleHooks(ctx context.Context, incoming message) {
 		SessionID string `json:"sessionId"`
 		Action    struct {
 			Type       string   `json:"type"`
+			Path       string   `json:"path"`
 			HookName   string   `json:"hook_name"`
 			HookName2  string   `json:"hookName"`
 			HookNames  []string `json:"hook_names"`
@@ -34,7 +35,7 @@ func (s *Server) handleHooks(ctx context.Context, incoming message) {
 		if len(names) == 0 {
 			names = req.Action.HookNames2
 		}
-		s.handleHookAction(ctx, incoming, current, req.Action.Type, firstString(req.Action.HookName, req.Action.HookName2), names, req.Action.Disable)
+		s.handleHookAction(ctx, incoming, current, req.Action.Type, req.Action.Path, firstString(req.Action.HookName, req.Action.HookName2), names, req.Action.Disable)
 		return
 	}
 	snapshot := hooks.Snapshot{}
@@ -59,11 +60,11 @@ func (s *Server) handleHooks(ctx context.Context, incoming message) {
 		items = append(items, wire)
 	}
 	s.respond(incoming.ID, map[string]any{"result": map[string]any{
-		"hooks": items, "projectTrusted": current.runner.ProjectTrusted, "loadErrors": snapshot.LoadErrors,
+		"hooks": items, "projectTrusted": current.runner.HookCatalog != nil && current.runner.HookCatalog.ProjectTrusted(), "loadErrors": snapshot.LoadErrors,
 	}, "error": nil})
 }
 
-func (s *Server) handleHookAction(ctx context.Context, incoming message, current *session, action, hookName string, hookNames []string, disable bool) {
+func (s *Server) handleHookAction(ctx context.Context, incoming message, current *session, action, path, hookName string, hookNames []string, disable bool) {
 	switch action {
 	case "reload":
 		if current.runner.ReloadHooks == nil {
@@ -96,19 +97,61 @@ func (s *Server) handleHookAction(ctx context.Context, incoming message, current
 		}
 		s.hookActionOutcome(incoming, "success", "Hook source state updated.", true, false)
 	case "trust":
-		if err := workspace.GrantFolderTrust(ctx, current.cwd); err != nil {
+		root, ok := workspace.FindGitRoot(current.cwd)
+		if !ok {
+			s.hookActionOutcome(incoming, "validation_error", "Project hooks require a Git worktree.", false, false)
+			return
+		}
+		if err := workspace.GrantFolderTrust(ctx, root); err != nil {
 			s.hookActionOutcome(incoming, "error", err.Error(), false, false)
 			return
 		}
-		s.hookActionOutcome(incoming, "success", "Workspace trusted. Restart the session to load project hooks.", false, true)
+		if current.runner.UpdatePlugins != nil {
+			if _, err := current.runner.UpdatePlugins(ctx, nil); err != nil {
+				s.hookActionOutcome(incoming, "error", err.Error(), false, false)
+				return
+			}
+		} else if current.runner.ReloadHooks != nil {
+			_ = current.runner.ReloadHooks()
+		}
+		s.hookActionOutcome(incoming, "success", "Workspace trusted and executable components reloaded.", false, false)
 	case "untrust":
-		if err := workspace.RevokeFolderTrust(ctx, current.cwd); err != nil {
+		root, ok := workspace.FindGitRoot(current.cwd)
+		if !ok {
+			s.hookActionOutcome(incoming, "validation_error", "Project hooks require a Git worktree.", false, false)
+			return
+		}
+		if err := workspace.RevokeFolderTrust(ctx, root); err != nil {
 			s.hookActionOutcome(incoming, "error", err.Error(), false, false)
 			return
 		}
-		s.hookActionOutcome(incoming, "success", "Workspace untrusted. Restart the session to unload project hooks.", false, true)
+		if current.runner.UpdatePlugins != nil {
+			if _, err := current.runner.UpdatePlugins(ctx, nil); err != nil {
+				s.hookActionOutcome(incoming, "error", err.Error(), false, false)
+				return
+			}
+		} else if current.runner.ReloadHooks != nil {
+			_ = current.runner.ReloadHooks()
+		}
+		s.hookActionOutcome(incoming, "success", "Workspace untrusted and project components unloaded.", false, false)
 	case "add", "remove":
-		s.hookActionOutcome(incoming, "unsupported", "Custom hook paths are not supported yet.", false, false)
+		var err error
+		if action == "add" {
+			err = hooks.AddPath(ctx, path)
+		} else {
+			err = hooks.RemovePath(ctx, path)
+		}
+		if err != nil {
+			s.hookActionOutcome(incoming, "validation_error", err.Error(), false, false)
+			return
+		}
+		if current.runner.ReloadHooks != nil {
+			if err := current.runner.ReloadHooks(); err != nil {
+				s.hookActionOutcome(incoming, "error", err.Error(), false, false)
+				return
+			}
+		}
+		s.hookActionOutcome(incoming, "success", "Hook path updated.", false, false)
 	default:
 		s.hookActionOutcome(incoming, "validation_error", "Unknown hook action.", false, false)
 	}

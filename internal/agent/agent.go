@@ -43,7 +43,9 @@ type HookPolicy interface {
 	UserPromptSubmitted(context.Context, string)
 	BeforeTool(context.Context, api.ToolCall) error
 	AfterTool(context.Context, api.ToolCall, tools.ExecutionResult, error)
-	Stopped(context.Context, string)
+	Stopped(context.Context, string, error)
+	BeforeCompact(context.Context, string)
+	AfterCompact(context.Context, string)
 }
 
 type HistoryResetter interface {
@@ -60,7 +62,6 @@ type Runner struct {
 	Skills                  *skills.Catalog
 	PluginInventory         func() []plugin.Plugin
 	HookCatalog             *hooks.Catalog
-	ProjectTrusted          bool
 	ReloadHooks             func() error
 	Logger                  EventLogger
 	SessionID               string
@@ -107,7 +108,7 @@ func (r *Runner) RunTurnParts(ctx context.Context, prompt string, parts []api.Co
 	return r.runTurn(ctx, prompt, parts, previousResponseID)
 }
 
-func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previousResponseID string) (Result, error) {
+func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previousResponseID string) (final Result, runErr error) {
 	if r.Client == nil || r.Tools == nil {
 		return Result{}, errors.New("agent client and tools are required")
 	}
@@ -117,6 +118,13 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 	if r.HookPolicy != nil {
 		r.hookStart.Do(func() { r.HookPolicy.SessionStarted(ctx) })
 		r.HookPolicy.UserPromptSubmitted(ctx, prompt)
+		defer func() {
+			reason := "completed"
+			if runErr != nil {
+				reason = "failed"
+			}
+			r.HookPolicy.Stopped(ctx, reason, runErr)
+		}()
 	}
 	if r.MaxSteps < 1 {
 		r.MaxSteps = 20
@@ -128,7 +136,7 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 		instructions = defaultInstructions + "\n\nAdditional user instructions:\n" + instructions
 	}
 	if r.shouldCompact(previousResponseID) {
-		_, err := r.Compact(ctx, previousResponseID)
+		_, err := r.compact(ctx, previousResponseID, "auto")
 		if err != nil {
 			r.log("compaction_error", map[string]any{"error": err.Error(), "input_tokens": r.lastInputTokens})
 		} else {
@@ -163,8 +171,6 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 	}
 
 	input := []api.InputItem{{Type: "message", Role: "user", Content: content}}
-	var final Result
-
 	for step := 1; step <= r.MaxSteps; step++ {
 		if r.Skills != nil {
 			if reminder := r.Skills.DrainReminder(); reminder != "" {
@@ -204,9 +210,6 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 		})
 
 		if len(streamed.ToolCalls) == 0 {
-			if r.HookPolicy != nil {
-				r.HookPolicy.Stopped(ctx, "completed")
-			}
 			return final, nil
 		}
 		if streamed.ResponseID == "" {
@@ -283,8 +286,15 @@ func (r *Runner) shouldCompact(previousResponseID string) bool {
 }
 
 func (r *Runner) Compact(ctx context.Context, previousResponseID string) (string, error) {
+	return r.compact(ctx, previousResponseID, "manual")
+}
+
+func (r *Runner) compact(ctx context.Context, previousResponseID, source string) (string, error) {
 	if previousResponseID == "" {
 		return "", errors.New("no completed response is available to compact")
+	}
+	if r.HookPolicy != nil {
+		r.HookPolicy.BeforeCompact(ctx, source)
 	}
 	request := api.ResponseRequest{
 		Model:        r.Model,
@@ -310,6 +320,9 @@ func (r *Runner) Compact(ctx context.Context, previousResponseID string) (string
 	}
 	r.log("context_compacted", map[string]any{"summary": summary})
 	r.status("context compacted")
+	if r.HookPolicy != nil {
+		r.HookPolicy.AfterCompact(ctx, source)
+	}
 	return summary, nil
 }
 

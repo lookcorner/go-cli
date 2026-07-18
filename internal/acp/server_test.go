@@ -788,6 +788,7 @@ func TestHooksListAndDisableWireContract(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("GROK_HOME", home)
 	root := t.TempDir()
+	runACPGit(t, root, "init", "-q")
 	hooksRoot := filepath.Join(root, "hooks")
 	if err := os.MkdirAll(hooksRoot, 0o700); err != nil {
 		t.Fatal(err)
@@ -796,10 +797,10 @@ func TestHooksListAndDisableWireContract(t *testing.T) {
 	if err := os.WriteFile(hooksPath, []byte(`{"hooks":{"PreToolUse":[{"matcher":"shell","hooks":[{"type":"command","command":"check","timeout":2}]}]}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	catalog := hooks.DiscoverPlugins([]plugin.Plugin{{Name: "guard", Root: root, HooksConfig: hooksPath, Executable: true}})
+	catalog := hooks.Discover(hooks.Config{ProjectTrusted: true, Plugins: []plugin.Plugin{{Name: "guard", Root: root, HooksConfig: hooksPath, Executable: true}}})
 	reloads := 0
 	current := &session{id: "hook-session", cwd: root, runner: &agent.Runner{
-		HookCatalog: catalog, ProjectTrusted: true, ReloadHooks: func() error { reloads++; return nil },
+		HookCatalog: catalog, ReloadHooks: func() error { reloads++; return nil },
 	}}
 	request := func(method, params string) map[string]any {
 		var output bytes.Buffer
@@ -825,6 +826,31 @@ func TestHooksListAndDisableWireContract(t *testing.T) {
 	request("x.ai/hooks/action", `{"sessionId":"hook-session","action":{"type":"reload"}}`)
 	if reloads != 1 {
 		t.Fatalf("reloads=%d", reloads)
+	}
+	custom := filepath.Join(home, "custom", "hooks.json")
+	if err := os.MkdirAll(filepath.Dir(custom), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(custom, []byte(`{"hooks":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	added := request("x.ai/hooks/action", `{"sessionId":"hook-session","action":{"type":"add","path":`+strconv.Quote(custom)+`}}`)
+	if added["status"] != "success" || reloads != 2 {
+		t.Fatalf("added=%#v reloads=%d", added, reloads)
+	}
+	removed := request("x.ai/hooks/action", `{"sessionId":"hook-session","action":{"type":"remove","path":`+strconv.Quote(custom)+`}}`)
+	if removed["status"] != "success" || reloads != 3 {
+		t.Fatalf("removed=%#v reloads=%d", removed, reloads)
+	}
+	componentReloads := 0
+	current.runner.UpdatePlugins = func(context.Context, func(*plugin.Settings)) ([]plugin.Plugin, error) {
+		componentReloads++
+		return nil, nil
+	}
+	trusted := request("x.ai/hooks/action", `{"sessionId":"hook-session","action":{"type":"trust"}}`)
+	untrusted := request("x.ai/hooks/action", `{"sessionId":"hook-session","action":{"type":"untrust"}}`)
+	if trusted["status"] != "success" || untrusted["status"] != "success" || trusted["requiresRestart"] != false || untrusted["requiresRestart"] != false || componentReloads != 2 {
+		t.Fatalf("trusted=%#v untrusted=%#v reloads=%d", trusted, untrusted, componentReloads)
 	}
 }
 

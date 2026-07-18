@@ -267,6 +267,7 @@ type fileVendorCompat struct {
 	Rules  *bool `json:"rules,omitempty" toml:"rules"`
 	Agents *bool `json:"agents,omitempty" toml:"agents"`
 	Mcps   *bool `json:"mcps,omitempty" toml:"mcps"`
+	Hooks  *bool `json:"hooks,omitempty" toml:"hooks"`
 }
 
 type fileCompatConfig struct {
@@ -499,6 +500,9 @@ func applyVendorCompat(target *compat.Vendor, source fileVendorCompat) {
 	}
 	if source.Mcps != nil {
 		target.Mcps = *source.Mcps
+	}
+	if source.Hooks != nil {
+		target.Hooks = *source.Hooks
 	}
 }
 
@@ -926,6 +930,7 @@ func applyCompatEnv(target *compat.Vendor, vendor string) {
 		"RULES":  &target.Rules,
 		"AGENTS": &target.Agents,
 		"MCPS":   &target.Mcps,
+		"HOOKS":  &target.Hooks,
 	} {
 		if value, ok := envBool("GROK_" + vendor + "_" + surface + "_ENABLED"); ok {
 			*field = value

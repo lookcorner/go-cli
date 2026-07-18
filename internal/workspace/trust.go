@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -148,6 +149,18 @@ func ProjectExecutionConfigPresent(cwd string) bool {
 			filepath.Join(scope, ".claude", "plugins"),
 		} {
 			if hasSubdirectory(path) {
+				return true
+			}
+		}
+		if hasHookFile(filepath.Join(scope, ".grok", "hooks")) {
+			return true
+		}
+		for _, path := range []string{
+			filepath.Join(scope, ".cursor", "hooks.json"),
+			filepath.Join(scope, ".claude", "settings.json"),
+			filepath.Join(scope, ".claude", "settings.local.json"),
+		} {
+			if hasConfiguredHooks(path) {
 				return true
 			}
 		}
@@ -305,6 +318,30 @@ func hasSubdirectory(path string) bool {
 		}
 	}
 	return false
+}
+
+func hasHookFile(path string) bool {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".json" && !strings.HasPrefix(entry.Name(), ".") {
+			return true
+		}
+	}
+	return false
+}
+
+func hasConfiguredHooks(path string) bool {
+	data, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		return false
+	}
+	var value struct {
+		Hooks map[string]json.RawMessage `json:"hooks"`
+	}
+	return json.Unmarshal(data, &value) == nil && len(value.Hooks) > 0
 }
 
 func unsafeTrustRoot(path, home string) bool {

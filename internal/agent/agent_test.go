@@ -36,6 +36,33 @@ type denyingHookPolicy struct {
 	stopped []string
 }
 
+type lifecycleHookPolicy struct {
+	stopErr error
+	events  []string
+}
+
+func (*lifecycleHookPolicy) SessionStarted(context.Context)                 {}
+func (*lifecycleHookPolicy) UserPromptSubmitted(context.Context, string)    {}
+func (*lifecycleHookPolicy) BeforeTool(context.Context, api.ToolCall) error { return nil }
+func (*lifecycleHookPolicy) AfterTool(context.Context, api.ToolCall, tools.ExecutionResult, error) {
+}
+func (p *lifecycleHookPolicy) Stopped(_ context.Context, reason string, err error) {
+	p.events = append(p.events, "stop:"+reason)
+	p.stopErr = err
+}
+func (p *lifecycleHookPolicy) BeforeCompact(_ context.Context, source string) {
+	p.events = append(p.events, "pre:"+source)
+}
+func (p *lifecycleHookPolicy) AfterCompact(_ context.Context, source string) {
+	p.events = append(p.events, "post:"+source)
+}
+
+type failingStreamer struct{ err error }
+
+func (f failingStreamer) StreamResponse(context.Context, api.ResponseRequest, func(string)) (api.StreamResult, error) {
+	return api.StreamResult{}, f.err
+}
+
 func (p *denyingHookPolicy) SessionStarted(context.Context) { p.started++ }
 func (p *denyingHookPolicy) UserPromptSubmitted(_ context.Context, prompt string) {
 	p.prompts = append(p.prompts, prompt)
@@ -47,9 +74,11 @@ func (p *denyingHookPolicy) BeforeTool(_ context.Context, call api.ToolCall) err
 func (p *denyingHookPolicy) AfterTool(_ context.Context, call api.ToolCall, _ tools.ExecutionResult, _ error) {
 	p.after = append(p.after, call.Name)
 }
-func (p *denyingHookPolicy) Stopped(_ context.Context, reason string) {
+func (p *denyingHookPolicy) Stopped(_ context.Context, reason string, _ error) {
 	p.stopped = append(p.stopped, reason)
 }
+func (*denyingHookPolicy) BeforeCompact(context.Context, string) {}
+func (*denyingHookPolicy) AfterCompact(context.Context, string)  {}
 
 func (*recordingToolObserver) ToolStarted(api.ToolCall) {}
 
@@ -84,6 +113,35 @@ func TestRunnerHookPolicyCanDenyBeforeToolExecution(t *testing.T) {
 	}
 	if len(streamer.requests) != 2 || !strings.Contains(streamer.requests[1].Input[0].Output, "blocked by policy") || len(observer.results) != 1 {
 		t.Fatalf("requests=%#v observer=%#v", streamer.requests, observer)
+	}
+}
+
+func TestRunnerReportsFailureAndCompactionHookLifecycle(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := &lifecycleHookPolicy{}
+	runner := Runner{
+		Client: failingStreamer{err: errors.New("model unavailable")},
+		Tools:  tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto}), HookPolicy: policy,
+	}
+	defer runner.Tools.Close()
+	if _, err := runner.Run(context.Background(), "inspect"); err == nil {
+		t.Fatal("model failure was lost")
+	}
+	if policy.stopErr == nil || strings.Join(policy.events, "|") != "stop:failed" {
+		t.Fatalf("policy=%#v", policy)
+	}
+
+	policy.events = nil
+	streamer := &fakeStreamer{results: []api.StreamResult{{ResponseID: "summary", Text: "state"}}}
+	runner.Client, runner.HookPolicy = streamer, policy
+	if _, err := runner.Compact(context.Background(), "previous"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(policy.events, "|") != "pre:manual|post:manual" {
+		t.Fatalf("compact events=%#v", policy.events)
 	}
 }
 

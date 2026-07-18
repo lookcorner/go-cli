@@ -69,8 +69,10 @@ hard_clear_age_turns = 10
 
 # [compat.cursor]
 # mcps = false
+# hooks = false
 # [compat.claude]
 # mcps = false
+# hooks = false
 
 [mcp_servers.example]
 command = "example-mcp-server"

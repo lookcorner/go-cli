@@ -671,10 +671,14 @@ redirect targets. Hook names disabled through ACP persist one per line in
 
 ACP `x.ai/hooks/list` exposes loaded hook metadata and parse warnings;
 `x.ai/hooks/action` supports reload, enable, disable, source toggles, and folder
-trust changes. Custom hook-path add/remove is not implemented yet. The runtime
-currently fires plugin `SessionStart`, `UserPromptSubmit`, `PreToolUse`,
-`PostToolUse`, `Stop`, and `SessionEnd` events; project/global non-plugin hook
-sources and the other event producers remain.
+trust changes plus confined custom-path add/remove. Global discovery reads
+Claude settings, `$GROK_HOME/hooks`, `$GROK_HOME/hooks-paths`, and Cursor hooks;
+trusted projects contribute the corresponding repo settings and `.grok/hooks`.
+Vendor sources honor the `compat.<vendor>.hooks` gate. The runtime fires
+`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`,
+`PostToolUseFailure`, `Stop`, `StopFailure`, `PreCompact`, `PostCompact`, and
+`SessionEnd`; notification, permission-denied, and subagent event producers
+remain.
 
 Plugin `agents/*.md` definitions are parsed from YAML frontmatter and reported
 as names/counts in plugin inventory. Their prompt, tool allow/deny lists, and
@@ -744,6 +748,7 @@ skills = false
 rules = false
 agents = false
 mcps = false
+hooks = false
 ```
 
 ## Privacy
