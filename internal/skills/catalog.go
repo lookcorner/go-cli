@@ -45,6 +45,7 @@ type Skill struct {
 	Source                 string
 	Paths                  []string
 	WhenToUse              string
+	UserInvocable          bool
 	DisableModelInvocation bool
 	baseName               string
 	scope                  string
@@ -307,7 +308,7 @@ func (c *Catalog) loadSkill(path string, info os.FileInfo, root skillRoot, comma
 	wasActive := c.removePath(real)
 	skill := Skill{
 		Name: metadata.Name, Description: metadata.Description, Path: real, Source: root.source,
-		Paths: metadata.Paths, WhenToUse: metadata.WhenToUse,
+		Paths: metadata.Paths, WhenToUse: metadata.WhenToUse, UserInvocable: metadata.UserInvocable,
 		baseName: normalizeSkillName(fallbackName), scope: root.scope,
 		frontmatterDisabled: metadata.DisableModelInvocation, digest: sha256.Sum256(data),
 	}
@@ -798,13 +799,24 @@ func (c *Catalog) modelSkillNamesLocked() []string {
 	return names
 }
 
+func (c *Catalog) toolSkillNamesLocked() []string {
+	names := make([]string, 0, len(c.byName))
+	for name, skill := range c.byName {
+		if skill.UserInvocable && !skill.DisableModelInvocation {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
 func (c *Catalog) Tool() *Tool { return &Tool{catalog: c} }
 
 type Tool struct{ catalog *Catalog }
 
 func (t *Tool) Definition() api.ToolDefinition {
 	t.catalog.mu.RLock()
-	names := t.catalog.modelSkillNamesLocked()
+	names := t.catalog.toolSkillNamesLocked()
 	t.catalog.mu.RUnlock()
 	nameSchema := map[string]any{"type": "string"}
 	if len(names) > 0 {
@@ -831,7 +843,7 @@ func (t *Tool) Execute(_ context.Context, raw json.RawMessage) (string, error) {
 	t.catalog.mu.RLock()
 	skill, ok := t.catalog.byName[args.Name]
 	t.catalog.mu.RUnlock()
-	if !ok || skill.DisableModelInvocation {
+	if !ok || !skill.UserInvocable || skill.DisableModelInvocation {
 		return "", fmt.Errorf("unknown skill %q", args.Name)
 	}
 	data, err := os.ReadFile(skill.Path)
@@ -852,12 +864,13 @@ type skillMetadata struct {
 	Description            string
 	Paths                  []string
 	WhenToUse              string
+	UserInvocable          bool
 	DisableModelInvocation bool
 }
 
 func parseMetadata(content, fallbackName string) skillMetadata {
 	fallbackName = normalizeSkillName(fallbackName)
-	result := skillMetadata{Name: fallbackName}
+	result := skillMetadata{Name: fallbackName, UserInvocable: true}
 	body := content
 	if !strings.HasPrefix(content, "---\n") {
 		result.Description = capSkillText(descriptionFromBody(body, result.Name))
@@ -875,6 +888,7 @@ func parseMetadata(content, fallbackName string) skillMetadata {
 		Paths                  yaml.Node `yaml:"paths"`
 		WhenToUse              yaml.Node `yaml:"when-to-use"`
 		WhenToUseAlias         yaml.Node `yaml:"when_to_use"`
+		UserInvocable          yaml.Node `yaml:"user-invocable"`
 		DisableModelInvocation yaml.Node `yaml:"disable-model-invocation"`
 	}
 	if yaml.Unmarshal([]byte(content[4:4+end]), &metadata) != nil {
@@ -898,6 +912,9 @@ func parseMetadata(content, fallbackName string) skillMetadata {
 	}
 	if whenToUse.Kind == yaml.ScalarNode {
 		result.WhenToUse = capSkillText(whenToUse.Value)
+	}
+	if metadata.UserInvocable.Kind != 0 {
+		result.UserInvocable = metadata.UserInvocable.Kind == yaml.ScalarNode && strings.EqualFold(metadata.UserInvocable.Value, "true")
 	}
 	result.DisableModelInvocation = metadata.DisableModelInvocation.Kind == yaml.ScalarNode && strings.EqualFold(metadata.DisableModelInvocation.Value, "true")
 	result.Paths = parseSkillPaths(metadata.Paths)

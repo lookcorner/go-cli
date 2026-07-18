@@ -427,6 +427,8 @@ available under their normalized directory names. Cross-scope collisions still
 use the normal workspace-over-user priority.
 Skills with a scalar or list `paths` value in YAML frontmatter stay hidden until a successful
 file read, directory listing, or edit touches a matching path.
+`user-invocable: false` keeps a Skill in the model-facing catalog but removes it
+from the Skill tool; only the literal YAML value `true` enables invocation.
 
 The `[skills]` config accepts additional directories or individual `SKILL.md`
 files. Paths support `~`; relative paths resolve from the workspace. `ignore`

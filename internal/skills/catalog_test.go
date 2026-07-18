@@ -45,9 +45,11 @@ func TestCatalogScanAndTool(t *testing.T) {
 func TestSkillInvocationMetadataControlsToolVisibility(t *testing.T) {
 	root := t.TempDir()
 	for name, frontmatter := range map[string]string{
-		"callable": "when-to-use: User asks to deploy",
-		"manual":   "disable-model-invocation: true",
-		"yes":      "disable-model-invocation: yes",
+		"callable":   "when-to-use: User asks to deploy",
+		"manual":     "disable-model-invocation: true",
+		"slash-only": "user-invocable: false",
+		"user-yes":   "user-invocable: yes",
+		"yes":        "disable-model-invocation: yes",
 	} {
 		dir := filepath.Join(root, name)
 		if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -63,14 +65,20 @@ func TestSkillInvocationMetadataControlsToolVisibility(t *testing.T) {
 		t.Fatal(err)
 	}
 	definition := catalog.Tool().Definition()
-	if !strings.Contains(definition.Description, "callable") || !strings.Contains(definition.Description, "yes") || strings.Contains(definition.Description, "manual") {
+	if !strings.Contains(definition.Description, "callable") || !strings.Contains(definition.Description, "yes") || strings.Contains(definition.Description, "manual") || strings.Contains(definition.Description, "slash-only") || strings.Contains(definition.Description, "user-yes") {
 		t.Fatalf("unexpected callable skill names: %s", definition.Description)
 	}
-	if summary := catalog.Summary(); !strings.Contains(summary, "Use when: User asks to deploy") || !strings.Contains(summary, "Absolute path:") || strings.Contains(summary, "manual") {
+	if summary := catalog.Summary(); !strings.Contains(summary, "Use when: User asks to deploy") || !strings.Contains(summary, "Absolute path:") || !strings.Contains(summary, "slash-only") || !strings.Contains(summary, "user-yes") || !strings.Contains(summary, "yes") || strings.Contains(summary, "manual") {
 		t.Fatalf("metadata missing from summary: %s", summary)
 	}
 	if _, err := catalog.Tool().Execute(context.Background(), json.RawMessage(`{"name":"manual"}`)); err == nil {
 		t.Fatal("non-model-invocable skill was accepted")
+	}
+	if _, err := catalog.Tool().Execute(context.Background(), json.RawMessage(`{"name":"slash-only"}`)); err == nil {
+		t.Fatal("non-user-invocable skill was accepted")
+	}
+	if _, err := catalog.Tool().Execute(context.Background(), json.RawMessage(`{"name":"user-yes"}`)); err == nil {
+		t.Fatal("non-literal true must not enable user invocation")
 	}
 	if _, err := catalog.Tool().Execute(context.Background(), json.RawMessage(`{"name":"yes"}`)); err != nil {
 		t.Fatalf("non-literal true must not disable model invocation: %v", err)
