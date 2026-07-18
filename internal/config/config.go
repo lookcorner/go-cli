@@ -506,7 +506,7 @@ func firstConfiguredEnv(value any) string {
 
 func (c Config) Validate() error {
 	if c.APIKey == "" {
-		return errors.New("missing API key: set GORK_API_KEY or XAI_API_KEY")
+		return errors.New("missing credentials: set GORK_API_KEY or XAI_API_KEY, or run gork login")
 	}
 	if c.Model == "" {
 		return errors.New("missing model: pass --model or set GORK_MODEL")

@@ -1,11 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/lookcorner/go-cli/internal/api"
+	"github.com/lookcorner/go-cli/internal/auth"
 	"github.com/lookcorner/go-cli/internal/config"
 	"github.com/lookcorner/go-cli/internal/mcp"
 	"github.com/lookcorner/go-cli/internal/tools"
@@ -60,5 +67,51 @@ func TestMCPSamplingRequiresApproval(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "permission denied") {
 		t.Fatalf("unexpected approval error: %v", err)
+	}
+}
+
+func TestLoginRejectsDisabledDeviceAuthWithoutNetwork(t *testing.T) {
+	err := run([]string{"login", "--device-auth=false"}, strings.NewReader(""), io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "only device authentication") {
+		t.Fatalf("unexpected login error: %v", err)
+	}
+}
+
+func TestXAIBaseURLDetection(t *testing.T) {
+	if !isXAIBaseURL("https://api.x.ai/v1") || isXAIBaseURL("https://api.x.ai.example/v1") || isXAIBaseURL("https://provider.example/v1") {
+		t.Fatal("xAI base URL detection is incorrect")
+	}
+}
+
+func TestRunLoginDeviceFlow(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/oauth2/device/code":
+			_ = json.NewEncoder(writer).Encode(map[string]any{
+				"device_code": "device-1", "user_code": "ABCD-1234",
+				"verification_uri": "http://127.0.0.1/verify", "expires_in": 600, "interval": 1,
+			})
+		case "/oauth2/token":
+			_ = json.NewEncoder(writer).Encode(map[string]any{"access_token": "access-1", "refresh_token": "refresh-1", "expires_in": 3600})
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+	authFile := filepath.Join(t.TempDir(), "auth.json")
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"login", "--issuer", server.URL, "--client-id", "client-1", "--scopes", "openid", "--auth-file", authFile,
+	}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "Signed in") || !strings.Contains(stderr.String(), "ABCD-1234") {
+		t.Fatalf("unexpected login output: stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	credential, err := auth.Load(authFile, (auth.Config{Issuer: server.URL, ClientID: "client-1"}).Scope())
+	if err != nil || credential.Key != "access-1" || credential.RefreshToken != "refresh-1" {
+		t.Fatalf("stored credential=%#v err=%v", credential, err)
 	}
 }

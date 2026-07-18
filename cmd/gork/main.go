@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -20,6 +21,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/acp"
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/api"
+	"github.com/lookcorner/go-cli/internal/auth"
 	"github.com/lookcorner/go-cli/internal/config"
 	"github.com/lookcorner/go-cli/internal/lsp"
 	"github.com/lookcorner/go-cli/internal/mcp"
@@ -72,6 +74,9 @@ func main() {
 }
 
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
+	if len(args) > 0 && args[0] == "login" {
+		return runLogin(args[1:], stdout, stderr)
+	}
 	var opts options
 	flags := flag.NewFlagSet("gork", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -96,7 +101,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	flags.IntVar(&opts.goalRuns, "goal-runs", 10, "maximum turns in --goal mode")
 	flags.BoolVar(&opts.acp, "acp", false, "serve Agent Client Protocol v1 over stdio")
 	flags.Usage = func() {
-		fmt.Fprintf(stderr, "Usage: gork [flags] [prompt]\n\n")
+		fmt.Fprintf(stderr, "Usage: gork [flags] [prompt]\n       gork login --device-auth\n\n")
 		flags.PrintDefaults()
 	}
 	if err := flags.Parse(args); err != nil {
@@ -137,6 +142,18 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 	if opts.maxSteps > 0 {
 		cfg.MaxSteps = opts.maxSteps
+	}
+	if cfg.APIKey == "" && isXAIBaseURL(cfg.BaseURL) {
+		path, pathErr := auth.DefaultPath()
+		if pathErr != nil {
+			return pathErr
+		}
+		token, authErr := auth.NewClient(&http.Client{Timeout: cfg.HTTPTimeout}).Resolve(context.Background(), path, auth.DefaultConfig())
+		if authErr == nil {
+			cfg.APIKey = token
+		} else if !errors.Is(authErr, os.ErrNotExist) {
+			return fmt.Errorf("load OAuth credentials: %w", authErr)
+		}
 	}
 	allowRules, askRules, denyRules, err := permissionRules(cfg.Permission, opts.allow, opts.deny)
 	if err != nil {
@@ -326,6 +343,67 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		fmt.Fprintln(stdout)
 	}
 	return nil
+}
+
+func runLogin(args []string, stdout, stderr io.Writer) error {
+	cfg := auth.DefaultConfig()
+	var authFile, scopes string
+	var deviceAuth bool
+	flags := flag.NewFlagSet("gork login", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	flags.BoolVar(&deviceAuth, "device-auth", true, "sign in with the OAuth device flow")
+	flags.StringVar(&cfg.Issuer, "issuer", cfg.Issuer, "OAuth issuer")
+	flags.StringVar(&cfg.ClientID, "client-id", cfg.ClientID, "OAuth client ID")
+	flags.StringVar(&scopes, "scopes", strings.Join(cfg.Scopes, " "), "space-separated OAuth scopes")
+	flags.StringVar(&authFile, "auth-file", "", "credential store path")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if !deviceAuth {
+		return errors.New("only device authentication is currently supported")
+	}
+	if len(flags.Args()) > 0 {
+		return fmt.Errorf("unexpected login arguments: %s", strings.Join(flags.Args(), " "))
+	}
+	cfg.Issuer = strings.TrimRight(strings.TrimSpace(cfg.Issuer), "/")
+	cfg.ClientID = strings.TrimSpace(cfg.ClientID)
+	cfg.Scopes = strings.Fields(scopes)
+	if cfg.Issuer == "" || cfg.ClientID == "" || len(cfg.Scopes) == 0 {
+		return errors.New("OAuth issuer, client ID, and scopes are required")
+	}
+	if authFile == "" {
+		var err error
+		authFile, err = auth.DefaultPath()
+		if err != nil {
+			return err
+		}
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	client := auth.NewClient(&http.Client{Timeout: 30 * time.Second})
+	code, err := client.RequestDeviceCode(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	displayURL := code.VerificationURIComplete
+	if displayURL == "" {
+		displayURL = code.VerificationURI
+	}
+	fmt.Fprintf(stderr, "Open this URL to sign in:\n\n  %s\n\nCode: %s\n\nWaiting for authorization...\n", displayURL, code.UserCode)
+	credential, err := client.CompleteDeviceLogin(ctx, cfg, code)
+	if err != nil {
+		return err
+	}
+	if err := auth.Save(authFile, cfg.Scope(), credential); err != nil {
+		return fmt.Errorf("save OAuth credentials: %w", err)
+	}
+	fmt.Fprintln(stdout, "Signed in")
+	return nil
+}
+
+func isXAIBaseURL(raw string) bool {
+	parsed, err := url.Parse(raw)
+	return err == nil && strings.EqualFold(parsed.Hostname(), "api.x.ai")
 }
 
 func newModelClient(cfg config.Config) (agent.ResponseStreamer, error) {

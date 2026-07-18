@@ -41,6 +41,13 @@ export XAI_API_KEY="..."
 export GORK_MODEL="a-responses-compatible-model"
 ```
 
+For the default xAI endpoint, `gork login --device-auth` performs the OAuth
+device flow and stores scoped credentials in `~/.grok/auth.json` (or
+`$GROK_HOME/auth.json`). Gork Go loads that token when no API-key environment
+variable is set and refreshes it within five minutes of expiration. OAuth
+issuer, client ID, and scopes honor `GROK_OAUTH2_*` / `GROK_OIDC_*` environment
+overrides.
+
 The default API base URL is `https://api.x.ai/v1`. Override it with
 `GORK_BASE_URL`, `--base-url`, or a config file. The default path matches Gork
 Build: `~/.grok/config.toml`.
