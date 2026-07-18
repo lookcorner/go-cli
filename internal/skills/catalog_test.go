@@ -43,6 +43,35 @@ func TestCatalogScanAndTool(t *testing.T) {
 	}
 }
 
+func TestCatalogListAndConfigInfo(t *testing.T) {
+	root := t.TempDir()
+	custom := filepath.Join(root, "custom-skills")
+	skillDir := filepath.Join(custom, "deploy")
+	if err := os.MkdirAll(skillDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	content := "---\nname: deploy\ndescription: Deploy the service\nuser-invocable: true\n---\nDeploy steps.\n"
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := discover(root, "", "", Config{Paths: []string{custom}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := catalog.List()
+	if len(items) != 1 || items[0].Name != "deploy" || items[0].Description != "Deploy the service" || !items[0].Enabled || items[0].Scope != "user" {
+		t.Fatalf("unexpected skill info: %#v", items)
+	}
+	config := catalog.ConfigInfo()
+	resolvedCustom, err := filepath.EvalSymlinks(custom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(config.Paths) != 1 || config.Paths[0] != resolvedCustom || config.TotalSkills != 1 || len(config.Skills) != 1 {
+		t.Fatalf("unexpected config info: %#v", config)
+	}
+}
+
 func TestSkillInvocationMetadataControlsToolVisibility(t *testing.T) {
 	root := t.TempDir()
 	for name, frontmatter := range map[string]string{

@@ -69,6 +69,40 @@ type Skill struct {
 	digest                 [sha256.Size]byte
 }
 
+type Info struct {
+	Name                        string            `json:"name"`
+	DisplayName                 string            `json:"display_name,omitempty"`
+	Description                 string            `json:"description"`
+	HasUserSpecifiedDescription bool              `json:"has_user_specified_description"`
+	Paths                       []string          `json:"paths,omitempty"`
+	WhenToUse                   string            `json:"when_to_use,omitempty"`
+	ShortDescription            string            `json:"short_description,omitempty"`
+	Author                      string            `json:"author,omitempty"`
+	ArgumentHint                string            `json:"argument_hint,omitempty"`
+	License                     string            `json:"license,omitempty"`
+	Compatibility               string            `json:"compatibility,omitempty"`
+	Metadata                    map[string]string `json:"metadata,omitempty"`
+	Path                        string            `json:"path"`
+	Scope                       string            `json:"scope"`
+	PluginName                  string            `json:"plugin_name,omitempty"`
+	PluginRoot                  string            `json:"plugin_root,omitempty"`
+	PluginData                  string            `json:"plugin_data,omitempty"`
+	AllowedTools                []string          `json:"allowed_tools,omitempty"`
+	Model                       string            `json:"model,omitempty"`
+	Effort                      string            `json:"effort,omitempty"`
+	UserInvocable               bool              `json:"user_invocable"`
+	DisableModelInvocation      bool              `json:"disable_model_invocation"`
+	Enabled                     bool              `json:"enabled"`
+}
+
+type ConfigInfo struct {
+	Paths       []string `json:"paths"`
+	Ignore      []string `json:"ignore"`
+	TotalSkills int      `json:"totalSkills"`
+	Message     string   `json:"message"`
+	Skills      []Info   `json:"skills"`
+}
+
 type Config struct {
 	Compat   compat.Config
 	Paths    []string
@@ -527,6 +561,57 @@ func (c *Catalog) Count() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return len(c.byName) + len(c.pending)
+}
+
+func (c *Catalog) List() []Info {
+	if c == nil {
+		return []Info{}
+	}
+	c.mu.RLock()
+	result := make([]Info, 0, len(c.byName))
+	for name, skill := range c.byName {
+		result = append(result, skillInfo(skill, !c.disabled[name] && !c.disabled[qualifiedSkillName(skill)]))
+	}
+	c.mu.RUnlock()
+	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
+	return result
+}
+
+func (c *Catalog) ConfigInfo() ConfigInfo {
+	if c == nil {
+		return ConfigInfo{Paths: []string{}, Ignore: []string{}, Skills: []Info{}, Message: "Total skills loaded: 0"}
+	}
+	c.mu.RLock()
+	paths := make([]string, 0)
+	seen := make(map[string]bool)
+	for _, root := range c.roots {
+		if root.source == "config" && !seen[root.path] {
+			seen[root.path] = true
+			paths = append(paths, root.path)
+		}
+	}
+	ignore := append([]string(nil), c.ignore...)
+	c.mu.RUnlock()
+	sort.Strings(paths)
+	sort.Strings(ignore)
+	skills := c.List()
+	return ConfigInfo{
+		Paths: paths, Ignore: ignore, TotalSkills: len(skills), Skills: skills,
+		Message: fmt.Sprintf("Total skills loaded: %d", len(skills)),
+	}
+}
+
+func skillInfo(skill Skill, enabled bool) Info {
+	return Info{
+		Name: skill.Name, DisplayName: skill.DisplayName, Description: skill.Description,
+		HasUserSpecifiedDescription: skill.HasAuthoredDescription, Paths: append([]string(nil), skill.Paths...),
+		WhenToUse: skill.WhenToUse, ShortDescription: skill.ShortDescription, Author: skill.Author,
+		ArgumentHint: skill.ArgumentHint, License: skill.License, Compatibility: skill.Compatibility,
+		Metadata: skill.Metadata, Path: skill.Path, Scope: skill.scope, PluginName: skill.PluginName,
+		PluginRoot: skill.PluginRoot, PluginData: skill.PluginData, AllowedTools: append([]string(nil), skill.AllowedTools...),
+		Model: skill.Model, Effort: skill.Effort, UserInvocable: skill.UserInvocable,
+		DisableModelInvocation: skill.DisableModelInvocation, Enabled: enabled,
+	}
 }
 
 func (c *Catalog) Watch(ctx context.Context, interval time.Duration) {

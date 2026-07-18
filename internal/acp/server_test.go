@@ -19,6 +19,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/api"
 	sessionlog "github.com/lookcorner/go-cli/internal/session"
+	"github.com/lookcorner/go-cli/internal/skills"
 	"github.com/lookcorner/go-cli/internal/tools"
 	"github.com/lookcorner/go-cli/internal/workspace"
 )
@@ -219,6 +220,42 @@ func TestStaticExtensionsAndCompactCommand(t *testing.T) {
 	streamer.mu.Unlock()
 	if len(requests) != 1 || requests[0].PreviousResponseID != "response-1" || !strings.Contains(requests[0].Instructions, "handoff summary") {
 		t.Fatalf("unexpected compact request: %#v", requests)
+	}
+}
+
+func TestSkillsExtensionWireContract(t *testing.T) {
+	root := t.TempDir()
+	skillDir := filepath.Join(root, ".grok", "skills", "review")
+	if err := os.MkdirAll(skillDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: review\ndescription: Review changes\n---\nReview the diff.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := skills.Discover(root, skills.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := &session{id: "skill-session", cwd: root, runner: &agent.Runner{Skills: catalog}}
+	var output bytes.Buffer
+	server := &Server{output: &output, sessions: map[string]*session{"skill-session": current}}
+	server.handleSkills(message{ID: json.RawMessage("1"), Method: "x.ai/skills/list", Params: json.RawMessage(`{"cwd":` + strconv.Quote(root) + `}`)})
+	var response map[string]any
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	items := response["result"].(map[string]any)["result"].(map[string]any)["skills"].([]any)
+	if len(items) != 1 || items[0].(map[string]any)["name"] != "review" || items[0].(map[string]any)["scope"] != "local" || items[0].(map[string]any)["enabled"] != true {
+		t.Fatalf("unexpected skills list: %#v", response)
+	}
+	output.Reset()
+	server.handleSkills(message{ID: json.RawMessage("2"), Method: "x.ai/skills/config", Params: json.RawMessage(`{"cwd":` + strconv.Quote(root) + `}`)})
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	config := response["result"].(map[string]any)["result"].(map[string]any)
+	if config["totalSkills"].(float64) != 1 || len(config["skills"].([]any)) != 1 {
+		t.Fatalf("unexpected skills config: %#v", response)
 	}
 }
 

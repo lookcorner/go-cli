@@ -269,6 +269,10 @@ optional snippets without a separate index service.
 `x.ai/workspaces/list` returns the reference-compatible partial `no_oauth`
 response because this local build has no cloud workspace backend.
 
+Live ACP sessions expose their resolved skill catalog through
+`x.ai/skills/list` and `x.ai/skills/config`, including scope, invocation gates,
+plugin metadata, configured paths, ignore paths, and enabled state.
+
 ACP sessions expose `x.ai/rewind/points` and `x.ai/rewind/execute` for
 `all`, `conversation_only`, and `files_only` rewind (`code_only` remains an
 alias). Rewinds append a timeline marker instead of deleting history, restore

@@ -214,6 +214,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleSessionAdmin(incoming)
 		case "x.ai/commands/list", "x.ai/workspaces/list":
 			s.handleStaticExtension(incoming)
+		case "x.ai/skills/list", "x.ai/skills/config":
+			s.handleSkills(incoming)
 		case "x.ai/rewind/points", "x.ai/rewind/execute":
 			s.handleRewind(incoming)
 		case "x.ai/terminal/pty/create", "x.ai/terminal/pty/load", "x.ai/terminal/pty/resize", "x.ai/terminal/list", "x.ai/terminal/kill":
@@ -363,6 +365,34 @@ func (s *Server) handleStaticExtension(incoming message) {
 			"_meta":      map[string]any{"x.ai/partial": map[string]any{"workspaces": true, "reason": "no_oauth"}},
 		}})
 	}
+}
+
+func (s *Server) handleSkills(incoming message) {
+	var req struct {
+		CWD string `json:"cwd"`
+	}
+	if json.Unmarshal(incoming.Params, &req) != nil {
+		s.respondError(incoming.ID, -32602, "invalid skills parameters")
+		return
+	}
+	var current *session
+	s.mu.Lock()
+	for _, candidate := range s.sessions {
+		if req.CWD == "" || candidate.cwd == req.CWD {
+			current = candidate
+			break
+		}
+	}
+	s.mu.Unlock()
+	if current == nil || current.runner == nil || current.runner.Skills == nil {
+		s.respond(incoming.ID, map[string]any{"result": nil, "error": "skills catalog is unavailable for this cwd"})
+		return
+	}
+	if incoming.Method == "x.ai/skills/list" {
+		s.respond(incoming.ID, map[string]any{"result": map[string]any{"skills": current.runner.Skills.List()}})
+		return
+	}
+	s.respond(incoming.ID, map[string]any{"result": current.runner.Skills.ConfigInfo()})
 }
 
 func sessionContextWire(used, total, turns int) map[string]any {
