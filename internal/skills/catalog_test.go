@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lookcorner/go-cli/internal/compat"
 )
@@ -336,5 +337,62 @@ func TestDynamicallyDiscoveredConditionalSkillWaitsForNextTouch(t *testing.T) {
 	}
 	if reminder := catalog.Activate("read_file", json.RawMessage(`{"path":"service/second.go"}`)); !strings.Contains(reminder, "go-only") {
 		t.Fatalf("conditional skill did not activate on the next touch: %q", reminder)
+	}
+}
+
+func TestCatalogWatcherReloadsAddedChangedAndDeletedSkills(t *testing.T) {
+	root := t.TempDir()
+	catalog, err := discover(root, "", "", compat.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	catalog.Watch(ctx, 5*time.Millisecond)
+	skillDir := filepath.Join(root, ".grok", "skills", "watched")
+	if err := os.MkdirAll(skillDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(skillDir, "SKILL.md")
+	if err := os.WriteFile(path, []byte("---\nname: watched\ndescription: first\n---\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waitForSkillNames(t, catalog, "watched")
+	if reminder := catalog.DrainReminder(); !strings.Contains(reminder, "first") {
+		t.Fatalf("missing added skill reminder: %q", reminder)
+	}
+	if err := os.WriteFile(path, []byte("---\nname: watched\ndescription: first\n---\nchanged body\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		if reminder := catalog.DrainReminder(); strings.Contains(reminder, "first") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("modified skill was not reloaded")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	waitForSkillNames(t, catalog)
+	if reminder := catalog.DrainReminder(); !strings.Contains(reminder, "Skills changed on disk") {
+		t.Fatalf("missing deleted skill reminder: %q", reminder)
+	}
+}
+
+func waitForSkillNames(t *testing.T, catalog *Catalog, want ...string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		if strings.Join(catalog.Names(), ",") == strings.Join(want, ",") {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("skill names=%#v, want %#v", catalog.Names(), want)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }

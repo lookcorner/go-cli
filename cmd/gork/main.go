@@ -223,6 +223,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		ctx, cancel = context.WithTimeout(ctx, opts.timeout)
 		defer cancel()
 	}
+	skillCatalog.Watch(ctx, time.Second)
 
 	client, err := newModelClient(cfg)
 	if err != nil {
@@ -482,8 +483,15 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			cleanup()
 			return nil, nil, err
 		}
+		watchCtx, stopSkills := context.WithCancel(sessionCtx)
+		catalog.Watch(watchCtx, time.Second)
 		var closeOnce sync.Once
-		closeRuntime := func() { closeOnce.Do(cleanup) }
+		closeRuntime := func() {
+			closeOnce.Do(func() {
+				stopSkills()
+				cleanup()
+			})
+		}
 		return &agent.Runner{
 			Client: modelClient, Tools: registry, Skills: catalog, Logger: logger,
 			Model: sessionCfg.Model, Instructions: instructions, MaxSteps: cfg.MaxSteps,

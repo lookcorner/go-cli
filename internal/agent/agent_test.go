@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/compat"
@@ -210,6 +211,61 @@ func TestRunnerAnnouncesConditionalSkillAfterFileTool(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("activated skill was absent from the next tool definition")
+	}
+}
+
+func TestRunnerIncludesWatchedSkillInNextRequest(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("GROK_HOME", filepath.Join(home, ".grok"))
+	root := t.TempDir()
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := skills.Discover(ws.Root(), compat.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	catalog.Watch(ctx, 5*time.Millisecond)
+	skillDir := filepath.Join(root, ".grok", "skills", "watched")
+	if err := os.MkdirAll(skillDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: watched\ndescription: Watched skill\n---\nInstructions\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for len(catalog.Names()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	if err := registry.Register(catalog.Tool()); err != nil {
+		t.Fatal(err)
+	}
+	streamer := &fakeStreamer{results: []api.StreamResult{{ResponseID: "resp_1", Text: "done"}}}
+	runner := Runner{Client: streamer, Tools: registry, Skills: catalog, Model: "test", MaxSteps: 1}
+	if _, err := runner.Run(ctx, "inspect"); err != nil {
+		t.Fatal(err)
+	}
+	if len(streamer.requests) != 1 || len(streamer.requests[0].Input) != 2 {
+		t.Fatalf("watch reminder missing from request: %#v", streamer.requests)
+	}
+	reminder, _ := streamer.requests[0].Input[1].Content.(string)
+	if !strings.Contains(reminder, "Skills changed on disk") || !strings.Contains(reminder, "watched") {
+		t.Fatalf("unexpected watch reminder: %q", reminder)
+	}
+	found := false
+	for _, definition := range streamer.requests[0].Tools {
+		if definition.Name == "skill" && strings.Contains(definition.Description, "watched") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("watched skill was absent from the tool definition")
 	}
 }
 

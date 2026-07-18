@@ -126,6 +126,11 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 	var final Result
 
 	for step := 1; step <= r.MaxSteps; step++ {
+		if r.Skills != nil {
+			if reminder := r.Skills.DrainReminder(); reminder != "" {
+				input = append(input, api.InputItem{Type: "message", Role: "user", Content: reminder})
+			}
+		}
 		request := api.ResponseRequest{
 			Model:              r.Model,
 			Instructions:       instructions,

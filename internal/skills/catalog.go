@@ -2,6 +2,7 @@ package skills
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 	"unicode/utf8"
 
 	"github.com/bmatcuk/doublestar"
@@ -29,6 +32,12 @@ type Skill struct {
 	Path        string
 	Source      string
 	Paths       []string
+	digest      [sha256.Size]byte
+}
+
+type skillRoot struct {
+	path   string
+	source string
 }
 
 type Catalog struct {
@@ -37,6 +46,10 @@ type Catalog struct {
 	byName  map[string]Skill
 	pending map[string]Skill
 	checked map[string]bool
+	roots   []skillRoot
+	seen    map[string]bool
+	changed bool
+	mu      sync.RWMutex
 }
 
 func Discover(workspaceRoot string, cfg compat.Config) (*Catalog, error) {
@@ -52,22 +65,18 @@ func discover(workspaceRoot, home, grokHome string, cfg compat.Config) (*Catalog
 	if real, err := filepath.EvalSymlinks(workspaceRoot); err == nil {
 		workspaceRoot = real
 	}
-	type root struct {
-		path   string
-		source string
-	}
-	var roots []root
+	var roots []skillRoot
 	if home != "" {
 		if cfg.Cursor.Skills {
-			roots = append(roots, root{filepath.Join(home, ".cursor", "skills"), "user:cursor"})
+			roots = append(roots, skillRoot{filepath.Join(home, ".cursor", "skills"), "user:cursor"})
 		}
 		if cfg.Claude.Skills {
-			roots = append(roots, root{filepath.Join(home, ".claude", "skills"), "user:claude"})
+			roots = append(roots, skillRoot{filepath.Join(home, ".claude", "skills"), "user:claude"})
 		}
-		roots = append(roots, root{filepath.Join(home, ".agents", "skills"), "user:agents"})
+		roots = append(roots, skillRoot{filepath.Join(home, ".agents", "skills"), "user:agents"})
 	}
 	if grokHome != "" {
-		roots = append(roots, root{filepath.Join(grokHome, "skills"), "user:grok"})
+		roots = append(roots, skillRoot{filepath.Join(grokHome, "skills"), "user:grok"})
 	}
 	gitRoot := workspace.GitRoot(workspaceRoot)
 	for _, scope := range workspace.ProjectScopes(gitRoot, workspaceRoot) {
@@ -80,14 +89,14 @@ func discover(workspaceRoot, home, grokHome string, cfg compat.Config) (*Catalog
 		}
 		dirs = append(dirs, ".agents", ".gork", ".grok")
 		for _, dir := range dirs {
-			roots = append(roots, root{
+			roots = append(roots, skillRoot{
 				filepath.Join(scope, dir, "skills"), "workspace:" + strings.TrimPrefix(dir, "."),
 			})
 		}
 	}
 	catalog := &Catalog{
-		root: workspaceRoot, compat: cfg,
-		byName: make(map[string]Skill), pending: make(map[string]Skill), checked: make(map[string]bool),
+		root: workspaceRoot, compat: cfg, roots: append([]skillRoot(nil), roots...),
+		byName: make(map[string]Skill), pending: make(map[string]Skill), checked: make(map[string]bool), seen: make(map[string]bool),
 	}
 	for _, root := range roots {
 		if root.path == "" {
@@ -151,6 +160,9 @@ func (c *Catalog) scan(root, source string) error {
 		if name == "" {
 			return nil
 		}
+		if c.seen != nil {
+			c.seen[name] = true
+		}
 		if _, active := c.byName[name]; !active {
 			if _, held := c.pending[name]; !held && len(c.byName)+len(c.pending) >= maxSkills {
 				return errors.New("skill discovery exceeded 500 skills")
@@ -164,7 +176,7 @@ func (c *Catalog) scan(root, source string) error {
 		active, wasActive := c.byName[name]
 		delete(c.byName, name)
 		delete(c.pending, name)
-		skill := Skill{Name: name, Description: description, Path: real, Source: source, Paths: paths}
+		skill := Skill{Name: name, Description: description, Path: real, Source: source, Paths: paths, digest: sha256.Sum256(data)}
 		if len(paths) == 0 || wasActive && active.Path == real {
 			c.byName[name] = skill
 		} else {
@@ -181,7 +193,93 @@ func (c *Catalog) Count() int {
 	if c == nil {
 		return 0
 	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return len(c.byName) + len(c.pending)
+}
+
+func (c *Catalog) Watch(ctx context.Context, interval time.Duration) {
+	if c == nil {
+		return
+	}
+	if interval <= 0 {
+		interval = time.Second
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				_ = c.reload()
+			}
+		}
+	}()
+}
+
+func (c *Catalog) reload() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	fresh := &Catalog{
+		root: c.root, compat: c.compat, roots: append([]skillRoot(nil), c.roots...),
+		byName: make(map[string]Skill, len(c.byName)), pending: make(map[string]Skill, len(c.pending)),
+		checked: make(map[string]bool), seen: make(map[string]bool),
+	}
+	for name, skill := range c.byName {
+		fresh.byName[name] = skill
+	}
+	for name, skill := range c.pending {
+		fresh.pending[name] = skill
+	}
+	for _, root := range fresh.roots {
+		if err := fresh.scanOnce(root.path, root.source); err != nil {
+			return err
+		}
+	}
+	for name := range fresh.byName {
+		if !fresh.seen[name] {
+			delete(fresh.byName, name)
+		}
+	}
+	for name := range fresh.pending {
+		if !fresh.seen[name] {
+			delete(fresh.pending, name)
+		}
+	}
+	changed := len(fresh.byName) != len(c.byName)
+	for name, skill := range fresh.byName {
+		previous, existed := c.byName[name]
+		if !existed || previous.Path != skill.Path || previous.Source != skill.Source || previous.Description != skill.Description || previous.digest != skill.digest || strings.Join(previous.Paths, "\x00") != strings.Join(skill.Paths, "\x00") {
+			changed = true
+		}
+	}
+	c.byName, c.pending, c.checked, c.seen = fresh.byName, fresh.pending, fresh.checked, fresh.seen
+	if changed {
+		c.changed = true
+	}
+	return nil
+}
+
+func (c *Catalog) DrainReminder() string {
+	if c == nil {
+		return ""
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.changed {
+		return ""
+	}
+	var output strings.Builder
+	output.WriteString("<system-reminder>\nSkills changed on disk:\n")
+	for _, name := range c.namesLocked() {
+		skill := c.byName[name]
+		fmt.Fprintf(&output, "- %s: %s (%s)\n", name, skill.Description, skill.Source)
+	}
+	c.changed = false
+	output.WriteString("Use the skill tool to load one when it matches the task.\n</system-reminder>")
+	return output.String()
 }
 
 // Activate updates skill visibility after a successful file tool call and
@@ -190,6 +288,8 @@ func (c *Catalog) Activate(toolName string, raw json.RawMessage) string {
 	if c == nil {
 		return ""
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	path := toolPath(toolName, raw)
 	if path == "" {
 		return ""
@@ -238,15 +338,30 @@ func (c *Catalog) Activate(toolName string, raw json.RawMessage) string {
 func (c *Catalog) discoverForPath(path string) {
 	if strings.EqualFold(filepath.Base(path), "SKILL.md") {
 		if source := c.skillSource(path); source != "" {
-			_ = c.scan(filepath.Dir(path), source)
+			root := filepath.Dir(path)
+			c.addRoot(root, source)
+			_ = c.scan(root, source)
 		}
 		return
 	}
 	for _, scope := range workspace.ProjectScopes(c.root, path) {
 		for _, dir := range c.skillConfigDirs() {
-			_ = c.scanOnce(filepath.Join(scope, dir, "skills"), "workspace:"+strings.TrimPrefix(dir, "."))
+			root := filepath.Join(scope, dir, "skills")
+			source := "workspace:" + strings.TrimPrefix(dir, ".")
+			c.addRoot(root, source)
+			_ = c.scanOnce(root, source)
 		}
 	}
+}
+
+func (c *Catalog) addRoot(path, source string) {
+	path = filepath.Clean(path)
+	for _, root := range c.roots {
+		if root.path == path || pathWithin(root.path, path) {
+			return
+		}
+	}
+	c.roots = append(c.roots, skillRoot{path: path, source: source})
 }
 
 func (c *Catalog) skillConfigDirs() []string {
@@ -341,10 +456,15 @@ func patternMatches(pattern, rel string) bool {
 }
 
 func (c *Catalog) Summary() string {
-	if c == nil || len(c.byName) == 0 {
+	if c == nil {
 		return ""
 	}
-	names := c.Names()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if len(c.byName) == 0 {
+		return ""
+	}
+	names := c.namesLocked()
 	var output strings.Builder
 	output.WriteString("Available skills are listed below. Use the skill tool to load a skill's complete instructions when the user names it or the task clearly matches it.\n")
 	for _, name := range names {
@@ -355,6 +475,15 @@ func (c *Catalog) Summary() string {
 }
 
 func (c *Catalog) Names() []string {
+	if c == nil {
+		return nil
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.namesLocked()
+}
+
+func (c *Catalog) namesLocked() []string {
 	names := make([]string, 0, len(c.byName))
 	for name := range c.byName {
 		names = append(names, name)
@@ -391,7 +520,9 @@ func (t *Tool) Execute(_ context.Context, raw json.RawMessage) (string, error) {
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return "", fmt.Errorf("decode skill arguments: %w", err)
 	}
+	t.catalog.mu.RLock()
 	skill, ok := t.catalog.byName[args.Name]
+	t.catalog.mu.RUnlock()
 	if !ok {
 		return "", fmt.Errorf("unknown skill %q", args.Name)
 	}
