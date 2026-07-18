@@ -3,9 +3,12 @@ package acp
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/lookcorner/go-cli/internal/plugin"
 )
@@ -16,8 +19,10 @@ func (s *Server) handlePlugins(ctx context.Context, incoming message) {
 		Action    struct {
 			Type           string `json:"type"`
 			Path           string `json:"path"`
+			Source         string `json:"source"`
 			PluginID       string `json:"plugin_id"`
 			LegacyPluginID string `json:"pluginId"`
+			Confirmed      bool   `json:"confirmed"`
 		} `json:"action"`
 	}
 	if json.Unmarshal(incoming.Params, &req) != nil || req.SessionID == "" {
@@ -30,7 +35,7 @@ func (s *Server) handlePlugins(ctx context.Context, incoming message) {
 		return
 	}
 	if incoming.Method == "x.ai/plugins/action" {
-		s.handlePluginAction(ctx, incoming, current, req.Action.Type, req.Action.Path, firstString(req.Action.PluginID, req.Action.LegacyPluginID))
+		s.handlePluginAction(ctx, incoming, current, req.Action.Type, req.Action.Path, req.Action.Source, firstString(req.Action.PluginID, req.Action.LegacyPluginID), req.Action.Confirmed)
 		return
 	}
 	inventory := []plugin.Plugin{}
@@ -44,36 +49,47 @@ func (s *Server) handlePlugins(ctx context.Context, incoming message) {
 	s.respond(incoming.ID, map[string]any{"result": map[string]any{"plugins": items}, "error": nil})
 }
 
-func (s *Server) handlePluginAction(ctx context.Context, incoming message, current *session, action, path, pluginID string) {
+func (s *Server) handlePluginAction(ctx context.Context, incoming message, current *session, action, path, source, pluginID string, confirmed bool) {
 	if current.runner.UpdatePlugins == nil {
-		s.pluginActionOutcome(incoming, "unsupported", "Plugin configuration is read-only.", false)
+		s.pluginActionOutcome(incoming, "unsupported", "Plugin configuration is read-only.", false, false)
 		return
 	}
-	if action == "install" || action == "uninstall" || action == "update" {
-		s.pluginActionOutcome(incoming, "unsupported", "Plugin installation and updates are not implemented.", false)
-		return
-	}
-	if action != "reload" && action != "add" && action != "remove" && action != "enable" && action != "disable" {
-		s.pluginActionOutcome(incoming, "validation_error", "Unsupported plugin action.", false)
+	if action != "reload" && action != "install" && action != "uninstall" && action != "update" && action != "add" && action != "remove" && action != "enable" && action != "disable" {
+		s.pluginActionOutcome(incoming, "validation_error", "Unsupported plugin action.", false, false)
 		return
 	}
 	if s.anySessionRunning() {
-		s.pluginActionOutcome(incoming, "validation_error", "Cannot update plugins while a prompt is running.", false)
+		s.pluginActionOutcome(incoming, "validation_error", "Cannot update plugins while a prompt is running.", false, false)
+		return
+	}
+	if action == "install" {
+		s.installPlugin(ctx, incoming, current, source)
+		return
+	}
+	if action == "uninstall" {
+		s.uninstallPlugin(ctx, incoming, current, pluginID, confirmed)
+		return
+	}
+	if action == "update" {
+		s.updatePlugins(ctx, incoming, current, pluginID)
 		return
 	}
 	resolved := ""
 	if action == "add" || action == "remove" {
 		if path == "" {
-			s.pluginActionOutcome(incoming, "validation_error", "Path is required.", false)
+			s.pluginActionOutcome(incoming, "validation_error", "Path is required.", false, false)
 			return
 		}
 		resolved = plugin.ResolvePath(path, current.cwd)
 	}
 	if (action == "enable" || action == "disable") && pluginID == "" {
-		s.pluginActionOutcome(incoming, "validation_error", "Plugin ID is required.", false)
+		s.pluginActionOutcome(incoming, "validation_error", "Plugin ID is required.", false, false)
 		return
 	}
 	var update func(*plugin.Settings)
+	if action == "reload" {
+		_ = plugin.RefreshLocal()
+	}
 	if action != "reload" {
 		update = func(settings *plugin.Settings) {
 			switch action {
@@ -98,7 +114,7 @@ func (s *Server) handlePluginAction(ctx context.Context, incoming message, curre
 	}
 	_, err := current.runner.UpdatePlugins(ctx, update)
 	if err != nil {
-		s.pluginActionOutcome(incoming, "internal_error", err.Error(), false)
+		s.pluginActionOutcome(incoming, "internal_error", err.Error(), false, false)
 		return
 	}
 	message := "Plugins reloaded"
@@ -112,7 +128,86 @@ func (s *Server) handlePluginAction(ctx context.Context, incoming message, curre
 	case "disable":
 		message = "Disabled: " + pluginID
 	}
-	s.pluginActionOutcome(incoming, "success", message+".", false)
+	s.pluginActionOutcome(incoming, "success", message+".", false, false)
+}
+
+func (s *Server) installPlugin(ctx context.Context, incoming message, current *session, source string) {
+	if source == "" {
+		s.pluginActionOutcome(incoming, "validation_error", "Source is required (git URL or local path).", false, false)
+		return
+	}
+	outcome, err := plugin.Install(source, current.cwd)
+	if err != nil {
+		s.pluginActionOutcome(incoming, "internal_error", "Failed to install plugin: "+err.Error(), false, false)
+		return
+	}
+	_, err = current.runner.UpdatePlugins(ctx, func(settings *plugin.Settings) {
+		for _, name := range outcome.Plugins {
+			if !containsString(settings.Enabled, name) {
+				settings.Enabled = append(settings.Enabled, name)
+			}
+			settings.Disabled = removeString(settings.Disabled, name)
+		}
+	})
+	if err != nil {
+		s.pluginActionOutcome(incoming, "internal_error", err.Error(), false, false)
+		return
+	}
+	s.pluginActionOutcome(incoming, "success", fmt.Sprintf("Installed %d plugin(s) from %s: %s", len(outcome.Plugins), source, strings.Join(outcome.Plugins, ", ")), false, false)
+}
+
+func (s *Server) uninstallPlugin(ctx context.Context, incoming message, current *session, pluginID string, confirmed bool) {
+	if pluginID == "" {
+		s.pluginActionOutcome(incoming, "validation_error", "Plugin ID is required.", false, false)
+		return
+	}
+	outcome, err := plugin.Uninstall(pluginID, confirmed, false)
+	if err != nil {
+		var confirmation *plugin.ConfirmationError
+		var missing *plugin.NotFoundError
+		switch {
+		case errors.As(err, &confirmation):
+			s.pluginActionOutcome(incoming, "confirmation_required", confirmation.Error()+". Uninstalling removes all of them.", false, false)
+		case errors.As(err, &missing):
+			s.pluginActionOutcome(incoming, "not_found", err.Error(), false, false)
+		default:
+			s.pluginActionOutcome(incoming, "internal_error", err.Error(), false, false)
+		}
+		return
+	}
+	_, err = current.runner.UpdatePlugins(ctx, func(settings *plugin.Settings) {
+		for _, name := range outcome.Plugins {
+			settings.Enabled = removeString(settings.Enabled, name)
+			settings.Disabled = removeString(settings.Disabled, name)
+		}
+	})
+	if err != nil {
+		s.pluginActionOutcome(incoming, "internal_error", err.Error(), false, false)
+		return
+	}
+	s.pluginActionOutcome(incoming, "success", fmt.Sprintf("Uninstalled repo %q (%d plugin(s): %s)", outcome.RepoKey, len(outcome.Plugins), strings.Join(outcome.Plugins, ", ")), false, false)
+}
+
+func (s *Server) updatePlugins(ctx context.Context, incoming message, current *session, pluginID string) {
+	outcomes, err := plugin.Update(pluginID)
+	if err != nil {
+		var missing *plugin.NotFoundError
+		if errors.As(err, &missing) || strings.Contains(err.Error(), "no installed plugins") {
+			s.pluginActionOutcome(incoming, "not_found", err.Error(), false, false)
+		} else {
+			s.pluginActionOutcome(incoming, "internal_error", err.Error(), false, false)
+		}
+		return
+	}
+	if _, err := current.runner.UpdatePlugins(ctx, nil); err != nil {
+		s.pluginActionOutcome(incoming, "internal_error", err.Error(), false, false)
+		return
+	}
+	messages := make([]string, 0, len(outcomes))
+	for _, outcome := range outcomes {
+		messages = append(messages, outcome.RepoKey+": "+strings.ReplaceAll(outcome.Status, "_", " "))
+	}
+	s.pluginActionOutcome(incoming, "success", strings.Join(messages, "; "), false, false)
 }
 
 func (s *Server) anySessionRunning() bool {
@@ -133,9 +228,9 @@ func (s *Server) anySessionRunning() bool {
 	return false
 }
 
-func (s *Server) pluginActionOutcome(incoming message, status, message string, restart bool) {
+func (s *Server) pluginActionOutcome(incoming message, status, message string, reload, restart bool) {
 	s.respond(incoming.ID, map[string]any{"result": map[string]any{
-		"status": status, "message": message, "requiresReload": false, "requiresRestart": restart,
+		"status": status, "message": message, "requiresReload": reload, "requiresRestart": restart,
 	}, "error": nil})
 }
 

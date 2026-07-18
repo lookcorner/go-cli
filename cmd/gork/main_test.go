@@ -205,6 +205,51 @@ func TestWatchMCPConfigReloadsChangedFiles(t *testing.T) {
 	}
 }
 
+func TestRunPluginLifecycle(t *testing.T) {
+	grokHome := filepath.Join(t.TempDir(), ".grok")
+	t.Setenv("GROK_HOME", grokHome)
+	source := filepath.Join(t.TempDir(), "source")
+	if err := os.MkdirAll(filepath.Join(source, "skills", "cli"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "plugin.json"), []byte(`{"name":"cli-plugin","version":"1.0.0"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "skills", "cli", "SKILL.md"), []byte("---\nname: cli\ndescription: CLI\n---\nCLI"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if err := runPlugin([]string{"install", source}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "cli-plugin") {
+		t.Fatalf("install output = %q", stdout.String())
+	}
+	cfg, err := config.Load("")
+	if err != nil || strings.Join(cfg.Plugins.Enabled, "|") != "cli-plugin" {
+		t.Fatalf("installed config=%#v err=%v", cfg.Plugins, err)
+	}
+	stdout.Reset()
+	if err := runPlugin([]string{"list"}, &stdout, &stderr); err != nil || !strings.Contains(stdout.String(), "cli-plugin") {
+		t.Fatalf("list output=%q err=%v", stdout.String(), err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "plugin.json"), []byte(`{"name":"cli-plugin","version":"2.0.0"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	if err := runPlugin([]string{"update", "cli-plugin"}, &stdout, &stderr); err != nil || !strings.Contains(stdout.String(), "updated") {
+		t.Fatalf("update output=%q err=%v", stdout.String(), err)
+	}
+	stdout.Reset()
+	if err := runPlugin([]string{"uninstall", "cli-plugin"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = config.Load("")
+	if err != nil || len(cfg.Plugins.Enabled) != 0 || !strings.Contains(stdout.String(), "Uninstalled") {
+		t.Fatalf("uninstall output=%q config=%#v err=%v", stdout.String(), cfg.Plugins, err)
+	}
+}
+
 func TestMCPHTTPHeadersUseBearerTokenEnvironment(t *testing.T) {
 	t.Setenv("MCP_ACCESS_TOKEN", "secret")
 	headers := mcpHTTPHeaders(config.MCPServerConfig{

@@ -179,6 +179,22 @@ func discoverInventory(workspaceRoot, home, grokHome string, cfg Config) ([]Plug
 		if err := collectParent(filepath.Join(grokHome, "plugins"), userScope); err != nil {
 			return nil, err
 		}
+		if registry, err := loadRegistryAt(filepath.Join(grokHome, "installed-plugins")); err == nil {
+			var roots []string
+			for _, repo := range registry.Repos {
+				for _, item := range repo.Plugins {
+					root := repo.Path
+					if item.Subdir != "" {
+						root = filepath.Join(root, filepath.FromSlash(item.Subdir))
+					}
+					roots = append(roots, root)
+				}
+			}
+			sort.Strings(roots)
+			for _, root := range roots {
+				collect(root, userScope, true, grokHome, cfg, seenPaths, seenNames, &plugins)
+			}
+		}
 	}
 	if home != "" {
 		if err := collectParent(filepath.Join(home, ".claude", "plugins"), userScope); err != nil {

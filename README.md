@@ -652,8 +652,27 @@ skill/command components update immediately. Plugin MCP servers are restarted
 with rollback on failure while preserving client-provided session overrides;
 plugin LSP servers are started as a complete replacement set and atomically
 swapped into the live manager. Supported local plugin actions therefore do not
-require a session restart. Plugin hooks, agents, installation, marketplaces,
-and updates are not yet implemented.
+require a session restart. `install`, `update`, and confirmed `uninstall`
+actions manage isolated local/Git snapshots under
+`$GROK_HOME/installed-plugins`, persist an atomic registry, and refresh live
+skill/MCP/LSP components. Multi-plugin repositories require explicit uninstall
+confirmation. Plugin hooks, agents, and marketplace lifecycle are not yet
+implemented.
+
+The same direct-install lifecycle is available outside ACP:
+
+```sh
+gork plugin install ./local-plugin
+gork plugin install owner/repository@v1.2.0
+gork plugin list
+gork plugin update [plugin-name]
+gork plugin uninstall [--confirm] [--keep-data] plugin-name
+```
+
+Local installs are full snapshots rather than symlinks. New sessions and
+explicit plugin reloads safely recopy the source; uninstall removes plugin data
+unless `--keep-data` is used. Git branches update with fast-forward-only pulls,
+while version tags and commit SHA installs remain pinned.
 
 The `[skills]` config accepts additional directories or individual `SKILL.md`
 files. Paths support `~`; relative paths resolve from the workspace. `ignore`

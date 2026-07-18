@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -86,6 +87,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if len(args) > 0 && args[0] == "setup" {
 		return runSetup(args[1:], stdout, stderr)
 	}
+	if len(args) > 0 && args[0] == "plugin" {
+		return runPlugin(args[1:], stdout, stderr)
+	}
 	var opts options
 	flags := flag.NewFlagSet("gork", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -111,7 +115,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	flags.BoolVar(&opts.acp, "acp", false, "serve Agent Client Protocol v1 over stdio")
 	flags.BoolVar(&opts.trust, "trust", false, "trust this workspace's executable project configuration")
 	flags.Usage = func() {
-		fmt.Fprintf(stderr, "Usage: gork [flags] [prompt]\n       gork login [--oauth|--device-auth]\n       gork logout\n       gork setup\n\n")
+		fmt.Fprintf(stderr, "Usage: gork [flags] [prompt]\n       gork login [--oauth|--device-auth]\n       gork logout\n       gork setup\n       gork plugin <list|install|update|uninstall>\n\n")
 		flags.PrintDefaults()
 	}
 	if err := flags.Parse(args); err != nil {
@@ -538,6 +542,108 @@ func runSetup(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintln(stdout, "Managed configuration is up to date")
 	}
 	return nil
+}
+
+func runPlugin(args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 {
+		return errors.New("plugin command is required: list, install, update, or uninstall")
+	}
+	switch args[0] {
+	case "list":
+		if len(args) != 1 {
+			return errors.New("plugin list does not accept arguments")
+		}
+		registry, err := plugin.LoadInstallRegistry()
+		if err != nil {
+			return err
+		}
+		var keys []string
+		for key := range registry.Repos {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		if len(keys) == 0 {
+			fmt.Fprintln(stdout, "No plugins installed.")
+			return nil
+		}
+		for _, key := range keys {
+			repo := registry.Repos[key]
+			var names []string
+			for name := range repo.Plugins {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			fmt.Fprintf(stdout, "%s\t%s\t%s\n", key, repo.Kind.Type, strings.Join(names, ", "))
+		}
+		return nil
+	case "install":
+		if len(args) != 2 {
+			return errors.New("usage: gork plugin install <git-url-or-local-path>")
+		}
+		cwd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		outcome, err := plugin.Install(args[1], cwd)
+		if err != nil {
+			return err
+		}
+		if err := config.UpdatePlugins("", func(settings *config.PluginsConfig) {
+			for _, name := range outcome.Plugins {
+				if !slices.Contains(settings.Enabled, name) {
+					settings.Enabled = append(settings.Enabled, name)
+				}
+				settings.Disabled = slices.DeleteFunc(settings.Disabled, func(value string) bool { return value == name })
+			}
+		}); err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "Installed %d plugin(s) from %s: %s\n", len(outcome.Plugins), args[1], strings.Join(outcome.Plugins, ", "))
+		return nil
+	case "update":
+		if len(args) > 2 {
+			return errors.New("usage: gork plugin update [plugin-name]")
+		}
+		name := ""
+		if len(args) == 2 {
+			name = args[1]
+		}
+		outcomes, err := plugin.Update(name)
+		if err != nil {
+			return err
+		}
+		for _, outcome := range outcomes {
+			fmt.Fprintf(stdout, "%s: %s\n", outcome.RepoKey, strings.ReplaceAll(outcome.Status, "_", " "))
+		}
+		return nil
+	case "uninstall":
+		flags := flag.NewFlagSet("gork plugin uninstall", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		confirmed := flags.Bool("confirm", false, "confirm removal of a repository containing multiple plugins")
+		keepData := flags.Bool("keep-data", false, "preserve plugin data directories")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if flags.NArg() != 1 {
+			return errors.New("usage: gork plugin uninstall [--confirm] <plugin-name>")
+		}
+		outcome, err := plugin.Uninstall(flags.Arg(0), *confirmed, *keepData)
+		if err != nil {
+			return err
+		}
+		if err := config.UpdatePlugins("", func(settings *config.PluginsConfig) {
+			for _, name := range outcome.Plugins {
+				settings.Enabled = slices.DeleteFunc(settings.Enabled, func(value string) bool { return value == name })
+				settings.Disabled = slices.DeleteFunc(settings.Disabled, func(value string) bool { return value == name })
+			}
+		}); err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "Uninstalled %d plugin(s) from %s: %s\n", len(outcome.Plugins), outcome.RepoKey, strings.Join(outcome.Plugins, ", "))
+		return nil
+	default:
+		return fmt.Errorf("unknown plugin command %q", args[0])
+	}
 }
 
 func syncManagedPolicy(ctx context.Context, cfg config.Config, credential *auth.Credential, attempts int) (bool, bool, error) {
@@ -1127,6 +1233,7 @@ func storedSkillSettings(source skills.Settings) config.SkillsConfig {
 }
 
 func discoverWorkspace(root string, cfg config.Config, projectTrusted bool) (config.Config, *skills.Catalog, []plugin.Plugin, error) {
+	_ = plugin.RefreshLocal()
 	inventory, err := plugin.Inventory(root, plugin.Config{
 		Paths: cfg.Plugins.Paths, Enabled: cfg.Plugins.Enabled, Disabled: cfg.Plugins.Disabled,
 		ProjectTrusted: projectTrusted,

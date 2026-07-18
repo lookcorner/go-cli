@@ -828,6 +828,89 @@ func TestPluginActionUpdatesInventoryAndSkills(t *testing.T) {
 	}
 }
 
+func TestPluginActionInstallUpdateAndUninstall(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("GROK_HOME", filepath.Join(t.TempDir(), ".grok"))
+	source := filepath.Join(root, "source")
+	for _, name := range []string{"alpha", "beta"} {
+		if err := os.MkdirAll(filepath.Join(source, name, "skills", name), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(source, name, "skills", name, "SKILL.md"), []byte("---\nname: "+name+"\ndescription: "+name+"\n---\n"+name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		version := ""
+		if name == "alpha" {
+			version = `,"version":"1.0.0"`
+		}
+		if err := os.WriteFile(filepath.Join(source, name, "plugin.json"), []byte(`{"name":"`+name+`"`+version+`}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	catalog, err := skills.Discover(root, skills.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := plugin.Settings{}
+	var inventory []plugin.Plugin
+	runner := &agent.Runner{Skills: catalog}
+	runner.PluginInventory = func() []plugin.Plugin { return append([]plugin.Plugin(nil), inventory...) }
+	runner.UpdatePlugins = func(_ context.Context, update func(*plugin.Settings)) ([]plugin.Plugin, error) {
+		if update != nil {
+			update(&settings)
+		}
+		inventory, err = plugin.Inventory(root, plugin.Config{
+			Paths: settings.Paths, Enabled: settings.Enabled, Disabled: settings.Disabled, ProjectTrusted: true,
+		})
+		if err == nil {
+			err = catalog.ReconfigurePlugins(enabledPluginFixtures(inventory))
+		}
+		return append([]plugin.Plugin(nil), inventory...), err
+	}
+	current := &session{id: "plugin-lifecycle", cwd: root, runner: runner}
+	var output bytes.Buffer
+	server := &Server{output: &output, sessions: map[string]*session{"plugin-lifecycle": current}}
+	call := func(id, action string) map[string]any {
+		t.Helper()
+		server.handlePlugins(context.Background(), message{ID: json.RawMessage(id), Method: "x.ai/plugins/action", Params: json.RawMessage(`{"sessionId":"plugin-lifecycle","action":` + action + `}`)})
+		var response map[string]any
+		if err := json.NewDecoder(&output).Decode(&response); err != nil {
+			t.Fatal(err)
+		}
+		output.Reset()
+		return response["result"].(map[string]any)["result"].(map[string]any)
+	}
+
+	outcome := call("1", `{"type":"install","source":`+strconv.Quote(source)+`}`)
+	if outcome["status"] != "success" || len(inventory) != 2 || strings.Join(settings.Enabled, "|") != "alpha|beta" || strings.Join(catalog.Names(), "|") != "alpha:alpha|beta:beta" {
+		t.Fatalf("install outcome=%#v inventory=%#v settings=%#v skills=%#v", outcome, inventory, settings, catalog.Names())
+	}
+	if err := os.WriteFile(filepath.Join(source, "alpha", "plugin.json"), []byte(`{"name":"alpha","version":"2.0.0"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outcome = call("2", `{"type":"update","plugin_id":`+strconv.Quote(inventory[0].ID)+`}`)
+	if outcome["status"] != "success" {
+		t.Fatalf("update outcome=%#v", outcome)
+	}
+	alphaVersion := ""
+	for _, item := range inventory {
+		if item.Name == "alpha" {
+			alphaVersion = item.Version
+		}
+	}
+	if alphaVersion != "2.0.0" {
+		t.Fatalf("updated inventory=%#v", inventory)
+	}
+	outcome = call("3", `{"type":"uninstall","plugin_id":"alpha"}`)
+	if outcome["status"] != "confirmation_required" || len(inventory) != 2 {
+		t.Fatalf("confirmation outcome=%#v inventory=%#v", outcome, inventory)
+	}
+	outcome = call("4", `{"type":"uninstall","plugin_id":"alpha","confirmed":true}`)
+	if outcome["status"] != "success" || len(inventory) != 0 || len(settings.Enabled) != 0 || len(catalog.Names()) != 0 {
+		t.Fatalf("uninstall outcome=%#v inventory=%#v settings=%#v skills=%#v", outcome, inventory, settings, catalog.Names())
+	}
+}
+
 func TestPluginActionRejectsRunningSession(t *testing.T) {
 	called := false
 	runner := &agent.Runner{
