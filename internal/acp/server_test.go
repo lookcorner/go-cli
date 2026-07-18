@@ -282,12 +282,16 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 	}
 	encodeACP(t, encoder, map[string]any{
 		"jsonrpc": "2.0", "id": 33, "method": "x.ai/hunk-tracker/get-hunks",
-		"params": map[string]any{"sessionId": sessionID, "source": "agent"},
+		"params": map[string]any{"sessionId": sessionID, "path": "made.txt", "source": "agent"},
 	})
 	hunkResponse := decodeACP(t, decoder)
-	hunks := hunkResponse["result"].(map[string]any)["hunks"].([]any)
+	hunkResult := hunkResponse["result"].(map[string]any)
+	hunks := hunkResult["hunks"].([]any)
 	if len(hunks) != 1 || hunks[0].(map[string]any)["path"] != "made.txt" || hunks[0].(map[string]any)["source"] != "agent" || int(hunks[0].(map[string]any)["promptIndex"].(float64)) != 0 {
 		t.Fatalf("unexpected ACP hunks: %#v", hunkResponse)
+	}
+	if hunkResult["baseline"].(map[string]any)["status"] != "missing" || hunkResult["current"].(map[string]any)["content"] != "ok" {
+		t.Fatalf("unexpected ACP file content: %#v", hunkResponse)
 	}
 	encodeACP(t, encoder, map[string]any{
 		"jsonrpc": "2.0", "id": 34, "method": "x.ai/hunk-tracker/turn-action",
@@ -313,6 +317,15 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 	acceptedResponse := decodeACP(t, decoder)
 	if visible := acceptedResponse["result"].(map[string]any)["hunks"].([]any); len(visible) != 0 {
 		t.Fatalf("accepted ACP hunk remained visible: %#v", acceptedResponse)
+	}
+	encodeACP(t, encoder, map[string]any{
+		"jsonrpc": "2.0", "id": 351, "method": "x.ai/hunk-tracker/get-all-file-contents",
+		"params": map[string]any{"sessionId": sessionID},
+	})
+	contentResponse := decodeACP(t, decoder)
+	contentFiles := contentResponse["result"].(map[string]any)["files"].([]any)
+	if len(contentFiles) != 1 || contentFiles[0].(map[string]any)["path"] != "made.txt" || contentFiles[0].(map[string]any)["current"].(map[string]any)["content"] != "ok" || contentFiles[0].(map[string]any)["isAgentFile"] != true {
+		t.Fatalf("unexpected all-file contents: %#v", contentResponse)
 	}
 	if err := os.WriteFile(filepath.Join(root, "made.txt"), []byte("external"), 0o600); err != nil {
 		t.Fatal(err)

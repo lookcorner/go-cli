@@ -68,6 +68,35 @@ func (w *Workspace) Resolve(path string) (string, error) {
 	return resolved, nil
 }
 
+// ResolveEntry confines a path while preserving the final directory entry.
+// Parent symlinks are resolved, but a final symlink is returned for safe lstat.
+func (w *Workspace) ResolveEntry(path string) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		path = "."
+	}
+	candidate := path
+	if !filepath.IsAbs(candidate) {
+		candidate = filepath.Join(w.root, candidate)
+	}
+	candidate = filepath.Clean(candidate)
+	if candidate == w.root {
+		return candidate, nil
+	}
+	parent, err := filepath.EvalSymlinks(filepath.Dir(candidate))
+	if err != nil {
+		return "", fmt.Errorf("resolve parent of %q: %w", path, err)
+	}
+	resolved := filepath.Join(parent, filepath.Base(candidate))
+	rel, err := filepath.Rel(w.root, resolved)
+	if err != nil {
+		return "", fmt.Errorf("check workspace boundary: %w", err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("path %q escapes workspace %q", path, w.root)
+	}
+	return resolved, nil
+}
+
 func (w *Workspace) Relative(path string) string {
 	rel, err := filepath.Rel(w.root, path)
 	if err != nil {

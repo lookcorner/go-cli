@@ -125,7 +125,7 @@ func (t *HunkTracker) Hunks(ctx context.Context, path, source string) ([]Hunk, e
 	}
 	if path != "" {
 		var err error
-		path, err = t.relativePath(path)
+		path, err = t.entryRelativePath(path)
 		if err != nil {
 			return nil, err
 		}
@@ -167,6 +167,17 @@ func (t *HunkTracker) relativePath(path string) (string, error) {
 		return "", nil
 	}
 	resolved, err := t.ws.Resolve(path)
+	if err != nil {
+		return "", err
+	}
+	return filepath.ToSlash(t.ws.Relative(resolved)), nil
+}
+
+func (t *HunkTracker) entryRelativePath(path string) (string, error) {
+	if path == "" {
+		return "", nil
+	}
+	resolved, err := t.ws.ResolveEntry(path)
 	if err != nil {
 		return "", err
 	}

@@ -188,7 +188,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleCancel(incoming.Params)
 		case "session/close":
 			s.handleClose(incoming)
-		case "x.ai/hunk-tracker/get-hunks", "x.ai/hunk-tracker/get-files", "x.ai/hunk-tracker/get-summary":
+		case "x.ai/hunk-tracker/get-hunks", "x.ai/hunk-tracker/get-files", "x.ai/hunk-tracker/get-all-file-contents", "x.ai/hunk-tracker/get-summary":
 			s.handleHunkQuery(ctx, incoming)
 		case "x.ai/hunk-tracker/hunk-action", "x.ai/hunk-tracker/file-action", "x.ai/hunk-tracker/turn-action", "x.ai/hunk-tracker/all-action":
 			s.handleHunkAction(ctx, incoming)
@@ -668,6 +668,15 @@ func (s *Server) handleHunkQuery(ctx context.Context, incoming message) {
 	tracker := current.runner.Tools.HunkTracker()
 	switch incoming.Method {
 	case "x.ai/hunk-tracker/get-hunks":
+		if params.Path != "" {
+			data, err := tracker.FileData(ctx, params.Path, params.Source)
+			if err != nil {
+				s.respondError(incoming.ID, -32000, err.Error())
+				return
+			}
+			s.respond(incoming.ID, data)
+			return
+		}
 		hunks, err := tracker.Hunks(ctx, params.Path, params.Source)
 		if err != nil {
 			s.respondError(incoming.ID, -32000, err.Error())
@@ -676,6 +685,13 @@ func (s *Server) handleHunkQuery(ctx context.Context, incoming message) {
 		s.respond(incoming.ID, map[string]any{"hunks": hunks})
 	case "x.ai/hunk-tracker/get-files":
 		files, err := tracker.Files(ctx)
+		if err != nil {
+			s.respondError(incoming.ID, -32000, err.Error())
+			return
+		}
+		s.respond(incoming.ID, map[string]any{"files": files})
+	case "x.ai/hunk-tracker/get-all-file-contents":
+		files, err := tracker.AllFileContents(ctx)
 		if err != nil {
 			s.respondError(incoming.ID, -32000, err.Error())
 			return

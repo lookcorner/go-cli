@@ -275,8 +275,8 @@ notifications. PTYs are owned by the ACP server connection and are cleaned up
 when it closes.
 
 Git repositories also expose compatible hunk tracker ACP extensions:
-`x.ai/hunk-tracker/get-hunks`, `get-files`, `get-summary`, `hunk-action`,
-`file-action`, `turn-action`, and `all-action`.
+`x.ai/hunk-tracker/get-hunks`, `get-files`, `get-all-file-contents`,
+`get-summary`, `hunk-action`, `file-action`, `turn-action`, and `all-action`.
 Tracked, staged, and text untracked changes are included; mutations performed
 through Gork file tools are attributed to the agent, while other changes are
 reported as external. Attribution is per hunk, so user and agent edits in the
@@ -285,6 +285,13 @@ same file remain distinct, including after staging. Actions accept `accept` or
 Accepted hunks are hidden for the current session, while rejection restores the
 recorded old text only when the current line range still exactly matches the
 hunk. A stale hunk fails closed instead of overwriting newer edits.
+
+When `get-hunks` includes a path, its response also includes Git HEAD
+`baseline` and on-disk `current` content views. The bulk content endpoint
+returns the same views for every dirty path, including accepted hunks and
+binary-only changes. Each view reports `missing`, `binary`, `tooLarge`,
+`lfsPointer`, `symlink`, or `full`; text reads are bounded to 1 MiB. Legacy
+`baselineContent` and `currentContent` fields remain for full text content.
 
 The ACP server also supports `x.ai/git/worktree/create`, `list`, `show`,
 `apply`, `remove`, `create_from_worktree`, and

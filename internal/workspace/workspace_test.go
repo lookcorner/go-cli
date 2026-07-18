@@ -43,3 +43,30 @@ func TestResolveRejectsEscapingSymlink(t *testing.T) {
 		t.Fatal("expected escaping symlink to be rejected")
 	}
 }
+
+func TestResolveEntryPreservesFinalSymlink(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target.txt")
+	link := filepath.Join(root, "link.txt")
+	if err := os.WriteFile(target, []byte("target"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	ws, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := ws.ResolveEntry("link.txt")
+	if err != nil || resolved != filepath.Join(ws.Root(), "link.txt") {
+		t.Fatalf("resolved entry=%q err=%v", resolved, err)
+	}
+	info, err := os.Lstat(resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("final symlink was followed: mode=%v", info.Mode())
+	}
+}
