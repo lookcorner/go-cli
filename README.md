@@ -278,6 +278,11 @@ summary snapshots for workspace history and recent-session views.
 `x.ai/sessions/list` merges those persisted summaries with live ACP sessions
 for a compact roster of working, idle, and dormant sessions.
 
+`x.ai/session/list` provides the local build-session lane with reference cursor
+encoding, title/ID search, page limits, `kind`/`cwd` facet filters, and window
+facet counts. Its conversations partial flag remains false because this build
+has no cloud conversations backend.
+
 `x.ai/workspaces/list` returns the reference-compatible partial `no_oauth`
 response because this local build has no cloud workspace backend.
 

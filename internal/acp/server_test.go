@@ -355,6 +355,57 @@ func TestSessionRosterWireContract(t *testing.T) {
 	}
 }
 
+func TestUnifiedSessionListWireContract(t *testing.T) {
+	dir, cwd := t.TempDir(), t.TempDir()
+	for _, id := range []string{"list-one", "list-two", "list-three"} {
+		logger, err := sessionlog.NewLoggerWithID(dir, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = logger.Append("session_metadata", map[string]any{"cwd": cwd, "modelId": "test-model"})
+		_ = logger.Append("user_prompt", map[string]any{"text": id + " title"})
+		_ = logger.Close()
+	}
+	var output bytes.Buffer
+	server := &Server{SessionDir: dir, output: &output}
+	call := func(id int, params map[string]any) map[string]any {
+		t.Helper()
+		output.Reset()
+		data, err := json.Marshal(params)
+		if err != nil {
+			t.Fatal(err)
+		}
+		server.handleUnifiedSessionList(message{ID: json.RawMessage(strconv.Itoa(id)), Method: "x.ai/session/list", Params: data})
+		var response map[string]any
+		if err := json.NewDecoder(&output).Decode(&response); err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}
+
+	first := call(1, map[string]any{"cwd": cwd, "limit": 2})
+	extension := first["result"].(map[string]any)
+	result := extension["result"].(map[string]any)
+	rows := result["sessions"].([]any)
+	cursor := result["nextCursor"].(string)
+	if len(rows) != 2 || cursor == "" || extension["error"] != nil {
+		t.Fatalf("unexpected first session page: %#v", first)
+	}
+	meta := result["_meta"].(map[string]any)
+	if meta["x.ai/partial"].(map[string]any)["conversations"] != false || len(meta["x.ai/facets"].(map[string]any)["keys"].([]any)) != 2 {
+		t.Fatalf("unexpected session list metadata: %#v", meta)
+	}
+	second := call(2, map[string]any{"cwd": cwd, "limit": 2, "cursor": cursor})
+	secondResult := second["result"].(map[string]any)["result"].(map[string]any)
+	if len(secondResult["sessions"].([]any)) != 1 || secondResult["nextCursor"] != nil {
+		t.Fatalf("unexpected second session page: %#v", second)
+	}
+	filtered := call(3, map[string]any{"cwd": cwd, "_meta": map[string]any{"x.ai/facetFilters": map[string]any{"kind": []any{"chat"}}}})
+	if rows := filtered["result"].(map[string]any)["result"].(map[string]any)["sessions"].([]any); len(rows) != 0 {
+		t.Fatalf("kind filter retained build rows: %#v", filtered)
+	}
+}
+
 func TestStaticExtensionsAndCompactCommand(t *testing.T) {
 	var output bytes.Buffer
 	streamer := &fixtureStreamer{results: []api.StreamResult{{Text: "preserve the implementation state"}}}
