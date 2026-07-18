@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -138,10 +139,8 @@ type fileConfig struct {
 	AuthProviderCommand string                     `json:"auth_provider_command,omitempty" toml:"auth_provider_command"`
 	AuthTokenTTL        int64                      `json:"auth_token_ttl,omitempty" toml:"auth_token_ttl"`
 	GrokComConfig       fileGrokComConfig          `json:"grok_com_config,omitempty" toml:"grok_com_config"`
-	Auth                struct {
-		PreferredMethod string `json:"preferred_method,omitempty" toml:"preferred_method"`
-	} `json:"auth,omitempty" toml:"auth"`
-	Models struct {
+	Auth                fileAuthConfig             `json:"auth,omitempty" toml:"auth"`
+	Models              struct {
 		Default   string `toml:"default"`
 		WebSearch string `toml:"web_search"`
 	} `json:"-" toml:"models"`
@@ -149,6 +148,31 @@ type fileConfig struct {
 	Toolset      struct {
 		WebFetch fileWebFetchConfig `json:"web_fetch,omitempty" toml:"web_fetch"`
 	} `json:"toolset,omitempty" toml:"toolset"`
+}
+
+type fileAuthConfig struct {
+	PreferredMethod string `json:"preferred_method,omitempty" toml:"preferred_method"`
+}
+
+type requirementsFile struct {
+	Permission    *PermissionConfig       `toml:"permission"`
+	GrokComConfig *requirementsGrokConfig `toml:"grok_com_config"`
+	Auth          *requirementsAuthConfig `toml:"auth"`
+}
+
+type requirementsAuthConfig struct {
+	PreferredMethod *string `toml:"preferred_method"`
+}
+
+type requirementsGrokConfig struct {
+	AuthProviderCommand *string `toml:"auth_provider_command"`
+	AuthTokenTTL        *int64  `toml:"auth_token_ttl"`
+	ForceLoginTeamUUID  any     `toml:"force_login_team_uuid"`
+	DisableAPIKeyAuth   *bool   `toml:"disable_api_key_auth"`
+	OAuth2              *struct {
+		PrincipalType *string `toml:"principal_type"`
+		PrincipalID   *string `toml:"principal_id"`
+	} `toml:"oauth2"`
 }
 
 type fileGrokComConfig struct {
@@ -318,6 +342,9 @@ func Load(path string) (Config, error) {
 	}
 
 	applyEnv(&cfg)
+	if err := applyRequirementsFiles(&cfg, requirementsPaths()); err != nil {
+		return Config{}, err
+	}
 	cfg.BaseURL = strings.TrimRight(cfg.BaseURL, "/")
 	cfg.WebSearch.BaseURL = strings.TrimRight(cfg.WebSearch.BaseURL, "/")
 	return cfg, nil
@@ -425,6 +452,93 @@ func applyEnv(cfg *Config) {
 	applyCompatEnv(&cfg.Compat.Claude, "CLAUDE")
 }
 
+func requirementsPaths() []string {
+	paths := make([]string, 0, 2)
+	if home := strings.TrimSpace(os.Getenv("GROK_HOME")); home != "" {
+		paths = append(paths, filepath.Join(home, "requirements.toml"))
+	} else if home, err := os.UserHomeDir(); err == nil {
+		paths = append(paths, filepath.Join(home, ".grok", "requirements.toml"))
+	}
+	if runtime.GOOS != "windows" {
+		paths = append(paths, "/etc/grok/requirements.toml")
+	}
+	return paths
+}
+
+func applyRequirementsFiles(cfg *Config, paths []string) error {
+	envFailClosed, _ := envBoolValue(os.Getenv("GROK_MANAGED_CONFIG_FAIL_CLOSED"))
+	envDisablesAPIKey, _ := envBoolValue(os.Getenv("GROK_DISABLE_API_KEY_AUTH"))
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			if envFailClosed {
+				return fmt.Errorf("read requirements %q: %w", path, err)
+			}
+			continue
+		}
+		fileFailClosed := false
+		var raw map[string]any
+		if toml.Unmarshal(data, &raw) == nil {
+			fileFailClosed, _ = raw["fail_closed"].(bool)
+			if _, hasVersionOverrides := raw["version_overrides"]; hasVersionOverrides {
+				if envFailClosed || fileFailClosed {
+					return fmt.Errorf("parse requirements %q: version_overrides are not supported", path)
+				}
+				continue
+			}
+		}
+		var requirement requirementsFile
+		if err := toml.Unmarshal(data, &requirement); err != nil {
+			if envFailClosed || fileFailClosed {
+				return fmt.Errorf("parse requirements %q: %w", path, err)
+			}
+			continue
+		}
+		if requirement.Permission != nil {
+			cfg.Permission = *requirement.Permission
+		}
+		if requirement.Auth != nil {
+			if requirement.Auth.PreferredMethod != nil {
+				cfg.PreferredAuthMethod = strings.ToLower(strings.TrimSpace(*requirement.Auth.PreferredMethod))
+			}
+		}
+		if requirement.GrokComConfig != nil {
+			managed := requirement.GrokComConfig
+			if managed.AuthProviderCommand != nil {
+				cfg.AuthProviderCommand = *managed.AuthProviderCommand
+			}
+			if managed.AuthTokenTTL != nil {
+				if *managed.AuthTokenTTL < 0 {
+					return fmt.Errorf("parse requirements %q: auth_token_ttl must not be negative", path)
+				}
+				cfg.AuthTokenTTL = time.Duration(*managed.AuthTokenTTL) * time.Second
+			}
+			if managed.OAuth2 != nil {
+				if managed.OAuth2.PrincipalType != nil {
+					cfg.AuthPrincipalType = strings.TrimSpace(*managed.OAuth2.PrincipalType)
+				}
+				if managed.OAuth2.PrincipalID != nil {
+					cfg.AuthPrincipalID = strings.TrimSpace(*managed.OAuth2.PrincipalID)
+				}
+			}
+			if managed.ForceLoginTeamUUID != nil {
+				teams, configured, err := forceLoginTeams(managed.ForceLoginTeamUUID)
+				if err != nil {
+					return fmt.Errorf("parse requirements %q: %w", path, err)
+				}
+				cfg.ForceLoginTeams, cfg.ForceLoginTeamConfigured = teams, configured
+			}
+			if managed.DisableAPIKeyAuth != nil && !envDisablesAPIKey {
+				cfg.DisableAPIKeyAuth = *managed.DisableAPIKeyAuth
+			}
+		}
+	}
+	return nil
+}
+
 func forceLoginTeams(value any) ([]string, bool, error) {
 	switch typed := value.(type) {
 	case nil:
@@ -515,6 +629,9 @@ func firstEnv(names ...string) string {
 }
 
 func DefaultPath() (string, error) {
+	if home := strings.TrimSpace(os.Getenv("GROK_HOME")); home != "" {
+		return filepath.Join(home, "config.toml"), nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve user home directory: %w", err)

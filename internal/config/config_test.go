@@ -315,6 +315,7 @@ func TestLoadJSONRemainsSupported(t *testing.T) {
 }
 
 func TestDefaultPathMatchesGrok(t *testing.T) {
+	t.Setenv("GROK_HOME", "")
 	t.Setenv("HOME", t.TempDir())
 	path, err := DefaultPath()
 	if err != nil {
@@ -322,6 +323,136 @@ func TestDefaultPathMatchesGrok(t *testing.T) {
 	}
 	if filepath.Base(path) != "config.toml" || filepath.Base(filepath.Dir(path)) != ".grok" {
 		t.Fatalf("unexpected default path: %s", path)
+	}
+}
+
+func TestDefaultPathUsesGROKHOME(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	path, err := DefaultPath()
+	if err != nil || path != filepath.Join(home, "config.toml") {
+		t.Fatalf("GROK_HOME config path=%q err=%v", path, err)
+	}
+}
+
+func TestRequirementsOverrideUserConfigAndEnvironment(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	t.Setenv("GROK_OAUTH2_PRINCIPAL_ID", "team-env")
+	t.Setenv("GROK_DISABLE_API_KEY_AUTH", "false")
+	t.Setenv("GROK_AUTH_PROVIDER_COMMAND", "printf env-token")
+	configPath := filepath.Join(home, "config.toml")
+	configData := []byte(`
+[grok_com_config]
+force_login_team_uuid = "team-user"
+disable_api_key_auth = false
+
+[grok_com_config.oauth2]
+principal_id = "team-user"
+
+[auth]
+preferred_method = "api_key"
+
+[[permission.rules]]
+action = "allow"
+tool = "bash"
+pattern = "git *"
+`)
+	if err := os.WriteFile(configPath, configData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	requirementsData := []byte(`
+fail_closed = true
+[grok_com_config]
+force_login_team_uuid = ["team-managed"]
+disable_api_key_auth = true
+auth_provider_command = ""
+
+[grok_com_config.oauth2]
+principal_id = "team-managed"
+
+[auth]
+preferred_method = "oidc"
+
+[[permission.rules]]
+action = "deny"
+tool = "bash"
+pattern = "git push*"
+`)
+	if err := os.WriteFile(filepath.Join(home, "requirements.toml"), requirementsData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.ForceLoginTeamConfigured || strings.Join(cfg.ForceLoginTeams, ",") != "team-managed" || !cfg.DisableAPIKeyAuth || cfg.AuthPrincipalID != "team-managed" || cfg.PreferredAuthMethod != "oidc" || cfg.AuthProviderCommand != "" {
+		t.Fatalf("effective requirements config=%#v", cfg)
+	}
+	if len(cfg.Permission.Rules) != 1 || cfg.Permission.Rules[0].Action != "deny" || cfg.Permission.Rules[0].Pattern == nil || *cfg.Permission.Rules[0].Pattern != "git push*" {
+		t.Fatalf("managed permission rules=%#v", cfg.Permission.Rules)
+	}
+}
+
+func TestSystemRequirementsOverrideUserRequirements(t *testing.T) {
+	userPath := filepath.Join(t.TempDir(), "user.toml")
+	systemPath := filepath.Join(t.TempDir(), "system.toml")
+	if err := os.WriteFile(userPath, []byte("[grok_com_config]\nforce_login_team_uuid = \"team-user\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(systemPath, []byte("[grok_com_config]\nforce_login_team_uuid = []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{}
+	if err := applyRequirementsFiles(&cfg, []string{userPath, systemPath}); err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.ForceLoginTeamConfigured || cfg.ForceLoginTeams == nil || len(cfg.ForceLoginTeams) != 0 {
+		t.Fatalf("system requirements did not fail closed: %#v", cfg.ForceLoginTeams)
+	}
+}
+
+func TestRequirementsFailClosedParsing(t *testing.T) {
+	t.Setenv("GROK_MANAGED_CONFIG_FAIL_CLOSED", "")
+	path := filepath.Join(t.TempDir(), "requirements.toml")
+	invalid := []byte("fail_closed = true\n[permission]\nrules = \"invalid\"\n")
+	if err := os.WriteFile(path, invalid, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyRequirementsFiles(&Config{}, []string{path}); err == nil || !strings.Contains(err.Error(), "parse requirements") {
+		t.Fatalf("file fail_closed error=%v", err)
+	}
+	if err := os.WriteFile(path, []byte("[permission]\nrules = \"invalid\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyRequirementsFiles(&Config{}, []string{path}); err != nil {
+		t.Fatalf("soft requirements error=%v", err)
+	}
+	if err := os.WriteFile(path, []byte("[broken"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GROK_MANAGED_CONFIG_FAIL_CLOSED", "true")
+	if err := applyRequirementsFiles(&Config{}, []string{path}); err == nil || !strings.Contains(err.Error(), "parse requirements") {
+		t.Fatalf("environment fail_closed error=%v", err)
+	}
+}
+
+func TestRequirementsVersionOverridesRespectFailClosed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "requirements.toml")
+	data := []byte("fail_closed = true\n[[version_overrides]]\nminimum_version = \"1.0.0\"\n")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyRequirementsFiles(&Config{}, []string{path}); err == nil || !strings.Contains(err.Error(), "version_overrides") {
+		t.Fatalf("unsupported fail-closed version override error=%v", err)
+	}
+	data = []byte("[grok_com_config]\ndisable_api_key_auth = true\n[[version_overrides]]\nminimum_version = \"1.0.0\"\n")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{}
+	if err := applyRequirementsFiles(&cfg, []string{path}); err != nil || cfg.DisableAPIKeyAuth {
+		t.Fatalf("soft version override layer was not skipped: cfg=%#v err=%v", cfg, err)
 	}
 }
 

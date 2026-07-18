@@ -227,3 +227,30 @@ func TestPreferredAuthMethodFailsClosed(t *testing.T) {
 		})
 	}
 }
+
+func TestRequirementsDenyCannotBeOverriddenByCLIAllow(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	data := []byte("[[permission.rules]]\naction = \"deny\"\ntool = \"bash\"\npattern = \"git push*\"\n")
+	if err := os.WriteFile(filepath.Join(home, "requirements.toml"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(filepath.Join(home, "missing.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	allow, ask, deny, err := permissionRules(cfg.Permission, []string{"Bash(*)"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approver, err := tools.NewPolicyApprover(
+		tools.PromptApprover{Mode: tools.PermissionAuto}, tools.PromptApprover{Mode: tools.PermissionAuto},
+		allow, ask, deny,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := approver.Approve(context.Background(), "shell", "git push origin main"); err == nil || !strings.Contains(err.Error(), "denied") {
+		t.Fatalf("CLI allow bypassed requirements deny: %v", err)
+	}
+}

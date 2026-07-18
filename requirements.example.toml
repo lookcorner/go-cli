@@ -1,0 +1,14 @@
+# Copy selected policy into $GROK_HOME/requirements.toml or /etc/grok/requirements.toml.
+fail_closed = true
+
+[grok_com_config]
+force_login_team_uuid = ["team-uuid"]
+disable_api_key_auth = true
+
+[auth]
+preferred_method = "oidc"
+
+[[permission.rules]]
+action = "deny"
+tool = "bash"
+pattern = "git push --force*"

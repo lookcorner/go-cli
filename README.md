@@ -93,6 +93,15 @@ are supported. The earlier JSON format remains accepted when passed with
 `--config`; an existing `$XDG_CONFIG_HOME/gork-go/config.json` is used as a
 fallback when `~/.grok/config.toml` does not exist.
 
+Managed authentication and permission policy may be placed in
+`$GROK_HOME/requirements.toml` (or `~/.grok/requirements.toml`). On Unix,
+`/etc/grok/requirements.toml` is applied afterward and wins conflicts. These
+layers override user config and relevant environment settings; deny rules still
+win over CLI `--allow`. Invalid requirements soft-fail by default. Set
+`fail_closed = true` in a valid layer, or
+`GROK_MANAGED_CONFIG_FAIL_CLOSED=true`, to make policy loading errors stop
+startup. See `requirements.example.toml`.
+
 `[models].web_search` may select another `[model.<name>]` Responses provider
 for the `web_search` tool; otherwise a Responses-backed main model is reused.
 `GORK_WEB_SEARCH_API_KEY`, `GORK_WEB_SEARCH_BASE_URL`, and
