@@ -280,6 +280,9 @@ func (r *Registry) SetRewindStore(store *workspace.RewindStore, promptIndex func
 	r.rewind.mu.Lock()
 	r.rewind.store, r.rewind.promptIndex = store, promptIndex
 	r.rewind.mu.Unlock()
+	if r.hunks != nil {
+		r.hunks.setPromptIndex(promptIndex)
+	}
 }
 
 func (r *Registry) BeginGoal(objective string) error {

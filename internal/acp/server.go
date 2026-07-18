@@ -190,7 +190,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleClose(incoming)
 		case "x.ai/hunk-tracker/get-hunks", "x.ai/hunk-tracker/get-files", "x.ai/hunk-tracker/get-summary":
 			s.handleHunkQuery(ctx, incoming)
-		case "x.ai/hunk-tracker/hunk-action", "x.ai/hunk-tracker/file-action", "x.ai/hunk-tracker/all-action":
+		case "x.ai/hunk-tracker/hunk-action", "x.ai/hunk-tracker/file-action", "x.ai/hunk-tracker/turn-action", "x.ai/hunk-tracker/all-action":
 			s.handleHunkAction(ctx, incoming)
 		case "x.ai/git/worktree/create", "x.ai/git/worktree/list", "x.ai/git/worktree/show", "x.ai/git/worktree/remove", "x.ai/git/worktree/apply":
 			s.handleWorktree(ctx, incoming)
@@ -603,10 +603,11 @@ func (s *Server) handleWorktree(ctx context.Context, incoming message) {
 
 func (s *Server) handleHunkAction(ctx context.Context, incoming message) {
 	var params struct {
-		SessionID string `json:"sessionId"`
-		HunkID    string `json:"hunkId"`
-		Path      string `json:"path"`
-		Action    string `json:"action"`
+		SessionID   string `json:"sessionId"`
+		HunkID      string `json:"hunkId"`
+		Path        string `json:"path"`
+		PromptIndex *int   `json:"promptIndex"`
+		Action      string `json:"action"`
 	}
 	if json.Unmarshal(incoming.Params, &params) != nil || params.SessionID == "" {
 		s.respondError(incoming.ID, -32602, "sessionId is required")
@@ -629,6 +630,12 @@ func (s *Server) handleHunkAction(ctx context.Context, incoming message) {
 		count, err = tracker.HunkAction(ctx, params.HunkID, params.Action)
 	case "x.ai/hunk-tracker/file-action":
 		count, err = tracker.FileAction(ctx, params.Path, params.Action)
+	case "x.ai/hunk-tracker/turn-action":
+		if params.PromptIndex == nil {
+			s.respondError(incoming.ID, -32602, "promptIndex is required")
+			return
+		}
+		count, err = tracker.TurnAction(ctx, *params.PromptIndex, params.Action)
 	case "x.ai/hunk-tracker/all-action":
 		count, err = tracker.AllAction(ctx, params.Action)
 	}

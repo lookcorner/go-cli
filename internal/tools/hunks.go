@@ -23,17 +23,18 @@ import (
 var hunkHeader = regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@`)
 
 type Hunk struct {
-	Path      string    `json:"path"`
-	ID        string    `json:"id"`
-	OldStart  int       `json:"oldStart"`
-	OldLines  int       `json:"oldLines"`
-	NewStart  int       `json:"newStart"`
-	NewLines  int       `json:"newLines"`
-	Source    string    `json:"source"`
-	OldText   string    `json:"oldText,omitempty"`
-	NewText   string    `json:"newText"`
-	Patch     string    `json:"patch"`
-	CreatedAt time.Time `json:"createdAt"`
+	Path        string    `json:"path"`
+	ID          string    `json:"id"`
+	OldStart    int       `json:"oldStart"`
+	OldLines    int       `json:"oldLines"`
+	NewStart    int       `json:"newStart"`
+	NewLines    int       `json:"newLines"`
+	Source      string    `json:"source"`
+	OldText     string    `json:"oldText,omitempty"`
+	NewText     string    `json:"newText"`
+	Patch       string    `json:"patch"`
+	CreatedAt   time.Time `json:"createdAt"`
+	PromptIndex *int      `json:"promptIndex,omitempty"`
 }
 
 type HunkFile struct {
@@ -46,15 +47,28 @@ type HunkFile struct {
 }
 
 type HunkTracker struct {
-	ws         *workspace.Workspace
-	mu         sync.RWMutex
-	agentHunks map[string]time.Time
-	accepted   map[string]bool
-	actionMu   sync.Mutex
+	ws          *workspace.Workspace
+	mu          sync.RWMutex
+	agentHunks  map[string]hunkAttribution
+	promptIndex func() int
+	accepted    map[string]bool
+	actionMu    sync.Mutex
+}
+
+type hunkAttribution struct {
+	createdAt      time.Time
+	promptIndex    int
+	hasPromptIndex bool
 }
 
 func NewHunkTracker(ws *workspace.Workspace) *HunkTracker {
-	return &HunkTracker{ws: ws, agentHunks: make(map[string]time.Time), accepted: make(map[string]bool)}
+	return &HunkTracker{ws: ws, agentHunks: make(map[string]hunkAttribution), accepted: make(map[string]bool)}
+}
+
+func (t *HunkTracker) setPromptIndex(current func() int) {
+	t.mu.Lock()
+	t.promptIndex = current
+	t.mu.Unlock()
 }
 
 func (t *HunkTracker) snapshot(ctx context.Context, path string) map[string]bool {
@@ -86,11 +100,20 @@ func (t *HunkTracker) markAgentChanges(ctx context.Context, path string, before 
 		return
 	}
 	now := time.Now().UTC()
+	promptIndex, hasPromptIndex := 0, false
+	t.mu.RLock()
+	currentPrompt := t.promptIndex
+	t.mu.RUnlock()
+	if currentPrompt != nil {
+		if index := currentPrompt(); index >= 0 {
+			promptIndex, hasPromptIndex = index, true
+		}
+	}
 	t.mu.Lock()
 	for _, hunk := range hunks {
 		key := hunkAttributionKey(hunk)
 		if !before[key] {
-			t.agentHunks[key] = now
+			t.agentHunks[key] = hunkAttribution{createdAt: now, promptIndex: promptIndex, hasPromptIndex: hasPromptIndex}
 		}
 	}
 	t.mu.Unlock()
@@ -211,6 +234,26 @@ func (t *HunkTracker) AllAction(ctx context.Context, action string) (int, error)
 		return 0, errors.New("no visible hunks")
 	}
 	return t.applyAction(hunks, action)
+}
+
+func (t *HunkTracker) TurnAction(ctx context.Context, promptIndex int, action string) (int, error) {
+	if promptIndex < 0 {
+		return 0, errors.New("promptIndex must be non-negative")
+	}
+	hunks, err := t.Hunks(ctx, "", "agent")
+	if err != nil {
+		return 0, err
+	}
+	selected := hunks[:0]
+	for _, hunk := range hunks {
+		if hunk.PromptIndex != nil && *hunk.PromptIndex == promptIndex {
+			selected = append(selected, hunk)
+		}
+	}
+	if len(selected) == 0 {
+		return 0, fmt.Errorf("no visible agent hunks for promptIndex %d", promptIndex)
+	}
+	return t.applyAction(selected, action)
 }
 
 func (t *HunkTracker) applyAction(hunks []Hunk, action string) (int, error) {
@@ -392,7 +435,7 @@ func (t *HunkTracker) parseDiff(diff string) []Hunk {
 			return
 		}
 		current.Patch, current.OldText, current.NewText = patch.String(), oldText.String(), newText.String()
-		current.Source, current.CreatedAt = t.source(*current)
+		current.Source, current.CreatedAt, current.PromptIndex = t.source(*current)
 		sum := sha256.Sum256([]byte(path + current.Patch))
 		current.ID = hex.EncodeToString(sum[:12])
 		result = append(result, *current)
@@ -478,22 +521,26 @@ func (t *HunkTracker) untracked(ctx context.Context, path string) ([]Hunk, error
 		text := string(data)
 		patch := fmt.Sprintf("@@ -0,0 +1,%d @@\n", lineCount(text))
 		hunk := Hunk{Path: filepath.ToSlash(name), NewStart: 1, NewLines: lineCount(text), NewText: text, Patch: patch + addPrefixes(text)}
-		source, created := t.source(hunk)
+		source, created, promptIndex := t.source(hunk)
 		sum := sha256.Sum256([]byte(name + patch + text))
-		hunk.ID, hunk.Source, hunk.CreatedAt = hex.EncodeToString(sum[:12]), source, created
+		hunk.ID, hunk.Source, hunk.CreatedAt, hunk.PromptIndex = hex.EncodeToString(sum[:12]), source, created, promptIndex
 		result = append(result, hunk)
 	}
 	return result, nil
 }
 
-func (t *HunkTracker) source(hunk Hunk) (string, time.Time) {
+func (t *HunkTracker) source(hunk Hunk) (string, time.Time, *int) {
 	t.mu.RLock()
-	created, ok := t.agentHunks[hunkAttributionKey(hunk)]
+	attribution, ok := t.agentHunks[hunkAttributionKey(hunk)]
 	t.mu.RUnlock()
 	if ok {
-		return "agent", created
+		if attribution.hasPromptIndex {
+			index := attribution.promptIndex
+			return "agent", attribution.createdAt, &index
+		}
+		return "agent", attribution.createdAt, nil
 	}
-	return "external", time.Time{}
+	return "external", time.Time{}, nil
 }
 
 func hunkAttributionKey(hunk Hunk) string {

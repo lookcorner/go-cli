@@ -154,6 +154,40 @@ func TestHunkTrackerSnapshotFailureDoesNotClaimExistingHunks(t *testing.T) {
 	}
 }
 
+func TestHunkTrackerTurnActionUsesPromptIndex(t *testing.T) {
+	root, registry := newHunkFixture(t, map[string]string{"turns.txt": "one\ntwo\nthree\nfour\nfive\n"})
+	promptIndex := 0
+	registry.SetRewindStore(nil, func() int { return promptIndex })
+	if _, err := registry.Execute(context.Background(), "edit_file", json.RawMessage(`{
+		"path":"turns.txt","old_text":"one","new_text":"turn-zero"
+	}`)); err != nil {
+		t.Fatal(err)
+	}
+	promptIndex = 1
+	if _, err := registry.Execute(context.Background(), "edit_file", json.RawMessage(`{
+		"path":"turns.txt","old_text":"five","new_text":"turn-one"
+	}`)); err != nil {
+		t.Fatal(err)
+	}
+	hunks, err := registry.HunkTracker().Hunks(context.Background(), "turns.txt", "agent")
+	if err != nil || len(hunks) != 2 || hunks[0].PromptIndex == nil || hunks[1].PromptIndex == nil {
+		t.Fatalf("turn hunks=%#v err=%v", hunks, err)
+	}
+	if count, err := registry.HunkTracker().TurnAction(context.Background(), 0, "reject"); err != nil || count != 1 {
+		t.Fatalf("reject turn zero: count=%d err=%v", count, err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "turns.txt"))
+	if err != nil || string(data) != "one\ntwo\nthree\nfour\nturn-one\n" {
+		t.Fatalf("turn reject content=%q err=%v", data, err)
+	}
+	if count, err := registry.HunkTracker().TurnAction(context.Background(), 1, "accept"); err != nil || count != 1 {
+		t.Fatalf("accept turn one: count=%d err=%v", count, err)
+	}
+	if _, err := registry.HunkTracker().TurnAction(context.Background(), -1, "accept"); err == nil {
+		t.Fatal("negative prompt index was accepted")
+	}
+}
+
 func TestHunkTrackerAcceptAndRejectActions(t *testing.T) {
 	root, registry := newHunkFixture(t, map[string]string{"tracked.txt": "before\n"})
 	if _, err := registry.Execute(context.Background(), "edit_file", json.RawMessage(`{
