@@ -37,8 +37,43 @@ func TestCatalogScanAndTool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(output, "Inspect the diff") || !strings.Contains(output, "Source: test") {
+	if !strings.Contains(output, "Inspect the diff") || !strings.HasPrefix(output, `<skill name="code-review" description="Review a code change" path="`) {
 		t.Fatalf("unexpected skill output: %s", output)
+	}
+}
+
+func TestSkillInvocationMetadataControlsToolVisibility(t *testing.T) {
+	root := t.TempDir()
+	for name, frontmatter := range map[string]string{
+		"callable": "when-to-use: User asks to deploy",
+		"manual":   "disable-model-invocation: true",
+		"yes":      "disable-model-invocation: yes",
+	} {
+		dir := filepath.Join(root, name)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		content := "---\nname: " + name + "\ndescription: " + name + " skill\n" + frontmatter + "\n---\nBody\n"
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	catalog := &Catalog{byName: make(map[string]Skill)}
+	if err := catalog.scan(root, "test"); err != nil {
+		t.Fatal(err)
+	}
+	definition := catalog.Tool().Definition()
+	if !strings.Contains(definition.Description, "callable") || !strings.Contains(definition.Description, "yes") || strings.Contains(definition.Description, "manual") {
+		t.Fatalf("unexpected callable skill names: %s", definition.Description)
+	}
+	if summary := catalog.Summary(); !strings.Contains(summary, "Use when: User asks to deploy") || !strings.Contains(summary, "Absolute path:") || strings.Contains(summary, "manual") {
+		t.Fatalf("metadata missing from summary: %s", summary)
+	}
+	if _, err := catalog.Tool().Execute(context.Background(), json.RawMessage(`{"name":"manual"}`)); err == nil {
+		t.Fatal("non-model-invocable skill was accepted")
+	}
+	if _, err := catalog.Tool().Execute(context.Background(), json.RawMessage(`{"name":"yes"}`)); err != nil {
+		t.Fatalf("non-literal true must not disable model invocation: %v", err)
 	}
 }
 
@@ -48,14 +83,14 @@ func TestParseMetadataNormalizesNames(t *testing.T) {
 		"tool-v1.2":           "tool-v1-2",
 		" spaced  name ":      "spaced-name",
 	} {
-		name, _, _ := parseMetadata("---\nname: "+input+"\n---\n", "fallback")
-		if name != want {
-			t.Errorf("parseMetadata name %q = %q, want %q", input, name, want)
+		metadata := parseMetadata("---\nname: "+input+"\n---\n", "fallback")
+		if metadata.Name != want {
+			t.Errorf("parseMetadata name %q = %q, want %q", input, metadata.Name, want)
 		}
 	}
-	name, description, _ := parseMetadata("---\nname: 日本語\ndescription: kept\n---\n", "valid.dir")
-	if name != "valid-dir" || description != "kept" {
-		t.Fatalf("invalid name did not use normalized directory fallback: name=%q description=%q", name, description)
+	metadata := parseMetadata("---\nname: 日本語\ndescription: kept\n---\n", "valid.dir")
+	if metadata.Name != "valid-dir" || metadata.Description != "kept" {
+		t.Fatalf("invalid name did not use normalized directory fallback: %#v", metadata)
 	}
 }
 
@@ -73,7 +108,7 @@ func TestParseMetadataPaths(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, _, got := parseMetadata("---\nname: x\npaths: "+test.value+"\n---\n", "x")
+			got := parseMetadata("---\nname: x\npaths: "+test.value+"\n---\n", "x").Paths
 			if strings.Join(got, "|") != strings.Join(test.want, "|") {
 				t.Fatalf("paths = %#v, want %#v", got, test.want)
 			}
@@ -95,11 +130,19 @@ func TestParseMetadataDescriptionFallback(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, got, _ := parseMetadata("---\nname: x\n---\n\n"+test.body, "x")
+			got := parseMetadata("---\nname: x\n---\n\n"+test.body, "x").Description
 			if got != test.want {
 				t.Fatalf("description = %q, want %q", got, test.want)
 			}
 		})
+	}
+}
+
+func TestSkillHintsUseAliasesAndUnicodeCharacterLimit(t *testing.T) {
+	long := strings.Repeat("界", maxSkillDescriptionChars+10)
+	metadata := parseMetadata("---\nname: x\ndescription: "+long+"\nwhen_to_use: "+long+"\n---\n", "x")
+	if len([]rune(metadata.Description)) != maxSkillDescriptionChars || len([]rune(metadata.WhenToUse)) != maxSkillDescriptionChars {
+		t.Fatalf("skill hints were not character-capped: description=%d when=%d", len([]rune(metadata.Description)), len([]rune(metadata.WhenToUse)))
 	}
 }
 

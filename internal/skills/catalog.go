@@ -22,17 +22,20 @@ import (
 )
 
 const (
-	maxSkillBytes = 1 << 20
-	maxSkills     = 500
+	maxSkillBytes            = 1 << 20
+	maxSkillDescriptionChars = 1024
+	maxSkills                = 500
 )
 
 type Skill struct {
-	Name        string
-	Description string
-	Path        string
-	Source      string
-	Paths       []string
-	digest      [sha256.Size]byte
+	Name                   string
+	Description            string
+	Path                   string
+	Source                 string
+	Paths                  []string
+	WhenToUse              string
+	DisableModelInvocation bool
+	digest                 [sha256.Size]byte
 }
 
 type skillRoot struct {
@@ -156,15 +159,15 @@ func (c *Catalog) scan(root, source string) error {
 		if !utf8.Valid(data) {
 			return fmt.Errorf("skill %q is not UTF-8", path)
 		}
-		name, description, paths := parseMetadata(string(data), filepath.Base(filepath.Dir(path)))
-		if name == "" {
+		metadata := parseMetadata(string(data), filepath.Base(filepath.Dir(path)))
+		if metadata.Name == "" {
 			return nil
 		}
 		if c.seen != nil {
-			c.seen[name] = true
+			c.seen[metadata.Name] = true
 		}
-		if _, active := c.byName[name]; !active {
-			if _, held := c.pending[name]; !held && len(c.byName)+len(c.pending) >= maxSkills {
+		if _, active := c.byName[metadata.Name]; !active {
+			if _, held := c.pending[metadata.Name]; !held && len(c.byName)+len(c.pending) >= maxSkills {
 				return errors.New("skill discovery exceeded 500 skills")
 			}
 		}
@@ -173,17 +176,21 @@ func (c *Catalog) scan(root, source string) error {
 			return fmt.Errorf("resolve skill %q: %w", path, err)
 		}
 		// Later roots have higher priority, so workspace skills override user skills.
-		active, wasActive := c.byName[name]
-		delete(c.byName, name)
-		delete(c.pending, name)
-		skill := Skill{Name: name, Description: description, Path: real, Source: source, Paths: paths, digest: sha256.Sum256(data)}
-		if len(paths) == 0 || wasActive && active.Path == real {
-			c.byName[name] = skill
+		active, wasActive := c.byName[metadata.Name]
+		delete(c.byName, metadata.Name)
+		delete(c.pending, metadata.Name)
+		skill := Skill{
+			Name: metadata.Name, Description: metadata.Description, Path: real, Source: source,
+			Paths: metadata.Paths, WhenToUse: metadata.WhenToUse,
+			DisableModelInvocation: metadata.DisableModelInvocation, digest: sha256.Sum256(data),
+		}
+		if len(metadata.Paths) == 0 || wasActive && active.Path == real {
+			c.byName[metadata.Name] = skill
 		} else {
 			if c.pending == nil {
 				c.pending = make(map[string]Skill)
 			}
-			c.pending[name] = skill
+			c.pending[metadata.Name] = skill
 		}
 		return nil
 	})
@@ -248,18 +255,33 @@ func (c *Catalog) reload() error {
 			delete(fresh.pending, name)
 		}
 	}
-	changed := len(fresh.byName) != len(c.byName)
-	for name, skill := range fresh.byName {
-		previous, existed := c.byName[name]
-		if !existed || previous.Path != skill.Path || previous.Source != skill.Source || previous.Description != skill.Description || previous.digest != skill.digest || strings.Join(previous.Paths, "\x00") != strings.Join(skill.Paths, "\x00") {
-			changed = true
-		}
-	}
+	changed := modelSkillsChanged(c.byName, fresh.byName)
 	c.byName, c.pending, c.checked, c.seen = fresh.byName, fresh.pending, fresh.checked, fresh.seen
 	if changed {
 		c.changed = true
 	}
 	return nil
+}
+
+func modelSkillsChanged(before, after map[string]Skill) bool {
+	visibleAfter := 0
+	for name, skill := range after {
+		if skill.DisableModelInvocation {
+			continue
+		}
+		visibleAfter++
+		previous, existed := before[name]
+		if !existed || previous.DisableModelInvocation || previous.Path != skill.Path || previous.Source != skill.Source || previous.Description != skill.Description || previous.digest != skill.digest || strings.Join(previous.Paths, "\x00") != strings.Join(skill.Paths, "\x00") {
+			return true
+		}
+	}
+	visibleBefore := 0
+	for _, skill := range before {
+		if !skill.DisableModelInvocation {
+			visibleBefore++
+		}
+	}
+	return visibleBefore != visibleAfter
 }
 
 func (c *Catalog) DrainReminder() string {
@@ -271,13 +293,17 @@ func (c *Catalog) DrainReminder() string {
 	if !c.changed {
 		return ""
 	}
+	names := c.modelSkillNamesLocked()
+	c.changed = false
 	var output strings.Builder
 	output.WriteString("<system-reminder>\nSkills changed on disk:\n")
-	for _, name := range c.namesLocked() {
-		skill := c.byName[name]
-		fmt.Fprintf(&output, "- %s: %s (%s)\n", name, skill.Description, skill.Source)
+	if len(names) == 0 {
+		output.WriteString("- No skills are currently available.\n")
+	} else {
+		for _, name := range names {
+			writeSkillListing(&output, c.byName[name])
+		}
 	}
-	c.changed = false
 	output.WriteString("Use the skill tool to load one when it matches the task.\n</system-reminder>")
 	return output.String()
 }
@@ -315,7 +341,7 @@ func (c *Catalog) Activate(toolName string, raw json.RawMessage) string {
 	c.discoverForPath(path)
 	var activated []string
 	for name, skill := range c.byName {
-		if before[name] != skill.Path {
+		if before[name] != skill.Path && !skill.DisableModelInvocation {
 			activated = append(activated, name)
 		}
 	}
@@ -328,8 +354,7 @@ func (c *Catalog) Activate(toolName string, raw json.RawMessage) string {
 	output.WriteString(rel)
 	output.WriteString(":\n")
 	for _, name := range activated {
-		skill := c.byName[name]
-		fmt.Fprintf(&output, "- %s: %s (%s)\n", name, skill.Description, skill.Source)
+		writeSkillListing(&output, c.byName[name])
 	}
 	output.WriteString("Use the skill tool to load one when it matches the task.\n</system-reminder>")
 	return output.String()
@@ -461,17 +486,24 @@ func (c *Catalog) Summary() string {
 	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if len(c.byName) == 0 {
+	names := c.modelSkillNamesLocked()
+	if len(names) == 0 {
 		return ""
 	}
-	names := c.namesLocked()
 	var output strings.Builder
-	output.WriteString("Available skills are listed below. Use the skill tool to load a skill's complete instructions when the user names it or the task clearly matches it.\n")
+	output.WriteString("The following skills are available for use:\n\n")
 	for _, name := range names {
-		skill := c.byName[name]
-		fmt.Fprintf(&output, "- %s: %s (%s)\n", skill.Name, skill.Description, skill.Source)
+		writeSkillListing(&output, c.byName[name])
 	}
 	return output.String()
+}
+
+func writeSkillListing(output *strings.Builder, skill Skill) {
+	fmt.Fprintf(output, "- %s: %s\n", skill.Name, skill.Description)
+	if skill.WhenToUse != "" {
+		fmt.Fprintf(output, "  Use when: %s\n", skill.WhenToUse)
+	}
+	fmt.Fprintf(output, "  Absolute path: %s\n", skill.Path)
 }
 
 func (c *Catalog) Names() []string {
@@ -492,12 +524,25 @@ func (c *Catalog) namesLocked() []string {
 	return names
 }
 
+func (c *Catalog) modelSkillNamesLocked() []string {
+	names := make([]string, 0, len(c.byName))
+	for name, skill := range c.byName {
+		if !skill.DisableModelInvocation {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
 func (c *Catalog) Tool() *Tool { return &Tool{catalog: c} }
 
 type Tool struct{ catalog *Catalog }
 
 func (t *Tool) Definition() api.ToolDefinition {
-	names := t.catalog.Names()
+	t.catalog.mu.RLock()
+	names := t.catalog.modelSkillNamesLocked()
+	t.catalog.mu.RUnlock()
 	nameSchema := map[string]any{"type": "string"}
 	if len(names) > 0 {
 		nameSchema["enum"] = names
@@ -523,7 +568,7 @@ func (t *Tool) Execute(_ context.Context, raw json.RawMessage) (string, error) {
 	t.catalog.mu.RLock()
 	skill, ok := t.catalog.byName[args.Name]
 	t.catalog.mu.RUnlock()
-	if !ok {
+	if !ok || skill.DisableModelInvocation {
 		return "", fmt.Errorf("unknown skill %q", args.Name)
 	}
 	data, err := os.ReadFile(skill.Path)
@@ -533,42 +578,75 @@ func (t *Tool) Execute(_ context.Context, raw json.RawMessage) (string, error) {
 	if len(data) > maxSkillBytes || !utf8.Valid(data) {
 		return "", fmt.Errorf("skill %q is too large or no longer UTF-8", args.Name)
 	}
-	return fmt.Sprintf("Skill: %s\nSource: %s\nPath: %s\n\n%s", skill.Name, skill.Source, skill.Path, data), nil
+	return fmt.Sprintf(
+		"<skill name=\"%s\" description=\"%s\" path=\"%s\">\n%s\n</skill>",
+		skill.Name, skill.Description, skill.Path, data,
+	), nil
 }
 
-func parseMetadata(content, fallbackName string) (string, string, []string) {
+type skillMetadata struct {
+	Name                   string
+	Description            string
+	Paths                  []string
+	WhenToUse              string
+	DisableModelInvocation bool
+}
+
+func parseMetadata(content, fallbackName string) skillMetadata {
 	fallbackName = normalizeSkillName(fallbackName)
-	name := fallbackName
+	result := skillMetadata{Name: fallbackName}
 	body := content
 	if !strings.HasPrefix(content, "---\n") {
-		return name, descriptionFromBody(body, name), nil
+		result.Description = capSkillText(descriptionFromBody(body, result.Name))
+		return result
 	}
 	end := strings.Index(content[4:], "\n---\n")
 	if end < 0 {
-		return name, descriptionFromBody(body, name), nil
+		result.Description = capSkillText(descriptionFromBody(body, result.Name))
+		return result
 	}
 	body = content[4+end+5:]
 	var metadata struct {
-		Name        yaml.Node `yaml:"name"`
-		Description yaml.Node `yaml:"description"`
-		Paths       yaml.Node `yaml:"paths"`
+		Name                   yaml.Node `yaml:"name"`
+		Description            yaml.Node `yaml:"description"`
+		Paths                  yaml.Node `yaml:"paths"`
+		WhenToUse              yaml.Node `yaml:"when-to-use"`
+		WhenToUseAlias         yaml.Node `yaml:"when_to_use"`
+		DisableModelInvocation yaml.Node `yaml:"disable-model-invocation"`
 	}
 	if yaml.Unmarshal([]byte(content[4:4+end]), &metadata) != nil {
-		return name, descriptionFromBody(body, name), nil
+		result.Description = capSkillText(descriptionFromBody(body, result.Name))
+		return result
 	}
 	if metadata.Name.Kind == yaml.ScalarNode {
 		if candidate := normalizeSkillName(metadata.Name.Value); candidate != "" {
-			name = candidate
+			result.Name = candidate
 		}
 	}
-	description := ""
 	if metadata.Description.Kind == yaml.ScalarNode {
-		description = strings.TrimSpace(metadata.Description.Value)
+		result.Description = capSkillText(metadata.Description.Value)
 	}
-	if description == "" {
-		description = descriptionFromBody(body, name)
+	if result.Description == "" {
+		result.Description = capSkillText(descriptionFromBody(body, result.Name))
 	}
-	return name, description, parseSkillPaths(metadata.Paths)
+	whenToUse := metadata.WhenToUse
+	if whenToUse.Kind == 0 {
+		whenToUse = metadata.WhenToUseAlias
+	}
+	if whenToUse.Kind == yaml.ScalarNode {
+		result.WhenToUse = capSkillText(whenToUse.Value)
+	}
+	result.DisableModelInvocation = metadata.DisableModelInvocation.Kind == yaml.ScalarNode && strings.EqualFold(metadata.DisableModelInvocation.Value, "true")
+	result.Paths = parseSkillPaths(metadata.Paths)
+	return result
+}
+
+func capSkillText(value string) string {
+	runes := []rune(strings.TrimSpace(value))
+	if len(runes) > maxSkillDescriptionChars {
+		runes = runes[:maxSkillDescriptionChars]
+	}
+	return string(runes)
 }
 
 func normalizeSkillName(name string) string {
