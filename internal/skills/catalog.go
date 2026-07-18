@@ -46,6 +46,10 @@ type Skill struct {
 	Paths                  []string
 	WhenToUse              string
 	DisableModelInvocation bool
+	baseName               string
+	scope                  string
+	rekeyed                bool
+	frontmatterDisabled    bool
 	digest                 [sha256.Size]byte
 }
 
@@ -59,21 +63,22 @@ type Config struct {
 type skillRoot struct {
 	path     string
 	source   string
+	scope    string
 	commands bool
 }
 
 type Catalog struct {
-	root     string
-	compat   compat.Config
-	byName   map[string]Skill
-	pending  map[string]Skill
-	checked  map[string]bool
-	roots    []skillRoot
-	ignore   []string
-	disabled map[string]bool
-	seen     map[string]bool
-	changed  bool
-	mu       sync.RWMutex
+	root        string
+	compat      compat.Config
+	byName      map[string]Skill
+	pending     map[string]Skill
+	checked     map[string]bool
+	roots       []skillRoot
+	ignore      []string
+	disabled    map[string]bool
+	activePaths map[string]bool
+	changed     bool
+	mu          sync.RWMutex
 }
 
 func Discover(workspaceRoot string, cfg Config) (*Catalog, error) {
@@ -89,26 +94,37 @@ func discover(workspaceRoot, home, grokHome string, cfg Config) (*Catalog, error
 	if real, err := filepath.EvalSymlinks(workspaceRoot); err == nil {
 		workspaceRoot = real
 	}
+	gitRoot := workspace.GitRoot(workspaceRoot)
+	_, gitErr := os.Stat(filepath.Join(gitRoot, ".git"))
+	hasGitRoot := gitErr == nil
 	var roots []skillRoot
-	for _, path := range cfg.Paths {
+	for index := len(cfg.Paths) - 1; index >= 0; index-- {
+		path := cfg.Paths[index]
 		if path = resolveConfigPath(path, home, workspaceRoot); path != "" {
-			roots = append(roots, skillRoot{path: path, source: "config"})
+			scope := "user"
+			if hasGitRoot && pathWithin(gitRoot, path) {
+				scope = "repo"
+			}
+			roots = append(roots, skillRoot{path: path, source: "config", scope: scope})
 		}
 	}
 	if home != "" {
 		if cfg.Compat.Cursor.Skills {
-			roots = appendSkillRoots(roots, filepath.Join(home, ".cursor"), "user:cursor")
+			roots = appendSkillRoots(roots, filepath.Join(home, ".cursor"), "user:cursor", "user")
 		}
 		if cfg.Compat.Claude.Skills {
-			roots = appendSkillRoots(roots, filepath.Join(home, ".claude"), "user:claude")
+			roots = appendSkillRoots(roots, filepath.Join(home, ".claude"), "user:claude", "user")
 		}
-		roots = appendSkillRoots(roots, filepath.Join(home, ".agents"), "user:agents")
+		roots = appendSkillRoots(roots, filepath.Join(home, ".agents"), "user:agents", "user")
 	}
 	if grokHome != "" {
-		roots = appendSkillRoots(roots, grokHome, "user:grok")
+		roots = appendSkillRoots(roots, grokHome, "user:grok", "user")
 	}
-	gitRoot := workspace.GitRoot(workspaceRoot)
 	for _, scope := range workspace.ProjectScopes(gitRoot, workspaceRoot) {
+		skillScope := "repo"
+		if scope == workspaceRoot {
+			skillScope = "local"
+		}
 		var dirs []string
 		if cfg.Compat.Cursor.Skills {
 			dirs = append(dirs, ".cursor")
@@ -118,7 +134,7 @@ func discover(workspaceRoot, home, grokHome string, cfg Config) (*Catalog, error
 		}
 		dirs = append(dirs, ".agents", ".gork", ".grok")
 		for _, dir := range dirs {
-			roots = appendSkillRoots(roots, filepath.Join(scope, dir), "workspace:"+strings.TrimPrefix(dir, "."))
+			roots = appendSkillRoots(roots, filepath.Join(scope, dir), "workspace:"+strings.TrimPrefix(dir, "."), skillScope)
 		}
 	}
 	disabled := make(map[string]bool, len(cfg.Disabled))
@@ -133,7 +149,7 @@ func discover(workspaceRoot, home, grokHome string, cfg Config) (*Catalog, error
 	}
 	catalog := &Catalog{
 		root: workspaceRoot, compat: cfg.Compat, roots: append([]skillRoot(nil), roots...), ignore: ignore, disabled: disabled,
-		byName: make(map[string]Skill), pending: make(map[string]Skill), checked: make(map[string]bool), seen: make(map[string]bool),
+		byName: make(map[string]Skill), pending: make(map[string]Skill), checked: make(map[string]bool),
 	}
 	for _, root := range roots {
 		if root.path == "" {
@@ -146,10 +162,10 @@ func discover(workspaceRoot, home, grokHome string, cfg Config) (*Catalog, error
 	return catalog, nil
 }
 
-func appendSkillRoots(roots []skillRoot, configDir, source string) []skillRoot {
+func appendSkillRoots(roots []skillRoot, configDir, source, scope string) []skillRoot {
 	return append(roots,
-		skillRoot{path: filepath.Join(configDir, "commands"), source: source, commands: true},
-		skillRoot{path: filepath.Join(configDir, "skills"), source: source},
+		skillRoot{path: filepath.Join(configDir, "commands"), source: source, scope: scope, commands: true},
+		skillRoot{path: filepath.Join(configDir, "skills"), source: source, scope: scope},
 	)
 }
 
@@ -183,9 +199,9 @@ func (c *Catalog) scanOnce(root skillRoot) error {
 	}
 	var err error
 	if root.commands {
-		err = c.scanCommands(root.path, root.source)
+		err = c.scanCommands(root)
 	} else {
-		err = c.scan(root.path, root.source)
+		err = c.scan(root)
 	}
 	if err != nil {
 		return err
@@ -197,42 +213,52 @@ func (c *Catalog) scanOnce(root skillRoot) error {
 	return nil
 }
 
-func (c *Catalog) scan(root, source string) error {
-	info, err := os.Stat(root)
+func (c *Catalog) scan(root skillRoot) error {
+	info, err := os.Stat(root.path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
-		return fmt.Errorf("stat skills root %q: %w", root, err)
+		return fmt.Errorf("stat skills root %q: %w", root.path, err)
 	}
 	if !info.IsDir() {
-		if !strings.EqualFold(filepath.Base(root), "SKILL.md") {
+		if !strings.EqualFold(filepath.Base(root.path), "SKILL.md") {
 			return nil
 		}
-		return c.loadSkill(root, info, source, false)
+		return c.loadSkill(root.path, info, root, false)
 	}
-	return filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+	var paths []string
+	if err := filepath.WalkDir(root.path, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
 		if entry.IsDir() || !strings.EqualFold(entry.Name(), "SKILL.md") {
 			return nil
 		}
-		info, err := entry.Info()
+		paths = append(paths, path)
+		return nil
+	}); err != nil {
+		return err
+	}
+	for index := len(paths) - 1; index >= 0; index-- {
+		info, err := os.Stat(paths[index])
 		if err != nil {
 			return err
 		}
-		return c.loadSkill(path, info, source, false)
-	})
+		if err := c.loadSkill(paths[index], info, root, false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-func (c *Catalog) scanCommands(root, source string) error {
-	entries, err := os.ReadDir(root)
+func (c *Catalog) scanCommands(root skillRoot) error {
+	entries, err := os.ReadDir(root.path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
-		return fmt.Errorf("read commands root %q: %w", root, err)
+		return fmt.Errorf("read commands root %q: %w", root.path, err)
 	}
 	for index := len(entries) - 1; index >= 0; index-- {
 		entry := entries[index]
@@ -243,14 +269,14 @@ func (c *Catalog) scanCommands(root, source string) error {
 		if err != nil {
 			return err
 		}
-		if err := c.loadSkill(filepath.Join(root, entry.Name()), info, source, true); err != nil {
+		if err := c.loadSkill(filepath.Join(root.path, entry.Name()), info, root, true); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (c *Catalog) loadSkill(path string, info os.FileInfo, source string, command bool) error {
+func (c *Catalog) loadSkill(path string, info os.FileInfo, root skillRoot, command bool) error {
 	if info.Size() > maxSkillBytes {
 		return fmt.Errorf("skill %q exceeds %d bytes", path, maxSkillBytes)
 	}
@@ -278,32 +304,135 @@ func (c *Catalog) loadSkill(path string, info os.FileInfo, source string, comman
 	if metadata.Name == "" || isVendorDefaultSkill(real, metadata.Name) {
 		return nil
 	}
-	if c.seen != nil {
-		c.seen[metadata.Name] = true
+	wasActive := c.removePath(real)
+	skill := Skill{
+		Name: metadata.Name, Description: metadata.Description, Path: real, Source: root.source,
+		Paths: metadata.Paths, WhenToUse: metadata.WhenToUse,
+		baseName: normalizeSkillName(fallbackName), scope: root.scope,
+		frontmatterDisabled: metadata.DisableModelInvocation, digest: sha256.Sum256(data),
 	}
-	if _, active := c.byName[metadata.Name]; !active {
-		if _, held := c.pending[metadata.Name]; !held && len(c.byName)+len(c.pending) >= maxSkills {
-			return errors.New("skill discovery exceeded 500 skills")
+	active := len(metadata.Paths) == 0 || wasActive || c.activePaths[real]
+	return c.insertSkill(skill, active)
+}
+
+func (c *Catalog) insertSkill(skill Skill, active bool) error {
+	incumbent, incumbentActive, exists := c.lookup(skill.Name)
+	if !exists {
+		return c.store(skill, active)
+	}
+	if incumbent.scope != skill.scope {
+		c.deleteName(skill.Name)
+		return c.store(skill, active)
+	}
+	incomingOwnsName := skill.baseName == skill.Name
+	incumbentOwnsName := !incumbent.rekeyed && incumbent.baseName == incumbent.Name
+	if incomingOwnsName && (incumbentOwnsName || incumbent.rekeyed) {
+		c.deleteName(skill.Name)
+		return c.store(skill, active)
+	}
+	if incomingOwnsName {
+		if !c.canRekey(incumbent) {
+			c.deleteName(incumbent.Name)
+			return c.store(skill, active)
+		}
+		if err := c.requireCapacity(); err != nil {
+			return err
+		}
+		c.deleteName(incumbent.Name)
+		incumbent.Name, incumbent.rekeyed = incumbent.baseName, true
+		if err := c.store(incumbent, incumbentActive); err != nil {
+			return err
+		}
+		return c.store(skill, active)
+	}
+	if incumbentOwnsName {
+		if !c.canRekey(skill) {
+			return nil
+		}
+		if err := c.requireCapacity(); err != nil {
+			return err
+		}
+		skill.Name, skill.rekeyed = skill.baseName, true
+		return c.store(skill, active)
+	}
+	if c.canRekey(incumbent) {
+		if err := c.requireCapacity(); err != nil {
+			return err
+		}
+		c.deleteName(incumbent.Name)
+		incumbent.Name, incumbent.rekeyed = incumbent.baseName, true
+		if err := c.store(incumbent, incumbentActive); err != nil {
+			return err
+		}
+		return c.store(skill, active)
+	}
+	c.deleteName(skill.Name)
+	return c.store(skill, active)
+}
+
+func (c *Catalog) canRekey(skill Skill) bool {
+	if skill.baseName == "" || skill.baseName == skill.Name {
+		return false
+	}
+	_, _, exists := c.lookup(skill.baseName)
+	return !exists
+}
+
+func (c *Catalog) requireCapacity() error {
+	if len(c.byName)+len(c.pending) >= maxSkills {
+		return errors.New("skill discovery exceeded 500 skills")
+	}
+	return nil
+}
+
+func (c *Catalog) store(skill Skill, active bool) error {
+	if _, _, exists := c.lookup(skill.Name); !exists {
+		if err := c.requireCapacity(); err != nil {
+			return err
 		}
 	}
-	// Later roots have higher priority, so workspace skills override config and user skills.
-	active, wasActive := c.byName[metadata.Name]
-	delete(c.byName, metadata.Name)
-	delete(c.pending, metadata.Name)
-	skill := Skill{
-		Name: metadata.Name, Description: metadata.Description, Path: real, Source: source,
-		Paths: metadata.Paths, WhenToUse: metadata.WhenToUse,
-		DisableModelInvocation: metadata.DisableModelInvocation || c.disabled[metadata.Name], digest: sha256.Sum256(data),
-	}
-	if len(metadata.Paths) == 0 || wasActive && active.Path == real {
-		c.byName[metadata.Name] = skill
+	skill.DisableModelInvocation = skill.frontmatterDisabled || c.disabled[skill.Name]
+	if active {
+		if c.byName == nil {
+			c.byName = make(map[string]Skill)
+		}
+		c.byName[skill.Name] = skill
 	} else {
 		if c.pending == nil {
 			c.pending = make(map[string]Skill)
 		}
-		c.pending[metadata.Name] = skill
+		c.pending[skill.Name] = skill
 	}
 	return nil
+}
+
+func (c *Catalog) lookup(name string) (Skill, bool, bool) {
+	if skill, ok := c.byName[name]; ok {
+		return skill, true, true
+	}
+	skill, ok := c.pending[name]
+	return skill, false, ok
+}
+
+func (c *Catalog) deleteName(name string) {
+	delete(c.byName, name)
+	delete(c.pending, name)
+}
+
+func (c *Catalog) removePath(path string) bool {
+	for name, skill := range c.byName {
+		if skill.Path == path {
+			delete(c.byName, name)
+			return true
+		}
+	}
+	for name, skill := range c.pending {
+		if skill.Path == path {
+			delete(c.pending, name)
+			return false
+		}
+	}
+	return false
 }
 
 func isVendorDefaultSkill(path, name string) bool {
@@ -355,35 +484,23 @@ func (c *Catalog) Watch(ctx context.Context, interval time.Duration) {
 func (c *Catalog) reload() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	activePaths := make(map[string]bool, len(c.byName))
+	for _, skill := range c.byName {
+		activePaths[skill.Path] = true
+	}
 	fresh := &Catalog{
 		root: c.root, compat: c.compat, roots: append([]skillRoot(nil), c.roots...),
 		ignore: append([]string(nil), c.ignore...), disabled: c.disabled,
 		byName: make(map[string]Skill, len(c.byName)), pending: make(map[string]Skill, len(c.pending)),
-		checked: make(map[string]bool), seen: make(map[string]bool),
-	}
-	for name, skill := range c.byName {
-		fresh.byName[name] = skill
-	}
-	for name, skill := range c.pending {
-		fresh.pending[name] = skill
+		checked: make(map[string]bool), activePaths: activePaths,
 	}
 	for _, root := range fresh.roots {
 		if err := fresh.scanOnce(root); err != nil {
 			return err
 		}
 	}
-	for name := range fresh.byName {
-		if !fresh.seen[name] {
-			delete(fresh.byName, name)
-		}
-	}
-	for name := range fresh.pending {
-		if !fresh.seen[name] {
-			delete(fresh.pending, name)
-		}
-	}
 	changed := modelSkillsChanged(c.byName, fresh.byName)
-	c.byName, c.pending, c.checked, c.seen = fresh.byName, fresh.pending, fresh.checked, fresh.seen
+	c.byName, c.pending, c.checked = fresh.byName, fresh.pending, fresh.checked
 	if changed {
 		c.changed = true
 	}
@@ -492,17 +609,21 @@ func (c *Catalog) discoverForPath(path string) {
 		if root, ok := c.skillRootForPath(path); ok {
 			c.addRoot(root)
 			if root.commands {
-				_ = c.scanCommands(root.path, root.source)
+				_ = c.scanCommands(root)
 			} else {
-				_ = c.scan(root.path, root.source)
+				_ = c.scan(root)
 			}
 		}
 		return
 	}
 	for _, scope := range workspace.ProjectScopes(c.root, path) {
+		skillScope := "repo"
+		if scope == c.root {
+			skillScope = "local"
+		}
 		for _, dir := range c.skillConfigDirs() {
 			source := "workspace:" + strings.TrimPrefix(dir, ".")
-			for _, root := range appendSkillRoots(nil, filepath.Join(scope, dir), source) {
+			for _, root := range appendSkillRoots(nil, filepath.Join(scope, dir), source, skillScope) {
 				c.addRoot(root)
 				_ = c.scanOnce(root)
 			}
@@ -544,8 +665,12 @@ func (c *Catalog) skillRootForPath(path string) (skillRoot, bool) {
 				if kind == "skills" {
 					root = filepath.Dir(path)
 				}
+				scope := "repo"
+				if filepath.Dir(filepath.Dir(dir)) == c.root {
+					scope = "local"
+				}
 				return skillRoot{
-					path: root, source: "workspace:" + strings.TrimPrefix(configDir, "."), commands: kind == "commands",
+					path: root, source: "workspace:" + strings.TrimPrefix(configDir, "."), scope: scope, commands: kind == "commands",
 				}, true
 			}
 		}

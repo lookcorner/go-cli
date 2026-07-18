@@ -421,6 +421,10 @@ skills.
 Known Cursor and Claude built-in Skill copies found inside their vendor
 directories are ignored; user-authored skills with the same names elsewhere
 remain available.
+When copied directories in the same scope still declare the same frontmatter
+name, the directory-name owner keeps the bare name and other copies remain
+available under their normalized directory names. Cross-scope collisions still
+use the normal workspace-over-user priority.
 Skills with a scalar or list `paths` value in YAML frontmatter stay hidden until a successful
 file read, directory listing, or edit touches a matching path.
 

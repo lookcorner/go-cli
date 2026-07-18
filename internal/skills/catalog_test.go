@@ -24,7 +24,7 @@ func TestCatalogScanAndTool(t *testing.T) {
 		t.Fatal(err)
 	}
 	catalog := &Catalog{byName: make(map[string]Skill)}
-	if err := catalog.scan(root, "test"); err != nil {
+	if err := catalog.scan(skillRoot{path: root, source: "test", scope: "test"}); err != nil {
 		t.Fatal(err)
 	}
 	if names := catalog.Names(); len(names) != 1 || names[0] != "code-review" {
@@ -59,7 +59,7 @@ func TestSkillInvocationMetadataControlsToolVisibility(t *testing.T) {
 		}
 	}
 	catalog := &Catalog{byName: make(map[string]Skill)}
-	if err := catalog.scan(root, "test"); err != nil {
+	if err := catalog.scan(skillRoot{path: root, source: "test", scope: "test"}); err != nil {
 		t.Fatal(err)
 	}
 	definition := catalog.Tool().Definition()
@@ -159,10 +159,10 @@ func TestWorkspaceSkillOverridesUserSkill(t *testing.T) {
 		}
 	}
 	catalog := &Catalog{byName: make(map[string]Skill)}
-	if err := catalog.scan(userRoot, "user"); err != nil {
+	if err := catalog.scan(skillRoot{path: userRoot, source: "user", scope: "user"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := catalog.scan(workspaceRoot, "workspace"); err != nil {
+	if err := catalog.scan(skillRoot{path: workspaceRoot, source: "workspace", scope: "workspace"}); err != nil {
 		t.Fatal(err)
 	}
 	if catalog.byName["same"].Source != "workspace" {
@@ -190,7 +190,7 @@ func TestWorkspaceSkillsLoadWhenGitignored(t *testing.T) {
 		t.Fatal(err)
 	}
 	catalog := &Catalog{byName: make(map[string]Skill)}
-	if err := catalog.scan(filepath.Join(root, ".gork", "skills"), "workspace:grok"); err != nil {
+	if err := catalog.scan(skillRoot{path: filepath.Join(root, ".gork", "skills"), source: "workspace:grok", scope: "local"}); err != nil {
 		t.Fatal(err)
 	}
 	if names := catalog.Names(); len(names) != 2 || names[0] != "allowed" || names[1] != "ignored" {
@@ -311,7 +311,7 @@ func TestCommandsLoadFlatAndSkillsWinNameCollisions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(catalog.Names(), ","); got != "deploy,rollback,shared-command" {
+	if got := strings.Join(catalog.Names(), ","); got != "deploy,rollback,shared-command,zeta" {
 		t.Fatalf("command names=%q", got)
 	}
 	if skill := catalog.byName["deploy"]; skill.Description != "skill copy" || !strings.EqualFold(filepath.Base(skill.Path), "SKILL.md") {
@@ -322,6 +322,166 @@ func TestCommandsLoadFlatAndSkillsWinNameCollisions(t *testing.T) {
 	}
 	if skill := catalog.byName["shared-command"]; skill.Description != "alpha wins" {
 		t.Fatalf("command collision was not deterministic: %#v", skill)
+	}
+	if skill := catalog.byName["zeta"]; skill.Description != "zeta loses" || !skill.rekeyed {
+		t.Fatalf("command collision loser was not rekeyed: %#v", skill)
+	}
+}
+
+func TestSameScopeSkillCopiesUseDirectoryNames(t *testing.T) {
+	home := t.TempDir()
+	write := func(vendor, dir, name string) {
+		t.Helper()
+		path := filepath.Join(home, vendor, "skills", dir, "SKILL.md")
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("---\nname: "+name+"\ndescription: "+dir+"\n---\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(".grok", "japandi", "japandi")
+	write(".grok", "japandi2", "japandi")
+	write(".grok", "backup-review", "review")
+	write(".grok", "review", "review")
+	write(".claude", "my-review", "review")
+	write(".agents", "same", "same")
+	write(".grok", "same", "same")
+
+	catalog, err := discover(t.TempDir(), home, filepath.Join(home, ".grok"), Config{Compat: compat.Default()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "backup-review,japandi,japandi2,my-review,review,same"
+	if got := strings.Join(catalog.Names(), ","); got != want {
+		t.Fatalf("same-scope names=%q, want %q", got, want)
+	}
+	for _, name := range []string{"backup-review", "japandi2", "my-review"} {
+		if skill := catalog.byName[name]; !skill.rekeyed || skill.baseName != skill.Name {
+			t.Fatalf("copied skill %q was not rekeyed: %#v", name, skill)
+		}
+	}
+	if skill := catalog.byName["review"]; filepath.Base(filepath.Dir(skill.Path)) != "review" || skill.rekeyed {
+		t.Fatalf("directory-name owner lost bare name: %#v", skill)
+	}
+	if skill := catalog.byName["same"]; skill.Source != "user:grok" {
+		t.Fatalf("same-basename priority changed: %#v", skill)
+	}
+}
+
+func TestCrossScopeSkillCollisionStillOverrides(t *testing.T) {
+	home := t.TempDir()
+	root := t.TempDir()
+	for _, file := range []struct {
+		path        string
+		description string
+	}{
+		{filepath.Join(home, ".grok", "skills", "shared-copy", "SKILL.md"), "user"},
+		{filepath.Join(root, ".grok", "skills", "shared", "SKILL.md"), "workspace"},
+	} {
+		if err := os.MkdirAll(filepath.Dir(file.path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		content := "---\nname: shared\ndescription: " + file.description + "\n---\n"
+		if err := os.WriteFile(file.path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	catalog, err := discover(root, home, filepath.Join(home, ".grok"), Config{Compat: compat.Default()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(catalog.Names(), ","); got != "shared" || catalog.byName["shared"].Description != "workspace" {
+		t.Fatalf("cross-scope collision did not override: names=%q skill=%#v", got, catalog.byName["shared"])
+	}
+}
+
+func TestDirectoryNameOwnerDropsUnmovableStaleCopy(t *testing.T) {
+	home := t.TempDir()
+	write := func(vendor, dir, name string) string {
+		t.Helper()
+		path := filepath.Join(home, vendor, "skills", dir, "SKILL.md")
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("---\nname: "+name+"\ndescription: "+vendor+"/"+dir+"\n---\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	write(".grok", "japandi", "japandi")
+	write(".grok", "japandi2", "japandi")
+	write(".claude", "japandi2", "japandi2")
+
+	catalog, err := discover(t.TempDir(), home, filepath.Join(home, ".grok"), Config{Compat: compat.Default()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(catalog.Names(), ","); got != "japandi,japandi2" {
+		t.Fatalf("owner collision names=%q", got)
+	}
+	if catalog.byName["japandi"].Description != ".grok/japandi" || catalog.byName["japandi2"].Description != ".claude/japandi2" {
+		t.Fatalf("directory owners did not win: %#v", catalog.byName)
+	}
+}
+
+func TestReloadReclaimsDeclaredNameAfterOwnerDeleted(t *testing.T) {
+	root := t.TempDir()
+	write := func(dir string) string {
+		t.Helper()
+		path := filepath.Join(root, ".grok", "skills", dir, "SKILL.md")
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("---\nname: shared\ndescription: "+dir+"\n---\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	owner := write("shared")
+	write("shared-copy")
+	catalog, err := discover(root, "", "", Config{Compat: compat.Default()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(catalog.Names(), ","); got != "shared,shared-copy" {
+		t.Fatalf("initial collision names=%q", got)
+	}
+	if err := os.Remove(owner); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.reload(); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(catalog.Names(), ","); got != "shared" || catalog.byName["shared"].Description != "shared-copy" || catalog.byName["shared"].rekeyed {
+		t.Fatalf("copy did not reclaim declared name: names=%q skill=%#v", got, catalog.byName["shared"])
+	}
+}
+
+func TestReloadPreservesActivatedConditionalSkill(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, ".grok", "skills", "go-guide", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("---\nname: go-guide\ndescription: first\npaths: ['src/**']\n---\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := discover(root, "", "", Config{Compat: compat.Default()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reminder := catalog.Activate("read_file", json.RawMessage(`{"path":"src/main.go"}`)); !strings.Contains(reminder, "go-guide") {
+		t.Fatalf("conditional skill did not activate: %q", reminder)
+	}
+	if err := os.WriteFile(path, []byte("---\nname: go-guide\ndescription: second\npaths: ['src/**']\n---\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.reload(); err != nil {
+		t.Fatal(err)
+	}
+	if got := catalog.byName["go-guide"]; got.Description != "second" {
+		t.Fatalf("activated conditional skill was hidden after reload: %#v", got)
 	}
 }
 
@@ -429,7 +589,7 @@ func TestConditionalSkillActivatesForMatchingToolPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	catalog := &Catalog{root: root, byName: make(map[string]Skill), pending: make(map[string]Skill)}
-	if err := catalog.scan(root, "test"); err != nil {
+	if err := catalog.scan(skillRoot{path: root, source: "test", scope: "test"}); err != nil {
 		t.Fatal(err)
 	}
 	if names := catalog.Names(); len(names) != 0 || catalog.Count() != 1 {
