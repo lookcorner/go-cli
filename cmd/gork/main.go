@@ -143,14 +143,20 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if opts.maxSteps > 0 {
 		cfg.MaxSteps = opts.maxSteps
 	}
+	var tokenProvider api.TokenProvider
 	if cfg.APIKey == "" && isXAIBaseURL(cfg.BaseURL) {
 		path, pathErr := auth.DefaultPath()
 		if pathErr != nil {
 			return pathErr
 		}
-		token, authErr := auth.NewClient(&http.Client{Timeout: cfg.HTTPTimeout}).Resolve(context.Background(), path, auth.DefaultConfig())
+		authClient := auth.NewClient(&http.Client{Timeout: cfg.HTTPTimeout})
+		authConfig := auth.DefaultConfig()
+		token, authErr := authClient.Resolve(context.Background(), path, authConfig)
 		if authErr == nil {
 			cfg.APIKey = token
+			tokenProvider = func(ctx context.Context, rejectedToken string) (string, error) {
+				return authClient.ResolveRejected(ctx, path, authConfig, rejectedToken)
+			}
 		} else if !errors.Is(authErr, os.ErrNotExist) {
 			return fmt.Errorf("load OAuth credentials: %w", authErr)
 		}
@@ -163,7 +169,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return err
 	}
 	if opts.acp {
-		return runACP(cfg, opts, allowRules, askRules, denyRules, stdin, stdout, stderr)
+		return runACP(cfg, opts, allowRules, askRules, denyRules, tokenProvider, stdin, stdout, stderr)
 	}
 
 	inputReader := bufio.NewReader(stdin)
@@ -244,7 +250,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 	skillCatalog.Watch(ctx, time.Second)
 
-	client, err := newModelClient(cfg)
+	client, err := newModelClient(cfg, tokenProvider)
 	if err != nil {
 		return err
 	}
@@ -296,7 +302,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		}
 		fmt.Fprintf(statusOutput, "[gork] discovered %d skill(s)\n", skillCatalog.Count())
 	}
-	mcpClients, err := startMCPServers(ctx, cfg, ws.Root(), registry, approver, statusOutput)
+	mcpClients, err := startMCPServers(ctx, cfg, ws.Root(), registry, approver, tokenProvider, statusOutput)
 	if err != nil {
 		return err
 	}
@@ -406,17 +412,21 @@ func isXAIBaseURL(raw string) bool {
 	return err == nil && strings.EqualFold(parsed.Hostname(), "api.x.ai")
 }
 
-func newModelClient(cfg config.Config) (agent.ResponseStreamer, error) {
+func newModelClient(cfg config.Config, tokenProvider api.TokenProvider) (agent.ResponseStreamer, error) {
 	httpClient := &http.Client{Timeout: cfg.HTTPTimeout}
 	switch cfg.Backend {
 	case "responses":
-		return api.NewClient(cfg.BaseURL, cfg.APIKey, httpClient), nil
+		client := api.NewClient(cfg.BaseURL, cfg.APIKey, httpClient)
+		client.SetTokenProvider(tokenProvider)
+		return client, nil
 	case "chat_completions":
 		client := api.NewChatClient(cfg.BaseURL, cfg.APIKey, httpClient)
+		client.SetTokenProvider(tokenProvider)
 		client.SetPruning(modelPruningConfig(cfg))
 		return client, nil
 	case "anthropic_messages":
 		client := api.NewMessagesClient(cfg.BaseURL, cfg.APIKey, httpClient)
+		client.SetTokenProvider(tokenProvider)
 		client.SetPruning(modelPruningConfig(cfg))
 		return client, nil
 	default:
@@ -432,7 +442,7 @@ func modelPruningConfig(cfg config.Config) api.PruningConfig {
 	}
 }
 
-func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []string, stdin io.Reader, stdout, stderr io.Writer) error {
+func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []string, tokenProvider api.TokenProvider, stdin io.Reader, stdout, stderr io.Writer) error {
 	mode := tools.PermissionMode(opts.approval)
 	if mode != tools.PermissionPrompt && mode != tools.PermissionAuto && mode != tools.PermissionDeny {
 		return fmt.Errorf("invalid --approval %q", opts.approval)
@@ -551,7 +561,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 				URL: remote.URL, Headers: remote.Headers,
 			}
 		}
-		mcpClients, err = startMCPServers(sessionCtx, sessionCfg, ws.Root(), registry, approver, statusOutput)
+		mcpClients, err = startMCPServers(sessionCtx, sessionCfg, ws.Root(), registry, approver, tokenProvider, statusOutput)
 		if err != nil {
 			cleanup()
 			return nil, nil, err
@@ -561,7 +571,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			cleanup()
 			return nil, nil, err
 		}
-		modelClient, err := newModelClient(sessionCfg)
+		modelClient, err := newModelClient(sessionCfg, tokenProvider)
 		if err != nil {
 			cleanup()
 			return nil, nil, err
@@ -766,6 +776,7 @@ func startMCPServers(
 	workspaceRoot string,
 	registry *tools.Registry,
 	approver tools.Approver,
+	tokenProvider api.TokenProvider,
 	stderr io.Writer,
 ) ([]*mcp.Client, error) {
 	names := make([]string, 0, len(cfg.MCPServers))
@@ -783,7 +794,7 @@ func startMCPServers(
 	}
 	for _, name := range names {
 		server := cfg.MCPServers[name]
-		sampling := newMCPSamplingHandler(cfg, approver, name)
+		sampling := newMCPSamplingHandler(cfg, approver, tokenProvider, name)
 		fmt.Fprintf(stderr, "[gork] starting MCP server: %s\n", name)
 		var client *mcp.Client
 		var initialized mcp.InitializeResult
@@ -884,14 +895,14 @@ func startMCPServers(
 	return clients, nil
 }
 
-func newMCPSamplingHandler(cfg config.Config, approver tools.Approver, serverName string) mcp.SamplingHandler {
+func newMCPSamplingHandler(cfg config.Config, approver tools.Approver, tokenProvider api.TokenProvider, serverName string) mcp.SamplingHandler {
 	return func(ctx context.Context, request mcp.SamplingRequest) (mcp.SamplingResult, error) {
 		if approver != nil {
 			if err := approver.Approve(ctx, "MCP sampling", serverName); err != nil {
 				return mcp.SamplingResult{}, err
 			}
 		}
-		client, err := newModelClient(cfg)
+		client, err := newModelClient(cfg, tokenProvider)
 		if err != nil {
 			return mcp.SamplingResult{}, err
 		}

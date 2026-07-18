@@ -17,14 +17,17 @@ import (
 )
 
 type ChatClient struct {
-	baseURL string
-	apiKey  string
-	http    *http.Client
-	mu      sync.Mutex
-	history []chatMessage
-	nextID  atomic.Uint64
-	pruning PruningConfig
+	baseURL       string
+	apiKey        string
+	tokenProvider TokenProvider
+	http          *http.Client
+	mu            sync.Mutex
+	history       []chatMessage
+	nextID        atomic.Uint64
+	pruning       PruningConfig
 }
+
+func (c *ChatClient) SetTokenProvider(provider TokenProvider) { c.tokenProvider = provider }
 
 type chatMessage struct {
 	Role       string         `json:"role"`
@@ -153,15 +156,17 @@ func (c *ChatClient) StreamResponse(ctx context.Context, request ResponseRequest
 	if err != nil {
 		return StreamResult{}, fmt.Errorf("encode chat request: %w", err)
 	}
-	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
-	if err != nil {
-		return StreamResult{}, fmt.Errorf("build chat request: %w", err)
-	}
-	httpRequest.Header.Set("Authorization", "Bearer "+c.apiKey)
-	httpRequest.Header.Set("Content-Type", "application/json")
-	httpRequest.Header.Set("Accept", "text/event-stream")
-	httpRequest.Header.Set("User-Agent", "gork-go/0.1")
-	resp, err := c.http.Do(httpRequest)
+	resp, err := sendAuthenticated(ctx, c.http, c.apiKey, c.tokenProvider, func(token string) (*http.Request, error) {
+		httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("build chat request: %w", err)
+		}
+		httpRequest.Header.Set("Authorization", "Bearer "+token)
+		httpRequest.Header.Set("Content-Type", "application/json")
+		httpRequest.Header.Set("Accept", "text/event-stream")
+		httpRequest.Header.Set("User-Agent", "gork-go/0.1")
+		return httpRequest, nil
+	})
 	if err != nil {
 		return StreamResult{}, fmt.Errorf("send chat request: %w", err)
 	}

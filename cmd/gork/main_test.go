@@ -61,7 +61,7 @@ func TestRunMCPSamplingRejectsUnsupportedContent(t *testing.T) {
 }
 
 func TestMCPSamplingRequiresApproval(t *testing.T) {
-	handler := newMCPSamplingHandler(config.Config{}, tools.PromptApprover{Mode: tools.PermissionDeny}, "fixture")
+	handler := newMCPSamplingHandler(config.Config{}, tools.PromptApprover{Mode: tools.PermissionDeny}, nil, "fixture")
 	_, err := handler(context.Background(), mcp.SamplingRequest{
 		MaxTokens: 1, Messages: []mcp.SamplingMessage{{Role: "user", Content: mcp.SamplingContent{Type: "text", Text: "private context"}}},
 	})

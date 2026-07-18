@@ -13,10 +13,13 @@ import (
 )
 
 type Client struct {
-	baseURL string
-	apiKey  string
-	http    *http.Client
+	baseURL       string
+	apiKey        string
+	tokenProvider TokenProvider
+	http          *http.Client
 }
+
+func (c *Client) SetTokenProvider(provider TokenProvider) { c.tokenProvider = provider }
 
 func NewClient(baseURL, apiKey string, httpClient *http.Client) *Client {
 	return &Client{
@@ -31,16 +34,17 @@ func (c *Client) StreamResponse(ctx context.Context, request ResponseRequest, on
 	if err != nil {
 		return StreamResult{}, fmt.Errorf("encode response request: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/responses", bytes.NewReader(body))
-	if err != nil {
-		return StreamResult{}, fmt.Errorf("build response request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("User-Agent", "gork-go/0.1")
-
-	resp, err := c.http.Do(req)
+	resp, err := sendAuthenticated(ctx, c.http, c.apiKey, c.tokenProvider, func(token string) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/responses", bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("build response request: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "text/event-stream")
+		req.Header.Set("User-Agent", "gork-go/0.1")
+		return req, nil
+	})
 	if err != nil {
 		return StreamResult{}, fmt.Errorf("send response request: %w", err)
 	}

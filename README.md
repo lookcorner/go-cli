@@ -47,7 +47,9 @@ device flow and stores scoped credentials in `~/.grok/auth.json` (or
 variable is set and refreshes it within five minutes of expiration. OAuth
 issuer, client ID, and scopes honor `GROK_OAUTH2_*` / `GROK_OIDC_*` environment
 overrides. Refresh and write transactions coordinate through
-`auth.json.lock`, including cancellation and stale-lock recovery.
+`auth.json.lock`, including cancellation and stale-lock recovery. Model API
+requests retry once after a 401 using a freshly resolved credential; concurrent
+401s reuse the first successful refresh.
 
 The default API base URL is `https://api.x.ai/v1`. Override it with
 `GORK_BASE_URL`, `--base-url`, or a config file. The default path matches Gork

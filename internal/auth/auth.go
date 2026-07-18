@@ -226,6 +226,19 @@ func (c *Client) Refresh(ctx context.Context, cfg Config, credential Credential)
 }
 
 func (c *Client) Resolve(ctx context.Context, path string, cfg Config) (string, error) {
+	return c.ResolveRejected(ctx, path, cfg, "")
+}
+
+func (c *Client) ResolveRejected(ctx context.Context, path string, cfg Config, rejectedToken string) (string, error) {
+	if rejectedToken == "" {
+		credential, err := Load(path, cfg.Scope())
+		if err != nil {
+			return "", err
+		}
+		if credential.ExpiresAt == nil || credential.ExpiresAt.After(c.Now().Add(5*time.Minute)) {
+			return credential.Key, nil
+		}
+	}
 	lock, err := acquireFileLock(ctx, path)
 	if err != nil {
 		return "", err
@@ -235,7 +248,10 @@ func (c *Client) Resolve(ctx context.Context, path string, cfg Config) (string, 
 	if err != nil {
 		return "", err
 	}
-	if credential.ExpiresAt == nil || credential.ExpiresAt.After(c.Now().Add(5*time.Minute)) {
+	if rejectedToken != "" && credential.Key != rejectedToken {
+		return credential.Key, nil
+	}
+	if rejectedToken == "" && (credential.ExpiresAt == nil || credential.ExpiresAt.After(c.Now().Add(5*time.Minute))) {
 		return credential.Key, nil
 	}
 	credential, err = c.Refresh(ctx, cfg, credential)

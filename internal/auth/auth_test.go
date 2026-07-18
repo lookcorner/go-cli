@@ -202,7 +202,7 @@ func TestConcurrentResolveRefreshesOnce(t *testing.T) {
 	fixed := time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC)
 	path := filepath.Join(t.TempDir(), "auth.json")
 	cfg := Config{Issuer: "https://auth.example", ClientID: "client-1", Scopes: defaultScopes}
-	expires := fixed.Add(time.Minute)
+	expires := fixed.Add(time.Hour)
 	if err := Save(path, cfg.Scope(), Credential{Key: "old", RefreshToken: "refresh-1", ExpiresAt: &expires}); err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +223,7 @@ func TestConcurrentResolveRefreshesOnce(t *testing.T) {
 			client := NewClient(httpClient)
 			client.Now = func() time.Time { return fixed }
 			<-start
-			token, err := client.Resolve(context.Background(), path, cfg)
+			token, err := client.ResolveRejected(context.Background(), path, cfg, "old")
 			results <- token
 			errors <- err
 		}()
@@ -277,5 +277,27 @@ func TestAuthLockWaitCanBeCancelled(t *testing.T) {
 	cancel()
 	if _, err := acquireFileLock(ctx, path); !errors.Is(err, context.Canceled) {
 		t.Fatalf("lock wait error=%v", err)
+	}
+}
+
+func TestFreshCredentialDoesNotWaitForAuthLock(t *testing.T) {
+	fixed := time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC)
+	path := filepath.Join(t.TempDir(), "auth.json")
+	cfg := Config{Issuer: "https://auth.example", ClientID: "client-1"}
+	expires := fixed.Add(time.Hour)
+	if err := Save(path, cfg.Scope(), Credential{Key: "fresh", ExpiresAt: &expires}); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := acquireFileLock(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.release()
+	client := NewClient(http.DefaultClient)
+	client.Now = func() time.Time { return fixed }
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if token, err := client.Resolve(ctx, path, cfg); err != nil || token != "fresh" {
+		t.Fatalf("fresh token=%q err=%v", token, err)
 	}
 }

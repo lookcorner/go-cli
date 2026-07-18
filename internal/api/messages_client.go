@@ -17,14 +17,17 @@ import (
 )
 
 type MessagesClient struct {
-	baseURL string
-	apiKey  string
-	http    *http.Client
-	mu      sync.Mutex
-	history []messagesMessage
-	nextID  atomic.Uint64
-	pruning PruningConfig
+	baseURL       string
+	apiKey        string
+	tokenProvider TokenProvider
+	http          *http.Client
+	mu            sync.Mutex
+	history       []messagesMessage
+	nextID        atomic.Uint64
+	pruning       PruningConfig
 }
+
+func (c *MessagesClient) SetTokenProvider(provider TokenProvider) { c.tokenProvider = provider }
 
 type messagesMessage struct {
 	Role    string          `json:"role"`
@@ -134,16 +137,18 @@ func (c *MessagesClient) StreamResponse(ctx context.Context, request ResponseReq
 	if err != nil {
 		return StreamResult{}, fmt.Errorf("encode messages request: %w", err)
 	}
-	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/messages", bytes.NewReader(body))
-	if err != nil {
-		return StreamResult{}, fmt.Errorf("build messages request: %w", err)
-	}
-	httpRequest.Header.Set("x-api-key", c.apiKey)
-	httpRequest.Header.Set("anthropic-version", "2023-06-01")
-	httpRequest.Header.Set("Content-Type", "application/json")
-	httpRequest.Header.Set("Accept", "text/event-stream")
-	httpRequest.Header.Set("User-Agent", "gork-go/0.1")
-	resp, err := c.http.Do(httpRequest)
+	resp, err := sendAuthenticated(ctx, c.http, c.apiKey, c.tokenProvider, func(token string) (*http.Request, error) {
+		httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/messages", bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("build messages request: %w", err)
+		}
+		httpRequest.Header.Set("x-api-key", token)
+		httpRequest.Header.Set("anthropic-version", "2023-06-01")
+		httpRequest.Header.Set("Content-Type", "application/json")
+		httpRequest.Header.Set("Accept", "text/event-stream")
+		httpRequest.Header.Set("User-Agent", "gork-go/0.1")
+		return httpRequest, nil
+	})
 	if err != nil {
 		return StreamResult{}, fmt.Errorf("send messages request: %w", err)
 	}
