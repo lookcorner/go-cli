@@ -85,6 +85,16 @@ func TestGitExtensionWireContract(t *testing.T) {
 	if result := response["result"].(map[string]any); result["checked_out"] != true || result["fetched"] != false {
 		t.Fatalf("unexpected checkout commit response: %#v", response)
 	}
+	output.Reset()
+	runACPGit(t, root, "add", "tracked.txt")
+	server.handleGit(context.Background(), message{ID: json.RawMessage("6"), Method: "x.ai/git/commit", Params: json.RawMessage(`{"gitRoot":` + strconv.Quote(root) + `,"message":"wire commit"}`)})
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	commitResult := response["result"].(map[string]any)
+	if data := commitResult["result"].(map[string]any); data["commitHash"] == "" || !strings.HasPrefix(data["output"].(string), "Committed: ") || commitResult["error"] != nil {
+		t.Fatalf("unexpected commit response: %#v", response)
+	}
 }
 
 type fixtureStreamer struct {

@@ -279,7 +279,7 @@ Git repositories also expose compatible hunk tracker ACP extensions:
 `get-summary`, `hunk-action`, `file-action`, `turn-action`, and `all-action`.
 Core Git extensions are available through `x.ai/git/git_repo_root`, `status`,
 `current_commit`, `info`, `branches`, `stage`, `unstage`, `discard`, `stash`,
-`checkout`, and `checkout_commit`. Status reports repository, branch/upstream,
+`checkout`, `checkout_commit`, and `commit`. Status reports repository, branch/upstream,
 staged, unstaged, untracked, and optional line-count data using the reference
 extension result envelope.
 Tracked, staged, and text untracked changes are included; mutations performed

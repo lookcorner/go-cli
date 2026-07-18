@@ -196,7 +196,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleHunkAction(ctx, incoming)
 		case "x.ai/git/worktree/create", "x.ai/git/worktree/list", "x.ai/git/worktree/show", "x.ai/git/worktree/remove", "x.ai/git/worktree/apply":
 			s.handleWorktree(ctx, incoming)
-		case "x.ai/git/git_repo_root", "x.ai/git/status", "x.ai/git/stage", "x.ai/git/unstage", "x.ai/git/discard", "x.ai/git/current_commit", "x.ai/git/info", "x.ai/git/branches", "x.ai/git/stash", "x.ai/git/checkout", "x.ai/git/checkout_commit":
+		case "x.ai/git/git_repo_root", "x.ai/git/status", "x.ai/git/stage", "x.ai/git/unstage", "x.ai/git/discard", "x.ai/git/current_commit", "x.ai/git/info", "x.ai/git/branches", "x.ai/git/stash", "x.ai/git/checkout", "x.ai/git/checkout_commit", "x.ai/git/commit":
 			s.handleGit(ctx, incoming)
 		case "x.ai/git/worktree/create_from_worktree", "x.ai/git/worktree/create_from_worktree_sync":
 			s.handleWorktreeFork(ctx, incoming)
@@ -252,6 +252,11 @@ func (s *Server) handleGit(ctx context.Context, incoming message) {
 		Create           bool     `json:"create"`
 		Commit           string   `json:"commit"`
 		StashIfDirty     bool     `json:"stashIfDirty"`
+		Message          string   `json:"message"`
+		Amend            bool     `json:"amend"`
+		Signoff          bool     `json:"signoff"`
+		Push             bool     `json:"push"`
+		Sync             bool     `json:"sync"`
 	}
 	if json.Unmarshal(incoming.Params, &req) != nil {
 		s.respondError(incoming.ID, -32602, "invalid git parameters")
@@ -317,6 +322,15 @@ func (s *Server) handleGit(ctx context.Context, incoming message) {
 			return
 		}
 		s.respond(incoming.ID, worktrees.CheckoutCommit(ctx, root, req.Commit, req.StashIfDirty))
+	case "x.ai/git/commit":
+		data, warning, err := worktrees.Commit(ctx, root, req.Message, req.Amend, req.Signoff, req.Push, req.Sync)
+		if err != nil {
+			extResult(nil, err)
+		} else if warning != "" {
+			s.respond(incoming.ID, map[string]any{"result": data, "error": warning})
+		} else {
+			extResult(data, nil)
+		}
 	}
 }
 

@@ -61,6 +61,11 @@ type CheckoutCommitResult struct {
 	Error      string `json:"error,omitempty"`
 }
 
+type CommitData struct {
+	CommitHash string `json:"commitHash,omitempty"`
+	Output     string `json:"output,omitempty"`
+}
+
 func GitRoot(ctx context.Context, cwd string) (string, error) {
 	root, err := gitOutput(ctx, cwd, "rev-parse", "--show-toplevel")
 	return strings.TrimSpace(root), err
@@ -260,6 +265,44 @@ func CheckoutCommit(ctx context.Context, root, commit string, stashIfDirty bool)
 		}
 		return CheckoutCommitResult{Fetched: true, Error: err.Error()}
 	}
+}
+
+func Commit(ctx context.Context, root, message string, amend, signoff, push, syncRemote bool) (CommitData, string, error) {
+	if strings.TrimSpace(message) == "" {
+		return CommitData{}, "", errors.New("message is required")
+	}
+	args := []string{"commit", "-m", message}
+	if amend {
+		args = append(args, "--amend")
+	}
+	if signoff {
+		args = append(args, "--signoff")
+	}
+	if _, err := gitOutput(ctx, root, args...); err != nil {
+		return CommitData{}, "", err
+	}
+	commit, _ := CurrentCommit(ctx, root)
+	short := commit
+	if len(short) > 7 {
+		short = short[:7]
+	}
+	data := CommitData{CommitHash: commit, Output: "Committed: " + short}
+	warning := ""
+	if syncRemote {
+		if output, err := gitOutput(ctx, root, "pull", "--rebase"); err != nil {
+			warning = "Couldn't pull the latest changes. " + err.Error()
+		} else if strings.TrimSpace(output) != "" {
+			data.Output += "\n--- Pull ---\n" + strings.TrimSpace(output)
+		}
+	}
+	if warning == "" && (push || syncRemote) {
+		if output, err := gitOutput(ctx, root, "push", "-u", "origin", "HEAD"); err != nil {
+			warning = "Couldn't push your changes. " + err.Error()
+		} else if strings.TrimSpace(output) != "" {
+			data.Output += "\n--- Push ---\n" + strings.TrimSpace(output)
+		}
+	}
+	return data, warning, nil
 }
 
 func gitChanges(ctx context.Context, root string, staged, includeUntracked, includeStats bool) ([]GitFileChange, error) {

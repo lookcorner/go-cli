@@ -132,3 +132,24 @@ func TestGitInfoBranchesCheckoutStashAndCommit(t *testing.T) {
 		t.Fatalf("checkout commit HEAD=%q want=%q", got, initial)
 	}
 }
+
+func TestCommitReturnsHashAndSignoff(t *testing.T) {
+	root := newRepo(t)
+	if err := os.WriteFile(filepath.Join(root, "commit.txt"), []byte("commit me\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Stage(context.Background(), root, []string{"commit.txt"}); err != nil {
+		t.Fatal(err)
+	}
+	data, warning, err := Commit(context.Background(), root, "add commit fixture", false, true, false, false)
+	if err != nil || warning != "" || data.CommitHash == "" || !strings.HasPrefix(data.Output, "Committed: ") {
+		t.Fatalf("commit data=%#v warning=%q err=%v", data, warning, err)
+	}
+	if got := strings.TrimSpace(runGitOutput(t, root, "rev-parse", "HEAD")); got != data.CommitHash {
+		t.Fatalf("commit hash=%q want=%q", data.CommitHash, got)
+	}
+	message := runGitOutput(t, root, "log", "-1", "--format=%B")
+	if !strings.Contains(message, "Signed-off-by: Fixture <fixture@example.invalid>") {
+		t.Fatalf("signoff missing from commit message: %s", message)
+	}
+}
