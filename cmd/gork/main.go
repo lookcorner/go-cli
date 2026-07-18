@@ -413,6 +413,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		Client: client, Tools: registry, Skills: skillCatalog, Logger: logger,
 		HookCatalog: hookCatalog, HookPolicy: hookRuntime,
 		ListSubagents: subagents.List, GetSubagent: subagents.Output, KillSubagent: subagents.Kill,
+		ListTasks: registry.BackgroundTasks, KillTask: registry.KillBackgroundTask,
 		SessionID: logger.ID(),
 		Model:     cfg.Model, Instructions: cfg.SystemPrompt, MaxSteps: cfg.MaxSteps,
 		TextOutput: stdout, StatusOutput: stderr,
@@ -1268,6 +1269,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			Client: modelClient, Tools: registry, Skills: catalog, PluginInventory: pluginInventory, Logger: logger,
 			HookCatalog: pluginState.hooks, HookPolicy: pluginState.hookRun,
 			ListSubagents: subagentManager.List, GetSubagent: subagentManager.Output, KillSubagent: subagentManager.Kill,
+			ListTasks: registry.BackgroundTasks, KillTask: registry.KillBackgroundTask,
 			ReloadHooks: func() error {
 				pluginState.updateMu.Lock()
 				defer pluginState.updateMu.Unlock()

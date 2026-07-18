@@ -67,6 +67,8 @@ type Runner struct {
 	ListSubagents           func() []tools.SubagentResult
 	GetSubagent             func(context.Context, string, time.Duration) (tools.SubagentResult, error)
 	KillSubagent            func(context.Context, string) (string, error)
+	ListTasks               func() []tools.ProcessSnapshot
+	KillTask                func(context.Context, string) (string, error)
 	Logger                  EventLogger
 	SessionID               string
 	Model                   string

@@ -45,6 +45,30 @@ type backgroundProcess struct {
 	done    chan struct{}
 	mu      sync.Mutex
 	err     error
+	ended   time.Time
+	killed  bool
+}
+
+type ProcessTime struct {
+	SecsSinceEpoch  int64 `json:"secs_since_epoch"`
+	NanosSinceEpoch int32 `json:"nanos_since_epoch"`
+}
+
+type ProcessSnapshot struct {
+	TaskID           string       `json:"task_id"`
+	Command          string       `json:"command"`
+	CWD              string       `json:"cwd"`
+	StartTime        ProcessTime  `json:"start_time"`
+	EndTime          *ProcessTime `json:"end_time"`
+	Output           string       `json:"output"`
+	OutputFile       string       `json:"output_file"`
+	Truncated        bool         `json:"truncated"`
+	ExitCode         *int         `json:"exit_code"`
+	Signal           *string      `json:"signal"`
+	Completed        bool         `json:"completed"`
+	Kind             string       `json:"kind"`
+	BlockWaited      bool         `json:"block_waited"`
+	ExplicitlyKilled bool         `json:"explicitly_killed"`
 }
 
 func NewProcessManager(ws *workspace.Workspace, approver Approver) *ProcessManager {
@@ -98,6 +122,7 @@ func (m *ProcessManager) StartWithTimeout(ctx context.Context, command string, t
 		}
 		process.mu.Lock()
 		process.err = err
+		process.ended = time.Now()
 		process.mu.Unlock()
 		close(process.done)
 	}()
@@ -423,6 +448,9 @@ func (m *ProcessManager) Kill(ctx context.Context, id string) error {
 	if err := terminateProcess(process.cmd); err != nil {
 		return fmt.Errorf("terminate %s: %w", id, err)
 	}
+	process.mu.Lock()
+	process.killed = true
+	process.mu.Unlock()
 	select {
 	case <-process.done:
 		return nil
@@ -450,6 +478,56 @@ func (m *ProcessManager) List() []string {
 	}
 	sort.Strings(ids)
 	return ids
+}
+
+func (m *ProcessManager) Snapshots() []ProcessSnapshot {
+	m.mu.Lock()
+	processes := make([]*backgroundProcess, 0, len(m.processes))
+	for _, process := range m.processes {
+		processes = append(processes, process)
+	}
+	m.mu.Unlock()
+	result := make([]ProcessSnapshot, 0, len(processes))
+	for _, process := range processes {
+		completed := false
+		select {
+		case <-process.done:
+			completed = true
+		default:
+		}
+		process.mu.Lock()
+		ended, killed := process.ended, process.killed
+		process.mu.Unlock()
+		output, truncated := process.output.Snapshot()
+		item := ProcessSnapshot{
+			TaskID: process.id, Command: process.command, CWD: process.cmd.Dir,
+			StartTime: processTime(process.started), Output: output, Truncated: truncated,
+			Completed: completed, Kind: "bash", ExplicitlyKilled: killed,
+		}
+		if completed {
+			end := processTime(ended)
+			item.EndTime = &end
+			if process.cmd.ProcessState != nil && process.cmd.ProcessState.ExitCode() >= 0 {
+				code := process.cmd.ProcessState.ExitCode()
+				item.ExitCode = &code
+			}
+		}
+		result = append(result, item)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].StartTime == result[j].StartTime {
+			return result[i].TaskID < result[j].TaskID
+		}
+		if result[i].StartTime.SecsSinceEpoch == result[j].StartTime.SecsSinceEpoch {
+			return result[i].StartTime.NanosSinceEpoch < result[j].StartTime.NanosSinceEpoch
+		}
+		return result[i].StartTime.SecsSinceEpoch < result[j].StartTime.SecsSinceEpoch
+	})
+	return result
+}
+
+func processTime(value time.Time) ProcessTime {
+	return ProcessTime{SecsSinceEpoch: value.Unix(), NanosSinceEpoch: int32(value.Nanosecond())}
 }
 
 func (m *ProcessManager) lookup(id string) (*backgroundProcess, error) {
@@ -541,12 +619,17 @@ func (b *tailBuffer) Write(data []byte) (int, error) {
 }
 
 func (b *tailBuffer) String() string {
+	value, _ := b.Snapshot()
+	return value
+}
+
+func (b *tailBuffer) Snapshot() (string, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.truncated {
-		return "[earlier output truncated]\n" + string(b.data)
+		return "[earlier output truncated]\n" + string(b.data), true
 	}
-	return string(b.data)
+	return string(b.data), false
 }
 
 type startCommandTool struct{ manager *ProcessManager }

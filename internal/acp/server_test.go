@@ -867,10 +867,10 @@ func TestPluginWireInfoReportsInlineHooks(t *testing.T) {
 func TestTaskListAndKillWireContract(t *testing.T) {
 	killed := ""
 	current := &session{id: "task-session", runner: &agent.Runner{
-		ListSubagents: func() []tools.SubagentResult {
-			return []tools.SubagentResult{{ID: "subagent-1", Type: "explore", Description: "find code", Status: "running", StartedAtMS: 10, DurationMS: 20}}
+		ListTasks: func() []tools.ProcessSnapshot {
+			return []tools.ProcessSnapshot{{TaskID: "task-1", Command: "sleep 1", CWD: "/work", StartTime: tools.ProcessTime{SecsSinceEpoch: 10}, Kind: "bash"}}
 		},
-		KillSubagent: func(_ context.Context, id string) (string, error) { killed = id; return "killed", nil },
+		KillTask: func(_ context.Context, id string) (string, error) { killed = id; return "killed", nil },
 	}}
 	request := func(method, params string) map[string]any {
 		var output bytes.Buffer
@@ -884,11 +884,11 @@ func TestTaskListAndKillWireContract(t *testing.T) {
 	}
 	listed := request("x.ai/task/list", `{"sessionId":"task-session"}`)
 	item := listed["result"].(map[string]any)["tasks"].([]any)[0].(map[string]any)
-	if item["taskId"] != "subagent-1" || item["subagentType"] != "explore" || item["status"] != "running" {
+	if item["task_id"] != "task-1" || item["command"] != "sleep 1" || item["cwd"] != "/work" || item["kind"] != "bash" {
 		t.Fatalf("listed=%#v", listed)
 	}
-	kill := request("x.ai/task/kill", `{"sessionId":"task-session","taskId":"subagent-1"}`)
-	if killed != "subagent-1" || kill["result"].(map[string]any)["outcome"] != "killed" {
+	kill := request("x.ai/task/kill", `{"sessionId":"task-session","taskId":"task-1"}`)
+	if killed != "task-1" || kill["result"].(map[string]any)["outcome"] != "killed" {
 		t.Fatalf("kill=%#v killed=%q", kill, killed)
 	}
 }

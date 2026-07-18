@@ -312,6 +312,32 @@ func (r *Registry) GoalSnapshot() GoalSnapshot {
 	return r.goal.Snapshot()
 }
 
+func (r *Registry) BackgroundTasks() []ProcessSnapshot {
+	if r == nil || r.processes == nil {
+		return nil
+	}
+	return r.processes.Snapshots()
+}
+
+func (r *Registry) KillBackgroundTask(ctx context.Context, id string) (string, error) {
+	if r == nil || r.processes == nil {
+		return "not_found", nil
+	}
+	process, err := r.processes.lookup(id)
+	if err != nil {
+		return "not_found", nil
+	}
+	select {
+	case <-process.done:
+		return "already_exited", nil
+	default:
+	}
+	if err := r.processes.Kill(ctx, id); err != nil {
+		return "", err
+	}
+	return "killed", nil
+}
+
 func (r *Registry) HunkTracker() *HunkTracker { return r.hunks }
 
 func (r *Registry) SetReadPolicy(approver Approver) {

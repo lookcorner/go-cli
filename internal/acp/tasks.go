@@ -24,36 +24,19 @@ func (s *Server) handleTasks(ctx context.Context, incoming message) {
 		return
 	}
 	if incoming.Method == "x.ai/task/list" {
-		if current.runner.ListSubagents == nil {
+		if current.runner.ListTasks == nil {
 			s.respond(incoming.ID, map[string]any{"result": map[string]any{"tasks": []any{}}, "error": nil})
 			return
 		}
-		results := current.runner.ListSubagents()
-		items := make([]map[string]any, 0, len(results))
-		for _, result := range results {
-			item := map[string]any{
-				"taskId": result.ID, "subagentId": result.ID, "subagentType": result.Type,
-				"description": result.Description, "status": result.Status,
-				"startedAtEpochMs": result.StartedAtMS, "durationMs": result.DurationMS,
-				"toolCalls": result.ToolCalls, "turns": result.Turns,
-			}
-			if result.Output != "" {
-				item["output"] = result.Output
-			}
-			if result.WorktreeDir != "" {
-				item["worktreePath"] = result.WorktreeDir
-			}
-			items = append(items, item)
-		}
-		s.respond(incoming.ID, map[string]any{"result": map[string]any{"tasks": items}, "error": nil})
+		s.respond(incoming.ID, map[string]any{"result": map[string]any{"tasks": current.runner.ListTasks()}, "error": nil})
 		return
 	}
 	id := firstString(req.TaskID, req.TaskID2)
-	if id == "" || current.runner.KillSubagent == nil {
+	if id == "" || current.runner.KillTask == nil {
 		s.respondError(incoming.ID, -32602, "taskId is required")
 		return
 	}
-	outcome, err := current.runner.KillSubagent(ctx, id)
+	outcome, err := current.runner.KillTask(ctx, id)
 	if err != nil {
 		s.respond(incoming.ID, map[string]any{"result": nil, "error": err.Error()})
 		return

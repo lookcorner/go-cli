@@ -283,3 +283,43 @@ func TestBackgroundCommandKill(t *testing.T) {
 		t.Fatalf("process still running: %s", output)
 	}
 }
+
+func TestRegistryBackgroundTaskSnapshotsAndKillOutcomes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture is Unix-specific")
+	}
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry(ws, PromptApprover{Mode: PermissionAuto})
+	defer registry.Close()
+	completedID, err := registry.processes.Start(context.Background(), "printf hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.processes.WaitOutput(context.Background(), completedID, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	snapshots := registry.BackgroundTasks()
+	if len(snapshots) != 1 || snapshots[0].TaskID != completedID || snapshots[0].Command != "printf hello" || snapshots[0].Output != "hello" || !snapshots[0].Completed || snapshots[0].ExitCode == nil || *snapshots[0].ExitCode != 0 || snapshots[0].EndTime == nil {
+		t.Fatalf("snapshots=%#v", snapshots)
+	}
+	if outcome, err := registry.KillBackgroundTask(context.Background(), completedID); err != nil || outcome != "already_exited" {
+		t.Fatalf("completed kill outcome=%q err=%v", outcome, err)
+	}
+	runningID, err := registry.processes.Start(context.Background(), "sleep 30")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome, err := registry.KillBackgroundTask(context.Background(), runningID); err != nil || outcome != "killed" {
+		t.Fatalf("running kill outcome=%q err=%v", outcome, err)
+	}
+	if outcome, err := registry.KillBackgroundTask(context.Background(), "missing"); err != nil || outcome != "not_found" {
+		t.Fatalf("missing kill outcome=%q err=%v", outcome, err)
+	}
+	snapshots = registry.BackgroundTasks()
+	if len(snapshots) != 2 || !snapshots[1].ExplicitlyKilled {
+		t.Fatalf("killed snapshot=%#v", snapshots)
+	}
+}
