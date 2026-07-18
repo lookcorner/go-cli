@@ -13,12 +13,18 @@ type callableMCPTool interface {
 	CallMCP(context.Context, json.RawMessage) (mcppkg.ToolResult, error)
 }
 
+type readableMCPResource interface {
+	MCPResourceReader() (string, bool)
+	ReadMCPResource(context.Context, string) ([]mcppkg.ResourceContents, error)
+}
+
 func (s *Server) handleMCP(ctx context.Context, incoming message) {
 	var req struct {
 		SessionID string          `json:"sessionId"`
 		Server    string          `json:"server"`
 		ServerURL string          `json:"serverUrl"`
 		Tool      string          `json:"tool"`
+		URI       string          `json:"uri"`
 		Arguments json.RawMessage `json:"arguments"`
 	}
 	if json.Unmarshal(incoming.Params, &req) != nil {
@@ -27,6 +33,10 @@ func (s *Server) handleMCP(ctx context.Context, incoming message) {
 	}
 	if incoming.Method == "x.ai/mcp/list" {
 		s.handleMCPList(incoming, req.SessionID)
+		return
+	}
+	if incoming.Method == "x.ai/mcp/read_resource" {
+		s.handleMCPReadResource(ctx, incoming, req.SessionID, req.Server, req.URI)
 		return
 	}
 	if req.SessionID == "" || req.Server == "" || req.Tool == "" {
@@ -87,6 +97,53 @@ func (s *Server) handleMCP(ctx context.Context, incoming message) {
 		return
 	}
 	s.respondError(incoming.ID, -32000, "MCP tool not found")
+}
+
+func (s *Server) handleMCPReadResource(ctx context.Context, incoming message, sessionID, server, uri string) {
+	if sessionID == "" || server == "" || uri == "" {
+		s.respondError(incoming.ID, -32602, "sessionId, server, and uri are required")
+		return
+	}
+	current := s.lookupSession(sessionID)
+	if current == nil || current.runner == nil || current.runner.Tools == nil {
+		s.respondError(incoming.ID, -32602, "session not found")
+		return
+	}
+	for _, registered := range current.runner.Tools.SnapshotTools() {
+		reader, ok := registered.(readableMCPResource)
+		if !ok {
+			continue
+		}
+		name, readable := reader.MCPResourceReader()
+		if name != server || !readable {
+			continue
+		}
+		contents, err := reader.ReadMCPResource(ctx, uri)
+		if err != nil {
+			s.respondError(incoming.ID, -32000, err.Error())
+			return
+		}
+		if len(contents) == 0 {
+			s.respondError(incoming.ID, -32000, "empty resource")
+			return
+		}
+		result := make([]map[string]any, 0, len(contents))
+		for _, content := range contents {
+			entry := map[string]any{"uri": content.URI}
+			if content.MIMEType != "" {
+				entry["mimeType"] = content.MIMEType
+			}
+			if content.Blob != "" {
+				entry["blob"] = content.Blob
+			} else {
+				entry["text"] = content.Text
+			}
+			result = append(result, entry)
+		}
+		s.respond(incoming.ID, map[string]any{"result": map[string]any{"contents": result}, "error": nil})
+		return
+	}
+	s.respondError(incoming.ID, -32000, "MCP server resource reader not found")
 }
 
 func (s *Server) handleMCPList(incoming message, sessionID string) {

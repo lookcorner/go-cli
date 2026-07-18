@@ -446,6 +446,9 @@ func TestMCPExtensionsWireContract(t *testing.T) {
 	if err := registry.Register(fakeMCPTool{}); err != nil {
 		t.Fatal(err)
 	}
+	if err := registry.Register(fakeMCPResource{}); err != nil {
+		t.Fatal(err)
+	}
 	var output bytes.Buffer
 	server := &Server{output: &output, sessions: map[string]*session{"mcp-session": {
 		id: "mcp-session", cwd: root, runner: &agent.Runner{Tools: registry},
@@ -483,6 +486,13 @@ func TestMCPExtensionsWireContract(t *testing.T) {
 	if len(content) != 1 || content[0].(map[string]any)["text"] != "hello" {
 		t.Fatalf("unexpected MCP call response: %#v", called)
 	}
+	resource := call(3, "x.ai/mcp/read_resource", map[string]any{
+		"sessionId": "mcp-session", "server": "fixture", "uri": "fixture://notes",
+	})
+	contents := resource["result"].(map[string]any)["result"].(map[string]any)["contents"].([]any)
+	if len(contents) != 1 || contents[0].(map[string]any)["uri"] != "fixture://notes" || contents[0].(map[string]any)["text"] != "resource text" {
+		t.Fatalf("unexpected MCP resource response: %#v", resource)
+	}
 }
 
 type fakeMCPTool struct{}
@@ -509,6 +519,22 @@ func (fakeMCPTool) CallMCP(_ context.Context, raw json.RawMessage) (mcppkg.ToolR
 	var result mcppkg.ToolResult
 	data, _ := json.Marshal(map[string]any{"content": []any{map[string]any{"type": "text", "text": arguments.Value}}})
 	return result, json.Unmarshal(data, &result)
+}
+
+type fakeMCPResource struct{}
+
+func (fakeMCPResource) Definition() api.ToolDefinition {
+	return api.ToolDefinition{Type: "function", Name: "mcp__resource__fixture__read"}
+}
+
+func (fakeMCPResource) Execute(context.Context, json.RawMessage) (string, error) {
+	return "", errors.New("unexpected model resource execution")
+}
+
+func (fakeMCPResource) MCPResourceReader() (string, bool) { return "fixture", true }
+
+func (fakeMCPResource) ReadMCPResource(_ context.Context, uri string) ([]mcppkg.ResourceContents, error) {
+	return []mcppkg.ResourceContents{{URI: uri, MIMEType: "text/plain", Text: "resource text"}}, nil
 }
 
 func TestStaticExtensionsAndCompactCommand(t *testing.T) {

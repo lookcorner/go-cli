@@ -13,11 +13,24 @@ import (
 type contentTool struct {
 	definition api.ToolDefinition
 	execute    func(context.Context, json.RawMessage) (string, error)
+	serverName string
+	read       func(context.Context, string) ([]ResourceContents, error)
 }
 
 func (t *contentTool) Definition() api.ToolDefinition { return t.definition }
 func (t *contentTool) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
 	return t.execute(ctx, raw)
+}
+
+func (t *contentTool) MCPResourceReader() (string, bool) {
+	return t.serverName, t.read != nil
+}
+
+func (t *contentTool) ReadMCPResource(ctx context.Context, uri string) ([]ResourceContents, error) {
+	if t.read == nil {
+		return nil, errors.New("tool does not read MCP resources")
+	}
+	return t.read(ctx, uri)
 }
 
 func NewResourceAdapters(client *Client, serverName string) []*contentTool {
@@ -34,13 +47,14 @@ func NewResourceAdapters(client *Client, serverName string) []*contentTool {
 		encoded, err := json.Marshal(resources)
 		return string(encoded), err
 	}
-	read := &contentTool{definition: api.ToolDefinition{
+	read := &contentTool{serverName: serverName, definition: api.ToolDefinition{
 		Type: "function", Name: modelContentToolName("resource", serverName, "read"),
 		Description: fmt.Sprintf("Read a resource from MCP server %s by URI.", serverName),
 		Parameters: objectInputSchema(map[string]any{
 			"uri": map[string]any{"type": "string", "description": "Exact URI returned by the resource list tool."},
 		}, "uri"),
 	}}
+	read.read = client.ReadResource
 	read.execute = func(ctx context.Context, raw json.RawMessage) (string, error) {
 		var args struct {
 			URI string `json:"uri"`
