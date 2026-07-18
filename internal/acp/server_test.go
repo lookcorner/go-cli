@@ -893,6 +893,61 @@ func TestTaskListAndKillWireContract(t *testing.T) {
 	}
 }
 
+func TestSubagentGetListRunningAndCancelWireContract(t *testing.T) {
+	results := map[string]tools.SubagentResult{
+		"running-1": {ID: "running-1", Type: "explore", Description: "find code", Status: "running", StartedAtMS: 10, DurationMS: 20},
+		"done-1":    {ID: "done-1", Type: "general-purpose", Description: "implement", Status: "completed", Output: "done", ToolCalls: 3, Turns: 2, StartedAtMS: 30, DurationMS: 40},
+	}
+	var getTimeout time.Duration
+	current := &session{id: "parent-1", runner: &agent.Runner{
+		ListSubagents: func() []tools.SubagentResult { return []tools.SubagentResult{results["running-1"], results["done-1"]} },
+		GetSubagent: func(_ context.Context, id string, timeout time.Duration) (tools.SubagentResult, error) {
+			getTimeout = timeout
+			result, ok := results[id]
+			if !ok {
+				return tools.SubagentResult{}, errors.New("not found")
+			}
+			return result, nil
+		},
+		KillSubagent: func(_ context.Context, id string) (string, error) {
+			if results[id].Status != "running" {
+				return "already_finished", nil
+			}
+			return "killed", nil
+		},
+	}}
+	request := func(method, params string) map[string]any {
+		var output bytes.Buffer
+		server := &Server{output: &output, sessions: map[string]*session{"parent-1": current}}
+		server.handleSubagents(context.Background(), message{ID: json.RawMessage("1"), Method: method, Params: json.RawMessage(params)})
+		var response map[string]any
+		if err := json.NewDecoder(&output).Decode(&response); err != nil {
+			t.Fatal(err)
+		}
+		return response["result"].(map[string]any)
+	}
+
+	listed := request("x.ai/subagent/list_running", `{"sessionId":"parent-1"}`)
+	items := listed["result"].(map[string]any)["subagents"].([]any)
+	if len(items) != 1 || items[0].(map[string]any)["subagentId"] != "running-1" || items[0].(map[string]any)["parentSessionId"] != "parent-1" {
+		t.Fatalf("listed=%#v", listed)
+	}
+	got := request("x.ai/subagent/get", `{"subagentId":"done-1","block":true,"timeoutMs":25}`)
+	snapshot := got["result"].(map[string]any)["snapshot"].(map[string]any)
+	if snapshot["status"] != "completed" || snapshot["output"] != "done" || snapshot["toolCalls"] != float64(3) || getTimeout != 25*time.Millisecond {
+		t.Fatalf("snapshot=%#v timeout=%s", snapshot, getTimeout)
+	}
+	cancelled := request("x.ai/subagent/cancel", `{"subagentId":"done-1"}`)
+	cancelResult := cancelled["result"].(map[string]any)
+	if cancelResult["cancelled"] != false || cancelResult["outcome"].(map[string]any)["kind"] != "already_finished" || cancelResult["outcome"].(map[string]any)["status"] != "completed" {
+		t.Fatalf("cancelled=%#v", cancelled)
+	}
+	missing := request("x.ai/subagent/get", `{"subagentId":"missing"}`)
+	if missing["result"].(map[string]any)["snapshot"] != nil {
+		t.Fatalf("missing=%#v", missing)
+	}
+}
+
 func TestPluginActionUpdatesInventoryAndSkills(t *testing.T) {
 	root := t.TempDir()
 	pluginRoot := filepath.Join(root, "plugin")

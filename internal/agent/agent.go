@@ -9,6 +9,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/hooks"
@@ -64,6 +65,7 @@ type Runner struct {
 	HookCatalog             *hooks.Catalog
 	ReloadHooks             func() error
 	ListSubagents           func() []tools.SubagentResult
+	GetSubagent             func(context.Context, string, time.Duration) (tools.SubagentResult, error)
 	KillSubagent            func(context.Context, string) (string, error)
 	Logger                  EventLogger
 	SessionID               string
