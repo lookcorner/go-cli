@@ -5,10 +5,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 type GitFileChange struct {
@@ -64,6 +66,24 @@ type CheckoutCommitResult struct {
 type CommitData struct {
 	CommitHash string `json:"commitHash,omitempty"`
 	Output     string `json:"output,omitempty"`
+}
+
+type GitReadFile struct {
+	Path     string `json:"path"`
+	Version  string `json:"version"`
+	Content  string `json:"content"`
+	IsBinary bool   `json:"isBinary"`
+}
+
+type GitReadError struct {
+	Path    string `json:"path,omitempty"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+type GitReadFiles struct {
+	Files  []GitReadFile  `json:"files"`
+	Errors []GitReadError `json:"errors"`
 }
 
 func GitRoot(ctx context.Context, cwd string) (string, error) {
@@ -303,6 +323,94 @@ func Commit(ctx context.Context, root, message string, amend, signoff, push, syn
 		}
 	}
 	return data, warning, nil
+}
+
+func ReadFiles(ctx context.Context, root string, paths []string, version string) (GitReadFiles, error) {
+	resolved, err := GitRoot(ctx, root)
+	if err != nil {
+		return GitReadFiles{}, err
+	}
+	if version == "" {
+		version = "HEAD"
+	}
+	result := GitReadFiles{Files: make([]GitReadFile, 0, len(paths)), Errors: make([]GitReadError, 0)}
+	for _, path := range paths {
+		rel, err := relativeGitPath(resolved, path)
+		if err != nil {
+			return GitReadFiles{}, err
+		}
+		var data []byte
+		switch version {
+		case "working":
+			data, err = os.ReadFile(filepath.Join(resolved, filepath.FromSlash(rel)))
+		case "staged":
+			data, err = gitBytes(ctx, resolved, "show", ":"+rel)
+		default:
+			data, err = gitBytes(ctx, resolved, "show", version+":"+rel)
+		}
+		if err != nil {
+			result.Errors = append(result.Errors, GitReadError{Path: rel, Code: "READ_FAILED", Message: err.Error()})
+			continue
+		}
+		binary := !utf8.Valid(data)
+		content := string(data)
+		if binary {
+			content = ""
+		}
+		result.Files = append(result.Files, GitReadFile{Path: rel, Version: version, Content: content, IsBinary: binary})
+	}
+	return result, nil
+}
+
+func StageContent(ctx context.Context, root, path, content string) error {
+	resolved, err := GitRoot(ctx, root)
+	if err != nil {
+		return err
+	}
+	rel, err := relativeGitPath(resolved, path)
+	if err != nil {
+		return err
+	}
+	temp, err := os.CreateTemp("", "gork-stage-content-*")
+	if err != nil {
+		return err
+	}
+	name := temp.Name()
+	defer os.Remove(name)
+	if _, err := temp.WriteString(content); err != nil {
+		temp.Close()
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	hash, err := gitOutput(ctx, resolved, "hash-object", "-w", name)
+	if err != nil {
+		return err
+	}
+	mode := "100644"
+	if entry := optionalGit(ctx, resolved, "ls-files", "-s", "--", rel); entry != "" {
+		if fields := strings.Fields(entry); len(fields) > 0 {
+			mode = fields[0]
+		}
+	}
+	_, err = gitOutput(ctx, resolved, "update-index", "--add", "--cacheinfo", mode, strings.TrimSpace(hash), rel)
+	return err
+}
+
+func relativeGitPath(root, path string) (string, error) {
+	if filepath.IsAbs(path) {
+		rel, err := filepath.Rel(root, path)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return "", fmt.Errorf("path %q is not within git repository %q", path, root)
+		}
+		path = rel
+	}
+	clean := filepath.Clean(path)
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("invalid git path %q", path)
+	}
+	return filepath.ToSlash(clean), nil
 }
 
 func gitChanges(ctx context.Context, root string, staged, includeUntracked, includeStats bool) ([]GitFileChange, error) {

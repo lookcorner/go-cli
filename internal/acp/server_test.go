@@ -95,6 +95,23 @@ func TestGitExtensionWireContract(t *testing.T) {
 	if data := commitResult["result"].(map[string]any); data["commitHash"] == "" || !strings.HasPrefix(data["output"].(string), "Committed: ") || commitResult["error"] != nil {
 		t.Fatalf("unexpected commit response: %#v", response)
 	}
+	output.Reset()
+	server.handleGit(context.Background(), message{ID: json.RawMessage("7"), Method: "x.ai/git/files", Params: json.RawMessage(`{"gitRoot":` + strconv.Quote(root) + `,"paths":["tracked.txt"],"version":"HEAD"}`)})
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	files := response["result"].(map[string]any)["result"].(map[string]any)["files"].([]any)
+	if len(files) != 1 || files[0].(map[string]any)["content"] != "changed\n" {
+		t.Fatalf("unexpected git files response: %#v", response)
+	}
+	output.Reset()
+	server.handleGit(context.Background(), message{ID: json.RawMessage("8"), Method: "x.ai/git/stage/content", Params: json.RawMessage(`{"gitRoot":` + strconv.Quote(root) + `,"path":"tracked.txt","content":"index only\n"}`)})
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if got := runACPGitOutput(t, root, "show", ":tracked.txt"); got != "index only\n" {
+		t.Fatalf("stage content index=%q", got)
+	}
 }
 
 type fixtureStreamer struct {

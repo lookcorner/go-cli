@@ -153,3 +153,44 @@ func TestCommitReturnsHashAndSignoff(t *testing.T) {
 		t.Fatalf("signoff missing from commit message: %s", message)
 	}
 }
+
+func TestReadFilesAndStageContent(t *testing.T) {
+	ctx := context.Background()
+	root := newRepo(t)
+	if err := os.Chmod(filepath.Join(root, "tracked.txt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, root, "add", "tracked.txt")
+	runGit(t, root, "commit", "-qm", "make executable")
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("working\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "binary.bin"), []byte{0xff, 0x00, 0x01}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	head, err := ReadFiles(ctx, root, []string{"tracked.txt"}, "HEAD")
+	if err != nil || len(head.Files) != 1 || head.Files[0].Content != "original\n" || head.Files[0].IsBinary {
+		t.Fatalf("HEAD files=%#v err=%v", head, err)
+	}
+	working, err := ReadFiles(ctx, root, []string{"tracked.txt", "binary.bin", "missing.txt"}, "working")
+	if err != nil || len(working.Files) != 2 || len(working.Errors) != 1 || !working.Files[0].IsBinary && !working.Files[1].IsBinary {
+		t.Fatalf("working files=%#v err=%v", working, err)
+	}
+	if err := StageContent(ctx, root, "tracked.txt", "staged only\n"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "tracked.txt"))
+	if err != nil || string(data) != "working\n" {
+		t.Fatalf("stage content changed working file: %q err=%v", data, err)
+	}
+	staged, err := ReadFiles(ctx, root, []string{"tracked.txt"}, "staged")
+	if err != nil || len(staged.Files) != 1 || staged.Files[0].Content != "staged only\n" {
+		t.Fatalf("staged files=%#v err=%v", staged, err)
+	}
+	if mode := strings.Fields(runGitOutput(t, root, "ls-files", "-s", "--", "tracked.txt"))[0]; mode != "100755" {
+		t.Fatalf("stage content mode=%q want=100755", mode)
+	}
+	if _, err := ReadFiles(ctx, root, []string{filepath.Join(t.TempDir(), "outside.txt")}, "working"); err == nil {
+		t.Fatal("repository-external path was accepted")
+	}
+}

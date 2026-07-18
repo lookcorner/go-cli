@@ -196,7 +196,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleHunkAction(ctx, incoming)
 		case "x.ai/git/worktree/create", "x.ai/git/worktree/list", "x.ai/git/worktree/show", "x.ai/git/worktree/remove", "x.ai/git/worktree/apply":
 			s.handleWorktree(ctx, incoming)
-		case "x.ai/git/git_repo_root", "x.ai/git/status", "x.ai/git/stage", "x.ai/git/unstage", "x.ai/git/discard", "x.ai/git/current_commit", "x.ai/git/info", "x.ai/git/branches", "x.ai/git/stash", "x.ai/git/checkout", "x.ai/git/checkout_commit", "x.ai/git/commit":
+		case "x.ai/git/git_repo_root", "x.ai/git/status", "x.ai/git/stage", "x.ai/git/stage/content", "x.ai/git/unstage", "x.ai/git/discard", "x.ai/git/current_commit", "x.ai/git/info", "x.ai/git/branches", "x.ai/git/stash", "x.ai/git/checkout", "x.ai/git/checkout_commit", "x.ai/git/commit", "x.ai/git/files":
 			s.handleGit(ctx, incoming)
 		case "x.ai/git/worktree/create_from_worktree", "x.ai/git/worktree/create_from_worktree_sync":
 			s.handleWorktreeFork(ctx, incoming)
@@ -257,6 +257,9 @@ func (s *Server) handleGit(ctx context.Context, incoming message) {
 		Signoff          bool     `json:"signoff"`
 		Push             bool     `json:"push"`
 		Sync             bool     `json:"sync"`
+		Path             string   `json:"path"`
+		Content          string   `json:"content"`
+		Version          string   `json:"version"`
 	}
 	if json.Unmarshal(incoming.Params, &req) != nil {
 		s.respondError(incoming.ID, -32602, "invalid git parameters")
@@ -331,6 +334,15 @@ func (s *Server) handleGit(ctx context.Context, incoming message) {
 		} else {
 			extResult(data, nil)
 		}
+	case "x.ai/git/files":
+		result, err := worktrees.ReadFiles(ctx, root, req.Paths, req.Version)
+		extResult(result, err)
+	case "x.ai/git/stage/content":
+		if req.Path == "" {
+			s.respondError(incoming.ID, -32602, "path is required")
+			return
+		}
+		extResult(map[string]any{}, worktrees.StageContent(ctx, root, req.Path, req.Content))
 	}
 }
 
