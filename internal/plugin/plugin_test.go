@@ -73,7 +73,8 @@ func TestManifestSearchAndContainedPaths(t *testing.T) {
 	if err := os.Symlink(escape, filepath.Join(root, "escaped")); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	mustWrite(t, filepath.Join(root, ".grok-plugin", "plugin.json"), `{"name":"safe-plugin","skills":["skills","../outside","escaped"]}`)
+	mustWrite(t, filepath.Join(workspaceRoot, "outside.json"), `{"mcpServers":{}}`)
+	mustWrite(t, filepath.Join(root, ".grok-plugin", "plugin.json"), `{"name":"safe-plugin","skills":["skills","../outside","escaped"],"mcpServers":"../outside.json"}`)
 
 	plugins, err := discover(workspaceRoot, home, filepath.Join(home, ".grok"), Config{Paths: []string{root}})
 	if err != nil || len(plugins) != 1 {
@@ -81,6 +82,9 @@ func TestManifestSearchAndContainedPaths(t *testing.T) {
 	}
 	if len(plugins[0].SkillDirs) != 1 || plugins[0].SkillDirs[0] != canonicalOrClean(filepath.Join(root, "skills")) {
 		t.Fatalf("escaping paths were accepted: %#v", plugins[0].SkillDirs)
+	}
+	if plugins[0].MCPConfig != "" {
+		t.Fatalf("escaping MCP path was accepted: %q", plugins[0].MCPConfig)
 	}
 }
 
@@ -111,6 +115,31 @@ func TestHigherPriorityNameConflictIsResolvedBeforeEnablement(t *testing.T) {
 	plugins, err := discover(workspaceRoot, home, filepath.Join(home, ".grok"), Config{Paths: []string{configured}})
 	if err != nil || len(plugins) != 0 {
 		t.Fatalf("lower-priority configured plugin bypassed project name conflict: plugins=%#v err=%v", plugins, err)
+	}
+}
+
+func TestPluginMCPManifestAndConvention(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	home := t.TempDir()
+	root := filepath.Join(workspaceRoot, "mcp-plugin")
+	mustMkdir(t, root)
+	mustWrite(t, filepath.Join(root, ".mcp.json"), `{"mcpServers":{"file":{"command":"file-server"}}}`)
+	mustWrite(t, filepath.Join(root, "plugin.json"), `{"name":"mcp-plugin","mcpServers":{"inline":{"command":"inline-server"}}}`)
+
+	plugins, err := discover(workspaceRoot, home, filepath.Join(home, ".grok"), Config{Paths: []string{root}})
+	if err != nil || len(plugins) != 1 {
+		t.Fatalf("plugins=%#v err=%v", plugins, err)
+	}
+	if plugins[0].MCPConfig != canonicalOrClean(filepath.Join(root, ".mcp.json")) || !strings.Contains(string(plugins[0].InlineMCP), "inline-server") {
+		t.Fatalf("plugin MCP descriptor=%#v", plugins[0])
+	}
+
+	convention := filepath.Join(workspaceRoot, "convention")
+	mustMkdir(t, convention)
+	mustWrite(t, filepath.Join(convention, ".mcp.json"), `{"mcpServers":{}}`)
+	plugins, err = discover(workspaceRoot, home, filepath.Join(home, ".grok"), Config{Paths: []string{convention}})
+	if err != nil || len(plugins) != 1 || plugins[0].Name != "convention" {
+		t.Fatalf("convention MCP plugin=%#v err=%v", plugins, err)
 	}
 }
 

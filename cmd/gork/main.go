@@ -221,7 +221,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return err
 	}
 	projectInstructions := workspace.FormatInstructions(instructionFiles)
-	skillCatalog, err := discoverSkills(ws.Root(), cfg)
+	cfg, skillCatalog, err := discoverWorkspace(ws.Root(), cfg)
 	if err != nil {
 		return err
 	}
@@ -738,7 +738,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		if err != nil {
 			return nil, nil, err
 		}
-		catalog, err := discoverSkills(ws.Root(), cfg)
+		sessionCfg, catalog, err := discoverWorkspace(ws.Root(), cfg)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -819,13 +819,11 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 				return nil, nil, err
 			}
 		}
-		sessionCfg := cfg
 		if sessionConfig.Model != "" {
 			sessionCfg.Model = sessionConfig.Model
 		}
-		sessionCfg.MCPServers = make(map[string]config.MCPServerConfig, len(cfg.MCPServers)+len(sessionConfig.MCPServers))
-		for name, configured := range cfg.MCPServers {
-			sessionCfg.MCPServers[name] = configured
+		if sessionCfg.MCPServers == nil {
+			sessionCfg.MCPServers = make(map[string]config.MCPServerConfig, len(sessionConfig.MCPServers))
 		}
 		for _, remote := range sessionConfig.MCPServers {
 			sessionCfg.MCPServers[remote.Name] = config.MCPServerConfig{
@@ -871,17 +869,19 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 	return nil
 }
 
-func discoverSkills(root string, cfg config.Config) (*skills.Catalog, error) {
+func discoverWorkspace(root string, cfg config.Config) (config.Config, *skills.Catalog, error) {
 	plugins, err := plugin.Discover(root, plugin.Config{
 		Paths: cfg.Plugins.Paths, Enabled: cfg.Plugins.Enabled, Disabled: cfg.Plugins.Disabled,
 	})
 	if err != nil {
-		return nil, err
+		return config.Config{}, nil, err
 	}
-	return skills.Discover(root, skills.Config{
+	cfg.MCPServers = config.DiscoverMCPServers(root, cfg, plugins)
+	catalog, err := skills.Discover(root, skills.Config{
 		Compat: cfg.Compat, Paths: cfg.Skills.Paths, Ignore: cfg.Skills.Ignore,
 		Disabled: cfg.Skills.Disabled, Plugins: plugins,
 	})
+	return cfg, catalog, err
 }
 
 func sessionMetadata(ctx context.Context, cwd, model string) map[string]any {
@@ -1085,7 +1085,7 @@ func startMCPServers(
 		var initialized mcp.InitializeResult
 		var err error
 		if server.URL != "" {
-			httpConfig := mcp.HTTPConfig{Name: name, URL: server.URL, Headers: server.Headers}
+			httpConfig := mcp.HTTPConfig{Name: name, URL: server.URL, Headers: mcpHTTPHeaders(server)}
 			transport := strings.ToLower(strings.TrimSpace(server.Type))
 			if transport != "" && transport != "sse" && transport != "http" && transport != "streamable-http" {
 				err = fmt.Errorf("MCP server %q has unsupported transport type %q", name, server.Type)
@@ -1178,6 +1178,22 @@ func startMCPServers(
 		fmt.Fprintf(stderr, "[gork] MCP %s ready: %d tool(s)\n", serverLabel, len(remoteTools))
 	}
 	return clients, nil
+}
+
+func mcpHTTPHeaders(server config.MCPServerConfig) map[string]string {
+	headers := make(map[string]string, len(server.Headers)+1)
+	for key, value := range server.Headers {
+		headers[key] = value
+	}
+	if token := os.Getenv(server.BearerTokenEnvVar); server.BearerTokenEnvVar != "" && token != "" {
+		for key := range headers {
+			if strings.EqualFold(key, "Authorization") {
+				delete(headers, key)
+			}
+		}
+		headers["Authorization"] = "Bearer " + token
+	}
+	return headers
 }
 
 func newMCPSamplingHandler(cfg config.Config, approver tools.Approver, tokenProvider api.TokenProvider, serverName string) mcp.SamplingHandler {

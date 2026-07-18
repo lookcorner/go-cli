@@ -27,6 +27,8 @@ type Plugin struct {
 	DataDir     string
 	SkillDirs   []string
 	CommandDirs []string
+	MCPConfig   string
+	InlineMCP   json.RawMessage
 }
 
 type scope string
@@ -38,11 +40,31 @@ const (
 )
 
 type manifest struct {
-	Name        string   `json:"name"`
-	Version     string   `json:"version"`
-	Description string   `json:"description"`
-	Skills      pathList `json:"skills"`
-	Commands    pathList `json:"commands"`
+	Name        string    `json:"name"`
+	Version     string    `json:"version"`
+	Description string    `json:"description"`
+	Skills      pathList  `json:"skills"`
+	Commands    pathList  `json:"commands"`
+	MCPServers  component `json:"mcpServers"`
+}
+
+type component struct {
+	Path   string
+	Inline json.RawMessage
+}
+
+func (c *component) UnmarshalJSON(data []byte) error {
+	var path string
+	if json.Unmarshal(data, &path) == nil {
+		c.Path = path
+		return nil
+	}
+	var value map[string]any
+	if err := json.Unmarshal(data, &value); err != nil {
+		return fmt.Errorf("plugin component must be a path or object: %w", err)
+	}
+	c.Inline = append(c.Inline[:0], data...)
+	return nil
 }
 
 type pathList []string
@@ -152,6 +174,7 @@ func collect(root string, kind scope, grokHome string, cfg Config, seenPaths, se
 		ID: id, Name: m.Name, Version: m.Version, Description: m.Description,
 		Root: root, DataDir: dataDir,
 		SkillDirs: resolveDirs(root, m.Skills, "skills"), CommandDirs: resolveDirs(root, m.Commands, "commands"),
+		MCPConfig: resolveMCPConfig(root, m.MCPServers), InlineMCP: append(json.RawMessage(nil), m.MCPServers.Inline...),
 	})
 }
 
@@ -171,10 +194,33 @@ func loadManifest(root string) (manifest, bool) {
 		return m, true
 	}
 	name := nameFromDir(root)
-	if name == "" || !isDir(filepath.Join(root, "skills")) && !isDir(filepath.Join(root, "commands")) {
+	if name == "" || !isDir(filepath.Join(root, "skills")) && !isDir(filepath.Join(root, "commands")) && !isFile(filepath.Join(root, ".mcp.json")) {
 		return manifest{}, false
 	}
 	return manifest{Name: name}, true
+}
+
+func resolveMCPConfig(root string, configured component) string {
+	if configured.Path != "" {
+		return resolveFile(root, configured.Path)
+	}
+	return resolveFile(root, ".mcp.json")
+}
+
+func resolveFile(root, relative string) string {
+	if filepath.IsAbs(relative) {
+		return ""
+	}
+	path := filepath.Join(root, relative)
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return ""
+	}
+	real, err := filepath.EvalSymlinks(path)
+	if err != nil || !pathWithin(root, real) {
+		return ""
+	}
+	return real
 }
 
 func resolveDirs(root string, configured pathList, fallback string) []string {
@@ -285,4 +331,9 @@ func pathWithin(root, path string) bool {
 func isDir(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
+}
+
+func isFile(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
 }

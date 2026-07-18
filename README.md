@@ -430,6 +430,14 @@ Server processes inherit the current environment, with optional per-server
 the agent exits. Text, structured, and validated image tool results are
 forwarded to the model without flattening images into JSON text.
 
+MCP configuration is also discovered from project `.grok/config.toml` files,
+enabled plugin `.mcp.json` or inline `mcpServers`, `~/.claude.json`, project and
+global Cursor `mcp.json`, and `.mcp.json` files from the Git root through the
+workspace. Precedence is TOML, plugins, Claude, Cursor, then `.mcp.json`; closer
+project files win within one source. `${VAR}` and `$VAR` are expanded without
+removing unknown variables. Plugin MCP values additionally support the plugin
+root/data substitutions used by plugin skills.
+
 MCP Streamable HTTP endpoints use `url` instead of `command`. Gork sends the
 negotiated protocol and session headers, accepts both JSON and SSE responses,
 and closes stateful sessions with DELETE:
@@ -438,6 +446,7 @@ and closes stateful sessions with DELETE:
 [mcp_servers.remote]
 url = "https://mcp.example.com/rpc"
 headers = { Authorization = "Bearer token" }
+# Or: bearer_token_env_var = "MCP_ACCESS_TOKEN"
 ```
 
 Legacy standalone SSE servers use the same URL form with `type = "sse"` (a
@@ -540,9 +549,11 @@ enabled = ["team-tools"]
 disabled = ["old-tools"]
 ```
 
-This stage intentionally loads only textual skills and commands. Plugin hooks,
-agents, MCP/LSP servers, installation, marketplaces, and updates are not yet
-implemented.
+Enabled plugins may also contribute `.mcp.json` or an inline `mcpServers`
+object. This development build follows the reference's unstamped-build behavior
+and treats enabled project plugins as trusted; persistent release-build folder
+trust is not yet implemented. Plugin hooks, agents, LSP servers, installation,
+marketplaces, and updates are not yet implemented.
 
 The `[skills]` config accepts additional directories or individual `SKILL.md`
 files. Paths support `~`; relative paths resolve from the workspace. `ignore`
@@ -565,6 +576,7 @@ environment variables taking precedence:
 skills = false
 rules = false
 agents = false
+mcps = false
 ```
 
 ## Privacy

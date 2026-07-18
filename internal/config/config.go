@@ -103,13 +103,14 @@ type PruningConfig struct {
 }
 
 type MCPServerConfig struct {
-	Command string            `json:"command" toml:"command"`
-	Args    []string          `json:"args,omitempty" toml:"args"`
-	Env     map[string]string `json:"env,omitempty" toml:"env"`
-	URL     string            `json:"url,omitempty" toml:"url"`
-	Type    string            `json:"type,omitempty" toml:"type"`
-	Headers map[string]string `json:"headers,omitempty" toml:"headers"`
-	Enabled *bool             `json:"enabled,omitempty" toml:"enabled"`
+	Command           string            `json:"command" toml:"command"`
+	Args              []string          `json:"args,omitempty" toml:"args"`
+	Env               map[string]string `json:"env,omitempty" toml:"env"`
+	URL               string            `json:"url,omitempty" toml:"url"`
+	Type              string            `json:"type,omitempty" toml:"type"`
+	Headers           map[string]string `json:"headers,omitempty" toml:"headers"`
+	BearerTokenEnvVar string            `json:"bearer_token_env_var,omitempty" toml:"bearer_token_env_var"`
+	Enabled           *bool             `json:"enabled,omitempty" toml:"enabled"`
 }
 
 type LSPServerConfig struct {
@@ -246,6 +247,7 @@ type fileVendorCompat struct {
 	Skills *bool `json:"skills,omitempty" toml:"skills"`
 	Rules  *bool `json:"rules,omitempty" toml:"rules"`
 	Agents *bool `json:"agents,omitempty" toml:"agents"`
+	Mcps   *bool `json:"mcps,omitempty" toml:"mcps"`
 }
 
 type fileCompatConfig struct {
@@ -468,6 +470,9 @@ func applyVendorCompat(target *compat.Vendor, source fileVendorCompat) {
 	}
 	if source.Agents != nil {
 		target.Agents = *source.Agents
+	}
+	if source.Mcps != nil {
+		target.Mcps = *source.Mcps
 	}
 }
 
@@ -891,6 +896,7 @@ func applyCompatEnv(target *compat.Vendor, vendor string) {
 		"SKILLS": &target.Skills,
 		"RULES":  &target.Rules,
 		"AGENTS": &target.Agents,
+		"MCPS":   &target.Mcps,
 	} {
 		if value, ok := envBool("GROK_" + vendor + "_" + surface + "_ENABLED"); ok {
 			*field = value

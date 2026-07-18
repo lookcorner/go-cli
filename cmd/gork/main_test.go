@@ -15,6 +15,7 @@ import (
 
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/auth"
+	"github.com/lookcorner/go-cli/internal/compat"
 	"github.com/lookcorner/go-cli/internal/config"
 	"github.com/lookcorner/go-cli/internal/mcp"
 	"github.com/lookcorner/go-cli/internal/tools"
@@ -31,18 +32,33 @@ func TestDiscoverSkillsLoadsConfiguredPlugin(t *testing.T) {
 	if err := os.MkdirAll(skillDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(pluginRoot, "plugin.json"), []byte(`{"name":"team-tools"}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(pluginRoot, "plugin.json"), []byte(`{"name":"team-tools","mcpServers":{"plugin-mcp":{"command":"${GROK_PLUGIN_ROOT}/server"}}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: deploy\ndescription: Deploy\n---\nDeploy"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	catalog, err := discoverSkills(root, config.Config{Plugins: config.PluginsConfig{Paths: []string{pluginRoot}}})
+	pluginRoot, _ = filepath.EvalSymlinks(pluginRoot)
+	workspaceCfg, catalog, err := discoverWorkspace(root, config.Config{Compat: compat.Default(), Plugins: config.PluginsConfig{Paths: []string{pluginRoot}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if names := strings.Join(catalog.Names(), "|"); names != "team-tools:deploy" {
 		t.Fatalf("plugin skill names = %q", names)
+	}
+	if workspaceCfg.MCPServers["plugin-mcp"].Command != filepath.Join(pluginRoot, "server") {
+		t.Fatalf("plugin MCP config = %#v", workspaceCfg.MCPServers)
+	}
+}
+
+func TestMCPHTTPHeadersUseBearerTokenEnvironment(t *testing.T) {
+	t.Setenv("MCP_ACCESS_TOKEN", "secret")
+	headers := mcpHTTPHeaders(config.MCPServerConfig{
+		Headers:           map[string]string{"authorization": "Bearer old", "X-Test": "kept"},
+		BearerTokenEnvVar: "MCP_ACCESS_TOKEN",
+	})
+	if headers["Authorization"] != "Bearer secret" || headers["X-Test"] != "kept" || len(headers) != 2 {
+		t.Fatalf("headers = %#v", headers)
 	}
 }
 

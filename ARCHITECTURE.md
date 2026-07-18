@@ -16,7 +16,7 @@ implementation.
 - `internal/auth` owns login protocols, credential policy, scoped persistence,
   and token refresh serialization.
 - `internal/config` owns managed, user, environment, requirements, signed remote policy,
-  and OS-enforced MDM precedence.
+  OS-enforced MDM precedence, and compatible MCP configuration source merging.
 - `internal/plugin` owns local plugin manifests, discovery precedence, enablement,
   stable identity, data paths, and component-path confinement.
 - `internal/compat` owns resolved vendor compatibility values shared by

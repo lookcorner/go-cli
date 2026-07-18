@@ -63,6 +63,11 @@ hard_clear_age_turns = 10
 # enabled = ["team-tools"]
 # disabled = ["old-tools"]
 
+# [compat.cursor]
+# mcps = false
+# [compat.claude]
+# mcps = false
+
 [mcp_servers.example]
 command = "example-mcp-server"
 args = []
@@ -81,6 +86,7 @@ pattern = "git push --force*"
 # [mcp_servers.remote]
 # url = "https://mcp.example.com/rpc"
 # headers = { Authorization = "Bearer token" }
+# bearer_token_env_var = "MCP_ACCESS_TOKEN"
 
 [lsp_servers.gopls]
 command = "gopls"

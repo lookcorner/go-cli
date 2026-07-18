@@ -55,6 +55,7 @@ env = { TOKEN = "value" }
 [mcp_servers.remote]
 url = "https://mcp.example/rpc"
 headers = { Authorization = "Bearer token" }
+bearer_token_env_var = "REMOTE_MCP_TOKEN"
 
 [mcp_servers.legacy]
 url = "https://mcp.example/sse"
@@ -122,7 +123,7 @@ pattern = ".env*"
 	if cfg.MCPServers["fixture"].Command != "fixture-mcp" || cfg.MCPServers["fixture"].Env["TOKEN"] != "value" {
 		t.Fatalf("unexpected MCP config: %#v", cfg.MCPServers)
 	}
-	if cfg.MCPServers["remote"].URL != "https://mcp.example/rpc" || cfg.MCPServers["remote"].Headers["Authorization"] != "Bearer token" {
+	if cfg.MCPServers["remote"].URL != "https://mcp.example/rpc" || cfg.MCPServers["remote"].Headers["Authorization"] != "Bearer token" || cfg.MCPServers["remote"].BearerTokenEnvVar != "REMOTE_MCP_TOKEN" {
 		t.Fatalf("unexpected MCP HTTP config: %#v", cfg.MCPServers["remote"])
 	}
 	if cfg.MCPServers["legacy"].Type != "sse" {
@@ -702,22 +703,25 @@ func TestInvalidManagedConfigStopsLoading(t *testing.T) {
 
 func TestCompatConfigAndEnvironmentPrecedence(t *testing.T) {
 	for _, name := range []string{
-		"GROK_CURSOR_SKILLS_ENABLED", "GROK_CURSOR_RULES_ENABLED", "GROK_CURSOR_AGENTS_ENABLED",
-		"GROK_CLAUDE_SKILLS_ENABLED", "GROK_CLAUDE_RULES_ENABLED", "GROK_CLAUDE_AGENTS_ENABLED",
+		"GROK_CURSOR_SKILLS_ENABLED", "GROK_CURSOR_RULES_ENABLED", "GROK_CURSOR_AGENTS_ENABLED", "GROK_CURSOR_MCPS_ENABLED",
+		"GROK_CLAUDE_SKILLS_ENABLED", "GROK_CLAUDE_RULES_ENABLED", "GROK_CLAUDE_AGENTS_ENABLED", "GROK_CLAUDE_MCPS_ENABLED",
 	} {
 		t.Setenv(name, "")
 	}
 	t.Setenv("GROK_CURSOR_SKILLS_ENABLED", "yes")
 	t.Setenv("GROK_CURSOR_RULES_ENABLED", "invalid")
+	t.Setenv("GROK_CURSOR_MCPS_ENABLED", "on")
 	path := filepath.Join(t.TempDir(), "config.toml")
 	data := []byte(`
 [compat.cursor]
 skills = false
 rules = false
 agents = false
+mcps = false
 
 [compat.claude]
 skills = false
+mcps = false
 `)
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
@@ -726,10 +730,10 @@ skills = false
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.Compat.Cursor.Skills || cfg.Compat.Cursor.Rules || cfg.Compat.Cursor.Agents {
+	if !cfg.Compat.Cursor.Skills || cfg.Compat.Cursor.Rules || cfg.Compat.Cursor.Agents || !cfg.Compat.Cursor.Mcps {
 		t.Fatalf("unexpected cursor compatibility resolution: %#v", cfg.Compat.Cursor)
 	}
-	if cfg.Compat.Claude.Skills || !cfg.Compat.Claude.Rules || !cfg.Compat.Claude.Agents {
+	if cfg.Compat.Claude.Skills || !cfg.Compat.Claude.Rules || !cfg.Compat.Claude.Agents || cfg.Compat.Claude.Mcps {
 		t.Fatalf("unexpected claude compatibility resolution: %#v", cfg.Compat.Claude)
 	}
 }

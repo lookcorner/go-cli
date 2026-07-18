@@ -4,6 +4,7 @@ type Vendor struct {
 	Skills bool
 	Rules  bool
 	Agents bool
+	Mcps   bool
 }
 
 type Config struct {
@@ -12,6 +13,6 @@ type Config struct {
 }
 
 func Default() Config {
-	on := Vendor{Skills: true, Rules: true, Agents: true}
+	on := Vendor{Skills: true, Rules: true, Agents: true, Mcps: true}
 	return Config{Cursor: on, Claude: on}
 }
