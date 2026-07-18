@@ -20,15 +20,63 @@ type readableMCPResource interface {
 
 func (s *Server) handleMCP(ctx context.Context, incoming message) {
 	var req struct {
-		SessionID string          `json:"sessionId"`
-		Server    string          `json:"server"`
-		ServerURL string          `json:"serverUrl"`
-		Tool      string          `json:"tool"`
-		URI       string          `json:"uri"`
-		Arguments json.RawMessage `json:"arguments"`
+		SessionID       string          `json:"sessionId"`
+		LegacySessionID string          `json:"session_id"`
+		Server          string          `json:"server"`
+		ServerName      string          `json:"server_name"`
+		ServerURL       string          `json:"serverUrl"`
+		Tool            string          `json:"tool"`
+		URI             string          `json:"uri"`
+		Arguments       json.RawMessage `json:"arguments"`
 	}
 	if json.Unmarshal(incoming.Params, &req) != nil {
 		s.respondError(incoming.ID, -32602, "invalid MCP parameters")
+		return
+	}
+	if req.SessionID == "" {
+		req.SessionID = req.LegacySessionID
+	}
+	if incoming.Method == "x.ai/mcp/auth_status" {
+		if s.lookupSession(req.SessionID) == nil {
+			s.respondError(incoming.ID, -32602, "session not found")
+			return
+		}
+		s.respond(incoming.ID, map[string]any{"result": map[string]any{"servers": []any{}}, "error": nil})
+		return
+	}
+	if incoming.Method == "x.ai/mcp/auth_trigger" {
+		current := s.lookupSession(req.SessionID)
+		if current == nil || current.runner == nil {
+			s.respondError(incoming.ID, -32602, "session not found")
+			return
+		}
+		if req.ServerName == "" {
+			s.respondError(incoming.ID, -32602, "server_name is required")
+			return
+		}
+		current.mu.Lock()
+		configs := append([]MCPServer(nil), current.mcpServers...)
+		provider := current.runner.MCPServers
+		current.mu.Unlock()
+		if provider != nil {
+			configs = provider()
+		}
+		found := false
+		for _, config := range configs {
+			if config.Name == req.ServerName {
+				found = true
+				break
+			}
+		}
+		if !found {
+			s.respond(incoming.ID, map[string]any{"result": map[string]any{
+				"status": "failed", "error": "MCP server not found",
+			}, "error": nil})
+			return
+		}
+		s.respond(incoming.ID, map[string]any{"result": map[string]any{
+			"status": "failed", "error": "MCP OAuth is not supported for local servers",
+		}, "error": nil})
 		return
 	}
 	if incoming.Method == "x.ai/mcp/list" {

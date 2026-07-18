@@ -216,7 +216,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleUnifiedSessionList(incoming)
 		case "x.ai/session/close":
 			s.handleExtensionSessionClose(incoming)
-		case "x.ai/mcp/list", "x.ai/mcp/call", "x.ai/mcp/read_resource":
+		case "x.ai/mcp/list", "x.ai/mcp/call", "x.ai/mcp/read_resource", "x.ai/mcp/auth_status", "x.ai/mcp/auth_trigger":
 			s.handleMCP(ctx, incoming)
 		case "x.ai/commands/list", "x.ai/workspaces/list":
 			s.handleStaticExtension(incoming)

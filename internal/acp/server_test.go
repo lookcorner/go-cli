@@ -496,6 +496,31 @@ func TestMCPExtensionsWireContract(t *testing.T) {
 	}
 }
 
+func TestMCPAuthExtensionsForLocalServers(t *testing.T) {
+	current := &session{id: "mcp-auth", runner: &agent.Runner{}, mcpServers: []MCPServer{{Name: "local", Command: "server"}}}
+	var output bytes.Buffer
+	server := &Server{output: &output, sessions: map[string]*session{"mcp-auth": current}}
+	server.handleMCP(context.Background(), message{ID: json.RawMessage("1"), Method: "x.ai/mcp/auth_status", Params: json.RawMessage(`{"session_id":"mcp-auth"}`)})
+	var response map[string]any
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	result := response["result"].(map[string]any)
+	if result["error"] != nil || len(result["result"].(map[string]any)["servers"].([]any)) != 0 {
+		t.Fatalf("unexpected MCP auth status: %#v", response)
+	}
+	output.Reset()
+	server.handleMCP(context.Background(), message{ID: json.RawMessage("2"), Method: "x.ai/mcp/auth_trigger", Params: json.RawMessage(`{"session_id":"mcp-auth","server_name":"local"}`)})
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	result = response["result"].(map[string]any)
+	trigger := result["result"].(map[string]any)
+	if result["error"] != nil || trigger["status"] != "failed" || !strings.Contains(trigger["error"].(string), "not supported") {
+		t.Fatalf("unexpected MCP auth trigger: %#v", response)
+	}
+}
+
 func TestUpdateMCPServersExtension(t *testing.T) {
 	var output bytes.Buffer
 	var updated []mcppkg.ServerConfig

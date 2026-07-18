@@ -299,7 +299,9 @@ permission path used by model tool calls. `x.ai/mcp/read_resource` returns raw
 text or base64 resource contents. `x.ai/session/update_mcp_servers` safely
 restarts the session MCP runtime, preserves project/plugin base servers, and
 restores the previous runtime if replacement fails. Sessionless agent-level MCP
-pools, OAuth, and automatic config-file reload are not yet available.
+pools, OAuth enrollment, and automatic config-file reload are not yet available.
+For local-only sessions, `x.ai/mcp/auth_status` reports no pending authentication
+and `x.ai/mcp/auth_trigger` returns an explicit unsupported result.
 
 The `x.ai/fs/list`, `exists`, `read_file`, `write_file`, and `delete_file`
 extensions provide workspace-confined file access. Listing supports stable
