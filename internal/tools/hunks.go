@@ -48,22 +48,51 @@ type HunkFile struct {
 type HunkTracker struct {
 	ws         *workspace.Workspace
 	mu         sync.RWMutex
-	agentPaths map[string]time.Time
+	agentHunks map[string]time.Time
 	accepted   map[string]bool
 	actionMu   sync.Mutex
 }
 
 func NewHunkTracker(ws *workspace.Workspace) *HunkTracker {
-	return &HunkTracker{ws: ws, agentPaths: make(map[string]time.Time), accepted: make(map[string]bool)}
+	return &HunkTracker{ws: ws, agentHunks: make(map[string]time.Time), accepted: make(map[string]bool)}
 }
 
-func (t *HunkTracker) MarkAgent(path string) {
-	if path == "" {
+func (t *HunkTracker) snapshot(ctx context.Context, path string) map[string]bool {
+	path, err := t.relativePath(path)
+	if err != nil {
+		return nil
+	}
+	hunks, err := t.rawHunks(ctx, path)
+	if err != nil {
+		return nil
+	}
+	result := make(map[string]bool, len(hunks))
+	for _, hunk := range hunks {
+		result[hunkAttributionKey(hunk)] = true
+	}
+	return result
+}
+
+func (t *HunkTracker) markAgentChanges(ctx context.Context, path string, before map[string]bool) {
+	if before == nil {
 		return
 	}
-	clean := filepath.ToSlash(filepath.Clean(path))
+	path, err := t.relativePath(path)
+	if err != nil {
+		return
+	}
+	hunks, err := t.rawHunks(ctx, path)
+	if err != nil {
+		return
+	}
+	now := time.Now().UTC()
 	t.mu.Lock()
-	t.agentPaths[clean] = time.Now().UTC()
+	for _, hunk := range hunks {
+		key := hunkAttributionKey(hunk)
+		if !before[key] {
+			t.agentHunks[key] = now
+		}
+	}
 	t.mu.Unlock()
 }
 
@@ -72,29 +101,16 @@ func (t *HunkTracker) Hunks(ctx context.Context, path, source string) ([]Hunk, e
 		return nil, errors.New("hunk tracker unavailable")
 	}
 	if path != "" {
-		resolved, err := t.ws.Resolve(path)
+		var err error
+		path, err = t.relativePath(path)
 		if err != nil {
 			return nil, err
 		}
-		path, err = t.ws.Relative(resolved), nil
-		if err != nil {
-			return nil, err
-		}
 	}
-	unstaged, err := t.gitDiff(ctx, false, path)
+	hunks, err := t.rawHunks(ctx, path)
 	if err != nil {
 		return nil, err
 	}
-	stagedDiff, err := t.gitDiff(ctx, true, path)
-	if err != nil {
-		return nil, err
-	}
-	hunks := append(t.parseDiff(unstaged), t.parseDiff(stagedDiff)...)
-	untracked, err := t.untracked(ctx, path)
-	if err != nil {
-		return nil, err
-	}
-	hunks = append(hunks, untracked...)
 	unique := make(map[string]Hunk, len(hunks))
 	for _, hunk := range hunks {
 		unique[hunk.ID] = hunk
@@ -121,6 +137,34 @@ func (t *HunkTracker) Hunks(ctx context.Context, path, source string) ([]Hunk, e
 		return hunks[i].Path < hunks[j].Path
 	})
 	return hunks, nil
+}
+
+func (t *HunkTracker) relativePath(path string) (string, error) {
+	if path == "" {
+		return "", nil
+	}
+	resolved, err := t.ws.Resolve(path)
+	if err != nil {
+		return "", err
+	}
+	return filepath.ToSlash(t.ws.Relative(resolved)), nil
+}
+
+func (t *HunkTracker) rawHunks(ctx context.Context, path string) ([]Hunk, error) {
+	unstaged, err := t.gitDiff(ctx, false, path)
+	if err != nil {
+		return nil, err
+	}
+	staged, err := t.gitDiff(ctx, true, path)
+	if err != nil {
+		return nil, err
+	}
+	hunks := append(t.parseDiff(unstaged), t.parseDiff(staged)...)
+	untracked, err := t.untracked(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	return append(hunks, untracked...), nil
 }
 
 // HunkAction accepts or rejects one currently visible hunk. Accepting hides
@@ -348,7 +392,7 @@ func (t *HunkTracker) parseDiff(diff string) []Hunk {
 			return
 		}
 		current.Patch, current.OldText, current.NewText = patch.String(), oldText.String(), newText.String()
-		current.Source, current.CreatedAt = t.source(path)
+		current.Source, current.CreatedAt = t.source(*current)
 		sum := sha256.Sum256([]byte(path + current.Patch))
 		current.ID = hex.EncodeToString(sum[:12])
 		result = append(result, *current)
@@ -432,22 +476,29 @@ func (t *HunkTracker) untracked(ctx context.Context, path string) ([]Hunk, error
 			continue
 		}
 		text := string(data)
-		source, created := t.source(filepath.ToSlash(name))
 		patch := fmt.Sprintf("@@ -0,0 +1,%d @@\n", lineCount(text))
+		hunk := Hunk{Path: filepath.ToSlash(name), NewStart: 1, NewLines: lineCount(text), NewText: text, Patch: patch + addPrefixes(text)}
+		source, created := t.source(hunk)
 		sum := sha256.Sum256([]byte(name + patch + text))
-		result = append(result, Hunk{Path: filepath.ToSlash(name), ID: hex.EncodeToString(sum[:12]), NewStart: 1, NewLines: lineCount(text), Source: source, NewText: text, Patch: patch + addPrefixes(text), CreatedAt: created})
+		hunk.ID, hunk.Source, hunk.CreatedAt = hex.EncodeToString(sum[:12]), source, created
+		result = append(result, hunk)
 	}
 	return result, nil
 }
 
-func (t *HunkTracker) source(path string) (string, time.Time) {
+func (t *HunkTracker) source(hunk Hunk) (string, time.Time) {
 	t.mu.RLock()
-	created, ok := t.agentPaths[filepath.ToSlash(filepath.Clean(path))]
+	created, ok := t.agentHunks[hunkAttributionKey(hunk)]
 	t.mu.RUnlock()
 	if ok {
 		return "agent", created
 	}
 	return "external", time.Time{}
+}
+
+func hunkAttributionKey(hunk Hunk) string {
+	sum := sha256.Sum256([]byte(filepath.ToSlash(filepath.Clean(hunk.Path)) + "\x00" + hunk.OldText + "\x00" + hunk.NewText))
+	return hex.EncodeToString(sum[:])
 }
 
 func (t *HunkTracker) stagedPaths(ctx context.Context) map[string]bool {

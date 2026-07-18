@@ -278,11 +278,12 @@ Git repositories also expose compatible hunk tracker ACP extensions:
 `x.ai/hunk-tracker/get-hunks`, `get-files`, `get-summary`, `hunk-action`,
 `file-action`, and `all-action`.
 Tracked, staged, and text untracked changes are included; mutations performed
-through Gork file tools are attributed to the agent, while other files are
-reported as external. Actions accept `accept` or `reject`: accepted hunks are
-hidden for the current session, while rejection restores the recorded old text
-only when the current line range still exactly matches the hunk. A stale hunk
-fails closed instead of overwriting newer edits.
+through Gork file tools are attributed to the agent, while other changes are
+reported as external. Attribution is per hunk, so user and agent edits in the
+same file remain distinct, including after staging. Actions accept `accept` or
+`reject`: accepted hunks are hidden for the current session, while rejection
+restores the recorded old text only when the current line range still exactly
+matches the hunk. A stale hunk fails closed instead of overwriting newer edits.
 
 The ACP server also supports `x.ai/git/worktree/create`, `list`, `show`,
 `apply`, `remove`, `create_from_worktree`, and

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/lookcorner/go-cli/internal/workspace"
@@ -63,6 +64,93 @@ func TestHunkTrackerAttributesAgentAndExternalFiles(t *testing.T) {
 	}
 	if !staged {
 		t.Fatalf("staged file was not reported: %#v", files)
+	}
+}
+
+func TestHunkTrackerAttributesMixedFilePerHunk(t *testing.T) {
+	root, registry := newHunkFixture(t, map[string]string{"mixed.txt": "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\n"})
+	path := filepath.Join(root, "mixed.txt")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(strings.Replace(string(data), "one", "user-one", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.Execute(context.Background(), "edit_file", json.RawMessage(`{
+		"path":"mixed.txt","old_text":"five","new_text":"agent-five"
+	}`)); err != nil {
+		t.Fatal(err)
+	}
+	hunks, err := registry.HunkTracker().Hunks(context.Background(), "mixed.txt", "all")
+	if err != nil || len(hunks) != 2 {
+		t.Fatalf("mixed hunks=%#v err=%v", hunks, err)
+	}
+	sources := map[string]string{}
+	for _, hunk := range hunks {
+		sources[strings.TrimSpace(hunk.NewText)] = hunk.Source
+	}
+	if sources["user-one"] != "external" || sources["agent-five"] != "agent" {
+		t.Fatalf("mixed attribution=%#v", sources)
+	}
+
+	data, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(strings.Replace(string(data), "nine", "user-nine", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hunks, err = registry.HunkTracker().Hunks(context.Background(), "mixed.txt", "all")
+	if err != nil || len(hunks) != 3 {
+		t.Fatalf("later mixed hunks=%#v err=%v", hunks, err)
+	}
+	for _, hunk := range hunks {
+		if strings.Contains(hunk.NewText, "agent-five") && hunk.Source != "agent" {
+			t.Fatalf("agent hunk lost attribution after external edit: %#v", hunk)
+		}
+		if strings.Contains(hunk.NewText, "user-") && hunk.Source != "external" {
+			t.Fatalf("external hunk was attributed to agent: %#v", hunk)
+		}
+	}
+	runGit(t, root, "add", "mixed.txt")
+	staged, err := registry.HunkTracker().Hunks(context.Background(), "mixed.txt", "all")
+	if err != nil || len(staged) != 3 {
+		t.Fatalf("staged mixed hunks=%#v err=%v", staged, err)
+	}
+	for _, hunk := range staged {
+		if strings.Contains(hunk.NewText, "agent-five") && hunk.Source != "agent" {
+			t.Fatalf("staging lost agent attribution: %#v", hunk)
+		}
+	}
+}
+
+func TestHunkTrackerAttributesAbsoluteToolPath(t *testing.T) {
+	root, registry := newHunkFixture(t, map[string]string{"absolute.txt": "before\n"})
+	arguments, err := json.Marshal(map[string]string{
+		"path": filepath.Join(root, "absolute.txt"), "old_text": "before", "new_text": "after",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.Execute(context.Background(), "edit_file", arguments); err != nil {
+		t.Fatal(err)
+	}
+	hunks, err := registry.HunkTracker().Hunks(context.Background(), "absolute.txt", "all")
+	if err != nil || len(hunks) != 1 || hunks[0].Source != "agent" {
+		t.Fatalf("absolute path attribution=%#v err=%v", hunks, err)
+	}
+}
+
+func TestHunkTrackerSnapshotFailureDoesNotClaimExistingHunks(t *testing.T) {
+	root, registry := newHunkFixture(t, map[string]string{"external.txt": "before\n"})
+	if err := os.WriteFile(filepath.Join(root, "external.txt"), []byte("after\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	registry.HunkTracker().markAgentChanges(context.Background(), "external.txt", nil)
+	hunks, err := registry.HunkTracker().Hunks(context.Background(), "external.txt", "all")
+	if err != nil || len(hunks) != 1 || hunks[0].Source != "external" {
+		t.Fatalf("failed snapshot claimed external hunk: %#v err=%v", hunks, err)
 	}
 }
 

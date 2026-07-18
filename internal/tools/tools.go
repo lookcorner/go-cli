@@ -397,15 +397,18 @@ func (r *Registry) ExecuteResult(ctx context.Context, name string, arguments jso
 	}
 	var result ExecutionResult
 	var executeErr error
+	mutation := mutationPath(name, arguments)
+	var before map[string]bool
+	if mutation != "" && r.hunks != nil {
+		before = r.hunks.snapshot(ctx, mutation)
+	}
 	if rich, ok := tool.(ResultTool); ok {
 		result, executeErr = rich.ExecuteResult(ctx, arguments)
 	} else {
 		result.Output, executeErr = tool.Execute(ctx, arguments)
 	}
-	if executeErr == nil && r.hunks != nil {
-		if path := mutationPath(name, arguments); path != "" {
-			r.hunks.MarkAgent(path)
-		}
+	if executeErr == nil && mutation != "" && r.hunks != nil {
+		r.hunks.markAgentChanges(ctx, mutation, before)
 	}
 	return result, executeErr
 }
