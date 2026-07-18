@@ -410,11 +410,14 @@ the model is told to check for more deeply nested instructions before editing
 files below the root.
 
 Reusable skills are discovered from `.grok/skills`, `.gork/skills`,
-`.agents/skills`, `.claude/skills`, and `.cursor/skills`. Project directories
-are scanned from the Git root through the workspace, and user skills honor
-`GROK_HOME`. Only skill metadata is included initially. The model calls the
-`skill` tool to load the full `SKILL.md` when a task matches it; deeper project
-skills override same-named user or parent skills.
+`.agents/skills`, `.claude/skills`, and `.cursor/skills`. Flat Markdown files
+under the matching `commands` directories are loaded through the same Skill
+tool, with the filename used as the fallback name; a same-named `SKILL.md` has
+priority over a command. Project directories are scanned from the Git root
+through the workspace, and user skills honor `GROK_HOME`. Only skill metadata
+is included initially. The model calls the `skill` tool to load the full file
+when a task matches it; deeper project skills override same-named user or parent
+skills.
 Skills with a scalar or list `paths` value in YAML frontmatter stay hidden until a successful
 file read, directory listing, or edit touches a matching path.
 

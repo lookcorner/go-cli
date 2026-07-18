@@ -261,6 +261,20 @@ func TestSkillCompatibilityGatesAreIndependent(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	for _, file := range []struct {
+		path string
+		name string
+	}{
+		{filepath.Join(repo, ".cursor", "commands", "cursor-command.md"), "cursor-command"},
+		{filepath.Join(repo, ".claude", "commands", "claude-command.md"), "claude-command"},
+	} {
+		if err := os.MkdirAll(filepath.Dir(file.path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(file.path, []byte("---\nname: "+file.name+"\n---\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	cfg := compat.Default()
 	cfg.Cursor.Skills = false
 	catalog, err := discover(repo, home, filepath.Join(home, ".grok"), Config{Compat: cfg})
@@ -268,8 +282,46 @@ func TestSkillCompatibilityGatesAreIndependent(t *testing.T) {
 		t.Fatal(err)
 	}
 	joined := strings.Join(catalog.Names(), ",")
-	if strings.Contains(joined, "cursor-") || !strings.Contains(joined, "claude-home") || !strings.Contains(joined, "claude-project") {
+	if strings.Contains(joined, "cursor-") || !strings.Contains(joined, "claude-home") || !strings.Contains(joined, "claude-project") || !strings.Contains(joined, "claude-command") {
 		t.Fatalf("unexpected gated skills: %s", joined)
+	}
+}
+
+func TestCommandsLoadFlatAndSkillsWinNameCollisions(t *testing.T) {
+	root := t.TempDir()
+	write := func(path, content string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	commands := filepath.Join(root, ".grok", "commands")
+	write(filepath.Join(commands, "deploy.md"), "---\nname: deploy\ndescription: command copy\n---\nCommand\n")
+	write(filepath.Join(commands, "rollback.md"), "Just rollback instructions.\n")
+	write(filepath.Join(commands, "alpha.md"), "---\nname: shared-command\ndescription: alpha wins\n---\n")
+	write(filepath.Join(commands, "zeta.md"), "---\nname: shared-command\ndescription: zeta loses\n---\n")
+	write(filepath.Join(commands, "nested", "ignored.md"), "Nested command must not load.\n")
+	write(filepath.Join(commands, "upper.MD"), "Uppercase extension must not load.\n")
+	write(filepath.Join(root, ".grok", "skills", "deploy", "SKILL.md"), "---\nname: deploy\ndescription: skill copy\n---\nSkill\n")
+
+	catalog, err := discover(root, "", "", Config{Compat: compat.Default()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(catalog.Names(), ","); got != "deploy,rollback,shared-command" {
+		t.Fatalf("command names=%q", got)
+	}
+	if skill := catalog.byName["deploy"]; skill.Description != "skill copy" || !strings.EqualFold(filepath.Base(skill.Path), "SKILL.md") {
+		t.Fatalf("skill did not shadow command: %#v", skill)
+	}
+	if skill := catalog.byName["rollback"]; skill.Description != "Just rollback instructions." || filepath.Base(skill.Path) != "rollback.md" {
+		t.Fatalf("command fallback metadata=%#v", skill)
+	}
+	if skill := catalog.byName["shared-command"]; skill.Description != "alpha wins" {
+		t.Fatalf("command collision was not deterministic: %#v", skill)
 	}
 }
 
@@ -380,8 +432,15 @@ func TestCatalogDiscoversSkillsBelowInitialWorkspace(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: service-review\ndescription: Review service code\n---\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	commandPath := filepath.Join(root, "service", ".grok", "commands", "service-command.md")
+	if err := os.MkdirAll(filepath.Dir(commandPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(commandPath, []byte("Service command instructions.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	reminder := catalog.Activate("read_file", json.RawMessage(`{"path":"service/main.go"}`))
-	if !strings.Contains(reminder, "service-review") || catalog.byName["service-review"].Source != "workspace:grok" {
+	if !strings.Contains(reminder, "service-review") || !strings.Contains(reminder, "service-command") || catalog.byName["service-review"].Source != "workspace:grok" {
 		t.Fatalf("nested skill was not discovered: reminder=%q catalog=%#v", reminder, catalog.byName)
 	}
 }
@@ -473,6 +532,17 @@ func TestCatalogWatcherReloadsAddedChangedAndDeletedSkills(t *testing.T) {
 	waitForSkillNames(t, catalog)
 	if reminder := catalog.DrainReminder(); !strings.Contains(reminder, "Skills changed on disk") {
 		t.Fatalf("missing deleted skill reminder: %q", reminder)
+	}
+	commandPath := filepath.Join(root, ".grok", "commands", "watched-command.md")
+	if err := os.MkdirAll(filepath.Dir(commandPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(commandPath, []byte("Watched command body.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waitForSkillNames(t, catalog, "watched-command")
+	if reminder := catalog.DrainReminder(); !strings.Contains(reminder, "watched-command") {
+		t.Fatalf("missing watched command reminder: %q", reminder)
 	}
 }
 

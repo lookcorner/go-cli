@@ -46,8 +46,9 @@ type Config struct {
 }
 
 type skillRoot struct {
-	path   string
-	source string
+	path     string
+	source   string
+	commands bool
 }
 
 type Catalog struct {
@@ -80,20 +81,20 @@ func discover(workspaceRoot, home, grokHome string, cfg Config) (*Catalog, error
 	var roots []skillRoot
 	for _, path := range cfg.Paths {
 		if path = resolveConfigPath(path, home, workspaceRoot); path != "" {
-			roots = append(roots, skillRoot{path, "config"})
+			roots = append(roots, skillRoot{path: path, source: "config"})
 		}
 	}
 	if home != "" {
 		if cfg.Compat.Cursor.Skills {
-			roots = append(roots, skillRoot{filepath.Join(home, ".cursor", "skills"), "user:cursor"})
+			roots = appendSkillRoots(roots, filepath.Join(home, ".cursor"), "user:cursor")
 		}
 		if cfg.Compat.Claude.Skills {
-			roots = append(roots, skillRoot{filepath.Join(home, ".claude", "skills"), "user:claude"})
+			roots = appendSkillRoots(roots, filepath.Join(home, ".claude"), "user:claude")
 		}
-		roots = append(roots, skillRoot{filepath.Join(home, ".agents", "skills"), "user:agents"})
+		roots = appendSkillRoots(roots, filepath.Join(home, ".agents"), "user:agents")
 	}
 	if grokHome != "" {
-		roots = append(roots, skillRoot{filepath.Join(grokHome, "skills"), "user:grok"})
+		roots = appendSkillRoots(roots, grokHome, "user:grok")
 	}
 	gitRoot := workspace.GitRoot(workspaceRoot)
 	for _, scope := range workspace.ProjectScopes(gitRoot, workspaceRoot) {
@@ -106,9 +107,7 @@ func discover(workspaceRoot, home, grokHome string, cfg Config) (*Catalog, error
 		}
 		dirs = append(dirs, ".agents", ".gork", ".grok")
 		for _, dir := range dirs {
-			roots = append(roots, skillRoot{
-				filepath.Join(scope, dir, "skills"), "workspace:" + strings.TrimPrefix(dir, "."),
-			})
+			roots = appendSkillRoots(roots, filepath.Join(scope, dir), "workspace:"+strings.TrimPrefix(dir, "."))
 		}
 	}
 	disabled := make(map[string]bool, len(cfg.Disabled))
@@ -129,11 +128,18 @@ func discover(workspaceRoot, home, grokHome string, cfg Config) (*Catalog, error
 		if root.path == "" {
 			continue
 		}
-		if err := catalog.scanOnce(root.path, root.source); err != nil {
+		if err := catalog.scanOnce(root); err != nil {
 			return nil, err
 		}
 	}
 	return catalog, nil
+}
+
+func appendSkillRoots(roots []skillRoot, configDir, source string) []skillRoot {
+	return append(roots,
+		skillRoot{path: filepath.Join(configDir, "commands"), source: source, commands: true},
+		skillRoot{path: filepath.Join(configDir, "skills"), source: source},
+	)
 }
 
 func resolveConfigPath(path, home, workspaceRoot string) string {
@@ -155,18 +161,28 @@ func resolveConfigPath(path, home, workspaceRoot string) string {
 	return path
 }
 
-func (c *Catalog) scanOnce(root, source string) error {
-	root = filepath.Clean(root)
-	if c.checked[root] {
+func (c *Catalog) scanOnce(root skillRoot) error {
+	root.path = filepath.Clean(root.path)
+	key := root.path
+	if root.commands {
+		key = "commands:" + key
+	}
+	if c.checked[key] {
 		return nil
 	}
-	if err := c.scan(root, source); err != nil {
+	var err error
+	if root.commands {
+		err = c.scanCommands(root.path, root.source)
+	} else {
+		err = c.scan(root.path, root.source)
+	}
+	if err != nil {
 		return err
 	}
 	if c.checked == nil {
 		c.checked = make(map[string]bool)
 	}
-	c.checked[root] = true
+	c.checked[key] = true
 	return nil
 }
 
@@ -182,7 +198,7 @@ func (c *Catalog) scan(root, source string) error {
 		if !strings.EqualFold(filepath.Base(root), "SKILL.md") {
 			return nil
 		}
-		return c.loadSkill(root, info, source)
+		return c.loadSkill(root, info, source, false)
 	}
 	return filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -195,11 +211,35 @@ func (c *Catalog) scan(root, source string) error {
 		if err != nil {
 			return err
 		}
-		return c.loadSkill(path, info, source)
+		return c.loadSkill(path, info, source, false)
 	})
 }
 
-func (c *Catalog) loadSkill(path string, info os.FileInfo, source string) error {
+func (c *Catalog) scanCommands(root, source string) error {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read commands root %q: %w", root, err)
+	}
+	for index := len(entries) - 1; index >= 0; index-- {
+		entry := entries[index]
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".md" {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if err := c.loadSkill(filepath.Join(root, entry.Name()), info, source, true); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *Catalog) loadSkill(path string, info os.FileInfo, source string, command bool) error {
 	if info.Size() > maxSkillBytes {
 		return fmt.Errorf("skill %q exceeds %d bytes", path, maxSkillBytes)
 	}
@@ -219,7 +259,11 @@ func (c *Catalog) loadSkill(path string, info os.FileInfo, source string) error 
 			return nil
 		}
 	}
-	metadata := parseMetadata(string(data), filepath.Base(filepath.Dir(path)))
+	fallbackName := filepath.Base(filepath.Dir(path))
+	if command {
+		fallbackName = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	}
+	metadata := parseMetadata(string(data), fallbackName)
 	if metadata.Name == "" {
 		return nil
 	}
@@ -297,7 +341,7 @@ func (c *Catalog) reload() error {
 		fresh.pending[name] = skill
 	}
 	for _, root := range fresh.roots {
-		if err := fresh.scanOnce(root.path, root.source); err != nil {
+		if err := fresh.scanOnce(root); err != nil {
 			return err
 		}
 	}
@@ -417,32 +461,36 @@ func (c *Catalog) Activate(toolName string, raw json.RawMessage) string {
 }
 
 func (c *Catalog) discoverForPath(path string) {
-	if strings.EqualFold(filepath.Base(path), "SKILL.md") {
-		if source := c.skillSource(path); source != "" {
-			root := filepath.Dir(path)
-			c.addRoot(root, source)
-			_ = c.scan(root, source)
+	if filepath.Ext(path) == ".md" {
+		if root, ok := c.skillRootForPath(path); ok {
+			c.addRoot(root)
+			if root.commands {
+				_ = c.scanCommands(root.path, root.source)
+			} else {
+				_ = c.scan(root.path, root.source)
+			}
 		}
 		return
 	}
 	for _, scope := range workspace.ProjectScopes(c.root, path) {
 		for _, dir := range c.skillConfigDirs() {
-			root := filepath.Join(scope, dir, "skills")
 			source := "workspace:" + strings.TrimPrefix(dir, ".")
-			c.addRoot(root, source)
-			_ = c.scanOnce(root, source)
+			for _, root := range appendSkillRoots(nil, filepath.Join(scope, dir), source) {
+				c.addRoot(root)
+				_ = c.scanOnce(root)
+			}
 		}
 	}
 }
 
-func (c *Catalog) addRoot(path, source string) {
-	path = filepath.Clean(path)
+func (c *Catalog) addRoot(candidate skillRoot) {
+	candidate.path = filepath.Clean(candidate.path)
 	for _, root := range c.roots {
-		if root.path == path || pathWithin(root.path, path) {
+		if root.commands == candidate.commands && (root.path == candidate.path || pathWithin(root.path, candidate.path)) {
 			return
 		}
 	}
-	c.roots = append(c.roots, skillRoot{path: path, source: source})
+	c.roots = append(c.roots, candidate)
 }
 
 func (c *Catalog) skillConfigDirs() []string {
@@ -456,19 +504,26 @@ func (c *Catalog) skillConfigDirs() []string {
 	return append(dirs, ".agents", ".gork", ".grok")
 }
 
-func (c *Catalog) skillSource(path string) string {
+func (c *Catalog) skillRootForPath(path string) (skillRoot, bool) {
 	for dir := filepath.Dir(path); dir != c.root && pathWithin(c.root, dir); dir = filepath.Dir(dir) {
-		if filepath.Base(dir) != "skills" {
+		kind := filepath.Base(dir)
+		if kind != "skills" && kind != "commands" {
 			continue
 		}
 		configDir := filepath.Base(filepath.Dir(dir))
 		for _, allowed := range c.skillConfigDirs() {
 			if configDir == allowed {
-				return "workspace:" + strings.TrimPrefix(configDir, ".")
+				root := dir
+				if kind == "skills" {
+					root = filepath.Dir(path)
+				}
+				return skillRoot{
+					path: root, source: "workspace:" + strings.TrimPrefix(configDir, "."), commands: kind == "commands",
+				}, true
 			}
 		}
 	}
-	return ""
+	return skillRoot{}, false
 }
 
 func pathWithin(root, path string) bool {
