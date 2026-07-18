@@ -560,12 +560,23 @@ func startLSPServers(
 	manager := lsp.NewManager(ws)
 	for _, name := range names {
 		server := cfg.LSPServers[name]
+		root := ws.Root()
+		if server.WorkspaceFolder != "" {
+			var err error
+			root, err = ws.Resolve(server.WorkspaceFolder)
+			if err != nil {
+				_ = manager.Close()
+				return nil, fmt.Errorf("resolve LSP workspace for %q: %w", name, err)
+			}
+		}
 		fmt.Fprintf(stderr, "[gork] starting LSP server: %s\n", name)
 		client, err := lsp.Start(ctx, lsp.ProcessConfig{
 			Name: name, Command: server.Command, Transport: server.Transport, Args: server.Args,
 			Env: server.Env, Extensions: server.Extensions,
 			InitializationOptions: server.InitializationOptions, Settings: server.Settings,
-			Root: ws.Root(), Stderr: stderr,
+			Root: root, Stderr: stderr,
+			StartupTimeout:  time.Duration(server.StartupTimeoutMS) * time.Millisecond,
+			ShutdownTimeout: time.Duration(server.ShutdownTimeoutMS) * time.Millisecond,
 		})
 		if err != nil {
 			_ = manager.Close()

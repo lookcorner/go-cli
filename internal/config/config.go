@@ -83,6 +83,9 @@ type MCPServerConfig struct {
 type LSPServerConfig struct {
 	Command               string            `json:"command" toml:"command"`
 	Transport             string            `json:"transport,omitempty" toml:"transport"`
+	WorkspaceFolder       string            `json:"workspace_folder,omitempty" toml:"workspace_folder"`
+	StartupTimeoutMS      int               `json:"startup_timeout,omitempty" toml:"startup_timeout"`
+	ShutdownTimeoutMS     int               `json:"shutdown_timeout,omitempty" toml:"shutdown_timeout"`
 	Args                  []string          `json:"args,omitempty" toml:"args"`
 	Env                   map[string]string `json:"env,omitempty" toml:"env"`
 	Extensions            []string          `json:"extensions,omitempty" toml:"extensions"`

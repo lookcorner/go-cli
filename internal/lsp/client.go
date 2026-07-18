@@ -33,6 +33,8 @@ type ProcessConfig struct {
 	Settings              map[string]any
 	Root                  string
 	Stderr                io.Writer
+	StartupTimeout        time.Duration
+	ShutdownTimeout       time.Duration
 }
 
 type rpcError struct {
@@ -79,6 +81,7 @@ type Client struct {
 	writeMu     sync.Mutex
 	done        chan struct{}
 	once        sync.Once
+	shutdown    time.Duration
 }
 
 func Start(ctx context.Context, cfg ProcessConfig) (*Client, error) {
@@ -96,6 +99,10 @@ func Start(ctx context.Context, cfg ProcessConfig) (*Client, error) {
 	var cmd *exec.Cmd
 	var stdin io.WriteCloser
 	var stdout io.Reader
+	startupTimeout := cfg.StartupTimeout
+	if startupTimeout <= 0 {
+		startupTimeout = 15 * time.Second
+	}
 	switch transport {
 	case "stdio":
 		cmd = exec.CommandContext(ctx, cfg.Command, cfg.Args...)
@@ -114,7 +121,7 @@ func Start(ctx context.Context, cfg ProcessConfig) (*Client, error) {
 			return nil, fmt.Errorf("start LSP server %q: %w", cfg.Name, err)
 		}
 	case "socket":
-		dialCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		dialCtx, cancel := context.WithTimeout(ctx, startupTimeout)
 		connection, dialErr := (&net.Dialer{}).DialContext(dialCtx, "tcp", cfg.Command)
 		cancel()
 		if dialErr != nil {
@@ -129,11 +136,14 @@ func Start(ctx context.Context, cfg ProcessConfig) (*Client, error) {
 		cmd: cmd, stdin: stdin, pending: make(map[string]chan response),
 		documents: make(map[string]documentState), diagnostics: make(map[string]json.RawMessage),
 		settings: cfg.Settings, workspace: ws,
-		done: make(chan struct{}),
+		done: make(chan struct{}), shutdown: cfg.ShutdownTimeout,
+	}
+	if client.shutdown <= 0 {
+		client.shutdown = 5 * time.Second
 	}
 	go client.readLoop(stdout)
 	rootURI := fileURI(ws.Root())
-	initCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	initCtx, cancel := context.WithTimeout(ctx, startupTimeout)
 	defer cancel()
 	var initialized any
 	initializeParams := map[string]any{
@@ -417,7 +427,7 @@ func (c *Client) failPending(err error) {
 }
 
 func (c *Client) Close() error {
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), c.shutdown)
 	_ = c.call(shutdownCtx, "shutdown", nil, nil)
 	cancel()
 	_ = c.notify("exit", nil)
@@ -432,7 +442,7 @@ func (c *Client) Close() error {
 	case err := <-wait:
 		c.failPending(io.EOF)
 		return err
-	case <-time.After(2 * time.Second):
+	case <-time.After(c.shutdown):
 		_ = c.cmd.Process.Kill()
 		err := <-wait
 		c.failPending(io.EOF)
