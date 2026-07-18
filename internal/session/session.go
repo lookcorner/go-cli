@@ -328,6 +328,13 @@ func readInfo(path, id string) (Info, error) {
 					info.Title = titleFromText(data.Text)
 				}
 			}
+		case "session_title":
+			var data struct {
+				Title string `json:"title"`
+			}
+			if json.Unmarshal(event.Data, &data) == nil && strings.TrimSpace(data.Title) != "" {
+				info.Title = strings.TrimSpace(data.Title)
+			}
 		}
 	}
 	return info, scanner.Err()

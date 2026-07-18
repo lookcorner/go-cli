@@ -123,6 +123,57 @@ func TestGitExtensionWireContract(t *testing.T) {
 	}
 }
 
+func TestSessionAdminExtensionWireContract(t *testing.T) {
+	dir, cwd := t.TempDir(), t.TempDir()
+	logger, err := sessionlog.NewLoggerWithID(dir, "admin-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = logger.Append("session_metadata", map[string]any{"cwd": cwd, "modelId": "test-model"})
+	_ = logger.Append("user_prompt", map[string]any{"text": "searchable prompt"})
+	_ = logger.Append("model_response", map[string]any{"text": "answer", "response_id": "r1", "tool_call_count": 0})
+	_ = logger.Close()
+	var output bytes.Buffer
+	server := &Server{SessionDir: dir, output: &output, sessions: make(map[string]*session)}
+	server.handleSessionAdmin(message{ID: json.RawMessage("1"), Method: "x.ai/session/rename", Params: json.RawMessage(`{"sessionId":"admin-session","title":"Manual title"}`)})
+	var response map[string]any
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response["result"].(map[string]any)["success"] != true {
+		t.Fatalf("unexpected rename response: %#v", response)
+	}
+	output.Reset()
+	server.handleSessionAdmin(message{ID: json.RawMessage("2"), Method: "x.ai/session/info", Params: json.RawMessage(`{"sessionId":"admin-session"}`)})
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	info := response["result"].(map[string]any)["result"].(map[string]any)
+	if info["sessionId"] != "admin-session" || info["cwd"] != cwd || info["model"] != "test-model" || info["turns"].(float64) != 1 {
+		t.Fatalf("unexpected info response: %#v", response)
+	}
+	output.Reset()
+	server.handleSessionAdmin(message{ID: json.RawMessage("3"), Method: "x.ai/session/search", Params: json.RawMessage(`{"query":"searchable","includeContent":true}`)})
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	results := response["result"].(map[string]any)["result"].(map[string]any)["results"].([]any)
+	if len(results) != 1 || results[0].(map[string]any)["sessionId"] != "admin-session" {
+		t.Fatalf("unexpected search response: %#v", response)
+	}
+	output.Reset()
+	server.handleSessionAdmin(message{ID: json.RawMessage("4"), Method: "x.ai/session/delete", Params: json.RawMessage(`{"sessionId":"admin-session"}`)})
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response["result"].(map[string]any)["success"] != true {
+		t.Fatalf("unexpected delete response: %#v", response)
+	}
+	if _, err := os.Stat(logger.Path()); !os.IsNotExist(err) {
+		t.Fatalf("session survived ACP delete: %v", err)
+	}
+}
+
 type fixtureStreamer struct {
 	mu       sync.Mutex
 	results  []api.StreamResult

@@ -210,6 +210,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleResolveLocalSession(ctx, incoming)
 		case "x.ai/session/fork":
 			s.handleSessionFork(incoming)
+		case "x.ai/session/info", "x.ai/session/rename", "x.ai/session/delete", "x.ai/session/search":
+			s.handleSessionAdmin(incoming)
 		case "x.ai/rewind/points", "x.ai/rewind/execute":
 			s.handleRewind(incoming)
 		case "x.ai/terminal/pty/create", "x.ai/terminal/pty/load", "x.ai/terminal/pty/resize", "x.ai/terminal/list", "x.ai/terminal/kill":
@@ -221,6 +223,136 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				s.respondError(incoming.ID, -32601, "method not found")
 			}
 		}
+	}
+}
+
+func (s *Server) handleSessionAdmin(incoming message) {
+	var req struct {
+		SessionID      string `json:"sessionId"`
+		Title          string `json:"title"`
+		CWD            string `json:"cwd"`
+		Query          string `json:"query"`
+		Limit          int    `json:"limit"`
+		Offset         int    `json:"offset"`
+		IncludeContent bool   `json:"includeContent"`
+	}
+	if json.Unmarshal(incoming.Params, &req) != nil {
+		s.respondError(incoming.ID, -32602, "invalid session parameters")
+		return
+	}
+	extResult := func(value any, err error) {
+		if err != nil {
+			s.respond(incoming.ID, map[string]any{"result": nil, "error": err.Error()})
+		} else {
+			s.respond(incoming.ID, map[string]any{"result": value})
+		}
+	}
+	switch incoming.Method {
+	case "x.ai/session/info":
+		id := req.SessionID
+		if id == "" {
+			s.mu.Lock()
+			for candidate := range s.sessions {
+				id = candidate
+				break
+			}
+			s.mu.Unlock()
+		}
+		if id == "" {
+			extResult(map[string]any{}, nil)
+			return
+		}
+		if current := s.lookupSession(id); current != nil {
+			current.mu.Lock()
+			used, total := 0, current.runner.ContextWindow
+			turns, turnIndex := current.promptIndex, current.activePrompt
+			if turnIndex < 0 {
+				turnIndex = turns
+			}
+			result := map[string]any{
+				"sessionId": id, "cwd": current.cwd, "model": current.runner.Model,
+				"turns": turns, "turnIndex": turnIndex,
+				"context": sessionContextWire(used, total, turns),
+			}
+			current.mu.Unlock()
+			extResult(result, nil)
+			return
+		}
+		info, err := sessionlog.InfoByID(s.SessionDir, id)
+		if err != nil {
+			extResult(map[string]any{}, nil)
+			return
+		}
+		path, _ := sessionlog.PathForID(s.SessionDir, id)
+		points, _ := sessionlog.RewindPoints(path)
+		extResult(map[string]any{
+			"sessionId": id, "cwd": info.CWD, "model": info.ModelID,
+			"turns": len(points), "turnIndex": len(points), "context": sessionContextWire(0, 0, len(points)),
+		}, nil)
+	case "x.ai/session/rename":
+		if req.SessionID == "" {
+			s.respondError(incoming.ID, -32602, "sessionId is required")
+			return
+		}
+		if err := sessionlog.Rename(s.SessionDir, req.SessionID, req.Title); err != nil {
+			s.respondError(incoming.ID, -32000, err.Error())
+			return
+		}
+		if current := s.lookupSession(req.SessionID); current != nil {
+			current.mu.Lock()
+			current.title = strings.TrimSpace(req.Title)
+			current.updated = time.Now().UTC()
+			current.mu.Unlock()
+			s.notify(req.SessionID, map[string]any{
+				"sessionUpdate": "session_info_update", "title": strings.TrimSpace(req.Title),
+				"updatedAt": time.Now().UTC().Format(time.RFC3339),
+			})
+		}
+		s.respond(incoming.ID, map[string]any{"success": true})
+	case "x.ai/session/delete":
+		if req.SessionID == "" {
+			s.respondError(incoming.ID, -32602, "sessionId is required")
+			return
+		}
+		s.mu.Lock()
+		current := s.sessions[req.SessionID]
+		delete(s.sessions, req.SessionID)
+		s.mu.Unlock()
+		if current != nil {
+			current.mu.Lock()
+			if current.cancel != nil {
+				current.cancel()
+			}
+			current.mu.Unlock()
+			current.close()
+		}
+		if err := sessionlog.Delete(s.SessionDir, req.SessionID); err != nil {
+			s.respondError(incoming.ID, -32000, err.Error())
+			return
+		}
+		s.respond(incoming.ID, map[string]any{"success": true})
+	case "x.ai/session/search":
+		result, err := sessionlog.Search(s.SessionDir, sessionlog.SearchRequest{
+			Query: req.Query, CWD: req.CWD, Limit: req.Limit, Offset: req.Offset, IncludeContent: req.IncludeContent,
+		})
+		extResult(result, err)
+	}
+}
+
+func sessionContextWire(used, total, turns int) map[string]any {
+	free, percent := 0, 0
+	if total > 0 {
+		free = total - used
+		if free < 0 {
+			free = 0
+		}
+		percent = used * 100 / total
+	}
+	return map[string]any{
+		"used": used, "total": total, "systemPromptTokens": 0,
+		"toolDefinitionsCount": 0, "toolDefinitionsTokens": 0, "compactionCount": 0,
+		"turnCount": turns, "toolCallCount": 0, "messageCount": 0, "messageTokens": 0,
+		"freeTokens": free, "usagePct": percent, "autoCompactThresholdPercent": 85,
 	}
 }
 

@@ -258,6 +258,12 @@ supports client-provided IDs, model overrides, a new working directory, and
 inclusive `targetPromptIndex` truncation; later load/resume uses the stored
 model override.
 
+Persisted and live sessions also expose `x.ai/session/info`, `rename`,
+`delete`, and `search`. Rename appends an explicit title event, delete removes
+only the validated JSONL log and its exact artifact directory, and search
+supports workspace filtering, pagination, ranked title/content matches, and
+optional snippets without a separate index service.
+
 ACP sessions expose `x.ai/rewind/points` and `x.ai/rewind/execute` for
 `all`, `conversation_only`, and `files_only` rewind (`code_only` remains an
 alias). Rewinds append a timeline marker instead of deleting history, restore
