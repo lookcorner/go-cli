@@ -112,13 +112,16 @@ func Fork(dir, sourceID, newID, cwd, modelID string, target *int) (chatMessages,
 	}
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
 	scanner.Buffer(make([]byte, 64<<10), 8<<20)
+	var validated bytes.Buffer
 	for scanner.Scan() {
 		var event struct {
 			Kind string `json:"kind"`
 		}
 		if json.Unmarshal(scanner.Bytes(), &event) != nil {
-			return 0, 0, errors.New("malformed source session event")
+			continue
 		}
+		validated.Write(scanner.Bytes())
+		validated.WriteByte('\n')
 		switch event.Kind {
 		case "user_prompt", "model_response":
 			chatMessages++
@@ -129,6 +132,7 @@ func Fork(dir, sourceID, newID, cwd, modelID string, target *int) (chatMessages,
 	if err := scanner.Err(); err != nil {
 		return 0, 0, err
 	}
+	data = validated.Bytes()
 	if len(data) > 0 && data[len(data)-1] != '\n' {
 		data = append(data, '\n')
 	}
@@ -180,9 +184,10 @@ type Content struct {
 }
 
 type Logger struct {
-	mu   sync.Mutex
-	file *os.File
-	path string
+	mu           sync.Mutex
+	file         *os.File
+	path         string
+	needsNewline bool
 }
 
 func NewLogger(dir string) (*Logger, error) {
@@ -296,7 +301,7 @@ func readInfo(path, id string) (Info, error) {
 			Data json.RawMessage `json:"data"`
 		}
 		if json.Unmarshal(scanner.Bytes(), &event) != nil {
-			return Info{}, errors.New("malformed session event")
+			continue
 		}
 		switch event.Kind {
 		case "session_metadata":
@@ -355,11 +360,15 @@ func Resume(path string) (*Logger, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
+	needsNewline, err := sessionNeedsNewline(path)
+	if err != nil {
+		return nil, "", err
+	}
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
 	if err != nil {
 		return nil, "", fmt.Errorf("open session log for resume: %w", err)
 	}
-	logger := &Logger{file: file, path: path}
+	logger := &Logger{file: file, path: path, needsNewline: needsNewline}
 	if err := logger.Append("session_resumed", map[string]any{"previous_response_id": responseID}); err != nil {
 		file.Close()
 		return nil, "", err
@@ -472,6 +481,14 @@ func Rewind(path string, target int) (RewindResult, error) {
 		_ = file.Close()
 		return RewindResult{}, errors.New("session log changed before rewind")
 	}
+	needsNewline, err := sessionNeedsNewline(path)
+	if err != nil {
+		_ = file.Close()
+		return RewindResult{}, err
+	}
+	if needsNewline {
+		encoded = append([]byte{'\n'}, encoded...)
+	}
 	if _, err = file.Write(append(encoded, '\n')); err == nil {
 		err = file.Sync()
 	}
@@ -503,7 +520,7 @@ func liveTimeline(path string) ([]storedEvent, []int, bool, error) {
 		line++
 		var event storedEvent
 		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
-			return nil, nil, false, fmt.Errorf("parse session line %d: %w", line, err)
+			continue
 		}
 		if event.Kind == "session_rewind" {
 			var data struct {
@@ -781,10 +798,31 @@ func (l *Logger) appendLocked(kind string, data any) error {
 		return fmt.Errorf("encode session event: %w", err)
 	}
 	encoded = append(encoded, '\n')
+	if l.needsNewline {
+		encoded = append([]byte{'\n'}, encoded...)
+		l.needsNewline = false
+	}
 	if _, err := l.file.Write(encoded); err != nil {
 		return fmt.Errorf("write session event: %w", err)
 	}
 	return l.file.Sync()
+}
+
+func sessionNeedsNewline(path string) (bool, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || info.Size() == 0 {
+		return false, err
+	}
+	last := []byte{0}
+	if _, err := file.ReadAt(last, info.Size()-1); err != nil {
+		return false, err
+	}
+	return last[0] != '\n', nil
 }
 
 func (l *Logger) persistImage(rawURL string) (Content, string, error) {

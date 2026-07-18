@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,6 +47,50 @@ func TestResumeRejectsSessionWithoutCompletedTurn(t *testing.T) {
 	}
 	if _, _, err := Resume(path); err == nil {
 		t.Fatal("expected incomplete session to be rejected")
+	}
+}
+
+func TestTranscriptSkipsMalformedJSONLLine(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	content := "" +
+		`{"kind":"user_prompt","data":{"text":"hello"}}` + "\n" +
+		`{"kind":"model_response","data":` + "\n" +
+		`{"kind":"model_response","data":{"response_id":"r1","text":"world","tool_call_count":0}}` + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	messages, err := Transcript(path)
+	if err != nil || len(messages) != 2 || messages[0].Text != "hello" || messages[1].Text != "world" {
+		t.Fatalf("recovered transcript=%#v err=%v", messages, err)
+	}
+}
+
+func TestResumeHealsTornJSONLTail(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	content := "" +
+		`{"kind":"user_prompt","data":{"text":"hello"}}` + "\n" +
+		`{"kind":"model_response","data":{"response_id":"r1","text":"world","tool_call_count":0}}` + "\n" +
+		`{"kind":"model_response","data":{"response_id":"torn"`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	logger, responseID, err := Resume(path)
+	if err != nil || responseID != "r1" {
+		t.Fatalf("resume response=%q err=%v", responseID, err)
+	}
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+	if len(lines) != 4 || !strings.Contains(lines[3], `"kind":"session_resumed"`) {
+		t.Fatalf("torn tail was not isolated: %q", data)
+	}
+	if _, err := Transcript(path); err != nil {
+		t.Fatalf("healed session did not replay: %v", err)
 	}
 }
 
@@ -237,6 +282,35 @@ func TestForkCopiesTranscriptAndRebindsCWD(t *testing.T) {
 	messages, err := Transcript(filepath.Join(dir, "child.jsonl"))
 	if err != nil || len(messages) != 2 || messages[0].Text != "hello" || messages[1].Text != "world" {
 		t.Fatalf("forked transcript: %#v err=%v", messages, err)
+	}
+}
+
+func TestForkDropsMalformedSourceLines(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "parent.jsonl")
+	content := "" +
+		`{"kind":"session_metadata","data":{"cwd":"/old"}}` + "\n" +
+		`{"kind":"user_prompt","data":{"text":"hello"}}` + "\n" +
+		`{"kind":"broken"` + "\n" +
+		`{"kind":"model_response","data":{"text":"world","response_id":"r1","tool_call_count":0}}` + "\n"
+	if err := os.WriteFile(source, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Fork(dir, "parent", "child", "/new", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "child.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if !json.Valid([]byte(line)) {
+			t.Fatalf("fork retained malformed line: %q", line)
+		}
+	}
+	messages, err := Transcript(filepath.Join(dir, "child.jsonl"))
+	if err != nil || len(messages) != 2 || messages[1].Text != "world" {
+		t.Fatalf("forked transcript=%#v err=%v", messages, err)
 	}
 }
 
