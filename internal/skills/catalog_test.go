@@ -85,6 +85,65 @@ func TestSkillInvocationMetadataControlsToolVisibility(t *testing.T) {
 	}
 }
 
+func TestExpandSkillReferences(t *testing.T) {
+	root := t.TempDir()
+	write := func(name, metadata, body string) {
+		t.Helper()
+		dir := filepath.Join(root, name)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		content := "---\nname: " + name + "\ndescription: " + name + "\n" + metadata + "\n---\n" + body
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("deploy", "disable-model-invocation: true", "Deploy $0 to $ARGUMENTS[1]. Full: $ARGUMENTS. Dir: ${SKILL_DIR}")
+	write("lint", "", "Lint")
+	write("review", "", "Review changes")
+	write("hidden", "user-invocable: false", "Hidden")
+	catalog := &Catalog{byName: make(map[string]Skill), disabled: map[string]bool{"review": true}}
+	if err := catalog.scan(skillRoot{path: root, source: "test", scope: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	information := catalog.ExpandReferences("please /deploy prod east /lint strict")
+	if !strings.Contains(information, `<skill name="deploy" args="prod east">`) || !strings.Contains(information, "Deploy prod to east. Full: prod east.") {
+		t.Fatalf("skill arguments were not expanded: %s", information)
+	}
+	if !strings.Contains(information, filepath.Join(root, "deploy")) {
+		t.Fatalf("skill directory was not expanded: %s", information)
+	}
+	if !strings.Contains(information, `<skill name="lint" args="strict">`) {
+		t.Fatalf("second skill arguments were not isolated: %s", information)
+	}
+	if got := catalog.ExpandReferences("/review /hidden"); got != "" {
+		t.Fatalf("disabled skill was expanded: %s", got)
+	}
+	if got := catalog.ExpandReferences("check /api/v2/users"); got != "" {
+		t.Fatalf("unknown slash path was treated as a skill: %s", got)
+	}
+}
+
+func TestExpandSkillReferencesKeepsRepeatedBlocksAndDedupesIndex(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "review")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "SKILL.md")
+	if err := os.WriteFile(path, []byte("---\nname: review\ndescription: review\n---\nReview"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	catalog := &Catalog{byName: make(map[string]Skill)}
+	if err := catalog.scan(skillRoot{path: root, source: "test", scope: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	information := catalog.ExpandReferences("/review first /review second")
+	if strings.Count(information, `<skill name="review" path=`) != 1 || strings.Count(information, `<skill name="review" args=`) != 2 {
+		t.Fatalf("unexpected repeated skill expansion: %s", information)
+	}
+}
+
 func TestParseMetadataNormalizesNames(t *testing.T) {
 	for input, want := range map[string]string{
 		"narrate_crash_video": "narrate-crash-video",

@@ -108,6 +108,16 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 	if err := r.logPrompt(prompt, content); err != nil {
 		return Result{}, fmt.Errorf("persist user prompt: %w", err)
 	}
+	if r.Skills != nil {
+		if information := r.Skills.ExpandReferences(prompt); information != "" {
+			switch value := content.(type) {
+			case string:
+				content = "<user_query>\n" + value + "\n</user_query>\n" + information
+			case []api.ContentPart:
+				content = append(append([]api.ContentPart(nil), value...), api.ContentPart{Type: "input_text", Text: information})
+			}
+		}
+	}
 	summaryPrefix := ""
 	if r.pendingSummary != "" {
 		summaryPrefix = "Previous conversation summary:\n" + r.pendingSummary + "\n\n"

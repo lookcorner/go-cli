@@ -214,6 +214,36 @@ func TestRunnerAnnouncesConditionalSkillAfterFileTool(t *testing.T) {
 	}
 }
 
+func TestRunnerExpandsUserSkillReferences(t *testing.T) {
+	root := t.TempDir()
+	skillDir := filepath.Join(root, ".grok", "skills", "commit")
+	if err := os.MkdirAll(skillDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: commit\ndescription: Commit changes\ndisable-model-invocation: true\n---\nCommit $ARGUMENTS"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := skills.Discover(ws.Root(), skills.Config{Compat: compat.Default()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	streamer := &fakeStreamer{results: []api.StreamResult{{ResponseID: "resp_1", Text: "done"}}}
+	runner := Runner{Client: streamer, Tools: registry, Skills: catalog, Model: "test", MaxSteps: 1}
+	if _, err := runner.Run(context.Background(), "/commit fix typo"); err != nil {
+		t.Fatal(err)
+	}
+	content, ok := streamer.requests[0].Input[0].Content.(string)
+	if !ok || !strings.Contains(content, "<user_query>\n/commit fix typo\n</user_query>") || !strings.Contains(content, `<skill name="commit" args="fix typo">`) || !strings.Contains(content, "Commit fix typo") {
+		t.Fatalf("skill reference was not expanded into the model request: %#v", streamer.requests[0].Input)
+	}
+}
+
 func TestRunnerIncludesWatchedSkillInNextRequest(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
