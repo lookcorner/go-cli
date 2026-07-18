@@ -194,11 +194,26 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 		t.Fatalf("client MCP config was not forwarded: %#v", receivedConfig)
 	}
 	sessionID := created["result"].(map[string]any)["sessionId"].(string)
+	modes := created["result"].(map[string]any)["modes"].(map[string]any)
+	if modes["currentModeId"] != "default" || len(modes["availableModes"].([]any)) != 3 {
+		t.Fatalf("unexpected session modes: %#v", modes)
+	}
 	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 22, "method": "session/list", "params": map[string]any{"cwd": root}})
 	listed := decodeACP(t, decoder)
 	sessions := listed["result"].(map[string]any)["sessions"].([]any)
 	if len(sessions) != 1 || sessions[0].(map[string]any)["sessionId"] != sessionID {
 		t.Fatalf("unexpected session list: %#v", listed)
+	}
+	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 23, "method": "session/set_mode", "params": map[string]any{
+		"sessionId": sessionID, "modeId": "plan",
+	}})
+	modeUpdate := decodeACP(t, decoder)
+	modeData := modeUpdate["params"].(map[string]any)["update"].(map[string]any)
+	if modeData["sessionUpdate"] != "current_mode_update" || modeData["currentModeId"] != "plan" {
+		t.Fatalf("unexpected mode update: %#v", modeUpdate)
+	}
+	if response := decodeACP(t, decoder); int(response["id"].(float64)) != 23 {
+		t.Fatalf("unexpected set mode response: %#v", response)
 	}
 	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 3, "method": "session/prompt", "params": map[string]any{
 		"sessionId": sessionID, "prompt": []any{map[string]any{"type": "text", "text": "create the file"}},
@@ -321,7 +336,7 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 		t.Fatalf("unexpected replacement completion: %#v", replacementDone)
 	}
 	streamer.mu.Lock()
-	if len(streamer.requests) != 3 || streamer.requests[2].PreviousResponseID != "" {
+	if len(streamer.requests) != 3 || streamer.requests[2].PreviousResponseID != "" || !strings.Contains(streamer.requests[0].Instructions, "Session mode: plan") {
 		t.Fatalf("rewound prompt used the discarded response chain: %#v", streamer.requests)
 	}
 	streamer.mu.Unlock()
@@ -329,6 +344,13 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 	closed := decodeACP(t, decoder)
 	if int(closed["id"].(float64)) != 4 {
 		t.Fatalf("unexpected close response: %#v", closed)
+	}
+	path, err := sessionlog.PathForID(sessionDir, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode, err := sessionlog.CurrentMode(path); err != nil || mode != "plan" {
+		t.Fatalf("persisted mode=%q err=%v", mode, err)
 	}
 	_ = clientToAgentW.Close()
 	select {
@@ -743,6 +765,9 @@ func TestACPLoadReplaysAndResumeReconnectsPersistedSession(t *testing.T) {
 	if err := logger.Append("model_response", map[string]any{"response_id": "stored-response", "text": "stored answer", "tool_call_count": 0}); err != nil {
 		t.Fatal(err)
 	}
+	if err := logger.Append("session_mode", map[string]any{"mode_id": "plan"}); err != nil {
+		t.Fatal(err)
+	}
 	if err := logger.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -780,12 +805,18 @@ func TestACPLoadReplaysAndResumeReconnectsPersistedSession(t *testing.T) {
 		loaded["result"].(map[string]any)["sessionId"] != "persisted-1" {
 		t.Fatalf("unexpected load sequence: %#v %#v %#v %#v", userTextReplay, userImageReplay, agentReplay, loaded)
 	}
+	if loaded["result"].(map[string]any)["modes"].(map[string]any)["currentModeId"] != "plan" {
+		t.Fatalf("loaded mode was not restored: %#v", loaded)
+	}
 	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 2, "method": "session/close", "params": map[string]any{"sessionId": "persisted-1"}})
 	_ = decodeACP(t, decoder)
 	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 3, "method": "session/resume", "params": loadParams})
 	resumed := decodeACP(t, decoder)
 	if int(resumed["id"].(float64)) != 3 || resumed["result"].(map[string]any)["sessionId"] != "persisted-1" {
 		t.Fatalf("unexpected resume response: %#v", resumed)
+	}
+	if resumed["result"].(map[string]any)["modes"].(map[string]any)["currentModeId"] != "plan" {
+		t.Fatalf("resumed mode was not restored: %#v", resumed)
 	}
 	_ = inputW.Close()
 	select {

@@ -464,3 +464,35 @@ func TestRewindRejectsInvalidTarget(t *testing.T) {
 		t.Fatal("rewind accepted target at current prompt count")
 	}
 }
+
+func TestCurrentModeSurvivesConversationRewind(t *testing.T) {
+	dir := t.TempDir()
+	logger, err := NewLoggerWithID(dir, "mode-rewind")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []struct {
+		kind string
+		data any
+	}{
+		{"user_prompt", map[string]any{"text": "first"}},
+		{"model_response", map[string]any{"response_id": "r1", "tool_call_count": 0}},
+		{"user_prompt", map[string]any{"text": "second"}},
+		{"session_mode", map[string]any{"mode_id": "plan"}},
+		{"model_response", map[string]any{"response_id": "r2", "tool_call_count": 0}},
+	} {
+		if err := logger.Append(event.kind, event.data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := logger.Path()
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Rewind(path, 1); err != nil {
+		t.Fatal(err)
+	}
+	if mode, err := CurrentMode(path); err != nil || mode != "plan" {
+		t.Fatalf("mode=%q err=%v", mode, err)
+	}
+}

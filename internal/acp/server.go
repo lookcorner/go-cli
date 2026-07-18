@@ -103,6 +103,7 @@ type session struct {
 	activePrompt int
 	rewind       *workspace.RewindStore
 	logPath      string
+	mode         string
 }
 
 type permissionResult struct {
@@ -181,6 +182,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleRestoreSession(ctx, incoming, false)
 		case "session/prompt":
 			s.handlePrompt(ctx, incoming)
+		case "session/set_mode":
+			s.handleSetMode(incoming)
 		case "session/cancel":
 			s.handleCancel(incoming.Params)
 		case "session/close":
@@ -714,7 +717,7 @@ func (s *Server) handleNewSession(ctx context.Context, incoming message) {
 		s.respondError(incoming.ID, -32000, err.Error())
 		return
 	}
-	s.respond(incoming.ID, map[string]any{"sessionId": id})
+	s.respond(incoming.ID, map[string]any{"sessionId": id, "modes": sessionModes("default")})
 }
 
 func (s *Server) handleRewind(incoming message) {
@@ -896,9 +899,18 @@ func (s *Server) startSession(ctx context.Context, id string, sessionConfig Sess
 		closeRuntime()
 		return nil, pointsErr
 	}
+	mode := "default"
+	if storedMode, modeErr := sessionlog.CurrentMode(sessionPath); modeErr == nil {
+		if validSessionMode(storedMode) {
+			mode = storedMode
+		}
+	} else if !errors.Is(modeErr, os.ErrNotExist) {
+		closeRuntime()
+		return nil, modeErr
+	}
 	created := &session{
 		id: id, cwd: sessionConfig.CWD, updated: time.Now().UTC(), previous: previous,
-		runner: runner, close: closeRuntime, promptIndex: promptIndex, activePrompt: -1, rewind: rewind, logPath: sessionPath,
+		runner: runner, close: closeRuntime, promptIndex: promptIndex, activePrompt: -1, rewind: rewind, logPath: sessionPath, mode: mode,
 	}
 	runner.ToolObserver = &sessionToolObserver{server: s, sessionID: id}
 	runner.Tools.SetRewindStore(rewind, func() int {
@@ -963,11 +975,15 @@ func (s *Server) handlePrompt(parent context.Context, incoming message) {
 	}
 	current.updated = time.Now().UTC()
 	previous := current.previous
+	mode := current.mode
 	current.mu.Unlock()
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
+		baseInstructions := current.runner.Instructions
+		current.runner.Instructions = instructionsForMode(baseInstructions, mode)
 		result, err := current.runner.RunTurnParts(runCtx, prompt, content, previous)
+		current.runner.Instructions = baseInstructions
 		points, pointsErr := sessionlog.RewindPoints(current.logPath)
 		stopReason := "end_turn"
 		if errors.Is(runCtx.Err(), context.Canceled) {
@@ -1081,7 +1097,78 @@ func (s *Server) handleRestoreSession(ctx context.Context, incoming message, rep
 			}
 		}
 	}
-	s.respond(incoming.ID, map[string]any{"sessionId": params.SessionID})
+	current := s.lookupSession(params.SessionID)
+	mode := "default"
+	if current != nil {
+		current.mu.Lock()
+		mode = current.mode
+		current.mu.Unlock()
+	}
+	s.respond(incoming.ID, map[string]any{"sessionId": params.SessionID, "modes": sessionModes(mode)})
+}
+
+func (s *Server) handleSetMode(incoming message) {
+	var params struct {
+		SessionID string `json:"sessionId"`
+		ModeID    string `json:"modeId"`
+	}
+	if json.Unmarshal(incoming.Params, &params) != nil || params.SessionID == "" || !validSessionMode(params.ModeID) {
+		s.respondError(incoming.ID, -32602, "sessionId and a valid modeId are required")
+		return
+	}
+	current := s.lookupSession(params.SessionID)
+	if current == nil {
+		s.respondError(incoming.ID, -32602, "unknown session")
+		return
+	}
+	current.mu.Lock()
+	if current.mode == params.ModeID {
+		current.mu.Unlock()
+		s.respond(incoming.ID, map[string]any{})
+		return
+	}
+	if current.runner.Logger != nil {
+		if err := current.runner.Logger.Append("session_mode", map[string]any{"mode_id": params.ModeID}); err != nil {
+			current.mu.Unlock()
+			s.respondError(incoming.ID, -32000, err.Error())
+			return
+		}
+	}
+	current.mode = params.ModeID
+	current.mu.Unlock()
+	s.notify(params.SessionID, map[string]any{"sessionUpdate": "current_mode_update", "currentModeId": params.ModeID})
+	s.respond(incoming.ID, map[string]any{})
+}
+
+func validSessionMode(mode string) bool {
+	return mode == "default" || mode == "ask" || mode == "plan"
+}
+
+func sessionModes(current string) map[string]any {
+	return map[string]any{
+		"currentModeId": current,
+		"availableModes": []any{
+			map[string]any{"id": "default", "name": "Agent", "description": "Use tools to complete the task."},
+			map[string]any{"id": "ask", "name": "Ask", "description": "Answer without changing the workspace."},
+			map[string]any{"id": "plan", "name": "Plan", "description": "Investigate and produce an implementation plan without changing the workspace."},
+		},
+	}
+}
+
+func instructionsForMode(base, mode string) string {
+	var instruction string
+	switch mode {
+	case "ask":
+		instruction = "Session mode: ask. Answer the user's question without editing files or running commands that change the workspace."
+	case "plan":
+		instruction = "Session mode: plan. Investigate as needed and return a concrete implementation plan. Do not edit files or run commands that change the workspace."
+	default:
+		return base
+	}
+	if strings.TrimSpace(base) == "" {
+		return instruction
+	}
+	return base + "\n\n" + instruction
 }
 
 func parseMCPServers(params []mcpServerParam) ([]MCPServer, error) {

@@ -728,6 +728,37 @@ func completedResponseID(events []storedEvent) (string, error) {
 
 func CompletedResponseID(path string) (string, error) { return lastCompletedResponseID(path) }
 
+func CurrentMode(path string) (string, error) {
+	if err := validateSessionFile(path); err != nil {
+		return "", err
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	mode := "default"
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64<<10), 8<<20)
+	for scanner.Scan() {
+		var event storedEvent
+		if json.Unmarshal(scanner.Bytes(), &event) != nil {
+			continue
+		}
+		if event.Kind != "session_mode" {
+			continue
+		}
+		var data struct {
+			ModeID string `json:"mode_id"`
+		}
+		if err := json.Unmarshal(event.Data, &data); err != nil || data.ModeID == "" {
+			return "", errors.New("invalid session mode event")
+		}
+		mode = data.ModeID
+	}
+	return mode, scanner.Err()
+}
+
 func (l *Logger) Path() string { return l.path }
 
 func ArtifactDir(sessionPath string) (string, error) {
