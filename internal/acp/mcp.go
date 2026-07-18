@@ -154,7 +154,11 @@ func (s *Server) handleMCPList(incoming message, sessionID string) {
 	}
 	current.mu.Lock()
 	configs := append([]MCPServer(nil), current.mcpServers...)
+	provider := current.runner.MCPServers
 	current.mu.Unlock()
+	if provider != nil {
+		configs = provider()
+	}
 	toolsByServer := make(map[string][]map[string]any)
 	for _, registered := range current.runner.Tools.SnapshotTools() {
 		tool, ok := registered.(callableMCPTool)

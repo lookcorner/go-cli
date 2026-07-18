@@ -26,6 +26,8 @@ func (t *contentTool) MCPResourceReader() (string, bool) {
 	return t.serverName, t.read != nil
 }
 
+func (t *contentTool) MCPServerName() string { return t.serverName }
+
 func (t *contentTool) ReadMCPResource(ctx context.Context, uri string) ([]ResourceContents, error) {
 	if t.read == nil {
 		return nil, errors.New("tool does not read MCP resources")
@@ -34,7 +36,7 @@ func (t *contentTool) ReadMCPResource(ctx context.Context, uri string) ([]Resour
 }
 
 func NewResourceAdapters(client *Client, serverName string) []*contentTool {
-	list := &contentTool{definition: api.ToolDefinition{
+	list := &contentTool{serverName: serverName, definition: api.ToolDefinition{
 		Type: "function", Name: modelContentToolName("resource", serverName, "list"),
 		Description: fmt.Sprintf("List resources exposed by MCP server %s.", serverName),
 		Parameters:  emptyObjectSchema(),
@@ -72,7 +74,7 @@ func NewResourceAdapters(client *Client, serverName string) []*contentTool {
 }
 
 func NewPromptAdapters(client *Client, serverName string) []*contentTool {
-	list := &contentTool{definition: api.ToolDefinition{
+	list := &contentTool{serverName: serverName, definition: api.ToolDefinition{
 		Type: "function", Name: modelContentToolName("prompt", serverName, "list"),
 		Description: fmt.Sprintf("List reusable prompts exposed by MCP server %s.", serverName),
 		Parameters:  emptyObjectSchema(),
@@ -85,7 +87,7 @@ func NewPromptAdapters(client *Client, serverName string) []*contentTool {
 		encoded, err := json.Marshal(prompts)
 		return string(encoded), err
 	}
-	get := &contentTool{definition: api.ToolDefinition{
+	get := &contentTool{serverName: serverName, definition: api.ToolDefinition{
 		Type: "function", Name: modelContentToolName("prompt", serverName, "get"),
 		Description: fmt.Sprintf("Render a reusable prompt from MCP server %s.", serverName),
 		Parameters: objectInputSchema(map[string]any{

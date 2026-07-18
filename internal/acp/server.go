@@ -19,6 +19,7 @@ import (
 
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/api"
+	mcppkg "github.com/lookcorner/go-cli/internal/mcp"
 	sessionlog "github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/tools"
 	"github.com/lookcorner/go-cli/internal/workspace"
@@ -35,15 +36,7 @@ type SessionConfig struct {
 	ResumePath string
 }
 
-type MCPServer struct {
-	Type    string
-	Name    string
-	Command string
-	Args    []string
-	Env     map[string]string
-	URL     string
-	Headers map[string]string
-}
+type MCPServer = mcppkg.ServerConfig
 
 type mcpServerParam struct {
 	Type    string   `json:"type"`
@@ -213,6 +206,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleSessionFork(incoming)
 		case "x.ai/session/info", "x.ai/session/rename", "x.ai/session/delete", "x.ai/session/search", "x.ai/prompt_history":
 			s.handleSessionAdmin(incoming)
+		case "x.ai/session/update_mcp_servers":
+			s.handleUpdateMCPServers(ctx, incoming)
 		case "x.ai/session_summaries/session_list", "x.ai/session_summaries/workspace_list", "x.ai/session_summaries/workspace_list_recent":
 			s.handleSessionSummaries(incoming)
 		case "x.ai/sessions/list":
@@ -377,6 +372,43 @@ func (s *Server) handleSessionAdmin(incoming message) {
 			s.respond(incoming.ID, map[string]any{"prompts": prompts})
 		}
 	}
+}
+
+func (s *Server) handleUpdateMCPServers(ctx context.Context, incoming message) {
+	var req struct {
+		SessionID  string           `json:"sessionId"`
+		MCPServers []mcpServerParam `json:"mcpServers"`
+	}
+	if json.Unmarshal(incoming.Params, &req) != nil || req.SessionID == "" {
+		s.respondError(incoming.ID, -32602, "sessionId is required")
+		return
+	}
+	current := s.lookupSession(req.SessionID)
+	if current == nil || current.runner == nil || current.runner.UpdateMCPServers == nil {
+		s.respondError(incoming.ID, -32602, "session does not support MCP updates")
+		return
+	}
+	current.mu.Lock()
+	running := current.running
+	updater := current.runner.UpdateMCPServers
+	current.mu.Unlock()
+	if running {
+		s.respondError(incoming.ID, -32000, "cannot update MCP servers while a prompt is running")
+		return
+	}
+	servers, err := parseMCPServers(req.MCPServers)
+	if err != nil {
+		s.respondError(incoming.ID, -32602, err.Error())
+		return
+	}
+	if err := updater(ctx, servers); err != nil {
+		s.respondError(incoming.ID, -32000, err.Error())
+		return
+	}
+	current.mu.Lock()
+	current.mcpServers = append([]MCPServer(nil), servers...)
+	current.mu.Unlock()
+	s.respond(incoming.ID, map[string]any{"result": map[string]any{"ok": true}, "error": nil})
 }
 
 func (s *Server) handleSessionSummaries(incoming message) {

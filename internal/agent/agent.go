@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/lookcorner/go-cli/internal/api"
+	"github.com/lookcorner/go-cli/internal/mcp"
 	"github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/skills"
 	"github.com/lookcorner/go-cli/internal/tools"
@@ -55,6 +56,8 @@ type Runner struct {
 	ToolObserver            ToolObserver
 	ContextWindow           int
 	CompactThresholdPercent int
+	UpdateMCPServers        func(context.Context, []mcp.ServerConfig) error
+	MCPServers              func() []mcp.ServerConfig
 	lastInputTokens         int
 	pendingSummary          string
 }

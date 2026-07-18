@@ -495,6 +495,34 @@ func TestMCPExtensionsWireContract(t *testing.T) {
 	}
 }
 
+func TestUpdateMCPServersExtension(t *testing.T) {
+	var output bytes.Buffer
+	var updated []mcppkg.ServerConfig
+	runner := &agent.Runner{UpdateMCPServers: func(_ context.Context, servers []mcppkg.ServerConfig) error {
+		updated = append([]mcppkg.ServerConfig(nil), servers...)
+		return nil
+	}}
+	current := &session{id: "update-mcp", runner: runner}
+	server := &Server{output: &output, sessions: map[string]*session{"update-mcp": current}}
+	server.handleUpdateMCPServers(context.Background(), message{ID: json.RawMessage("1"), Method: "x.ai/session/update_mcp_servers", Params: json.RawMessage(`{
+		"sessionId":"update-mcp","mcpServers":[{"name":"local","command":"server","args":["--stdio"]}]
+	}`)})
+	var response map[string]any
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	extension := response["result"].(map[string]any)
+	if extension["result"].(map[string]any)["ok"] != true || extension["error"] != nil || len(updated) != 1 || updated[0].Name != "local" {
+		t.Fatalf("unexpected MCP update response=%#v configs=%#v", response, updated)
+	}
+	current.mu.Lock()
+	persisted := append([]MCPServer(nil), current.mcpServers...)
+	current.mu.Unlock()
+	if len(persisted) != 1 || persisted[0].Command != "server" {
+		t.Fatalf("session MCP config was not updated: %#v", persisted)
+	}
+}
+
 type fakeMCPTool struct{}
 
 func (fakeMCPTool) Definition() api.ToolDefinition {

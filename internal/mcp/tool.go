@@ -52,6 +52,8 @@ func (t *ToolAdapter) MCPIdentity() (string, string, ToolInfo) {
 	return t.serverName, t.remoteName, t.remoteInfo
 }
 
+func (t *ToolAdapter) MCPServerName() string { return t.serverName }
+
 func (t *ToolAdapter) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
 	result, err := t.ExecuteResult(ctx, raw)
 	return result.Output, err

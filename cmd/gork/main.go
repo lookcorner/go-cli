@@ -824,14 +824,14 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 				return nil, nil, err
 			}
 		}
-		var mcpClients []*mcp.Client
+		var mcpRuntime *sessionMCPRuntime
 		var lspManager *lsp.Manager
 		cleanup := func() {
 			if lspManager != nil {
 				_ = lspManager.Close()
 			}
-			for _, client := range mcpClients {
-				_ = client.Close()
+			if mcpRuntime != nil {
+				mcpRuntime.Close()
 			}
 			_ = registry.Close()
 			_ = logger.Close()
@@ -845,17 +845,8 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		if sessionConfig.Model != "" {
 			sessionCfg.Model = sessionConfig.Model
 		}
-		if sessionCfg.MCPServers == nil {
-			sessionCfg.MCPServers = make(map[string]config.MCPServerConfig, len(sessionConfig.MCPServers))
-		}
-		for _, remote := range sessionConfig.MCPServers {
-			sessionCfg.MCPServers[remote.Name] = config.MCPServerConfig{
-				Type: remote.Type, Command: remote.Command, Args: remote.Args, Env: remote.Env,
-				URL: remote.URL, Headers: remote.Headers,
-			}
-		}
-		mcpClients, err = startMCPServers(sessionCtx, sessionCfg, ws.Root(), registry, approver, tokenProvider, statusOutput)
-		if err != nil {
+		mcpRuntime = newSessionMCPRuntime(sessionCtx, sessionCfg, ws.Root(), registry, approver, tokenProvider, statusOutput)
+		if err = mcpRuntime.Update(sessionCtx, sessionConfig.MCPServers); err != nil {
 			cleanup()
 			return nil, nil, err
 		}
@@ -883,6 +874,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			Model: sessionCfg.Model, Instructions: instructions, MaxSteps: cfg.MaxSteps,
 			TextOutput: textOutput, StatusOutput: statusOutput,
 			ContextWindow: cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,
+			UpdateMCPServers: mcpRuntime.Update, MCPServers: mcpRuntime.Configs,
 		}, closeRuntime, nil
 	}}
 	if err := server.Serve(ctx, stdin, stdout); err != nil {
@@ -1240,6 +1232,166 @@ func startMCPServers(
 		fmt.Fprintf(stderr, "[gork] MCP %s ready: %d tool(s)\n", serverLabel, len(remoteTools))
 	}
 	return clients, nil
+}
+
+type sessionMCPRuntime struct {
+	mu            sync.Mutex
+	ctx           context.Context
+	base          config.Config
+	workspaceRoot string
+	registry      *tools.Registry
+	approver      tools.Approver
+	tokenProvider api.TokenProvider
+	stderr        io.Writer
+	clients       []*mcp.Client
+	clientConfigs []mcp.ServerConfig
+	effective     []mcp.ServerConfig
+	closed        bool
+}
+
+func newSessionMCPRuntime(
+	ctx context.Context,
+	base config.Config,
+	workspaceRoot string,
+	registry *tools.Registry,
+	approver tools.Approver,
+	tokenProvider api.TokenProvider,
+	stderr io.Writer,
+) *sessionMCPRuntime {
+	base.MCPServers = cloneMCPConfigMap(base.MCPServers)
+	return &sessionMCPRuntime{
+		ctx: ctx, base: base, workspaceRoot: workspaceRoot, registry: registry,
+		approver: approver, tokenProvider: tokenProvider, stderr: stderr,
+	}
+}
+
+func (r *sessionMCPRuntime) Update(ctx context.Context, requested []mcp.ServerConfig) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return errors.New("MCP runtime is closed")
+	}
+	previous := cloneMCPServerConfigs(r.clientConfigs)
+	r.stopLocked()
+	clients, effective, err := r.startLocked(requested)
+	if err == nil {
+		r.clients, r.clientConfigs, r.effective = clients, cloneMCPServerConfigs(requested), effective
+		return nil
+	}
+	r.stopLocked()
+	restored, restoredEffective, restoreErr := r.startLocked(previous)
+	if restoreErr == nil {
+		r.clients, r.clientConfigs, r.effective = restored, previous, restoredEffective
+		return err
+	}
+	return errors.Join(err, fmt.Errorf("restore previous MCP configuration: %w", restoreErr))
+}
+
+func (r *sessionMCPRuntime) Configs() []mcp.ServerConfig {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return cloneMCPServerConfigs(r.effective)
+}
+
+func (r *sessionMCPRuntime) Close() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return
+	}
+	r.closed = true
+	r.stopLocked()
+}
+
+func (r *sessionMCPRuntime) startLocked(requested []mcp.ServerConfig) ([]*mcp.Client, []mcp.ServerConfig, error) {
+	cfg, effective := r.mergedConfig(requested)
+	clients, err := startMCPServers(r.ctx, cfg, r.workspaceRoot, r.registry, r.approver, r.tokenProvider, r.stderr)
+	return clients, effective, err
+}
+
+func (r *sessionMCPRuntime) stopLocked() {
+	names := registeredMCPToolNames(r.registry)
+	if len(names) > 0 {
+		_, _ = r.registry.Replace(names, nil)
+	}
+	for _, client := range r.clients {
+		_ = client.Close()
+	}
+	r.clients = nil
+}
+
+func (r *sessionMCPRuntime) mergedConfig(requested []mcp.ServerConfig) (config.Config, []mcp.ServerConfig) {
+	cfg := r.base
+	cfg.MCPServers = cloneMCPConfigMap(r.base.MCPServers)
+	for _, server := range requested {
+		cfg.MCPServers[server.Name] = config.MCPServerConfig{
+			Type: server.Type, Command: server.Command, Args: append([]string(nil), server.Args...),
+			Env: cloneStringsMap(server.Env), URL: server.URL, Headers: cloneStringsMap(server.Headers),
+		}
+	}
+	names := make([]string, 0, len(cfg.MCPServers))
+	for name, server := range cfg.MCPServers {
+		if server.IsEnabled() {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	effective := make([]mcp.ServerConfig, 0, len(names))
+	for _, name := range names {
+		server := cfg.MCPServers[name]
+		effective = append(effective, mcp.ServerConfig{
+			Type: server.Type, Name: name, Command: server.Command, Args: append([]string(nil), server.Args...),
+			Env: cloneStringsMap(server.Env), URL: server.URL, Headers: cloneStringsMap(server.Headers),
+		})
+	}
+	return cfg, effective
+}
+
+func registeredMCPToolNames(registry *tools.Registry) []string {
+	var names []string
+	for _, tool := range registry.SnapshotTools() {
+		marker, ok := tool.(interface{ MCPServerName() string })
+		if ok && marker.MCPServerName() != "" {
+			names = append(names, tool.Definition().Name)
+		}
+	}
+	return names
+}
+
+func cloneMCPConfigMap(source map[string]config.MCPServerConfig) map[string]config.MCPServerConfig {
+	cloned := make(map[string]config.MCPServerConfig, len(source))
+	for name, server := range source {
+		server.Args = append([]string(nil), server.Args...)
+		server.Env = cloneStringsMap(server.Env)
+		server.Headers = cloneStringsMap(server.Headers)
+		cloned[name] = server
+	}
+	return cloned
+}
+
+func cloneMCPServerConfigs(source []mcp.ServerConfig) []mcp.ServerConfig {
+	cloned := make([]mcp.ServerConfig, len(source))
+	for index, server := range source {
+		server.Args = append([]string(nil), server.Args...)
+		server.Env = cloneStringsMap(server.Env)
+		server.Headers = cloneStringsMap(server.Headers)
+		cloned[index] = server
+	}
+	return cloned
+}
+
+func cloneStringsMap(source map[string]string) map[string]string {
+	if source == nil {
+		return nil
+	}
+	cloned := make(map[string]string, len(source))
+	for key, value := range source {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func mcpHTTPHeaders(server config.MCPServerConfig) map[string]string {

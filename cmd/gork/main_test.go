@@ -21,10 +21,48 @@ import (
 	"github.com/lookcorner/go-cli/internal/mcp"
 	"github.com/lookcorner/go-cli/internal/tools"
 	"github.com/lookcorner/go-cli/internal/version"
+	"github.com/lookcorner/go-cli/internal/workspace"
 )
 
 type samplingStreamer struct {
 	request api.ResponseRequest
+}
+
+func TestSessionMCPRuntimeMergesAndRestoresConfiguration(t *testing.T) {
+	disabled := false
+	runtime := &sessionMCPRuntime{base: config.Config{MCPServers: map[string]config.MCPServerConfig{
+		"base":     {Command: "base-server"},
+		"disabled": {Command: "disabled-server", Enabled: &disabled},
+	}}}
+	_, effective := runtime.mergedConfig([]mcp.ServerConfig{
+		{Name: "base", Command: "client-override"},
+		{Name: "extra", Command: "extra-server"},
+	})
+	if len(effective) != 2 || effective[0].Name != "base" || effective[0].Command != "client-override" || effective[1].Name != "extra" {
+		t.Fatalf("unexpected effective MCP configuration: %#v", effective)
+	}
+
+	root := t.TempDir()
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, nil)
+	live := newSessionMCPRuntime(context.Background(), config.Config{}, root, registry, nil, nil, io.Discard)
+	defer func() {
+		live.Close()
+		_ = registry.Close()
+	}()
+	if err := live.Update(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	err = live.Update(context.Background(), []mcp.ServerConfig{{Name: "broken", Command: filepath.Join(root, "missing-server")}})
+	if err == nil {
+		t.Fatal("invalid MCP update unexpectedly succeeded")
+	}
+	if configs := live.Configs(); len(configs) != 0 {
+		t.Fatalf("failed update replaced previous MCP configuration: %#v", configs)
+	}
 }
 
 func TestDiscoverSkillsLoadsConfiguredPlugin(t *testing.T) {
