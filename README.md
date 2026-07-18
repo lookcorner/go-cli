@@ -194,8 +194,9 @@ Use `--tui` for the full-screen interface:
 ./gork --tui --workspace .
 ```
 
-The TUI streams model output as it arrives, keeps a scrollable transcript,
-supports Unicode input, displays tool status, cancels the current turn with
+The TUI streams model output as it arrives, renders headings, emphasis, links,
+lists, quotes, and inline or fenced code, and keeps a scrollable transcript.
+It supports Unicode input, displays tool status, cancels the current turn with
 Ctrl-C, and presents write/Shell/MCP approval prompts inside the alternate
 screen. Page Up/Page Down scroll, Ctrl-Q exits, and an optional prompt argument
 starts the first turn immediately. When providers report usage, the status line

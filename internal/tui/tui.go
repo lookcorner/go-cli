@@ -324,7 +324,7 @@ func (m *model) View() tea.View {
 	width := max(m.width, 20)
 	header := fmt.Sprintf("\x1b[1m Gork Go\x1b[0m  \x1b[2m%s · %s\x1b[0m", truncate(m.modelName, 24), truncate(m.workspace, max(width-45, 10)))
 	header = padRight(truncateANSIUnsafe(header, width), width)
-	contentLines := wrapText(m.transcript.String(), width)
+	contentLines := renderMarkdown(m.transcript.String(), width)
 	visible := sliceFromBottom(contentLines, m.contentHeight(), m.scroll)
 	body := strings.Join(visible, "\n")
 	for len(visible) < m.contentHeight() {
@@ -358,26 +358,6 @@ func cleanStatus(value string) string {
 	value = strings.TrimSpace(value)
 	value = strings.TrimPrefix(value, "[gork]")
 	return strings.TrimSpace(strings.ReplaceAll(value, "\n", " "))
-}
-
-func wrapText(value string, width int) []string {
-	if width < 1 {
-		width = 1
-	}
-	var lines []string
-	for _, logical := range strings.Split(value, "\n") {
-		runes := []rune(logical)
-		if len(runes) == 0 {
-			lines = append(lines, "")
-			continue
-		}
-		for len(runes) > width {
-			lines = append(lines, string(runes[:width]))
-			runes = runes[width:]
-		}
-		lines = append(lines, string(runes))
-	}
-	return lines
 }
 
 func sliceFromBottom(lines []string, height, scroll int) []string {
