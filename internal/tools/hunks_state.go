@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,10 +15,13 @@ import (
 const maxHunkStateBytes = 8 << 20
 
 type hunkStateFile struct {
-	Version    int                             `json:"version"`
-	AgentHunks map[string]hunkAttributionState `json:"agentHunks"`
-	Accepted   []string                        `json:"accepted"`
-	Stats      HunkSessionStats                `json:"stats"`
+	Version     int                             `json:"version"`
+	Head        string                          `json:"head,omitempty"`
+	HeadLogSize int64                           `json:"headLogSize,omitempty"`
+	AgentHunks  map[string]hunkAttributionState `json:"agentHunks"`
+	AgentFiles  []string                        `json:"agentFiles,omitempty"`
+	Accepted    []string                        `json:"accepted"`
+	Stats       HunkSessionStats                `json:"stats"`
 }
 
 type hunkAttributionState struct {
@@ -57,6 +61,12 @@ func (t *HunkTracker) configureState(path string) error {
 		}
 		t.agentHunks[key] = attribution
 	}
+	t.agentFiles = make(map[string]bool, len(stored.AgentFiles))
+	for _, path := range stored.AgentFiles {
+		if path != "" {
+			t.agentFiles[path] = true
+		}
+	}
 	t.accepted = make(map[string]bool, len(stored.Accepted))
 	for _, id := range stored.Accepted {
 		if id != "" {
@@ -64,6 +74,17 @@ func (t *HunkTracker) configureState(path string) error {
 		}
 	}
 	t.stats = stored.Stats
+	currentHead, currentHeadLogSize := t.currentGitIdentity(context.Background())
+	if currentHead != "" && gitIdentityChanged(stored.Head, stored.HeadLogSize, currentHead, currentHeadLogSize) {
+		t.agentHunks = make(map[string]hunkAttribution)
+		t.accepted = make(map[string]bool)
+	}
+	t.head = currentHead
+	t.headLogSize = currentHeadLogSize
+	if t.head == "" {
+		t.head = stored.Head
+		t.headLogSize = stored.HeadLogSize
+	}
 	t.statePath = path
 	return nil
 }
@@ -77,8 +98,8 @@ func (t *HunkTracker) saveState() error {
 	t.mu.RLock()
 	path := t.statePath
 	stored := hunkStateFile{
-		Version: 1, AgentHunks: make(map[string]hunkAttributionState, len(t.agentHunks)),
-		Accepted: make([]string, 0, len(t.accepted)), Stats: t.stats,
+		Version: 1, Head: t.head, HeadLogSize: t.headLogSize, AgentHunks: make(map[string]hunkAttributionState, len(t.agentHunks)),
+		AgentFiles: make([]string, 0, len(t.agentFiles)), Accepted: make([]string, 0, len(t.accepted)), Stats: t.stats,
 	}
 	for key, item := range t.agentHunks {
 		state := hunkAttributionState{CreatedAt: item.createdAt}
@@ -91,11 +112,15 @@ func (t *HunkTracker) saveState() error {
 	for id := range t.accepted {
 		stored.Accepted = append(stored.Accepted, id)
 	}
+	for path := range t.agentFiles {
+		stored.AgentFiles = append(stored.AgentFiles, path)
+	}
 	t.mu.RUnlock()
 	if path == "" {
 		return nil
 	}
 	sort.Strings(stored.Accepted)
+	sort.Strings(stored.AgentFiles)
 	data, err := json.MarshalIndent(stored, "", "  ")
 	if err != nil {
 		return err

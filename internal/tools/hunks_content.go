@@ -60,26 +60,17 @@ func (t *HunkTracker) FileData(ctx context.Context, path, source string) (HunkFi
 }
 
 func (t *HunkTracker) AllFileContents(ctx context.Context) ([]FileContentEntry, error) {
+	t.syncHead(ctx)
 	paths, err := t.changedPaths(ctx)
 	if err != nil {
 		return nil, err
 	}
 	staged := t.stagedPaths(ctx)
-	hunks, err := t.rawHunks(ctx, "")
-	if err != nil {
-		return nil, err
-	}
-	agentPaths := make(map[string]bool)
-	for _, hunk := range hunks {
-		if hunk.Source == "agent" {
-			agentPaths[hunk.Path] = true
-		}
-	}
 	entries := make([]FileContentEntry, 0, len(paths))
 	for _, path := range paths {
 		entries = append(entries, FileContentEntry{
 			Path: path, Baseline: t.baselineContent(ctx, path), Current: t.currentContent(path),
-			IsAgentFile: agentPaths[path], Staged: staged[path],
+			IsAgentFile: t.isAgentFile(path), Staged: staged[path],
 		})
 	}
 	return entries, nil

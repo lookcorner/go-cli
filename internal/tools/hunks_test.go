@@ -261,6 +261,10 @@ func TestHunkTrackerStateSurvivesRegistryRestart(t *testing.T) {
 	if err != nil || summary.Stats.AcceptedHunks != 1 || summary.PendingHunks != 1 {
 		t.Fatalf("restored summary=%#v err=%v", summary, err)
 	}
+	contents, err := second.HunkTracker().AllFileContents(context.Background())
+	if err != nil || len(contents) != 2 || !contents[0].IsAgentFile || !contents[1].IsAgentFile {
+		t.Fatalf("restored agent files=%#v err=%v", contents, err)
+	}
 }
 
 func TestHunkTrackerStateRejectsCorruptFile(t *testing.T) {
@@ -278,6 +282,43 @@ func TestHunkTrackerStateRejectsCorruptFile(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(artifactDir, "hunks.json"))
 	if err != nil || string(data) != "not json" {
 		t.Fatalf("corrupt state was overwritten: %q err=%v", data, err)
+	}
+}
+
+func TestHunkTrackerHeadChangeDropsStaleHunkIdentity(t *testing.T) {
+	root, registry := newHunkFixture(t, map[string]string{"tracked.txt": "before\n"})
+	originalHead := runGitOutput(t, root, "rev-parse", "HEAD")
+	promptIndex := 0
+	registry.SetRewindStore(nil, func() int { return promptIndex })
+	if _, err := registry.Execute(context.Background(), "edit_file", json.RawMessage(`{
+		"path":"tracked.txt","old_text":"before","new_text":"after"
+	}`)); err != nil {
+		t.Fatal(err)
+	}
+	hunks, err := registry.HunkTracker().Hunks(context.Background(), "tracked.txt", "agent")
+	if err != nil || len(hunks) != 1 {
+		t.Fatalf("agent hunks=%#v err=%v", hunks, err)
+	}
+	if _, err := registry.HunkTracker().HunkAction(context.Background(), hunks[0].ID, "accept"); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, root, "add", "tracked.txt")
+	runGit(t, root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "accepted")
+	runGit(t, root, "checkout", "-q", "--detach", originalHead)
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("after\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hunks, err = registry.HunkTracker().Hunks(context.Background(), "tracked.txt", "all")
+	if err != nil || len(hunks) != 1 || hunks[0].Source != "external" {
+		t.Fatalf("stale identity survived HEAD change: %#v err=%v", hunks, err)
+	}
+	files, err := registry.HunkTracker().Files(context.Background())
+	if err != nil || len(files) != 1 || !files[0].IsAgentFile {
+		t.Fatalf("agent file identity was lost: %#v err=%v", files, err)
+	}
+	summary, err := registry.HunkTracker().Summary(context.Background())
+	if err != nil || summary.Stats.AcceptedHunks != 1 || summary.UnattributedPending != 1 {
+		t.Fatalf("HEAD-change summary=%#v err=%v", summary, err)
 	}
 }
 
@@ -416,4 +457,15 @@ func runGit(t *testing.T, dir string, args ...string) {
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v: %s", args, err, output)
 	}
+}
+
+func runGitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	command := exec.Command("git", args...)
+	command.Dir = dir
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v: %s", args, err, output)
+	}
+	return strings.TrimSpace(string(output))
 }

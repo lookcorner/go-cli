@@ -78,9 +78,12 @@ type HunkTracker struct {
 	ws          *workspace.Workspace
 	mu          sync.RWMutex
 	agentHunks  map[string]hunkAttribution
+	agentFiles  map[string]bool
 	promptIndex func() int
 	accepted    map[string]bool
 	stats       HunkSessionStats
+	head        string
+	headLogSize int64
 	statePath   string
 	actionMu    sync.Mutex
 }
@@ -92,7 +95,10 @@ type hunkAttribution struct {
 }
 
 func NewHunkTracker(ws *workspace.Workspace) *HunkTracker {
-	return &HunkTracker{ws: ws, agentHunks: make(map[string]hunkAttribution), accepted: make(map[string]bool)}
+	return &HunkTracker{
+		ws: ws, agentHunks: make(map[string]hunkAttribution), agentFiles: make(map[string]bool),
+		accepted: make(map[string]bool),
+	}
 }
 
 func (t *HunkTracker) setPromptIndex(current func() int) {
@@ -140,6 +146,7 @@ func (t *HunkTracker) markAgentChanges(ctx context.Context, path string, before 
 		}
 	}
 	t.mu.Lock()
+	t.agentFiles[path] = true
 	for _, hunk := range hunks {
 		key := hunkAttributionKey(hunk)
 		if !before[key] {
@@ -215,6 +222,7 @@ func (t *HunkTracker) entryRelativePath(path string) (string, error) {
 }
 
 func (t *HunkTracker) rawHunks(ctx context.Context, path string) ([]Hunk, error) {
+	t.syncHead(ctx)
 	unstaged, err := t.gitDiff(ctx, false, path)
 	if err != nil {
 		return nil, err
@@ -228,7 +236,15 @@ func (t *HunkTracker) rawHunks(ctx context.Context, path string) ([]Hunk, error)
 	if err != nil {
 		return nil, err
 	}
-	return append(hunks, untracked...), nil
+	hunks = append(hunks, untracked...)
+	t.mu.Lock()
+	for _, hunk := range hunks {
+		if hunk.Source == "agent" {
+			t.agentFiles[hunk.Path] = true
+		}
+	}
+	t.mu.Unlock()
+	return hunks, nil
 }
 
 // HunkAction accepts or rejects one currently visible hunk. Accepting hides
@@ -457,13 +473,12 @@ func (t *HunkTracker) Files(ctx context.Context) ([]HunkFile, error) {
 	for _, hunk := range hunks {
 		item := byPath[hunk.Path]
 		if item == nil {
-			item = &HunkFile{Path: hunk.Path, Staged: staged[hunk.Path]}
+			item = &HunkFile{Path: hunk.Path, Staged: staged[hunk.Path], IsAgentFile: t.isAgentFile(hunk.Path)}
 			byPath[hunk.Path] = item
 		}
 		item.HunkCount++
 		item.Additions += hunk.NewLines
 		item.Deletions += hunk.OldLines
-		item.IsAgentFile = item.IsAgentFile || hunk.Source == "agent"
 	}
 	files := make([]HunkFile, 0, len(byPath))
 	for _, item := range byPath {
@@ -471,6 +486,57 @@ func (t *HunkTracker) Files(ctx context.Context) ([]HunkFile, error) {
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	return files, nil
+}
+
+func (t *HunkTracker) isAgentFile(path string) bool {
+	t.mu.RLock()
+	tracked := t.agentFiles[path]
+	t.mu.RUnlock()
+	return tracked
+}
+
+func (t *HunkTracker) syncHead(ctx context.Context) {
+	head, headLogSize := t.currentGitIdentity(ctx)
+	if head == "" {
+		return
+	}
+	t.mu.Lock()
+	if gitIdentityChanged(t.head, t.headLogSize, head, headLogSize) {
+		t.agentHunks = make(map[string]hunkAttribution)
+		t.accepted = make(map[string]bool)
+	}
+	t.head = head
+	t.headLogSize = headLogSize
+	t.mu.Unlock()
+}
+
+func gitIdentityChanged(oldHead string, oldLogSize int64, head string, logSize int64) bool {
+	return oldHead != "" && (oldHead != head || oldLogSize != 0 && logSize != 0 && oldLogSize != logSize)
+}
+
+func (t *HunkTracker) currentGitIdentity(ctx context.Context) (string, int64) {
+	command := exec.CommandContext(ctx, "git", "rev-parse", "--verify", "HEAD^{commit}")
+	command.Dir = t.ws.Root()
+	output, err := command.Output()
+	if err != nil {
+		return "", 0
+	}
+	head := strings.TrimSpace(string(output))
+	logCommand := exec.CommandContext(ctx, "git", "rev-parse", "--git-path", "logs/HEAD")
+	logCommand.Dir = t.ws.Root()
+	logOutput, err := logCommand.Output()
+	if err != nil {
+		return head, 0
+	}
+	logPath := strings.TrimSpace(string(logOutput))
+	if !filepath.IsAbs(logPath) {
+		logPath = filepath.Join(t.ws.Root(), logPath)
+	}
+	info, err := os.Stat(logPath)
+	if err != nil {
+		return head, 0
+	}
+	return head, info.Size()
 }
 
 func (t *HunkTracker) Summary(ctx context.Context) (HunkSessionSummary, error) {
