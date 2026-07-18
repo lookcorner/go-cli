@@ -57,3 +57,18 @@ func TestExternalProviderPersistsAndRefreshesRejectedToken(t *testing.T) {
 		t.Fatalf("cached token=%q err=%v", token, err)
 	}
 }
+
+func TestExternalProviderRejectsWrongTeamBeforePersist(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "auth.json")
+	token := testJWT(map[string]string{"principal_id": "team-wrong"})
+	provider := ExternalProvider{
+		Command: "printf '%s' '" + token + "'", Path: path, Scope: "scope",
+		AllowedTeams: []string{"team-good"},
+	}
+	if _, err := provider.Resolve(context.Background(), ""); err == nil || !strings.Contains(err.Error(), "team-wrong") {
+		t.Fatalf("wrong-team provider error=%v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("rejected credential was persisted: %v", err)
+	}
+}

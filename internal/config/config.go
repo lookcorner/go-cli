@@ -37,6 +37,11 @@ type Config struct {
 	WebFetch                    WebFetchConfig             `json:"web_fetch,omitempty"`
 	AuthProviderCommand         string                     `json:"auth_provider_command,omitempty"`
 	AuthTokenTTL                time.Duration              `json:"-"`
+	AuthPrincipalType           string                     `json:"auth_principal_type,omitempty"`
+	AuthPrincipalID             string                     `json:"auth_principal_id,omitempty"`
+	ForceLoginTeams             []string                   `json:"force_login_team_uuid,omitempty"`
+	ForceLoginTeamConfigured    bool                       `json:"-"`
+	DisableAPIKeyAuth           bool                       `json:"disable_api_key_auth,omitempty"`
 }
 
 type WebSearchConfig struct {
@@ -131,6 +136,7 @@ type fileConfig struct {
 	Skills              SkillsConfig               `json:"skills,omitempty" toml:"skills"`
 	AuthProviderCommand string                     `json:"auth_provider_command,omitempty" toml:"auth_provider_command"`
 	AuthTokenTTL        int64                      `json:"auth_token_ttl,omitempty" toml:"auth_token_ttl"`
+	GrokComConfig       fileGrokComConfig          `json:"grok_com_config,omitempty" toml:"grok_com_config"`
 	Models              struct {
 		Default   string `toml:"default"`
 		WebSearch string `toml:"web_search"`
@@ -139,6 +145,17 @@ type fileConfig struct {
 	Toolset      struct {
 		WebFetch fileWebFetchConfig `json:"web_fetch,omitempty" toml:"web_fetch"`
 	} `json:"toolset,omitempty" toml:"toolset"`
+}
+
+type fileGrokComConfig struct {
+	AuthProviderCommand string `json:"auth_provider_command,omitempty" toml:"auth_provider_command"`
+	AuthTokenTTL        int64  `json:"auth_token_ttl,omitempty" toml:"auth_token_ttl"`
+	ForceLoginTeamUUID  any    `json:"force_login_team_uuid,omitempty" toml:"force_login_team_uuid"`
+	DisableAPIKeyAuth   *bool  `json:"disable_api_key_auth,omitempty" toml:"disable_api_key_auth"`
+	OAuth2              struct {
+		PrincipalType string `json:"principal_type,omitempty" toml:"principal_type"`
+		PrincipalID   string `json:"principal_id,omitempty" toml:"principal_id"`
+	} `json:"oauth2,omitempty" toml:"oauth2"`
 }
 
 type fileWebFetchConfig struct {
@@ -266,9 +283,25 @@ func Load(path string) (Config, error) {
 		applyPruningConfig(&cfg.Pruning, disk.Compaction.Pruning)
 		applyCompatConfig(&cfg.Compat, disk.Compat)
 		cfg.Skills = disk.Skills
-		cfg.AuthProviderCommand = disk.AuthProviderCommand
-		if disk.AuthTokenTTL > 0 {
-			cfg.AuthTokenTTL = time.Duration(disk.AuthTokenTTL) * time.Second
+		cfg.AuthProviderCommand = disk.GrokComConfig.AuthProviderCommand
+		if cfg.AuthProviderCommand == "" {
+			cfg.AuthProviderCommand = disk.AuthProviderCommand
+		}
+		authTokenTTL := disk.GrokComConfig.AuthTokenTTL
+		if authTokenTTL == 0 {
+			authTokenTTL = disk.AuthTokenTTL
+		}
+		if authTokenTTL > 0 {
+			cfg.AuthTokenTTL = time.Duration(authTokenTTL) * time.Second
+		}
+		cfg.AuthPrincipalType = strings.TrimSpace(disk.GrokComConfig.OAuth2.PrincipalType)
+		cfg.AuthPrincipalID = strings.TrimSpace(disk.GrokComConfig.OAuth2.PrincipalID)
+		cfg.ForceLoginTeams, cfg.ForceLoginTeamConfigured, err = forceLoginTeams(disk.GrokComConfig.ForceLoginTeamUUID)
+		if err != nil {
+			return Config{}, err
+		}
+		if disk.GrokComConfig.DisableAPIKeyAuth != nil {
+			cfg.DisableAPIKeyAuth = *disk.GrokComConfig.DisableAPIKeyAuth
 		}
 		if disk.HTTPTimeout != "" {
 			d, err := time.ParseDuration(disk.HTTPTimeout)
@@ -367,13 +400,58 @@ func applyEnv(cfg *Config) {
 	if value := strings.TrimSpace(os.Getenv("GROK_AUTH_PROVIDER_COMMAND")); value != "" {
 		cfg.AuthProviderCommand = value
 	}
+	if value := strings.TrimSpace(os.Getenv("GROK_OAUTH2_PRINCIPAL_TYPE")); value != "" {
+		cfg.AuthPrincipalType = value
+	}
+	if value := strings.TrimSpace(os.Getenv("GROK_OAUTH2_PRINCIPAL_ID")); value != "" {
+		cfg.AuthPrincipalID = value
+	}
 	if value := strings.TrimSpace(os.Getenv("GROK_AUTH_TOKEN_TTL")); value != "" {
 		if seconds, err := strconv.ParseInt(value, 10, 64); err == nil && seconds > 0 {
 			cfg.AuthTokenTTL = time.Duration(seconds) * time.Second
 		}
 	}
+	if value := strings.TrimSpace(os.Getenv("GROK_DISABLE_API_KEY_AUTH")); value != "" {
+		if enabled, ok := envBoolValue(value); ok && enabled {
+			cfg.DisableAPIKeyAuth = true
+		}
+	}
 	applyCompatEnv(&cfg.Compat.Cursor, "CURSOR")
 	applyCompatEnv(&cfg.Compat.Claude, "CLAUDE")
+}
+
+func forceLoginTeams(value any) ([]string, bool, error) {
+	switch typed := value.(type) {
+	case nil:
+		return nil, false, nil
+	case string:
+		return []string{typed}, true, nil
+	case []string:
+		return append([]string(nil), typed...), true, nil
+	case []any:
+		teams := make([]string, 0, len(typed))
+		for _, item := range typed {
+			team, ok := item.(string)
+			if !ok {
+				return nil, false, errors.New("force_login_team_uuid must be a string or array of strings")
+			}
+			teams = append(teams, team)
+		}
+		return teams, true, nil
+	default:
+		return nil, false, errors.New("force_login_team_uuid must be a string or array of strings")
+	}
+}
+
+func envBoolValue(value string) (bool, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "on", "enabled":
+		return true, true
+	case "0", "false", "no", "off", "disabled", "":
+		return false, true
+	default:
+		return false, false
+	}
 }
 
 func (c Config) WebSearchEndpoint() (WebSearchConfig, bool) {

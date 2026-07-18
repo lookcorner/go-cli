@@ -27,10 +27,13 @@ var defaultScopes = []string{
 }
 
 type Config struct {
-	Issuer   string
-	ClientID string
-	Scopes   []string
-	Audience string
+	Issuer        string
+	ClientID      string
+	Scopes        []string
+	Audience      string
+	PrincipalType string
+	PrincipalID   string
+	AllowedTeams  []string
 }
 
 func DefaultConfig() Config {
@@ -60,6 +63,8 @@ func DefaultConfig() Config {
 	return Config{
 		Issuer: strings.TrimRight(strings.TrimSpace(issuer), "/"), ClientID: strings.TrimSpace(clientID),
 		Scopes: append([]string(nil), scopes...), Audience: audience,
+		PrincipalType: strings.TrimSpace(os.Getenv("GROK_OAUTH2_PRINCIPAL_TYPE")),
+		PrincipalID:   strings.TrimSpace(os.Getenv("GROK_OAUTH2_PRINCIPAL_ID")),
 	}
 }
 
@@ -76,6 +81,9 @@ type Credential struct {
 	Issuer        string     `json:"oidc_issuer,omitempty"`
 	ClientID      string     `json:"oidc_client_id,omitempty"`
 	TokenEndpoint string     `json:"token_endpoint,omitempty"`
+	PrincipalType string     `json:"principal_type,omitempty"`
+	PrincipalID   string     `json:"principal_id,omitempty"`
+	TeamID        string     `json:"team_id,omitempty"`
 }
 
 type DeviceCode struct {
@@ -254,6 +262,9 @@ func (c *Client) ResolveRejected(ctx context.Context, path string, cfg Config, r
 		if err != nil {
 			return "", err
 		}
+		if err := enforceCredential(cfg, credential); err != nil {
+			return "", err
+		}
 		if credential.ExpiresAt == nil || credential.ExpiresAt.After(c.Now().Add(5*time.Minute)) {
 			return credential.Key, nil
 		}
@@ -265,6 +276,9 @@ func (c *Client) ResolveRejected(ctx context.Context, path string, cfg Config, r
 	defer lock.release()
 	credential, err := Load(path, cfg.Scope())
 	if err != nil {
+		return "", err
+	}
+	if err := enforceCredential(cfg, credential); err != nil {
 		return "", err
 	}
 	if rejectedToken != "" && credential.Key != rejectedToken {
@@ -324,10 +338,18 @@ func (c *Client) exchangeAt(ctx context.Context, cfg Config, endpoint string, fo
 			expiresAt = &value
 		}
 		userID, email := jwtIdentity(wire.IDToken)
-		return Credential{
+		credential := Credential{
 			Key: wire.AccessToken, AuthMode: "oidc", CreateTime: now, UserID: userID, Email: email,
 			RefreshToken: wire.RefreshToken, ExpiresAt: expiresAt, Issuer: cfg.Issuer, ClientID: cfg.ClientID,
-		}, "", nil
+		}
+		credential.PrincipalType, credential.PrincipalID, credential.TeamID = jwtPrincipal(wire.AccessToken)
+		if credential.PrincipalType == "Team" && credential.TeamID == "" {
+			credential.TeamID = credential.PrincipalID
+		}
+		if err := enforceCredential(cfg, credential); err != nil {
+			return Credential{}, "", err
+		}
+		return credential, "", nil
 	}
 	var wire struct {
 		Error string `json:"error"`
@@ -390,6 +412,57 @@ func jwtIdentity(token string) (string, string) {
 		return "", ""
 	}
 	return claims.Subject, claims.Email
+}
+
+func jwtPrincipal(token string) (string, string, string) {
+	parts := strings.Split(token, ".")
+	if len(parts) < 2 {
+		return "", "", ""
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "", "", ""
+	}
+	var claims struct {
+		PrincipalType      string `json:"principal_type"`
+		PrincipalTypeCamel string `json:"principalType"`
+		PrincipalID        string `json:"principal_id"`
+		PrincipalIDCamel   string `json:"principalId"`
+		TeamID             string `json:"team_id"`
+	}
+	if json.Unmarshal(payload, &claims) != nil {
+		return "", "", ""
+	}
+	if claims.PrincipalType == "" {
+		claims.PrincipalType = claims.PrincipalTypeCamel
+	}
+	if claims.PrincipalID == "" {
+		claims.PrincipalID = claims.PrincipalIDCamel
+	}
+	return claims.PrincipalType, claims.PrincipalID, claims.TeamID
+}
+
+func enforceCredential(cfg Config, credential Credential) error {
+	if cfg.AllowedTeams == nil {
+		return nil
+	}
+	if len(cfg.AllowedTeams) == 0 {
+		return errors.New("login is blocked: force_login_team_uuid permits no teams")
+	}
+	_, actual, _ := jwtPrincipal(credential.Key)
+	for _, allowed := range cfg.AllowedTeams {
+		if actual == allowed {
+			return nil
+		}
+	}
+	expected := "team " + cfg.AllowedTeams[0]
+	if len(cfg.AllowedTeams) > 1 {
+		expected = "one of teams: " + strings.Join(cfg.AllowedTeams, ", ")
+	}
+	if actual == "" {
+		actual = "no team principal"
+	}
+	return fmt.Errorf("this deployment requires logging into %s; login returned %s", expected, actual)
 }
 
 func sleepContext(ctx context.Context, duration time.Duration) error {

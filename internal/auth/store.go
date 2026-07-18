@@ -128,7 +128,7 @@ func mergeCredential(existing json.RawMessage, credential Credential) (json.RawM
 	if err := json.Unmarshal(data, &updates); err != nil {
 		return nil, err
 	}
-	for _, name := range []string{"email", "refresh_token", "expires_at", "oidc_issuer", "oidc_client_id", "token_endpoint"} {
+	for _, name := range []string{"email", "refresh_token", "expires_at", "oidc_issuer", "oidc_client_id", "token_endpoint", "principal_type", "principal_id", "team_id"} {
 		if _, ok := updates[name]; !ok {
 			delete(fields, name)
 		}

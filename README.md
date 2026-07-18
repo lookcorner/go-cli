@@ -55,12 +55,19 @@ requests retry once after a 401 using a freshly resolved credential; concurrent
 401s reuse the first successful refresh.
 
 For managed credential brokers, set `GROK_AUTH_PROVIDER_COMMAND` or
-`auth_provider_command` in `config.toml`. The command writes either a bare token
+`auth_provider_command` under `[grok_com_config]` in `config.toml`. The command writes either a bare token
 or `{"access_token":"...","refresh_token":"...","expires_in":3600}` to stdout;
 stderr remains visible for login instructions. `GROK_AUTH_TOKEN_TTL` (or
 `auth_token_ttl`) gives bare tokens a proactive refresh lifetime. Refresh calls
 receive `GROK_AUTH_EXPIRED=1` and are limited to five seconds.
 Use `gork logout` to remove only the current issuer/client credential scope.
+
+`force_login_team_uuid` under `[grok_com_config]` accepts one team UUID or an array of
+allowed UUIDs. It rejects personal/wrong-team tokens before persistence and
+disables API-key authentication so the policy cannot be bypassed. OAuth2
+`principal_type` and `principal_id` only preselect the consent-screen identity;
+they do not enforce membership by themselves. An empty allowed-team array
+blocks every login.
 
 The default API base URL is `https://api.x.ai/v1`. Override it with
 `GORK_BASE_URL`, `--base-url`, or a config file. The default path matches Gork

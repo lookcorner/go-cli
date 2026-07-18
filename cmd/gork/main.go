@@ -146,6 +146,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if opts.maxSteps > 0 {
 		cfg.MaxSteps = opts.maxSteps
 	}
+	if cfg.DisableAPIKeyAuth || cfg.ForceLoginTeamConfigured {
+		cfg.APIKey = ""
+	}
 	var tokenProvider api.TokenProvider
 	if cfg.APIKey == "" && isXAIBaseURL(cfg.BaseURL) {
 		path, pathErr := auth.DefaultPath()
@@ -154,9 +157,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		}
 		authClient := auth.NewClient(&http.Client{Timeout: cfg.HTTPTimeout})
 		authConfig := auth.DefaultConfig()
+		applyAuthPolicy(&authConfig, cfg)
 		external := auth.ExternalProvider{
 			Command: cfg.AuthProviderCommand, Path: path, Scope: authConfig.Scope(),
-			TokenTTL: cfg.AuthTokenTTL, Stderr: stderr,
+			TokenTTL: cfg.AuthTokenTTL, Stderr: stderr, AllowedTeams: authConfig.AllowedTeams,
 		}
 		resolveToken := func(ctx context.Context, rejectedToken string) (string, error) {
 			token, err := authClient.ResolveRejected(ctx, path, authConfig, rejectedToken)
@@ -365,7 +369,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 
 func runLogin(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	cfg := auth.DefaultConfig()
-	var authFile, scopes string
+	var authFile, configPath, scopes string
 	var oauth, deviceAuth, noBrowser bool
 	flags := flag.NewFlagSet("gork login", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -377,6 +381,7 @@ func runLogin(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	flags.StringVar(&scopes, "scopes", strings.Join(cfg.Scopes, " "), "space-separated OAuth scopes")
 	flags.StringVar(&cfg.Audience, "audience", cfg.Audience, "OIDC audience")
 	flags.StringVar(&authFile, "auth-file", "", "credential store path")
+	flags.StringVar(&configPath, "config", "", "path to config file")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -386,6 +391,11 @@ func runLogin(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if len(flags.Args()) > 0 {
 		return fmt.Errorf("unexpected login arguments: %s", strings.Join(flags.Args(), " "))
 	}
+	appConfig, err := config.Load(configPath)
+	if err != nil {
+		return err
+	}
+	applyAuthPolicy(&cfg, appConfig)
 	cfg.Issuer = strings.TrimRight(strings.TrimSpace(cfg.Issuer), "/")
 	cfg.ClientID = strings.TrimSpace(cfg.ClientID)
 	cfg.Scopes = strings.Fields(scopes)
@@ -471,6 +481,18 @@ func isTerminalInput(input io.Reader) bool {
 	}
 	info, err := file.Stat()
 	return err == nil && info.Mode()&os.ModeCharDevice != 0
+}
+
+func applyAuthPolicy(target *auth.Config, source config.Config) {
+	if source.AuthPrincipalType != "" {
+		target.PrincipalType = source.AuthPrincipalType
+	}
+	if source.AuthPrincipalID != "" {
+		target.PrincipalID = source.AuthPrincipalID
+	}
+	if source.ForceLoginTeamConfigured {
+		target.AllowedTeams = append([]string{}, source.ForceLoginTeams...)
+	}
 }
 
 func runLogout(args []string, stdout, stderr io.Writer) error {

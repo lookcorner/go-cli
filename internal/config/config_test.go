@@ -241,6 +241,43 @@ func TestExternalAuthConfigurationAndEnvironment(t *testing.T) {
 	}
 }
 
+func TestTeamAuthenticationPolicy(t *testing.T) {
+	t.Setenv("GROK_DISABLE_API_KEY_AUTH", "true")
+	t.Setenv("GROK_OAUTH2_PRINCIPAL_TYPE", "Team")
+	t.Setenv("GROK_OAUTH2_PRINCIPAL_ID", "team-env")
+	path := filepath.Join(t.TempDir(), "config.toml")
+	data := []byte(`
+[grok_com_config]
+force_login_team_uuid = ["team-a", "team-b"]
+disable_api_key_auth = false
+auth_provider_command = "printf nested-token"
+auth_token_ttl = 300
+
+[grok_com_config.oauth2]
+principal_type = "Personal"
+principal_id = "user-file"
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.ForceLoginTeamConfigured || strings.Join(cfg.ForceLoginTeams, ",") != "team-a,team-b" || !cfg.DisableAPIKeyAuth || cfg.AuthPrincipalType != "Team" || cfg.AuthPrincipalID != "team-env" || cfg.AuthProviderCommand != "printf nested-token" || cfg.AuthTokenTTL != 5*time.Minute {
+		t.Fatalf("team auth policy=%#v", cfg)
+	}
+	if teams, configured, err := forceLoginTeams("team-only"); err != nil || !configured || strings.Join(teams, ",") != "team-only" {
+		t.Fatalf("single team=%#v configured=%v err=%v", teams, configured, err)
+	}
+	if teams, configured, err := forceLoginTeams([]any{}); err != nil || !configured || teams == nil || len(teams) != 0 {
+		t.Fatalf("empty team policy=%#v configured=%v err=%v", teams, configured, err)
+	}
+	if _, _, err := forceLoginTeams(42); err == nil {
+		t.Fatal("invalid team policy was accepted")
+	}
+}
+
 func TestLoadJSONRemainsSupported(t *testing.T) {
 	t.Setenv("GORK_API_KEY", "")
 	t.Setenv("XAI_API_KEY", "")

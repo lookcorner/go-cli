@@ -29,6 +29,7 @@ type BrowserLogin struct {
 	nonce            string
 	codeVerifier     string
 	issuer           string
+	config           Config
 	httpClient       *http.Client
 	now              func() time.Time
 }
@@ -94,6 +95,12 @@ func (c *Client) StartBrowserLogin(ctx context.Context, cfg Config) (*BrowserLog
 	if cfg.Audience != "" {
 		query.Set("audience", cfg.Audience)
 	}
+	if cfg.PrincipalType != "" {
+		query.Set("principal_type", cfg.PrincipalType)
+	}
+	if cfg.PrincipalID != "" {
+		query.Set("principal_id", cfg.PrincipalID)
+	}
 	parsed.RawQuery = query.Encode()
 	return &BrowserLogin{
 		AuthorizationURL: parsed.String(), listener: listener, oauth: oauthConfig,
@@ -103,7 +110,7 @@ func (c *Client) StartBrowserLogin(ctx context.Context, cfg Config) (*BrowserLog
 				"RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384", "EdDSA",
 			},
 		}), state: state,
-		nonce: nonce, codeVerifier: codeVerifier, issuer: cfg.Issuer, httpClient: c.HTTP, now: c.Now,
+		nonce: nonce, codeVerifier: codeVerifier, issuer: cfg.Issuer, config: cfg, httpClient: c.HTTP, now: c.Now,
 	}, nil
 }
 
@@ -154,25 +161,39 @@ func (l *BrowserLogin) Complete(ctx context.Context, pastedInput io.Reader) (Cre
 		return Credential{}, fmt.Errorf("exchange OIDC authorization code: %w", err)
 	}
 	rawIDToken, _ := token.Extra("id_token").(string)
-	if rawIDToken == "" {
-		return Credential{}, errors.New("OIDC token response has no id_token")
-	}
-	idToken, err := l.verifier.Verify(exchangeCtx, rawIDToken)
-	if err != nil {
-		return Credential{}, fmt.Errorf("verify OIDC ID token: %w", err)
-	}
-	if subtle.ConstantTimeCompare([]byte(idToken.Nonce), []byte(l.nonce)) != 1 {
-		return Credential{}, errors.New("OIDC ID token nonce mismatch")
-	}
 	var claims struct {
 		Subject string `json:"sub"`
 		Email   string `json:"email"`
 	}
-	if err := idToken.Claims(&claims); err != nil {
-		return Credential{}, fmt.Errorf("decode OIDC ID token claims: %w", err)
+	actualPrincipalType, actualPrincipalID, tokenTeamID := jwtPrincipal(token.AccessToken)
+	principalType, principalID := actualPrincipalType, actualPrincipalID
+	if l.config.PrincipalType != "" {
+		principalType = l.config.PrincipalType
+		principalID = l.config.PrincipalID
 	}
-	if claims.Subject == "" {
-		return Credential{}, errors.New("OIDC ID token has no subject")
+	teamID := tokenTeamID
+	if principalType == "Team" && teamID == "" {
+		teamID = principalID
+	}
+	if principalType == "Team" && principalID != "" {
+		claims.Subject = principalID
+	} else {
+		if rawIDToken == "" {
+			return Credential{}, errors.New("OIDC token response has no id_token")
+		}
+		idToken, err := l.verifier.Verify(exchangeCtx, rawIDToken)
+		if err != nil {
+			return Credential{}, fmt.Errorf("verify OIDC ID token: %w", err)
+		}
+		if subtle.ConstantTimeCompare([]byte(idToken.Nonce), []byte(l.nonce)) != 1 {
+			return Credential{}, errors.New("OIDC ID token nonce mismatch")
+		}
+		if err := idToken.Claims(&claims); err != nil {
+			return Credential{}, fmt.Errorf("decode OIDC ID token claims: %w", err)
+		}
+		if claims.Subject == "" {
+			return Credential{}, errors.New("OIDC ID token has no subject")
+		}
 	}
 	created := l.now().UTC()
 	var expiresAt *time.Time
@@ -180,12 +201,17 @@ func (l *BrowserLogin) Complete(ctx context.Context, pastedInput io.Reader) (Cre
 		value := token.Expiry.UTC()
 		expiresAt = &value
 	}
-	return Credential{
+	credential := Credential{
 		Key: token.AccessToken, AuthMode: "oidc", CreateTime: created,
 		UserID: claims.Subject, Email: claims.Email, RefreshToken: token.RefreshToken,
 		ExpiresAt: expiresAt, Issuer: l.issuer, ClientID: l.oauth.ClientID,
-		TokenEndpoint: l.oauth.Endpoint.TokenURL,
-	}, nil
+		TokenEndpoint: l.oauth.Endpoint.TokenURL, PrincipalType: principalType,
+		PrincipalID: principalID, TeamID: teamID,
+	}
+	if err := enforceCredential(l.config, credential); err != nil {
+		return Credential{}, err
+	}
+	return credential, nil
 }
 
 func callbackHandler(callback chan<- loginCallback) http.Handler {

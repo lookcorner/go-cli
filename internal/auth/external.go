@@ -13,16 +13,17 @@ import (
 )
 
 type ExternalProvider struct {
-	Command  string
-	Path     string
-	Scope    string
-	TokenTTL time.Duration
-	Stderr   io.Writer
+	Command      string
+	Path         string
+	Scope        string
+	TokenTTL     time.Duration
+	Stderr       io.Writer
+	AllowedTeams []string
 }
 
 func (p ExternalProvider) Resolve(ctx context.Context, rejectedToken string) (string, error) {
 	credential, err := Load(p.Path, p.Scope)
-	if err == nil && rejectedToken == "" && credentialFresh(credential, time.Now()) {
+	if err == nil && enforceCredential(Config{AllowedTeams: p.AllowedTeams}, credential) == nil && rejectedToken == "" && credentialFresh(credential, time.Now()) {
 		return credential.Key, nil
 	}
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -36,10 +37,11 @@ func (p ExternalProvider) Resolve(ctx context.Context, rejectedToken string) (st
 
 	credential, err = Load(p.Path, p.Scope)
 	if err == nil {
-		if rejectedToken != "" && credential.Key != rejectedToken {
+		policyErr := enforceCredential(Config{AllowedTeams: p.AllowedTeams}, credential)
+		if policyErr == nil && rejectedToken != "" && credential.Key != rejectedToken {
 			return credential.Key, nil
 		}
-		if rejectedToken == "" && credentialFresh(credential, time.Now()) {
+		if policyErr == nil && rejectedToken == "" && credentialFresh(credential, time.Now()) {
 			return credential.Key, nil
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -48,6 +50,13 @@ func (p ExternalProvider) Resolve(ctx context.Context, rejectedToken string) (st
 
 	credential, err = p.run(ctx, rejectedToken != "" || err == nil)
 	if err != nil {
+		return "", err
+	}
+	credential.PrincipalType, credential.PrincipalID, credential.TeamID = jwtPrincipal(credential.Key)
+	if credential.PrincipalType == "Team" && credential.TeamID == "" {
+		credential.TeamID = credential.PrincipalID
+	}
+	if err := enforceCredential(Config{AllowedTeams: p.AllowedTeams}, credential); err != nil {
 		return "", err
 	}
 	if err := saveCredential(p.Path, p.Scope, credential); err != nil {

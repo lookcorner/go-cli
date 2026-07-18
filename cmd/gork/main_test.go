@@ -123,9 +123,10 @@ func TestRunLoginDeviceFlow(t *testing.T) {
 	}))
 	defer server.Close()
 	authFile := filepath.Join(t.TempDir(), "auth.json")
+	configPath := filepath.Join(t.TempDir(), "missing.toml")
 	var stdout, stderr bytes.Buffer
 	err := run([]string{
-		"login", "--device-auth", "--issuer", server.URL, "--client-id", "client-1", "--scopes", "openid", "--auth-file", authFile, "--no-browser",
+		"login", "--device-auth", "--issuer", server.URL, "--client-id", "client-1", "--scopes", "openid", "--auth-file", authFile, "--config", configPath, "--no-browser",
 	}, strings.NewReader(""), &stdout, &stderr)
 	if err != nil {
 		t.Fatal(err)
@@ -160,5 +161,32 @@ func TestRunLogoutRemovesSelectedScope(t *testing.T) {
 	}
 	if credential, err := auth.Load(path, "sibling"); err != nil || credential.Key != "keep" {
 		t.Fatalf("sibling credential=%#v err=%v", credential, err)
+	}
+}
+
+func TestTeamPolicyDisablesStaticAPIKey(t *testing.T) {
+	t.Setenv("GROK_HOME", t.TempDir())
+	t.Setenv("GORK_API_KEY", "must-not-bypass-team-policy")
+	t.Setenv("XAI_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	path := filepath.Join(t.TempDir(), "config.toml")
+	data := []byte(`
+[models]
+default = "main"
+
+[model.main]
+model = "model"
+base_url = "https://api.x.ai/v1"
+backend = "responses"
+
+[grok_com_config]
+force_login_team_uuid = "team-required"
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := run([]string{"--config", path, "hello"}, strings.NewReader(""), io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "missing credentials") {
+		t.Fatalf("static API key bypassed team policy: %v", err)
 	}
 }

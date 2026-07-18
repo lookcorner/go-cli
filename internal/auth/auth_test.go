@@ -28,6 +28,11 @@ func jsonResponse(status int, value any) *http.Response {
 	}
 }
 
+func testJWT(claims any) string {
+	payload, _ := json.Marshal(claims)
+	return "e30." + base64.RawURLEncoding.EncodeToString(payload) + ".signature"
+}
+
 func TestDeviceLoginProtocol(t *testing.T) {
 	fixed := time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC)
 	polls := 0
@@ -247,6 +252,53 @@ func TestDefaultConfigPrefersOIDCEnvironment(t *testing.T) {
 	cfg := DefaultConfig()
 	if cfg.Issuer != "https://oidc.example" || cfg.ClientID != "oidc-client" || strings.Join(cfg.Scopes, ",") != "openid,email,offline_access" || cfg.Audience != "api" {
 		t.Fatalf("OIDC config=%#v", cfg)
+	}
+}
+
+func TestEnforceCredentialTeamPolicy(t *testing.T) {
+	credential := Credential{Key: testJWT(map[string]string{"principal_id": "team-b"})}
+	for _, test := range []struct {
+		name    string
+		allowed []string
+		wantErr string
+	}{
+		{name: "unrestricted", allowed: nil},
+		{name: "single match", allowed: []string{"team-b"}},
+		{name: "multiple match", allowed: []string{"team-a", "team-b"}},
+		{name: "empty fails closed", allowed: []string{}, wantErr: "permits no teams"},
+		{name: "mismatch", allowed: []string{"team-a"}, wantErr: "login returned team-b"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := enforceCredential(Config{AllowedTeams: test.allowed}, credential)
+			if test.wantErr == "" && err != nil {
+				t.Fatal(err)
+			}
+			if test.wantErr != "" && (err == nil || !strings.Contains(err.Error(), test.wantErr)) {
+				t.Fatalf("policy error=%v", err)
+			}
+		})
+	}
+	if err := enforceCredential(Config{AllowedTeams: []string{"team-a"}}, Credential{Key: "opaque"}); err == nil || !strings.Contains(err.Error(), "no team principal") {
+		t.Fatalf("missing principal error=%v", err)
+	}
+	spoofedMetadata := Credential{Key: testJWT(map[string]string{"principal_id": "team-b"}), PrincipalID: "team-a"}
+	if err := enforceCredential(Config{AllowedTeams: []string{"team-a"}}, spoofedMetadata); err == nil || !strings.Contains(err.Error(), "team-b") {
+		t.Fatalf("persisted metadata bypassed token policy: %v", err)
+	}
+	principalType, principalID, _ := jwtPrincipal(testJWT(map[string]string{"principalType": "Team", "principalId": "team-c"}))
+	if principalType != "Team" || principalID != "team-c" {
+		t.Fatalf("camelCase principal=%q %q", principalType, principalID)
+	}
+}
+
+func TestResolveRejectsCachedCredentialFromWrongTeam(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "auth.json")
+	cfg := Config{Issuer: "https://auth.example", ClientID: "client", AllowedTeams: []string{"team-good"}}
+	if err := Save(path, cfg.Scope(), Credential{Key: testJWT(map[string]string{"principal_id": "team-wrong"})}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewClient(nil).Resolve(context.Background(), path, cfg); err == nil || !strings.Contains(err.Error(), "team-wrong") {
+		t.Fatalf("wrong-team cached credential error=%v", err)
 	}
 }
 
