@@ -10,8 +10,8 @@ implementation.
   metadata, artifact namespaces, and session forking.
 - `internal/worktree` owns worktree identity, lifecycle, Git state transfer,
   conflict rules, registry maintenance, and historical code restoration.
-- `internal/workspace` owns confined paths, instruction discovery, and durable
-  before/after file checkpoints used by session rewind.
+- `internal/workspace` owns confined paths, instruction discovery, release-build
+  folder trust, and durable before/after file checkpoints used by session rewind.
 - `internal/agent` owns the model/tool turn loop and context compaction.
 - `internal/auth` owns login protocols, credential policy, scoped persistence,
   and token refresh serialization.

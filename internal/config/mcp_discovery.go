@@ -14,23 +14,35 @@ import (
 // DiscoverMCPServers merges workspace and compatible editor MCP sources into
 // the already-resolved config. TOML wins over non-TOML sources, with closer
 // project TOML replacing global entries.
-func DiscoverMCPServers(workspaceRoot string, cfg Config, plugins []plugin.Plugin) map[string]MCPServerConfig {
+func DiscoverMCPServers(workspaceRoot string, cfg Config, plugins []plugin.Plugin, projectTrusted bool) map[string]MCPServerConfig {
 	home, _ := os.UserHomeDir()
-	return discoverMCPServers(workspaceRoot, home, cfg, plugins)
+	return discoverMCPServers(workspaceRoot, home, cfg, plugins, projectTrusted)
 }
 
-func discoverMCPServers(workspaceRoot, home string, cfg Config, plugins []plugin.Plugin) map[string]MCPServerConfig {
+func discoverMCPServers(workspaceRoot, home string, cfg Config, plugins []plugin.Plugin, projectTrusted bool) map[string]MCPServerConfig {
 	workspaceRoot = canonicalOrClean(workspaceRoot)
 	servers := cloneMCPServers(cfg.MCPServers)
 
 	gitRoot := workspace.GitRoot(workspaceRoot)
-	for _, scope := range workspace.ProjectScopes(gitRoot, workspaceRoot) {
-		for name, server := range readProjectMCP(filepath.Join(scope, ".grok", "config.toml")) {
-			servers[name] = server
+	blocked := make(map[string]bool)
+	if !projectTrusted {
+		blocked = projectMCPNames(workspaceRoot, home)
+		for name := range blocked {
+			delete(servers, name)
+		}
+	}
+	if projectTrusted {
+		for _, scope := range workspace.ProjectScopes(gitRoot, workspaceRoot) {
+			for name, server := range readProjectMCP(filepath.Join(scope, ".grok", "config.toml")) {
+				servers[name] = server
+			}
 		}
 	}
 
 	for _, item := range plugins {
+		if !item.Executable {
+			continue
+		}
 		for _, source := range []struct {
 			data        []byte
 			allowDirect bool
@@ -39,7 +51,7 @@ func discoverMCPServers(workspaceRoot, home string, cfg Config, plugins []plugin
 			{data: item.InlineMCP, allowDirect: true},
 		} {
 			for name, server := range parseMCPJSON(source.data, source.allowDirect) {
-				if _, claimed := servers[name]; claimed || !server.IsEnabled() {
+				if _, claimed := servers[name]; claimed || blocked[name] || !server.IsEnabled() {
 					continue
 				}
 				servers[name] = expandMCPServer(server, item.Root, item.DataDir)
@@ -48,35 +60,40 @@ func discoverMCPServers(workspaceRoot, home string, cfg Config, plugins []plugin
 	}
 
 	if cfg.Compat.Claude.Mcps && home != "" {
-		for name, server := range readClaudeMCP(filepath.Join(home, ".claude.json"), workspaceRoot) {
-			if _, claimed := servers[name]; !claimed {
+		for name, server := range readClaudeMCP(filepath.Join(home, ".claude.json"), workspaceRoot, projectTrusted) {
+			if _, claimed := servers[name]; !claimed && !blocked[name] {
 				servers[name] = server
 			}
 		}
 	}
 	if cfg.Compat.Cursor.Mcps {
-		paths := []string{filepath.Join(workspaceRoot, ".cursor", "mcp.json")}
+		var paths []string
+		if projectTrusted {
+			paths = append(paths, filepath.Join(workspaceRoot, ".cursor", "mcp.json"))
+		}
 		if home != "" {
 			paths = append(paths, filepath.Join(home, ".cursor", "mcp.json"))
 		}
 		for _, path := range paths {
 			for name, server := range parseMCPJSON(readSmallFile(path), false) {
-				if _, claimed := servers[name]; !claimed {
+				if _, claimed := servers[name]; !claimed && !blocked[name] {
 					servers[name] = server
 				}
 			}
 		}
 	}
 
-	local := make(map[string]MCPServerConfig)
-	for _, scope := range workspace.ProjectScopes(gitRoot, workspaceRoot) {
-		for name, server := range parseMCPJSON(readSmallFile(filepath.Join(scope, ".mcp.json")), false) {
-			local[name] = server
+	if projectTrusted {
+		local := make(map[string]MCPServerConfig)
+		for _, scope := range workspace.ProjectScopes(gitRoot, workspaceRoot) {
+			for name, server := range parseMCPJSON(readSmallFile(filepath.Join(scope, ".mcp.json")), false) {
+				local[name] = server
+			}
 		}
-	}
-	for name, server := range local {
-		if _, claimed := servers[name]; !claimed {
-			servers[name] = server
+		for name, server := range local {
+			if _, claimed := servers[name]; !claimed {
+				servers[name] = server
+			}
 		}
 	}
 
@@ -89,6 +106,28 @@ func discoverMCPServers(workspaceRoot, home string, cfg Config, plugins []plugin
 		servers[name] = server
 	}
 	return servers
+}
+
+func projectMCPNames(workspaceRoot, home string) map[string]bool {
+	result := make(map[string]bool)
+	gitRoot := workspace.GitRoot(workspaceRoot)
+	for _, scope := range workspace.ProjectScopes(gitRoot, workspaceRoot) {
+		for name := range readProjectMCP(filepath.Join(scope, ".grok", "config.toml")) {
+			result[name] = true
+		}
+		for name := range parseMCPJSON(readSmallFile(filepath.Join(scope, ".mcp.json")), false) {
+			result[name] = true
+		}
+	}
+	for name := range parseMCPJSON(readSmallFile(filepath.Join(workspaceRoot, ".cursor", "mcp.json")), false) {
+		result[name] = true
+	}
+	if home != "" {
+		for name := range readClaudeProjectMCP(filepath.Join(home, ".claude.json"), workspaceRoot) {
+			result[name] = true
+		}
+	}
+	return result
 }
 
 func readProjectMCP(path string) map[string]MCPServerConfig {
@@ -118,22 +157,13 @@ func readProjectMCP(path string) map[string]MCPServerConfig {
 	return result
 }
 
-func readClaudeMCP(path, workspaceRoot string) map[string]MCPServerConfig {
-	data := readSmallFile(path)
-	if len(data) == 0 {
-		return nil
-	}
-	var file struct {
-		MCPServers map[string]MCPServerConfig `json:"mcpServers"`
-		Projects   map[string]struct {
-			MCPServers map[string]MCPServerConfig `json:"mcpServers"`
-		} `json:"projects"`
-	}
-	if json.Unmarshal(data, &file) != nil {
+func readClaudeMCP(path, workspaceRoot string, projectTrusted bool) map[string]MCPServerConfig {
+	file, ok := readClaudeMCPFile(path)
+	if !ok {
 		return nil
 	}
 	result := make(map[string]MCPServerConfig)
-	if project, ok := file.Projects[workspaceRoot]; ok {
+	if project, ok := file.Projects[workspaceRoot]; ok && projectTrusted {
 		for name, server := range project.MCPServers {
 			result[name] = server
 		}
@@ -144,6 +174,33 @@ func readClaudeMCP(path, workspaceRoot string) map[string]MCPServerConfig {
 		}
 	}
 	return result
+}
+
+func readClaudeProjectMCP(path, workspaceRoot string) map[string]MCPServerConfig {
+	file, ok := readClaudeMCPFile(path)
+	if !ok {
+		return nil
+	}
+	return file.Projects[workspaceRoot].MCPServers
+}
+
+type claudeMCPFile struct {
+	MCPServers map[string]MCPServerConfig `json:"mcpServers"`
+	Projects   map[string]struct {
+		MCPServers map[string]MCPServerConfig `json:"mcpServers"`
+	} `json:"projects"`
+}
+
+func readClaudeMCPFile(path string) (claudeMCPFile, bool) {
+	data := readSmallFile(path)
+	if len(data) == 0 {
+		return claudeMCPFile{}, false
+	}
+	var file claudeMCPFile
+	if json.Unmarshal(data, &file) != nil {
+		return claudeMCPFile{}, false
+	}
+	return file, true
 }
 
 func parseMCPJSON(data []byte, allowDirect bool) map[string]MCPServerConfig {

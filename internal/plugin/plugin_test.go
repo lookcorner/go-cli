@@ -29,7 +29,7 @@ func TestDiscoverConfigPlugin(t *testing.T) {
 	plugin := plugins[0]
 	digest := sha256.Sum256([]byte(root))
 	wantID := fmt.Sprintf("config/%x/deploy-tools", digest[:4])
-	if plugin.ID != wantID || plugin.Name != "deploy-tools" || plugin.Version != "1.2.3" || plugin.Description != "Deploy helpers" {
+	if plugin.ID != wantID || plugin.Name != "deploy-tools" || plugin.Version != "1.2.3" || plugin.Description != "Deploy helpers" || !plugin.Executable {
 		t.Fatalf("plugin = %#v", plugin)
 	}
 	if strings.Join(plugin.SkillDirs, "|") != filepath.Join(root, "prompts") || strings.Join(plugin.CommandDirs, "|") != filepath.Join(root, "commands") {
@@ -56,6 +56,18 @@ func TestAutoDiscoveredPluginsRequireEnablement(t *testing.T) {
 	plugins, err = discover(workspaceRoot, home, grokHome, Config{Enabled: []string{"project-plugin", "user-plugin"}})
 	if err != nil || len(plugins) != 2 {
 		t.Fatalf("enabled plugins=%#v err=%v", plugins, err)
+	}
+	for _, item := range plugins {
+		if item.Name == "project-plugin" && item.Executable {
+			t.Fatal("untrusted project plugin was executable")
+		}
+		if item.Name == "user-plugin" && !item.Executable {
+			t.Fatal("enabled user plugin was not executable")
+		}
+	}
+	trusted, err := discover(workspaceRoot, home, grokHome, Config{Enabled: []string{"project-plugin"}, ProjectTrusted: true})
+	if err != nil || len(trusted) != 1 || !trusted[0].Executable {
+		t.Fatalf("trusted project plugin=%#v err=%v", trusted, err)
 	}
 	plugins, err = discover(workspaceRoot, home, grokHome, Config{Enabled: []string{"project-plugin"}, Disabled: []string{"project-plugin"}})
 	if err != nil || len(plugins) != 0 {

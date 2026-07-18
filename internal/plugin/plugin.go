@@ -13,9 +13,10 @@ import (
 )
 
 type Config struct {
-	Paths    []string
-	Enabled  []string
-	Disabled []string
+	Paths          []string
+	Enabled        []string
+	Disabled       []string
+	ProjectTrusted bool
 }
 
 type Plugin struct {
@@ -29,6 +30,7 @@ type Plugin struct {
 	CommandDirs []string
 	MCPConfig   string
 	InlineMCP   json.RawMessage
+	Executable  bool
 }
 
 type scope string
@@ -116,7 +118,7 @@ func discover(workspaceRoot, home, grokHome string, cfg Config) ([]Plugin, error
 		}
 		sort.Strings(roots)
 		for _, root := range roots {
-			collect(root, kind, grokHome, cfg, seenPaths, seenNames, &plugins)
+			collect(root, kind, kind != projectScope || cfg.ProjectTrusted, grokHome, cfg, seenPaths, seenNames, &plugins)
 		}
 		return nil
 	}
@@ -141,13 +143,13 @@ func discover(workspaceRoot, home, grokHome string, cfg Config) ([]Plugin, error
 	for _, raw := range cfg.Paths {
 		root := resolvePath(raw, home, workspaceRoot)
 		if root != "" {
-			collect(root, configScope, grokHome, cfg, seenPaths, seenNames, &plugins)
+			collect(root, configScope, true, grokHome, cfg, seenPaths, seenNames, &plugins)
 		}
 	}
 	return plugins, nil
 }
 
-func collect(root string, kind scope, grokHome string, cfg Config, seenPaths, seenNames map[string]bool, plugins *[]Plugin) {
+func collect(root string, kind scope, executable bool, grokHome string, cfg Config, seenPaths, seenNames map[string]bool, plugins *[]Plugin) {
 	info, err := os.Stat(root)
 	if err != nil || !info.IsDir() {
 		return
@@ -172,7 +174,7 @@ func collect(root string, kind scope, grokHome string, cfg Config, seenPaths, se
 	}
 	*plugins = append(*plugins, Plugin{
 		ID: id, Name: m.Name, Version: m.Version, Description: m.Description,
-		Root: root, DataDir: dataDir,
+		Root: root, DataDir: dataDir, Executable: executable,
 		SkillDirs: resolveDirs(root, m.Skills, "skills"), CommandDirs: resolveDirs(root, m.Commands, "commands"),
 		MCPConfig: resolveMCPConfig(root, m.MCPServers), InlineMCP: append(json.RawMessage(nil), m.MCPServers.Inline...),
 	})

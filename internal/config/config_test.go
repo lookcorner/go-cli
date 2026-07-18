@@ -737,3 +737,26 @@ mcps = false
 		t.Fatalf("unexpected claude compatibility resolution: %#v", cfg.Compat.Claude)
 	}
 }
+
+func TestFolderTrustConfigAndEnvironmentPrecedence(t *testing.T) {
+	t.Setenv("GROK_FOLDER_TRUST", "")
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[folder_trust]\nenabled = false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.FolderTrustEnabled {
+		t.Fatal("folder trust config was ignored")
+	}
+	t.Setenv("GROK_FOLDER_TRUST", "yes")
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.FolderTrustEnabled {
+		t.Fatal("folder trust environment override was ignored")
+	}
+}

@@ -39,6 +39,10 @@ hard_clear_age_turns = 10
 [auth]
 # preferred_method = "oidc" # or "api_key"
 
+[folder_trust]
+# Release builds default to true. Development builds keep the gate inert.
+# enabled = true
+
 # [[version_overrides]]
 # minimum_version = "0.2.0"
 # maximum_version = "0.3.0"

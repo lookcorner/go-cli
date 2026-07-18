@@ -54,6 +54,7 @@ type Config struct {
 	ProxyBaseURL                string                     `json:"proxy_base_url,omitempty"`
 	ManagedConfigURL            string                     `json:"managed_config_url,omitempty"`
 	DeploymentKey               string                     `json:"deployment_key,omitempty"`
+	FolderTrustEnabled          bool                       `json:"folder_trust_enabled"`
 }
 
 type WebSearchConfig struct {
@@ -166,7 +167,12 @@ type fileConfig struct {
 	Toolset      struct {
 		WebFetch fileWebFetchConfig `json:"web_fetch,omitempty" toml:"web_fetch"`
 	} `json:"toolset,omitempty" toml:"toolset"`
-	Endpoints fileEndpointsConfig `json:"endpoints,omitempty" toml:"endpoints"`
+	Endpoints   fileEndpointsConfig   `json:"endpoints,omitempty" toml:"endpoints"`
+	FolderTrust fileFolderTrustConfig `json:"folder_trust,omitempty" toml:"folder_trust"`
+}
+
+type fileFolderTrustConfig struct {
+	Enabled *bool `json:"enabled,omitempty" toml:"enabled"`
 }
 
 type fileEndpointsConfig struct {
@@ -265,6 +271,7 @@ func Load(path string) (Config, error) {
 		ContextWindow:               131072,
 		AutoCompactThresholdPercent: 85,
 		Compat:                      compat.Default(),
+		FolderTrustEnabled:          true,
 		Pruning:                     PruningConfig{Enabled: true, KeepLastNTurns: 3, SoftTrimThreshold: 4000, SoftTrimHead: 1500, SoftTrimTail: 1500, HardClearAgeTurns: 10},
 	}
 	if path == "" {
@@ -404,6 +411,9 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.Plugins.Disabled != nil {
 		cfg.Plugins.Disabled = append([]string(nil), disk.Plugins.Disabled...)
+	}
+	if disk.FolderTrust.Enabled != nil {
+		cfg.FolderTrustEnabled = *disk.FolderTrust.Enabled
 	}
 	if disk.Endpoints.CLIChatProxyBaseURL != "" {
 		cfg.ProxyBaseURL = strings.TrimRight(disk.Endpoints.CLIChatProxyBaseURL, "/")
@@ -568,6 +578,9 @@ func applyEnv(cfg *Config) {
 	}
 	applyCompatEnv(&cfg.Compat.Cursor, "CURSOR")
 	applyCompatEnv(&cfg.Compat.Claude, "CLAUDE")
+	if value, ok := envBool("GROK_FOLDER_TRUST"); ok {
+		cfg.FolderTrustEnabled = value
+	}
 }
 
 func (c Config) ManagedPolicyURL() string {

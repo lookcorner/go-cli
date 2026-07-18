@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -19,6 +20,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/config"
 	"github.com/lookcorner/go-cli/internal/mcp"
 	"github.com/lookcorner/go-cli/internal/tools"
+	"github.com/lookcorner/go-cli/internal/version"
 )
 
 type samplingStreamer struct {
@@ -39,7 +41,7 @@ func TestDiscoverSkillsLoadsConfiguredPlugin(t *testing.T) {
 		t.Fatal(err)
 	}
 	pluginRoot, _ = filepath.EvalSymlinks(pluginRoot)
-	workspaceCfg, catalog, err := discoverWorkspace(root, config.Config{Compat: compat.Default(), Plugins: config.PluginsConfig{Paths: []string{pluginRoot}}})
+	workspaceCfg, catalog, err := discoverWorkspace(root, config.Config{Compat: compat.Default(), Plugins: config.PluginsConfig{Paths: []string{pluginRoot}}}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,6 +61,32 @@ func TestMCPHTTPHeadersUseBearerTokenEnvironment(t *testing.T) {
 	})
 	if headers["Authorization"] != "Bearer secret" || headers["X-Test"] != "kept" || len(headers) != 2 {
 		t.Fatalf("headers = %#v", headers)
+	}
+}
+
+func TestResolveProjectTrustPromptsAndPersists(t *testing.T) {
+	previousVersion := version.Current
+	version.Current = "1.0.0"
+	t.Cleanup(func() { version.Current = previousVersion })
+	t.Setenv("GROK_HOME", t.TempDir())
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".mcp.json"), []byte(`{"mcpServers":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{FolderTrustEnabled: true}
+	var output bytes.Buffer
+	trusted, err := resolveProjectTrust(context.Background(), root, cfg, false, bufio.NewReader(strings.NewReader("")), &output, false)
+	if err != nil || trusted || !strings.Contains(output.String(), "--trust") {
+		t.Fatalf("headless trust=%v output=%q err=%v", trusted, output.String(), err)
+	}
+	output.Reset()
+	trusted, err = resolveProjectTrust(context.Background(), root, cfg, false, bufio.NewReader(strings.NewReader("yes\n")), &output, true)
+	if err != nil || !trusted || !strings.Contains(output.String(), "Trust executable") {
+		t.Fatalf("interactive trust=%v output=%q err=%v", trusted, output.String(), err)
+	}
+	trusted, err = resolveProjectTrust(context.Background(), root, cfg, false, bufio.NewReader(strings.NewReader("")), &output, false)
+	if err != nil || !trusted {
+		t.Fatalf("persisted trust=%v err=%v", trusted, err)
 	}
 }
 

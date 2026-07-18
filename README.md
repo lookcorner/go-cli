@@ -212,6 +212,18 @@ new turns until the model calls `update_goal` with `completed=true` or a genuine
 Progress-only `update_goal` calls keep the goal active. Goal mode is explicit
 and cannot be combined with the interactive REPL or TUI.
 
+Release builds gate repo-controlled MCP and enabled project-plugin execution on
+folder trust. Interactive CLI startup asks once when executable project config
+is present; headless and ACP sessions fail closed. `--trust` records the Git
+workspace in `$GROK_HOME/trusted_folders.toml` (normally
+`~/.grok/trusted_folders.toml`). Parent trust cascades to child paths while a
+more specific child decision wins. Development versions such as `0.1.0-dev`
+match the reference's unstamped-build behavior and keep this gate inert.
+
+```sh
+./gork --trust --workspace /path/to/project "inspect this repository"
+```
+
 Use `--acp` to run an Agent Client Protocol v1 agent over JSON-RPC stdio for
 editor/IDE integrations:
 
@@ -550,10 +562,10 @@ disabled = ["old-tools"]
 ```
 
 Enabled plugins may also contribute `.mcp.json` or an inline `mcpServers`
-object. This development build follows the reference's unstamped-build behavior
-and treats enabled project plugins as trusted; persistent release-build folder
-trust is not yet implemented. Plugin hooks, agents, LSP servers, installation,
-marketplaces, and updates are not yet implemented.
+object. Development builds follow the reference's unstamped-build behavior;
+release builds require folder trust before an enabled project plugin may start
+MCP processes. Plugin hooks, agents, LSP servers, installation, marketplaces,
+and updates are not yet implemented.
 
 The `[skills]` config accepts additional directories or individual `SKILL.md`
 files. Paths support `~`; relative paths resolve from the workspace. `ignore`

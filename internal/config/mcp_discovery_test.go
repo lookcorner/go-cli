@@ -36,8 +36,8 @@ command = "project-only"
 	}
 	servers := discoverMCPServers(root, home, cfg, []plugin.Plugin{{
 		Name: "p", Root: pluginRoot, DataDir: pluginData,
-		MCPConfig: filepath.Join(pluginRoot, ".mcp.json"),
-	}})
+		MCPConfig: filepath.Join(pluginRoot, ".mcp.json"), Executable: true,
+	}}, true)
 
 	for name, command := range map[string]string{
 		"shared": "project", "global": "global", "project": "project-only",
@@ -62,7 +62,7 @@ func TestDiscoverMCPServersHonorsCompat(t *testing.T) {
 	cfg := Config{Compat: compat.Default()}
 	cfg.Compat.Cursor.Mcps = false
 	cfg.Compat.Claude.Mcps = false
-	servers := discoverMCPServers(root, home, cfg, nil)
+	servers := discoverMCPServers(root, home, cfg, nil, true)
 	if _, ok := servers["cursor"]; ok {
 		t.Fatal("disabled Cursor MCP compatibility was loaded")
 	}
@@ -82,9 +82,33 @@ func TestDiscoverMCPServersClosestMCPJSONWins(t *testing.T) {
 	}
 	writeMCPFile(t, filepath.Join(root, ".mcp.json"), `{"mcpServers":{"shared":{"command":"root"}}}`)
 	writeMCPFile(t, filepath.Join(nested, ".mcp.json"), `{"mcpServers":{"shared":{"command":"nested"}}}`)
-	servers := discoverMCPServers(nested, t.TempDir(), Config{Compat: compat.Default()}, nil)
+	servers := discoverMCPServers(nested, t.TempDir(), Config{Compat: compat.Default()}, nil, true)
 	if servers["shared"].Command != "nested" {
 		t.Fatalf("closest .mcp.json did not win: %#v", servers["shared"])
+	}
+}
+
+func TestDiscoverMCPServersBlocksUntrustedProjectSources(t *testing.T) {
+	root := canonicalOrClean(t.TempDir())
+	home := t.TempDir()
+	writeMCPFile(t, filepath.Join(root, ".mcp.json"), `{"mcpServers":{"project":{"command":"project"}}}`)
+	writeMCPFile(t, filepath.Join(root, ".cursor", "mcp.json"), `{"mcpServers":{"cursor-project":{"command":"project"}}}`)
+	writeMCPFile(t, filepath.Join(home, ".cursor", "mcp.json"), `{"mcpServers":{"cursor-user":{"command":"user"}}}`)
+	writeMCPFile(t, filepath.Join(home, ".claude.json"), `{"mcpServers":{"claude-user":{"command":"user"}},"projects":{"`+root+`":{"mcpServers":{"claude-project":{"command":"project"}}}}}`)
+	servers := discoverMCPServers(root, home, Config{Compat: compat.Default(), MCPServers: map[string]MCPServerConfig{
+		"project": {Command: "global-fallback"},
+	}}, []plugin.Plugin{{
+		MCPConfig: filepath.Join(root, ".mcp.json"), Executable: false,
+	}}, false)
+	for _, name := range []string{"project", "cursor-project", "claude-project"} {
+		if _, ok := servers[name]; ok {
+			t.Fatalf("untrusted project server %q was loaded", name)
+		}
+	}
+	for _, name := range []string{"cursor-user", "claude-user"} {
+		if _, ok := servers[name]; !ok {
+			t.Fatalf("user server %q was blocked with project sources", name)
+		}
 	}
 }
 

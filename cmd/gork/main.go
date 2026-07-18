@@ -55,6 +55,7 @@ type options struct {
 	goal        bool
 	goalRuns    int
 	acp         bool
+	trust       bool
 	allow       stringListFlag
 	deny        stringListFlag
 }
@@ -107,6 +108,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	flags.BoolVar(&opts.goal, "goal", false, "keep running turns until update_goal completes or blocks the goal")
 	flags.IntVar(&opts.goalRuns, "goal-runs", 10, "maximum turns in --goal mode")
 	flags.BoolVar(&opts.acp, "acp", false, "serve Agent Client Protocol v1 over stdio")
+	flags.BoolVar(&opts.trust, "trust", false, "trust this workspace's executable project configuration")
 	flags.Usage = func() {
 		fmt.Fprintf(stderr, "Usage: gork [flags] [prompt]\n       gork login [--oauth|--device-auth]\n       gork logout\n       gork setup\n\n")
 		flags.PrintDefaults()
@@ -195,6 +197,15 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return err
 	}
 	if opts.acp {
+		if opts.trust {
+			ws, openErr := workspace.Open(opts.workspace)
+			if openErr != nil {
+				return openErr
+			}
+			if err := workspace.GrantFolderTrust(context.Background(), ws.Root()); err != nil {
+				return err
+			}
+		}
 		return runACP(cfg, opts, allowRules, askRules, denyRules, tokenProvider, stdin, stdout, stderr)
 	}
 
@@ -221,7 +232,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return err
 	}
 	projectInstructions := workspace.FormatInstructions(instructionFiles)
-	cfg, skillCatalog, err := discoverWorkspace(ws.Root(), cfg)
+	projectTrusted, err := resolveProjectTrust(context.Background(), ws.Root(), cfg, opts.trust, inputReader, stderr, terminalIO(stdin) && terminalIO(stderr))
+	if err != nil {
+		return err
+	}
+	cfg, skillCatalog, err := discoverWorkspace(ws.Root(), cfg, projectTrusted)
 	if err != nil {
 		return err
 	}
@@ -738,7 +753,11 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		if err != nil {
 			return nil, nil, err
 		}
-		sessionCfg, catalog, err := discoverWorkspace(ws.Root(), cfg)
+		projectTrusted := workspace.ResolveFolderTrust(ws.Root(), cfg.FolderTrustEnabled, false) == workspace.TrustTrusted
+		if !projectTrusted {
+			fmt.Fprintln(statusOutput, "[gork] project executable configuration is disabled for this untrusted workspace")
+		}
+		sessionCfg, catalog, err := discoverWorkspace(ws.Root(), cfg, projectTrusted)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -869,19 +888,57 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 	return nil
 }
 
-func discoverWorkspace(root string, cfg config.Config) (config.Config, *skills.Catalog, error) {
+func discoverWorkspace(root string, cfg config.Config, projectTrusted bool) (config.Config, *skills.Catalog, error) {
 	plugins, err := plugin.Discover(root, plugin.Config{
 		Paths: cfg.Plugins.Paths, Enabled: cfg.Plugins.Enabled, Disabled: cfg.Plugins.Disabled,
+		ProjectTrusted: projectTrusted,
 	})
 	if err != nil {
 		return config.Config{}, nil, err
 	}
-	cfg.MCPServers = config.DiscoverMCPServers(root, cfg, plugins)
+	cfg.MCPServers = config.DiscoverMCPServers(root, cfg, plugins, projectTrusted)
 	catalog, err := skills.Discover(root, skills.Config{
 		Compat: cfg.Compat, Paths: cfg.Skills.Paths, Ignore: cfg.Skills.Ignore,
 		Disabled: cfg.Skills.Disabled, Plugins: plugins,
 	})
 	return cfg, catalog, err
+}
+
+func resolveProjectTrust(ctx context.Context, root string, cfg config.Config, explicit bool, input *bufio.Reader, output io.Writer, interactive bool) (bool, error) {
+	if explicit {
+		if err := workspace.GrantFolderTrust(ctx, root); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	switch workspace.ResolveFolderTrust(root, cfg.FolderTrustEnabled, interactive) {
+	case workspace.TrustTrusted:
+		return true, nil
+	case workspace.TrustPrompt:
+		fmt.Fprintf(output, "Trust executable project configuration in %s? [y/N] ", workspace.WorkspaceTrustKey(root))
+		answer, err := input.ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return false, err
+		}
+		answer = strings.TrimSpace(answer)
+		if strings.EqualFold(answer, "y") || strings.EqualFold(answer, "yes") {
+			if err := workspace.GrantFolderTrust(ctx, root); err != nil {
+				return false, err
+			}
+			return true, nil
+		}
+	}
+	fmt.Fprintln(output, "[gork] project executable configuration is disabled; rerun with --trust to enable it")
+	return false, nil
+}
+
+func terminalIO(value any) bool {
+	file, ok := value.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := file.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
 func sessionMetadata(ctx context.Context, cwd, model string) map[string]any {
