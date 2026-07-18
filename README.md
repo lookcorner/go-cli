@@ -275,6 +275,9 @@ The `x.ai/session_summaries/session_list`, `workspace_list`, and
 `workspace_list_recent` extensions expose the same logs as reference-shaped
 summary snapshots for workspace history and recent-session views.
 
+`x.ai/sessions/list` merges those persisted summaries with live ACP sessions
+for a compact roster of working, idle, and dormant sessions.
+
 `x.ai/workspaces/list` returns the reference-compatible partial `no_oauth`
 response because this local build has no cloud workspace backend.
 

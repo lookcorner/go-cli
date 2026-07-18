@@ -314,6 +314,47 @@ func TestSessionSummariesWireContract(t *testing.T) {
 	}
 }
 
+func TestSessionRosterWireContract(t *testing.T) {
+	dir, cwd := t.TempDir(), t.TempDir()
+	for _, id := range []string{"live-session", "dormant-session"} {
+		logger, err := sessionlog.NewLoggerWithID(dir, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = logger.Append("session_metadata", map[string]any{"cwd": cwd, "modelId": "stored-model"})
+		_ = logger.Append("user_prompt", map[string]any{"text": id + " title"})
+		_ = logger.Close()
+	}
+	var output bytes.Buffer
+	server := &Server{
+		SessionDir: dir, output: &output,
+		sessions: map[string]*session{"live-session": {
+			id: "live-session", cwd: cwd, runner: &agent.Runner{Model: "live-model"}, running: true, updated: time.Now().UTC(),
+		}},
+	}
+	server.handleSessionRoster(context.Background(), message{ID: json.RawMessage("1"), Method: "x.ai/sessions/list", Params: json.RawMessage(`{}`)})
+	var response map[string]any
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	extension := response["result"].(map[string]any)
+	rows := extension["result"].(map[string]any)["sessions"].([]any)
+	if len(rows) != 2 || extension["error"] != nil {
+		t.Fatalf("unexpected roster response: %#v", response)
+	}
+	byID := make(map[string]map[string]any)
+	for _, row := range rows {
+		item := row.(map[string]any)
+		byID[item["sessionId"].(string)] = item
+	}
+	if live := byID["live-session"]; live["activity"] != "working" || live["resident"] != true || live["modelId"] != "live-model" {
+		t.Fatalf("unexpected live roster row: %#v", live)
+	}
+	if dormant := byID["dormant-session"]; dormant["activity"] != "dormant" || dormant["resident"] != false {
+		t.Fatalf("unexpected dormant roster row: %#v", dormant)
+	}
+}
+
 func TestStaticExtensionsAndCompactCommand(t *testing.T) {
 	var output bytes.Buffer
 	streamer := &fixtureStreamer{results: []api.StreamResult{{Text: "preserve the implementation state"}}}
