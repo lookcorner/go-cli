@@ -34,6 +34,33 @@ type GitStatus struct {
 	Unstaged   []GitFileChange `json:"unstaged"`
 }
 
+type GitInfo struct {
+	Root          string   `json:"root"`
+	Remotes       []string `json:"remotes"`
+	CurrentBranch string   `json:"currentBranch,omitempty"`
+	DefaultBranch string   `json:"defaultBranch,omitempty"`
+	VCSKind       string   `json:"vcsKind,omitempty"`
+}
+
+type GitBranch struct {
+	Name    string `json:"name"`
+	Current bool   `json:"current"`
+	Remote  bool   `json:"remote"`
+}
+
+type GitBranches struct {
+	CurrentBranch string      `json:"currentBranch,omitempty"`
+	RepoRoot      string      `json:"repoRoot"`
+	Branches      []GitBranch `json:"branches"`
+}
+
+type CheckoutCommitResult struct {
+	CheckedOut bool   `json:"checked_out"`
+	Stashed    bool   `json:"stashed"`
+	Fetched    bool   `json:"fetched"`
+	Error      string `json:"error,omitempty"`
+}
+
 func GitRoot(ctx context.Context, cwd string) (string, error) {
 	root, err := gitOutput(ctx, cwd, "rev-parse", "--show-toplevel")
 	return strings.TrimSpace(root), err
@@ -42,6 +69,54 @@ func GitRoot(ctx context.Context, cwd string) (string, error) {
 func CurrentCommit(ctx context.Context, root string) (string, error) {
 	commit, err := gitOutput(ctx, root, "rev-parse", "HEAD^{commit}")
 	return strings.TrimSpace(commit), err
+}
+
+func Info(ctx context.Context, root string) (GitInfo, error) {
+	resolved, err := GitRoot(ctx, root)
+	if err != nil {
+		return GitInfo{}, err
+	}
+	info := GitInfo{Root: resolved, CurrentBranch: optionalGit(ctx, resolved, "symbolic-ref", "--short", "-q", "HEAD"), VCSKind: "git"}
+	names := strings.Fields(optionalGit(ctx, resolved, "remote"))
+	seen := make(map[string]bool)
+	for _, name := range names {
+		urls := strings.Fields(optionalGit(ctx, resolved, "remote", "get-url", "--all", name))
+		for _, url := range urls {
+			if !seen[url] {
+				seen[url] = true
+				info.Remotes = append(info.Remotes, url)
+			}
+		}
+	}
+	sort.Strings(info.Remotes)
+	defaultRef := optionalGit(ctx, resolved, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+	info.DefaultBranch = strings.TrimPrefix(defaultRef, "origin/")
+	if info.DefaultBranch == "" {
+		info.DefaultBranch = optionalGit(ctx, resolved, "config", "--get", "init.defaultBranch")
+	}
+	return info, nil
+}
+
+func Branches(ctx context.Context, root string) (GitBranches, error) {
+	resolved, err := GitRoot(ctx, root)
+	if err != nil {
+		return GitBranches{}, err
+	}
+	result := GitBranches{CurrentBranch: optionalGit(ctx, resolved, "symbolic-ref", "--short", "-q", "HEAD"), RepoRoot: resolved}
+	output, err := gitOutput(ctx, resolved, "for-each-ref", "--format=%(HEAD)%09%(refname)", "refs/heads", "refs/remotes")
+	if err != nil {
+		return GitBranches{}, err
+	}
+	for _, line := range strings.Split(strings.TrimSuffix(output, "\n"), "\n") {
+		fields := strings.SplitN(line, "\t", 2)
+		if len(fields) != 2 || fields[1] == "" || strings.HasSuffix(fields[1], "/HEAD") {
+			continue
+		}
+		remote := strings.HasPrefix(fields[1], "refs/remotes/")
+		name := strings.TrimPrefix(strings.TrimPrefix(fields[1], "refs/heads/"), "refs/remotes/")
+		result.Branches = append(result.Branches, GitBranch{Name: name, Current: strings.TrimSpace(fields[0]) == "*", Remote: remote})
+	}
+	return result, nil
 }
 
 func Status(ctx context.Context, root string, includeUntracked, includeStats bool) (GitStatus, error) {
@@ -131,6 +206,60 @@ func Discard(ctx context.Context, root string, paths []string, scope string, inc
 		return err
 	}
 	return nil
+}
+
+func Stash(ctx context.Context, root string, includeUntracked bool) error {
+	args := []string{"stash", "push"}
+	if includeUntracked {
+		args = append(args, "--include-untracked")
+	}
+	_, err := gitOutput(ctx, root, args...)
+	return err
+}
+
+func CheckoutBranch(ctx context.Context, root, branch string, create bool) error {
+	if branch == "" {
+		return errors.New("branch is required")
+	}
+	status, err := gitOutput(ctx, root, "status", "--porcelain", "--untracked-files=no")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(status) != "" {
+		return errors.New("working tree has uncommitted changes; commit or stash before switching branches")
+	}
+	args := []string{"checkout"}
+	if create {
+		args = append(args, "-b")
+	}
+	args = append(args, branch)
+	_, err = gitOutput(ctx, root, args...)
+	return err
+}
+
+func CheckoutCommit(ctx context.Context, root, commit string, stashIfDirty bool) CheckoutCommitResult {
+	if current, err := CurrentCommit(ctx, root); err == nil && current == commit {
+		return CheckoutCommitResult{CheckedOut: true}
+	}
+	stashed := false
+	if stashIfDirty && strings.TrimSpace(optionalGit(ctx, root, "status", "--porcelain")) != "" {
+		message := "auto-stash before checkout " + commit
+		if _, err := gitOutput(ctx, root, "stash", "push", "-m", message); err == nil {
+			stashed = true
+		}
+	}
+	if _, err := gitOutput(ctx, root, "checkout", commit); err == nil {
+		return CheckoutCommitResult{CheckedOut: true, Stashed: stashed}
+	}
+	_, _ = gitOutput(ctx, root, "fetch", "origin")
+	if _, err := gitOutput(ctx, root, "checkout", commit); err == nil {
+		return CheckoutCommitResult{CheckedOut: true, Stashed: stashed, Fetched: true}
+	} else {
+		if stashed {
+			_, _ = gitOutput(ctx, root, "stash", "pop")
+		}
+		return CheckoutCommitResult{Fetched: true, Error: err.Error()}
+	}
 }
 
 func gitChanges(ctx context.Context, root string, staged, includeUntracked, includeStats bool) ([]GitFileChange, error) {

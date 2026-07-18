@@ -196,7 +196,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleHunkAction(ctx, incoming)
 		case "x.ai/git/worktree/create", "x.ai/git/worktree/list", "x.ai/git/worktree/show", "x.ai/git/worktree/remove", "x.ai/git/worktree/apply":
 			s.handleWorktree(ctx, incoming)
-		case "x.ai/git/git_repo_root", "x.ai/git/status", "x.ai/git/stage", "x.ai/git/unstage", "x.ai/git/discard", "x.ai/git/current_commit":
+		case "x.ai/git/git_repo_root", "x.ai/git/status", "x.ai/git/stage", "x.ai/git/unstage", "x.ai/git/discard", "x.ai/git/current_commit", "x.ai/git/info", "x.ai/git/branches", "x.ai/git/stash", "x.ai/git/checkout", "x.ai/git/checkout_commit":
 			s.handleGit(ctx, incoming)
 		case "x.ai/git/worktree/create_from_worktree", "x.ai/git/worktree/create_from_worktree_sync":
 			s.handleWorktreeFork(ctx, incoming)
@@ -248,6 +248,10 @@ func (s *Server) handleGit(ctx context.Context, incoming message) {
 		IncludeUntracked *bool    `json:"includeUntracked"`
 		IncludeStats     bool     `json:"includeStats"`
 		Scope            string   `json:"scope"`
+		Branch           string   `json:"branch"`
+		Create           bool     `json:"create"`
+		Commit           string   `json:"commit"`
+		StashIfDirty     bool     `json:"stashIfDirty"`
 	}
 	if json.Unmarshal(incoming.Params, &req) != nil {
 		s.respondError(incoming.ID, -32602, "invalid git parameters")
@@ -296,6 +300,23 @@ func (s *Server) handleGit(ctx context.Context, incoming message) {
 		} else {
 			extResult(commit, nil)
 		}
+	case "x.ai/git/info":
+		result, err := worktrees.Info(ctx, root)
+		extResult(result, err)
+	case "x.ai/git/branches":
+		result, err := worktrees.Branches(ctx, root)
+		extResult(result, err)
+	case "x.ai/git/stash":
+		includeUntracked := req.IncludeUntracked != nil && *req.IncludeUntracked
+		extResult(map[string]any{}, worktrees.Stash(ctx, root, includeUntracked))
+	case "x.ai/git/checkout":
+		extResult(map[string]any{}, worktrees.CheckoutBranch(ctx, root, req.Branch, req.Create))
+	case "x.ai/git/checkout_commit":
+		if req.Commit == "" {
+			s.respondError(incoming.ID, -32602, "commit is required")
+			return
+		}
+		s.respond(incoming.ID, worktrees.CheckoutCommit(ctx, root, req.Commit, req.StashIfDirty))
 	}
 }
 

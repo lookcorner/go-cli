@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -68,5 +69,66 @@ func TestGitStatusStageUnstageAndDiscard(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "new.txt")); !os.IsNotExist(err) {
 		t.Fatalf("discard kept untracked file: %v", err)
+	}
+}
+
+func TestGitInfoBranchesCheckoutStashAndCommit(t *testing.T) {
+	ctx := context.Background()
+	root := newRepo(t)
+	initial := strings.TrimSpace(runGitOutput(t, root, "rev-parse", "HEAD"))
+	current := strings.TrimSpace(runGitOutput(t, root, "symbolic-ref", "--short", "HEAD"))
+	runGit(t, root, "branch", "feature/topic")
+	runGit(t, root, "remote", "add", "origin", "https://example.invalid/repo.git")
+	info, err := Info(ctx, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.CurrentBranch != current || info.VCSKind != "git" || len(info.Remotes) != 1 || info.Remotes[0] != "https://example.invalid/repo.git" {
+		t.Fatalf("unexpected git info: %#v", info)
+	}
+	branches, err := Branches(ctx, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if branches.CurrentBranch != current || len(branches.Branches) != 2 {
+		t.Fatalf("unexpected branches: %#v", branches)
+	}
+	for _, branch := range branches.Branches {
+		if branch.Name == "feature/topic" && branch.Remote {
+			t.Fatalf("local slash branch was marked remote: %#v", branch)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "untracked.txt"), []byte("keep\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckoutBranch(ctx, root, "new-branch", true); err != nil {
+		t.Fatalf("untracked file blocked checkout: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("dirty\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckoutBranch(ctx, root, current, false); err == nil {
+		t.Fatal("tracked dirty state did not block branch checkout")
+	}
+	if err := Stash(ctx, root, true); err != nil {
+		t.Fatal(err)
+	}
+	if status := strings.TrimSpace(runGitOutput(t, root, "status", "--porcelain")); status != "" {
+		t.Fatalf("stash left dirty state: %s", status)
+	}
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("second\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, root, "add", "tracked.txt")
+	runGit(t, root, "commit", "-qm", "second")
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("pending\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outcome := CheckoutCommit(ctx, root, initial, true)
+	if !outcome.CheckedOut || !outcome.Stashed || outcome.Fetched || outcome.Error != "" {
+		t.Fatalf("unexpected checkout commit outcome: %#v", outcome)
+	}
+	if got := strings.TrimSpace(runGitOutput(t, root, "rev-parse", "HEAD")); got != initial {
+		t.Fatalf("checkout commit HEAD=%q want=%q", got, initial)
 	}
 }

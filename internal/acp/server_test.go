@@ -68,6 +68,23 @@ func TestGitExtensionWireContract(t *testing.T) {
 	if got := response["result"].(map[string]any)["GitRepo"].(map[string]any)["gitRoot"]; got != resolvedRoot {
 		t.Fatalf("unexpected repo root response: %#v", response)
 	}
+	output.Reset()
+	server.handleGit(context.Background(), message{ID: json.RawMessage("4"), Method: "x.ai/git/info", Params: json.RawMessage(`{"gitRoot":` + strconv.Quote(root) + `}`)})
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if info := response["result"].(map[string]any)["result"].(map[string]any); info["vcsKind"] != "git" || info["root"] != resolvedRoot {
+		t.Fatalf("unexpected git info response: %#v", response)
+	}
+	output.Reset()
+	head := strings.TrimSpace(runACPGitOutput(t, root, "rev-parse", "HEAD"))
+	server.handleGit(context.Background(), message{ID: json.RawMessage("5"), Method: "x.ai/git/checkout_commit", Params: json.RawMessage(`{"gitRoot":` + strconv.Quote(root) + `,"commit":` + strconv.Quote(head) + `}`)})
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if result := response["result"].(map[string]any); result["checked_out"] != true || result["fetched"] != false {
+		t.Fatalf("unexpected checkout commit response: %#v", response)
+	}
 }
 
 type fixtureStreamer struct {
