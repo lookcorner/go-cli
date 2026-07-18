@@ -115,6 +115,9 @@ func WorkspaceTrustKey(cwd string) string {
 func ProjectExecutionConfigPresent(cwd string) bool {
 	cwd = canonicalOrCleanTrust(cwd)
 	root := GitRoot(cwd)
+	if isFileTrust(filepath.Join(cwd, ".grok", "lsp.json")) {
+		return true
+	}
 	for _, scope := range ProjectScopes(root, cwd) {
 		for _, path := range []string{
 			filepath.Join(scope, ".mcp.json"),

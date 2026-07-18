@@ -86,7 +86,7 @@ func TestManifestSearchAndContainedPaths(t *testing.T) {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	mustWrite(t, filepath.Join(workspaceRoot, "outside.json"), `{"mcpServers":{}}`)
-	mustWrite(t, filepath.Join(root, ".grok-plugin", "plugin.json"), `{"name":"safe-plugin","skills":["skills","../outside","escaped"],"mcpServers":"../outside.json"}`)
+	mustWrite(t, filepath.Join(root, ".grok-plugin", "plugin.json"), `{"name":"safe-plugin","skills":["skills","../outside","escaped"],"mcpServers":"../outside.json","lspServers":"../outside.json"}`)
 
 	plugins, err := discover(workspaceRoot, home, filepath.Join(home, ".grok"), Config{Paths: []string{root}})
 	if err != nil || len(plugins) != 1 {
@@ -97,6 +97,9 @@ func TestManifestSearchAndContainedPaths(t *testing.T) {
 	}
 	if plugins[0].MCPConfig != "" {
 		t.Fatalf("escaping MCP path was accepted: %q", plugins[0].MCPConfig)
+	}
+	if plugins[0].LSPConfig != "" {
+		t.Fatalf("escaping LSP path was accepted: %q", plugins[0].LSPConfig)
 	}
 }
 
@@ -136,7 +139,8 @@ func TestPluginMCPManifestAndConvention(t *testing.T) {
 	root := filepath.Join(workspaceRoot, "mcp-plugin")
 	mustMkdir(t, root)
 	mustWrite(t, filepath.Join(root, ".mcp.json"), `{"mcpServers":{"file":{"command":"file-server"}}}`)
-	mustWrite(t, filepath.Join(root, "plugin.json"), `{"name":"mcp-plugin","mcpServers":{"inline":{"command":"inline-server"}}}`)
+	mustWrite(t, filepath.Join(root, ".lsp.json"), `{"file":{"command":"file-lsp"}}`)
+	mustWrite(t, filepath.Join(root, "plugin.json"), `{"name":"mcp-plugin","mcpServers":{"inline":{"command":"inline-server"}},"lspServers":{"inline":{"command":"inline-lsp"}}}`)
 
 	plugins, err := discover(workspaceRoot, home, filepath.Join(home, ".grok"), Config{Paths: []string{root}})
 	if err != nil || len(plugins) != 1 {
@@ -145,6 +149,9 @@ func TestPluginMCPManifestAndConvention(t *testing.T) {
 	if plugins[0].MCPConfig != canonicalOrClean(filepath.Join(root, ".mcp.json")) || !strings.Contains(string(plugins[0].InlineMCP), "inline-server") {
 		t.Fatalf("plugin MCP descriptor=%#v", plugins[0])
 	}
+	if plugins[0].LSPConfig != "" || !strings.Contains(string(plugins[0].InlineLSP), "inline-lsp") {
+		t.Fatalf("plugin inline LSP descriptor=%#v", plugins[0])
+	}
 
 	convention := filepath.Join(workspaceRoot, "convention")
 	mustMkdir(t, convention)
@@ -152,6 +159,13 @@ func TestPluginMCPManifestAndConvention(t *testing.T) {
 	plugins, err = discover(workspaceRoot, home, filepath.Join(home, ".grok"), Config{Paths: []string{convention}})
 	if err != nil || len(plugins) != 1 || plugins[0].Name != "convention" {
 		t.Fatalf("convention MCP plugin=%#v err=%v", plugins, err)
+	}
+	lspConvention := filepath.Join(workspaceRoot, "lsp-convention")
+	mustMkdir(t, lspConvention)
+	mustWrite(t, filepath.Join(lspConvention, ".lsp.json"), `{"gopls":{"command":"gopls"}}`)
+	plugins, err = discover(workspaceRoot, home, filepath.Join(home, ".grok"), Config{Paths: []string{lspConvention}})
+	if err != nil || len(plugins) != 1 || plugins[0].LSPConfig != canonicalOrClean(filepath.Join(lspConvention, ".lsp.json")) {
+		t.Fatalf("convention LSP plugin=%#v err=%v", plugins, err)
 	}
 }
 

@@ -124,6 +124,13 @@ func TestProjectExecutionConfigPresent(t *testing.T) {
 	if ProjectExecutionConfigPresent(root) {
 		t.Fatal("empty workspace reported execution config")
 	}
+	writeTrustFile(t, filepath.Join(root, ".grok", "lsp.json"), `{"gopls":{"command":"gopls"}}`)
+	if !ProjectExecutionConfigPresent(root) {
+		t.Fatal("project LSP config did not trigger trust")
+	}
+	if err := os.Remove(filepath.Join(root, ".grok", "lsp.json")); err != nil {
+		t.Fatal(err)
+	}
 	writeTrustFile(t, filepath.Join(root, ".grok", "config.toml"), "[models]\ndefault='x'\n")
 	if ProjectExecutionConfigPresent(root) {
 		t.Fatal("non-executable project config triggered trust")

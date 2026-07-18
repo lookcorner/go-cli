@@ -855,7 +855,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			cleanup()
 			return nil, nil, err
 		}
-		lspManager, err = startLSPServers(sessionCtx, cfg, ws, registry, statusOutput)
+		lspManager, err = startLSPServers(sessionCtx, sessionCfg, ws, registry, statusOutput)
 		if err != nil {
 			cleanup()
 			return nil, nil, err
@@ -897,6 +897,7 @@ func discoverWorkspace(root string, cfg config.Config, projectTrusted bool) (con
 		return config.Config{}, nil, err
 	}
 	cfg.MCPServers = config.DiscoverMCPServers(root, cfg, plugins, projectTrusted)
+	cfg.LSPServers = config.DiscoverLSPServers(root, cfg, plugins, projectTrusted)
 	catalog, err := skills.Discover(root, skills.Config{
 		Compat: cfg.Compat, Paths: cfg.Skills.Paths, Ignore: cfg.Skills.Ignore,
 		Disabled: cfg.Skills.Disabled, Plugins: plugins,

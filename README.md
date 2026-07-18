@@ -212,9 +212,9 @@ new turns until the model calls `update_goal` with `completed=true` or a genuine
 Progress-only `update_goal` calls keep the goal active. Goal mode is explicit
 and cannot be combined with the interactive REPL or TUI.
 
-Release builds gate repo-controlled MCP and enabled project-plugin execution on
-folder trust. Interactive CLI startup asks once when executable project config
-is present; headless and ACP sessions fail closed. `--trust` records the Git
+Release builds gate repo-controlled MCP/LSP and enabled project-plugin execution
+on folder trust. Interactive CLI startup asks once when executable project
+config is present; headless and ACP sessions fail closed. `--trust` records the Git
 workspace in `$GROK_HOME/trusted_folders.toml` (normally
 `~/.grok/trusted_folders.toml`). Parent trust cascades to child paths while a
 more specific child decision wins. Development versions such as `0.1.0-dev`
@@ -497,6 +497,13 @@ checks, and atomic file replacement. LSP create/rename/delete resource
 operations are rejected. Extension filters are optional; entries may be
 written with or without the leading dot.
 
+LSP configuration is also discovered from `$GROK_HOME/lsp.json` (normally
+`~/.grok/lsp.json`), the current workspace's `.grok/lsp.json`, and enabled
+plugin `.lsp.json` or inline `lspServers` entries. Project entries override
+configured TOML entries, which override user JSON; plugins only fill unclaimed
+names. Release builds require folder trust before project LSP or project-plugin
+LSP processes start.
+
 ## Project instructions and skills
 
 At startup, Gork Go discovers project instruction files compatible with Gork
@@ -561,11 +568,11 @@ enabled = ["team-tools"]
 disabled = ["old-tools"]
 ```
 
-Enabled plugins may also contribute `.mcp.json` or an inline `mcpServers`
-object. Development builds follow the reference's unstamped-build behavior;
-release builds require folder trust before an enabled project plugin may start
-MCP processes. Plugin hooks, agents, LSP servers, installation, marketplaces,
-and updates are not yet implemented.
+Enabled plugins may also contribute `.mcp.json`/inline `mcpServers` and
+`.lsp.json`/inline `lspServers`. Development builds follow the reference's
+unstamped-build behavior; release builds require folder trust before an enabled
+project plugin may start MCP or LSP processes. Plugin hooks, agents,
+installation, marketplaces, and updates are not yet implemented.
 
 The `[skills]` config accepts additional directories or individual `SKILL.md`
 files. Paths support `~`; relative paths resolve from the workspace. `ignore`

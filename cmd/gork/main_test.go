@@ -34,7 +34,7 @@ func TestDiscoverSkillsLoadsConfiguredPlugin(t *testing.T) {
 	if err := os.MkdirAll(skillDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(pluginRoot, "plugin.json"), []byte(`{"name":"team-tools","mcpServers":{"plugin-mcp":{"command":"${GROK_PLUGIN_ROOT}/server"}}}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(pluginRoot, "plugin.json"), []byte(`{"name":"team-tools","mcpServers":{"plugin-mcp":{"command":"${GROK_PLUGIN_ROOT}/server"}},"lspServers":{"plugin-lsp":{"command":"gopls","extensions":{".go":"go"}}}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: deploy\ndescription: Deploy\n---\nDeploy"), 0o600); err != nil {
@@ -50,6 +50,9 @@ func TestDiscoverSkillsLoadsConfiguredPlugin(t *testing.T) {
 	}
 	if workspaceCfg.MCPServers["plugin-mcp"].Command != filepath.Join(pluginRoot, "server") {
 		t.Fatalf("plugin MCP config = %#v", workspaceCfg.MCPServers)
+	}
+	if workspaceCfg.LSPServers["plugin-lsp"].Command != "gopls" || strings.Join(workspaceCfg.LSPServers["plugin-lsp"].Extensions, "|") != ".go" {
+		t.Fatalf("plugin LSP config = %#v", workspaceCfg.LSPServers)
 	}
 }
 
