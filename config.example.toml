@@ -10,6 +10,9 @@ env_key = ["GORK_API_KEY", "XAI_API_KEY"]
 context_window = 131072
 auto_compact_threshold_percent = 85
 
+# auth_provider_command = "security find-generic-password -w -s gork-token"
+# auth_token_ttl = 3600
+
 [session]
 auto_compact_threshold_percent = 85
 

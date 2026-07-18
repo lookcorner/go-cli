@@ -35,6 +35,8 @@ type Config struct {
 	HTTPTimeout                 time.Duration              `json:"-"`
 	WebSearch                   WebSearchConfig            `json:"web_search,omitempty"`
 	WebFetch                    WebFetchConfig             `json:"web_fetch,omitempty"`
+	AuthProviderCommand         string                     `json:"auth_provider_command,omitempty"`
+	AuthTokenTTL                time.Duration              `json:"-"`
 }
 
 type WebSearchConfig struct {
@@ -112,22 +114,24 @@ func (c MCPServerConfig) IsEnabled() bool {
 }
 
 type fileConfig struct {
-	APIKey        string                     `json:"api_key,omitempty" toml:"api_key"`
-	BaseURL       string                     `json:"base_url,omitempty" toml:"base_url"`
-	Model         string                     `json:"model,omitempty" toml:"model_name"`
-	Backend       string                     `json:"backend,omitempty" toml:"backend"`
-	SystemPrompt  string                     `json:"system_prompt,omitempty" toml:"system_prompt"`
-	MaxSteps      int                        `json:"max_steps,omitempty" toml:"max_steps"`
-	HTTPTimeout   string                     `json:"http_timeout,omitempty" toml:"http_timeout"`
-	MCPServers    map[string]MCPServerConfig `json:"mcp_servers,omitempty" toml:"mcp_servers"`
-	LSPServers    map[string]LSPServerConfig `json:"lsp_servers,omitempty" toml:"lsp_servers"`
-	Permission    PermissionConfig           `json:"permission,omitempty" toml:"permission"`
-	Session       sessionConfig              `json:"session,omitempty" toml:"session"`
-	ContextWindow int                        `json:"context_window,omitempty" toml:"context_window"`
-	Compaction    fileCompactionConfig       `json:"compaction,omitempty" toml:"compaction"`
-	Compat        fileCompatConfig           `json:"compat,omitempty" toml:"compat"`
-	Skills        SkillsConfig               `json:"skills,omitempty" toml:"skills"`
-	Models        struct {
+	APIKey              string                     `json:"api_key,omitempty" toml:"api_key"`
+	BaseURL             string                     `json:"base_url,omitempty" toml:"base_url"`
+	Model               string                     `json:"model,omitempty" toml:"model_name"`
+	Backend             string                     `json:"backend,omitempty" toml:"backend"`
+	SystemPrompt        string                     `json:"system_prompt,omitempty" toml:"system_prompt"`
+	MaxSteps            int                        `json:"max_steps,omitempty" toml:"max_steps"`
+	HTTPTimeout         string                     `json:"http_timeout,omitempty" toml:"http_timeout"`
+	MCPServers          map[string]MCPServerConfig `json:"mcp_servers,omitempty" toml:"mcp_servers"`
+	LSPServers          map[string]LSPServerConfig `json:"lsp_servers,omitempty" toml:"lsp_servers"`
+	Permission          PermissionConfig           `json:"permission,omitempty" toml:"permission"`
+	Session             sessionConfig              `json:"session,omitempty" toml:"session"`
+	ContextWindow       int                        `json:"context_window,omitempty" toml:"context_window"`
+	Compaction          fileCompactionConfig       `json:"compaction,omitempty" toml:"compaction"`
+	Compat              fileCompatConfig           `json:"compat,omitempty" toml:"compat"`
+	Skills              SkillsConfig               `json:"skills,omitempty" toml:"skills"`
+	AuthProviderCommand string                     `json:"auth_provider_command,omitempty" toml:"auth_provider_command"`
+	AuthTokenTTL        int64                      `json:"auth_token_ttl,omitempty" toml:"auth_token_ttl"`
+	Models              struct {
 		Default   string `toml:"default"`
 		WebSearch string `toml:"web_search"`
 	} `json:"-" toml:"models"`
@@ -262,6 +266,10 @@ func Load(path string) (Config, error) {
 		applyPruningConfig(&cfg.Pruning, disk.Compaction.Pruning)
 		applyCompatConfig(&cfg.Compat, disk.Compat)
 		cfg.Skills = disk.Skills
+		cfg.AuthProviderCommand = disk.AuthProviderCommand
+		if disk.AuthTokenTTL > 0 {
+			cfg.AuthTokenTTL = time.Duration(disk.AuthTokenTTL) * time.Second
+		}
 		if disk.HTTPTimeout != "" {
 			d, err := time.ParseDuration(disk.HTTPTimeout)
 			if err != nil {
@@ -354,6 +362,14 @@ func applyEnv(cfg *Config) {
 	if value := os.Getenv("GROK_DEBUG_CONTEXT_WINDOW"); value != "" {
 		if parsed, err := strconv.Atoi(value); err == nil && parsed > 0 {
 			cfg.ContextWindow = parsed
+		}
+	}
+	if value := strings.TrimSpace(os.Getenv("GROK_AUTH_PROVIDER_COMMAND")); value != "" {
+		cfg.AuthProviderCommand = value
+	}
+	if value := strings.TrimSpace(os.Getenv("GROK_AUTH_TOKEN_TTL")); value != "" {
+		if seconds, err := strconv.ParseInt(value, 10, 64); err == nil && seconds > 0 {
+			cfg.AuthTokenTTL = time.Duration(seconds) * time.Second
 		}
 	}
 	applyCompatEnv(&cfg.Compat.Cursor, "CURSOR")

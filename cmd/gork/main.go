@@ -151,14 +151,23 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		}
 		authClient := auth.NewClient(&http.Client{Timeout: cfg.HTTPTimeout})
 		authConfig := auth.DefaultConfig()
-		token, authErr := authClient.Resolve(context.Background(), path, authConfig)
+		external := auth.ExternalProvider{
+			Command: cfg.AuthProviderCommand, Path: path, Scope: authConfig.Scope(),
+			TokenTTL: cfg.AuthTokenTTL, Stderr: stderr,
+		}
+		resolveToken := func(ctx context.Context, rejectedToken string) (string, error) {
+			token, err := authClient.ResolveRejected(ctx, path, authConfig, rejectedToken)
+			if err == nil || external.Command == "" {
+				return token, err
+			}
+			return external.Resolve(ctx, rejectedToken)
+		}
+		token, authErr := resolveToken(context.Background(), "")
 		if authErr == nil {
 			cfg.APIKey = token
-			tokenProvider = func(ctx context.Context, rejectedToken string) (string, error) {
-				return authClient.ResolveRejected(ctx, path, authConfig, rejectedToken)
-			}
+			tokenProvider = resolveToken
 		} else if !errors.Is(authErr, os.ErrNotExist) {
-			return fmt.Errorf("load OAuth credentials: %w", authErr)
+			return fmt.Errorf("load dynamic credentials: %w", authErr)
 		}
 	}
 	allowRules, askRules, denyRules, err := permissionRules(cfg.Permission, opts.allow, opts.deny)

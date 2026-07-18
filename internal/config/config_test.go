@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadGrokTOMLModelAndServers(t *testing.T) {
@@ -212,6 +213,31 @@ func TestWebSearchEnvironmentOverrides(t *testing.T) {
 	search, enabled := cfg.WebSearchEndpoint()
 	if !enabled || search.APIKey != "search-key" || search.BaseURL != "https://search.example/v1" || search.Model != "search-model" {
 		t.Fatalf("unexpected environment search config: %#v enabled=%v", search, enabled)
+	}
+}
+
+func TestExternalAuthConfigurationAndEnvironment(t *testing.T) {
+	t.Setenv("GROK_AUTH_PROVIDER_COMMAND", "")
+	t.Setenv("GROK_AUTH_TOKEN_TTL", "")
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("auth_provider_command = \"printf file-token\"\nauth_token_ttl = 600\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AuthProviderCommand != "printf file-token" || cfg.AuthTokenTTL != 10*time.Minute {
+		t.Fatalf("file external auth config=%#v", cfg)
+	}
+	t.Setenv("GROK_AUTH_PROVIDER_COMMAND", "printf env-token")
+	t.Setenv("GROK_AUTH_TOKEN_TTL", "120")
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AuthProviderCommand != "printf env-token" || cfg.AuthTokenTTL != 2*time.Minute {
+		t.Fatalf("environment external auth config=%#v", cfg)
 	}
 }
 
