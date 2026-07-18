@@ -456,6 +456,115 @@ func TestRequirementsVersionOverridesRespectFailClosed(t *testing.T) {
 	}
 }
 
+func TestManagedConfigDeepMergeAndUserPrecedence(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	managed := []byte(`
+[models]
+default = "shared"
+
+[model.shared]
+model = "managed-model"
+base_url = "https://managed.example/v1"
+backend = "chat_completions"
+context_window = 90000
+
+[mcp_servers.managed]
+command = "managed-mcp"
+
+[skills]
+paths = ["managed-skills"]
+`)
+	if err := os.WriteFile(filepath.Join(home, "managed_config.toml"), managed, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	userPath := filepath.Join(home, "config.toml")
+	user := []byte(`
+[model.shared]
+model = "user-model"
+
+[mcp_servers.user]
+command = "user-mcp"
+
+[skills]
+paths = ["user-skills"]
+`)
+	if err := os.WriteFile(userPath, user, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(userPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Model != "user-model" || cfg.BaseURL != "https://managed.example/v1" || cfg.Backend != "chat_completions" || cfg.ContextWindow != 90000 {
+		t.Fatalf("merged model config=%#v", cfg)
+	}
+	if cfg.MCPServers["managed"].Command != "managed-mcp" || cfg.MCPServers["user"].Command != "user-mcp" {
+		t.Fatalf("merged MCP config=%#v", cfg.MCPServers)
+	}
+	if strings.Join(cfg.Skills.Paths, ",") != "user-skills" {
+		t.Fatalf("managed array was not replaced: %#v", cfg.Skills.Paths)
+	}
+}
+
+func TestManagedConfigLayerOrder(t *testing.T) {
+	systemPath := filepath.Join(t.TempDir(), "system.toml")
+	managedPath := filepath.Join(t.TempDir(), "managed.toml")
+	userPath := filepath.Join(t.TempDir(), "user.toml")
+	for path, value := range map[string]string{
+		systemPath:  "[grok_com_config]\nforce_login_team_uuid = \"system\"\n",
+		managedPath: "[grok_com_config]\nforce_login_team_uuid = \"managed\"\n",
+		userPath:    "[grok_com_config]\nforce_login_team_uuid = \"user\"\n",
+	} {
+		if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	disk, ok, err := loadMergedTOML([]string{systemPath, managedPath, userPath})
+	if err != nil || !ok {
+		t.Fatalf("load managed layers ok=%v err=%v", ok, err)
+	}
+	cfg := Config{}
+	if err := applyFileConfig(&cfg, &disk); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(cfg.ForceLoginTeams, ",") != "user" {
+		t.Fatalf("layer precedence=%#v", cfg.ForceLoginTeams)
+	}
+}
+
+func TestManagedConfigWithLegacyJSON(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	managed := []byte("[[permission.rules]]\naction = \"deny\"\ntool = \"bash\"\npattern = \"danger*\"\n[mcp_servers.managed]\ncommand = \"managed-mcp\"\n")
+	if err := os.WriteFile(filepath.Join(home, "managed_config.toml"), managed, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(home, "config.json")
+	data := []byte(`{"api_key":"key","model":"json-model","base_url":"https://json.example/v1","backend":"responses","mcp_servers":{"user":{"command":"user-mcp"}}}`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Model != "json-model" || len(cfg.Permission.Rules) != 1 || cfg.Permission.Rules[0].Action != "deny" || cfg.MCPServers["managed"].Command != "managed-mcp" || cfg.MCPServers["user"].Command != "user-mcp" {
+		t.Fatalf("managed + JSON config=%#v", cfg)
+	}
+}
+
+func TestInvalidManagedConfigStopsLoading(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	if err := os.WriteFile(filepath.Join(home, "managed_config.toml"), []byte("[broken"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(filepath.Join(home, "missing.toml")); err == nil || !strings.Contains(err.Error(), "managed_config.toml") {
+		t.Fatalf("invalid managed config error=%v", err)
+	}
+}
+
 func TestCompatConfigAndEnvironmentPrecedence(t *testing.T) {
 	for _, name := range []string{
 		"GROK_CURSOR_SKILLS_ENABLED", "GROK_CURSOR_RULES_ENABLED", "GROK_CURSOR_AGENTS_ENABLED",

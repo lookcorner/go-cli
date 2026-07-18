@@ -93,6 +93,11 @@ are supported. The earlier JSON format remains accepted when passed with
 `--config`; an existing `$XDG_CONFIG_HOME/gork-go/config.json` is used as a
 fallback when `~/.grok/config.toml` does not exist.
 
+On Unix, `/etc/grok/managed_config.toml` is the lowest disk layer. It is
+overlaid by `$GROK_HOME/managed_config.toml` and then the user `config.toml`.
+Nested tables merge recursively, arrays replace, and environment/CLI values are
+applied afterward.
+
 Managed authentication and permission policy may be placed in
 `$GROK_HOME/requirements.toml` (or `~/.grok/requirements.toml`). On Unix,
 `/etc/grok/requirements.toml` is applied afterward and wins conflicts. These

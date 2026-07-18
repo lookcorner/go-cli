@@ -248,96 +248,38 @@ func Load(path string) (Config, error) {
 		}
 	}
 
-	data, err := os.ReadFile(path)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return Config{}, fmt.Errorf("read config %q: %w", path, err)
-	}
-	if err == nil {
-		var disk fileConfig
-		if err := unmarshalConfig(path, data, &disk); err != nil {
-			return Config{}, fmt.Errorf("parse config %q: %w", path, err)
-		}
-		applyModelConfig(&disk)
-		if disk.Models.WebSearch != "" {
-			entry, ok := disk.ModelEntries[disk.Models.WebSearch]
-			if !ok {
-				return Config{}, fmt.Errorf("web search model %q is not defined", disk.Models.WebSearch)
-			}
-			if entry.Backend != "" && entry.Backend != "responses" {
-				return Config{}, errors.New("web search model backend must be responses")
-			}
-			cfg.WebSearch = WebSearchConfig{
-				Enabled: true, APIKey: entry.APIKey, BaseURL: entry.BaseURL, Model: entry.Model,
-			}
-			if cfg.WebSearch.APIKey == "" {
-				cfg.WebSearch.APIKey = firstConfiguredEnv(entry.EnvKey)
+	managedPaths := managedConfigPaths()
+	if strings.EqualFold(filepath.Ext(path), ".json") {
+		if disk, ok, err := loadMergedTOML(managedPaths); err != nil {
+			return Config{}, err
+		} else if ok {
+			if err := applyFileConfig(&cfg, &disk); err != nil {
+				return Config{}, err
 			}
 		}
-		if disk.APIKey != "" {
-			cfg.APIKey = disk.APIKey
+		data, err := os.ReadFile(path)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return Config{}, fmt.Errorf("read config %q: %w", path, err)
 		}
-		if disk.BaseURL != "" {
-			cfg.BaseURL = disk.BaseURL
+		if err == nil {
+			var disk fileConfig
+			if err := unmarshalConfig(path, data, &disk); err != nil {
+				return Config{}, fmt.Errorf("parse config %q: %w", path, err)
+			}
+			if err := applyFileConfig(&cfg, &disk); err != nil {
+				return Config{}, err
+			}
 		}
-		if disk.Model != "" {
-			cfg.Model = disk.Model
-		}
-		if disk.Backend != "" {
-			cfg.Backend = disk.Backend
-		}
-		if disk.SystemPrompt != "" {
-			cfg.SystemPrompt = disk.SystemPrompt
-		}
-		if disk.MaxSteps > 0 {
-			cfg.MaxSteps = disk.MaxSteps
-		}
-		cfg.MCPServers = disk.MCPServers
-		cfg.LSPServers = disk.LSPServers
-		cfg.Permission = disk.Permission
-		if disk.Toolset.WebFetch.ProxyEndpoint != nil {
-			cfg.WebFetch.ProxyEndpoint = *disk.Toolset.WebFetch.ProxyEndpoint
-			cfg.WebFetch.ProxyConfigured = true
-		}
-		if disk.Toolset.WebFetch.AllowedDomains != nil {
-			cfg.WebFetch.AllowedDomains = append([]string(nil), disk.Toolset.WebFetch.AllowedDomains...)
-			cfg.WebFetch.DomainsConfigured = true
-		}
-		if disk.ContextWindow > 0 {
-			cfg.ContextWindow = disk.ContextWindow
-		}
-		if disk.Session.AutoCompactThresholdPercent != nil {
-			cfg.AutoCompactThresholdPercent = *disk.Session.AutoCompactThresholdPercent
-		}
-		applyPruningConfig(&cfg.Pruning, disk.Compaction.Pruning)
-		applyCompatConfig(&cfg.Compat, disk.Compat)
-		cfg.Skills = disk.Skills
-		cfg.AuthProviderCommand = disk.GrokComConfig.AuthProviderCommand
-		if cfg.AuthProviderCommand == "" {
-			cfg.AuthProviderCommand = disk.AuthProviderCommand
-		}
-		authTokenTTL := disk.GrokComConfig.AuthTokenTTL
-		if authTokenTTL == 0 {
-			authTokenTTL = disk.AuthTokenTTL
-		}
-		if authTokenTTL > 0 {
-			cfg.AuthTokenTTL = time.Duration(authTokenTTL) * time.Second
-		}
-		cfg.AuthPrincipalType = strings.TrimSpace(disk.GrokComConfig.OAuth2.PrincipalType)
-		cfg.AuthPrincipalID = strings.TrimSpace(disk.GrokComConfig.OAuth2.PrincipalID)
-		cfg.ForceLoginTeams, cfg.ForceLoginTeamConfigured, err = forceLoginTeams(disk.GrokComConfig.ForceLoginTeamUUID)
+	} else {
+		layers := append(managedPaths, path)
+		disk, ok, err := loadMergedTOML(layers)
 		if err != nil {
 			return Config{}, err
 		}
-		if disk.GrokComConfig.DisableAPIKeyAuth != nil {
-			cfg.DisableAPIKeyAuth = *disk.GrokComConfig.DisableAPIKeyAuth
-		}
-		cfg.PreferredAuthMethod = strings.ToLower(strings.TrimSpace(disk.Auth.PreferredMethod))
-		if disk.HTTPTimeout != "" {
-			d, err := time.ParseDuration(disk.HTTPTimeout)
-			if err != nil {
-				return Config{}, fmt.Errorf("parse http_timeout: %w", err)
+		if ok {
+			if err := applyFileConfig(&cfg, &disk); err != nil {
+				return Config{}, err
 			}
-			cfg.HTTPTimeout = d
 		}
 	}
 
@@ -348,6 +290,125 @@ func Load(path string) (Config, error) {
 	cfg.BaseURL = strings.TrimRight(cfg.BaseURL, "/")
 	cfg.WebSearch.BaseURL = strings.TrimRight(cfg.WebSearch.BaseURL, "/")
 	return cfg, nil
+}
+
+func applyFileConfig(cfg *Config, disk *fileConfig) error {
+	applyModelConfig(disk)
+	if disk.Models.WebSearch != "" {
+		entry, ok := disk.ModelEntries[disk.Models.WebSearch]
+		if !ok {
+			return fmt.Errorf("web search model %q is not defined", disk.Models.WebSearch)
+		}
+		if entry.Backend != "" && entry.Backend != "responses" {
+			return errors.New("web search model backend must be responses")
+		}
+		cfg.WebSearch = WebSearchConfig{Enabled: true, APIKey: entry.APIKey, BaseURL: entry.BaseURL, Model: entry.Model}
+		if cfg.WebSearch.APIKey == "" {
+			cfg.WebSearch.APIKey = firstConfiguredEnv(entry.EnvKey)
+		}
+	}
+	if disk.APIKey != "" {
+		cfg.APIKey = disk.APIKey
+	}
+	if disk.BaseURL != "" {
+		cfg.BaseURL = disk.BaseURL
+	}
+	if disk.Model != "" {
+		cfg.Model = disk.Model
+	}
+	if disk.Backend != "" {
+		cfg.Backend = disk.Backend
+	}
+	if disk.SystemPrompt != "" {
+		cfg.SystemPrompt = disk.SystemPrompt
+	}
+	if disk.MaxSteps > 0 {
+		cfg.MaxSteps = disk.MaxSteps
+	}
+	if disk.MCPServers != nil {
+		if cfg.MCPServers == nil {
+			cfg.MCPServers = make(map[string]MCPServerConfig)
+		}
+		for name, server := range disk.MCPServers {
+			cfg.MCPServers[name] = server
+		}
+	}
+	if disk.LSPServers != nil {
+		if cfg.LSPServers == nil {
+			cfg.LSPServers = make(map[string]LSPServerConfig)
+		}
+		for name, server := range disk.LSPServers {
+			cfg.LSPServers[name] = server
+		}
+	}
+	if disk.Permission.Rules != nil {
+		cfg.Permission = disk.Permission
+	}
+	if disk.Toolset.WebFetch.ProxyEndpoint != nil {
+		cfg.WebFetch.ProxyEndpoint = *disk.Toolset.WebFetch.ProxyEndpoint
+		cfg.WebFetch.ProxyConfigured = true
+	}
+	if disk.Toolset.WebFetch.AllowedDomains != nil {
+		cfg.WebFetch.AllowedDomains = append([]string(nil), disk.Toolset.WebFetch.AllowedDomains...)
+		cfg.WebFetch.DomainsConfigured = true
+	}
+	if disk.ContextWindow > 0 {
+		cfg.ContextWindow = disk.ContextWindow
+	}
+	if disk.Session.AutoCompactThresholdPercent != nil {
+		cfg.AutoCompactThresholdPercent = *disk.Session.AutoCompactThresholdPercent
+	}
+	applyPruningConfig(&cfg.Pruning, disk.Compaction.Pruning)
+	applyCompatConfig(&cfg.Compat, disk.Compat)
+	if disk.Skills.Paths != nil {
+		cfg.Skills.Paths = append([]string(nil), disk.Skills.Paths...)
+	}
+	if disk.Skills.Ignore != nil {
+		cfg.Skills.Ignore = append([]string(nil), disk.Skills.Ignore...)
+	}
+	if disk.Skills.Disabled != nil {
+		cfg.Skills.Disabled = append([]string(nil), disk.Skills.Disabled...)
+	}
+	if disk.GrokComConfig.AuthProviderCommand != "" || disk.AuthProviderCommand != "" {
+		cfg.AuthProviderCommand = disk.GrokComConfig.AuthProviderCommand
+		if cfg.AuthProviderCommand == "" {
+			cfg.AuthProviderCommand = disk.AuthProviderCommand
+		}
+	}
+	authTokenTTL := disk.GrokComConfig.AuthTokenTTL
+	if authTokenTTL == 0 {
+		authTokenTTL = disk.AuthTokenTTL
+	}
+	if authTokenTTL > 0 {
+		cfg.AuthTokenTTL = time.Duration(authTokenTTL) * time.Second
+	}
+	if disk.GrokComConfig.OAuth2.PrincipalType != "" {
+		cfg.AuthPrincipalType = strings.TrimSpace(disk.GrokComConfig.OAuth2.PrincipalType)
+	}
+	if disk.GrokComConfig.OAuth2.PrincipalID != "" {
+		cfg.AuthPrincipalID = strings.TrimSpace(disk.GrokComConfig.OAuth2.PrincipalID)
+	}
+	if disk.GrokComConfig.ForceLoginTeamUUID != nil {
+		teams, configured, err := forceLoginTeams(disk.GrokComConfig.ForceLoginTeamUUID)
+		if err != nil {
+			return err
+		}
+		cfg.ForceLoginTeams, cfg.ForceLoginTeamConfigured = teams, configured
+	}
+	if disk.GrokComConfig.DisableAPIKeyAuth != nil {
+		cfg.DisableAPIKeyAuth = *disk.GrokComConfig.DisableAPIKeyAuth
+	}
+	if disk.Auth.PreferredMethod != "" {
+		cfg.PreferredAuthMethod = strings.ToLower(strings.TrimSpace(disk.Auth.PreferredMethod))
+	}
+	if disk.HTTPTimeout != "" {
+		duration, err := time.ParseDuration(disk.HTTPTimeout)
+		if err != nil {
+			return fmt.Errorf("parse http_timeout: %w", err)
+		}
+		cfg.HTTPTimeout = duration
+	}
+	return nil
 }
 
 func applyCompatConfig(target *compat.Config, source fileCompatConfig) {
@@ -463,6 +524,63 @@ func requirementsPaths() []string {
 		paths = append(paths, "/etc/grok/requirements.toml")
 	}
 	return paths
+}
+
+func managedConfigPaths() []string {
+	paths := make([]string, 0, 2)
+	if runtime.GOOS != "windows" {
+		paths = append(paths, "/etc/grok/managed_config.toml")
+	}
+	if home := strings.TrimSpace(os.Getenv("GROK_HOME")); home != "" {
+		paths = append(paths, filepath.Join(home, "managed_config.toml"))
+	} else if home, err := os.UserHomeDir(); err == nil {
+		paths = append(paths, filepath.Join(home, ".grok", "managed_config.toml"))
+	}
+	return paths
+}
+
+func loadMergedTOML(paths []string) (fileConfig, bool, error) {
+	merged := make(map[string]any)
+	found := false
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return fileConfig{}, false, fmt.Errorf("read config %q: %w", path, err)
+		}
+		var layer map[string]any
+		if err := toml.Unmarshal(data, &layer); err != nil {
+			return fileConfig{}, false, fmt.Errorf("parse config %q: %w", path, err)
+		}
+		deepMergeMap(merged, layer)
+		found = true
+	}
+	if !found {
+		return fileConfig{}, false, nil
+	}
+	data, err := toml.Marshal(merged)
+	if err != nil {
+		return fileConfig{}, false, err
+	}
+	var disk fileConfig
+	if err := toml.Unmarshal(data, &disk); err != nil {
+		return fileConfig{}, false, err
+	}
+	return disk, true, nil
+}
+
+func deepMergeMap(base, override map[string]any) {
+	for key, value := range override {
+		if overrideTable, ok := value.(map[string]any); ok {
+			if baseTable, ok := base[key].(map[string]any); ok {
+				deepMergeMap(baseTable, overrideTable)
+				continue
+			}
+		}
+		base[key] = value
+	}
 }
 
 func applyRequirementsFiles(cfg *Config, paths []string) error {
