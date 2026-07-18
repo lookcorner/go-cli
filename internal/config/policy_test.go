@@ -172,3 +172,46 @@ func TestPolicyClientRejectsCrossOriginRedirect(t *testing.T) {
 		t.Fatalf("cross-origin redirect err=%v called=%v", err, called)
 	}
 }
+
+func TestPolicyClientRetriesTransientServerFailure(t *testing.T) {
+	attempts := 0
+	managed := "[auth]\npreferred_method = \"oidc\"\n"
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		attempts++
+		if attempts == 1 {
+			http.Error(writer, "temporary", http.StatusServiceUnavailable)
+			return
+		}
+		_ = json.NewEncoder(writer).Encode(policyResponse{DeploymentID: "deployment-1", Managed: &managed})
+	}))
+	defer server.Close()
+	client := NewPolicyClient(server.Client())
+	client.Attempts = 3
+	client.backoff = func(context.Context, int) error { return nil }
+	if _, err := client.Sync(context.Background(), t.TempDir(), server.URL, "token", "", "fingerprint"); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 2 {
+		t.Fatalf("transient retry attempts=%d", attempts)
+	}
+}
+
+func TestManagedPolicyHardStaleUsesMarkerIdentityAndArtifacts(t *testing.T) {
+	home := t.TempDir()
+	marker := policyMarker{SyncedAt: time.Now().Unix(), Principal: "team-1", HadManaged: true}
+	if err := writeJSONAtomic(filepath.Join(home, policyMarkerFile), marker); err != nil {
+		t.Fatal(err)
+	}
+	if !ManagedPolicyHardStale(home, "team-1", "") {
+		t.Fatal("missing served artifact was considered usable")
+	}
+	if err := os.WriteFile(filepath.Join(home, "managed_config.toml"), []byte("managed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if ManagedPolicyHardStale(home, "team-1", "") {
+		t.Fatal("matching cache was considered hard stale")
+	}
+	if !ManagedPolicyHardStale(home, "team-2", "") {
+		t.Fatal("foreign team marker was considered usable")
+	}
+}

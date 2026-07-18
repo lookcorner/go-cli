@@ -35,9 +35,11 @@ type PolicyKey struct {
 var embeddedPolicyKeys []PolicyKey
 
 type PolicyClient struct {
-	HTTP *http.Client
-	keys []PolicyKey
-	now  func() time.Time
+	HTTP     *http.Client
+	Attempts int
+	keys     []PolicyKey
+	now      func() time.Time
+	backoff  func(context.Context, int) error
 }
 
 type policyResponse struct {
@@ -66,11 +68,22 @@ type signedPayload struct {
 }
 
 type policyMarker struct {
+	SyncedAt        int64  `json:"synced_at,omitempty"`
 	Principal       string `json:"principal,omitempty"`
 	KeyFingerprint  string `json:"key_fingerprint,omitempty"`
 	FailClosed      bool   `json:"fail_closed"`
 	HadManaged      bool   `json:"had_managed_config"`
 	HadRequirements bool   `json:"had_requirements"`
+}
+
+type SetupReport struct {
+	Source       *string `json:"source"`
+	Configured   bool    `json:"configured"`
+	DeploymentID *string `json:"deploymentId"`
+	TeamID       *string `json:"teamId"`
+	Managed      *string `json:"managedConfig"`
+	Requirements *string `json:"requirements"`
+	FailClosed   bool    `json:"failClosed"`
 }
 
 func NewPolicyClient(httpClient *http.Client) *PolicyClient {
@@ -91,7 +104,7 @@ func NewPolicyClient(httpClient *http.Client) *PolicyClient {
 		}
 		return nil
 	}
-	return &PolicyClient{HTTP: &copy, keys: embeddedPolicyKeys, now: time.Now}
+	return &PolicyClient{HTTP: &copy, Attempts: 5, keys: embeddedPolicyKeys, now: time.Now, backoff: policyBackoff}
 }
 
 func (c *PolicyClient) Sync(ctx context.Context, home, endpoint, token, expectedTeam, keyFingerprint string) (bool, error) {
@@ -101,27 +114,12 @@ func (c *PolicyClient) Sync(ctx context.Context, home, endpoint, token, expected
 	if err := validatePolicyURL(endpoint); err != nil {
 		return false, err
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	body, err := c.fetch(ctx, endpoint, token)
 	if err != nil {
 		return false, err
 	}
-	request.Header.Set("Authorization", "Bearer "+token)
-	response, err := c.HTTP.Do(request)
-	if err != nil {
-		return false, fmt.Errorf("fetch managed policy: %w", err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden {
-		return false, errors.New("managed policy credential was rejected")
-	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return false, fmt.Errorf("fetch managed policy: server returned %s", response.Status)
-	}
-	var body policyResponse
-	if err := json.NewDecoder(io.LimitReader(response.Body, 4<<20)).Decode(&body); err != nil {
-		return false, fmt.Errorf("decode managed policy: %w", err)
-	}
 	marker := policyMarker{
+		SyncedAt:        c.now().Unix(),
 		KeyFingerprint:  keyFingerprint,
 		HadManaged:      body.Managed != nil && *body.Managed != "",
 		HadRequirements: body.Requirements != nil && *body.Requirements != "",
@@ -172,8 +170,130 @@ func (c *PolicyClient) Sync(ctx context.Context, home, endpoint, token, expected
 	return changed, nil
 }
 
+func (c *PolicyClient) FetchReport(ctx context.Context, endpoint, token, expectedTeam string) (SetupReport, error) {
+	if token == "" {
+		return SetupReport{}, nil
+	}
+	if err := validatePolicyURL(endpoint); err != nil {
+		return SetupReport{}, err
+	}
+	body, err := c.fetch(ctx, endpoint, token)
+	if err != nil {
+		return SetupReport{}, err
+	}
+	if len(c.keys) > 0 {
+		if _, _, err := verifyPolicyResponse(body, c.keys, expectedTeam, uint64(c.now().Unix())); err != nil {
+			return SetupReport{}, fmt.Errorf("verify managed policy: %w", err)
+		}
+	}
+	return SetupReport{
+		Configured:   body.DeploymentID != "" || body.TeamID != "",
+		DeploymentID: optionalString(body.DeploymentID), TeamID: optionalString(body.TeamID),
+		Managed: body.Managed, Requirements: body.Requirements, FailClosed: requirementsFailClosed(body.Requirements),
+	}, nil
+}
+
+func (c *PolicyClient) fetch(ctx context.Context, endpoint, token string) (policyResponse, error) {
+	attempts := c.Attempts
+	if attempts < 1 {
+		attempts = 1
+	}
+	for attempt := 1; attempt <= attempts; attempt++ {
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			return policyResponse{}, err
+		}
+		request.Header.Set("Authorization", "Bearer "+token)
+		response, err := c.HTTP.Do(request)
+		if err != nil {
+			if attempt < attempts {
+				if waitErr := c.waitBackoff(ctx, attempt); waitErr == nil {
+					continue
+				} else {
+					return policyResponse{}, waitErr
+				}
+			}
+			return policyResponse{}, fmt.Errorf("fetch managed policy: %w", err)
+		}
+		data, readErr := io.ReadAll(io.LimitReader(response.Body, (4<<20)+1))
+		response.Body.Close()
+		if readErr != nil {
+			if attempt < attempts {
+				if waitErr := c.waitBackoff(ctx, attempt); waitErr == nil {
+					continue
+				} else {
+					return policyResponse{}, waitErr
+				}
+			}
+			return policyResponse{}, fmt.Errorf("read managed policy: %w", readErr)
+		}
+		if len(data) > 4<<20 {
+			return policyResponse{}, errors.New("managed policy response exceeds 4 MiB")
+		}
+		if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden {
+			return policyResponse{}, errors.New("managed policy credential was rejected")
+		}
+		if response.StatusCode >= 500 && attempt < attempts {
+			if waitErr := c.waitBackoff(ctx, attempt); waitErr == nil {
+				continue
+			} else {
+				return policyResponse{}, waitErr
+			}
+		}
+		if response.StatusCode < 200 || response.StatusCode >= 300 {
+			return policyResponse{}, fmt.Errorf("fetch managed policy: server returned %s", response.Status)
+		}
+		var body policyResponse
+		if err := json.Unmarshal(data, &body); err != nil {
+			return policyResponse{}, fmt.Errorf("decode managed policy: %w", err)
+		}
+		return body, nil
+	}
+	return policyResponse{}, errors.New("fetch managed policy failed")
+}
+
+func (c *PolicyClient) waitBackoff(ctx context.Context, attempt int) error {
+	if c.backoff == nil {
+		return policyBackoff(ctx, attempt)
+	}
+	return c.backoff(ctx, attempt)
+}
+
 func VerifyManagedPolicy(home, expectedPrincipal, keyFingerprint string) error {
 	return verifyManagedPolicy(home, expectedPrincipal, keyFingerprint, embeddedPolicyKeys, uint64(time.Now().Unix()))
+}
+
+func ManagedPolicyHardStale(home, expectedPrincipal, keyFingerprint string) bool {
+	marker, err := readPolicyMarker(home)
+	if err != nil {
+		return true
+	}
+	if expectedPrincipal != "" && marker.Principal != expectedPrincipal {
+		return true
+	}
+	if keyFingerprint != "" && marker.KeyFingerprint != "" && marker.KeyFingerprint != keyFingerprint {
+		return true
+	}
+	if marker.HadManaged {
+		if _, err := readRegularFile(filepath.Join(home, "managed_config.toml")); err != nil {
+			return true
+		}
+	}
+	if marker.HadRequirements {
+		if _, err := readRegularFile(filepath.Join(home, "requirements.toml")); err != nil {
+			return true
+		}
+	}
+	if len(embeddedPolicyKeys) > 0 {
+		principal := expectedPrincipal
+		if principal == "" && marker.KeyFingerprint == keyFingerprint {
+			principal = marker.Principal
+		}
+		if verifyPolicyCache(home, principal, embeddedPolicyKeys, uint64(time.Now().Unix())) != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func verifyManagedPolicy(home, expectedPrincipal, keyFingerprint string, keys []PolicyKey, now uint64) error {
@@ -218,6 +338,28 @@ func verifyManagedPolicy(home, expectedPrincipal, keyFingerprint string, keys []
 		return err
 	}
 	return nil
+}
+
+func verifyPolicyCache(home, expectedPrincipal string, keys []PolicyKey, now uint64) error {
+	data, err := readRegularFile(filepath.Join(home, policySignatureFile))
+	if err != nil {
+		return err
+	}
+	var envelope signatureEnvelope
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return err
+	}
+	payload, err := verifySignedPayload(envelope, keys)
+	if err != nil {
+		return err
+	}
+	if expectedPrincipal != "" && policyPrincipal(payload) != "" && policyPrincipal(payload) != expectedPrincipal {
+		return errors.New("managed policy is bound to a different principal")
+	}
+	if now > payload.ExpiresAt {
+		return errors.New("managed policy has expired")
+	}
+	return checkPolicyFiles(home, payload)
 }
 
 func verifyPolicyResponse(body policyResponse, keys []PolicyKey, expectedTeam string, now uint64) (signatureEnvelope, signedPayload, error) {
@@ -418,6 +560,23 @@ func DeploymentKeyFingerprint(key string) string {
 	return hex.EncodeToString(digest[:])
 }
 
+func policyBackoff(ctx context.Context, attempt int) error {
+	delay := time.Second << max(attempt-1, 0)
+	if value := strings.TrimSpace(os.Getenv("GROK_DEPLOYMENT_CONFIG_BACKOFF_MS")); value != "" {
+		if base, err := time.ParseDuration(value + "ms"); err == nil && base >= 0 {
+			delay = base << max(attempt-1, 0)
+		}
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 func findPolicyKey(keys []PolicyKey, id string) ed25519.PublicKey {
 	for _, key := range keys {
 		if key.ID == id && len(key.Key) == ed25519.PublicKeySize {
@@ -439,6 +598,13 @@ func stringValue(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+func optionalString(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
 }
 
 func equalOptional(left, right *string) bool {

@@ -186,6 +186,72 @@ func TestRunSetupRequiresManagedPrincipal(t *testing.T) {
 	}
 }
 
+func TestRunSetupJSONDoesNotWritePolicy(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	t.Setenv("GROK_DEPLOYMENT_KEY", "deployment-secret")
+	managed := "[auth]\npreferred_method = \"oidc\"\n"
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(writer).Encode(map[string]any{
+			"deployment_id": "deployment-1", "managed_config": managed,
+		})
+	}))
+	defer server.Close()
+	path := filepath.Join(home, "config.toml")
+	if err := os.WriteFile(path, []byte("[endpoints]\nmanaged_config_url = \""+server.URL+"\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	if err := run([]string{"setup", "--json", "--config", path}, strings.NewReader(""), &stdout, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	var report struct {
+		Source       string `json:"source"`
+		Configured   bool   `json:"configured"`
+		DeploymentID string `json:"deploymentId"`
+		Managed      string `json:"managedConfig"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Source != "deploymentKey" || !report.Configured || report.DeploymentID != "deployment-1" || report.Managed != managed {
+		t.Fatalf("setup report=%#v", report)
+	}
+	if _, err := os.Stat(filepath.Join(home, "managed_config.toml")); !os.IsNotExist(err) {
+		t.Fatalf("setup --json wrote policy: %v", err)
+	}
+}
+
+func TestSessionStartRepairsAndReloadsMissingManagedPolicy(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	t.Setenv("GROK_DEPLOYMENT_KEY", "deployment-secret")
+	t.Setenv("GORK_API_KEY", "")
+	t.Setenv("XAI_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	requests := 0
+	requirements := "[auth]\npreferred_method = \"api_key\"\n"
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		requests++
+		_ = json.NewEncoder(writer).Encode(map[string]any{
+			"deployment_id": "deployment-1", "requirements": requirements,
+		})
+	}))
+	defer server.Close()
+	path := filepath.Join(home, "config.toml")
+	data := "[models]\ndefault = \"main\"\n[model.main]\nmodel = \"model\"\nbase_url = \"https://api.x.ai/v1\"\nbackend = \"responses\"\n[endpoints]\nmanaged_config_url = \"" + server.URL + "\"\n"
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := run([]string{"--config", path, "hello"}, strings.NewReader(""), io.Discard, io.Discard)
+	if requests != 1 || err == nil || !strings.Contains(err.Error(), "missing credentials") {
+		t.Fatalf("session repair requests=%d err=%v", requests, err)
+	}
+	if data, err := os.ReadFile(filepath.Join(home, "requirements.toml")); err != nil || string(data) != requirements {
+		t.Fatalf("repaired requirements=%q err=%v", data, err)
+	}
+}
+
 func TestRunLogoutRemovesSelectedScope(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "auth.json")
 	selected := auth.Config{Issuer: "https://auth.example", ClientID: "client-1"}

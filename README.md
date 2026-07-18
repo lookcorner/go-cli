@@ -71,6 +71,10 @@ Enterprise managed policy can be fetched with `gork setup`. Configure
 `managed_config.toml` and `requirements.toml` files are replaced atomically;
 withdrawn files are removed. Team login performs the same sync on a best-effort
 basis.
+`gork setup --json` returns the served documents without changing disk. Setup
+retries transient transport and 5xx failures with bounded exponential backoff;
+session startup performs an eight-second repair only when the cache marker is
+missing, belongs to another principal, or references a missing/invalid artifact.
 
 The signed-policy implementation verifies the server's exact Ed25519 payload,
 principal binding, expiry and byte-for-byte disk contents before enforcing a

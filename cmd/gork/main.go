@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -133,7 +134,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if err := verifyManagedPolicy(cfg); err != nil {
+	if err := prepareManagedPolicy(&cfg, opts.configPath, stderr); err != nil {
 		return err
 	}
 	if opts.model != "" {
@@ -453,7 +454,7 @@ func runLogin(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if err := auth.Save(authFile, cfg.Scope(), credential); err != nil {
 		return fmt.Errorf("save OAuth credentials: %w", err)
 	}
-	if _, _, err := syncManagedPolicy(ctx, appConfig, &credential); err != nil {
+	if _, _, err := syncManagedPolicy(ctx, appConfig, &credential, 2); err != nil {
 		fmt.Fprintf(stderr, "Managed configuration was not updated: %v\n", err)
 	}
 	fmt.Fprintln(stdout, "Signed in")
@@ -462,9 +463,11 @@ func runLogin(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 
 func runSetup(args []string, stdout, stderr io.Writer) error {
 	var configPath string
+	var jsonOutput bool
 	flags := flag.NewFlagSet("gork setup", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.StringVar(&configPath, "config", "", "path to config file")
+	flags.BoolVar(&jsonOutput, "json", false, "print the served configuration without installing it")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -478,7 +481,21 @@ func runSetup(args []string, stdout, stderr io.Writer) error {
 	credential := loadStoredCredential(cfg)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	changed, attempted, err := syncManagedPolicy(ctx, cfg, credential)
+	if jsonOutput {
+		token, team, _, source := managedPolicyCredential(cfg, credential)
+		report := config.SetupReport{}
+		if token != "" {
+			client := config.NewPolicyClient(&http.Client{Timeout: 15 * time.Second})
+			var err error
+			report, err = client.FetchReport(ctx, cfg.ManagedPolicyURL(), token, team)
+			if err != nil {
+				return err
+			}
+			report.Source = &source
+		}
+		return json.NewEncoder(stdout).Encode(report)
+	}
+	changed, attempted, err := syncManagedPolicy(ctx, cfg, credential, 5)
 	if err != nil {
 		return err
 	}
@@ -493,13 +510,8 @@ func runSetup(args []string, stdout, stderr io.Writer) error {
 	return nil
 }
 
-func syncManagedPolicy(ctx context.Context, cfg config.Config, credential *auth.Credential) (bool, bool, error) {
-	token, team, fingerprint := cfg.DeploymentKey, "", ""
-	if token != "" {
-		fingerprint = config.DeploymentKeyFingerprint(token)
-	} else if credential != nil && credential.TeamID != "" {
-		token, team = credential.Key, credential.TeamID
-	}
+func syncManagedPolicy(ctx context.Context, cfg config.Config, credential *auth.Credential, attempts int) (bool, bool, error) {
+	token, team, fingerprint, _ := managedPolicyCredential(cfg, credential)
 	if token == "" {
 		return false, false, nil
 	}
@@ -508,8 +520,43 @@ func syncManagedPolicy(ctx context.Context, cfg config.Config, credential *auth.
 		return false, true, err
 	}
 	client := config.NewPolicyClient(&http.Client{Timeout: 15 * time.Second})
+	client.Attempts = attempts
 	changed, err := client.Sync(ctx, home, cfg.ManagedPolicyURL(), token, team, fingerprint)
 	return changed, true, err
+}
+
+func managedPolicyCredential(cfg config.Config, credential *auth.Credential) (token, team, fingerprint, source string) {
+	if cfg.DeploymentKey != "" {
+		return cfg.DeploymentKey, "", config.DeploymentKeyFingerprint(cfg.DeploymentKey), "deploymentKey"
+	}
+	if credential != nil && credential.TeamID != "" {
+		return credential.Key, credential.TeamID, "", "teamOauth"
+	}
+	return "", "", "", ""
+}
+
+func prepareManagedPolicy(cfg *config.Config, configPath string, stderr io.Writer) error {
+	home, err := config.PolicyHome()
+	if err != nil {
+		return err
+	}
+	credential := loadStoredCredential(*cfg)
+	_, team, fingerprint, _ := managedPolicyCredential(*cfg, credential)
+	if (cfg.DeploymentKey != "" || credential != nil) && config.ManagedPolicyHardStale(home, team, fingerprint) {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		changed, _, syncErr := syncManagedPolicy(ctx, *cfg, credential, 2)
+		cancel()
+		if syncErr != nil {
+			fmt.Fprintf(stderr, "Managed configuration refresh failed: %v\n", syncErr)
+		} else if changed {
+			reloaded, err := config.Load(configPath)
+			if err != nil {
+				return err
+			}
+			*cfg = reloaded
+		}
+	}
+	return verifyManagedPolicy(*cfg)
 }
 
 func verifyManagedPolicy(cfg config.Config) error {
