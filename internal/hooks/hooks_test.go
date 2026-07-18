@@ -12,10 +12,12 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/compat"
 	"github.com/lookcorner/go-cli/internal/plugin"
+	"github.com/lookcorner/go-cli/internal/tools"
 )
 
 func TestPluginHookCanDenyToolAndReceivesAuthenticEnvironment(t *testing.T) {
@@ -47,6 +49,32 @@ func TestPluginHookCanDenyToolAndReceivesAuthenticEnvironment(t *testing.T) {
 	}
 	if err := runner.BeforeTool(context.Background(), api.ToolCall{Name: "read_file", Arguments: []byte(`{}`)}); err != nil {
 		t.Fatalf("matcher blocked unrelated tool: %v", err)
+	}
+}
+
+func TestPermissionDeniedHookReceivesToolPayload(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	root := t.TempDir()
+	payloadPath := filepath.Join(root, "payload.json")
+	script := filepath.Join(root, "capture.sh")
+	if err := os.WriteFile(script, []byte(fmt.Sprintf("#!/bin/sh\ncat > %q\n", payloadPath)), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	catalog := &Catalog{specs: []Spec{{Event: PermissionDenied, Command: script, Timeout: time.Second}}}
+	runner := &Runtime{Catalog: catalog, WorkspaceRoot: root, SessionID: "session-1"}
+	call := api.ToolCall{CallID: "call-1", Name: "shell", Arguments: []byte(`{"command":"git push"}`)}
+	runner.AfterTool(context.Background(), call, tools.ExecutionResult{}, &tools.PermissionDeniedError{Action: "shell"})
+	payload, err := os.ReadFile(payloadPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(payload)
+	for _, expected := range []string{`"hookEventName":"permission_denied"`, `"toolName":"shell"`, `"toolUseId":"call-1"`, `"command":"git push"`} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("payload=%s missing %s", text, expected)
+		}
 	}
 }
 

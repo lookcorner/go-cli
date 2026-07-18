@@ -305,19 +305,22 @@ func (r *Runtime) UserPromptSubmitted(ctx context.Context, prompt string) {
 }
 
 func (r *Runtime) BeforeTool(ctx context.Context, call api.ToolCall) error {
-	input := json.RawMessage(call.Arguments)
-	if !json.Valid(input) {
-		input = json.RawMessage("null")
-	}
 	return r.dispatch(ctx, PreToolUse, call.Name, map[string]any{
-		"toolName": call.Name, "toolUseId": call.CallID, "toolInput": input, "toolInputTruncated": false, "subagentType": r.SubagentType,
+		"toolName": call.Name, "toolUseId": call.CallID, "toolInput": validJSON(call.Arguments), "toolInputTruncated": false, "subagentType": r.SubagentType,
 	}, true)
 }
 
 func (r *Runtime) AfterTool(ctx context.Context, call api.ToolCall, result tools.ExecutionResult, toolErr error) {
 	if toolErr != nil {
+		if tools.IsPermissionDenied(toolErr) {
+			r.dispatch(ctx, PermissionDenied, call.Name, map[string]any{
+				"toolName": call.Name, "toolUseId": call.CallID, "toolInput": validJSON(call.Arguments),
+				"toolInputTruncated": false,
+			}, false)
+			return
+		}
 		r.dispatch(ctx, PostToolFailure, call.Name, map[string]any{
-			"toolName": call.Name, "toolUseId": call.CallID, "toolInput": json.RawMessage(call.Arguments),
+			"toolName": call.Name, "toolUseId": call.CallID, "toolInput": validJSON(call.Arguments),
 			"toolInputTruncated": false, "error": toolErr.Error(), "subagentType": r.SubagentType,
 		}, false)
 		return
@@ -326,6 +329,13 @@ func (r *Runtime) AfterTool(ctx context.Context, call api.ToolCall, result tools
 		"toolName": call.Name, "toolUseId": call.CallID, "toolInput": json.RawMessage(call.Arguments),
 		"toolResult": result.Output, "toolInputTruncated": false, "toolResultTruncated": false, "isBackgrounded": false, "subagentType": r.SubagentType,
 	}, false)
+}
+
+func validJSON(value []byte) json.RawMessage {
+	if json.Valid(value) {
+		return json.RawMessage(value)
+	}
+	return json.RawMessage("null")
 }
 
 func (r *Runtime) Stopped(ctx context.Context, reason string, runErr error) {

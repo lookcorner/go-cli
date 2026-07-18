@@ -55,10 +55,10 @@ func (a PromptApprover) Approve(_ context.Context, action, detail string) error 
 	case PermissionAuto:
 		return nil
 	case PermissionDeny:
-		return fmt.Errorf("permission denied for %s", action)
+		return &PermissionDeniedError{Action: action}
 	case PermissionPrompt:
 		if a.Input == nil || a.Output == nil {
-			return fmt.Errorf("permission prompt unavailable for %s", action)
+			return &PermissionDeniedError{Action: action, Reason: fmt.Sprintf("permission prompt unavailable for %s", action)}
 		}
 		fmt.Fprintf(a.Output, "\nAllow %s?\n  %s\n[y/N] ", action, detail)
 		var line string
@@ -75,7 +75,7 @@ func (a PromptApprover) Approve(_ context.Context, action, detail string) error 
 		if answer == "y" || answer == "yes" {
 			return nil
 		}
-		return fmt.Errorf("permission denied for %s", action)
+		return &PermissionDeniedError{Action: action}
 	default:
 		return fmt.Errorf("unknown permission mode %q", a.Mode)
 	}

@@ -97,3 +97,16 @@ func TestPolicyApproverAskPrecedesAllow(t *testing.T) {
 		t.Fatalf("ask did not precede allow: asker=%d base=%d", asker.calls, base.calls)
 	}
 }
+
+func TestPermissionDenialsAreTyped(t *testing.T) {
+	if err := (PromptApprover{Mode: PermissionDeny}).Approve(context.Background(), "shell", "true"); !IsPermissionDenied(err) {
+		t.Fatalf("prompt denial type: %v", err)
+	}
+	approver, err := NewRuleApprover(PromptApprover{Mode: PermissionAuto}, nil, []string{"Bash(git push *)"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := approver.Approve(context.Background(), "shell", "git push origin main"); !IsPermissionDenied(err) {
+		t.Fatalf("rule denial type: %v", err)
+	}
+}

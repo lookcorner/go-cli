@@ -15,6 +15,23 @@ type permissionRule struct {
 	raw     string
 }
 
+type PermissionDeniedError struct {
+	Action string
+	Reason string
+}
+
+func (e *PermissionDeniedError) Error() string {
+	if e.Reason != "" {
+		return e.Reason
+	}
+	return fmt.Sprintf("permission denied for %s", e.Action)
+}
+
+func IsPermissionDenied(err error) bool {
+	var denied *PermissionDeniedError
+	return errors.As(err, &denied)
+}
+
 type RuleApprover struct {
 	base  Approver
 	asker Approver
@@ -55,7 +72,7 @@ func NewPolicyApprover(base, asker Approver, allow, ask, deny []string) (*RuleAp
 func (a *RuleApprover) Approve(ctx context.Context, action, detail string) error {
 	for _, rule := range a.deny {
 		if rule.matches(action, detail) {
-			return fmt.Errorf("permission denied by rule %s", rule.raw)
+			return &PermissionDeniedError{Action: action, Reason: fmt.Sprintf("permission denied by rule %s", rule.raw)}
 		}
 	}
 	for _, rule := range a.ask {

@@ -2387,7 +2387,7 @@ func (a *serverApprover) Approve(ctx context.Context, action, detail string) err
 		if response.outcome == "selected" && response.optionID == "allow_once" {
 			return nil
 		}
-		return fmt.Errorf("permission denied for %s", action)
+		return &tools.PermissionDeniedError{Action: action}
 	case <-ctx.Done():
 		return ctx.Err()
 	}
