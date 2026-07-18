@@ -35,6 +35,9 @@ type Plugin struct {
 	DataDir     string
 	SkillDirs   []string
 	CommandDirs []string
+	AgentDirs   []string
+	HooksConfig string
+	InlineHooks json.RawMessage
 	MCPConfig   string
 	InlineMCP   json.RawMessage
 	LSPConfig   string
@@ -58,8 +61,10 @@ type manifest struct {
 	Description string    `json:"description"`
 	Skills      pathList  `json:"skills"`
 	Commands    pathList  `json:"commands"`
+	Agents      pathList  `json:"agents"`
 	MCPServers  component `json:"mcpServers"`
 	LSPServers  component `json:"lspServers"`
+	Hooks       component `json:"hooks"`
 }
 
 type component struct {
@@ -235,6 +240,7 @@ func collect(root string, kind scope, executable bool, grokHome string, cfg Conf
 		ID: id, Name: m.Name, Scope: string(kind), Version: m.Version, Description: m.Description,
 		Root: root, DataDir: dataDir, Enabled: enabled, Trusted: executable, Executable: enabled && executable,
 		SkillDirs: resolveDirs(root, m.Skills, "skills"), CommandDirs: resolveDirs(root, m.Commands, "commands"),
+		AgentDirs: resolveDirs(root, m.Agents, "agents"), HooksConfig: resolveHooksConfig(root, m.Hooks), InlineHooks: append(json.RawMessage(nil), m.Hooks.Inline...),
 		MCPConfig: resolveMCPConfig(root, m.MCPServers), InlineMCP: append(json.RawMessage(nil), m.MCPServers.Inline...),
 		LSPConfig: resolveLSPConfig(root, m.LSPServers), InlineLSP: append(json.RawMessage(nil), m.LSPServers.Inline...),
 	})
@@ -256,7 +262,7 @@ func loadManifest(root string) (manifest, bool) {
 		return m, true
 	}
 	name := nameFromDir(root)
-	if name == "" || !isDir(filepath.Join(root, "skills")) && !isDir(filepath.Join(root, "commands")) && !isFile(filepath.Join(root, ".mcp.json")) && !isFile(filepath.Join(root, ".lsp.json")) {
+	if name == "" || !isDir(filepath.Join(root, "skills")) && !isDir(filepath.Join(root, "commands")) && !isDir(filepath.Join(root, "agents")) && !isFile(filepath.Join(root, "hooks", "hooks.json")) && !isFile(filepath.Join(root, ".mcp.json")) && !isFile(filepath.Join(root, ".lsp.json")) {
 		return manifest{}, false
 	}
 	return manifest{Name: name}, true
@@ -270,6 +276,16 @@ func resolveLSPConfig(root string, configured component) string {
 		return resolveFile(root, configured.Path)
 	}
 	return resolveFile(root, ".lsp.json")
+}
+
+func resolveHooksConfig(root string, configured component) string {
+	if len(configured.Inline) > 0 {
+		return ""
+	}
+	if configured.Path != "" {
+		return resolveFile(root, configured.Path)
+	}
+	return resolveFile(root, filepath.Join("hooks", "hooks.json"))
 }
 
 func resolveMCPConfig(root string, configured component) string {

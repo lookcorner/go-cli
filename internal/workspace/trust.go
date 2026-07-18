@@ -57,6 +57,22 @@ func GrantFolderTrust(ctx context.Context, cwd string) error {
 	return recordFolderTrust(ctx, path, key, true)
 }
 
+func RevokeFolderTrust(ctx context.Context, cwd string) error {
+	if DevelopmentBuild() {
+		return nil
+	}
+	home := userHome()
+	path := trustStorePath(home)
+	if path == "" {
+		return errors.New("cannot persist folder trust without GROK_HOME or a user home")
+	}
+	key := WorkspaceTrustKey(cwd)
+	if unsafeTrustRoot(key, home) {
+		return errors.New("refusing to change trust for a broad user directory")
+	}
+	return recordFolderTrust(ctx, path, key, false)
+}
+
 func DevelopmentBuild() bool {
 	return version.Current == "" || strings.Contains(strings.ToLower(version.Current), "dev")
 }

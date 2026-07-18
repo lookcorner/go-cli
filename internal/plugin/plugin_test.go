@@ -16,7 +16,10 @@ func TestDiscoverConfigPlugin(t *testing.T) {
 	root := filepath.Join(workspaceRoot, "tools")
 	mustMkdir(t, filepath.Join(root, "prompts"))
 	mustMkdir(t, filepath.Join(root, "commands"))
-	mustWrite(t, filepath.Join(root, "plugin.json"), `{"name":"deploy-tools","version":"1.2.3","description":"Deploy helpers","skills":"prompts","commands":["commands"]}`)
+	mustMkdir(t, filepath.Join(root, "agents"))
+	mustMkdir(t, filepath.Join(root, "hooks"))
+	mustWrite(t, filepath.Join(root, "hooks", "hooks.json"), `{"hooks":{}}`)
+	mustWrite(t, filepath.Join(root, "plugin.json"), `{"name":"deploy-tools","version":"1.2.3","description":"Deploy helpers","skills":"prompts","commands":["commands"],"agents":"agents"}`)
 	root = canonicalOrClean(root)
 
 	plugins, err := discover(workspaceRoot, home, grokHome, Config{Paths: []string{"tools"}})
@@ -34,6 +37,9 @@ func TestDiscoverConfigPlugin(t *testing.T) {
 	}
 	if strings.Join(plugin.SkillDirs, "|") != filepath.Join(root, "prompts") || strings.Join(plugin.CommandDirs, "|") != filepath.Join(root, "commands") {
 		t.Fatalf("component dirs = %#v %#v", plugin.SkillDirs, plugin.CommandDirs)
+	}
+	if strings.Join(plugin.AgentDirs, "|") != filepath.Join(root, "agents") || plugin.HooksConfig != filepath.Join(root, "hooks", "hooks.json") {
+		t.Fatalf("agent/hook components = %#v %q", plugin.AgentDirs, plugin.HooksConfig)
 	}
 	if plugin.DataDir != filepath.Join(grokHome, "plugin-data", filepath.FromSlash(wantID)) {
 		t.Fatalf("data dir = %q", plugin.DataDir)
@@ -170,6 +176,18 @@ func TestPluginMCPManifestAndConvention(t *testing.T) {
 	plugins, err = discover(workspaceRoot, home, filepath.Join(home, ".grok"), Config{Paths: []string{lspConvention}})
 	if err != nil || len(plugins) != 1 || plugins[0].LSPConfig != canonicalOrClean(filepath.Join(lspConvention, ".lsp.json")) {
 		t.Fatalf("convention LSP plugin=%#v err=%v", plugins, err)
+	}
+}
+
+func TestPluginInlineHooks(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	home := t.TempDir()
+	root := filepath.Join(workspaceRoot, "inline-hooks")
+	mustMkdir(t, root)
+	mustWrite(t, filepath.Join(root, "plugin.json"), `{"name":"inline-hooks","hooks":{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"check"}]}]}}}`)
+	plugins, err := discover(workspaceRoot, home, filepath.Join(home, ".grok"), Config{Paths: []string{root}})
+	if err != nil || len(plugins) != 1 || plugins[0].HooksConfig != "" || !strings.Contains(string(plugins[0].InlineHooks), "PreToolUse") {
+		t.Fatalf("plugins=%#v err=%v", plugins, err)
 	}
 }
 

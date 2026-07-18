@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,10 +28,63 @@ type recordingToolObserver struct {
 	results []tools.ExecutionResult
 }
 
+type denyingHookPolicy struct {
+	started int
+	prompts []string
+	before  []string
+	after   []string
+	stopped []string
+}
+
+func (p *denyingHookPolicy) SessionStarted(context.Context) { p.started++ }
+func (p *denyingHookPolicy) UserPromptSubmitted(_ context.Context, prompt string) {
+	p.prompts = append(p.prompts, prompt)
+}
+func (p *denyingHookPolicy) BeforeTool(_ context.Context, call api.ToolCall) error {
+	p.before = append(p.before, call.Name)
+	return errors.New("blocked by policy")
+}
+func (p *denyingHookPolicy) AfterTool(_ context.Context, call api.ToolCall, _ tools.ExecutionResult, _ error) {
+	p.after = append(p.after, call.Name)
+}
+func (p *denyingHookPolicy) Stopped(_ context.Context, reason string) {
+	p.stopped = append(p.stopped, reason)
+}
+
 func (*recordingToolObserver) ToolStarted(api.ToolCall) {}
 
 func (o *recordingToolObserver) ToolFinished(_ api.ToolCall, result tools.ExecutionResult, _ error) {
 	o.results = append(o.results, result)
+}
+
+func TestRunnerHookPolicyCanDenyBeforeToolExecution(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamer := &fakeStreamer{results: []api.StreamResult{
+		{ResponseID: "resp_1", ToolCalls: []api.ToolCall{{CallID: "call_1", Name: "shell", Arguments: json.RawMessage(`{"command":"touch should-not-exist"}`)}}},
+		{ResponseID: "resp_2", Text: "done"},
+	}}
+	policy := &denyingHookPolicy{}
+	observer := &recordingToolObserver{}
+	runner := Runner{
+		Client: streamer, Tools: tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto}),
+		HookPolicy: policy, ToolObserver: observer, Model: "test", MaxSteps: 2,
+	}
+	defer runner.Tools.Close()
+	if _, err := runner.Run(context.Background(), "inspect"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(ws.Root(), "should-not-exist")); !os.IsNotExist(err) {
+		t.Fatalf("denied tool executed: %v", err)
+	}
+	if policy.started != 1 || strings.Join(policy.prompts, "|") != "inspect" || strings.Join(policy.before, "|") != "shell" || len(policy.after) != 0 || strings.Join(policy.stopped, "|") != "completed" {
+		t.Fatalf("policy=%#v", policy)
+	}
+	if len(streamer.requests) != 2 || !strings.Contains(streamer.requests[1].Input[0].Output, "blocked by policy") || len(observer.results) != 1 {
+		t.Fatalf("requests=%#v observer=%#v", streamer.requests, observer)
+	}
 }
 
 func (f *fakeStreamer) StreamResponse(_ context.Context, request api.ResponseRequest, onText func(string)) (api.StreamResult, error) {

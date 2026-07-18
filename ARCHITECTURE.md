@@ -19,6 +19,10 @@ implementation.
   OS-enforced MDM precedence, and compatible MCP/LSP configuration source merging.
 - `internal/plugin` owns local plugin manifests, discovery precedence, enablement,
   stable identity, data paths, and component-path confinement.
+- `internal/hooks` owns plugin hook parsing, durable disablement, matching, safe
+  command/HTTP execution, and fail-open versus explicit-deny semantics.
+- `internal/agents` owns portable plugin agent-definition discovery and parsing;
+  it does not imply a subagent execution runtime.
 - `internal/compat` owns resolved vendor compatibility values shared by
   configuration, instruction discovery, and skill discovery.
 

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+
+	"github.com/lookcorner/go-cli/internal/version"
 )
 
 func TestResolveFolderTrustPrecedence(t *testing.T) {
@@ -61,6 +63,32 @@ func TestTrustStoreMostSpecificDecisionWins(t *testing.T) {
 	}
 	if trustedByStore(trustDocument{Folders: map[string]folderTrust{home: {Trusted: true}}}, child, home) {
 		t.Fatal("unsafe home trust record was honored")
+	}
+}
+
+func TestGrantAndRevokeFolderTrust(t *testing.T) {
+	previousVersion := version.Current
+	version.Current = "1.0.0"
+	t.Cleanup(func() { version.Current = previousVersion })
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("GROK_HOME", filepath.Join(home, ".grok"))
+	root := filepath.Join(home, "project")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeTrustFile(t, filepath.Join(root, ".mcp.json"), `{"mcpServers":{}}`)
+	if err := GrantFolderTrust(context.Background(), root); err != nil {
+		t.Fatal(err)
+	}
+	if ResolveFolderTrust(root, true, false) != TrustTrusted {
+		t.Fatal("grant was not persisted")
+	}
+	if err := RevokeFolderTrust(context.Background(), root); err != nil {
+		t.Fatal(err)
+	}
+	if ResolveFolderTrust(root, true, false) != TrustUntrusted {
+		t.Fatal("revocation was not persisted")
 	}
 }
 

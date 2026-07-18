@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 
 	"github.com/lookcorner/go-cli/internal/api"
+	"github.com/lookcorner/go-cli/internal/hooks"
 	"github.com/lookcorner/go-cli/internal/marketplace"
 	"github.com/lookcorner/go-cli/internal/mcp"
 	"github.com/lookcorner/go-cli/internal/plugin"
@@ -36,6 +38,14 @@ type ToolObserver interface {
 	ToolFinished(call api.ToolCall, result tools.ExecutionResult, err error)
 }
 
+type HookPolicy interface {
+	SessionStarted(context.Context)
+	UserPromptSubmitted(context.Context, string)
+	BeforeTool(context.Context, api.ToolCall) error
+	AfterTool(context.Context, api.ToolCall, tools.ExecutionResult, error)
+	Stopped(context.Context, string)
+}
+
 type HistoryResetter interface {
 	ResetHistory(summary string)
 }
@@ -49,6 +59,9 @@ type Runner struct {
 	Tools                   *tools.Registry
 	Skills                  *skills.Catalog
 	PluginInventory         func() []plugin.Plugin
+	HookCatalog             *hooks.Catalog
+	ProjectTrusted          bool
+	ReloadHooks             func() error
 	Logger                  EventLogger
 	SessionID               string
 	Model                   string
@@ -57,6 +70,7 @@ type Runner struct {
 	TextOutput              io.Writer
 	StatusOutput            io.Writer
 	ToolObserver            ToolObserver
+	HookPolicy              HookPolicy
 	ContextWindow           int
 	CompactThresholdPercent int
 	UpdateMCPServers        func(context.Context, []mcp.ServerConfig) error
@@ -67,6 +81,7 @@ type Runner struct {
 	MarketplaceAction       func(context.Context, marketplace.Action) (marketplace.Outcome, error)
 	lastInputTokens         int
 	pendingSummary          string
+	hookStart               sync.Once
 }
 
 type Result struct {
@@ -98,6 +113,10 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 	}
 	if strings.TrimSpace(prompt) == "" {
 		return Result{}, errors.New("prompt must not be empty")
+	}
+	if r.HookPolicy != nil {
+		r.hookStart.Do(func() { r.HookPolicy.SessionStarted(ctx) })
+		r.HookPolicy.UserPromptSubmitted(ctx, prompt)
 	}
 	if r.MaxSteps < 1 {
 		r.MaxSteps = 20
@@ -185,6 +204,9 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 		})
 
 		if len(streamed.ToolCalls) == 0 {
+			if r.HookPolicy != nil {
+				r.HookPolicy.Stopped(ctx, "completed")
+			}
 			return final, nil
 		}
 		if streamed.ResponseID == "" {
@@ -203,7 +225,17 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 				r.ToolObserver.ToolStarted(call)
 			}
 			toolCtx := tools.WithToolCall(ctx, call.CallID, call.Name)
-			toolResult, toolErr := r.Tools.ExecuteResult(toolCtx, call.Name, call.Arguments)
+			var toolResult tools.ExecutionResult
+			var toolErr error
+			if r.HookPolicy != nil {
+				toolErr = r.HookPolicy.BeforeTool(toolCtx, call)
+			}
+			if toolErr == nil {
+				toolResult, toolErr = r.Tools.ExecuteResult(toolCtx, call.Name, call.Arguments)
+				if r.HookPolicy != nil {
+					r.HookPolicy.AfterTool(toolCtx, call, toolResult, toolErr)
+				}
+			}
 			output := toolResult.Output
 			if r.ToolObserver != nil {
 				r.ToolObserver.ToolFinished(call, toolResult, toolErr)

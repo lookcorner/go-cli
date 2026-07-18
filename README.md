@@ -646,7 +646,7 @@ Enabled plugins may also contribute `.mcp.json`/inline `mcpServers` and
 unstamped-build behavior; release builds require folder trust before an enabled
 project plugin may start MCP or LSP processes. ACP sessions expose enabled and
 disabled inventory through `x.ai/plugins/list`, including scope, trust, skill,
-and MCP summaries. `x.ai/plugins/action` persists local path add/remove and
+agent, hook, and MCP summaries. `x.ai/plugins/action` persists local path add/remove and
 plugin enable/disable, while reload re-runs discovery. Inventory and
 skill/command components update immediately. Plugin MCP servers are restarted
 with rollback on failure while preserving client-provided session overrides;
@@ -655,8 +655,31 @@ swapped into the live manager. Supported local plugin actions therefore do not
 require a session restart. `install`, `update`, and confirmed `uninstall`
 actions manage isolated local/Git snapshots under
 `$GROK_HOME/installed-plugins`, persist an atomic registry, and refresh live
-skill/MCP/LSP components. Multi-plugin repositories require explicit uninstall
-confirmation. Plugin hooks and agents are not yet implemented.
+skill/MCP/LSP/hook components. Multi-plugin repositories require explicit uninstall
+confirmation.
+
+Enabled executable plugins may define `hooks/hooks.json`. Command and HTTPS
+handlers receive the compatible camel-case JSON event envelope on stdin or as
+the request body. `PreToolUse` is blocking only when a handler explicitly
+returns `{"decision":"deny","reason":"..."}`; crashes, nonzero exits,
+timeouts, malformed output, and request failures fail open. Matchers are Go/RE2
+regular expressions over tool names. Command hooks receive authentic
+`GROK_HOOK_*`, workspace, plugin-root, and plugin-data environment variables.
+HTTP hooks reject non-HTTPS, private, link-local, metadata-range, and unsafe
+redirect targets. Hook names disabled through ACP persist one per line in
+`$GROK_HOME/disabled-hooks`.
+
+ACP `x.ai/hooks/list` exposes loaded hook metadata and parse warnings;
+`x.ai/hooks/action` supports reload, enable, disable, source toggles, and folder
+trust changes. Custom hook-path add/remove is not implemented yet. The runtime
+currently fires plugin `SessionStart`, `UserPromptSubmit`, `PreToolUse`,
+`PostToolUse`, `Stop`, and `SessionEnd` events; project/global non-plugin hook
+sources and the other event producers remain.
+
+Plugin `agents/*.md` definitions are parsed from YAML frontmatter and reported
+as names/counts in plugin inventory. Their prompt, tool allow/deny lists, and
+turn limit are retained in the agent catalog, but executable subagent
+coordination is not implemented yet.
 
 The same direct-install lifecycle is available outside ACP:
 

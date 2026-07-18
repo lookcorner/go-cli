@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/lookcorner/go-cli/internal/agents"
+	"github.com/lookcorner/go-cli/internal/hooks"
 	"github.com/lookcorner/go-cli/internal/plugin"
 )
 
@@ -245,6 +247,17 @@ func firstString(values ...string) string {
 
 func pluginWireInfo(item plugin.Plugin) map[string]any {
 	skillNames := pluginSkillNames(item.SkillDirs)
+	agentNames := agents.PluginNames(item)
+	hookCount := hooks.CountDefined(item)
+	hookStatus := "none"
+	if item.HooksConfig != "" || len(item.InlineHooks) > 0 {
+		hookStatus = "active"
+		if !item.Executable {
+			hookStatus = "blocked"
+		} else if item.HooksConfig == "" && len(item.InlineHooks) > 0 {
+			hookStatus = "active_inline"
+		}
+	}
 	mcpCount := pluginMCPServerCount(item)
 	mcpStatus := "none"
 	if mcpCount > 0 {
@@ -259,11 +272,14 @@ func pluginWireInfo(item plugin.Plugin) map[string]any {
 		"name": item.Name, "id": item.ID, "root": item.Root, "scope": item.Scope,
 		"trusted": item.Trusted, "enabled": item.Enabled,
 		"version": pluginOptionalString(item.Version), "description": pluginOptionalString(item.Description),
-		"skillCount": len(skillNames), "agentCount": 0, "hookStatus": "none", "hookCount": 0,
+		"skillCount": len(skillNames), "agentCount": len(agentNames), "hookStatus": hookStatus, "hookCount": hookCount,
 		"mcpServerCount": mcpCount, "mcpStatus": mcpStatus,
 	}
 	if len(skillNames) > 0 {
 		info["skillNames"] = skillNames
+	}
+	if len(agentNames) > 0 {
+		info["agentNames"] = agentNames
 	}
 	return info
 }

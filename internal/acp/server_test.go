@@ -18,6 +18,7 @@ import (
 
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/api"
+	"github.com/lookcorner/go-cli/internal/hooks"
 	"github.com/lookcorner/go-cli/internal/marketplace"
 	mcppkg "github.com/lookcorner/go-cli/internal/mcp"
 	"github.com/lookcorner/go-cli/internal/plugin"
@@ -747,9 +748,25 @@ func TestPluginsListExtensionWireContract(t *testing.T) {
 	if err := os.WriteFile(mcpPath, []byte(`{"mcpServers":{"docs":{"command":"docs"}}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	agentRoot := filepath.Join(root, "agents")
+	if err := os.MkdirAll(agentRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentRoot, "review.md"), []byte("---\nname: reviewer\ndescription: Review code\n---\nReview."), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hooksRoot := filepath.Join(root, "hooks")
+	if err := os.MkdirAll(hooksRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	hooksPath := filepath.Join(hooksRoot, "hooks.json")
+	if err := os.WriteFile(hooksPath, []byte(`{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"check"}]}]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	plugins := []plugin.Plugin{{
 		ID: "project/12345678/review-tools", Name: "review-tools", Scope: "project", Root: root,
-		Version: "1.0.0", SkillDirs: []string{skillRoot}, MCPConfig: mcpPath, Enabled: false, Trusted: false,
+		Version: "1.0.0", SkillDirs: []string{skillRoot}, AgentDirs: []string{agentRoot}, HooksConfig: hooksPath,
+		MCPConfig: mcpPath, Enabled: false, Trusted: false,
 	}}
 	current := &session{id: "plugin-session", runner: &agent.Runner{PluginInventory: func() []plugin.Plugin { return plugins }}}
 	var output bytes.Buffer
@@ -762,8 +779,62 @@ func TestPluginsListExtensionWireContract(t *testing.T) {
 	result := response["result"].(map[string]any)
 	items := result["result"].(map[string]any)["plugins"].([]any)
 	item := items[0].(map[string]any)
-	if result["error"] != nil || len(items) != 1 || item["enabled"] != false || item["trusted"] != false || item["scope"] != "project" || item["skillCount"].(float64) != 1 || item["mcpServerCount"].(float64) != 1 || item["mcpStatus"] != "blocked" {
+	if result["error"] != nil || len(items) != 1 || item["enabled"] != false || item["trusted"] != false || item["scope"] != "project" || item["skillCount"].(float64) != 1 || item["agentCount"].(float64) != 1 || item["agentNames"].([]any)[0] != "review" || item["hookCount"].(float64) != 1 || item["hookStatus"] != "blocked" || item["mcpServerCount"].(float64) != 1 || item["mcpStatus"] != "blocked" {
 		t.Fatalf("unexpected plugins list: %#v", response)
+	}
+}
+
+func TestHooksListAndDisableWireContract(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	root := t.TempDir()
+	hooksRoot := filepath.Join(root, "hooks")
+	if err := os.MkdirAll(hooksRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	hooksPath := filepath.Join(hooksRoot, "hooks.json")
+	if err := os.WriteFile(hooksPath, []byte(`{"hooks":{"PreToolUse":[{"matcher":"shell","hooks":[{"type":"command","command":"check","timeout":2}]}]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	catalog := hooks.DiscoverPlugins([]plugin.Plugin{{Name: "guard", Root: root, HooksConfig: hooksPath, Executable: true}})
+	reloads := 0
+	current := &session{id: "hook-session", cwd: root, runner: &agent.Runner{
+		HookCatalog: catalog, ProjectTrusted: true, ReloadHooks: func() error { reloads++; return nil },
+	}}
+	request := func(method, params string) map[string]any {
+		var output bytes.Buffer
+		server := &Server{output: &output, sessions: map[string]*session{"hook-session": current}}
+		server.handleHooks(context.Background(), message{ID: json.RawMessage("1"), Method: method, Params: json.RawMessage(params)})
+		var response map[string]any
+		if err := json.NewDecoder(&output).Decode(&response); err != nil {
+			t.Fatal(err)
+		}
+		return response["result"].(map[string]any)["result"].(map[string]any)
+	}
+	listed := request("x.ai/hooks/list", `{"sessionId":"hook-session"}`)
+	items := listed["hooks"].([]any)
+	item := items[0].(map[string]any)
+	if len(items) != 1 || listed["projectTrusted"] != true || item["event"] != "pre_tool_use" || item["matcher"] != "shell" || item["timeoutMs"].(float64) != 2000 || item["disabled"] != false {
+		t.Fatalf("listed=%#v", listed)
+	}
+	name := item["name"].(string)
+	outcome := request("x.ai/hooks/action", `{"sessionId":"hook-session","action":{"type":"disable","hookName":`+strconv.Quote(name)+`}}`)
+	if outcome["status"] != "success" || !catalog.Snapshot().Hooks[0].Disabled {
+		t.Fatalf("outcome=%#v snapshot=%#v", outcome, catalog.Snapshot())
+	}
+	request("x.ai/hooks/action", `{"sessionId":"hook-session","action":{"type":"reload"}}`)
+	if reloads != 1 {
+		t.Fatalf("reloads=%d", reloads)
+	}
+}
+
+func TestPluginWireInfoReportsInlineHooks(t *testing.T) {
+	info := pluginWireInfo(plugin.Plugin{
+		Name: "inline", Enabled: true, Trusted: true, Executable: true,
+		InlineHooks: json.RawMessage(`{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"start"}]}]}}`),
+	})
+	if info["hookStatus"] != "active_inline" || info["hookCount"] != 1 {
+		t.Fatalf("info=%#v", info)
 	}
 }
 

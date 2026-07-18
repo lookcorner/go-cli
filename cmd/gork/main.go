@@ -26,6 +26,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/auth"
 	"github.com/lookcorner/go-cli/internal/config"
+	"github.com/lookcorner/go-cli/internal/hooks"
 	"github.com/lookcorner/go-cli/internal/lsp"
 	"github.com/lookcorner/go-cli/internal/marketplace"
 	"github.com/lookcorner/go-cli/internal/mcp"
@@ -377,8 +378,14 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if lspManager != nil {
 		defer lspManager.Close()
 	}
+	hookCatalog := hooks.DiscoverPlugins(plugins)
+	hookRuntime := &hooks.Runtime{
+		Catalog: hookCatalog, WorkspaceRoot: ws.Root(), SessionID: logger.ID(), Model: cfg.Model,
+	}
+	defer hookRuntime.SessionEnded(context.Background(), "closed")
 	runner := &agent.Runner{
 		Client: client, Tools: registry, Skills: skillCatalog, Logger: logger,
+		HookCatalog: hookCatalog, HookPolicy: hookRuntime, ProjectTrusted: projectTrusted,
 		SessionID: logger.ID(),
 		Model:     cfg.Model, Instructions: cfg.SystemPrompt, MaxSteps: cfg.MaxSteps,
 		TextOutput: stdout, StatusOutput: stderr,
@@ -864,6 +871,8 @@ type sessionPluginState struct {
 	updateLSP func(config.Config) error
 	lspSource config.Config
 	inventory []plugin.Plugin
+	hooks     *hooks.Catalog
+	hookRun   *hooks.Runtime
 }
 
 func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []string, tokenProvider api.TokenProvider, stdin io.Reader, stdout, stderr io.Writer) error {
@@ -1019,6 +1028,10 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			lspSource: sessionBase,
 			inventory: append([]plugin.Plugin(nil), plugins...),
 		}
+		pluginState.hooks = hooks.DiscoverPlugins(plugins)
+		pluginState.hookRun = &hooks.Runtime{
+			Catalog: pluginState.hooks, WorkspaceRoot: ws.Root(), SessionID: logger.ID(), Model: sessionCfg.Model,
+		}
 		extensionsMu.Lock()
 		pluginStates[pluginState] = true
 		extensionsMu.Unlock()
@@ -1053,6 +1066,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		var closeOnce sync.Once
 		closeRuntime := func() {
 			closeOnce.Do(func() {
+				pluginState.hookRun.SessionEnded(context.Background(), "closed")
 				stopSkills()
 				extensionsMu.Lock()
 				delete(pluginStates, pluginState)
@@ -1160,6 +1174,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 				extensionsMu.Lock()
 				state.inventory = append([]plugin.Plugin(nil), inventory...)
 				extensionsMu.Unlock()
+				state.hooks.ReplacePlugins(inventory)
 				state.updateMu.Unlock()
 			}
 			return pluginInventory(), nil
@@ -1181,6 +1196,14 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		}
 		return &agent.Runner{
 			Client: modelClient, Tools: registry, Skills: catalog, PluginInventory: pluginInventory, Logger: logger,
+			HookCatalog: pluginState.hooks, HookPolicy: pluginState.hookRun, ProjectTrusted: projectTrusted,
+			ReloadHooks: func() error {
+				extensionsMu.Lock()
+				inventory := append([]plugin.Plugin(nil), pluginState.inventory...)
+				extensionsMu.Unlock()
+				pluginState.hooks.ReplacePlugins(inventory)
+				return nil
+			},
 			Model: sessionCfg.Model, Instructions: instructions, MaxSteps: cfg.MaxSteps,
 			TextOutput: textOutput, StatusOutput: statusOutput,
 			ContextWindow: cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,
