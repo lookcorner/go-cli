@@ -781,6 +781,9 @@ func TestPluginActionUpdatesInventoryAndSkills(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(pluginRoot, ".mcp.json"), []byte(`{"mcpServers":{"review":{"command":"review"}}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(pluginRoot, ".lsp.json"), []byte(`{"review":{"command":"review-lsp"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	catalog, err := skills.Discover(root, skills.Config{})
 	if err != nil {
 		t.Fatal(err)
@@ -822,6 +825,38 @@ func TestPluginActionUpdatesInventoryAndSkills(t *testing.T) {
 	outcome = response["result"].(map[string]any)["result"].(map[string]any)
 	if outcome["status"] != "success" || outcome["requiresRestart"] != true || inventory[0].Enabled || len(catalog.Names()) != 0 {
 		t.Fatalf("unexpected disable outcome=%#v inventory=%#v skills=%#v", outcome, inventory, catalog.Names())
+	}
+}
+
+func TestPluginActionRejectsRunningSession(t *testing.T) {
+	called := false
+	runner := &agent.Runner{
+		Skills: &skills.Catalog{},
+		UpdatePlugins: func(context.Context, func(*plugin.Settings)) ([]plugin.Plugin, error) {
+			called = true
+			return nil, nil
+		},
+	}
+	current := &session{id: "plugin-running", cwd: t.TempDir(), runner: runner, running: true}
+	var output bytes.Buffer
+	server := &Server{output: &output, sessions: map[string]*session{"plugin-running": current}}
+	server.handlePlugins(context.Background(), message{ID: json.RawMessage("1"), Method: "x.ai/plugins/action", Params: json.RawMessage(`{"sessionId":"plugin-running","action":{"type":"reload"}}`)})
+	var response map[string]any
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	outcome := response["result"].(map[string]any)["result"].(map[string]any)
+	if called || outcome["status"] != "validation_error" || !strings.Contains(outcome["message"].(string), "prompt is running") {
+		t.Fatalf("unexpected running-session outcome=%#v called=%v", outcome, called)
+	}
+}
+
+func TestPluginRestartRequirementOnlyTracksLSP(t *testing.T) {
+	if affectedPluginNeedsRestart("add", "/plugin", "", nil, []plugin.Plugin{{Root: "/plugin", MCPConfig: "/plugin/.mcp.json"}}) {
+		t.Fatal("MCP-only plugin unexpectedly required a restart")
+	}
+	if !affectedPluginNeedsRestart("add", "/plugin", "", nil, []plugin.Plugin{{Root: "/plugin", LSPConfig: "/plugin/.lsp.json"}}) {
+		t.Fatal("LSP plugin did not require a restart")
 	}
 }
 

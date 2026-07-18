@@ -63,6 +63,64 @@ func TestSessionMCPRuntimeMergesAndRestoresConfiguration(t *testing.T) {
 	if configs := live.Configs(); len(configs) != 0 {
 		t.Fatalf("failed update replaced previous MCP configuration: %#v", configs)
 	}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodDelete {
+			writer.WriteHeader(http.StatusNoContent)
+			return
+		}
+		var rpc struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&rpc); err != nil {
+			t.Error(err)
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		switch rpc.Method {
+		case "initialize":
+			_ = json.NewEncoder(writer).Encode(map[string]any{
+				"jsonrpc": "2.0", "id": rpc.ID, "result": map[string]any{
+					"protocolVersion": "2025-11-25", "capabilities": map[string]any{"tools": map[string]any{}},
+					"serverInfo": map[string]any{"name": "hot-base", "version": "1"},
+				},
+			})
+		case "notifications/initialized":
+			writer.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			_ = json.NewEncoder(writer).Encode(map[string]any{
+				"jsonrpc": "2.0", "id": rpc.ID, "result": map[string]any{"tools": []any{}},
+			})
+		default:
+			t.Errorf("unexpected MCP method %q", rpc.Method)
+			writer.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+	if err := live.UpdateBase(context.Background(), config.Config{MCPServers: map[string]config.MCPServerConfig{
+		"hot-base": {Type: "http", URL: server.URL},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if configs := live.Configs(); len(configs) != 1 || configs[0].Name != "hot-base" {
+		t.Fatalf("hot base was not applied: %#v", configs)
+	}
+	if err := live.UpdateBase(context.Background(), config.Config{}); err != nil {
+		t.Fatal(err)
+	}
+	if configs := live.Configs(); len(configs) != 0 {
+		t.Fatalf("hot base was not removed: %#v", configs)
+	}
+	err = live.UpdateBase(context.Background(), config.Config{MCPServers: map[string]config.MCPServerConfig{
+		"broken-base": {Command: filepath.Join(root, "missing-base-server")},
+	}})
+	if err == nil {
+		t.Fatal("invalid MCP base update unexpectedly succeeded")
+	}
+	if len(live.base.MCPServers) != 0 || len(live.Configs()) != 0 {
+		t.Fatalf("failed base update was not rolled back: base=%#v effective=%#v", live.base.MCPServers, live.Configs())
+	}
 }
 
 func TestDiscoverSkillsLoadsConfiguredPlugin(t *testing.T) {

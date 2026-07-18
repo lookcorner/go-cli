@@ -57,6 +57,10 @@ func (s *Server) handlePluginAction(ctx context.Context, incoming message, curre
 		s.pluginActionOutcome(incoming, "validation_error", "Unsupported plugin action.", false)
 		return
 	}
+	if s.anySessionRunning() {
+		s.pluginActionOutcome(incoming, "validation_error", "Cannot update plugins while a prompt is running.", false)
+		return
+	}
 	resolved := ""
 	if action == "add" || action == "remove" {
 		if path == "" {
@@ -121,6 +125,24 @@ func (s *Server) handlePluginAction(ctx context.Context, incoming message, curre
 	s.pluginActionOutcome(incoming, "success", message, restart)
 }
 
+func (s *Server) anySessionRunning() bool {
+	s.mu.Lock()
+	sessions := make([]*session, 0, len(s.sessions))
+	for _, current := range s.sessions {
+		sessions = append(sessions, current)
+	}
+	s.mu.Unlock()
+	for _, current := range sessions {
+		current.mu.Lock()
+		running := current.running
+		current.mu.Unlock()
+		if running {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Server) pluginActionOutcome(incoming message, status, message string, restart bool) {
 	s.respond(incoming.ID, map[string]any{"result": map[string]any{
 		"status": status, "message": message, "requiresReload": false, "requiresRestart": restart,
@@ -130,7 +152,7 @@ func (s *Server) pluginActionOutcome(incoming message, status, message string, r
 func affectedPluginNeedsRestart(action, path, id string, before, after []plugin.Plugin) bool {
 	if action == "reload" {
 		for _, item := range after {
-			if pluginHasRuntimeComponents(item) {
+			if pluginNeedsRestart(item) {
 				return true
 			}
 		}
@@ -140,7 +162,7 @@ func affectedPluginNeedsRestart(action, path, id string, before, after []plugin.
 		for _, item := range inventory {
 			matches := (action == "add" || action == "remove") && item.Root == path ||
 				(action == "enable" || action == "disable") && (item.ID == id || item.Name == id)
-			if matches && pluginHasRuntimeComponents(item) {
+			if matches && pluginNeedsRestart(item) {
 				return true
 			}
 		}
@@ -148,8 +170,8 @@ func affectedPluginNeedsRestart(action, path, id string, before, after []plugin.
 	return false
 }
 
-func pluginHasRuntimeComponents(item plugin.Plugin) bool {
-	return item.MCPConfig != "" || len(item.InlineMCP) > 0 || item.LSPConfig != "" || len(item.InlineLSP) > 0
+func pluginNeedsRestart(item plugin.Plugin) bool {
+	return item.LSPConfig != "" || len(item.InlineLSP) > 0
 }
 
 func firstString(values ...string) string {

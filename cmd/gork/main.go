@@ -739,6 +739,8 @@ type sessionPluginState struct {
 	root      string
 	trusted   bool
 	catalog   *skills.Catalog
+	mcp       *sessionMCPRuntime
+	mcpSource config.Config
 	inventory []plugin.Plugin
 }
 
@@ -878,6 +880,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		catalog.Watch(watchCtx, time.Second)
 		pluginState := &sessionPluginState{
 			root: ws.Root(), trusted: projectTrusted, catalog: catalog,
+			mcp: mcpRuntime, mcpSource: sessionBase,
 			inventory: append([]plugin.Plugin(nil), plugins...),
 		}
 		extensionsMu.Lock()
@@ -925,7 +928,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			defer extensionsMu.Unlock()
 			return append([]plugin.Plugin(nil), pluginState.inventory...)
 		}
-		updatePlugins := func(_ context.Context, update func(*plugin.Settings)) ([]plugin.Plugin, error) {
+		updatePlugins := func(updateCtx context.Context, update func(*plugin.Settings)) ([]plugin.Plugin, error) {
 			if update != nil {
 				if err := config.UpdatePlugins(opts.configPath, func(stored *config.PluginsConfig) {
 					settings := pluginSettings(*stored)
@@ -956,6 +959,11 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 					return nil, err
 				}
 				if err := state.catalog.ReconfigurePlugins(enabledPlugins(inventory)); err != nil {
+					return nil, err
+				}
+				mcpBase := state.mcpSource
+				mcpBase.MCPServers = config.DiscoverMCPServers(state.root, mcpBase, enabledPlugins(inventory), state.trusted)
+				if err := state.mcp.UpdateBase(updateCtx, mcpBase); err != nil {
 					return nil, err
 				}
 				extensionsMu.Lock()
@@ -1430,19 +1438,38 @@ func (r *sessionMCPRuntime) Update(ctx context.Context, requested []mcp.ServerCo
 		return errors.New("MCP runtime is closed")
 	}
 	previous := cloneMCPServerConfigs(r.clientConfigs)
-	r.stopLocked()
-	clients, effective, err := r.startLocked(requested)
-	if err == nil {
-		r.clients, r.clientConfigs, r.effective = clients, cloneMCPServerConfigs(requested), effective
+	if err := r.restartLocked(requested); err == nil {
+		r.clientConfigs = cloneMCPServerConfigs(requested)
 		return nil
+	} else if restoreErr := r.restartLocked(previous); restoreErr == nil {
+		return err
+	} else {
+		return errors.Join(err, fmt.Errorf("restore previous MCP configuration: %w", restoreErr))
 	}
-	r.stopLocked()
-	restored, restoredEffective, restoreErr := r.startLocked(previous)
-	if restoreErr == nil {
-		r.clients, r.clientConfigs, r.effective = restored, previous, restoredEffective
+}
+
+func (r *sessionMCPRuntime) UpdateBase(ctx context.Context, base config.Config) error {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return errors.Join(err, fmt.Errorf("restore previous MCP configuration: %w", restoreErr))
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return errors.New("MCP runtime is closed")
+	}
+	previous := r.base
+	base.MCPServers = cloneMCPConfigMap(base.MCPServers)
+	r.base = base
+	if err := r.restartLocked(r.clientConfigs); err == nil {
+		return nil
+	} else {
+		r.base = previous
+		if restoreErr := r.restartLocked(r.clientConfigs); restoreErr == nil {
+			return err
+		} else {
+			return errors.Join(err, fmt.Errorf("restore previous MCP base configuration: %w", restoreErr))
+		}
+	}
 }
 
 func (r *sessionMCPRuntime) Configs() []mcp.ServerConfig {
@@ -1467,6 +1494,17 @@ func (r *sessionMCPRuntime) startLocked(requested []mcp.ServerConfig) ([]*mcp.Cl
 	return clients, effective, err
 }
 
+func (r *sessionMCPRuntime) restartLocked(requested []mcp.ServerConfig) error {
+	r.stopLocked()
+	clients, effective, err := r.startLocked(requested)
+	if err != nil {
+		r.stopLocked()
+		return err
+	}
+	r.clients, r.effective = clients, effective
+	return nil
+}
+
 func (r *sessionMCPRuntime) stopLocked() {
 	names := registeredMCPToolNames(r.registry)
 	if len(names) > 0 {
@@ -1476,6 +1514,7 @@ func (r *sessionMCPRuntime) stopLocked() {
 		_ = client.Close()
 	}
 	r.clients = nil
+	r.effective = nil
 }
 
 func (r *sessionMCPRuntime) mergedConfig(requested []mcp.ServerConfig) (config.Config, []mcp.ServerConfig) {
