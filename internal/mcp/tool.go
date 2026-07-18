@@ -22,6 +22,7 @@ type ToolAdapter struct {
 	client     *Client
 	serverName string
 	remoteName string
+	remoteInfo ToolInfo
 	definition api.ToolDefinition
 	approver   tools.Approver
 }
@@ -34,7 +35,7 @@ func NewToolAdapters(client *Client, serverName string, remoteTools []ToolInfo, 
 			schema = map[string]any{"type": "object", "properties": map[string]any{}}
 		}
 		result = append(result, &ToolAdapter{
-			client: client, serverName: serverName, remoteName: remote.Name, approver: approver,
+			client: client, serverName: serverName, remoteName: remote.Name, remoteInfo: remote, approver: approver,
 			definition: api.ToolDefinition{
 				Type: "function", Name: modelToolName(serverName, remote.Name),
 				Description: fmt.Sprintf("MCP server %s: %s", serverName, remote.Description),
@@ -47,25 +48,17 @@ func NewToolAdapters(client *Client, serverName string, remoteTools []ToolInfo, 
 
 func (t *ToolAdapter) Definition() api.ToolDefinition { return t.definition }
 
+func (t *ToolAdapter) MCPIdentity() (string, string, ToolInfo) {
+	return t.serverName, t.remoteName, t.remoteInfo
+}
+
 func (t *ToolAdapter) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
 	result, err := t.ExecuteResult(ctx, raw)
 	return result.Output, err
 }
 
 func (t *ToolAdapter) ExecuteResult(ctx context.Context, raw json.RawMessage) (tools.ExecutionResult, error) {
-	var arguments map[string]any
-	if len(raw) == 0 {
-		arguments = map[string]any{}
-	} else if err := json.Unmarshal(raw, &arguments); err != nil {
-		return tools.ExecutionResult{}, fmt.Errorf("decode MCP tool arguments: %w", err)
-	}
-	if t.approver != nil {
-		detail := fmt.Sprintf("%s/%s %s", t.serverName, t.remoteName, compactJSON(arguments))
-		if err := t.approver.Approve(ctx, "MCP tool", detail); err != nil {
-			return tools.ExecutionResult{}, err
-		}
-	}
-	result, err := t.client.CallTool(ctx, t.remoteName, arguments)
+	result, err := t.CallMCP(ctx, raw)
 	if err != nil {
 		return tools.ExecutionResult{}, err
 	}
@@ -102,6 +95,30 @@ func (t *ToolAdapter) ExecuteResult(ctx context.Context, raw json.RawMessage) (t
 		output = "MCP tool completed with no content"
 	}
 	return tools.ExecutionResult{Output: output, Images: images}, nil
+}
+
+func (t *ToolAdapter) CallMCP(ctx context.Context, raw json.RawMessage) (ToolResult, error) {
+	var arguments map[string]any
+	if len(raw) == 0 {
+		arguments = map[string]any{}
+	} else if err := json.Unmarshal(raw, &arguments); err != nil {
+		return ToolResult{}, fmt.Errorf("decode MCP tool arguments: %w", err)
+	}
+	if t.approver != nil {
+		detail := fmt.Sprintf("%s/%s %s", t.serverName, t.remoteName, compactJSON(arguments))
+		if err := t.approver.Approve(ctx, "MCP tool", detail); err != nil {
+			return ToolResult{}, err
+		}
+	}
+	result, err := t.client.CallTool(ctx, t.remoteName, arguments)
+	if err != nil {
+		return ToolResult{}, err
+	}
+	return result, nil
+}
+
+func ModelToolName(serverName, remoteName string) string {
+	return modelToolName(serverName, remoteName)
 }
 
 func modelToolName(serverName, remoteName string) string {

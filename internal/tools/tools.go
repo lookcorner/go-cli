@@ -388,6 +388,17 @@ func (r *Registry) Definitions() []api.ToolDefinition {
 	return definitions
 }
 
+func (r *Registry) SnapshotTools() []Tool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	items := make([]Tool, 0, len(r.tools))
+	for _, tool := range r.tools {
+		items = append(items, tool)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].Definition().Name < items[j].Definition().Name })
+	return items
+}
+
 func (r *Registry) Execute(ctx context.Context, name string, arguments json.RawMessage) (string, error) {
 	result, err := r.ExecuteResult(ctx, name, arguments)
 	return result.Output, err

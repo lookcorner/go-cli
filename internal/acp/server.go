@@ -105,6 +105,7 @@ type session struct {
 	rewind       *workspace.RewindStore
 	logPath      string
 	mode         string
+	mcpServers   []MCPServer
 }
 
 type permissionResult struct {
@@ -220,6 +221,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleUnifiedSessionList(incoming)
 		case "x.ai/session/close":
 			s.handleExtensionSessionClose(incoming)
+		case "x.ai/mcp/list", "x.ai/mcp/call":
+			s.handleMCP(ctx, incoming)
 		case "x.ai/commands/list", "x.ai/workspaces/list":
 			s.handleStaticExtension(incoming)
 		case "x.ai/skills/list", "x.ai/skills/config":
@@ -1507,6 +1510,7 @@ func (s *Server) startSession(ctx context.Context, id string, sessionConfig Sess
 	created := &session{
 		id: id, cwd: sessionConfig.CWD, updated: time.Now().UTC(), previous: previous,
 		runner: runner, close: closeRuntime, promptIndex: promptIndex, activePrompt: -1, rewind: rewind, logPath: sessionPath, mode: mode,
+		mcpServers: append([]MCPServer(nil), sessionConfig.MCPServers...),
 	}
 	runner.SessionID = id
 	runner.ToolObserver = &sessionToolObserver{server: s, sessionID: id}

@@ -293,6 +293,11 @@ Live ACP sessions expose their resolved skill catalog through
 `x.ai/skills/list` and `x.ai/skills/config`, including scope, invocation gates,
 plugin metadata, configured paths, ignore paths, and enabled state.
 
+Live session MCP servers are exposed through `x.ai/mcp/list`, and
+`x.ai/mcp/call` invokes a named server tool through the same client and
+permission path used by model tool calls. Sessionless agent-level MCP pools,
+OAuth, and live configuration mutation are not yet available.
+
 The `x.ai/fs/list`, `exists`, `read_file`, `write_file`, and `delete_file`
 extensions provide workspace-confined file access. Listing supports stable
 dirs-first pagination, bounded depth, hidden/Git-ignore controls, glob filters,

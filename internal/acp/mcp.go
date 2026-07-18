@@ -1,0 +1,152 @@
+package acp
+
+import (
+	"context"
+	"encoding/json"
+	"sort"
+
+	mcppkg "github.com/lookcorner/go-cli/internal/mcp"
+)
+
+type callableMCPTool interface {
+	MCPIdentity() (string, string, mcppkg.ToolInfo)
+	CallMCP(context.Context, json.RawMessage) (mcppkg.ToolResult, error)
+}
+
+func (s *Server) handleMCP(ctx context.Context, incoming message) {
+	var req struct {
+		SessionID string          `json:"sessionId"`
+		Server    string          `json:"server"`
+		ServerURL string          `json:"serverUrl"`
+		Tool      string          `json:"tool"`
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	if json.Unmarshal(incoming.Params, &req) != nil {
+		s.respondError(incoming.ID, -32602, "invalid MCP parameters")
+		return
+	}
+	if incoming.Method == "x.ai/mcp/list" {
+		s.handleMCPList(incoming, req.SessionID)
+		return
+	}
+	if req.SessionID == "" || req.Server == "" || req.Tool == "" {
+		s.respondError(incoming.ID, -32602, "sessionId, server, and tool are required")
+		return
+	}
+	current := s.lookupSession(req.SessionID)
+	if current == nil || current.runner == nil || current.runner.Tools == nil {
+		s.respondError(incoming.ID, -32602, "session not found")
+		return
+	}
+	if req.ServerURL != "" {
+		current.mu.Lock()
+		matched := false
+		for _, config := range current.mcpServers {
+			if config.Name == req.Server && config.URL == req.ServerURL {
+				matched = true
+				break
+			}
+		}
+		current.mu.Unlock()
+		if !matched {
+			s.respondError(incoming.ID, -32000, "MCP server URL not found")
+			return
+		}
+	}
+	if len(req.Arguments) == 0 || string(req.Arguments) == "null" {
+		req.Arguments = json.RawMessage(`{}`)
+	}
+	for _, registered := range current.runner.Tools.SnapshotTools() {
+		tool, ok := registered.(callableMCPTool)
+		if !ok {
+			continue
+		}
+		server, name, _ := tool.MCPIdentity()
+		if server != req.Server || name != req.Tool {
+			continue
+		}
+		result, err := tool.CallMCP(ctx, req.Arguments)
+		if err != nil {
+			s.respondError(incoming.ID, -32000, err.Error())
+			return
+		}
+		content := make([]map[string]any, 0, len(result.Content))
+		for _, block := range result.Content {
+			if block.Type == "text" {
+				content = append(content, map[string]any{"type": "text", "text": block.Text})
+				continue
+			}
+			encoded, _ := json.Marshal(block)
+			content = append(content, map[string]any{"type": block.Type, "text": string(encoded)})
+		}
+		response := map[string]any{"content": content}
+		if result.IsError {
+			response["isError"] = true
+		}
+		s.respond(incoming.ID, map[string]any{"result": response, "error": nil})
+		return
+	}
+	s.respondError(incoming.ID, -32000, "MCP tool not found")
+}
+
+func (s *Server) handleMCPList(incoming message, sessionID string) {
+	current := s.lookupSession(sessionID)
+	if current == nil || current.runner == nil || current.runner.Tools == nil {
+		s.respond(incoming.ID, map[string]any{"result": map[string]any{"servers": []any{}}, "error": nil})
+		return
+	}
+	current.mu.Lock()
+	configs := append([]MCPServer(nil), current.mcpServers...)
+	current.mu.Unlock()
+	toolsByServer := make(map[string][]map[string]any)
+	for _, registered := range current.runner.Tools.SnapshotTools() {
+		tool, ok := registered.(callableMCPTool)
+		if !ok {
+			continue
+		}
+		server, name, info := tool.MCPIdentity()
+		entry := map[string]any{"name": name, "enabled": true}
+		if info.Title != "" {
+			entry["displayName"] = info.Title
+		}
+		if info.Description != "" {
+			entry["description"] = info.Description
+		}
+		if len(info.Annotations) > 0 {
+			entry["_meta"] = info.Annotations
+		}
+		toolsByServer[server] = append(toolsByServer[server], entry)
+	}
+	servers := make([]map[string]any, 0, len(configs))
+	for _, config := range configs {
+		entry := map[string]any{"name": config.Name, "source": "local"}
+		if config.URL != "" {
+			entry["type"], entry["url"] = "http", config.URL
+		} else {
+			entry["type"], entry["command"] = "stdio", config.Command
+			if len(config.Args) > 0 {
+				entry["args"] = config.Args
+			}
+			if len(config.Env) > 0 {
+				names := make([]string, 0, len(config.Env))
+				for name := range config.Env {
+					names = append(names, name)
+				}
+				sort.Strings(names)
+				env := make([]map[string]string, 0, len(names))
+				for _, name := range names {
+					env = append(env, map[string]string{"name": name, "value": config.Env[name]})
+				}
+				entry["env"] = env
+			}
+		}
+		tools := toolsByServer[config.Name]
+		if tools == nil {
+			tools = []map[string]any{}
+		}
+		entry["session"] = map[string]any{"enabled": true, "status": "ready", "tools": tools}
+		servers = append(servers, entry)
+	}
+	sort.Slice(servers, func(i, j int) bool { return servers[i]["name"].(string) < servers[j]["name"].(string) })
+	s.respond(incoming.ID, map[string]any{"result": map[string]any{"servers": servers}, "error": nil})
+}

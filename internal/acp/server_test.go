@@ -18,6 +18,7 @@ import (
 
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/api"
+	mcppkg "github.com/lookcorner/go-cli/internal/mcp"
 	sessionlog "github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/skills"
 	"github.com/lookcorner/go-cli/internal/tools"
@@ -432,6 +433,82 @@ func TestExtensionSessionCloseIsIdempotent(t *testing.T) {
 	if closed != 1 {
 		t.Fatalf("close function called %d times", closed)
 	}
+}
+
+func TestMCPExtensionsWireContract(t *testing.T) {
+	root := t.TempDir()
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, nil)
+	defer registry.Close()
+	if err := registry.Register(fakeMCPTool{}); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	server := &Server{output: &output, sessions: map[string]*session{"mcp-session": {
+		id: "mcp-session", cwd: root, runner: &agent.Runner{Tools: registry},
+		mcpServers: []MCPServer{{Name: "fixture", Command: "fixture-server", Args: []string{"--stdio"}}},
+	}}}
+	call := func(id int, method string, params map[string]any) map[string]any {
+		t.Helper()
+		output.Reset()
+		data, err := json.Marshal(params)
+		if err != nil {
+			t.Fatal(err)
+		}
+		server.handleMCP(context.Background(), message{ID: json.RawMessage(strconv.Itoa(id)), Method: method, Params: data})
+		var response map[string]any
+		if err := json.NewDecoder(&output).Decode(&response); err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}
+
+	listed := call(1, "x.ai/mcp/list", map[string]any{"sessionId": "mcp-session"})
+	servers := listed["result"].(map[string]any)["result"].(map[string]any)["servers"].([]any)
+	if len(servers) != 1 {
+		t.Fatalf("unexpected MCP list response: %#v", listed)
+	}
+	serverEntry := servers[0].(map[string]any)
+	toolEntries := serverEntry["session"].(map[string]any)["tools"].([]any)
+	if serverEntry["name"] != "fixture" || serverEntry["type"] != "stdio" || len(toolEntries) != 1 || toolEntries[0].(map[string]any)["name"] != "echo" {
+		t.Fatalf("unexpected MCP server entry: %#v", serverEntry)
+	}
+	called := call(2, "x.ai/mcp/call", map[string]any{
+		"sessionId": "mcp-session", "server": "fixture", "tool": "echo", "arguments": map[string]any{"value": "hello"},
+	})
+	content := called["result"].(map[string]any)["result"].(map[string]any)["content"].([]any)
+	if len(content) != 1 || content[0].(map[string]any)["text"] != "hello" {
+		t.Fatalf("unexpected MCP call response: %#v", called)
+	}
+}
+
+type fakeMCPTool struct{}
+
+func (fakeMCPTool) Definition() api.ToolDefinition {
+	return api.ToolDefinition{Type: "function", Name: mcppkg.ModelToolName("fixture", "echo")}
+}
+
+func (fakeMCPTool) Execute(context.Context, json.RawMessage) (string, error) {
+	return "", errors.New("unexpected model tool execution")
+}
+
+func (fakeMCPTool) MCPIdentity() (string, string, mcppkg.ToolInfo) {
+	return "fixture", "echo", mcppkg.ToolInfo{Name: "echo", Title: "Echo", Description: "Echo one value"}
+}
+
+func (fakeMCPTool) CallMCP(_ context.Context, raw json.RawMessage) (mcppkg.ToolResult, error) {
+	var arguments struct {
+		Value string `json:"value"`
+	}
+	if err := json.Unmarshal(raw, &arguments); err != nil {
+		return mcppkg.ToolResult{}, err
+	}
+	var result mcppkg.ToolResult
+	data, _ := json.Marshal(map[string]any{"content": []any{map[string]any{"type": "text", "text": arguments.Value}}})
+	return result, json.Unmarshal(data, &result)
 }
 
 func TestStaticExtensionsAndCompactCommand(t *testing.T) {
