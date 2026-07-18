@@ -466,6 +466,10 @@ func (c *Client) notify(method string, params any) error {
 	if params != nil {
 		message["params"] = params
 	}
+	return c.sendJSON(message)
+}
+
+func (c *Client) sendJSON(message any) error {
 	if c.httpURL != "" {
 		_, err := c.httpRequest(context.Background(), message, false)
 		return err
@@ -546,7 +550,7 @@ func (c *Client) handleSampling(request rpcMessage) {
 	}
 	var params SamplingRequest
 	if err := json.Unmarshal(request.Params, &params); err != nil || params.MaxTokens < 1 || len(params.Messages) == 0 {
-		_ = c.writeJSON(map[string]any{
+		_ = c.sendJSON(map[string]any{
 			"jsonrpc": "2.0", "id": id,
 			"error": map[string]any{"code": -32602, "message": "invalid sampling request"},
 		})
@@ -556,13 +560,13 @@ func (c *Client) handleSampling(request rpcMessage) {
 	defer cancel()
 	result, err := c.sampling(ctx, params)
 	if err != nil {
-		_ = c.writeJSON(map[string]any{
+		_ = c.sendJSON(map[string]any{
 			"jsonrpc": "2.0", "id": id,
 			"error": map[string]any{"code": -32000, "message": err.Error()},
 		})
 		return
 	}
-	_ = c.writeJSON(map[string]any{"jsonrpc": "2.0", "id": id, "result": result})
+	_ = c.sendJSON(map[string]any{"jsonrpc": "2.0", "id": id, "result": result})
 }
 
 func clientCapabilities(sampling SamplingHandler) map[string]any {
@@ -578,7 +582,7 @@ func (c *Client) respondUnsupported(request rpcMessage) {
 	if err := json.Unmarshal(request.ID, &id); err != nil {
 		return
 	}
-	_ = c.writeJSON(map[string]any{
+	_ = c.sendJSON(map[string]any{
 		"jsonrpc": "2.0", "id": id,
 		"error": map[string]any{"code": -32601, "message": "client method not supported"},
 	})

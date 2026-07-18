@@ -8,13 +8,14 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestEventStreamDispatchesNotificationBeforeResponse(t *testing.T) {
 	stream := "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/tools/list_changed\"}\n\n" +
 		"data: {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{}}\n\n"
 	var notification string
-	message, err := readMCPEventStream(strings.NewReader(stream), func(method string, _ json.RawMessage) { notification = method })
+	message, err := readMCPEventStream(strings.NewReader(stream), nil, func(method string, _ json.RawMessage) { notification = method })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,6 +31,7 @@ func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) 
 func TestStreamableHTTPLifecycleJSONAndSSE(t *testing.T) {
 	var mu sync.Mutex
 	var methods []string
+	samplingResponse := make(chan SamplingResult, 1)
 	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -44,14 +46,23 @@ func TestStreamableHTTPLifecycleJSONAndSSE(t *testing.T) {
 			return httpResponse(http.StatusNoContent, "", ""), nil
 		}
 		var rpc struct {
-			ID     any    `json:"id"`
-			Method string `json:"method"`
+			ID     any            `json:"id"`
+			Method string         `json:"method"`
+			Result SamplingResult `json:"result"`
 			Params struct {
 				Capabilities map[string]any `json:"capabilities"`
 			} `json:"params"`
 		}
 		if err := json.NewDecoder(request.Body).Decode(&rpc); err != nil {
 			t.Fatal(err)
+		}
+		if rpc.Method == "" {
+			methods = append(methods, "sampling/result")
+			if rpc.ID != float64(900) {
+				t.Fatalf("unexpected sampling response ID: %#v", rpc.ID)
+			}
+			samplingResponse <- rpc.Result
+			return httpResponse(http.StatusAccepted, "", ""), nil
 		}
 		methods = append(methods, rpc.Method)
 		if rpc.Method != "initialize" && request.Header.Get("Mcp-Session-Id") != "session-fixture" {
@@ -65,8 +76,8 @@ func TestStreamableHTTPLifecycleJSONAndSSE(t *testing.T) {
 		}
 		switch rpc.Method {
 		case "initialize":
-			if _, advertised := rpc.Params.Capabilities["sampling"]; advertised {
-				t.Fatal("Streamable HTTP advertised sampling without a reverse channel")
+			if _, advertised := rpc.Params.Capabilities["sampling"]; !advertised {
+				t.Fatal("Streamable HTTP did not advertise configured sampling")
 			}
 			response := httpResponse(http.StatusOK, "application/json", rpcResult(rpc.ID, map[string]any{
 				"protocolVersion": protocolVersion,
@@ -78,7 +89,16 @@ func TestStreamableHTTPLifecycleJSONAndSSE(t *testing.T) {
 		case "notifications/initialized":
 			return httpResponse(http.StatusAccepted, "", ""), nil
 		case "tools/list":
-			body := "event: message\ndata: " + rpcResult(rpc.ID, map[string]any{"tools": []any{map[string]any{
+			requestBytes, _ := json.Marshal(map[string]any{
+				"jsonrpc": "2.0", "id": 900, "method": "sampling/createMessage",
+				"params": map[string]any{
+					"systemPrompt": "Be concise", "maxTokens": 64,
+					"messages": []any{map[string]any{
+						"role": "user", "content": map[string]any{"type": "text", "text": "sample over HTTP"},
+					}},
+				},
+			})
+			body := "event: message\ndata: " + string(requestBytes) + "\n\n" + "event: message\ndata: " + rpcResult(rpc.ID, map[string]any{"tools": []any{map[string]any{
 				"name": "echo", "description": "echo", "inputSchema": map[string]any{"type": "object"},
 			}}}) + "\n\n"
 			return httpResponse(http.StatusOK, "text/event-stream", body), nil
@@ -96,7 +116,10 @@ func TestStreamableHTTPLifecycleJSONAndSSE(t *testing.T) {
 		Headers: map[string]string{"Authorization": "Bearer fixture"},
 		Client:  &http.Client{Transport: transport},
 		Sampling: func(context.Context, SamplingRequest) (SamplingResult, error) {
-			return SamplingResult{}, nil
+			return SamplingResult{
+				Role: "assistant", Content: SamplingContent{Type: "text", Text: "sampled over HTTP"},
+				Model: "fixture-model", StopReason: "endTurn",
+			}, nil
 		},
 	})
 	if err != nil {
@@ -109,6 +132,14 @@ func TestStreamableHTTPLifecycleJSONAndSSE(t *testing.T) {
 	if err != nil || len(remoteTools) != 1 || remoteTools[0].Name != "echo" {
 		t.Fatalf("unexpected tools=%#v err=%v", remoteTools, err)
 	}
+	select {
+	case sampled := <-samplingResponse:
+		if sampled.Model != "fixture-model" || sampled.Content.Text != "sampled over HTTP" {
+			t.Fatalf("unexpected HTTP sampling response: %#v", sampled)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Streamable HTTP sampling response was not posted")
+	}
 	result, err := client.CallTool(context.Background(), "echo", map[string]any{"message": "hello"})
 	if err != nil || len(result.Content) != 1 || result.Content[0].Text != "echoed" {
 		t.Fatalf("unexpected tool result=%#v err=%v", result, err)
@@ -118,7 +149,7 @@ func TestStreamableHTTPLifecycleJSONAndSSE(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	want := []string{"initialize", "notifications/initialized", "tools/list", "tools/call", "DELETE"}
+	want := []string{"initialize", "notifications/initialized", "tools/list", "sampling/result", "tools/call", "DELETE"}
 	if strings.Join(methods, ",") != strings.Join(want, ",") {
 		t.Fatalf("unexpected lifecycle: %#v", methods)
 	}

@@ -16,11 +16,10 @@ import (
 )
 
 type HTTPConfig struct {
-	Name    string
-	URL     string
-	Headers map[string]string
-	Client  *http.Client
-	// Sampling is used by StartSSE. Streamable HTTP has no reverse channel yet.
+	Name     string
+	URL      string
+	Headers  map[string]string
+	Client   *http.Client
 	Sampling SamplingHandler
 }
 
@@ -39,13 +38,14 @@ func StartHTTP(ctx context.Context, cfg HTTPConfig) (*Client, InitializeResult, 
 	client := &Client{
 		name: cfg.Name, httpURL: cfg.URL, httpClient: httpClient,
 		headers: cloneHeaders(cfg.Headers), pending: make(map[string]chan response), done: make(chan struct{}),
+		sampling: cfg.Sampling,
 	}
 	initCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	var initialized InitializeResult
 	err = client.call(initCtx, "initialize", map[string]any{
 		"protocolVersion": protocolVersion,
-		"capabilities":    map[string]any{},
+		"capabilities":    clientCapabilities(cfg.Sampling),
 		"clientInfo": map[string]any{
 			"name": "gork-go", "title": "Gork Go", "version": "0.1.0",
 		},
@@ -118,7 +118,7 @@ func (c *Client) httpRequest(ctx context.Context, value any, expectResponse bool
 	}
 	mediaType, _, _ := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	if mediaType == "text/event-stream" {
-		return readMCPEventStream(response.Body, c.handleNotification)
+		return readMCPEventStream(response.Body, c.dispatch, c.handleNotification)
 	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, 16<<20+1))
 	if err != nil {
@@ -134,7 +134,7 @@ func (c *Client) httpRequest(ctx context.Context, value any, expectResponse bool
 	return message, nil
 }
 
-func readMCPEventStream(reader io.Reader, onNotification func(string, json.RawMessage)) (rpcMessage, error) {
+func readMCPEventStream(reader io.Reader, onRequest func(rpcMessage), onNotification func(string, json.RawMessage)) (rpcMessage, error) {
 	scanner := bufio.NewScanner(io.LimitReader(reader, 16<<20+1))
 	scanner.Buffer(make([]byte, 64<<10), 16<<20)
 	var dataLines []string
@@ -146,10 +146,12 @@ func readMCPEventStream(reader io.Reader, onNotification func(string, json.RawMe
 			}
 			var message rpcMessage
 			if err := json.Unmarshal([]byte(strings.Join(dataLines, "\n")), &message); err == nil {
-				if len(message.ID) > 0 {
+				if len(message.ID) > 0 && message.Method == "" {
 					return message, nil
 				}
-				if message.Method != "" && onNotification != nil {
+				if len(message.ID) > 0 && message.Method != "" && onRequest != nil {
+					onRequest(message)
+				} else if message.Method != "" && onNotification != nil {
 					onNotification(message.Method, message.Params)
 				}
 			}
@@ -166,10 +168,12 @@ func readMCPEventStream(reader io.Reader, onNotification func(string, json.RawMe
 	if len(dataLines) > 0 {
 		var message rpcMessage
 		if err := json.Unmarshal([]byte(strings.Join(dataLines, "\n")), &message); err == nil {
-			if len(message.ID) > 0 {
+			if len(message.ID) > 0 && message.Method == "" {
 				return message, nil
 			}
-			if message.Method != "" && onNotification != nil {
+			if len(message.ID) > 0 && message.Method != "" && onRequest != nil {
+				onRequest(message)
+			} else if message.Method != "" && onNotification != nil {
 				onNotification(message.Method, message.Params)
 			}
 		}
