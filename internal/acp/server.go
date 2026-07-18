@@ -74,6 +74,7 @@ type Server struct {
 	pending     map[string]chan permissionResult
 	nextSession atomic.Uint64
 	nextRequest atomic.Uint64
+	closing     atomic.Bool
 	wg          sync.WaitGroup
 	worktrees   *worktrees.Manager
 	terminals   *terminalManager
@@ -132,6 +133,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 		return errors.New("ACP session factory is required")
 	}
 	s.input, s.output = input, output
+	s.closing.Store(false)
 	s.sessions = make(map[string]*session)
 	s.pending = make(map[string]chan permissionResult)
 	manager, err := worktrees.NewManager(s.SessionDir)
@@ -556,6 +558,9 @@ func (s *Server) handleWorktree(ctx context.Context, incoming message) {
 					"commit": record.HeadCommit, "sourceGitRoot": record.SourceRepo,
 				},
 			})
+			if req.CopyIgnoredInBackground {
+				s.startIgnoredCopy(req.SessionID, req.SourcePath, record.Path, req.IgnoredSkipPatterns)
+			}
 		}
 	case "x.ai/git/worktree/list":
 		var req struct {
@@ -1571,6 +1576,10 @@ func (s *Server) lookupSession(id string) *session {
 }
 
 func (s *Server) closeAll() {
+	s.closing.Store(true)
+	if s.worktrees != nil {
+		s.worktrees.CancelCopies()
+	}
 	if s.terminals != nil {
 		s.terminals.closeAll()
 	}
@@ -1595,6 +1604,40 @@ func (s *Server) closeAll() {
 		current.mu.Unlock()
 		current.close()
 	}
+}
+
+func (s *Server) startIgnoredCopy(sessionID, source, worktreePath string, patterns []string) {
+	result := s.worktrees.StartIgnoredCopy(source, worktreePath, patterns)
+	s.write(map[string]any{
+		"jsonrpc": "2.0", "method": "x.ai/git/worktree/status",
+		"params": map[string]any{
+			"status": "copyingIgnored", "sessionId": sessionID, "worktreePath": worktreePath,
+			"message": "Copying ignored files in background...",
+		},
+	})
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		outcome := <-result
+		if s.closing.Load() {
+			return
+		}
+		params := map[string]any{
+			"status": "ignoredCopyComplete", "sessionId": sessionID, "worktreePath": worktreePath,
+			"filesCopied": outcome.FilesCopied, "dirsCreated": outcome.DirsCreated,
+		}
+		if outcome.Err != nil {
+			message := outcome.Err.Error()
+			if outcome.Cancelled {
+				message = "Background copy was cancelled"
+			}
+			params = map[string]any{
+				"status": "ignoredCopyError", "sessionId": sessionID, "worktreePath": worktreePath,
+				"message": message, "cancelled": outcome.Cancelled,
+			}
+		}
+		s.write(map[string]any{"jsonrpc": "2.0", "method": "x.ai/git/worktree/status", "params": params})
+	}()
 }
 
 func (s *Server) respond(id json.RawMessage, result any) {

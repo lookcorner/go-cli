@@ -16,6 +16,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/bmatcuk/doublestar"
 )
 
 type CreateRequest struct {
@@ -120,11 +122,24 @@ type RebuildReport struct {
 	AlreadyTracked uint64 `json:"alreadyTracked"`
 }
 
+type IgnoredCopyResult struct {
+	FilesCopied uint64
+	DirsCreated uint64
+	Cancelled   bool
+	Err         error
+}
+
+type ignoredCopyTask struct {
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
 type Manager struct {
 	mu      sync.Mutex
 	path    string
 	base    string
 	records map[string]Record
+	copies  map[string]*ignoredCopyTask
 }
 
 func NewManager(stateDir string) (*Manager, error) {
@@ -142,6 +157,7 @@ func NewManager(stateDir string) (*Manager, error) {
 		path:    filepath.Join(stateDir, "worktrees.json"),
 		base:    filepath.Join(stateDir, "worktrees"),
 		records: make(map[string]Record),
+		copies:  make(map[string]*ignoredCopyTask),
 	}
 	data, err := os.ReadFile(m.path)
 	if err == nil {
@@ -413,6 +429,11 @@ func (m *Manager) Remove(ctx context.Context, req RemoveRequest) (bool, string, 
 	if req.DryRun {
 		return false, record.Path, nil
 	}
+	if task := m.copies[record.Path]; task != nil {
+		task.cancel()
+		<-task.done
+		delete(m.copies, record.Path)
+	}
 	if record.CreationMode == "standalone" {
 		if err := validateStandalone(record); err != nil {
 			return false, record.Path, err
@@ -435,6 +456,49 @@ func (m *Manager) Remove(ctx context.Context, req RemoveRequest) (bool, string, 
 		return false, record.Path, err
 	}
 	return true, record.Path, nil
+}
+
+func (m *Manager) StartIgnoredCopy(source, dest string, patterns []string) <-chan IgnoredCopyResult {
+	result := make(chan IgnoredCopyResult, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	task := &ignoredCopyTask{cancel: cancel, done: make(chan struct{})}
+	m.mu.Lock()
+	previous := m.copies[dest]
+	if previous != nil {
+		previous.cancel()
+	}
+	m.mu.Unlock()
+	if previous != nil {
+		<-previous.done
+	}
+	m.mu.Lock()
+	m.copies[dest] = task
+	m.mu.Unlock()
+	go func() {
+		files, dirs, err := copyIgnored(ctx, source, dest, patterns)
+		close(task.done)
+		result <- IgnoredCopyResult{FilesCopied: files, DirsCreated: dirs, Cancelled: errors.Is(err, context.Canceled), Err: err}
+		close(result)
+		m.mu.Lock()
+		if m.copies[dest] == task {
+			delete(m.copies, dest)
+		}
+		m.mu.Unlock()
+	}()
+	return result
+}
+
+func (m *Manager) CancelCopies() {
+	m.mu.Lock()
+	tasks := make([]*ignoredCopyTask, 0, len(m.copies))
+	for _, task := range m.copies {
+		task.cancel()
+		tasks = append(tasks, task)
+	}
+	m.mu.Unlock()
+	for _, task := range tasks {
+		<-task.done
+	}
 }
 
 func (m *Manager) Apply(ctx context.Context, req ApplyRequest) (ApplyResponse, error) {
@@ -906,6 +970,122 @@ func copyDirty(ctx context.Context, source, dest string) error {
 		}
 	}
 	return nil
+}
+
+func copyIgnored(ctx context.Context, source, dest string, patterns []string) (uint64, uint64, error) {
+	root, err := gitOutput(ctx, source, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return 0, 0, err
+	}
+	root = strings.TrimSpace(root)
+	ignored, err := gitBytes(ctx, root, "ls-files", "--others", "--ignored", "--exclude-per-directory=.gitignore", "-z")
+	if err != nil {
+		return 0, 0, err
+	}
+	ignoredDirs, err := gitBytes(ctx, root, "ls-files", "--others", "--ignored", "--directory", "--exclude-per-directory=.gitignore", "-z")
+	if err != nil {
+		return 0, 0, err
+	}
+	createdDirs := make(map[string]bool)
+	for _, raw := range bytes.Split(ignoredDirs, []byte{0}) {
+		if len(raw) == 0 {
+			continue
+		}
+		rel := strings.TrimSuffix(filepath.ToSlash(filepath.Clean(string(raw))), "/")
+		if rel == "." || rel == ".." || strings.HasPrefix(rel, "../") || filepath.IsAbs(rel) {
+			return 0, uint64(len(createdDirs)), fmt.Errorf("unsafe ignored directory %q", rel)
+		}
+		if err := createIgnoredDirs(ctx, root, dest, rel, patterns, createdDirs); err != nil {
+			return 0, uint64(len(createdDirs)), err
+		}
+	}
+	var files uint64
+	for _, raw := range bytes.Split(ignored, []byte{0}) {
+		if err := ctx.Err(); err != nil {
+			return files, uint64(len(createdDirs)), err
+		}
+		if len(raw) == 0 {
+			continue
+		}
+		rel := filepath.ToSlash(filepath.Clean(string(raw)))
+		if rel == ".." || strings.HasPrefix(rel, "../") || filepath.IsAbs(rel) {
+			return files, uint64(len(createdDirs)), fmt.Errorf("unsafe ignored path %q", rel)
+		}
+		skipped, err := matchesIgnoredSkip(patterns, rel)
+		if err != nil {
+			return files, uint64(len(createdDirs)), err
+		}
+		if skipped {
+			continue
+		}
+		for dir := filepath.Dir(filepath.FromSlash(rel)); dir != "."; dir = filepath.Dir(dir) {
+			if _, err := os.Lstat(filepath.Join(dest, dir)); os.IsNotExist(err) {
+				createdDirs[dir] = true
+			}
+		}
+		if err := copyEntry(filepath.Join(root, filepath.FromSlash(rel)), filepath.Join(dest, filepath.FromSlash(rel))); err != nil {
+			return files, uint64(len(createdDirs)), err
+		}
+		files++
+	}
+	return files, uint64(len(createdDirs)), nil
+}
+
+func createIgnoredDirs(ctx context.Context, sourceRoot, destRoot, rel string, patterns []string, created map[string]bool) error {
+	return filepath.WalkDir(filepath.Join(sourceRoot, filepath.FromSlash(rel)), func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !entry.IsDir() {
+			return nil
+		}
+		item, err := filepath.Rel(sourceRoot, path)
+		if err != nil {
+			return err
+		}
+		item = filepath.ToSlash(item)
+		skipped, err := matchesIgnoredSkip(patterns, item)
+		if err != nil {
+			return err
+		}
+		if skipped {
+			return filepath.SkipDir
+		}
+		dest := filepath.Join(destRoot, filepath.FromSlash(item))
+		if _, err := os.Lstat(dest); err == nil {
+			return nil
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(dest, info.Mode().Perm()); err != nil {
+			return err
+		}
+		if err := os.Chmod(dest, info.Mode().Perm()); err != nil {
+			return err
+		}
+		created[filepath.FromSlash(item)] = true
+		return nil
+	})
+}
+
+func matchesIgnoredSkip(patterns []string, path string) (bool, error) {
+	for _, pattern := range patterns {
+		matched, err := doublestar.Match(filepath.ToSlash(pattern), path)
+		if err != nil {
+			return false, fmt.Errorf("invalid ignored skip pattern %q: %w", pattern, err)
+		}
+		if matched {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func copyEntry(source, dest string) error {

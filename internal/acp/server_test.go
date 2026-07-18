@@ -562,8 +562,20 @@ func TestWorktreeExtensionsCreateListShowAndRemove(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("base\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	runACPGit(t, root, "add", "tracked.txt")
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("ignored/\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runACPGit(t, root, "add", "tracked.txt", ".gitignore")
 	runACPGit(t, root, "commit", "-qm", "baseline")
+	if err := os.MkdirAll(filepath.Join(root, "ignored"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "ignored", "keep.txt"), []byte("keep\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "ignored", "skip.log"), []byte("skip\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	dest := filepath.Join(t.TempDir(), "worktree")
 
 	clientToAgentR, clientToAgentW := io.Pipe()
@@ -583,6 +595,7 @@ func TestWorktreeExtensionsCreateListShowAndRemove(t *testing.T) {
 		"params": map[string]any{
 			"sessionId": "wt-session", "sourcePath": root, "worktreePath": dest,
 			"copyMode": "clean", "worktreeType": "linked", "label": "ACP Test",
+			"copyIgnoredInBackground": true, "ignoredSkipPatterns": []string{"ignored/skip.log"},
 		},
 	})
 	created := decodeACP(t, decoder)
@@ -593,6 +606,21 @@ func TestWorktreeExtensionsCreateListShowAndRemove(t *testing.T) {
 	notification := decodeACP(t, decoder)
 	if notification["method"] != "x.ai/git/worktree/status" || notification["params"].(map[string]any)["status"] != "created" {
 		t.Fatalf("unexpected worktree notification: %#v", notification)
+	}
+	copyingIgnored := decodeACP(t, decoder)
+	if copyingIgnored["params"].(map[string]any)["status"] != "copyingIgnored" {
+		t.Fatalf("unexpected ignored-copy start: %#v", copyingIgnored)
+	}
+	ignoredComplete := decodeACP(t, decoder)
+	completeParams := ignoredComplete["params"].(map[string]any)
+	if completeParams["status"] != "ignoredCopyComplete" || int(completeParams["filesCopied"].(float64)) != 1 {
+		t.Fatalf("unexpected ignored-copy completion: %#v", ignoredComplete)
+	}
+	if data, err := os.ReadFile(filepath.Join(dest, "ignored", "keep.txt")); err != nil || string(data) != "keep\n" {
+		t.Fatalf("ignored file was not copied: %q err=%v", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "ignored", "skip.log")); !os.IsNotExist(err) {
+		t.Fatalf("skipped ignored file was copied: %v", err)
 	}
 	encodeACP(t, encoder, map[string]any{
 		"jsonrpc": "2.0", "id": 11, "method": "x.ai/git/worktree/create",

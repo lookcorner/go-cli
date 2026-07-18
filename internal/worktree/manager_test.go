@@ -327,6 +327,48 @@ func TestManagerGCStatsAndRebuild(t *testing.T) {
 	}
 }
 
+func TestCopyIgnoredUsesGitignoreAndSkipPatterns(t *testing.T) {
+	root := newRepo(t)
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("build/\nempty-cache/\n*.log\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, root, "add", ".gitignore")
+	runGit(t, root, "commit", "-qm", "ignore rules")
+	if err := os.MkdirAll(filepath.Join(root, "build", "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "empty-cache"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{
+		"build/keep.txt": "keep\n", "build/nested/skip.txt": "skip\n", "root.log": "log\n", "info-only.txt": "info\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(name)), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, ".git", "info", "exclude"), []byte("info-only.txt\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dest := t.TempDir()
+	files, dirs, err := copyIgnored(context.Background(), root, dest, []string{"build/nested", "build/nested/**", "*.log"})
+	if err != nil || files != 1 || dirs != 2 {
+		t.Fatalf("ignored copy files=%d dirs=%d err=%v", files, dirs, err)
+	}
+	data, err := os.ReadFile(filepath.Join(dest, "build", "keep.txt"))
+	if err != nil || string(data) != "keep\n" {
+		t.Fatalf("copied ignored file=%q err=%v", data, err)
+	}
+	if info, err := os.Stat(filepath.Join(dest, "empty-cache")); err != nil || !info.IsDir() || info.Mode().Perm() != 0o750 {
+		t.Fatalf("ignored empty directory missing or wrong mode: %#v err=%v", info, err)
+	}
+	for _, name := range []string{"build/nested/skip.txt", "root.log", "info-only.txt"} {
+		if _, err := os.Stat(filepath.Join(dest, filepath.FromSlash(name))); !os.IsNotExist(err) {
+			t.Fatalf("unexpected ignored copy %s: %v", name, err)
+		}
+	}
+}
+
 func TestSanitizeLabel(t *testing.T) {
 	if got := sanitizeLabel("  Feature__One..!  "); got != "feature-one" {
 		t.Fatalf("sanitizeLabel = %q", got)
