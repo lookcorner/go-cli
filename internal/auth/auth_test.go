@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -193,5 +195,87 @@ func TestDefaultConfigRequiresCompleteEnvironmentPair(t *testing.T) {
 	t.Setenv("GROK_OAUTH2_CLIENT_ID", "custom-client")
 	if cfg := DefaultConfig(); cfg.Issuer != "https://custom.example" || cfg.ClientID != "custom-client" {
 		t.Fatalf("complete OAuth pair was not used: %#v", cfg)
+	}
+}
+
+func TestConcurrentResolveRefreshesOnce(t *testing.T) {
+	fixed := time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC)
+	path := filepath.Join(t.TempDir(), "auth.json")
+	cfg := Config{Issuer: "https://auth.example", ClientID: "client-1", Scopes: defaultScopes}
+	expires := fixed.Add(time.Minute)
+	if err := Save(path, cfg.Scope(), Credential{Key: "old", RefreshToken: "refresh-1", ExpiresAt: &expires}); err != nil {
+		t.Fatal(err)
+	}
+	var refreshes atomic.Int32
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		refreshes.Add(1)
+		time.Sleep(25 * time.Millisecond)
+		return jsonResponse(http.StatusOK, map[string]any{"access_token": "new", "expires_in": 3600}), nil
+	})}
+	start := make(chan struct{})
+	results := make(chan string, 2)
+	errors := make(chan error, 2)
+	var wait sync.WaitGroup
+	for range 2 {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			client := NewClient(httpClient)
+			client.Now = func() time.Time { return fixed }
+			<-start
+			token, err := client.Resolve(context.Background(), path, cfg)
+			results <- token
+			errors <- err
+		}()
+	}
+	close(start)
+	wait.Wait()
+	close(results)
+	close(errors)
+	for err := range errors {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	for token := range results {
+		if token != "new" {
+			t.Fatalf("resolved token=%q", token)
+		}
+	}
+	if refreshes.Load() != 1 {
+		t.Fatalf("refresh requests=%d", refreshes.Load())
+	}
+}
+
+func TestSaveRecoversStaleAuthLock(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "auth.json")
+	lockPath := filepath.Join(dir, "auth.json.lock")
+	if err := os.WriteFile(lockPath, []byte("stale"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-staleLockAge - time.Second)
+	if err := os.Chtimes(lockPath, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := Save(path, "scope", Credential{Key: "token"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(lockPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("auth lock was not released: %v", err)
+	}
+}
+
+func TestAuthLockWaitCanBeCancelled(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "auth.json")
+	lock, err := acquireFileLock(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.release()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := acquireFileLock(ctx, path); !errors.Is(err, context.Canceled) {
+		t.Fatalf("lock wait error=%v", err)
 	}
 }

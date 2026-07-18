@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,6 +36,17 @@ func Load(path, scope string) (Credential, error) {
 }
 
 func Save(path, scope string, credential Credential) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	lock, err := acquireFileLock(ctx, path)
+	if err != nil {
+		return err
+	}
+	defer lock.release()
+	return saveCredential(path, scope, credential)
+}
+
+func saveCredential(path, scope string, credential Credential) error {
 	storeMu.Lock()
 	defer storeMu.Unlock()
 	store, err := readStore(path)

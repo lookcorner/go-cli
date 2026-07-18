@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -26,8 +25,6 @@ var defaultScopes = []string{
 	"openid", "profile", "email", "offline_access", "grok-cli:access", "api:access",
 	"conversations:read", "conversations:write",
 }
-
-var refreshMu sync.Mutex
 
 type Config struct {
 	Issuer   string
@@ -229,8 +226,11 @@ func (c *Client) Refresh(ctx context.Context, cfg Config, credential Credential)
 }
 
 func (c *Client) Resolve(ctx context.Context, path string, cfg Config) (string, error) {
-	refreshMu.Lock()
-	defer refreshMu.Unlock()
+	lock, err := acquireFileLock(ctx, path)
+	if err != nil {
+		return "", err
+	}
+	defer lock.release()
 	credential, err := Load(path, cfg.Scope())
 	if err != nil {
 		return "", err
@@ -242,7 +242,7 @@ func (c *Client) Resolve(ctx context.Context, path string, cfg Config) (string, 
 	if err != nil {
 		return "", err
 	}
-	if err := Save(path, cfg.Scope(), credential); err != nil {
+	if err := saveCredential(path, cfg.Scope(), credential); err != nil {
 		return "", err
 	}
 	return credential.Key, nil
