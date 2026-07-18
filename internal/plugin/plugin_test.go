@@ -53,6 +53,10 @@ func TestAutoDiscoveredPluginsRequireEnablement(t *testing.T) {
 	if err != nil || len(plugins) != 0 {
 		t.Fatalf("default plugins=%#v err=%v", plugins, err)
 	}
+	inventory, err := discoverInventory(workspaceRoot, home, grokHome, Config{})
+	if err != nil || len(inventory) != 2 || inventory[0].Enabled || inventory[1].Enabled {
+		t.Fatalf("disabled inventory=%#v err=%v", inventory, err)
+	}
 	plugins, err = discover(workspaceRoot, home, grokHome, Config{Enabled: []string{"project-plugin", "user-plugin"}})
 	if err != nil || len(plugins) != 2 {
 		t.Fatalf("enabled plugins=%#v err=%v", plugins, err)

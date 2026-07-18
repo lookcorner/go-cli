@@ -22,6 +22,7 @@ type Config struct {
 type Plugin struct {
 	ID          string
 	Name        string
+	Scope       string
 	Version     string
 	Description string
 	Root        string
@@ -32,6 +33,8 @@ type Plugin struct {
 	InlineMCP   json.RawMessage
 	LSPConfig   string
 	InlineLSP   json.RawMessage
+	Enabled     bool
+	Trusted     bool
 	Executable  bool
 }
 
@@ -89,15 +92,43 @@ func (p *pathList) UnmarshalJSON(data []byte) error {
 }
 
 func Discover(workspaceRoot string, cfg Config) ([]Plugin, error) {
+	plugins, err := Inventory(workspaceRoot, cfg)
+	if err != nil {
+		return nil, err
+	}
+	enabled := make([]Plugin, 0, len(plugins))
+	for _, item := range plugins {
+		if item.Enabled {
+			enabled = append(enabled, item)
+		}
+	}
+	return enabled, nil
+}
+
+func Inventory(workspaceRoot string, cfg Config) ([]Plugin, error) {
 	home, _ := os.UserHomeDir()
 	grokHome := os.Getenv("GROK_HOME")
 	if grokHome == "" && home != "" {
 		grokHome = filepath.Join(home, ".grok")
 	}
-	return discover(workspaceRoot, home, grokHome, cfg)
+	return discoverInventory(workspaceRoot, home, grokHome, cfg)
 }
 
 func discover(workspaceRoot, home, grokHome string, cfg Config) ([]Plugin, error) {
+	plugins, err := discoverInventory(workspaceRoot, home, grokHome, cfg)
+	if err != nil {
+		return nil, err
+	}
+	enabled := make([]Plugin, 0, len(plugins))
+	for _, item := range plugins {
+		if item.Enabled {
+			enabled = append(enabled, item)
+		}
+	}
+	return enabled, nil
+}
+
+func discoverInventory(workspaceRoot, home, grokHome string, cfg Config) ([]Plugin, error) {
 	workspaceRoot = canonicalOrClean(workspaceRoot)
 	gitRoot := workspace.GitRoot(workspaceRoot)
 	seenPaths := make(map[string]bool)
@@ -168,16 +199,14 @@ func collect(root string, kind scope, executable bool, grokHome string, cfg Conf
 	}
 	id := pluginID(kind, root, m.Name)
 	seenNames[m.Name] = true
-	if !isEnabled(kind, m.Name, id, cfg) {
-		return
-	}
+	enabled := isEnabled(kind, m.Name, id, cfg)
 	dataDir := ""
 	if grokHome != "" {
 		dataDir = filepath.Join(grokHome, "plugin-data", filepath.FromSlash(id))
 	}
 	*plugins = append(*plugins, Plugin{
-		ID: id, Name: m.Name, Version: m.Version, Description: m.Description,
-		Root: root, DataDir: dataDir, Executable: executable,
+		ID: id, Name: m.Name, Scope: string(kind), Version: m.Version, Description: m.Description,
+		Root: root, DataDir: dataDir, Enabled: enabled, Trusted: executable, Executable: enabled && executable,
 		SkillDirs: resolveDirs(root, m.Skills, "skills"), CommandDirs: resolveDirs(root, m.Commands, "commands"),
 		MCPConfig: resolveMCPConfig(root, m.MCPServers), InlineMCP: append(json.RawMessage(nil), m.MCPServers.Inline...),
 		LSPConfig: resolveLSPConfig(root, m.LSPServers), InlineLSP: append(json.RawMessage(nil), m.LSPServers.Inline...),

@@ -11,6 +11,7 @@ import (
 
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/mcp"
+	"github.com/lookcorner/go-cli/internal/plugin"
 	"github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/skills"
 	"github.com/lookcorner/go-cli/internal/tools"
@@ -46,6 +47,7 @@ type Runner struct {
 	Client                  ResponseStreamer
 	Tools                   *tools.Registry
 	Skills                  *skills.Catalog
+	Plugins                 []plugin.Plugin
 	Logger                  EventLogger
 	SessionID               string
 	Model                   string

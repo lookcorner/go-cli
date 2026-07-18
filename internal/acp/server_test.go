@@ -19,6 +19,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/api"
 	mcppkg "github.com/lookcorner/go-cli/internal/mcp"
+	"github.com/lookcorner/go-cli/internal/plugin"
 	sessionlog "github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/skills"
 	"github.com/lookcorner/go-cli/internal/tools"
@@ -646,6 +647,36 @@ func TestSkillsExtensionWireContract(t *testing.T) {
 	config := response["result"].(map[string]any)["result"].(map[string]any)
 	if config["totalSkills"].(float64) != 1 || len(config["skills"].([]any)) != 1 {
 		t.Fatalf("unexpected skills config: %#v", response)
+	}
+}
+
+func TestPluginsListExtensionWireContract(t *testing.T) {
+	root := t.TempDir()
+	skillRoot := filepath.Join(root, "skills")
+	if err := os.MkdirAll(filepath.Join(skillRoot, "review"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mcpPath := filepath.Join(root, ".mcp.json")
+	if err := os.WriteFile(mcpPath, []byte(`{"mcpServers":{"docs":{"command":"docs"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plugins := []plugin.Plugin{{
+		ID: "project/12345678/review-tools", Name: "review-tools", Scope: "project", Root: root,
+		Version: "1.0.0", SkillDirs: []string{skillRoot}, MCPConfig: mcpPath, Enabled: false, Trusted: false,
+	}}
+	current := &session{id: "plugin-session", runner: &agent.Runner{Plugins: plugins}}
+	var output bytes.Buffer
+	server := &Server{output: &output, sessions: map[string]*session{"plugin-session": current}}
+	server.handlePlugins(message{ID: json.RawMessage("1"), Method: "x.ai/plugins/list", Params: json.RawMessage(`{"sessionId":"plugin-session"}`)})
+	var response map[string]any
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	result := response["result"].(map[string]any)
+	items := result["result"].(map[string]any)["plugins"].([]any)
+	item := items[0].(map[string]any)
+	if result["error"] != nil || len(items) != 1 || item["enabled"] != false || item["trusted"] != false || item["scope"] != "project" || item["skillCount"].(float64) != 1 || item["mcpServerCount"].(float64) != 1 || item["mcpStatus"] != "blocked" {
+		t.Fatalf("unexpected plugins list: %#v", response)
 	}
 }
 

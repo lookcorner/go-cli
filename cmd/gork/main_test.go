@@ -79,7 +79,7 @@ func TestDiscoverSkillsLoadsConfiguredPlugin(t *testing.T) {
 		t.Fatal(err)
 	}
 	pluginRoot, _ = filepath.EvalSymlinks(pluginRoot)
-	workspaceCfg, catalog, err := discoverWorkspace(root, config.Config{Compat: compat.Default(), Plugins: config.PluginsConfig{Paths: []string{pluginRoot}}}, true)
+	workspaceCfg, catalog, _, err := discoverWorkspace(root, config.Config{Compat: compat.Default(), Plugins: config.PluginsConfig{Paths: []string{pluginRoot}}}, true)
 	if err != nil {
 		t.Fatal(err)
 	}

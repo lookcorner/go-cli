@@ -222,6 +222,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleStaticExtension(incoming)
 		case "x.ai/skills/list", "x.ai/skills/config":
 			s.handleSkills(incoming)
+		case "x.ai/plugins/list":
+			s.handlePlugins(incoming)
 		case "x.ai/fs/list", "x.ai/fs/exists", "x.ai/fs/read_file", "x.ai/fs/write_file", "x.ai/fs/delete_file":
 			s.handleFS(incoming)
 		case "x.ai/rewind/points", "x.ai/rewind/execute":

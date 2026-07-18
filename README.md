@@ -639,8 +639,10 @@ disabled = ["old-tools"]
 Enabled plugins may also contribute `.mcp.json`/inline `mcpServers` and
 `.lsp.json`/inline `lspServers`. Development builds follow the reference's
 unstamped-build behavior; release builds require folder trust before an enabled
-project plugin may start MCP or LSP processes. Plugin hooks, agents,
-installation, marketplaces, and updates are not yet implemented.
+project plugin may start MCP or LSP processes. ACP sessions expose enabled and
+disabled inventory through `x.ai/plugins/list`, including scope, trust, skill,
+and MCP summaries. Plugin hooks, agents, actions, installation, marketplaces,
+and updates are not yet implemented.
 
 The `[skills]` config accepts additional directories or individual `SKILL.md`
 files. Paths support `~`; relative paths resolve from the workspace. `ignore`

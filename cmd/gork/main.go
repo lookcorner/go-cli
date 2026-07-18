@@ -236,7 +236,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	cfg, skillCatalog, err := discoverWorkspace(ws.Root(), cfg, projectTrusted)
+	cfg, skillCatalog, _, err := discoverWorkspace(ws.Root(), cfg, projectTrusted)
 	if err != nil {
 		return err
 	}
@@ -761,7 +761,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		if !projectTrusted {
 			fmt.Fprintln(statusOutput, "[gork] project executable configuration is disabled for this untrusted workspace")
 		}
-		sessionCfg, catalog, err := discoverWorkspace(ws.Root(), cfg, projectTrusted)
+		sessionCfg, catalog, plugins, err := discoverWorkspace(ws.Root(), cfg, projectTrusted)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -870,7 +870,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			})
 		}
 		return &agent.Runner{
-			Client: modelClient, Tools: registry, Skills: catalog, Logger: logger,
+			Client: modelClient, Tools: registry, Skills: catalog, Plugins: plugins, Logger: logger,
 			Model: sessionCfg.Model, Instructions: instructions, MaxSteps: cfg.MaxSteps,
 			TextOutput: textOutput, StatusOutput: statusOutput,
 			ContextWindow: cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,
@@ -884,13 +884,19 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 	return nil
 }
 
-func discoverWorkspace(root string, cfg config.Config, projectTrusted bool) (config.Config, *skills.Catalog, error) {
-	plugins, err := plugin.Discover(root, plugin.Config{
+func discoverWorkspace(root string, cfg config.Config, projectTrusted bool) (config.Config, *skills.Catalog, []plugin.Plugin, error) {
+	inventory, err := plugin.Inventory(root, plugin.Config{
 		Paths: cfg.Plugins.Paths, Enabled: cfg.Plugins.Enabled, Disabled: cfg.Plugins.Disabled,
 		ProjectTrusted: projectTrusted,
 	})
 	if err != nil {
-		return config.Config{}, nil, err
+		return config.Config{}, nil, nil, err
+	}
+	plugins := make([]plugin.Plugin, 0, len(inventory))
+	for _, item := range inventory {
+		if item.Enabled {
+			plugins = append(plugins, item)
+		}
 	}
 	cfg.MCPServers = config.DiscoverMCPServers(root, cfg, plugins, projectTrusted)
 	cfg.LSPServers = config.DiscoverLSPServers(root, cfg, plugins, projectTrusted)
@@ -898,7 +904,7 @@ func discoverWorkspace(root string, cfg config.Config, projectTrusted bool) (con
 		Compat: cfg.Compat, Paths: cfg.Skills.Paths, Ignore: cfg.Skills.Ignore,
 		Disabled: cfg.Skills.Disabled, Plugins: plugins,
 	})
-	return cfg, catalog, err
+	return cfg, catalog, inventory, err
 }
 
 func resolveProjectTrust(ctx context.Context, root string, cfg config.Config, explicit bool, input *bufio.Reader, output io.Writer, interactive bool) (bool, error) {
