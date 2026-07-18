@@ -14,6 +14,8 @@ feature-by-feature status.
 
 Interactive REPL and full-screen sessions accept `/compact` to summarize the
 current completed response chain and continue from a fresh context.
+ACP sessions accept the same command as a text prompt and advertise it through
+`x.ai/commands/list`.
 
 Workspace instruction and skill discovery respects repository and global Git
 ignore rules through Git's own matching engine. Project instructions load from
@@ -263,6 +265,9 @@ Persisted and live sessions also expose `x.ai/session/info`, `rename`,
 only the validated JSONL log and its exact artifact directory, and search
 supports workspace filtering, pagination, ranked title/content matches, and
 optional snippets without a separate index service.
+
+`x.ai/workspaces/list` returns the reference-compatible partial `no_oauth`
+response because this local build has no cloud workspace backend.
 
 ACP sessions expose `x.ai/rewind/points` and `x.ai/rewind/execute` for
 `all`, `conversation_only`, and `files_only` rewind (`code_only` remains an

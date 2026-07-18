@@ -212,6 +212,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleSessionFork(incoming)
 		case "x.ai/session/info", "x.ai/session/rename", "x.ai/session/delete", "x.ai/session/search":
 			s.handleSessionAdmin(incoming)
+		case "x.ai/commands/list", "x.ai/workspaces/list":
+			s.handleStaticExtension(incoming)
 		case "x.ai/rewind/points", "x.ai/rewind/execute":
 			s.handleRewind(incoming)
 		case "x.ai/terminal/pty/create", "x.ai/terminal/pty/load", "x.ai/terminal/pty/resize", "x.ai/terminal/list", "x.ai/terminal/kill":
@@ -336,6 +338,30 @@ func (s *Server) handleSessionAdmin(incoming message) {
 			Query: req.Query, CWD: req.CWD, Limit: req.Limit, Offset: req.Offset, IncludeContent: req.IncludeContent,
 		})
 		extResult(result, err)
+	}
+}
+
+func (s *Server) handleStaticExtension(incoming message) {
+	switch incoming.Method {
+	case "x.ai/commands/list":
+		s.respond(incoming.ID, map[string]any{"commands": []any{map[string]any{
+			"name": "compact", "description": "Compress conversation history to save context window",
+		}}})
+	case "x.ai/workspaces/list":
+		var req struct {
+			PageSize  *int   `json:"pageSize"`
+			PageToken string `json:"pageToken"`
+			Query     string `json:"query"`
+			Kind      string `json:"kind"`
+		}
+		if json.Unmarshal(incoming.Params, &req) != nil {
+			s.respondError(incoming.ID, -32602, "invalid workspace list parameters")
+			return
+		}
+		s.respond(incoming.ID, map[string]any{"result": map[string]any{
+			"workspaces": []any{},
+			"_meta":      map[string]any{"x.ai/partial": map[string]any{"workspaces": true, "reason": "no_oauth"}},
+		}})
 	}
 }
 
@@ -1278,6 +1304,10 @@ func (s *Server) handlePrompt(parent context.Context, incoming message) {
 	if prompt == "" {
 		prompt = "Image prompt"
 	}
+	if strings.TrimSpace(prompt) == "/compact" {
+		s.handleCompactPrompt(parent, incoming, current)
+		return
+	}
 	current.mu.Lock()
 	if current.running {
 		current.mu.Unlock()
@@ -1323,6 +1353,48 @@ func (s *Server) handlePrompt(parent context.Context, incoming message) {
 		if pointsErr == nil {
 			current.promptIndex = len(points)
 		}
+		current.cancel = nil
+		current.updated = time.Now().UTC()
+		current.mu.Unlock()
+		if err == nil || stopReason == "cancelled" {
+			s.respond(incoming.ID, map[string]any{"stopReason": stopReason})
+		}
+	}()
+}
+
+func (s *Server) handleCompactPrompt(parent context.Context, incoming message, current *session) {
+	current.mu.Lock()
+	if current.running {
+		current.mu.Unlock()
+		s.respondError(incoming.ID, -32000, "session already has an active prompt")
+		return
+	}
+	if current.previous == "" {
+		current.mu.Unlock()
+		s.respondError(incoming.ID, -32000, "no completed response is available to compact")
+		return
+	}
+	runCtx, cancel := context.WithCancel(parent)
+	previous := current.previous
+	current.cancel = cancel
+	current.running = true
+	current.updated = time.Now().UTC()
+	current.mu.Unlock()
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		_, err := current.runner.Compact(runCtx, previous)
+		stopReason := "end_turn"
+		if errors.Is(runCtx.Err(), context.Canceled) {
+			stopReason = "cancelled"
+		} else if err != nil {
+			s.respondError(incoming.ID, -32000, err.Error())
+		}
+		current.mu.Lock()
+		if err == nil {
+			current.previous = ""
+		}
+		current.running = false
 		current.cancel = nil
 		current.updated = time.Now().UTC()
 		current.mu.Unlock()

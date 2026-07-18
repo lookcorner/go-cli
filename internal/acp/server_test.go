@@ -174,6 +174,54 @@ func TestSessionAdminExtensionWireContract(t *testing.T) {
 	}
 }
 
+func TestStaticExtensionsAndCompactCommand(t *testing.T) {
+	var output bytes.Buffer
+	streamer := &fixtureStreamer{results: []api.StreamResult{{Text: "preserve the implementation state"}}}
+	runner := &agent.Runner{Client: streamer, Model: "test-model"}
+	current := &session{id: "compact-session", cwd: t.TempDir(), runner: runner, previous: "response-1", activePrompt: -1, close: func() {}}
+	server := &Server{output: &output, sessions: map[string]*session{"compact-session": current}}
+	server.handleStaticExtension(message{ID: json.RawMessage("1"), Method: "x.ai/commands/list", Params: json.RawMessage(`{}`)})
+	var response map[string]any
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	commands := response["result"].(map[string]any)["commands"].([]any)
+	if len(commands) != 1 || commands[0].(map[string]any)["name"] != "compact" {
+		t.Fatalf("unexpected commands response: %#v", response)
+	}
+	output.Reset()
+	server.handleStaticExtension(message{ID: json.RawMessage("2"), Method: "x.ai/workspaces/list", Params: json.RawMessage(`{}`)})
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	workspaceResult := response["result"].(map[string]any)["result"].(map[string]any)
+	if len(workspaceResult["workspaces"].([]any)) != 0 || workspaceResult["_meta"].(map[string]any)["x.ai/partial"].(map[string]any)["reason"] != "no_oauth" {
+		t.Fatalf("unexpected workspaces response: %#v", response)
+	}
+	output.Reset()
+	params, _ := json.Marshal(map[string]any{"sessionId": "compact-session", "prompt": []any{map[string]any{"type": "text", "text": "/compact"}}})
+	server.handlePrompt(context.Background(), message{ID: json.RawMessage("3"), Method: "session/prompt", Params: params})
+	server.wg.Wait()
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response["result"].(map[string]any)["stopReason"] != "end_turn" {
+		t.Fatalf("unexpected compact response: %#v", response)
+	}
+	current.mu.Lock()
+	previous, running := current.previous, current.running
+	current.mu.Unlock()
+	if previous != "" || running {
+		t.Fatalf("compact state previous=%q running=%v", previous, running)
+	}
+	streamer.mu.Lock()
+	requests := append([]api.ResponseRequest(nil), streamer.requests...)
+	streamer.mu.Unlock()
+	if len(requests) != 1 || requests[0].PreviousResponseID != "response-1" || !strings.Contains(requests[0].Instructions, "handoff summary") {
+		t.Fatalf("unexpected compact request: %#v", requests)
+	}
+}
+
 type fixtureStreamer struct {
 	mu       sync.Mutex
 	results  []api.StreamResult
@@ -228,7 +276,7 @@ func (f *fixtureStreamer) StreamResponse(ctx context.Context, request api.Respon
 	result := f.results[0]
 	f.results = f.results[1:]
 	f.mu.Unlock()
-	if result.Text != "" {
+	if result.Text != "" && onText != nil {
 		onText(result.Text)
 	}
 	return result, nil
