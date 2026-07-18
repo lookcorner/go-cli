@@ -27,6 +27,17 @@ const (
 	maxSkills                = 500
 )
 
+var cursorDefaultSkills = map[string]bool{
+	"babysit": true, "canvas": true, "create-hook": true, "create-rule": true,
+	"create-skill": true, "create-subagent": true, "loop": true, "migrate-to-skills": true,
+	"sdk": true, "shell": true, "split-to-prs": true, "statusline": true,
+	"update-cli-config": true, "update-cursor-settings": true,
+}
+
+var claudeDefaultSkills = map[string]bool{
+	"pdf": true, "docx": true, "xlsx": true, "pptx": true, "skill-creator": true,
+}
+
 type Skill struct {
 	Name                   string
 	Description            string
@@ -264,7 +275,7 @@ func (c *Catalog) loadSkill(path string, info os.FileInfo, source string, comman
 		fallbackName = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 	}
 	metadata := parseMetadata(string(data), fallbackName)
-	if metadata.Name == "" {
+	if metadata.Name == "" || isVendorDefaultSkill(real, metadata.Name) {
 		return nil
 	}
 	if c.seen != nil {
@@ -293,6 +304,22 @@ func (c *Catalog) loadSkill(path string, info os.FileInfo, source string, comman
 		c.pending[metadata.Name] = skill
 	}
 	return nil
+}
+
+func isVendorDefaultSkill(path, name string) bool {
+	return pathHasDir(path, ".cursor") && cursorDefaultSkills[name] ||
+		pathHasDir(path, ".claude") && claudeDefaultSkills[name]
+}
+
+func pathHasDir(path, name string) bool {
+	for dir := filepath.Dir(path); ; dir = filepath.Dir(dir) {
+		if filepath.Base(dir) == name {
+			return true
+		}
+		if parent := filepath.Dir(dir); parent == dir {
+			return false
+		}
+	}
 }
 
 func (c *Catalog) Count() int {

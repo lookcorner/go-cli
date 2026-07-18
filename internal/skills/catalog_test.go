@@ -325,6 +325,49 @@ func TestCommandsLoadFlatAndSkillsWinNameCollisions(t *testing.T) {
 	}
 }
 
+func TestVendorDefaultSkillsAreDroppedOnlyUnderMatchingVendor(t *testing.T) {
+	home := t.TempDir()
+	write := func(vendor, name string) {
+		t.Helper()
+		dir := filepath.Join(home, vendor, "skills", name)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("---\nname: "+name+"\ndescription: "+vendor+" copy\n---\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(".cursor", "create-rule")
+	write(".cursor", "custom-cursor")
+	write(".claude", "docx")
+	write(".claude", "shell")
+	write(".grok", "pdf")
+
+	catalog, err := discover(t.TempDir(), home, filepath.Join(home, ".grok"), Config{Compat: compat.Default()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(catalog.Names(), ","); got != "custom-cursor,pdf,shell" {
+		t.Fatalf("vendor-filtered names=%q", got)
+	}
+	if skill := catalog.byName["shell"]; skill.Source != "user:claude" {
+		t.Fatalf("cursor-only denylist crossed vendors: %#v", skill)
+	}
+	if skill := catalog.byName["pdf"]; skill.Source != "user:grok" {
+		t.Fatalf("user skill sharing a vendor name was dropped: %#v", skill)
+	}
+}
+
+func TestVendorDefaultSkillPathMatching(t *testing.T) {
+	root := t.TempDir()
+	if !isVendorDefaultSkill(filepath.Join(root, ".cursor", "skills", "shell", "SKILL.md"), "shell") ||
+		!isVendorDefaultSkill(filepath.Join(root, ".claude", "skills", "pdf", "SKILL.md"), "pdf") ||
+		isVendorDefaultSkill(filepath.Join(root, ".grok", "skills", "shell", "SKILL.md"), "shell") ||
+		isVendorDefaultSkill(filepath.Join(root, ".claude", "skills", "shell", "SKILL.md"), "shell") {
+		t.Fatal("vendor default path matching is incorrect")
+	}
+}
+
 func TestConfiguredSkillPathsIgnoreAndDisabled(t *testing.T) {
 	home := t.TempDir()
 	root := t.TempDir()

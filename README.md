@@ -418,6 +418,9 @@ through the workspace, and user skills honor `GROK_HOME`. Only skill metadata
 is included initially. The model calls the `skill` tool to load the full file
 when a task matches it; deeper project skills override same-named user or parent
 skills.
+Known Cursor and Claude built-in Skill copies found inside their vendor
+directories are ignored; user-authored skills with the same names elsewhere
+remain available.
 Skills with a scalar or list `paths` value in YAML frontmatter stay hidden until a successful
 file read, directory listing, or edit touches a matching path.
 
