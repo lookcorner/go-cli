@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -927,21 +926,7 @@ func copyEntry(source, dest string) error {
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("unsupported untracked file type: %s", source)
 	}
-	in, err := os.Open(source)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, info.Mode().Perm())
-	if err != nil {
-		return err
-	}
-	_, copyErr := io.Copy(out, in)
-	closeErr := out.Close()
-	if copyErr != nil {
-		return copyErr
-	}
-	return closeErr
+	return cloneFile(source, dest, info.Mode().Perm())
 }
 
 func gitOutput(ctx context.Context, dir string, args ...string) (string, error) {

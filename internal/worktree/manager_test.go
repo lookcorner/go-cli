@@ -64,6 +64,51 @@ func TestManagerLinkedDirtyLifecycleAndPersistence(t *testing.T) {
 	}
 }
 
+func TestCopyEntryPreservesModeAndCreatesIndependentFile(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "source")
+	dest := filepath.Join(dir, "nested", "dest")
+	if err := os.WriteFile(source, []byte("original\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyEntry(source, dest); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o755 {
+		t.Fatalf("copied mode = %o, want 755", info.Mode().Perm())
+	}
+	if err := os.WriteFile(dest, []byte("changed\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(source)
+	if err != nil || string(data) != "original\n" {
+		t.Fatalf("source changed with clone: %q err=%v", data, err)
+	}
+}
+
+func TestCopyEntryDoesNotReplaceExistingFile(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "source")
+	dest := filepath.Join(dir, "dest")
+	if err := os.WriteFile(source, []byte("source\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dest, []byte("existing\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyEntry(source, dest); err == nil {
+		t.Fatal("copy replaced an existing destination")
+	}
+	data, err := os.ReadFile(dest)
+	if err != nil || string(data) != "existing\n" {
+		t.Fatalf("existing destination changed: %q err=%v", data, err)
+	}
+}
+
 func TestManagerStandaloneAndSafeRemove(t *testing.T) {
 	root := newRepo(t)
 	manager, err := NewManager(t.TempDir())
