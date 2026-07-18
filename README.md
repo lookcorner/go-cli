@@ -273,6 +273,13 @@ Live ACP sessions expose their resolved skill catalog through
 `x.ai/skills/list` and `x.ai/skills/config`, including scope, invocation gates,
 plugin metadata, configured paths, ignore paths, and enabled state.
 
+The `x.ai/fs/list`, `exists`, `read_file`, `write_file`, and `delete_file`
+extensions provide workspace-confined file access. Listing supports stable
+dirs-first pagination, bounded depth, hidden/Git-ignore controls, glob filters,
+and safe symlink traversal. Reads support UTF-8 or base64 byte ranges; writes
+use same-directory atomic replacement and preserve existing file permissions.
+Deletion is intentionally file-only and never recursively removes directories.
+
 ACP sessions expose `x.ai/rewind/points` and `x.ai/rewind/execute` for
 `all`, `conversation_only`, and `files_only` rewind (`code_only` remains an
 alias). Rewinds append a timeline marker instead of deleting history, restore

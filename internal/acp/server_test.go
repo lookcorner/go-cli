@@ -124,6 +124,56 @@ func TestGitExtensionWireContract(t *testing.T) {
 	}
 }
 
+func TestFSExtensionWireContract(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "read.txt"), []byte("hello\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	server := &Server{output: &output, sessions: map[string]*session{"fs-session": {id: "fs-session", cwd: root}}}
+	call := func(id int, method string, params map[string]any) map[string]any {
+		t.Helper()
+		output.Reset()
+		data, err := json.Marshal(params)
+		if err != nil {
+			t.Fatal(err)
+		}
+		server.handleFS(message{ID: json.RawMessage(strconv.Itoa(id)), Method: method, Params: data})
+		var response map[string]any
+		if err := json.NewDecoder(&output).Decode(&response); err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}
+
+	listed := call(1, "x.ai/fs/list", map[string]any{"sessionId": "fs-session", "path": ".", "depth": 1})
+	extension := listed["result"].(map[string]any)
+	nodes := extension["result"].(map[string]any)["nodes"].([]any)
+	if len(nodes) != 1 || nodes[0].(map[string]any)["name"] != "read.txt" || extension["error"] != nil {
+		t.Fatalf("unexpected list response: %#v", listed)
+	}
+	read := call(2, "x.ai/fs/read_file", map[string]any{"sessionId": "fs-session", "path": "read.txt"})
+	if result := read["result"].(map[string]any)["result"].(map[string]any); result["content"] != "hello\n" || result["lineCount"].(float64) != 1 {
+		t.Fatalf("unexpected read response: %#v", read)
+	}
+	write := call(3, "x.ai/fs/write_file", map[string]any{"sessionId": "fs-session", "path": "nested/new.txt", "content": "new"})
+	if write["result"].(map[string]any)["error"] != nil {
+		t.Fatalf("unexpected write response: %#v", write)
+	}
+	exists := call(4, "x.ai/fs/exists", map[string]any{"sessionId": "fs-session", "path": "nested/new.txt"})
+	if exists["result"].(map[string]any)["result"].(map[string]any)["exists"] != true {
+		t.Fatalf("unexpected exists response: %#v", exists)
+	}
+	deleted := call(5, "x.ai/fs/delete_file", map[string]any{"sessionId": "fs-session", "path": "nested/new.txt"})
+	if deleted["result"].(map[string]any)["error"] != nil {
+		t.Fatalf("unexpected delete response: %#v", deleted)
+	}
+	missingSession := call(6, "x.ai/fs/exists", map[string]any{"path": "read.txt"})
+	if missingSession["error"].(map[string]any)["code"].(float64) != -32602 {
+		t.Fatalf("relative path did not require session: %#v", missingSession)
+	}
+}
+
 func TestSessionAdminExtensionWireContract(t *testing.T) {
 	dir, cwd := t.TempDir(), t.TempDir()
 	logger, err := sessionlog.NewLoggerWithID(dir, "admin-session")

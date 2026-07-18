@@ -216,6 +216,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleStaticExtension(incoming)
 		case "x.ai/skills/list", "x.ai/skills/config":
 			s.handleSkills(incoming)
+		case "x.ai/fs/list", "x.ai/fs/exists", "x.ai/fs/read_file", "x.ai/fs/write_file", "x.ai/fs/delete_file":
+			s.handleFS(incoming)
 		case "x.ai/rewind/points", "x.ai/rewind/execute":
 			s.handleRewind(incoming)
 		case "x.ai/terminal/pty/create", "x.ai/terminal/pty/load", "x.ai/terminal/pty/resize", "x.ai/terminal/list", "x.ai/terminal/kill":
@@ -393,6 +395,111 @@ func (s *Server) handleSkills(incoming message) {
 		return
 	}
 	s.respond(incoming.ID, map[string]any{"result": current.runner.Skills.ConfigInfo()})
+}
+
+func (s *Server) handleFS(incoming message) {
+	var req struct {
+		SessionID        string   `json:"sessionId"`
+		Path             string   `json:"path"`
+		Depth            int      `json:"depth"`
+		IncludeHidden    *bool    `json:"includeHidden"`
+		Limit            int      `json:"limit"`
+		Offset           *int64   `json:"offset"`
+		FollowSymlinks   *bool    `json:"followSymlinks"`
+		RespectGitIgnore *bool    `json:"respectGitIgnore"`
+		IncludeGlobs     []string `json:"includeGlobs"`
+		ExcludeGlobs     []string `json:"excludeGlobs"`
+		MaxBytes         int      `json:"maxBytes"`
+		MaxLines         *uint64  `json:"maxLines"`
+		Length           *uint64  `json:"length"`
+		Encoding         string   `json:"encoding"`
+		Content          string   `json:"content"`
+		CreateDirs       *bool    `json:"createDirs"`
+	}
+	if json.Unmarshal(incoming.Params, &req) != nil || req.Path == "" {
+		s.respondError(incoming.ID, -32602, "path is required")
+		return
+	}
+	current := s.lookupSession(req.SessionID)
+	if current == nil && filepath.IsAbs(req.Path) {
+		s.mu.Lock()
+		for _, candidate := range s.sessions {
+			rel, err := filepath.Rel(candidate.cwd, req.Path)
+			if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				current = candidate
+				break
+			}
+		}
+		s.mu.Unlock()
+	}
+	if current == nil {
+		s.respondError(incoming.ID, -32602, "sessionId is required for relative paths")
+		return
+	}
+	ws, err := workspace.Open(current.cwd)
+	if err != nil {
+		s.respondError(incoming.ID, -32000, err.Error())
+		return
+	}
+	extResult := func(value any, err error) {
+		if err != nil {
+			s.respond(incoming.ID, map[string]any{"result": nil, "error": err.Error()})
+		} else {
+			s.respond(incoming.ID, map[string]any{"result": value})
+		}
+	}
+	switch incoming.Method {
+	case "x.ai/fs/list":
+		includeHidden, followSymlinks, respectGitIgnore := true, true, true
+		if req.IncludeHidden != nil {
+			includeHidden = *req.IncludeHidden
+		}
+		if req.FollowSymlinks != nil {
+			followSymlinks = *req.FollowSymlinks
+		}
+		if req.RespectGitIgnore != nil {
+			respectGitIgnore = *req.RespectGitIgnore
+		}
+		offset := 0
+		if req.Offset != nil && *req.Offset > 0 {
+			offset = int(*req.Offset)
+		}
+		result, err := ws.List(req.Path, workspace.FSListOptions{
+			Depth: req.Depth, IncludeHidden: includeHidden, Limit: req.Limit, Offset: offset,
+			FollowSymlinks: followSymlinks, RespectGitIgnore: respectGitIgnore,
+			IncludeGlobs: req.IncludeGlobs, ExcludeGlobs: req.ExcludeGlobs,
+		})
+		extResult(result, err)
+	case "x.ai/fs/exists":
+		extResult(map[string]any{"exists": ws.Exists(req.Path)}, nil)
+	case "x.ai/fs/read_file":
+		ranged := req.Offset != nil || req.Length != nil || req.Encoding == "base64"
+		length := ^uint64(0)
+		if req.Length != nil {
+			length = *req.Length
+		}
+		offset := uint64(0)
+		if req.Offset != nil {
+			if *req.Offset < 0 {
+				s.respondError(incoming.ID, -32602, "offset must not be negative")
+				return
+			}
+			offset = uint64(*req.Offset)
+		}
+		result, err := ws.Read(req.Path, offset, length, req.MaxBytes, req.Encoding, ranged)
+		if err == nil && req.MaxLines != nil && result.LineCount != nil && *result.LineCount > *req.MaxLines {
+			err = fmt.Errorf("file exceeds %d lines", *req.MaxLines)
+		}
+		extResult(result, err)
+	case "x.ai/fs/write_file":
+		createDirs := true
+		if req.CreateDirs != nil {
+			createDirs = *req.CreateDirs
+		}
+		extResult(map[string]any{}, ws.Write(req.Path, req.Content, createDirs))
+	case "x.ai/fs/delete_file":
+		extResult(map[string]any{}, ws.Delete(req.Path))
+	}
 }
 
 func sessionContextWire(used, total, turns int) map[string]any {
