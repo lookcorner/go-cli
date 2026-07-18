@@ -741,6 +741,8 @@ type sessionPluginState struct {
 	catalog   *skills.Catalog
 	mcp       *sessionMCPRuntime
 	mcpSource config.Config
+	updateLSP func(config.Config) error
+	lspSource config.Config
 	inventory []plugin.Plugin
 }
 
@@ -881,6 +883,20 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		pluginState := &sessionPluginState{
 			root: ws.Root(), trusted: projectTrusted, catalog: catalog,
 			mcp: mcpRuntime, mcpSource: sessionBase,
+			updateLSP: func(base config.Config) error {
+				clients, err := startLSPClients(sessionCtx, base, ws, statusOutput)
+				if err != nil {
+					return err
+				}
+				if err := lspManager.Replace(clients); err != nil {
+					for _, client := range clients {
+						_ = client.Close()
+					}
+					return err
+				}
+				return nil
+			},
+			lspSource: sessionBase,
 			inventory: append([]plugin.Plugin(nil), plugins...),
 		}
 		extensionsMu.Lock()
@@ -951,6 +967,9 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			}
 			extensionsMu.Unlock()
 			for _, state := range states {
+				extensionsMu.Lock()
+				previousInventory := append([]plugin.Plugin(nil), state.inventory...)
+				extensionsMu.Unlock()
 				inventory, err := plugin.Inventory(state.root, plugin.Config{
 					Paths: settings.Paths, Enabled: settings.Enabled, Disabled: settings.Disabled,
 					ProjectTrusted: state.trusted,
@@ -965,6 +984,20 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 				mcpBase.MCPServers = config.DiscoverMCPServers(state.root, mcpBase, enabledPlugins(inventory), state.trusted)
 				if err := state.mcp.UpdateBase(updateCtx, mcpBase); err != nil {
 					return nil, err
+				}
+				lspBase := state.lspSource
+				lspBase.LSPServers = config.DiscoverLSPServers(state.root, lspBase, enabledPlugins(inventory), state.trusted)
+				if err := state.updateLSP(lspBase); err != nil {
+					var rollbackErr error
+					if catalogErr := state.catalog.ReconfigurePlugins(enabledPlugins(previousInventory)); catalogErr != nil {
+						rollbackErr = errors.Join(rollbackErr, catalogErr)
+					}
+					previousMCP := state.mcpSource
+					previousMCP.MCPServers = config.DiscoverMCPServers(state.root, previousMCP, enabledPlugins(previousInventory), state.trusted)
+					if mcpErr := state.mcp.UpdateBase(updateCtx, previousMCP); mcpErr != nil {
+						rollbackErr = errors.Join(rollbackErr, mcpErr)
+					}
+					return nil, errors.Join(err, rollbackErr)
 				}
 				extensionsMu.Lock()
 				state.inventory = append([]plugin.Plugin(nil), inventory...)
@@ -1150,17 +1183,40 @@ func startLSPServers(
 	registry *tools.Registry,
 	stderr io.Writer,
 ) (*lsp.Manager, error) {
+	manager := lsp.NewManager(ws)
+	clients, err := startLSPClients(ctx, cfg, ws, stderr)
+	if err != nil {
+		_ = manager.Close()
+		return nil, err
+	}
+	if err := manager.Replace(clients); err != nil {
+		for _, client := range clients {
+			_ = client.Close()
+		}
+		_ = manager.Close()
+		return nil, err
+	}
+	if err := registry.Register(manager.Tool()); err != nil {
+		_ = manager.Close()
+		return nil, fmt.Errorf("register LSP tool: %w", err)
+	}
+	return manager, nil
+}
+
+func startLSPClients(ctx context.Context, cfg config.Config, ws *workspace.Workspace, stderr io.Writer) ([]*lsp.Client, error) {
 	names := make([]string, 0, len(cfg.LSPServers))
 	for name, server := range cfg.LSPServers {
 		if server.IsEnabled() {
 			names = append(names, name)
 		}
 	}
-	if len(names) == 0 {
-		return nil, nil
-	}
 	sort.Strings(names)
-	manager := lsp.NewManager(ws)
+	clients := make([]*lsp.Client, 0, len(names))
+	closeClients := func() {
+		for _, client := range clients {
+			_ = client.Close()
+		}
+	}
 	for _, name := range names {
 		server := cfg.LSPServers[name]
 		root := ws.Root()
@@ -1168,7 +1224,7 @@ func startLSPServers(
 			var err error
 			root, err = ws.Resolve(server.WorkspaceFolder)
 			if err != nil {
-				_ = manager.Close()
+				closeClients()
 				return nil, fmt.Errorf("resolve LSP workspace for %q: %w", name, err)
 			}
 		}
@@ -1188,21 +1244,13 @@ func startLSPServers(
 			MaxRestarts:     maxRestarts,
 		})
 		if err != nil {
-			_ = manager.Close()
+			closeClients()
 			return nil, err
 		}
-		if err := manager.Add(client); err != nil {
-			_ = client.Close()
-			_ = manager.Close()
-			return nil, err
-		}
+		clients = append(clients, client)
 		fmt.Fprintf(stderr, "[gork] LSP %s ready\n", name)
 	}
-	if err := registry.Register(manager.Tool()); err != nil {
-		_ = manager.Close()
-		return nil, fmt.Errorf("register LSP tool: %w", err)
-	}
-	return manager, nil
+	return clients, nil
 }
 
 func joinInstructions(parts ...string) string {

@@ -152,6 +152,34 @@ func TestDiscoverSkillsLoadsConfiguredPlugin(t *testing.T) {
 	}
 }
 
+func TestStartLSPServersRegistersDynamicToolWithoutInitialServers(t *testing.T) {
+	root := t.TempDir()
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, nil)
+	defer registry.Close()
+	manager, err := startLSPServers(context.Background(), config.Config{}, ws, registry, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	if len(manager.Names()) != 0 {
+		t.Fatalf("unexpected initial LSP servers: %#v", manager.Names())
+	}
+	found := false
+	for _, tool := range registry.SnapshotTools() {
+		if tool.Definition().Name == "lsp" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("dynamic LSP tool was not registered")
+	}
+}
+
 func TestMCPHTTPHeadersUseBearerTokenEnvironment(t *testing.T) {
 	t.Setenv("MCP_ACCESS_TOKEN", "secret")
 	headers := mcpHTTPHeaders(config.MCPServerConfig{

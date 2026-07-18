@@ -52,6 +52,40 @@ func (m *Manager) Add(client *Client) error {
 	return nil
 }
 
+func (m *Manager) Replace(clients []*Client) error {
+	next := make(map[string]*Client, len(clients))
+	for _, client := range clients {
+		if client == nil {
+			return errors.New("LSP client is nil")
+		}
+		if _, exists := next[client.Name()]; exists {
+			return fmt.Errorf("LSP server %q is duplicated", client.Name())
+		}
+		next[client.Name()] = client
+	}
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return errors.New("LSP manager is closed")
+	}
+	previous := m.clients
+	m.clients = next
+	for name, client := range next {
+		if client.config.RestartOnCrash && client.config.MaxRestarts > 0 {
+			m.wg.Add(1)
+			go m.monitor(name, client)
+		}
+	}
+	m.mu.Unlock()
+	for name, client := range previous {
+		if next[name] == client {
+			continue
+		}
+		_ = client.Close()
+	}
+	return nil
+}
+
 func (m *Manager) Names() []string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -118,8 +152,9 @@ func (m *Manager) monitor(name string, client *Client) {
 		}
 		m.mu.RLock()
 		closed := m.closed
+		current := m.clients[name] == client
 		m.mu.RUnlock()
-		if closed {
+		if closed || !current {
 			return
 		}
 		tracked := client.trackedDocumentURIs()

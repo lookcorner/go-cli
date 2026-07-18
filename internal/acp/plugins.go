@@ -73,10 +73,6 @@ func (s *Server) handlePluginAction(ctx context.Context, incoming message, curre
 		s.pluginActionOutcome(incoming, "validation_error", "Plugin ID is required.", false)
 		return
 	}
-	before := []plugin.Plugin{}
-	if current.runner.PluginInventory != nil {
-		before = current.runner.PluginInventory()
-	}
 	var update func(*plugin.Settings)
 	if action != "reload" {
 		update = func(settings *plugin.Settings) {
@@ -100,12 +96,11 @@ func (s *Server) handlePluginAction(ctx context.Context, incoming message, curre
 			}
 		}
 	}
-	after, err := current.runner.UpdatePlugins(ctx, update)
+	_, err := current.runner.UpdatePlugins(ctx, update)
 	if err != nil {
 		s.pluginActionOutcome(incoming, "internal_error", err.Error(), false)
 		return
 	}
-	restart := affectedPluginNeedsRestart(action, resolved, pluginID, before, after)
 	message := "Plugins reloaded"
 	switch action {
 	case "add":
@@ -117,12 +112,7 @@ func (s *Server) handlePluginAction(ctx context.Context, incoming message, curre
 	case "disable":
 		message = "Disabled: " + pluginID
 	}
-	if restart {
-		message += ". Restart to apply MCP/LSP changes."
-	} else {
-		message += "."
-	}
-	s.pluginActionOutcome(incoming, "success", message, restart)
+	s.pluginActionOutcome(incoming, "success", message+".", false)
 }
 
 func (s *Server) anySessionRunning() bool {
@@ -147,31 +137,6 @@ func (s *Server) pluginActionOutcome(incoming message, status, message string, r
 	s.respond(incoming.ID, map[string]any{"result": map[string]any{
 		"status": status, "message": message, "requiresReload": false, "requiresRestart": restart,
 	}, "error": nil})
-}
-
-func affectedPluginNeedsRestart(action, path, id string, before, after []plugin.Plugin) bool {
-	if action == "reload" {
-		for _, item := range after {
-			if pluginNeedsRestart(item) {
-				return true
-			}
-		}
-		return false
-	}
-	for _, inventory := range [][]plugin.Plugin{before, after} {
-		for _, item := range inventory {
-			matches := (action == "add" || action == "remove") && item.Root == path ||
-				(action == "enable" || action == "disable") && (item.ID == id || item.Name == id)
-			if matches && pluginNeedsRestart(item) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func pluginNeedsRestart(item plugin.Plugin) bool {
-	return item.LSPConfig != "" || len(item.InlineLSP) > 0
 }
 
 func firstString(values ...string) string {

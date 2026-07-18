@@ -814,7 +814,7 @@ func TestPluginActionUpdatesInventoryAndSkills(t *testing.T) {
 		t.Fatal(err)
 	}
 	outcome := response["result"].(map[string]any)["result"].(map[string]any)
-	if outcome["status"] != "success" || outcome["requiresRestart"] != true || len(inventory) != 1 || strings.Join(catalog.Names(), "|") != "review-tools:review" {
+	if outcome["status"] != "success" || outcome["requiresRestart"] != false || len(inventory) != 1 || strings.Join(catalog.Names(), "|") != "review-tools:review" {
 		t.Fatalf("unexpected add outcome=%#v inventory=%#v skills=%#v", outcome, inventory, catalog.Names())
 	}
 	output.Reset()
@@ -823,7 +823,7 @@ func TestPluginActionUpdatesInventoryAndSkills(t *testing.T) {
 		t.Fatal(err)
 	}
 	outcome = response["result"].(map[string]any)["result"].(map[string]any)
-	if outcome["status"] != "success" || outcome["requiresRestart"] != true || inventory[0].Enabled || len(catalog.Names()) != 0 {
+	if outcome["status"] != "success" || outcome["requiresRestart"] != false || inventory[0].Enabled || len(catalog.Names()) != 0 {
 		t.Fatalf("unexpected disable outcome=%#v inventory=%#v skills=%#v", outcome, inventory, catalog.Names())
 	}
 }
@@ -848,15 +848,6 @@ func TestPluginActionRejectsRunningSession(t *testing.T) {
 	outcome := response["result"].(map[string]any)["result"].(map[string]any)
 	if called || outcome["status"] != "validation_error" || !strings.Contains(outcome["message"].(string), "prompt is running") {
 		t.Fatalf("unexpected running-session outcome=%#v called=%v", outcome, called)
-	}
-}
-
-func TestPluginRestartRequirementOnlyTracksLSP(t *testing.T) {
-	if affectedPluginNeedsRestart("add", "/plugin", "", nil, []plugin.Plugin{{Root: "/plugin", MCPConfig: "/plugin/.mcp.json"}}) {
-		t.Fatal("MCP-only plugin unexpectedly required a restart")
-	}
-	if !affectedPluginNeedsRestart("add", "/plugin", "", nil, []plugin.Plugin{{Root: "/plugin", LSPConfig: "/plugin/.lsp.json"}}) {
-		t.Fatal("LSP plugin did not require a restart")
 	}
 }
 

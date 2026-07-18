@@ -647,8 +647,10 @@ and MCP summaries. `x.ai/plugins/action` persists local path add/remove and
 plugin enable/disable, while reload re-runs discovery. Inventory and
 skill/command components update immediately. Plugin MCP servers are restarted
 with rollback on failure while preserving client-provided session overrides;
-only actions affecting LSP components return `requiresRestart`. Plugin hooks,
-agents, installation, marketplaces, and updates are not yet implemented.
+plugin LSP servers are started as a complete replacement set and atomically
+swapped into the live manager. Supported local plugin actions therefore do not
+require a session restart. Plugin hooks, agents, installation, marketplaces,
+and updates are not yet implemented.
 
 The `[skills]` config accepts additional directories or individual `SKILL.md`
 files. Paths support `~`; relative paths resolve from the workspace. `ignore`

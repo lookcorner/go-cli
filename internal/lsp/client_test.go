@@ -217,6 +217,54 @@ func TestManagerRestartsCrashedServer(t *testing.T) {
 	}
 }
 
+func TestManagerReplaceSwapsReadyClients(t *testing.T) {
+	root := t.TempDir()
+	start := func(name string) *Client {
+		client, err := Start(context.Background(), ProcessConfig{
+			Name: name, Command: os.Args[0], Args: []string{"-test.run=TestLSPHelperProcess"},
+			Env: map[string]string{"GORK_GO_LSP_HELPER": "1"}, Root: root, Stderr: io.Discard,
+			InitializationOptions: map[string]any{"usePlaceholders": true},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return client
+	}
+	first := start("first")
+	ws, _ := workspace.Open(root)
+	manager := NewManager(ws)
+	if err := manager.Replace([]*Client{first}); err != nil {
+		t.Fatal(err)
+	}
+	second := start("second")
+	if err := manager.Replace([]*Client{second}); err != nil {
+		t.Fatal(err)
+	}
+	if names := strings.Join(manager.Names(), "|"); names != "second" {
+		t.Fatalf("unexpected manager names: %s", names)
+	}
+	if err := manager.Replace([]*Client{second, second}); err == nil {
+		t.Fatal("duplicate replacement unexpectedly succeeded")
+	}
+	if names := strings.Join(manager.Names(), "|"); names != "second" {
+		t.Fatalf("failed replacement changed manager names: %s", names)
+	}
+	select {
+	case <-first.doneSignal():
+	case <-time.After(time.Second):
+		t.Fatal("replaced client was not closed")
+	}
+	if err := manager.Replace(nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(manager.Names()) != 0 {
+		t.Fatalf("manager was not emptied: %#v", manager.Names())
+	}
+	if err := manager.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestLSPHelperProcess(t *testing.T) {
 	if os.Getenv("GORK_GO_LSP_HELPER") != "1" {
 		return
