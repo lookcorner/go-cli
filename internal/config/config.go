@@ -42,6 +42,7 @@ type Config struct {
 	ForceLoginTeams             []string                   `json:"force_login_team_uuid,omitempty"`
 	ForceLoginTeamConfigured    bool                       `json:"-"`
 	DisableAPIKeyAuth           bool                       `json:"disable_api_key_auth,omitempty"`
+	PreferredAuthMethod         string                     `json:"preferred_auth_method,omitempty"`
 }
 
 type WebSearchConfig struct {
@@ -137,7 +138,10 @@ type fileConfig struct {
 	AuthProviderCommand string                     `json:"auth_provider_command,omitempty" toml:"auth_provider_command"`
 	AuthTokenTTL        int64                      `json:"auth_token_ttl,omitempty" toml:"auth_token_ttl"`
 	GrokComConfig       fileGrokComConfig          `json:"grok_com_config,omitempty" toml:"grok_com_config"`
-	Models              struct {
+	Auth                struct {
+		PreferredMethod string `json:"preferred_method,omitempty" toml:"preferred_method"`
+	} `json:"auth,omitempty" toml:"auth"`
+	Models struct {
 		Default   string `toml:"default"`
 		WebSearch string `toml:"web_search"`
 	} `json:"-" toml:"models"`
@@ -303,6 +307,7 @@ func Load(path string) (Config, error) {
 		if disk.GrokComConfig.DisableAPIKeyAuth != nil {
 			cfg.DisableAPIKeyAuth = *disk.GrokComConfig.DisableAPIKeyAuth
 		}
+		cfg.PreferredAuthMethod = strings.ToLower(strings.TrimSpace(disk.Auth.PreferredMethod))
 		if disk.HTTPTimeout != "" {
 			d, err := time.ParseDuration(disk.HTTPTimeout)
 			if err != nil {
@@ -599,6 +604,9 @@ func firstConfiguredEnv(value any) string {
 }
 
 func (c Config) Validate() error {
+	if err := c.ValidateAuthPolicy(); err != nil {
+		return err
+	}
 	if c.APIKey == "" {
 		return errors.New("missing credentials: set GORK_API_KEY or XAI_API_KEY, or run gork login")
 	}
@@ -640,6 +648,16 @@ func (c Config) Validate() error {
 				return fmt.Errorf("invalid web fetch allowed domain %q", entry)
 			}
 		}
+	}
+	return nil
+}
+
+func (c Config) ValidateAuthPolicy() error {
+	if c.PreferredAuthMethod != "" && c.PreferredAuthMethod != "api_key" && c.PreferredAuthMethod != "oidc" {
+		return errors.New("auth preferred_method must be api_key or oidc")
+	}
+	if c.PreferredAuthMethod == "api_key" && (c.DisableAPIKeyAuth || c.ForceLoginTeamConfigured) {
+		return errors.New("auth preferred_method api_key conflicts with API-key authentication policy")
 	}
 	return nil
 }

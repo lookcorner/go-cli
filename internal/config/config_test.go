@@ -256,6 +256,9 @@ auth_token_ttl = 300
 [grok_com_config.oauth2]
 principal_type = "Personal"
 principal_id = "user-file"
+
+[auth]
+preferred_method = "oidc"
 `)
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
@@ -264,7 +267,7 @@ principal_id = "user-file"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.ForceLoginTeamConfigured || strings.Join(cfg.ForceLoginTeams, ",") != "team-a,team-b" || !cfg.DisableAPIKeyAuth || cfg.AuthPrincipalType != "Team" || cfg.AuthPrincipalID != "team-env" || cfg.AuthProviderCommand != "printf nested-token" || cfg.AuthTokenTTL != 5*time.Minute {
+	if !cfg.ForceLoginTeamConfigured || strings.Join(cfg.ForceLoginTeams, ",") != "team-a,team-b" || !cfg.DisableAPIKeyAuth || cfg.AuthPrincipalType != "Team" || cfg.AuthPrincipalID != "team-env" || cfg.AuthProviderCommand != "printf nested-token" || cfg.AuthTokenTTL != 5*time.Minute || cfg.PreferredAuthMethod != "oidc" {
 		t.Fatalf("team auth policy=%#v", cfg)
 	}
 	if teams, configured, err := forceLoginTeams("team-only"); err != nil || !configured || strings.Join(teams, ",") != "team-only" {
@@ -275,6 +278,19 @@ principal_id = "user-file"
 	}
 	if _, _, err := forceLoginTeams(42); err == nil {
 		t.Fatal("invalid team policy was accepted")
+	}
+}
+
+func TestPreferredAuthMethodValidation(t *testing.T) {
+	base := Config{APIKey: "key", BaseURL: "https://api.x.ai/v1", Model: "model", Backend: "responses", MaxSteps: 1, ContextWindow: 1}
+	base.PreferredAuthMethod = "invalid"
+	if err := base.Validate(); err == nil || !strings.Contains(err.Error(), "preferred_method") {
+		t.Fatalf("invalid preferred method error=%v", err)
+	}
+	base.PreferredAuthMethod = "api_key"
+	base.DisableAPIKeyAuth = true
+	if err := base.Validate(); err == nil || !strings.Contains(err.Error(), "conflicts") {
+		t.Fatalf("conflicting preferred method error=%v", err)
 	}
 }
 

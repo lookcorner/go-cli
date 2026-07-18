@@ -190,3 +190,40 @@ force_login_team_uuid = "team-required"
 		t.Fatalf("static API key bypassed team policy: %v", err)
 	}
 }
+
+func TestPreferredAuthMethodFailsClosed(t *testing.T) {
+	for _, method := range []string{"oidc", "api_key"} {
+		t.Run(method, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("GROK_HOME", home)
+			t.Setenv("GROK_OIDC_ISSUER", "")
+			t.Setenv("GROK_OIDC_CLIENT_ID", "")
+			t.Setenv("GROK_OAUTH2_ISSUER", "")
+			t.Setenv("GROK_OAUTH2_CLIENT_ID", "")
+			t.Setenv("XAI_API_KEY", "")
+			t.Setenv("OPENAI_API_KEY", "")
+			if method == "oidc" {
+				t.Setenv("GORK_API_KEY", "static-must-be-ignored")
+			} else {
+				t.Setenv("GORK_API_KEY", "")
+				path, err := auth.DefaultPath()
+				if err != nil {
+					t.Fatal(err)
+				}
+				cfg := auth.DefaultConfig()
+				if err := auth.Save(path, cfg.Scope(), auth.Credential{Key: "session-must-be-ignored"}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			path := filepath.Join(t.TempDir(), "config.toml")
+			data := []byte("[models]\ndefault = \"main\"\n[model.main]\nmodel = \"model\"\nbase_url = \"https://api.x.ai/v1\"\nbackend = \"responses\"\n[auth]\npreferred_method = \"" + method + "\"\n")
+			if err := os.WriteFile(path, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			err := run([]string{"--config", path, "hello"}, strings.NewReader(""), io.Discard, io.Discard)
+			if err == nil || !strings.Contains(err.Error(), "missing credentials") {
+				t.Fatalf("preferred method %s fell back: %v", method, err)
+			}
+		})
+	}
+}

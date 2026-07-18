@@ -31,6 +31,9 @@ hard_clear_age_turns = 10
 # principal_type = "Team"
 # principal_id = "team-uuid"
 
+[auth]
+# preferred_method = "oidc" # or "api_key"
+
 [toolset.web_fetch]
 # proxy_endpoint = "https://proxy.example:8443"
 # allowed_domains = ["docs.example.com", "example.com/docs"]

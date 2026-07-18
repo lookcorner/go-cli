@@ -69,6 +69,10 @@ disables API-key authentication so the policy cannot be bypassed. OAuth2
 they do not enforce membership by themselves. An empty allowed-team array
 blocks every login.
 
+`preferred_method` under `[auth]` may be `oidc` or `api_key`. Automatic credential
+selection fails closed when the selected method is unavailable instead of
+silently falling back to the other method.
+
 The default API base URL is `https://api.x.ai/v1`. Override it with
 `GORK_BASE_URL`, `--base-url`, or a config file. The default path matches Gork
 Build: `~/.grok/config.toml`.

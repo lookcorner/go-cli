@@ -146,11 +146,14 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if opts.maxSteps > 0 {
 		cfg.MaxSteps = opts.maxSteps
 	}
-	if cfg.DisableAPIKeyAuth || cfg.ForceLoginTeamConfigured {
+	if err := cfg.ValidateAuthPolicy(); err != nil {
+		return err
+	}
+	if cfg.DisableAPIKeyAuth || cfg.ForceLoginTeamConfigured || cfg.PreferredAuthMethod == "oidc" {
 		cfg.APIKey = ""
 	}
 	var tokenProvider api.TokenProvider
-	if cfg.APIKey == "" && isXAIBaseURL(cfg.BaseURL) {
+	if cfg.APIKey == "" && cfg.PreferredAuthMethod != "api_key" && isXAIBaseURL(cfg.BaseURL) {
 		path, pathErr := auth.DefaultPath()
 		if pathErr != nil {
 			return pathErr
