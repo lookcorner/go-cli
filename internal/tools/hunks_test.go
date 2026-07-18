@@ -188,6 +188,37 @@ func TestHunkTrackerTurnActionUsesPromptIndex(t *testing.T) {
 	}
 }
 
+func TestHunkTrackerSessionSummaryTracksTurnsAndActions(t *testing.T) {
+	root, registry := newHunkFixture(t, map[string]string{"turns.txt": "one\ntwo\nthree\n"})
+	promptIndex := 2
+	registry.SetRewindStore(nil, func() int { return promptIndex })
+	if _, err := registry.Execute(context.Background(), "edit_file", json.RawMessage(`{
+		"path":"turns.txt","old_text":"one","new_text":"agent-one"
+	}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "external.txt"), []byte("outside\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	summary, err := registry.HunkTracker().Summary(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(summary.Turns) != 1 || summary.Turns[0].PromptIndex != 2 || summary.PendingHunks != 1 || summary.UnattributedPending != 1 || summary.FilesModified != 1 {
+		t.Fatalf("unexpected pending summary: %#v", summary)
+	}
+	if count, err := registry.HunkTracker().TurnAction(context.Background(), 2, "accept"); err != nil || count != 1 {
+		t.Fatalf("accept turn: count=%d err=%v", count, err)
+	}
+	summary, err = registry.HunkTracker().Summary(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Stats.AcceptedHunks != 1 || summary.Stats.AcceptedLinesAdded != 1 || summary.PendingHunks != 0 || len(summary.Turns) != 0 || summary.UnattributedPending != 1 {
+		t.Fatalf("unexpected accepted summary: %#v", summary)
+	}
+}
+
 func TestHunkTrackerAcceptAndRejectActions(t *testing.T) {
 	root, registry := newHunkFixture(t, map[string]string{"tracked.txt": "before\n"})
 	if _, err := registry.Execute(context.Background(), "edit_file", json.RawMessage(`{

@@ -698,6 +698,11 @@ func (s *Server) handleHunkQuery(ctx context.Context, incoming message) {
 		}
 		s.respond(incoming.ID, map[string]any{"files": files})
 	case "x.ai/hunk-tracker/get-summary":
+		summary, err := tracker.Summary(ctx)
+		if err != nil {
+			s.respondError(incoming.ID, -32000, err.Error())
+			return
+		}
 		files, err := tracker.Files(ctx)
 		if err != nil {
 			s.respondError(incoming.ID, -32000, err.Error())
@@ -715,6 +720,10 @@ func (s *Server) handleHunkQuery(ctx context.Context, incoming message) {
 		s.respond(incoming.ID, map[string]any{
 			"fileCount": len(files), "hunkCount": hunks, "agentFileCount": agentFiles,
 			"additions": additions, "deletions": deletions,
+			"stats": summary.Stats, "turns": summary.Turns,
+			"filesModified": summary.FilesModified, "filesWithPending": summary.FilesWithPending,
+			"pendingHunks": summary.PendingHunks, "pendingLinesAdded": summary.PendingLinesAdded,
+			"pendingLinesRemoved": summary.PendingLinesRemoved, "unattributedPending": summary.UnattributedPending,
 		})
 	}
 }

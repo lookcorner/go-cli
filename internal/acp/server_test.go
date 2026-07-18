@@ -294,6 +294,15 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 		t.Fatalf("unexpected ACP file content: %#v", hunkResponse)
 	}
 	encodeACP(t, encoder, map[string]any{
+		"jsonrpc": "2.0", "id": 331, "method": "x.ai/hunk-tracker/get-summary",
+		"params": map[string]any{"sessionId": sessionID},
+	})
+	summaryResult := decodeACP(t, decoder)["result"].(map[string]any)
+	summaryStats := summaryResult["stats"].(map[string]any)
+	if int(summaryResult["fileCount"].(float64)) != 1 || int(summaryResult["pendingHunks"].(float64)) != 1 || len(summaryResult["turns"].([]any)) != 1 || int(summaryStats["acceptedHunks"].(float64)) != 0 {
+		t.Fatalf("unexpected ACP hunk summary: %#v", summaryResult)
+	}
+	encodeACP(t, encoder, map[string]any{
 		"jsonrpc": "2.0", "id": 34, "method": "x.ai/hunk-tracker/turn-action",
 		"params": map[string]any{"sessionId": sessionID, "promptIndex": 0, "action": "accept"},
 	})

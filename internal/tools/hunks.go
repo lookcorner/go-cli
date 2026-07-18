@@ -46,12 +46,41 @@ type HunkFile struct {
 	Deletions   int    `json:"deletions"`
 }
 
+type HunkSessionStats struct {
+	AcceptedHunks        int `json:"acceptedHunks"`
+	RejectedHunks        int `json:"rejectedHunks"`
+	AcceptedLinesAdded   int `json:"acceptedLinesAdded"`
+	AcceptedLinesRemoved int `json:"acceptedLinesRemoved"`
+	RejectedLinesAdded   int `json:"rejectedLinesAdded"`
+	RejectedLinesRemoved int `json:"rejectedLinesRemoved"`
+}
+
+type HunkTurnSummary struct {
+	PromptIndex  int      `json:"promptIndex"`
+	Files        []string `json:"files"`
+	PendingHunks []Hunk   `json:"pendingHunks"`
+	LinesAdded   int      `json:"linesAdded"`
+	LinesRemoved int      `json:"linesRemoved"`
+}
+
+type HunkSessionSummary struct {
+	Stats               HunkSessionStats  `json:"stats"`
+	Turns               []HunkTurnSummary `json:"turns"`
+	FilesModified       int               `json:"filesModified"`
+	FilesWithPending    int               `json:"filesWithPending"`
+	PendingHunks        int               `json:"pendingHunks"`
+	PendingLinesAdded   int               `json:"pendingLinesAdded"`
+	PendingLinesRemoved int               `json:"pendingLinesRemoved"`
+	UnattributedPending int               `json:"unattributedPending"`
+}
+
 type HunkTracker struct {
 	ws          *workspace.Workspace
 	mu          sync.RWMutex
 	agentHunks  map[string]hunkAttribution
 	promptIndex func() int
 	accepted    map[string]bool
+	stats       HunkSessionStats
 	actionMu    sync.Mutex
 }
 
@@ -274,7 +303,7 @@ func (t *HunkTracker) applyAction(hunks []Hunk, action string) (int, error) {
 	t.actionMu.Lock()
 	defer t.actionMu.Unlock()
 	if action == "accept" {
-		t.markAccepted(hunks)
+		t.markHandled(hunks, action)
 		return len(hunks), nil
 	}
 
@@ -331,7 +360,7 @@ func (t *HunkTracker) applyAction(hunks []Hunk, action string) (int, error) {
 			return 0, err
 		}
 	}
-	t.markAccepted(hunks)
+	t.markHandled(hunks, action)
 	return len(hunks), nil
 }
 
@@ -379,10 +408,19 @@ func (t *HunkTracker) isAccepted(id string) bool {
 	return accepted
 }
 
-func (t *HunkTracker) markAccepted(hunks []Hunk) {
+func (t *HunkTracker) markHandled(hunks []Hunk, action string) {
 	t.mu.Lock()
 	for _, hunk := range hunks {
 		t.accepted[hunk.ID] = true
+		if action == "accept" {
+			t.stats.AcceptedHunks++
+			t.stats.AcceptedLinesAdded += hunk.NewLines
+			t.stats.AcceptedLinesRemoved += hunk.OldLines
+		} else {
+			t.stats.RejectedHunks++
+			t.stats.RejectedLinesAdded += hunk.NewLines
+			t.stats.RejectedLinesRemoved += hunk.OldLines
+		}
 	}
 	t.mu.Unlock()
 }
@@ -432,6 +470,61 @@ func (t *HunkTracker) Files(ctx context.Context) ([]HunkFile, error) {
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	return files, nil
+}
+
+func (t *HunkTracker) Summary(ctx context.Context) (HunkSessionSummary, error) {
+	if t == nil {
+		return HunkSessionSummary{}, errors.New("hunk tracker unavailable")
+	}
+	t.actionMu.Lock()
+	defer t.actionMu.Unlock()
+	hunks, err := t.Hunks(ctx, "", "all")
+	if err != nil {
+		return HunkSessionSummary{}, err
+	}
+	t.mu.RLock()
+	summary := HunkSessionSummary{Stats: t.stats, Turns: []HunkTurnSummary{}}
+	t.mu.RUnlock()
+	turns := make(map[int]*HunkTurnSummary)
+	files := make(map[string]bool)
+	for _, hunk := range hunks {
+		if hunk.Source != "agent" || hunk.PromptIndex == nil {
+			summary.UnattributedPending++
+			continue
+		}
+		turn := turns[*hunk.PromptIndex]
+		if turn == nil {
+			turn = &HunkTurnSummary{PromptIndex: *hunk.PromptIndex}
+			turns[*hunk.PromptIndex] = turn
+		}
+		if !containsPath(turn.Files, hunk.Path) {
+			turn.Files = append(turn.Files, hunk.Path)
+		}
+		turn.PendingHunks = append(turn.PendingHunks, hunk)
+		turn.LinesAdded += hunk.NewLines
+		turn.LinesRemoved += hunk.OldLines
+		files[hunk.Path] = true
+		summary.PendingHunks++
+		summary.PendingLinesAdded += hunk.NewLines
+		summary.PendingLinesRemoved += hunk.OldLines
+	}
+	for _, turn := range turns {
+		sort.Strings(turn.Files)
+		summary.Turns = append(summary.Turns, *turn)
+	}
+	sort.Slice(summary.Turns, func(i, j int) bool { return summary.Turns[i].PromptIndex < summary.Turns[j].PromptIndex })
+	summary.FilesModified = len(files)
+	summary.FilesWithPending = len(files)
+	return summary, nil
+}
+
+func containsPath(items []string, value string) bool {
+	for _, item := range items {
+		if item == value {
+			return true
+		}
+	}
+	return false
 }
 
 func (t *HunkTracker) parseDiff(diff string) []Hunk {
