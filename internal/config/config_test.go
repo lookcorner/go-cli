@@ -81,6 +81,11 @@ paths = ["~/shared-skills", "project-skills"]
 ignore = ["~/shared-skills/ignored"]
 disabled = ["manual-only"]
 
+[plugins]
+paths = ["~/plugins/team-tools"]
+enabled = ["project-tools"]
+disabled = ["old-tools"]
+
 [[permission.rules]]
 action = "allow"
 tool = "bash"
@@ -128,6 +133,9 @@ pattern = ".env*"
 	}
 	if cfg.LSPServers["gopls"].InitializationOptions["usePlaceholders"] != true || cfg.LSPServers["gopls"].Settings["gopls"].(map[string]any)["staticcheck"] != true {
 		t.Fatalf("unexpected LSP dynamic config: %#v", cfg.LSPServers["gopls"])
+	}
+	if strings.Join(cfg.Plugins.Paths, "|") != "~/plugins/team-tools" || strings.Join(cfg.Plugins.Enabled, "|") != "project-tools" || strings.Join(cfg.Plugins.Disabled, "|") != "old-tools" {
+		t.Fatalf("unexpected plugin config: %#v", cfg.Plugins)
 	}
 	if cfg.LSPServers["gopls"].WorkspaceFolder != "backend" || cfg.LSPServers["gopls"].StartupTimeoutMS != 12000 || cfg.LSPServers["gopls"].ShutdownTimeoutMS != 3000 {
 		t.Fatalf("unexpected LSP lifecycle config: %#v", cfg.LSPServers["gopls"])

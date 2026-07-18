@@ -517,6 +517,33 @@ Additional compatible frontmatter is preserved for clients and future UI use:
 `argument-hint`, `license`, `compatibility`, `allowed-tools`, `model`, `effort`,
 and string-valued `metadata` entries including `short-description` and `author`.
 
+Local plugin skills and commands are discovered from enabled plugins. A plugin
+may use `plugin.json`, `.grok-plugin/plugin.json`, or
+`.claude-plugin/plugin.json`; without a manifest, its directory name becomes
+the plugin name and the conventional `skills/` and `commands/` directories are
+used. Manifest component paths are confined to the plugin root after resolving
+symlinks. Plugin skills use the directory basename as their identity and remain
+available as `plugin-name:skill-name`; a frontmatter `name` is retained as the
+display label. A unique plugin skill also has a bare alias, but a native skill
+with the same name wins. Plugin bodies support `${GROK_PLUGIN_ROOT}`,
+`${CLAUDE_PLUGIN_ROOT}`, `${GROK_PLUGIN_DATA}`, and `${CLAUDE_PLUGIN_DATA}`.
+
+Explicit `[plugins].paths` entries are enabled automatically. Plugins found in
+`$GROK_HOME/plugins`, `~/.claude/plugins`, `.grok/plugins`, or
+`.claude/plugins` are disabled until their name or stable ID is listed in
+`enabled`; `disabled` always takes precedence:
+
+```toml
+[plugins]
+paths = ["~/my-plugins/deploy-tools"]
+enabled = ["team-tools"]
+disabled = ["old-tools"]
+```
+
+This stage intentionally loads only textual skills and commands. Plugin hooks,
+agents, MCP/LSP servers, installation, marketplaces, and updates are not yet
+implemented.
+
 The `[skills]` config accepts additional directories or individual `SKILL.md`
 files. Paths support `~`; relative paths resolve from the workspace. `ignore`
 removes matching path prefixes, while `disabled` keeps named skills discoverable

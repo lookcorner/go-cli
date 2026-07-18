@@ -17,6 +17,7 @@ import (
 	"github.com/bmatcuk/doublestar"
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/compat"
+	"github.com/lookcorner/go-cli/internal/plugin"
 	"github.com/lookcorner/go-cli/internal/workspace"
 	"gopkg.in/yaml.v3"
 )
@@ -54,6 +55,9 @@ type Skill struct {
 	Effort                 string
 	Path                   string
 	Source                 string
+	PluginName             string
+	PluginRoot             string
+	PluginData             string
 	Paths                  []string
 	WhenToUse              string
 	UserInvocable          bool
@@ -70,13 +74,17 @@ type Config struct {
 	Paths    []string
 	Ignore   []string
 	Disabled []string
+	Plugins  []plugin.Plugin
 }
 
 type skillRoot struct {
-	path     string
-	source   string
-	scope    string
-	commands bool
+	path       string
+	source     string
+	scope      string
+	commands   bool
+	pluginName string
+	pluginRoot string
+	pluginData string
 }
 
 type Catalog struct {
@@ -147,6 +155,20 @@ func discover(workspaceRoot, home, grokHome string, cfg Config) (*Catalog, error
 		dirs = append(dirs, ".agents", ".gork", ".grok")
 		for _, dir := range dirs {
 			roots = appendSkillRoots(roots, filepath.Join(scope, dir), "workspace:"+strings.TrimPrefix(dir, "."), skillScope)
+		}
+	}
+	for _, item := range cfg.Plugins {
+		for _, path := range item.SkillDirs {
+			roots = append(roots, skillRoot{
+				path: path, source: "plugin:" + item.Name, scope: "plugin",
+				pluginName: item.Name, pluginRoot: item.Root, pluginData: item.DataDir,
+			})
+		}
+		for _, path := range item.CommandDirs {
+			roots = append(roots, skillRoot{
+				path: path, source: "plugin:" + item.Name, scope: "plugin", commands: true,
+				pluginName: item.Name, pluginRoot: item.Root, pluginData: item.DataDir,
+			})
 		}
 	}
 	disabled := make(map[string]bool, len(cfg.Disabled))
@@ -316,9 +338,21 @@ func (c *Catalog) loadSkill(path string, info os.FileInfo, root skillRoot, comma
 	if metadata.Name == "" || isVendorDefaultSkill(real, metadata.Name) {
 		return nil
 	}
+	name := metadata.Name
+	displayName := ""
+	if root.pluginName != "" {
+		name = normalizeSkillName(fallbackName)
+		if name == "" {
+			return nil
+		}
+		if metadata.Name != name {
+			displayName = metadata.Name
+		}
+	}
 	wasActive := c.removePath(real)
 	skill := Skill{
-		Name: metadata.Name, Description: metadata.Description, Path: real, Source: root.source,
+		Name: name, DisplayName: displayName, Description: metadata.Description, Path: real, Source: root.source,
+		PluginName: root.pluginName, PluginRoot: root.pluginRoot, PluginData: root.pluginData,
 		Paths: metadata.Paths, WhenToUse: metadata.WhenToUse, UserInvocable: metadata.UserInvocable,
 		HasAuthoredDescription: metadata.HasAuthoredDescription, ShortDescription: metadata.ShortDescription,
 		Author: metadata.Author, ArgumentHint: metadata.ArgumentHint, License: metadata.License,
@@ -328,7 +362,26 @@ func (c *Catalog) loadSkill(path string, info os.FileInfo, root skillRoot, comma
 		frontmatterDisabled: metadata.DisableModelInvocation, digest: sha256.Sum256(data),
 	}
 	active := len(metadata.Paths) == 0 || wasActive || c.activePaths[real]
+	if skill.PluginName != "" {
+		return c.storePluginSkill(skill, active)
+	}
 	return c.insertSkill(skill, active)
+}
+
+func (c *Catalog) storePluginSkill(skill Skill, active bool) error {
+	name := qualifiedSkillName(skill)
+	if _, _, exists := c.lookup(name); !exists {
+		if err := c.requireCapacity(); err != nil {
+			return err
+		}
+	}
+	skill.DisableModelInvocation = skill.frontmatterDisabled || c.disabled[skill.Name] || c.disabled[name]
+	if active {
+		c.byName[name] = skill
+	} else {
+		c.pending[name] = skill
+	}
+	return nil
 }
 
 func (c *Catalog) insertSkill(skill Skill, active bool) error {
@@ -778,7 +831,11 @@ func (c *Catalog) Summary() string {
 }
 
 func writeSkillListing(output *strings.Builder, skill Skill) {
-	fmt.Fprintf(output, "- %s: %s\n", skill.Name, skill.Description)
+	name := skill.Name
+	if skill.PluginName != "" {
+		name = qualifiedSkillName(skill)
+	}
+	fmt.Fprintf(output, "- %s: %s\n", name, skill.Description)
 	if skill.WhenToUse != "" {
 		fmt.Fprintf(output, "  Use when: %s\n", skill.WhenToUse)
 	}
@@ -824,8 +881,34 @@ func (c *Catalog) toolSkillNamesLocked() []string {
 			}
 		}
 	}
+	for name := range c.pluginBareAliasesLocked(true) {
+		names = append(names, name)
+	}
 	sort.Strings(names)
 	return names
+}
+
+func (c *Catalog) pluginBareAliasesLocked(modelInvocable bool) map[string]Skill {
+	aliases := make(map[string]Skill)
+	ambiguous := make(map[string]bool)
+	for key, skill := range c.byName {
+		if skill.PluginName == "" || !skill.UserInvocable || modelInvocable && skill.DisableModelInvocation {
+			continue
+		}
+		name := strings.ToLower(skill.Name)
+		if _, native := c.byName[name]; native && key != name {
+			ambiguous[name] = true
+			delete(aliases, name)
+			continue
+		}
+		if _, exists := aliases[name]; exists {
+			ambiguous[name] = true
+			delete(aliases, name)
+		} else if !ambiguous[name] {
+			aliases[name] = skill
+		}
+	}
+	return aliases
 }
 
 func (c *Catalog) Tool() *Tool { return &Tool{catalog: c} }
@@ -875,7 +958,9 @@ func (t *Tool) Execute(_ context.Context, raw json.RawMessage) (string, error) {
 	if len(data) > maxSkillBytes || !utf8.Valid(data) {
 		return "", fmt.Errorf("skill %q is too large or no longer UTF-8", args.Name)
 	}
-	body := substituteSkillArguments(string(data), args.Args, filepath.Dir(skill.Path), "")
+	body := substituteSkillArguments(string(data), args.Args, expansionContext{
+		SkillDir: filepath.Dir(skill.Path), PluginRoot: skill.PluginRoot, PluginData: skill.PluginData,
+	})
 	return fmt.Sprintf(
 		"<skill name=\"%s\" description=\"%s\" path=\"%s\">\n%s\n</skill>",
 		skill.Name, skill.Description, skill.Path, body,
@@ -978,10 +1063,16 @@ func (c *Catalog) resolveSkillLocked(name string) (Skill, bool) {
 			return skill, true
 		}
 	}
+	if skill, ok := c.pluginBareAliasesLocked(true)[strings.ToLower(name)]; ok {
+		return skill, true
+	}
 	return Skill{}, false
 }
 
 func qualifiedSkillName(skill Skill) string {
+	if skill.PluginName != "" {
+		return skill.PluginName + ":" + skill.Name
+	}
 	if skill.scope == "" {
 		return skill.Name
 	}

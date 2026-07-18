@@ -39,6 +39,7 @@ type Config struct {
 	Pruning                     PruningConfig              `json:"pruning"`
 	Compat                      compat.Config              `json:"compat"`
 	Skills                      SkillsConfig               `json:"skills,omitempty"`
+	Plugins                     PluginsConfig              `json:"plugins,omitempty"`
 	HTTPTimeout                 time.Duration              `json:"-"`
 	WebSearch                   WebSearchConfig            `json:"web_search,omitempty"`
 	WebFetch                    WebFetchConfig             `json:"web_fetch,omitempty"`
@@ -83,6 +84,12 @@ type PermissionRule struct {
 type SkillsConfig struct {
 	Paths    []string `json:"paths,omitempty" toml:"paths"`
 	Ignore   []string `json:"ignore,omitempty" toml:"ignore"`
+	Disabled []string `json:"disabled,omitempty" toml:"disabled"`
+}
+
+type PluginsConfig struct {
+	Paths    []string `json:"paths,omitempty" toml:"paths"`
+	Enabled  []string `json:"enabled,omitempty" toml:"enabled"`
 	Disabled []string `json:"disabled,omitempty" toml:"disabled"`
 }
 
@@ -145,6 +152,7 @@ type fileConfig struct {
 	Compaction          fileCompactionConfig       `json:"compaction,omitempty" toml:"compaction"`
 	Compat              fileCompatConfig           `json:"compat,omitempty" toml:"compat"`
 	Skills              SkillsConfig               `json:"skills,omitempty" toml:"skills"`
+	Plugins             PluginsConfig              `json:"plugins,omitempty" toml:"plugins"`
 	AuthProviderCommand string                     `json:"auth_provider_command,omitempty" toml:"auth_provider_command"`
 	AuthTokenTTL        int64                      `json:"auth_token_ttl,omitempty" toml:"auth_token_ttl"`
 	GrokComConfig       fileGrokComConfig          `json:"grok_com_config,omitempty" toml:"grok_com_config"`
@@ -385,6 +393,15 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.Skills.Disabled != nil {
 		cfg.Skills.Disabled = append([]string(nil), disk.Skills.Disabled...)
+	}
+	if disk.Plugins.Paths != nil {
+		cfg.Plugins.Paths = append([]string(nil), disk.Plugins.Paths...)
+	}
+	if disk.Plugins.Enabled != nil {
+		cfg.Plugins.Enabled = append([]string(nil), disk.Plugins.Enabled...)
+	}
+	if disk.Plugins.Disabled != nil {
+		cfg.Plugins.Disabled = append([]string(nil), disk.Plugins.Disabled...)
 	}
 	if disk.Endpoints.CLIChatProxyBaseURL != "" {
 		cfg.ProxyBaseURL = strings.TrimRight(disk.Endpoints.CLIChatProxyBaseURL, "/")

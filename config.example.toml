@@ -56,6 +56,13 @@ hard_clear_age_turns = 10
 # ignore = ["~/shared-skills/experimental"]
 # disabled = ["manual-only"]
 
+[plugins]
+# Explicit paths are enabled automatically. Auto-discovered user/project plugins
+# must be listed in enabled; disabled takes precedence.
+# paths = ["~/my-plugins/deploy-tools"]
+# enabled = ["team-tools"]
+# disabled = ["old-tools"]
+
 [mcp_servers.example]
 command = "example-mcp-server"
 args = []

@@ -17,6 +17,8 @@ implementation.
   and token refresh serialization.
 - `internal/config` owns managed, user, environment, requirements, signed remote policy,
   and OS-enforced MDM precedence.
+- `internal/plugin` owns local plugin manifests, discovery precedence, enablement,
+  stable identity, data paths, and component-path confinement.
 - `internal/compat` owns resolved vendor compatibility values shared by
   configuration, instruction discovery, and skill discovery.
 

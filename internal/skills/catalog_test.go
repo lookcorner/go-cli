@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/lookcorner/go-cli/internal/compat"
+	"github.com/lookcorner/go-cli/internal/plugin"
 )
 
 func TestCatalogScanAndTool(t *testing.T) {
@@ -243,6 +244,56 @@ func TestQualifiedSkillNamesResolveForToolAndSlashReferences(t *testing.T) {
 	information := catalog.ExpandReferences("/USER:DEPLOY production", "")
 	if !strings.Contains(information, `<skill name="USER:DEPLOY" args="production">`) || !strings.Contains(information, "Run production") {
 		t.Fatalf("qualified slash invocation=%s", information)
+	}
+}
+
+func TestPluginSkillsUseQualifiedIdentityAndSubstitutions(t *testing.T) {
+	root := t.TempDir()
+	nativeDir := filepath.Join(root, ".grok", "skills", "deploy")
+	pluginRoot := filepath.Join(root, "plugin")
+	pluginSkills := filepath.Join(pluginRoot, "skills")
+	for _, dir := range []string{nativeDir, filepath.Join(pluginSkills, "deploy"), filepath.Join(pluginSkills, "lint")} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(nativeDir, "SKILL.md"), []byte("---\nname: deploy\ndescription: Native deploy\n---\nNative"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pluginData := filepath.Join(root, "plugin-data")
+	pluginBody := "---\nname: pretty-deploy\ndescription: Plugin deploy\n---\nRoot=${GROK_PLUGIN_ROOT}/${CLAUDE_PLUGIN_ROOT} Data=${GROK_PLUGIN_DATA}/${CLAUDE_PLUGIN_DATA} Args=$ARGUMENTS"
+	if err := os.WriteFile(filepath.Join(pluginSkills, "deploy", "SKILL.md"), []byte(pluginBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginSkills, "lint", "SKILL.md"), []byte("---\nname: fancy-lint\ndescription: Plugin lint\n---\nLint"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := discover(root, "", "", Config{Plugins: []plugin.Plugin{{
+		Name: "team-tools", Root: pluginRoot, DataDir: pluginData, SkillDirs: []string{pluginSkills},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if skill := catalog.byName["team-tools:deploy"]; skill.Name != "deploy" || skill.DisplayName != "pretty-deploy" || skill.PluginName != "team-tools" {
+		t.Fatalf("plugin identity = %#v", skill)
+	}
+	names := catalog.Tool().Definition().Description
+	if !strings.Contains(names, "team-tools:deploy") || !strings.Contains(names, "team-tools:lint") || !strings.Contains(names, "lint") {
+		t.Fatalf("plugin names missing: %s", names)
+	}
+	output, err := catalog.Tool().Execute(context.Background(), json.RawMessage(`{"name":"team-tools:deploy","args":"prod"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output, "Root="+pluginRoot+"/"+pluginRoot) || !strings.Contains(output, "Data="+pluginData+"/"+pluginData) || !strings.Contains(output, "Args=prod") {
+		t.Fatalf("plugin substitutions missing: %s", output)
+	}
+	native, err := catalog.Tool().Execute(context.Background(), json.RawMessage(`{"name":"deploy"}`))
+	if err != nil || !strings.Contains(native, "Native") {
+		t.Fatalf("native bare-name precedence output=%q err=%v", native, err)
+	}
+	if slash := catalog.ExpandReferences("/team-tools:deploy staging", ""); !strings.Contains(slash, "Args=staging") {
+		t.Fatalf("qualified plugin slash expansion=%s", slash)
 	}
 }
 

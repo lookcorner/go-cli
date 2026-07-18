@@ -30,6 +30,12 @@ func (c *Catalog) ExpandReferences(text, sessionID string) string {
 			available[qualified] = skill
 		}
 	}
+	for name, skill := range c.pluginBareAliasesLocked(false) {
+		qualified := qualifiedSkillName(skill)
+		if !c.disabled[name] && !c.disabled[qualified] {
+			available[name] = skill
+		}
+	}
 	c.mu.RUnlock()
 	refs := parseSkillReferences(text, available)
 	if len(refs) == 0 {
@@ -41,7 +47,10 @@ func (c *Catalog) ExpandReferences(text, sessionID string) string {
 		if err != nil || len(data) > maxSkillBytes || !utf8.Valid(data) {
 			continue
 		}
-		body := substituteSkillArguments(string(data), ref.args, filepath.Dir(ref.skill.Path), sessionID)
+		body := substituteSkillArguments(string(data), ref.args, expansionContext{
+			SkillDir: filepath.Dir(ref.skill.Path), SessionID: sessionID,
+			PluginRoot: ref.skill.PluginRoot, PluginData: ref.skill.PluginData,
+		})
 		if ref.args == "" {
 			blocks = append(blocks, fmt.Sprintf("<skill name=\"%s\">\n%s\n</skill>", ref.name, body))
 		} else {
@@ -103,7 +112,14 @@ func isASCIISpace(char byte) bool {
 	return char == ' ' || char == '\t' || char == '\n' || char == '\r'
 }
 
-func substituteSkillArguments(body, args, skillDir, sessionID string) string {
+type expansionContext struct {
+	SkillDir   string
+	SessionID  string
+	PluginRoot string
+	PluginData string
+}
+
+func substituteSkillArguments(body, args string, context expansionContext) string {
 	argv := strings.Fields(args)
 	usedArgs := false
 	for index := len(argv) + 20; index >= 0; index-- {
@@ -124,11 +140,19 @@ func substituteSkillArguments(body, args, skillDir, sessionID string) string {
 		body = strings.ReplaceAll(body, "$ARGUMENTS", args)
 		usedArgs = true
 	}
-	body = strings.ReplaceAll(body, "${SKILL_DIR}", skillDir)
-	body = strings.ReplaceAll(body, "${CLAUDE_SKILL_DIR}", skillDir)
-	if sessionID != "" {
-		body = strings.ReplaceAll(body, "${SESSION_ID}", sessionID)
-		body = strings.ReplaceAll(body, "${CLAUDE_SESSION_ID}", sessionID)
+	body = strings.ReplaceAll(body, "${SKILL_DIR}", context.SkillDir)
+	body = strings.ReplaceAll(body, "${CLAUDE_SKILL_DIR}", context.SkillDir)
+	if context.SessionID != "" {
+		body = strings.ReplaceAll(body, "${SESSION_ID}", context.SessionID)
+		body = strings.ReplaceAll(body, "${CLAUDE_SESSION_ID}", context.SessionID)
+	}
+	if context.PluginRoot != "" {
+		body = strings.ReplaceAll(body, "${GROK_PLUGIN_ROOT}", context.PluginRoot)
+		body = strings.ReplaceAll(body, "${CLAUDE_PLUGIN_ROOT}", context.PluginRoot)
+	}
+	if context.PluginData != "" {
+		body = strings.ReplaceAll(body, "${GROK_PLUGIN_DATA}", context.PluginData)
+		body = strings.ReplaceAll(body, "${CLAUDE_PLUGIN_DATA}", context.PluginData)
 	}
 	if args != "" && !usedArgs {
 		body += "\n\n**ARGUMENTS:** " + args

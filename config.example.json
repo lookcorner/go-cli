@@ -4,6 +4,11 @@
   "model": "YOUR_RESPONSES_API_MODEL",
   "max_steps": 20,
   "http_timeout": "10m",
+  "plugins": {
+    "paths": [],
+    "enabled": [],
+    "disabled": []
+  },
   "mcp_servers": {
     "example": {
       "command": "example-mcp-server",

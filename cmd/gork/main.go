@@ -26,6 +26,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/config"
 	"github.com/lookcorner/go-cli/internal/lsp"
 	"github.com/lookcorner/go-cli/internal/mcp"
+	"github.com/lookcorner/go-cli/internal/plugin"
 	"github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/skills"
 	"github.com/lookcorner/go-cli/internal/tools"
@@ -220,9 +221,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return err
 	}
 	projectInstructions := workspace.FormatInstructions(instructionFiles)
-	skillCatalog, err := skills.Discover(ws.Root(), skills.Config{
-		Compat: cfg.Compat, Paths: cfg.Skills.Paths, Ignore: cfg.Skills.Ignore, Disabled: cfg.Skills.Disabled,
-	})
+	skillCatalog, err := discoverSkills(ws.Root(), cfg)
 	if err != nil {
 		return err
 	}
@@ -739,9 +738,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		if err != nil {
 			return nil, nil, err
 		}
-		catalog, err := skills.Discover(ws.Root(), skills.Config{
-			Compat: cfg.Compat, Paths: cfg.Skills.Paths, Ignore: cfg.Skills.Ignore, Disabled: cfg.Skills.Disabled,
-		})
+		catalog, err := discoverSkills(ws.Root(), cfg)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -872,6 +869,19 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		return err
 	}
 	return nil
+}
+
+func discoverSkills(root string, cfg config.Config) (*skills.Catalog, error) {
+	plugins, err := plugin.Discover(root, plugin.Config{
+		Paths: cfg.Plugins.Paths, Enabled: cfg.Plugins.Enabled, Disabled: cfg.Plugins.Disabled,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return skills.Discover(root, skills.Config{
+		Compat: cfg.Compat, Paths: cfg.Skills.Paths, Ignore: cfg.Skills.Ignore,
+		Disabled: cfg.Skills.Disabled, Plugins: plugins,
+	})
 }
 
 func sessionMetadata(ctx context.Context, cwd, model string) map[string]any {
