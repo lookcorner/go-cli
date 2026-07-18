@@ -194,3 +194,37 @@ func TestReadFilesAndStageContent(t *testing.T) {
 		t.Fatal("repository-external path was accepted")
 	}
 }
+
+func TestDiffsAcrossCommitsIndexAndWorkingTree(t *testing.T) {
+	ctx := context.Background()
+	root := newRepo(t)
+	base := strings.TrimSpace(runGitOutput(t, root, "rev-parse", "HEAD"))
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("committed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, root, "add", "tracked.txt")
+	runGit(t, root, "commit", "-qm", "second")
+	head := strings.TrimSpace(runGitOutput(t, root, "rev-parse", "HEAD"))
+	commits, err := Diffs(ctx, root, nil, base, head, true, true, false)
+	if err != nil || len(commits.Files) != 1 {
+		t.Fatalf("commit diff=%#v err=%v", commits, err)
+	}
+	file := commits.Files[0]
+	if file.Path != "tracked.txt" || file.Type != "edit" || file.Additions != 1 || file.Deletions != 1 || file.Patch == nil || !strings.Contains(*file.Patch, "+committed") || file.OldText == nil || *file.OldText != "original\n" || file.NewText == nil || *file.NewText != "committed\n" {
+		t.Fatalf("unexpected commit diff file: %#v", file)
+	}
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("working\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := StageContent(ctx, root, "tracked.txt", "staged\n"); err != nil {
+		t.Fatal(err)
+	}
+	staged, err := Diffs(ctx, root, []string{"tracked.txt"}, "HEAD", "staged", false, true, false)
+	if err != nil || len(staged.Files) != 1 || staged.Files[0].NewText == nil || *staged.Files[0].NewText != "staged\n" {
+		t.Fatalf("staged diff=%#v err=%v", staged, err)
+	}
+	working, err := Diffs(ctx, root, nil, "staged", "working", false, true, false)
+	if err != nil || len(working.Files) != 1 || working.Files[0].OldText == nil || *working.Files[0].OldText != "staged\n" || working.Files[0].NewText == nil || *working.Files[0].NewText != "working\n" {
+		t.Fatalf("working diff=%#v err=%v", working, err)
+	}
+}

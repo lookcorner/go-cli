@@ -112,6 +112,15 @@ func TestGitExtensionWireContract(t *testing.T) {
 	if got := runACPGitOutput(t, root, "show", ":tracked.txt"); got != "index only\n" {
 		t.Fatalf("stage content index=%q", got)
 	}
+	output.Reset()
+	server.handleGit(context.Background(), message{ID: json.RawMessage("9"), Method: "x.ai/git/diffs", Params: json.RawMessage(`{"gitRoot":` + strconv.Quote(root) + `,"from":"HEAD","to":"staged","includePatch":true,"includeContent":true}`)})
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	diffFiles := response["result"].(map[string]any)["result"].(map[string]any)["files"].([]any)
+	if len(diffFiles) != 1 || diffFiles[0].(map[string]any)["newText"] != "index only\n" || !strings.Contains(diffFiles[0].(map[string]any)["patch"].(string), "+index only") {
+		t.Fatalf("unexpected git diffs response: %#v", response)
+	}
 }
 
 type fixtureStreamer struct {

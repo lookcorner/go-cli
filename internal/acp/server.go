@@ -196,7 +196,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleHunkAction(ctx, incoming)
 		case "x.ai/git/worktree/create", "x.ai/git/worktree/list", "x.ai/git/worktree/show", "x.ai/git/worktree/remove", "x.ai/git/worktree/apply":
 			s.handleWorktree(ctx, incoming)
-		case "x.ai/git/git_repo_root", "x.ai/git/status", "x.ai/git/stage", "x.ai/git/stage/content", "x.ai/git/unstage", "x.ai/git/discard", "x.ai/git/current_commit", "x.ai/git/info", "x.ai/git/branches", "x.ai/git/stash", "x.ai/git/checkout", "x.ai/git/checkout_commit", "x.ai/git/commit", "x.ai/git/files":
+		case "x.ai/git/git_repo_root", "x.ai/git/status", "x.ai/git/stage", "x.ai/git/stage/content", "x.ai/git/unstage", "x.ai/git/discard", "x.ai/git/current_commit", "x.ai/git/info", "x.ai/git/branches", "x.ai/git/stash", "x.ai/git/checkout", "x.ai/git/checkout_commit", "x.ai/git/commit", "x.ai/git/files", "x.ai/git/diffs":
 			s.handleGit(ctx, incoming)
 		case "x.ai/git/worktree/create_from_worktree", "x.ai/git/worktree/create_from_worktree_sync":
 			s.handleWorktreeFork(ctx, incoming)
@@ -260,6 +260,13 @@ func (s *Server) handleGit(ctx context.Context, incoming message) {
 		Path             string   `json:"path"`
 		Content          string   `json:"content"`
 		Version          string   `json:"version"`
+		From             string   `json:"from"`
+		To               string   `json:"to"`
+		IncludePatch     bool     `json:"includePatch"`
+		IncludeContent   bool     `json:"includeContent"`
+		MergeBase        bool     `json:"mergeBase"`
+		MaxPatchBytes    *uint64  `json:"maxPatchBytes"`
+		MaxPatchLines    *uint64  `json:"maxPatchLines"`
 	}
 	if json.Unmarshal(incoming.Params, &req) != nil {
 		s.respondError(incoming.ID, -32602, "invalid git parameters")
@@ -343,6 +350,18 @@ func (s *Server) handleGit(ctx context.Context, incoming message) {
 			return
 		}
 		extResult(map[string]any{}, worktrees.StageContent(ctx, root, req.Path, req.Content))
+	case "x.ai/git/diffs":
+		result, err := worktrees.Diffs(ctx, root, req.Paths, req.From, req.To, req.IncludePatch, req.IncludeContent, req.MergeBase)
+		if err == nil {
+			for _, file := range result.Files {
+				if (req.MaxPatchBytes != nil && file.PatchBytes != nil && *file.PatchBytes > *req.MaxPatchBytes) ||
+					(req.MaxPatchLines != nil && file.PatchLines != nil && *file.PatchLines > *req.MaxPatchLines) {
+					err = fmt.Errorf("diff size limit exceeded for %s", file.Path)
+					break
+				}
+			}
+		}
+		extResult(result, err)
 	}
 }
 

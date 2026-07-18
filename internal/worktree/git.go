@@ -86,6 +86,23 @@ type GitReadFiles struct {
 	Errors []GitReadError `json:"errors"`
 }
 
+type GitDiffFile struct {
+	Path       string  `json:"path"`
+	OldPath    string  `json:"oldPath,omitempty"`
+	Type       string  `json:"type"`
+	Additions  uint64  `json:"additions"`
+	Deletions  uint64  `json:"deletions"`
+	Patch      *string `json:"patch,omitempty"`
+	PatchBytes *uint64 `json:"patchBytes,omitempty"`
+	PatchLines *uint64 `json:"patchLines,omitempty"`
+	OldText    *string `json:"oldText,omitempty"`
+	NewText    *string `json:"newText,omitempty"`
+}
+
+type GitDiffs struct {
+	Files []GitDiffFile `json:"files"`
+}
+
 func GitRoot(ctx context.Context, cwd string) (string, error) {
 	root, err := gitOutput(ctx, cwd, "rev-parse", "--show-toplevel")
 	return strings.TrimSpace(root), err
@@ -398,6 +415,134 @@ func StageContent(ctx context.Context, root, path, content string) error {
 	return err
 }
 
+func Diffs(ctx context.Context, root string, paths []string, from, to string, includePatch, includeContent, mergeBase bool) (GitDiffs, error) {
+	resolved, err := GitRoot(ctx, root)
+	if err != nil {
+		return GitDiffs{}, err
+	}
+	if from == "" {
+		from = "HEAD"
+	}
+	if to == "" {
+		to = "working"
+	}
+	if mergeBase && from != "working" && from != "staged" && to != "working" && to != "staged" {
+		if base := optionalGit(ctx, resolved, "merge-base", from, to); base != "" {
+			from = base
+		}
+	}
+	baseArgs, err := diffArgs(from, to)
+	if err != nil {
+		return GitDiffs{}, err
+	}
+	nameArgs := append([]string{"diff", "--name-status", "-z"}, baseArgs...)
+	nameArgs = appendPaths(nameArgs, paths)
+	data, err := gitBytes(ctx, resolved, nameArgs...)
+	if err != nil {
+		return GitDiffs{}, err
+	}
+	numstatArgs := append([]string{"diff", "--numstat"}, baseArgs...)
+	numstatArgs = appendPaths(numstatArgs, paths)
+	numstat, err := gitOutput(ctx, resolved, numstatArgs...)
+	if err != nil {
+		return GitDiffs{}, err
+	}
+	stats := parseNumstat(numstat)
+	parts := bytes.Split(data, []byte{0})
+	result := GitDiffs{Files: make([]GitDiffFile, 0, len(parts)/2)}
+	for i := 0; i < len(parts) && len(parts[i]) > 0; {
+		code := string(parts[i])
+		i++
+		if i >= len(parts) {
+			return GitDiffs{}, errors.New("invalid git diff name-status output")
+		}
+		path := filepath.ToSlash(string(parts[i]))
+		i++
+		oldPath := ""
+		if strings.HasPrefix(code, "R") || strings.HasPrefix(code, "C") {
+			if i >= len(parts) {
+				return GitDiffs{}, errors.New("invalid git diff rename output")
+			}
+			oldPath, path = path, filepath.ToSlash(string(parts[i]))
+			i++
+		}
+		counts := stats[path]
+		file := GitDiffFile{Path: path, OldPath: oldPath, Type: changeType(code), Additions: counts[0], Deletions: counts[1]}
+		if includePatch {
+			patchArgs := append([]string{"diff"}, baseArgs...)
+			patchArgs = append(patchArgs, "--", path)
+			patch, err := gitOutput(ctx, resolved, patchArgs...)
+			if err != nil {
+				return GitDiffs{}, err
+			}
+			patchBytes, patchLines := uint64(len(patch)), uint64(strings.Count(patch, "\n"))
+			file.Patch, file.PatchBytes, file.PatchLines = &patch, &patchBytes, &patchLines
+		}
+		if includeContent {
+			oldContentPath := path
+			if oldPath != "" {
+				oldContentPath = oldPath
+			}
+			file.OldText = readTextVersion(ctx, resolved, oldContentPath, from)
+			file.NewText = readTextVersion(ctx, resolved, path, to)
+		}
+		result.Files = append(result.Files, file)
+	}
+	return result, nil
+}
+
+func diffArgs(from, to string) ([]string, error) {
+	switch {
+	case from == "staged" && to == "working":
+		return nil, nil
+	case to == "staged" && from != "working":
+		return []string{"--cached", from}, nil
+	case to == "working" && from != "staged":
+		return []string{from}, nil
+	case from != "working" && from != "staged" && to != "working" && to != "staged":
+		return []string{from, to}, nil
+	default:
+		return nil, fmt.Errorf("unsupported git diff versions %q to %q", from, to)
+	}
+}
+
+func appendPaths(args, paths []string) []string {
+	args = append(args, "--")
+	return append(args, paths...)
+}
+
+func parseNumstat(output string) map[string][2]uint64 {
+	result := make(map[string][2]uint64)
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		fields := strings.SplitN(line, "\t", 3)
+		if len(fields) != 3 {
+			continue
+		}
+		additions, _ := strconv.ParseUint(fields[0], 10, 64)
+		deletions, _ := strconv.ParseUint(fields[1], 10, 64)
+		result[filepath.ToSlash(fields[2])] = [2]uint64{additions, deletions}
+	}
+	return result
+}
+
+func readTextVersion(ctx context.Context, root, path, version string) *string {
+	var data []byte
+	var err error
+	switch version {
+	case "working":
+		data, err = os.ReadFile(filepath.Join(root, filepath.FromSlash(path)))
+	case "staged":
+		data, err = gitBytes(ctx, root, "show", ":"+path)
+	default:
+		data, err = gitBytes(ctx, root, "show", version+":"+path)
+	}
+	if err != nil || !utf8.Valid(data) {
+		return nil
+	}
+	text := string(data)
+	return &text
+}
+
 func relativeGitPath(root, path string) (string, error) {
 	if filepath.IsAbs(path) {
 		rel, err := filepath.Rel(root, path)
@@ -476,17 +621,7 @@ func gitNumstat(ctx context.Context, root string, staged bool) (map[string][2]ui
 	if err != nil {
 		return nil, err
 	}
-	result := make(map[string][2]uint64)
-	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
-		fields := strings.SplitN(line, "\t", 3)
-		if len(fields) != 3 {
-			continue
-		}
-		additions, _ := strconv.ParseUint(fields[0], 10, 64)
-		deletions, _ := strconv.ParseUint(fields[1], 10, 64)
-		result[filepath.ToSlash(fields[2])] = [2]uint64{additions, deletions}
-	}
-	return result, nil
+	return parseNumstat(output), nil
 }
 
 func optionalGit(ctx context.Context, root string, args ...string) string {

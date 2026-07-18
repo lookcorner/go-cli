@@ -281,7 +281,8 @@ Core Git extensions are available through `x.ai/git/git_repo_root`, `status`,
 `current_commit`, `info`, `branches`, `stage`, `unstage`, `discard`, `stash`,
 `stage/content`, `checkout`, `checkout_commit`, `commit`, and `files`. Status
 reports repository, branch/upstream, staged, unstaged, untracked, and optional
-line-count data using the reference extension result envelope.
+line-count data using the reference extension result envelope. `diffs` compares
+commit-ish, staged, and working versions with optional patches and text content.
 Tracked, staged, and text untracked changes are included; mutations performed
 through Gork file tools are attributed to the agent, while other changes are
 reported as external. Attribution is per hunk, so user and agent edits in the
