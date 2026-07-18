@@ -95,7 +95,10 @@ func TestResolveRefreshesAndPersistsCredential(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"sibling":{"key":"keep","custom":"preserved"}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := Save(path, cfg.Scope(), Credential{Key: "old", RefreshToken: "refresh-1", ExpiresAt: &expires, UserID: "user-1"}); err != nil {
+	if err := Save(path, cfg.Scope(), Credential{
+		Key: "old", RefreshToken: "refresh-1", ExpiresAt: &expires, UserID: "user-1",
+		FirstName: "Ada", TeamName: "Core", TeamBlockedReasons: []string{"BLOCKED_REASON_NO_LOGS"}, CodingDataRetentionOptOut: true,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
@@ -125,7 +128,7 @@ func TestResolveRefreshesAndPersistsCredential(t *testing.T) {
 		t.Fatalf("resolve token=%q err=%v", token, err)
 	}
 	credential, err = Load(path, cfg.Scope())
-	if err != nil || credential.RefreshToken != "refresh-1" || credential.UserID != "user-1" {
+	if err != nil || credential.RefreshToken != "refresh-1" || credential.UserID != "user-1" || credential.FirstName != "Ada" || credential.TeamName != "Core" || len(credential.TeamBlockedReasons) != 1 || !credential.CodingDataRetentionOptOut {
 		t.Fatalf("persisted refresh=%#v err=%v", credential, err)
 	}
 	if sibling, err := Load(path, "sibling"); err != nil || sibling.Key != "keep" {

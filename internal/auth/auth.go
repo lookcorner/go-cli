@@ -71,19 +71,30 @@ func DefaultConfig() Config {
 func (c Config) Scope() string { return strings.TrimRight(c.Issuer, "/") + "::" + c.ClientID }
 
 type Credential struct {
-	Key           string     `json:"key"`
-	AuthMode      string     `json:"auth_mode"`
-	CreateTime    time.Time  `json:"create_time"`
-	UserID        string     `json:"user_id"`
-	Email         string     `json:"email,omitempty"`
-	RefreshToken  string     `json:"refresh_token,omitempty"`
-	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
-	Issuer        string     `json:"oidc_issuer,omitempty"`
-	ClientID      string     `json:"oidc_client_id,omitempty"`
-	TokenEndpoint string     `json:"token_endpoint,omitempty"`
-	PrincipalType string     `json:"principal_type,omitempty"`
-	PrincipalID   string     `json:"principal_id,omitempty"`
-	TeamID        string     `json:"team_id,omitempty"`
+	Key                       string     `json:"key"`
+	AuthMode                  string     `json:"auth_mode"`
+	CreateTime                time.Time  `json:"create_time"`
+	UserID                    string     `json:"user_id"`
+	Email                     string     `json:"email,omitempty"`
+	FirstName                 string     `json:"first_name,omitempty"`
+	LastName                  string     `json:"last_name,omitempty"`
+	ProfileImageAssetID       string     `json:"profile_image_asset_id,omitempty"`
+	PrincipalType             string     `json:"principal_type,omitempty"`
+	PrincipalID               string     `json:"principal_id,omitempty"`
+	TeamID                    string     `json:"team_id,omitempty"`
+	TeamName                  string     `json:"team_name,omitempty"`
+	TeamRole                  string     `json:"team_role,omitempty"`
+	OrganizationID            string     `json:"organization_id,omitempty"`
+	OrganizationName          string     `json:"organization_name,omitempty"`
+	OrganizationRole          string     `json:"organization_role,omitempty"`
+	UserBlockedReason         string     `json:"user_blocked_reason,omitempty"`
+	TeamBlockedReasons        []string   `json:"team_blocked_reasons,omitempty"`
+	CodingDataRetentionOptOut bool       `json:"coding_data_retention_opt_out"`
+	RefreshToken              string     `json:"refresh_token,omitempty"`
+	ExpiresAt                 *time.Time `json:"expires_at,omitempty"`
+	Issuer                    string     `json:"oidc_issuer,omitempty"`
+	ClientID                  string     `json:"oidc_client_id,omitempty"`
+	TokenEndpoint             string     `json:"token_endpoint,omitempty"`
 }
 
 type DeviceCode struct {
@@ -242,12 +253,7 @@ func (c *Client) Refresh(ctx context.Context, cfg Config, credential Credential)
 	if refreshed.RefreshToken == "" {
 		refreshed.RefreshToken = credential.RefreshToken
 	}
-	if refreshed.UserID == "" {
-		refreshed.UserID = credential.UserID
-	}
-	if refreshed.Email == "" {
-		refreshed.Email = credential.Email
-	}
+	refreshed.carryProfileFrom(credential)
 	refreshed.TokenEndpoint = credential.TokenEndpoint
 	return refreshed, nil
 }
@@ -340,7 +346,8 @@ func (c *Client) exchangeAt(ctx context.Context, cfg Config, endpoint string, fo
 		userID, email := jwtIdentity(wire.IDToken)
 		credential := Credential{
 			Key: wire.AccessToken, AuthMode: "oidc", CreateTime: now, UserID: userID, Email: email,
-			RefreshToken: wire.RefreshToken, ExpiresAt: expiresAt, Issuer: cfg.Issuer, ClientID: cfg.ClientID,
+			CodingDataRetentionOptOut: true, RefreshToken: wire.RefreshToken, ExpiresAt: expiresAt,
+			Issuer: cfg.Issuer, ClientID: cfg.ClientID,
 		}
 		credential.PrincipalType, credential.PrincipalID, credential.TeamID = jwtPrincipal(wire.AccessToken)
 		if credential.PrincipalType == "Team" && credential.TeamID == "" {

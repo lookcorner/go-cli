@@ -204,7 +204,7 @@ func (l *BrowserLogin) Complete(ctx context.Context, pastedInput io.Reader) (Cre
 	credential := Credential{
 		Key: token.AccessToken, AuthMode: "oidc", CreateTime: created,
 		UserID: claims.Subject, Email: claims.Email, RefreshToken: token.RefreshToken,
-		ExpiresAt: expiresAt, Issuer: l.issuer, ClientID: l.oauth.ClientID,
+		CodingDataRetentionOptOut: true, ExpiresAt: expiresAt, Issuer: l.issuer, ClientID: l.oauth.ClientID,
 		TokenEndpoint: l.oauth.Endpoint.TokenURL, PrincipalType: principalType,
 		PrincipalID: principalID, TeamID: teamID,
 	}

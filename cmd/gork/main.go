@@ -443,6 +443,7 @@ func runLogin(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			return err
 		}
 	}
+	credential = client.Enrich(ctx, appConfig.BaseURL, "", credential)
 	if err := auth.Save(authFile, cfg.Scope(), credential); err != nil {
 		return fmt.Errorf("save OAuth credentials: %w", err)
 	}

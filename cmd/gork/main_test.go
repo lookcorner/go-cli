@@ -123,7 +123,10 @@ func TestRunLoginDeviceFlow(t *testing.T) {
 	}))
 	defer server.Close()
 	authFile := filepath.Join(t.TempDir(), "auth.json")
-	configPath := filepath.Join(t.TempDir(), "missing.toml")
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(configPath, []byte("base_url = \""+server.URL+"\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	var stdout, stderr bytes.Buffer
 	err := run([]string{
 		"login", "--device-auth", "--issuer", server.URL, "--client-id", "client-1", "--scopes", "openid", "--auth-file", authFile, "--config", configPath, "--no-browser",

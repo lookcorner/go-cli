@@ -121,7 +121,7 @@ func parseExternalCredential(output string, tokenTTL time.Duration, now time.Tim
 	}
 	return Credential{
 		Key: token, AuthMode: "external", CreateTime: created,
-		RefreshToken: wire.RefreshToken, ExpiresAt: expiresAt,
+		CodingDataRetentionOptOut: true, RefreshToken: wire.RefreshToken, ExpiresAt: expiresAt,
 	}, nil
 }
 
