@@ -75,7 +75,7 @@ func main() {
 
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if len(args) > 0 && args[0] == "login" {
-		return runLogin(args[1:], stdout, stderr)
+		return runLogin(args[1:], stdin, stdout, stderr)
 	}
 	if len(args) > 0 && args[0] == "logout" {
 		return runLogout(args[1:], stdout, stderr)
@@ -104,7 +104,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	flags.IntVar(&opts.goalRuns, "goal-runs", 10, "maximum turns in --goal mode")
 	flags.BoolVar(&opts.acp, "acp", false, "serve Agent Client Protocol v1 over stdio")
 	flags.Usage = func() {
-		fmt.Fprintf(stderr, "Usage: gork [flags] [prompt]\n       gork login --device-auth\n       gork logout\n\n")
+		fmt.Fprintf(stderr, "Usage: gork [flags] [prompt]\n       gork login [--oauth|--device-auth]\n       gork logout\n\n")
 		flags.PrintDefaults()
 	}
 	if err := flags.Parse(args); err != nil {
@@ -363,23 +363,25 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	return nil
 }
 
-func runLogin(args []string, stdout, stderr io.Writer) error {
+func runLogin(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	cfg := auth.DefaultConfig()
 	var authFile, scopes string
-	var deviceAuth, noBrowser bool
+	var oauth, deviceAuth, noBrowser bool
 	flags := flag.NewFlagSet("gork login", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	flags.BoolVar(&deviceAuth, "device-auth", true, "sign in with the OAuth device flow")
+	flags.BoolVar(&oauth, "oauth", false, "sign in with the browser OAuth flow")
+	flags.BoolVar(&deviceAuth, "device-auth", false, "sign in with the OAuth device flow")
 	flags.BoolVar(&noBrowser, "no-browser", false, "print the verification URL without opening a browser")
 	flags.StringVar(&cfg.Issuer, "issuer", cfg.Issuer, "OAuth issuer")
 	flags.StringVar(&cfg.ClientID, "client-id", cfg.ClientID, "OAuth client ID")
 	flags.StringVar(&scopes, "scopes", strings.Join(cfg.Scopes, " "), "space-separated OAuth scopes")
+	flags.StringVar(&cfg.Audience, "audience", cfg.Audience, "OIDC audience")
 	flags.StringVar(&authFile, "auth-file", "", "credential store path")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	if !deviceAuth {
-		return errors.New("only device authentication is currently supported")
+	if oauth && deviceAuth {
+		return errors.New("--oauth and --device-auth are mutually exclusive")
 	}
 	if len(flags.Args()) > 0 {
 		return fmt.Errorf("unexpected login arguments: %s", strings.Join(flags.Args(), " "))
@@ -400,9 +402,46 @@ func runLogin(args []string, stdout, stderr io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	client := auth.NewClient(&http.Client{Timeout: 30 * time.Second})
+	var credential auth.Credential
+	if !deviceAuth {
+		login, err := client.StartBrowserLogin(ctx, cfg)
+		if err != nil {
+			return err
+		}
+		defer login.Close()
+		fmt.Fprintf(stderr, "Open this URL to sign in:\n\n  %s\n\n", login.AuthorizationURL)
+		if !noBrowser && !openBrowser(login.AuthorizationURL) {
+			fmt.Fprint(stderr, "Could not open a browser automatically; open the URL above manually.\n\n")
+		}
+		var pastedInput io.Reader
+		if isTerminalInput(stdin) {
+			pastedInput = stdin
+			fmt.Fprintln(stderr, "Paste the callback URL or authorization code here if it does not connect:")
+		}
+		loginCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+		defer cancel()
+		credential, err = login.Complete(loginCtx, pastedInput)
+		if err != nil {
+			return err
+		}
+	} else {
+		var err error
+		credential, err = completeDeviceLogin(ctx, client, cfg, noBrowser, stderr)
+		if err != nil {
+			return err
+		}
+	}
+	if err := auth.Save(authFile, cfg.Scope(), credential); err != nil {
+		return fmt.Errorf("save OAuth credentials: %w", err)
+	}
+	fmt.Fprintln(stdout, "Signed in")
+	return nil
+}
+
+func completeDeviceLogin(ctx context.Context, client *auth.Client, cfg auth.Config, noBrowser bool, stderr io.Writer) (auth.Credential, error) {
 	code, err := client.RequestDeviceCode(ctx, cfg)
 	if err != nil {
-		return err
+		return auth.Credential{}, err
 	}
 	displayURL := code.VerificationURIComplete
 	if displayURL == "" {
@@ -420,13 +459,18 @@ func runLogin(args []string, stdout, stderr io.Writer) error {
 	fmt.Fprint(stderr, "\nOnly continue with a code you requested. Do not share it.\n\nWaiting for authorization...\n")
 	credential, err := client.CompleteDeviceLogin(ctx, cfg, code)
 	if err != nil {
-		return err
+		return auth.Credential{}, err
 	}
-	if err := auth.Save(authFile, cfg.Scope(), credential); err != nil {
-		return fmt.Errorf("save OAuth credentials: %w", err)
+	return credential, nil
+}
+
+func isTerminalInput(input io.Reader) bool {
+	file, ok := input.(*os.File)
+	if !ok {
+		return false
 	}
-	fmt.Fprintln(stdout, "Signed in")
-	return nil
+	info, err := file.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
 func runLogout(args []string, stdout, stderr io.Writer) error {

@@ -72,9 +72,9 @@ func TestMCPSamplingRequiresApproval(t *testing.T) {
 	}
 }
 
-func TestLoginRejectsDisabledDeviceAuthWithoutNetwork(t *testing.T) {
-	err := run([]string{"login", "--device-auth=false"}, strings.NewReader(""), io.Discard, io.Discard)
-	if err == nil || !strings.Contains(err.Error(), "only device authentication") {
+func TestLoginRejectsConflictingTransportsWithoutNetwork(t *testing.T) {
+	err := run([]string{"login", "--oauth", "--device-auth"}, strings.NewReader(""), io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
 		t.Fatalf("unexpected login error: %v", err)
 	}
 }
@@ -125,7 +125,7 @@ func TestRunLoginDeviceFlow(t *testing.T) {
 	authFile := filepath.Join(t.TempDir(), "auth.json")
 	var stdout, stderr bytes.Buffer
 	err := run([]string{
-		"login", "--issuer", server.URL, "--client-id", "client-1", "--scopes", "openid", "--auth-file", authFile, "--no-browser",
+		"login", "--device-auth", "--issuer", server.URL, "--client-id", "client-1", "--scopes", "openid", "--auth-file", authFile, "--no-browser",
 	}, strings.NewReader(""), &stdout, &stderr)
 	if err != nil {
 		t.Fatal(err)

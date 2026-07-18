@@ -94,6 +94,9 @@ func TestResolveRefreshesAndPersistsCredential(t *testing.T) {
 		t.Fatal(err)
 	}
 	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.String() != "https://tokens.example/custom" {
+			t.Fatalf("refresh endpoint=%s", request.URL)
+		}
 		if err := request.ParseForm(); err != nil {
 			t.Fatal(err)
 		}
@@ -104,11 +107,19 @@ func TestResolveRefreshesAndPersistsCredential(t *testing.T) {
 	})}
 	client := NewClient(httpClient)
 	client.Now = func() time.Time { return fixed }
+	credential, err := Load(path, cfg.Scope())
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential.TokenEndpoint = "https://tokens.example/custom"
+	if err := Save(path, cfg.Scope(), credential); err != nil {
+		t.Fatal(err)
+	}
 	token, err := client.Resolve(context.Background(), path, cfg)
 	if err != nil || token != "new" {
 		t.Fatalf("resolve token=%q err=%v", token, err)
 	}
-	credential, err := Load(path, cfg.Scope())
+	credential, err = Load(path, cfg.Scope())
 	if err != nil || credential.RefreshToken != "refresh-1" || credential.UserID != "user-1" {
 		t.Fatalf("persisted refresh=%#v err=%v", credential, err)
 	}
@@ -223,6 +234,19 @@ func TestDefaultConfigRequiresCompleteEnvironmentPair(t *testing.T) {
 	t.Setenv("GROK_OAUTH2_CLIENT_ID", "custom-client")
 	if cfg := DefaultConfig(); cfg.Issuer != "https://custom.example" || cfg.ClientID != "custom-client" {
 		t.Fatalf("complete OAuth pair was not used: %#v", cfg)
+	}
+}
+
+func TestDefaultConfigPrefersOIDCEnvironment(t *testing.T) {
+	t.Setenv("GROK_OAUTH2_ISSUER", "https://oauth.example")
+	t.Setenv("GROK_OAUTH2_CLIENT_ID", "oauth-client")
+	t.Setenv("GROK_OIDC_ISSUER", "https://oidc.example")
+	t.Setenv("GROK_OIDC_CLIENT_ID", "oidc-client")
+	t.Setenv("GROK_OIDC_SCOPES", "openid,email offline_access")
+	t.Setenv("GROK_OIDC_AUDIENCE", "api")
+	cfg := DefaultConfig()
+	if cfg.Issuer != "https://oidc.example" || cfg.ClientID != "oidc-client" || strings.Join(cfg.Scopes, ",") != "openid,email,offline_access" || cfg.Audience != "api" {
+		t.Fatalf("OIDC config=%#v", cfg)
 	}
 }
 

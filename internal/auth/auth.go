@@ -30,12 +30,14 @@ type Config struct {
 	Issuer   string
 	ClientID string
 	Scopes   []string
+	Audience string
 }
 
 func DefaultConfig() Config {
-	issuer, clientID := os.Getenv("GROK_OAUTH2_ISSUER"), os.Getenv("GROK_OAUTH2_CLIENT_ID")
-	if strings.TrimSpace(issuer) == "" || strings.TrimSpace(clientID) == "" {
-		issuer, clientID = os.Getenv("GROK_OIDC_ISSUER"), os.Getenv("GROK_OIDC_CLIENT_ID")
+	issuer, clientID := os.Getenv("GROK_OIDC_ISSUER"), os.Getenv("GROK_OIDC_CLIENT_ID")
+	oidcConfigured := strings.TrimSpace(issuer) != "" && strings.TrimSpace(clientID) != ""
+	if !oidcConfigured {
+		issuer, clientID = os.Getenv("GROK_OAUTH2_ISSUER"), os.Getenv("GROK_OAUTH2_CLIENT_ID")
 	}
 	if strings.TrimSpace(issuer) == "" || strings.TrimSpace(clientID) == "" {
 		issuer, clientID = defaultIssuer, defaultClientID
@@ -44,24 +46,36 @@ func DefaultConfig() Config {
 		}
 	}
 	scopes := defaultScopes
-	if value := firstEnv("GROK_OAUTH2_SCOPES", "GROK_OIDC_SCOPES"); value != "" {
-		scopes = strings.Fields(value)
+	scopeEnv := "GROK_OAUTH2_SCOPES"
+	if oidcConfigured {
+		scopeEnv = "GROK_OIDC_SCOPES"
 	}
-	return Config{Issuer: strings.TrimRight(strings.TrimSpace(issuer), "/"), ClientID: strings.TrimSpace(clientID), Scopes: append([]string(nil), scopes...)}
+	if value := firstEnv(scopeEnv); value != "" {
+		scopes = strings.FieldsFunc(value, func(char rune) bool { return char == ',' || char == ' ' || char == '\t' || char == '\n' })
+	}
+	audience := ""
+	if oidcConfigured {
+		audience = strings.TrimSpace(os.Getenv("GROK_OIDC_AUDIENCE"))
+	}
+	return Config{
+		Issuer: strings.TrimRight(strings.TrimSpace(issuer), "/"), ClientID: strings.TrimSpace(clientID),
+		Scopes: append([]string(nil), scopes...), Audience: audience,
+	}
 }
 
 func (c Config) Scope() string { return strings.TrimRight(c.Issuer, "/") + "::" + c.ClientID }
 
 type Credential struct {
-	Key          string     `json:"key"`
-	AuthMode     string     `json:"auth_mode"`
-	CreateTime   time.Time  `json:"create_time"`
-	UserID       string     `json:"user_id"`
-	Email        string     `json:"email,omitempty"`
-	RefreshToken string     `json:"refresh_token,omitempty"`
-	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
-	Issuer       string     `json:"oidc_issuer,omitempty"`
-	ClientID     string     `json:"oidc_client_id,omitempty"`
+	Key           string     `json:"key"`
+	AuthMode      string     `json:"auth_mode"`
+	CreateTime    time.Time  `json:"create_time"`
+	UserID        string     `json:"user_id"`
+	Email         string     `json:"email,omitempty"`
+	RefreshToken  string     `json:"refresh_token,omitempty"`
+	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
+	Issuer        string     `json:"oidc_issuer,omitempty"`
+	ClientID      string     `json:"oidc_client_id,omitempty"`
+	TokenEndpoint string     `json:"token_endpoint,omitempty"`
 }
 
 type DeviceCode struct {
@@ -206,7 +220,11 @@ func (c *Client) Refresh(ctx context.Context, cfg Config, credential Credential)
 		return Credential{}, errors.New("OAuth credential has no refresh token")
 	}
 	form := url.Values{"grant_type": {"refresh_token"}, "refresh_token": {credential.RefreshToken}, "client_id": {cfg.ClientID}}
-	refreshed, tokenError, err := c.exchange(ctx, cfg, form)
+	endpoint := strings.TrimRight(cfg.Issuer, "/") + "/oauth2/token"
+	if credential.TokenEndpoint != "" {
+		endpoint = credential.TokenEndpoint
+	}
+	refreshed, tokenError, err := c.exchangeAt(ctx, cfg, endpoint, form)
 	if err != nil {
 		return Credential{}, err
 	}
@@ -222,6 +240,7 @@ func (c *Client) Refresh(ctx context.Context, cfg Config, credential Credential)
 	if refreshed.Email == "" {
 		refreshed.Email = credential.Email
 	}
+	refreshed.TokenEndpoint = credential.TokenEndpoint
 	return refreshed, nil
 }
 
@@ -268,7 +287,14 @@ func (c *Client) exchange(ctx context.Context, cfg Config, form url.Values) (Cre
 	if err := validateVerificationURI(cfg.Issuer); err != nil {
 		return Credential{}, "", fmt.Errorf("invalid OAuth issuer: %w", err)
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(cfg.Issuer, "/")+"/oauth2/token", strings.NewReader(form.Encode()))
+	return c.exchangeAt(ctx, cfg, strings.TrimRight(cfg.Issuer, "/")+"/oauth2/token", form)
+}
+
+func (c *Client) exchangeAt(ctx context.Context, cfg Config, endpoint string, form url.Values) (Credential, string, error) {
+	if err := validateVerificationURI(endpoint); err != nil {
+		return Credential{}, "", fmt.Errorf("invalid OAuth token endpoint: %w", err)
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
 	if err != nil {
 		return Credential{}, "", err
 	}
