@@ -65,3 +65,31 @@ func TestWorkspaceFileResourcesRejectDirectoriesAndEscapes(t *testing.T) {
 		t.Fatal("escaping rename was accepted")
 	}
 }
+
+func TestWorkspaceDirectoryResourceLifecycle(t *testing.T) {
+	root := t.TempDir()
+	ws, _ := Open(root)
+	source := filepath.Join(root, "source")
+	if err := os.MkdirAll(filepath.Join(source, "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "nested", "main.go"), []byte("package main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(root, "target")
+	if changed, err := ws.RenameFile(source, target, false, false); err != nil || !changed {
+		t.Fatalf("rename directory changed=%v err=%v", changed, err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "nested", "main.go")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ws.DeleteResource(target, false, false); err == nil {
+		t.Fatal("non-recursive delete accepted a non-empty directory")
+	}
+	if changed, err := ws.DeleteResource(target, true, false); err != nil || !changed {
+		t.Fatalf("recursive delete changed=%v err=%v", changed, err)
+	}
+	if _, err := ws.DeleteResource(root, true, false); err == nil {
+		t.Fatal("workspace root delete was accepted")
+	}
+}

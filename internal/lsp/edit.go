@@ -35,6 +35,7 @@ type editOperation struct {
 	edits        []workspace.TextEdit
 	overwrite    bool
 	ignoreExists bool
+	recursive    bool
 }
 
 func (c *Client) applyWorkspaceEdit(raw json.RawMessage) map[string]any {
@@ -91,13 +92,17 @@ func decodeWorkspaceEdit(raw json.RawMessage) ([]editOperation, error) {
 					Overwrite         bool `json:"overwrite"`
 					IgnoreIfExists    bool `json:"ignoreIfExists"`
 					IgnoreIfNotExists bool `json:"ignoreIfNotExists"`
+					Recursive         bool `json:"recursive"`
 				} `json:"options"`
 			}
 			if json.Unmarshal(rawChange, &resource) != nil {
 				return nil, errors.New("invalid workspace resource operation")
 			}
 			index := documentIndex
-			operation := editOperation{kind: resource.Kind, failedChange: &index, overwrite: resource.Options.Overwrite}
+			operation := editOperation{
+				kind: resource.Kind, failedChange: &index, overwrite: resource.Options.Overwrite,
+				recursive: resource.Options.Recursive,
+			}
 			switch resource.Kind {
 			case "create":
 				operation.uri, operation.ignoreExists = resource.URI, resource.Options.IgnoreIfExists
@@ -223,7 +228,7 @@ func (c *Client) applyEditOperation(operation editOperation) error {
 		}
 		return c.recordRenamedDocument(operation.uri, operation.newURI)
 	case "delete":
-		changed, err := c.workspace.DeleteFile(operation.path, operation.ignoreExists)
+		changed, err := c.workspace.DeleteResource(operation.path, operation.recursive, operation.ignoreExists)
 		if err != nil || !changed {
 			return err
 		}
@@ -252,39 +257,81 @@ func (c *Client) recordAppliedDocument(uri, content string) error {
 }
 
 func (c *Client) recordDeletedDocument(uri string) error {
+	prefix := strings.TrimSuffix(uri, "/") + "/"
 	c.mu.Lock()
-	_, open := c.documents[uri]
-	delete(c.documents, uri)
-	delete(c.diagnostics, uri)
-	c.mu.Unlock()
-	if !open {
-		return nil
+	closed := make([]string, 0)
+	for documentURI := range c.documents {
+		if documentURI == uri || strings.HasPrefix(documentURI, prefix) {
+			closed = append(closed, documentURI)
+			delete(c.documents, documentURI)
+		}
 	}
-	return c.notify("textDocument/didClose", map[string]any{"textDocument": map[string]any{"uri": uri}})
+	for diagnosticURI := range c.diagnostics {
+		if diagnosticURI == uri || strings.HasPrefix(diagnosticURI, prefix) {
+			delete(c.diagnostics, diagnosticURI)
+		}
+	}
+	c.mu.Unlock()
+	sort.Strings(closed)
+	for _, documentURI := range closed {
+		if err := c.notify("textDocument/didClose", map[string]any{"textDocument": map[string]any{"uri": documentURI}}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (c *Client) recordRenamedDocument(oldURI, newURI string) error {
-	c.mu.Lock()
-	state, open := c.documents[oldURI]
-	if open {
-		delete(c.documents, oldURI)
-		c.documents[newURI] = state
+	type renamedDocument struct {
+		oldURI string
+		newURI string
+		state  documentState
 	}
-	if diagnostics, exists := c.diagnostics[oldURI]; exists {
-		delete(c.diagnostics, oldURI)
-		c.diagnostics[newURI] = diagnostics
+	prefix := strings.TrimSuffix(oldURI, "/") + "/"
+	c.mu.Lock()
+	renamed := make([]renamedDocument, 0)
+	for documentURI, state := range c.documents {
+		if documentURI != oldURI && !strings.HasPrefix(documentURI, prefix) {
+			continue
+		}
+		targetURI := newURI + strings.TrimPrefix(documentURI, oldURI)
+		renamed = append(renamed, renamedDocument{oldURI: documentURI, newURI: targetURI, state: state})
+	}
+	for _, document := range renamed {
+		delete(c.documents, document.oldURI)
+		c.documents[document.newURI] = document.state
+	}
+	type renamedDiagnostic struct {
+		oldURI string
+		newURI string
+		value  json.RawMessage
+	}
+	renamedDiagnostics := make([]renamedDiagnostic, 0)
+	for diagnosticURI, diagnostics := range c.diagnostics {
+		if diagnosticURI != oldURI && !strings.HasPrefix(diagnosticURI, prefix) {
+			continue
+		}
+		targetURI := newURI + strings.TrimPrefix(diagnosticURI, oldURI)
+		renamedDiagnostics = append(renamedDiagnostics, renamedDiagnostic{diagnosticURI, targetURI, diagnostics})
+	}
+	for _, diagnostic := range renamedDiagnostics {
+		delete(c.diagnostics, diagnostic.oldURI)
+		c.diagnostics[diagnostic.newURI] = diagnostic.value
 	}
 	c.mu.Unlock()
-	if !open {
-		return nil
+	sort.Slice(renamed, func(i, j int) bool { return renamed[i].oldURI < renamed[j].oldURI })
+	for _, document := range renamed {
+		if err := c.notify("textDocument/didClose", map[string]any{"textDocument": map[string]any{"uri": document.oldURI}}); err != nil {
+			return err
+		}
+		path, _ := pathFromFileURI(document.newURI)
+		if err := c.notify("textDocument/didOpen", map[string]any{"textDocument": map[string]any{
+			"uri": document.newURI, "languageId": languageID(path), "version": document.state.version, "text": document.state.content,
+		}}); err != nil {
+			return err
+		}
 	}
-	if err := c.notify("textDocument/didClose", map[string]any{"textDocument": map[string]any{"uri": oldURI}}); err != nil {
-		return err
-	}
-	path, _ := pathFromFileURI(newURI)
-	return c.notify("textDocument/didOpen", map[string]any{"textDocument": map[string]any{
-		"uri": newURI, "languageId": languageID(path), "version": state.version, "text": state.content,
-	}})
+	return nil
 }
 
 func pathFromFileURI(value string) (string, error) {

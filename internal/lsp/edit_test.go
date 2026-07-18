@@ -73,3 +73,31 @@ func TestWorkspaceEditAppliesFileResourceOperationsInOrder(t *testing.T) {
 		t.Fatalf("deleted file remained: %v", err)
 	}
 }
+
+func TestWorkspaceEditRenamesAndDeletesDirectory(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.MkdirAll(filepath.Join(source, "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "nested", "main.go"), []byte("package main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ws, _ := workspace.Open(root)
+	target := filepath.Join(root, "target")
+	client := &Client{root: ws.Root(), workspace: ws, documents: make(map[string]documentState), diagnostics: make(map[string]json.RawMessage)}
+	rename := json.RawMessage(`{"edit":{"documentChanges":[{"kind":"rename","oldUri":"` + fileURI(source) + `","newUri":"` + fileURI(target) + `"}]}}`)
+	if result := client.applyWorkspaceEdit(rename); result["applied"] != true {
+		t.Fatalf("directory rename failed: %#v", result)
+	}
+	if _, err := os.Stat(filepath.Join(target, "nested", "main.go")); err != nil {
+		t.Fatal(err)
+	}
+	remove := json.RawMessage(`{"edit":{"documentChanges":[{"kind":"delete","uri":"` + fileURI(target) + `","options":{"recursive":true}}]}}`)
+	if result := client.applyWorkspaceEdit(remove); result["applied"] != true {
+		t.Fatalf("directory delete failed: %#v", result)
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("directory remained after delete: %v", err)
+	}
+}

@@ -69,20 +69,32 @@ func (w *Workspace) RenameFile(oldPath, newPath string, overwrite, ignoreIfExist
 	if source == target {
 		return false, nil
 	}
+	if source == w.root || target == w.root {
+		return false, errors.New("workspace root cannot be renamed")
+	}
 	info, err := os.Lstat(source)
-	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return false, errors.New("workspace rename source must be a regular file")
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || (!info.Mode().IsRegular() && !info.IsDir()) {
+		return false, errors.New("workspace rename source must be a file or directory")
 	}
 	targetInfo, targetErr := os.Lstat(target)
 	if targetErr == nil {
-		if targetInfo.Mode()&os.ModeSymlink != 0 || !targetInfo.Mode().IsRegular() {
-			return false, errors.New("workspace rename target must be a regular file")
+		if targetInfo.Mode()&os.ModeSymlink != 0 || targetInfo.IsDir() != info.IsDir() {
+			return false, errors.New("workspace rename target must have the same resource type")
 		}
 		if !overwrite {
 			if ignoreIfExists {
 				return false, nil
 			}
 			return false, errors.New("workspace rename target already exists")
+		}
+		if info.IsDir() {
+			if err := os.Remove(target); err != nil {
+				return false, fmt.Errorf("replace workspace directory: %w", err)
+			}
+			if err := os.Rename(source, target); err != nil {
+				return false, fmt.Errorf("rename workspace directory: %w", err)
+			}
+			return true, nil
 		}
 		if err := atomicReplace(source, target); err != nil {
 			return false, fmt.Errorf("rename workspace file: %w", err)
@@ -91,6 +103,12 @@ func (w *Workspace) RenameFile(oldPath, newPath string, overwrite, ignoreIfExist
 	}
 	if !errors.Is(targetErr, os.ErrNotExist) {
 		return false, targetErr
+	}
+	if info.IsDir() {
+		if err := os.Rename(source, target); err != nil {
+			return false, fmt.Errorf("rename workspace directory: %w", err)
+		}
+		return true, nil
 	}
 	if err := os.Link(source, target); err != nil {
 		return false, fmt.Errorf("rename workspace file: %w", err)
@@ -103,6 +121,10 @@ func (w *Workspace) RenameFile(oldPath, newPath string, overwrite, ignoreIfExist
 }
 
 func (w *Workspace) DeleteFile(path string, ignoreIfNotExists bool) (bool, error) {
+	return w.DeleteResource(path, false, ignoreIfNotExists)
+}
+
+func (w *Workspace) DeleteResource(path string, recursive, ignoreIfNotExists bool) (bool, error) {
 	resolved, err := w.Resolve(path)
 	if err != nil {
 		if ignoreIfNotExists && errors.Is(err, os.ErrNotExist) {
@@ -110,15 +132,22 @@ func (w *Workspace) DeleteFile(path string, ignoreIfNotExists bool) (bool, error
 		}
 		return false, err
 	}
+	if resolved == w.root {
+		return false, errors.New("workspace root cannot be deleted")
+	}
 	info, err := os.Lstat(resolved)
 	if errors.Is(err, os.ErrNotExist) && ignoreIfNotExists {
 		return false, nil
 	}
-	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return false, errors.New("workspace delete target must be a regular file")
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || (!info.Mode().IsRegular() && !info.IsDir()) {
+		return false, errors.New("workspace delete target must be a file or directory")
 	}
-	if err := os.Remove(resolved); err != nil {
-		return false, fmt.Errorf("delete workspace file: %w", err)
+	remove := os.Remove
+	if info.IsDir() && recursive {
+		remove = os.RemoveAll
+	}
+	if err := remove(resolved); err != nil {
+		return false, fmt.Errorf("delete workspace resource: %w", err)
 	}
 	return true, nil
 }
