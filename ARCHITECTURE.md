@@ -22,7 +22,9 @@ implementation.
 - `internal/hooks` owns plugin hook parsing, durable disablement, matching, safe
   command/HTTP execution, and fail-open versus explicit-deny semantics.
 - `internal/agents` owns portable plugin agent-definition discovery and parsing;
-  it does not imply a subagent execution runtime.
+  project/user/plugin precedence, and the immutable callable catalog.
+- `internal/subagent` owns child-runner lifecycle, foreground/background task
+  state, cancellation, resume, and tool-capability filtering coordination.
 - `internal/compat` owns resolved vendor compatibility values shared by
   configuration, instruction discovery, and skill discovery.
 

@@ -192,6 +192,19 @@ func TestProjectHookSourcesRequireFolderTrust(t *testing.T) {
 	}
 }
 
+func TestProjectAgentSourcesRequireFolderTrust(t *testing.T) {
+	for _, relative := range []string{
+		filepath.Join(".grok", "agents", "review.md"),
+		filepath.Join(".claude", "agents", "review.md"),
+	} {
+		root := t.TempDir()
+		writeTrustFile(t, filepath.Join(root, relative), "---\nname: review\ndescription: Review\n---\nPrompt")
+		if !ProjectExecutionConfigPresent(root) {
+			t.Fatalf("project agent source %q did not trigger trust", relative)
+		}
+	}
+}
+
 func writeTrustFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {

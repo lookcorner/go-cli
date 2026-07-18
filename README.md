@@ -677,13 +677,25 @@ trusted projects contribute the corresponding repo settings and `.grok/hooks`.
 Vendor sources honor the `compat.<vendor>.hooks` gate. The runtime fires
 `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`,
 `PostToolUseFailure`, `Stop`, `StopFailure`, `PreCompact`, `PostCompact`, and
-`SessionEnd`; notification, permission-denied, and subagent event producers
+`SessionEnd` plus subagent start/stop; notification and permission-denied producers
 remain.
 
-Plugin `agents/*.md` definitions are parsed from YAML frontmatter and reported
-as names/counts in plugin inventory. Their prompt, tool allow/deny lists, and
-turn limit are retained in the agent catalog, but executable subagent
-coordination is not implemented yet.
+Custom agent definitions are discovered from trusted project `.grok/agents`
+and `.claude/agents` directories from the current directory to the Git root,
+then `$GROK_HOME/agents`, legacy/user Claude locations, bundled agents, and
+enabled plugin `agents/*.md`. Trusted project agents may shadow the built-in
+`general-purpose`, `explore`, and `plan` types; user definitions cannot silently
+replace a built-in, and plugin agents use `plugin-name:agent-name` identities.
+
+The `task` tool runs these definitions through the existing Runner and parent
+tool infrastructure. It supports foreground and background execution,
+`get_task_output`, `kill_task`, completed-agent resume, per-agent turn limits,
+model/prompt metadata, tool allow/deny lists, capability modes, and subagent
+hook events. Background tasks survive completion of the parent turn and are
+cancelled during session cleanup. ACP exposes `x.ai/task/list` and
+`x.ai/task/kill`. Worktree isolation, an alternate child cwd,
+durable cross-process task recovery, full live token/tool metrics, and explicit
+model-slug allowlist validation are not implemented yet.
 
 The same direct-install lifecycle is available outside ACP:
 

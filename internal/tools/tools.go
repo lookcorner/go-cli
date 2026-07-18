@@ -129,6 +129,7 @@ type Registry struct {
 	rewind     *mutationCheckpoint
 	readFile   *readFileTool
 	webFetch   *webFetchTool
+	subagents  *subagentHolder
 }
 
 type mutationCheckpoint struct {
@@ -210,6 +211,7 @@ func (c *mutationCheckpoint) afterWorkspace(mutation *workspaceMutation) error {
 
 func NewRegistry(ws *workspace.Workspace, approver Approver) *Registry {
 	processes := NewProcessManager(ws, approver)
+	subagents := &subagentHolder{}
 	todos := newTodoStore()
 	goal := NewGoalStore()
 	rewind := &mutationCheckpoint{}
@@ -230,8 +232,8 @@ func NewRegistry(ws *workspace.Workspace, approver Approver) *Registry {
 		&commandOutputTool{manager: processes},
 		&killCommandTool{manager: processes},
 		&runTerminalCommandTool{manager: processes},
-		&taskOutputTool{manager: processes},
-		&killTaskTool{manager: processes},
+		&taskOutputTool{manager: processes, subagents: subagents},
+		&killTaskTool{manager: processes, subagents: subagents},
 		&listDirTool{ws: ws},
 		&grepTool{ws: ws},
 		&searchReplaceTool{ws: ws, approver: approver, rewind: rewind},
@@ -242,6 +244,7 @@ func NewRegistry(ws *workspace.Workspace, approver Approver) *Registry {
 	registry := &Registry{
 		tools: make(map[string]Tool, len(items)), processes: processes, goal: goal,
 		hunks: NewHunkTracker(ws), rewind: rewind, readFile: readFile, webFetch: webFetch,
+		subagents: subagents,
 	}
 	for _, item := range items {
 		registry.tools[item.Definition().Name] = item
@@ -397,6 +400,66 @@ func (r *Registry) SnapshotTools() []Tool {
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Definition().Name < items[j].Definition().Name })
 	return items
+}
+
+// View reuses the parent's concurrency-safe tools while applying a child-only
+// allow/deny policy. The returned registry does not own parent resources.
+func (r *Registry) View(allowed, denied []string, capability string) *Registry {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	allow := toolNameSet(allowed)
+	deny := toolNameSet(denied)
+	items := make(map[string]Tool)
+	for name, tool := range r.tools {
+		canonical := strings.ToLower(name)
+		if name == "task" || name == "update_goal" || name == "todo_write" || deny[canonical] {
+			continue
+		}
+		if len(allow) > 0 && !allow[canonical] {
+			continue
+		}
+		if !capabilityAllows(capability, name) {
+			continue
+		}
+		items[name] = tool
+	}
+	return &Registry{tools: items, readPolicy: r.readPolicy, hunks: r.hunks, rewind: r.rewind, readFile: r.readFile, webFetch: r.webFetch, subagents: r.subagents}
+}
+
+func toolNameSet(values []string) map[string]bool {
+	result := make(map[string]bool, len(values))
+	aliases := map[string][]string{
+		"read": {"read_file"}, "write": {"write_file", "edit_file", "search_replace"},
+		"edit": {"write_file", "edit_file", "search_replace"}, "bash": {"shell", "run_terminal_cmd"},
+		"grep": {"grep", "search_files"}, "glob": {"list_files", "search_files"},
+	}
+	for _, value := range values {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value == "" || strings.HasPrefix(value, "agent(") {
+			continue
+		}
+		if expanded := aliases[value]; len(expanded) > 0 {
+			for _, name := range expanded {
+				result[name] = true
+			}
+		} else {
+			result[value] = true
+		}
+	}
+	return result
+}
+
+func capabilityAllows(capability, name string) bool {
+	switch strings.ToLower(strings.TrimSpace(capability)) {
+	case "read-only", "readonly":
+		return name != "write_file" && name != "edit_file" && name != "search_replace" && name != "shell" && name != "run_terminal_cmd" && name != "start_command" && name != "kill_command"
+	case "read-write", "readwrite":
+		return name != "shell" && name != "run_terminal_cmd" && name != "start_command" && name != "kill_command"
+	case "execute":
+		return name != "write_file" && name != "edit_file" && name != "search_replace"
+	default:
+		return true
+	}
 }
 
 func (r *Registry) Execute(ctx context.Context, name string, arguments json.RawMessage) (string, error) {

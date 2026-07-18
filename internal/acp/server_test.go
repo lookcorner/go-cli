@@ -864,6 +864,35 @@ func TestPluginWireInfoReportsInlineHooks(t *testing.T) {
 	}
 }
 
+func TestTaskListAndKillWireContract(t *testing.T) {
+	killed := ""
+	current := &session{id: "task-session", runner: &agent.Runner{
+		ListSubagents: func() []tools.SubagentResult {
+			return []tools.SubagentResult{{ID: "subagent-1", Type: "explore", Description: "find code", Status: "running", StartedAtMS: 10, DurationMS: 20}}
+		},
+		KillSubagent: func(_ context.Context, id string) (string, error) { killed = id; return "killed", nil },
+	}}
+	request := func(method, params string) map[string]any {
+		var output bytes.Buffer
+		server := &Server{output: &output, sessions: map[string]*session{"task-session": current}}
+		server.handleTasks(context.Background(), message{ID: json.RawMessage("1"), Method: method, Params: json.RawMessage(params)})
+		var response map[string]any
+		if err := json.NewDecoder(&output).Decode(&response); err != nil {
+			t.Fatal(err)
+		}
+		return response["result"].(map[string]any)
+	}
+	listed := request("x.ai/task/list", `{"sessionId":"task-session"}`)
+	item := listed["result"].(map[string]any)["tasks"].([]any)[0].(map[string]any)
+	if item["taskId"] != "subagent-1" || item["subagentType"] != "explore" || item["status"] != "running" {
+		t.Fatalf("listed=%#v", listed)
+	}
+	kill := request("x.ai/task/kill", `{"sessionId":"task-session","taskId":"subagent-1"}`)
+	if killed != "subagent-1" || kill["result"].(map[string]any)["outcome"] != "killed" {
+		t.Fatalf("kill=%#v killed=%q", kill, killed)
+	}
+}
+
 func TestPluginActionUpdatesInventoryAndSkills(t *testing.T) {
 	root := t.TempDir()
 	pluginRoot := filepath.Join(root, "plugin")

@@ -23,6 +23,7 @@ import (
 
 	"github.com/lookcorner/go-cli/internal/acp"
 	"github.com/lookcorner/go-cli/internal/agent"
+	"github.com/lookcorner/go-cli/internal/agents"
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/auth"
 	"github.com/lookcorner/go-cli/internal/config"
@@ -33,6 +34,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/plugin"
 	"github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/skills"
+	"github.com/lookcorner/go-cli/internal/subagent"
 	"github.com/lookcorner/go-cli/internal/tools"
 	"github.com/lookcorner/go-cli/internal/tui"
 	"github.com/lookcorner/go-cli/internal/version"
@@ -385,9 +387,32 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		Catalog: hookCatalog, WorkspaceRoot: ws.Root(), SessionID: logger.ID(), Model: cfg.Model,
 	}
 	defer hookRuntime.SessionEnded(context.Background(), "closed")
+	agentCatalog, agentErrors := agents.Discover(agents.Config{
+		WorkspaceRoot: ws.Root(), ProjectTrusted: projectTrusted, Compat: cfg.Compat, Plugins: plugins,
+	})
+	for _, agentErr := range agentErrors {
+		fmt.Fprintln(statusOutput, "[gork] agent definition:", agentErr)
+	}
+	subagents, err := subagent.New(subagent.Config{
+		Context: ctx, Catalog: agentCatalog, Tools: registry, WorkspaceRoot: ws.Root(), ParentModel: cfg.Model,
+		NewClient: func(model string) (agent.ResponseStreamer, error) {
+			child := cfg
+			child.Model = model
+			return newModelClient(child, tokenProvider)
+		}, Observer: hookRuntime, Hooks: hookCatalog,
+	})
+	if err != nil {
+		return err
+	}
+	if err := registry.SetSubagentBackend(subagents); err != nil {
+		subagents.Close()
+		return err
+	}
+	defer subagents.Close()
 	runner := &agent.Runner{
 		Client: client, Tools: registry, Skills: skillCatalog, Logger: logger,
 		HookCatalog: hookCatalog, HookPolicy: hookRuntime,
+		ListSubagents: subagents.List, KillSubagent: subagents.Kill,
 		SessionID: logger.ID(),
 		Model:     cfg.Model, Instructions: cfg.SystemPrompt, MaxSteps: cfg.MaxSteps,
 		TextOutput: stdout, StatusOutput: stderr,
@@ -876,6 +901,8 @@ type sessionPluginState struct {
 	hooks     *hooks.Catalog
 	hookRun   *hooks.Runtime
 	hookCfg   hooks.Config
+	agents    *agents.Catalog
+	subagents *subagent.Manager
 }
 
 func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []string, tokenProvider api.TokenProvider, stdin io.Reader, stdout, stderr io.Writer) error {
@@ -978,7 +1005,11 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		}
 		var mcpRuntime *sessionMCPRuntime
 		var lspManager *lsp.Manager
+		var subagentManager *subagent.Manager
 		cleanup := func() {
+			if subagentManager != nil {
+				subagentManager.Close()
+			}
 			if lspManager != nil {
 				_ = lspManager.Close()
 			}
@@ -1010,8 +1041,6 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			cleanup()
 			return nil, nil, err
 		}
-		watchCtx, stopSkills := context.WithCancel(sessionCtx)
-		catalog.Watch(watchCtx, time.Second)
 		pluginState := &sessionPluginState{
 			root: ws.Root(), trusted: projectTrusted, catalog: catalog,
 			mcp: mcpRuntime, mcpSource: sessionBase,
@@ -1038,6 +1067,31 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		pluginState.hookRun = &hooks.Runtime{
 			Catalog: pluginState.hooks, WorkspaceRoot: ws.Root(), SessionID: logger.ID(), Model: sessionCfg.Model,
 		}
+		agentCatalog, agentErrors := agents.Discover(agents.Config{
+			WorkspaceRoot: ws.Root(), ProjectTrusted: projectTrusted, Compat: sessionCfg.Compat, Plugins: plugins,
+		})
+		for _, agentErr := range agentErrors {
+			fmt.Fprintln(statusOutput, "[gork] agent definition:", agentErr)
+		}
+		subagentManager, err = subagent.New(subagent.Config{
+			Context: sessionCtx, Catalog: agentCatalog, Tools: registry, WorkspaceRoot: ws.Root(), ParentModel: sessionCfg.Model,
+			NewClient: func(model string) (agent.ResponseStreamer, error) {
+				child := sessionCfg
+				child.Model = model
+				return newModelClient(child, tokenProvider)
+			}, Observer: pluginState.hookRun, Hooks: pluginState.hooks,
+		})
+		if err != nil {
+			cleanup()
+			return nil, nil, err
+		}
+		if err := registry.SetSubagentBackend(subagentManager); err != nil {
+			cleanup()
+			return nil, nil, err
+		}
+		watchCtx, stopSkills := context.WithCancel(sessionCtx)
+		catalog.Watch(watchCtx, time.Second)
+		pluginState.agents, pluginState.subagents = agentCatalog, subagentManager
 		extensionsMu.Lock()
 		pluginStates[pluginState] = true
 		extensionsMu.Unlock()
@@ -1186,6 +1240,11 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 				state.hookCfg.Plugins = inventory
 				state.hookCfg.ProjectTrusted = trusted
 				state.hooks.Reconfigure(state.hookCfg)
+				agentCatalog, _ := agents.Discover(agents.Config{
+					WorkspaceRoot: state.root, ProjectTrusted: trusted, Compat: state.hookCfg.Compat, Plugins: inventory,
+				})
+				state.agents = agentCatalog
+				state.subagents.SetCatalog(agentCatalog)
 				state.updateMu.Unlock()
 			}
 			return pluginInventory(), nil
@@ -1208,6 +1267,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		return &agent.Runner{
 			Client: modelClient, Tools: registry, Skills: catalog, PluginInventory: pluginInventory, Logger: logger,
 			HookCatalog: pluginState.hooks, HookPolicy: pluginState.hookRun,
+			ListSubagents: subagentManager.List, KillSubagent: subagentManager.Kill,
 			ReloadHooks: func() error {
 				pluginState.updateMu.Lock()
 				defer pluginState.updateMu.Unlock()

@@ -226,6 +226,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handlePlugins(ctx, incoming)
 		case "x.ai/hooks/list", "x.ai/hooks/action":
 			s.handleHooks(ctx, incoming)
+		case "x.ai/task/list", "x.ai/task/kill":
+			s.handleTasks(ctx, incoming)
 		case "x.ai/marketplace/list", "x.ai/marketplace/action":
 			s.handleMarketplace(ctx, incoming)
 		case "x.ai/fs/list", "x.ai/fs/exists", "x.ai/fs/read_file", "x.ai/fs/write_file", "x.ai/fs/delete_file":

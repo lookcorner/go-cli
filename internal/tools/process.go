@@ -645,7 +645,10 @@ func (t *runTerminalCommandTool) Execute(ctx context.Context, raw json.RawMessag
 	return t.manager.RunForeground(ctx, args.Command, timeout)
 }
 
-type taskOutputTool struct{ manager *ProcessManager }
+type taskOutputTool struct {
+	manager   *ProcessManager
+	subagents *subagentHolder
+}
 
 func (t *taskOutputTool) Definition() api.ToolDefinition {
 	return api.ToolDefinition{
@@ -683,7 +686,22 @@ func (t *taskOutputTool) Execute(ctx context.Context, raw json.RawMessage) (stri
 				remaining = 0
 			}
 		}
-		output, err := t.manager.WaitOutput(ctx, id, remaining)
+		var output string
+		var err error
+		var backend SubagentBackend
+		if t.subagents != nil {
+			backend = t.subagents.get()
+		}
+		if backend != nil && backend.Has(id) {
+			var result SubagentResult
+			result, err = backend.Output(ctx, id, remaining)
+			if err == nil {
+				encoded, _ := json.Marshal(result)
+				output = string(encoded)
+			}
+		} else {
+			output, err = t.manager.WaitOutput(ctx, id, remaining)
+		}
 		if err != nil {
 			return "", err
 		}
@@ -708,7 +726,10 @@ func uniqueTaskIDs(ids []string) []string {
 	return result
 }
 
-type killTaskTool struct{ manager *ProcessManager }
+type killTaskTool struct {
+	manager   *ProcessManager
+	subagents *subagentHolder
+}
 
 func (t *killTaskTool) Definition() api.ToolDefinition {
 	return api.ToolDefinition{
@@ -724,6 +745,20 @@ func (t *killTaskTool) Execute(ctx context.Context, raw json.RawMessage) (string
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return "", fmt.Errorf("decode kill_task arguments: %w", err)
+	}
+	var backend SubagentBackend
+	if t.subagents != nil {
+		backend = t.subagents.get()
+	}
+	if backend != nil && backend.Has(args.TaskID) {
+		outcome, err := backend.Kill(ctx, args.TaskID)
+		if err != nil {
+			return "", err
+		}
+		if outcome == "already_finished" {
+			return fmt.Sprintf("task_id: %s\noutcome: already_exited\nmessage: Subagent had already completed", args.TaskID), nil
+		}
+		return fmt.Sprintf("task_id: %s\noutcome: killed\nmessage: Subagent was terminated successfully", args.TaskID), nil
 	}
 	process, err := t.manager.lookup(args.TaskID)
 	if err != nil {

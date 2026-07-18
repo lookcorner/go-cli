@@ -155,6 +155,9 @@ func ProjectExecutionConfigPresent(cwd string) bool {
 		if hasHookFile(filepath.Join(scope, ".grok", "hooks")) {
 			return true
 		}
+		if hasAgentFile(filepath.Join(scope, ".grok", "agents")) || hasAgentFile(filepath.Join(scope, ".claude", "agents")) {
+			return true
+		}
 		for _, path := range []string{
 			filepath.Join(scope, ".cursor", "hooks.json"),
 			filepath.Join(scope, ".claude", "settings.json"),
@@ -327,6 +330,19 @@ func hasHookFile(path string) bool {
 	}
 	for _, entry := range entries {
 		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".json" && !strings.HasPrefix(entry.Name(), ".") {
+			return true
+		}
+	}
+	return false
+}
+
+func hasAgentFile(path string) bool {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".md" && !strings.HasPrefix(entry.Name(), ".") {
 			return true
 		}
 	}

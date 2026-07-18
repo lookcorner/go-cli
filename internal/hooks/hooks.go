@@ -42,7 +42,6 @@ const (
 	PermissionDenied Event = "permission_denied"
 	SubagentStart    Event = "subagent_start"
 	SubagentStop     Event = "subagent_stop"
-	SubagentEnd      Event = "subagent_end"
 	PreCompact       Event = "pre_compact"
 	PostCompact      Event = "post_compact"
 )
@@ -285,6 +284,7 @@ type Runtime struct {
 	WorkspaceRoot string
 	SessionID     string
 	Model         string
+	SubagentType  string
 }
 
 type DeniedError struct {
@@ -297,7 +297,7 @@ func (e *DeniedError) Error() string {
 }
 
 func (r *Runtime) SessionStarted(ctx context.Context) {
-	r.dispatch(ctx, SessionStart, "", map[string]any{"source": "startup", "modelId": r.Model}, false)
+	r.dispatch(ctx, SessionStart, "", map[string]any{"source": "startup", "modelId": r.Model, "agentType": r.SubagentType}, false)
 }
 
 func (r *Runtime) UserPromptSubmitted(ctx context.Context, prompt string) {
@@ -310,7 +310,7 @@ func (r *Runtime) BeforeTool(ctx context.Context, call api.ToolCall) error {
 		input = json.RawMessage("null")
 	}
 	return r.dispatch(ctx, PreToolUse, call.Name, map[string]any{
-		"toolName": call.Name, "toolUseId": call.CallID, "toolInput": input, "toolInputTruncated": false,
+		"toolName": call.Name, "toolUseId": call.CallID, "toolInput": input, "toolInputTruncated": false, "subagentType": r.SubagentType,
 	}, true)
 }
 
@@ -318,13 +318,13 @@ func (r *Runtime) AfterTool(ctx context.Context, call api.ToolCall, result tools
 	if toolErr != nil {
 		r.dispatch(ctx, PostToolFailure, call.Name, map[string]any{
 			"toolName": call.Name, "toolUseId": call.CallID, "toolInput": json.RawMessage(call.Arguments),
-			"toolInputTruncated": false, "error": toolErr.Error(),
+			"toolInputTruncated": false, "error": toolErr.Error(), "subagentType": r.SubagentType,
 		}, false)
 		return
 	}
 	r.dispatch(ctx, PostToolUse, call.Name, map[string]any{
 		"toolName": call.Name, "toolUseId": call.CallID, "toolInput": json.RawMessage(call.Arguments),
-		"toolResult": result.Output, "toolInputTruncated": false, "toolResultTruncated": false, "isBackgrounded": false,
+		"toolResult": result.Output, "toolInputTruncated": false, "toolResultTruncated": false, "isBackgrounded": false, "subagentType": r.SubagentType,
 	}, false)
 }
 
@@ -342,6 +342,14 @@ func (r *Runtime) BeforeCompact(ctx context.Context, source string) {
 
 func (r *Runtime) AfterCompact(ctx context.Context, source string) {
 	r.dispatch(ctx, PostCompact, "", map[string]any{"source": source}, false)
+}
+
+func (r *Runtime) SubagentStarted(ctx context.Context, id, agentType, description string) {
+	r.dispatch(ctx, SubagentStart, "", map[string]any{"subagentId": id, "subagentType": agentType, "description": description}, false)
+}
+
+func (r *Runtime) SubagentEnded(ctx context.Context, id, agentType, status string, durationMS int64) {
+	r.dispatch(ctx, SubagentStop, "", map[string]any{"subagentId": id, "subagentType": agentType, "description": status, "durationMs": durationMS}, false)
 }
 
 func (r *Runtime) SessionEnded(ctx context.Context, reason string) {
@@ -405,7 +413,7 @@ var eventNames = map[string]Event{
 	"PermissionDenied": PermissionDenied, "permission_denied": PermissionDenied, "permissionDenied": PermissionDenied,
 	"SubagentStart": SubagentStart, "subagent_start": SubagentStart,
 	"SubagentStop": SubagentStop, "subagent_stop": SubagentStop,
-	"SubagentEnd": SubagentEnd, "subagent_end": SubagentEnd,
+	"SubagentEnd": SubagentStop, "subagent_end": SubagentStop,
 	"PreCompact": PreCompact, "pre_compact": PreCompact, "preCompact": PreCompact,
 	"PostCompact": PostCompact, "post_compact": PostCompact, "postCompact": PostCompact,
 	"sessionStart": SessionStart, "preToolUse": PreToolUse, "postToolUse": PostToolUse, "sessionEnd": SessionEnd,
@@ -619,7 +627,7 @@ func lifecycleEvent(event Event) bool {
 }
 
 func pluginEvent(event Event) bool {
-	return event == SessionStart || event == PreToolUse || event == PostToolUse || event == SessionEnd || event == Notification || event == Stop || event == UserPromptSubmit || event == SubagentStart || event == SubagentEnd
+	return event == SessionStart || event == PreToolUse || event == PostToolUse || event == SessionEnd || event == Notification || event == Stop || event == UserPromptSubmit || event == SubagentStart || event == SubagentStop
 }
 
 func run(ctx context.Context, spec Spec, envelope any, workspaceRoot, sessionID string) (string, string, error) {

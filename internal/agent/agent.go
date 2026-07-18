@@ -63,6 +63,8 @@ type Runner struct {
 	PluginInventory         func() []plugin.Plugin
 	HookCatalog             *hooks.Catalog
 	ReloadHooks             func() error
+	ListSubagents           func() []tools.SubagentResult
+	KillSubagent            func(context.Context, string) (string, error)
 	Logger                  EventLogger
 	SessionID               string
 	Model                   string
@@ -91,6 +93,7 @@ type Result struct {
 	Steps         int
 	InputTokens   int
 	ContextWindow int
+	ToolCalls     int
 }
 
 func (r *Runner) Run(ctx context.Context, prompt string) (Result, error) {
@@ -219,6 +222,7 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 		input = make([]api.InputItem, 0, len(streamed.ToolCalls))
 		var imageParts []api.ContentPart
 		for _, call := range streamed.ToolCalls {
+			final.ToolCalls++
 			r.status("tool %s", call.Name)
 			r.log("tool_call", map[string]any{
 				"step": step, "call_id": call.CallID, "name": call.Name,
