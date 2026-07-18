@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -66,7 +67,11 @@ func (t *webSearchTool) Execute(ctx context.Context, raw json.RawMessage) (strin
 	if err != nil {
 		return "", err
 	}
-	request.Header.Set("Authorization", "Bearer "+t.apiKey)
+	apiKey := t.apiKey
+	if refreshed := strings.TrimSpace(os.Getenv("GORK_WEB_SEARCH_API_KEY")); refreshed != "" {
+		apiKey = refreshed
+	}
+	request.Header.Set("Authorization", "Bearer "+apiKey)
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("User-Agent", "gork-go/0.1")
 	client := t.client

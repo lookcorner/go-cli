@@ -10,6 +10,7 @@ import (
 )
 
 func TestWebSearchUsesResponsesToolAndFormatsOutput(t *testing.T) {
+	t.Setenv("GORK_WEB_SEARCH_API_KEY", "")
 	var request map[string]any
 	client := &http.Client{Transport: webRoundTripFunc(func(incoming *http.Request) (*http.Response, error) {
 		if incoming.Method != http.MethodPost || incoming.URL.Path != "/v1/responses" || incoming.Header.Get("Authorization") != "Bearer secret" {
@@ -44,6 +45,7 @@ func TestWebSearchUsesResponsesToolAndFormatsOutput(t *testing.T) {
 }
 
 func TestWebSearchHandlesEmptyAndErrorResponses(t *testing.T) {
+	t.Setenv("GORK_WEB_SEARCH_API_KEY", "")
 	status := http.StatusOK
 	client := &http.Client{Transport: webRoundTripFunc(func(request *http.Request) (*http.Response, error) {
 		body := `{"error":{"message":"search unavailable"}}`
@@ -66,5 +68,28 @@ func TestWebSearchHandlesEmptyAndErrorResponses(t *testing.T) {
 	}
 	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"query":""}`)); err == nil {
 		t.Fatal("expected empty query error")
+	}
+}
+
+func TestWebSearchRefreshesEnvironmentCredentialPerRequest(t *testing.T) {
+	var credentials []string
+	client := &http.Client{Transport: webRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		credentials = append(credentials, request.Header.Get("Authorization"))
+		return &http.Response{
+			StatusCode: http.StatusOK, Status: "200 OK", Header: make(http.Header), Request: request,
+			Body: io.NopCloser(strings.NewReader(`{"output":[]}`)),
+		}, nil
+	})}
+	tool := NewWebSearchTool("https://api.example", "static-key", "model", client)
+	t.Setenv("GORK_WEB_SEARCH_API_KEY", "rotated-1")
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"first"}`)); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GORK_WEB_SEARCH_API_KEY", "rotated-2")
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"second"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(credentials, ",") != "Bearer rotated-1,Bearer rotated-2" {
+		t.Fatalf("unexpected refreshed credentials: %#v", credentials)
 	}
 }
