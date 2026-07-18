@@ -697,66 +697,78 @@ func applyRequirementsFiles(cfg *Config, paths []string) error {
 			}
 			continue
 		}
-		fileFailClosed := false
-		var raw map[string]any
-		if toml.Unmarshal(data, &raw) == nil {
-			fileFailClosed, _ = raw["fail_closed"].(bool)
-			if err := applyVersionOverrides(raw, version.Current); err != nil {
-				if envFailClosed || fileFailClosed {
-					return fmt.Errorf("parse requirements %q: %w", path, err)
-				}
-				continue
-			}
-			data, err = toml.Marshal(raw)
-			if err != nil {
-				return err
-			}
+		if err := applyRequirementsData(cfg, data, path, envFailClosed, envDisablesAPIKey); err != nil {
+			return err
 		}
-		var requirement requirementsFile
-		if err := toml.Unmarshal(data, &requirement); err != nil {
+	}
+	if data := readManagedRequirements(); data != nil {
+		if err := applyRequirementsData(cfg, data, mdmRequirementsSource, envFailClosed, envDisablesAPIKey); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func applyRequirementsData(cfg *Config, data []byte, source string, envFailClosed, envDisablesAPIKey bool) error {
+	fileFailClosed := false
+	var raw map[string]any
+	if toml.Unmarshal(data, &raw) == nil {
+		fileFailClosed, _ = raw["fail_closed"].(bool)
+		if err := applyVersionOverrides(raw, version.Current); err != nil {
 			if envFailClosed || fileFailClosed {
-				return fmt.Errorf("parse requirements %q: %w", path, err)
+				return fmt.Errorf("parse requirements %q: %w", source, err)
 			}
-			continue
+			return nil
 		}
-		if requirement.Permission != nil {
-			cfg.Permission = *requirement.Permission
+		var err error
+		data, err = toml.Marshal(raw)
+		if err != nil {
+			return err
 		}
-		if requirement.Auth != nil {
-			if requirement.Auth.PreferredMethod != nil {
-				cfg.PreferredAuthMethod = strings.ToLower(strings.TrimSpace(*requirement.Auth.PreferredMethod))
-			}
+	}
+	var requirement requirementsFile
+	if err := toml.Unmarshal(data, &requirement); err != nil {
+		if envFailClosed || fileFailClosed {
+			return fmt.Errorf("parse requirements %q: %w", source, err)
 		}
-		if requirement.GrokComConfig != nil {
-			managed := requirement.GrokComConfig
-			if managed.AuthProviderCommand != nil {
-				cfg.AuthProviderCommand = *managed.AuthProviderCommand
-			}
-			if managed.AuthTokenTTL != nil {
-				if *managed.AuthTokenTTL < 0 {
-					return fmt.Errorf("parse requirements %q: auth_token_ttl must not be negative", path)
-				}
-				cfg.AuthTokenTTL = time.Duration(*managed.AuthTokenTTL) * time.Second
-			}
-			if managed.OAuth2 != nil {
-				if managed.OAuth2.PrincipalType != nil {
-					cfg.AuthPrincipalType = strings.TrimSpace(*managed.OAuth2.PrincipalType)
-				}
-				if managed.OAuth2.PrincipalID != nil {
-					cfg.AuthPrincipalID = strings.TrimSpace(*managed.OAuth2.PrincipalID)
-				}
-			}
-			if managed.ForceLoginTeamUUID != nil {
-				teams, configured, err := forceLoginTeams(managed.ForceLoginTeamUUID)
-				if err != nil {
-					return fmt.Errorf("parse requirements %q: %w", path, err)
-				}
-				cfg.ForceLoginTeams, cfg.ForceLoginTeamConfigured = teams, configured
-			}
-			if managed.DisableAPIKeyAuth != nil && !envDisablesAPIKey {
-				cfg.DisableAPIKeyAuth = *managed.DisableAPIKeyAuth
-			}
+		return nil
+	}
+	if requirement.Permission != nil {
+		cfg.Permission = *requirement.Permission
+	}
+	if requirement.Auth != nil && requirement.Auth.PreferredMethod != nil {
+		cfg.PreferredAuthMethod = strings.ToLower(strings.TrimSpace(*requirement.Auth.PreferredMethod))
+	}
+	if requirement.GrokComConfig == nil {
+		return nil
+	}
+	managed := requirement.GrokComConfig
+	if managed.AuthProviderCommand != nil {
+		cfg.AuthProviderCommand = *managed.AuthProviderCommand
+	}
+	if managed.AuthTokenTTL != nil {
+		if *managed.AuthTokenTTL < 0 {
+			return fmt.Errorf("parse requirements %q: auth_token_ttl must not be negative", source)
 		}
+		cfg.AuthTokenTTL = time.Duration(*managed.AuthTokenTTL) * time.Second
+	}
+	if managed.OAuth2 != nil {
+		if managed.OAuth2.PrincipalType != nil {
+			cfg.AuthPrincipalType = strings.TrimSpace(*managed.OAuth2.PrincipalType)
+		}
+		if managed.OAuth2.PrincipalID != nil {
+			cfg.AuthPrincipalID = strings.TrimSpace(*managed.OAuth2.PrincipalID)
+		}
+	}
+	if managed.ForceLoginTeamUUID != nil {
+		teams, configured, err := forceLoginTeams(managed.ForceLoginTeamUUID)
+		if err != nil {
+			return fmt.Errorf("parse requirements %q: %w", source, err)
+		}
+		cfg.ForceLoginTeams, cfg.ForceLoginTeamConfigured = teams, configured
+	}
+	if managed.DisableAPIKeyAuth != nil && !envDisablesAPIKey {
+		cfg.DisableAPIKeyAuth = *managed.DisableAPIKeyAuth
 	}
 	return nil
 }
