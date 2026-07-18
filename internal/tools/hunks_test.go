@@ -312,9 +312,8 @@ func TestHunkTrackerHeadChangeDropsStaleHunkIdentity(t *testing.T) {
 	if err != nil || len(hunks) != 1 || hunks[0].Source != "external" {
 		t.Fatalf("stale identity survived HEAD change: %#v err=%v", hunks, err)
 	}
-	files, err := registry.HunkTracker().Files(context.Background())
-	if err != nil || len(files) != 1 || !files[0].IsAgentFile {
-		t.Fatalf("agent file identity was lost: %#v err=%v", files, err)
+	if !registry.HunkTracker().IsAgentFile("tracked.txt") {
+		t.Fatal("agent file identity was lost")
 	}
 	summary, err := registry.HunkTracker().Summary(context.Background())
 	if err != nil || summary.Stats.AcceptedHunks != 1 || summary.UnattributedPending != 1 {

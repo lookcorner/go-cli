@@ -640,7 +640,7 @@ func (s *Server) handleHunkAction(ctx context.Context, incoming message) {
 		count, err = tracker.AllAction(ctx, params.Action)
 	}
 	if err != nil {
-		s.respond(incoming.ID, map[string]any{"success": false, "error": err.Error(), "affectedCount": 0})
+		s.respond(incoming.ID, map[string]any{"success": false, "error": err.Error()})
 		return
 	}
 	s.respond(incoming.ID, map[string]any{"success": true, "affectedCount": count})
@@ -656,9 +656,8 @@ func (s *Server) handleHunkQuery(ctx context.Context, incoming message) {
 		s.respondError(incoming.ID, -32602, "sessionId is required")
 		return
 	}
-	if params.Source != "" && params.Source != "all" && params.Source != "agent" && params.Source != "external" {
-		s.respondError(incoming.ID, -32602, "source must be agent, external, or all")
-		return
+	if params.Source != "agent" && params.Source != "external" {
+		params.Source = "all"
 	}
 	current := s.lookupSession(params.SessionID)
 	if current == nil || current.runner == nil || current.runner.Tools == nil {
@@ -674,7 +673,11 @@ func (s *Server) handleHunkQuery(ctx context.Context, incoming message) {
 				s.respondError(incoming.ID, -32000, err.Error())
 				return
 			}
-			s.respond(incoming.ID, data)
+			s.respond(incoming.ID, getHunksWire{
+				Hunks:    hunkWires(data.Hunks, tracker, current.cwd, true),
+				Baseline: &data.Baseline, Current: &data.Current,
+				BaselineContent: data.BaselineContent, CurrentContent: data.CurrentContent,
+			})
 			return
 		}
 		hunks, err := tracker.Hunks(ctx, params.Path, params.Source)
@@ -682,12 +685,15 @@ func (s *Server) handleHunkQuery(ctx context.Context, incoming message) {
 			s.respondError(incoming.ID, -32000, err.Error())
 			return
 		}
-		s.respond(incoming.ID, map[string]any{"hunks": hunks})
+		s.respond(incoming.ID, getHunksWire{Hunks: hunkWires(hunks, tracker, current.cwd, false)})
 	case "x.ai/hunk-tracker/get-files":
 		files, err := tracker.Files(ctx)
 		if err != nil {
 			s.respondError(incoming.ID, -32000, err.Error())
 			return
+		}
+		for index := range files {
+			files[index].Path = displayHunkPath(current.cwd, files[index].Path)
 		}
 		s.respond(incoming.ID, map[string]any{"files": files})
 	case "x.ai/hunk-tracker/get-all-file-contents":
@@ -696,6 +702,9 @@ func (s *Server) handleHunkQuery(ctx context.Context, incoming message) {
 			s.respondError(incoming.ID, -32000, err.Error())
 			return
 		}
+		for index := range files {
+			files[index].Path = displayHunkPath(current.cwd, files[index].Path)
+		}
 		s.respond(incoming.ID, map[string]any{"files": files})
 	case "x.ai/hunk-tracker/get-summary":
 		summary, err := tracker.Summary(ctx)
@@ -703,27 +712,11 @@ func (s *Server) handleHunkQuery(ctx context.Context, incoming message) {
 			s.respondError(incoming.ID, -32000, err.Error())
 			return
 		}
-		files, err := tracker.Files(ctx)
-		if err != nil {
-			s.respondError(incoming.ID, -32000, err.Error())
-			return
-		}
-		var hunks, additions, deletions, agentFiles int
-		for _, file := range files {
-			hunks += file.HunkCount
-			additions += file.Additions
-			deletions += file.Deletions
-			if file.IsAgentFile {
-				agentFiles++
-			}
-		}
-		s.respond(incoming.ID, map[string]any{
-			"fileCount": len(files), "hunkCount": hunks, "agentFileCount": agentFiles,
-			"additions": additions, "deletions": deletions,
-			"stats": summary.Stats, "turns": summary.Turns,
-			"filesModified": summary.FilesModified, "filesWithPending": summary.FilesWithPending,
-			"pendingHunks": summary.PendingHunks, "pendingLinesAdded": summary.PendingLinesAdded,
-			"pendingLinesRemoved": summary.PendingLinesRemoved, "unattributedPending": summary.UnattributedPending,
+		s.respond(incoming.ID, hunkSummaryWire{
+			Stats: summary.Stats, Turns: hunkTurnWires(summary.Turns, tracker, current.cwd),
+			FilesModified: summary.FilesModified, FilesWithPending: summary.FilesWithPending,
+			PendingHunks: summary.PendingHunks, PendingLinesAdded: summary.PendingLinesAdded,
+			PendingLinesRemoved: summary.PendingLinesRemoved, UnattributedPending: summary.UnattributedPending,
 		})
 	}
 }

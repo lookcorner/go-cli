@@ -298,10 +298,16 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 	hunkResponse := decodeACP(t, decoder)
 	hunkResult := hunkResponse["result"].(map[string]any)
 	hunks := hunkResult["hunks"].([]any)
-	if len(hunks) != 1 || hunks[0].(map[string]any)["path"] != "made.txt" || hunks[0].(map[string]any)["source"] != "agent" || int(hunks[0].(map[string]any)["promptIndex"].(float64)) != 0 {
+	if len(hunks) != 1 {
 		t.Fatalf("unexpected ACP hunks: %#v", hunkResponse)
 	}
-	if hunkResult["baseline"].(map[string]any)["status"] != "missing" || hunkResult["current"].(map[string]any)["content"] != "ok" {
+	hunk := hunks[0].(map[string]any)
+	hunkSource := hunk["source"].(map[string]any)
+	lineInfo := hunk["lineInfo"].(map[string]any)
+	if hunk["path"] != filepath.Join(root, "made.txt") || hunkSource["type"] != "agentEdit" || int(hunkSource["prompt_index"].(float64)) != 0 || int(lineInfo["newStart"].(float64)) != 1 || hunk["patch"] == nil {
+		t.Fatalf("unexpected ACP hunks: %#v", hunkResponse)
+	}
+	if hunkResult["baseline"].(map[string]any)["status"] != "missing" || hunkResult["current"].(map[string]any)["content"] != "ok" || hunkResult["currentContent"] != "ok" {
 		t.Fatalf("unexpected ACP file content: %#v", hunkResponse)
 	}
 	encodeACP(t, encoder, map[string]any{
@@ -310,8 +316,36 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 	})
 	summaryResult := decodeACP(t, decoder)["result"].(map[string]any)
 	summaryStats := summaryResult["stats"].(map[string]any)
-	if int(summaryResult["fileCount"].(float64)) != 1 || int(summaryResult["pendingHunks"].(float64)) != 1 || len(summaryResult["turns"].([]any)) != 1 || int(summaryStats["acceptedHunks"].(float64)) != 0 {
+	turns := summaryResult["turns"].([]any)
+	if len(turns) != 1 {
 		t.Fatalf("unexpected ACP hunk summary: %#v", summaryResult)
+	}
+	turnHunk := turns[0].(map[string]any)["pendingHunks"].([]any)[0].(map[string]any)
+	if int(summaryResult["filesModified"].(float64)) != 1 || int(summaryResult["pendingHunks"].(float64)) != 1 || int(summaryStats["acceptedHunks"].(float64)) != 0 || turnHunk["path"] != filepath.Join(root, "made.txt") || turnHunk["patch"] != nil {
+		t.Fatalf("unexpected ACP hunk summary: %#v", summaryResult)
+	}
+	if _, exists := summaryResult["fileCount"]; exists {
+		t.Fatalf("ACP hunk summary included non-reference fields: %#v", summaryResult)
+	}
+	encodeACP(t, encoder, map[string]any{
+		"jsonrpc": "2.0", "id": 332, "method": "x.ai/hunk-tracker/get-files",
+		"params": map[string]any{"sessionId": sessionID},
+	})
+	fileItems := decodeACP(t, decoder)["result"].(map[string]any)["files"].([]any)
+	if len(fileItems) != 1 || fileItems[0].(map[string]any)["path"] != filepath.Join(root, "made.txt") || fileItems[0].(map[string]any)["isAgentFile"] != true {
+		t.Fatalf("unexpected ACP hunk files: %#v", fileItems)
+	}
+	encodeACP(t, encoder, map[string]any{
+		"jsonrpc": "2.0", "id": 333, "method": "x.ai/hunk-tracker/get-hunks",
+		"params": map[string]any{"sessionId": sessionID, "source": "future-source"},
+	})
+	allHunkResult := decodeACP(t, decoder)["result"].(map[string]any)
+	allHunks := allHunkResult["hunks"].([]any)
+	if len(allHunks) != 1 || allHunks[0].(map[string]any)["patch"] != nil {
+		t.Fatalf("unexpected unfiltered ACP hunks: %#v", allHunkResult)
+	}
+	if _, exists := allHunkResult["baseline"]; exists {
+		t.Fatalf("all-hunks response included file content: %#v", allHunkResult)
 	}
 	encodeACP(t, encoder, map[string]any{
 		"jsonrpc": "2.0", "id": 34, "method": "x.ai/hunk-tracker/turn-action",
@@ -324,11 +358,14 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 	}
 	encodeACP(t, encoder, map[string]any{
 		"jsonrpc": "2.0", "id": 341, "method": "x.ai/hunk-tracker/hunk-action",
-		"params": map[string]any{"sessionId": sessionID, "hunkId": hunks[0].(map[string]any)["id"], "action": "accept"},
+		"params": map[string]any{"sessionId": sessionID, "hunkId": hunk["id"], "action": "accept"},
 	})
 	alreadyAccepted := decodeACP(t, decoder)["result"].(map[string]any)
-	if alreadyAccepted["success"] != false || int(alreadyAccepted["affectedCount"].(float64)) != 0 {
+	if alreadyAccepted["success"] != false || alreadyAccepted["error"] == nil {
 		t.Fatalf("accepted hunk action did not fail closed: %#v", alreadyAccepted)
+	}
+	if _, exists := alreadyAccepted["affectedCount"]; exists {
+		t.Fatalf("failed action included affectedCount: %#v", alreadyAccepted)
 	}
 	encodeACP(t, encoder, map[string]any{
 		"jsonrpc": "2.0", "id": 35, "method": "x.ai/hunk-tracker/get-hunks",
@@ -344,7 +381,7 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 	})
 	contentResponse := decodeACP(t, decoder)
 	contentFiles := contentResponse["result"].(map[string]any)["files"].([]any)
-	if len(contentFiles) != 1 || contentFiles[0].(map[string]any)["path"] != "made.txt" || contentFiles[0].(map[string]any)["current"].(map[string]any)["content"] != "ok" || contentFiles[0].(map[string]any)["isAgentFile"] != true {
+	if len(contentFiles) != 1 || contentFiles[0].(map[string]any)["path"] != filepath.Join(root, "made.txt") || contentFiles[0].(map[string]any)["current"].(map[string]any)["content"] != "ok" || contentFiles[0].(map[string]any)["isAgentFile"] != true {
 		t.Fatalf("unexpected all-file contents: %#v", contentResponse)
 	}
 	if err := os.WriteFile(filepath.Join(root, "made.txt"), []byte("external"), 0o600); err != nil {

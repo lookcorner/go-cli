@@ -70,7 +70,7 @@ func (t *HunkTracker) AllFileContents(ctx context.Context) ([]FileContentEntry, 
 	for _, path := range paths {
 		entries = append(entries, FileContentEntry{
 			Path: path, Baseline: t.baselineContent(ctx, path), Current: t.currentContent(path),
-			IsAgentFile: t.isAgentFile(path), Staged: staged[path],
+			IsAgentFile: t.IsAgentFile(path), Staged: staged[path],
 		})
 	}
 	return entries, nil

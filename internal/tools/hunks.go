@@ -473,12 +473,13 @@ func (t *HunkTracker) Files(ctx context.Context) ([]HunkFile, error) {
 	for _, hunk := range hunks {
 		item := byPath[hunk.Path]
 		if item == nil {
-			item = &HunkFile{Path: hunk.Path, Staged: staged[hunk.Path], IsAgentFile: t.isAgentFile(hunk.Path)}
+			item = &HunkFile{Path: hunk.Path, Staged: staged[hunk.Path]}
 			byPath[hunk.Path] = item
 		}
 		item.HunkCount++
 		item.Additions += hunk.NewLines
 		item.Deletions += hunk.OldLines
+		item.IsAgentFile = item.IsAgentFile || hunk.Source == "agent"
 	}
 	files := make([]HunkFile, 0, len(byPath))
 	for _, item := range byPath {
@@ -488,7 +489,7 @@ func (t *HunkTracker) Files(ctx context.Context) ([]HunkFile, error) {
 	return files, nil
 }
 
-func (t *HunkTracker) isAgentFile(path string) bool {
+func (t *HunkTracker) IsAgentFile(path string) bool {
 	t.mu.RLock()
 	tracked := t.agentFiles[path]
 	t.mu.RUnlock()
