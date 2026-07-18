@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/lookcorner/go-cli/internal/api"
+	"github.com/lookcorner/go-cli/internal/marketplace"
 	"github.com/lookcorner/go-cli/internal/mcp"
 	"github.com/lookcorner/go-cli/internal/plugin"
 	"github.com/lookcorner/go-cli/internal/session"
@@ -62,6 +63,8 @@ type Runner struct {
 	MCPServers              func() []mcp.ServerConfig
 	UpdateSkills            func(context.Context, func(*skills.Settings)) (skills.Settings, error)
 	UpdatePlugins           func(context.Context, func(*plugin.Settings)) ([]plugin.Plugin, error)
+	MarketplaceList         func() ([]marketplace.ScanResult, error)
+	MarketplaceAction       func(context.Context, marketplace.Action) (marketplace.Outcome, error)
 	lastInputTokens         int
 	pendingSummary          string
 }

@@ -19,7 +19,9 @@ import (
 	"github.com/lookcorner/go-cli/internal/auth"
 	"github.com/lookcorner/go-cli/internal/compat"
 	"github.com/lookcorner/go-cli/internal/config"
+	"github.com/lookcorner/go-cli/internal/marketplace"
 	"github.com/lookcorner/go-cli/internal/mcp"
+	"github.com/lookcorner/go-cli/internal/plugin"
 	"github.com/lookcorner/go-cli/internal/tools"
 	"github.com/lookcorner/go-cli/internal/version"
 	"github.com/lookcorner/go-cli/internal/workspace"
@@ -247,6 +249,18 @@ func TestRunPluginLifecycle(t *testing.T) {
 	cfg, err = config.Load("")
 	if err != nil || len(cfg.Plugins.Enabled) != 0 || !strings.Contains(stdout.String(), "Uninstalled") {
 		t.Fatalf("uninstall output=%q config=%#v err=%v", stdout.String(), cfg.Plugins, err)
+	}
+}
+
+func TestApplyMarketplacePlugins(t *testing.T) {
+	settings := plugin.Settings{Enabled: []string{"old", "keep"}, Disabled: []string{"new"}}
+	applyMarketplacePlugins(&settings, "update", marketplace.Outcome{Plugins: []string{"new"}, RemovedPlugins: []string{"old"}})
+	if strings.Join(settings.Enabled, "|") != "keep|new" || len(settings.Disabled) != 0 {
+		t.Fatalf("updated marketplace settings=%#v", settings)
+	}
+	applyMarketplacePlugins(&settings, "uninstall", marketplace.Outcome{Plugins: []string{"new"}})
+	if strings.Join(settings.Enabled, "|") != "keep" {
+		t.Fatalf("uninstalled marketplace settings=%#v", settings)
 	}
 }
 

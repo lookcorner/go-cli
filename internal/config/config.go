@@ -40,6 +40,7 @@ type Config struct {
 	Compat                      compat.Config              `json:"compat"`
 	Skills                      SkillsConfig               `json:"skills,omitempty"`
 	Plugins                     PluginsConfig              `json:"plugins,omitempty"`
+	Marketplace                 MarketplaceConfig          `json:"marketplace,omitempty"`
 	HTTPTimeout                 time.Duration              `json:"-"`
 	WebSearch                   WebSearchConfig            `json:"web_search,omitempty"`
 	WebFetch                    WebFetchConfig             `json:"web_fetch,omitempty"`
@@ -92,6 +93,17 @@ type PluginsConfig struct {
 	Paths    []string `json:"paths,omitempty" toml:"paths"`
 	Enabled  []string `json:"enabled,omitempty" toml:"enabled"`
 	Disabled []string `json:"disabled,omitempty" toml:"disabled"`
+}
+
+type MarketplaceConfig struct {
+	Sources []MarketplaceSourceConfig `json:"sources,omitempty" toml:"sources"`
+}
+
+type MarketplaceSourceConfig struct {
+	Name   string `json:"name" toml:"name"`
+	Path   string `json:"path,omitempty" toml:"path"`
+	Git    string `json:"git,omitempty" toml:"git"`
+	Branch string `json:"branch,omitempty" toml:"branch"`
 }
 
 type PruningConfig struct {
@@ -155,6 +167,7 @@ type fileConfig struct {
 	Compat              fileCompatConfig           `json:"compat,omitempty" toml:"compat"`
 	Skills              SkillsConfig               `json:"skills,omitempty" toml:"skills"`
 	Plugins             PluginsConfig              `json:"plugins,omitempty" toml:"plugins"`
+	Marketplace         MarketplaceConfig          `json:"marketplace,omitempty" toml:"marketplace"`
 	AuthProviderCommand string                     `json:"auth_provider_command,omitempty" toml:"auth_provider_command"`
 	AuthTokenTTL        int64                      `json:"auth_token_ttl,omitempty" toml:"auth_token_ttl"`
 	GrokComConfig       fileGrokComConfig          `json:"grok_com_config,omitempty" toml:"grok_com_config"`
@@ -411,6 +424,9 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.Plugins.Disabled != nil {
 		cfg.Plugins.Disabled = append([]string(nil), disk.Plugins.Disabled...)
+	}
+	if disk.Marketplace.Sources != nil {
+		cfg.Marketplace.Sources = append([]MarketplaceSourceConfig(nil), disk.Marketplace.Sources...)
 	}
 	if disk.FolderTrust.Enabled != nil {
 		cfg.FolderTrustEnabled = *disk.FolderTrust.Enabled

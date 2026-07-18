@@ -27,6 +27,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/auth"
 	"github.com/lookcorner/go-cli/internal/config"
 	"github.com/lookcorner/go-cli/internal/lsp"
+	"github.com/lookcorner/go-cli/internal/marketplace"
 	"github.com/lookcorner/go-cli/internal/mcp"
 	"github.com/lookcorner/go-cli/internal/plugin"
 	"github.com/lookcorner/go-cli/internal/session"
@@ -1163,14 +1164,31 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			}
 			return pluginInventory(), nil
 		}
+		marketplaceAction := func(actionCtx context.Context, action marketplace.Action) (marketplace.Outcome, error) {
+			outcome, err := marketplace.Execute(opts.configPath, ws.Root(), action)
+			if err != nil || outcome.Status != "success" {
+				return outcome, err
+			}
+			var update func(*plugin.Settings)
+			switch action.Type {
+			case "install", "uninstall", "update":
+				update = func(settings *plugin.Settings) { applyMarketplacePlugins(settings, action.Type, outcome) }
+			default:
+				return outcome, nil
+			}
+			_, err = updatePlugins(actionCtx, update)
+			return outcome, err
+		}
 		return &agent.Runner{
 			Client: modelClient, Tools: registry, Skills: catalog, PluginInventory: pluginInventory, Logger: logger,
 			Model: sessionCfg.Model, Instructions: instructions, MaxSteps: cfg.MaxSteps,
 			TextOutput: textOutput, StatusOutput: statusOutput,
 			ContextWindow: cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,
 			UpdateMCPServers: mcpRuntime.Update, MCPServers: mcpRuntime.Configs,
-			UpdateSkills:  updateSkills,
-			UpdatePlugins: updatePlugins,
+			UpdateSkills:      updateSkills,
+			UpdatePlugins:     updatePlugins,
+			MarketplaceList:   func() ([]marketplace.ScanResult, error) { return marketplace.List(opts.configPath, ws.Root()) },
+			MarketplaceAction: marketplaceAction,
 		}, closeRuntime, nil
 	}}
 	if err := server.Serve(ctx, stdin, stdout); err != nil {
@@ -1178,6 +1196,26 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		return err
 	}
 	return nil
+}
+
+func applyMarketplacePlugins(settings *plugin.Settings, action string, outcome marketplace.Outcome) {
+	removed := outcome.RemovedPlugins
+	if action == "uninstall" {
+		removed = outcome.Plugins
+	}
+	for _, name := range removed {
+		settings.Enabled = slices.DeleteFunc(settings.Enabled, func(value string) bool { return value == name })
+		settings.Disabled = slices.DeleteFunc(settings.Disabled, func(value string) bool { return value == name })
+	}
+	if action == "uninstall" {
+		return
+	}
+	for _, name := range outcome.Plugins {
+		if !slices.Contains(settings.Enabled, name) {
+			settings.Enabled = append(settings.Enabled, name)
+		}
+		settings.Disabled = slices.DeleteFunc(settings.Disabled, func(value string) bool { return value == name })
+	}
 }
 
 func cloneSkillsConfig(source config.SkillsConfig) config.SkillsConfig {

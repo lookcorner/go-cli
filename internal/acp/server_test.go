@@ -18,6 +18,7 @@ import (
 
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/api"
+	"github.com/lookcorner/go-cli/internal/marketplace"
 	mcppkg "github.com/lookcorner/go-cli/internal/mcp"
 	"github.com/lookcorner/go-cli/internal/plugin"
 	sessionlog "github.com/lookcorner/go-cli/internal/session"
@@ -931,6 +932,40 @@ func TestPluginActionRejectsRunningSession(t *testing.T) {
 	outcome := response["result"].(map[string]any)["result"].(map[string]any)
 	if called || outcome["status"] != "validation_error" || !strings.Contains(outcome["message"].(string), "prompt is running") {
 		t.Fatalf("unexpected running-session outcome=%#v called=%v", outcome, called)
+	}
+}
+
+func TestMarketplaceExtensionsWireContract(t *testing.T) {
+	called := false
+	runner := &agent.Runner{
+		MarketplaceList: func() ([]marketplace.ScanResult, error) {
+			return []marketplace.ScanResult{{SourceName: "Local", SourceKind: "local", SourceURLOrPath: "/catalog", Plugins: []marketplace.Entry{{Name: "demo", RelativePath: "plugins/demo", InstallStatus: "not_installed"}}}}, nil
+		},
+		MarketplaceAction: func(_ context.Context, action marketplace.Action) (marketplace.Outcome, error) {
+			called = action.Type == "install" && action.SourceURLOrPath == "/catalog" && action.PluginRelativePath == "plugins/demo"
+			return marketplace.Outcome{Status: "success", Message: "installed"}, nil
+		},
+	}
+	current := &session{id: "marketplace", runner: runner}
+	var output bytes.Buffer
+	server := &Server{output: &output, sessions: map[string]*session{"marketplace": current}}
+	server.handleMarketplace(context.Background(), message{ID: json.RawMessage("1"), Method: "x.ai/marketplace/list", Params: json.RawMessage(`{"sessionId":"marketplace"}`)})
+	var response map[string]any
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	sources := response["result"].(map[string]any)["result"].(map[string]any)["sources"].([]any)
+	if len(sources) != 1 {
+		t.Fatalf("marketplace list=%#v", response)
+	}
+	output.Reset()
+	server.handleMarketplace(context.Background(), message{ID: json.RawMessage("2"), Method: "x.ai/marketplace/action", Params: json.RawMessage(`{"sessionId":"marketplace","action":{"type":"install","sourceUrlOrPath":"/catalog","pluginRelativePath":"plugins/demo"}}`)})
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	outcome := response["result"].(map[string]any)["result"].(map[string]any)
+	if !called || outcome["status"] != "success" || outcome["requiresRestart"] != false {
+		t.Fatalf("marketplace action=%#v called=%v", response, called)
 	}
 }
 

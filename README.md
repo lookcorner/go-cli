@@ -656,8 +656,7 @@ require a session restart. `install`, `update`, and confirmed `uninstall`
 actions manage isolated local/Git snapshots under
 `$GROK_HOME/installed-plugins`, persist an atomic registry, and refresh live
 skill/MCP/LSP components. Multi-plugin repositories require explicit uninstall
-confirmation. Plugin hooks, agents, and marketplace lifecycle are not yet
-implemented.
+confirmation. Plugin hooks and agents are not yet implemented.
 
 The same direct-install lifecycle is available outside ACP:
 
@@ -673,6 +672,27 @@ Local installs are full snapshots rather than symlinks. New sessions and
 explicit plugin reloads safely recopy the source; uninstall removes plugin data
 unless `--keep-data` is used. Git branches update with fast-forward-only pulls,
 while version tags and commit SHA installs remain pinned.
+
+Marketplace sources use the reference TOML shape:
+
+```toml
+[[marketplace.sources]]
+name = "Team plugins"
+path = "~/src/team-marketplace"
+
+[[marketplace.sources]]
+name = "Shared catalog"
+git = "https://github.com/example/plugin-marketplace.git"
+branch = "main"
+```
+
+ACP `x.ai/marketplace/list` scans `.grok-plugin/marketplace.json` (with
+`.claude-plugin` compatibility) or falls back to `plugins/*`. The corresponding
+action endpoint refreshes/adds/removes sources and installs, transactionally
+updates, or uninstalls catalog plugins. Git sources use a persistent
+`$GROK_HOME/marketplace-cache`; remote index entries may pin a tag or commit SHA.
+Official-source auto-registration, Claude known-marketplace imports, component
+catalog details, and marketplace CLI commands are not yet implemented.
 
 The `[skills]` config accepts additional directories or individual `SKILL.md`
 files. Paths support `~`; relative paths resolve from the workspace. `ignore`

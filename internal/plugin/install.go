@@ -32,11 +32,18 @@ type RepoPlugin struct {
 }
 
 type InstalledRepo struct {
-	Kind        InstallKind           `json:"kind"`
-	InstalledAt string                `json:"installed_at"`
-	UpdatedAt   string                `json:"updated_at"`
-	Path        string                `json:"path"`
-	Plugins     map[string]RepoPlugin `json:"plugins"`
+	Kind        InstallKind            `json:"kind"`
+	InstalledAt string                 `json:"installed_at"`
+	UpdatedAt   string                 `json:"updated_at"`
+	Path        string                 `json:"path"`
+	Plugins     map[string]RepoPlugin  `json:"plugins"`
+	Marketplace *MarketplaceProvenance `json:"marketplace,omitempty"`
+}
+
+type MarketplaceProvenance struct {
+	SourceURLOrPath   string `json:"source_url_or_path"`
+	SourceDisplayName string `json:"source_display_name"`
+	PluginSubdir      string `json:"plugin_subdir"`
 }
 
 type InstallRegistry struct {
@@ -46,8 +53,9 @@ type InstallRegistry struct {
 }
 
 type InstallOutcome struct {
-	RepoKey string
-	Plugins []string
+	RepoKey         string
+	Plugins         []string
+	PreviousPlugins []string
 }
 
 type UninstallOutcome struct {
@@ -235,6 +243,75 @@ func RefreshLocal() error {
 	return failures
 }
 
+func ReplaceMarketplace(repoKey, source, cwd string, provenance MarketplaceProvenance) (InstallOutcome, error) {
+	installMu.Lock()
+	defer installMu.Unlock()
+	registry, err := LoadInstallRegistry()
+	if err != nil {
+		return InstallOutcome{}, err
+	}
+	previous, ok := registry.Repos[repoKey]
+	if !ok || previous.Marketplace == nil {
+		return InstallOutcome{}, fmt.Errorf("marketplace plugin repo %q not found", repoKey)
+	}
+	parsed, err := parseInstallSource(source, cwd)
+	if err != nil {
+		return InstallOutcome{}, err
+	}
+	stagingRoot, err := os.MkdirTemp(registry.dir, ".marketplace-update-*")
+	if err != nil {
+		return InstallOutcome{}, err
+	}
+	defer os.RemoveAll(stagingRoot)
+	staging := filepath.Join(stagingRoot, "repo")
+	if parsed.kind == "git" {
+		err = clonePluginRepo(parsed, staging)
+	} else {
+		err = copyPluginDir(parsed.value, staging)
+	}
+	if err != nil {
+		return InstallOutcome{}, err
+	}
+	discovered, err := discoverInstalledPlugins(staging, parsed.subdir)
+	if err != nil || len(discovered) == 0 {
+		if err == nil {
+			err = errors.New("no plugins found in marketplace update")
+		}
+		return InstallOutcome{}, err
+	}
+	kind := InstallKind{Type: parsed.kind, Subdir: parsed.subdir}
+	if parsed.kind == "git" {
+		kind.URL, kind.Ref = parsed.value, parsed.ref
+		kind.Commit, _ = gitOutput(staging, "rev-parse", "HEAD")
+	} else {
+		kind.SourcePath = parsed.value
+	}
+	backup := previous.Path + ".old"
+	_ = os.RemoveAll(backup)
+	if err := os.Rename(previous.Path, backup); err != nil {
+		return InstallOutcome{}, err
+	}
+	if err := os.Rename(staging, previous.Path); err != nil {
+		_ = os.Rename(backup, previous.Path)
+		return InstallOutcome{}, err
+	}
+	next := InstalledRepo{
+		Kind: kind, InstalledAt: previous.InstalledAt, UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Path: previous.Path, Plugins: discovered, Marketplace: &provenance,
+	}
+	registry.Repos[repoKey] = next
+	if err := registry.Save(); err != nil {
+		_ = os.RemoveAll(previous.Path)
+		_ = os.Rename(backup, previous.Path)
+		registry.Repos[repoKey] = previous
+		return InstallOutcome{}, err
+	}
+	_ = os.RemoveAll(backup)
+	return InstallOutcome{
+		RepoKey: repoKey, Plugins: sortedPluginNames(discovered), PreviousPlugins: sortedPluginNames(previous.Plugins),
+	}, nil
+}
+
 func LoadInstallRegistry() (*InstallRegistry, error) {
 	dir, err := installDir()
 	if err != nil {
@@ -305,6 +382,41 @@ func (r *InstallRegistry) findPlugin(name string) (string, InstalledRepo, bool) 
 		}
 	}
 	return "", InstalledRepo{}, false
+}
+
+func SetMarketplace(repoKey, pluginName string, provenance MarketplaceProvenance) error {
+	installMu.Lock()
+	defer installMu.Unlock()
+	registry, err := LoadInstallRegistry()
+	if err != nil {
+		return err
+	}
+	repo, ok := registry.Repos[repoKey]
+	if !ok {
+		return fmt.Errorf("plugin repo %q not found", repoKey)
+	}
+	if _, ok := repo.Plugins[pluginName]; !ok {
+		return fmt.Errorf("plugin %q not found in repo %q", pluginName, repoKey)
+	}
+	repo.Marketplace = &provenance
+	registry.Repos[repoKey] = repo
+	return registry.Save()
+}
+
+func FindMarketplace(source, relativePath string) (string, string, bool, error) {
+	registry, err := LoadInstallRegistry()
+	if err != nil {
+		return "", "", false, err
+	}
+	for key, repo := range registry.Repos {
+		if repo.Marketplace == nil || repo.Marketplace.SourceURLOrPath != source || repo.Marketplace.PluginSubdir != relativePath {
+			continue
+		}
+		for name := range repo.Plugins {
+			return key, name, true, nil
+		}
+	}
+	return "", "", false, nil
 }
 
 func updateInstalledRepo(key string, repo *InstalledRepo, installRoot string) (string, error) {

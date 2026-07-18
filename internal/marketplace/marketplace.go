@@ -1,0 +1,545 @@
+package marketplace
+
+import (
+	"crypto/sha256"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/lookcorner/go-cli/internal/config"
+	"github.com/lookcorner/go-cli/internal/plugin"
+)
+
+type Source struct {
+	Name   string
+	Path   string
+	Git    string
+	Branch string
+}
+
+type Entry struct {
+	Name             string   `json:"name"`
+	Version          string   `json:"version,omitempty"`
+	Description      string   `json:"description,omitempty"`
+	Category         string   `json:"category,omitempty"`
+	Author           string   `json:"author,omitempty"`
+	Tags             []string `json:"tags,omitempty"`
+	RelativePath     string   `json:"relativePath"`
+	SkillCount       int      `json:"skillCount"`
+	HasHooks         bool     `json:"hasHooks"`
+	HasAgents        bool     `json:"hasAgents"`
+	HasMCP           bool     `json:"hasMcp"`
+	InstallStatus    string   `json:"installStatus"`
+	InstalledVersion string   `json:"installedVersion,omitempty"`
+	RemoteURL        string   `json:"remoteUrl,omitempty"`
+	RemoteRef        string   `json:"remoteRef,omitempty"`
+	RemoteSHA        string   `json:"remoteSha,omitempty"`
+	RemoteSubdir     string   `json:"remoteSubdir,omitempty"`
+}
+
+type ScanResult struct {
+	SourceName      string  `json:"sourceName"`
+	SourceKind      string  `json:"sourceKind"`
+	SourceURLOrPath string  `json:"sourceUrlOrPath"`
+	Plugins         []Entry `json:"plugins"`
+	Error           string  `json:"error,omitempty"`
+}
+
+type Action struct {
+	Type               string
+	SourceURLOrPath    string
+	PluginRelativePath string
+}
+
+type Outcome struct {
+	Status          string   `json:"status"`
+	Message         string   `json:"message"`
+	RequiresReload  bool     `json:"requiresReload"`
+	RequiresRestart bool     `json:"requiresRestart"`
+	Plugins         []string `json:"-"`
+	RemovedPlugins  []string `json:"-"`
+}
+
+func Sources(configPath, cwd string) ([]Source, error) {
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]Source, 0, len(cfg.Marketplace.Sources))
+	for _, item := range cfg.Marketplace.Sources {
+		if item.Name == "" || item.Path == "" && item.Git == "" {
+			continue
+		}
+		path := resolveSourcePath(item.Path, cwd)
+		result = append(result, Source{Name: item.Name, Path: path, Git: item.Git, Branch: item.Branch})
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
+	return result, nil
+}
+
+func List(configPath, cwd string) ([]ScanResult, error) {
+	sources, err := Sources(configPath, cwd)
+	if err != nil {
+		return nil, err
+	}
+	results := make([]ScanResult, 0, len(sources))
+	for _, source := range sources {
+		root, err := sourceRoot(source, false)
+		result := ScanResult{SourceName: source.Name, SourceKind: sourceKind(source), SourceURLOrPath: sourceIdentity(source)}
+		if err != nil {
+			result.Error = err.Error()
+			results = append(results, result)
+			continue
+		}
+		result.Plugins = scanRoot(root, sourceIdentity(source))
+		results = append(results, result)
+	}
+	return results, nil
+}
+
+func Execute(configPath, cwd string, action Action) (Outcome, error) {
+	sources, err := Sources(configPath, cwd)
+	if err != nil {
+		return Outcome{}, err
+	}
+	switch action.Type {
+	case "refresh":
+		for _, source := range sources {
+			if action.SourceURLOrPath != "" && sourceIdentity(source) != action.SourceURLOrPath {
+				continue
+			}
+			if _, err := sourceRoot(source, true); err != nil {
+				return Outcome{Status: "internal_error", Message: err.Error()}, nil
+			}
+		}
+		return Outcome{Status: "success", Message: "Marketplace sources refreshed."}, nil
+	case "add_source":
+		return addSource(configPath, cwd, action), nil
+	case "remove_source":
+		return removeSource(configPath, cwd, action), nil
+	case "install":
+		return installEntry(configPath, cwd, sources, action)
+	case "update":
+		return updateEntry(sources, action)
+	case "uninstall":
+		return uninstallEntry(sources, action)
+	default:
+		return Outcome{Status: "validation_error", Message: "Unsupported marketplace action."}, nil
+	}
+}
+
+func installEntry(configPath, cwd string, sources []Source, action Action) (Outcome, error) {
+	source, root, entry, err := resolveEntry(sources, action)
+	if err != nil {
+		return Outcome{Status: "not_found", Message: err.Error()}, nil
+	}
+	installSource, err := entryInstallSource(root, entry, action.PluginRelativePath)
+	if err != nil {
+		return Outcome{Status: "validation_error", Message: err.Error()}, nil
+	}
+	installed, err := plugin.Install(installSource, cwd)
+	if err != nil {
+		return Outcome{Status: "internal_error", Message: "Install failed: " + err.Error()}, nil
+	}
+	if err := plugin.SetMarketplace(installed.RepoKey, installed.Plugins[0], plugin.MarketplaceProvenance{
+		SourceURLOrPath: sourceIdentity(source), SourceDisplayName: source.Name, PluginSubdir: action.PluginRelativePath,
+	}); err != nil {
+		_, _ = plugin.Uninstall(installed.Plugins[0], true, false)
+		return Outcome{Status: "internal_error", Message: err.Error()}, nil
+	}
+	return Outcome{Status: "success", Message: fmt.Sprintf("Installed %s from %s.", action.PluginRelativePath, source.Name), Plugins: installed.Plugins}, nil
+}
+
+func updateEntry(sources []Source, action Action) (Outcome, error) {
+	key, _, ok, err := plugin.FindMarketplace(action.SourceURLOrPath, action.PluginRelativePath)
+	if err != nil {
+		return Outcome{}, err
+	}
+	if !ok {
+		return Outcome{Status: "not_found", Message: "Marketplace plugin is not installed."}, nil
+	}
+	source, root, entry, resolveErr := resolveEntry(sources, action)
+	if resolveErr != nil {
+		return Outcome{Status: "not_found", Message: "Marketplace plugin is not found in the source."}, nil
+	}
+	installSource, err := entryInstallSource(root, entry, action.PluginRelativePath)
+	if err != nil {
+		return Outcome{Status: "validation_error", Message: err.Error()}, nil
+	}
+	replaced, err := plugin.ReplaceMarketplace(key, installSource, root, plugin.MarketplaceProvenance{
+		SourceURLOrPath: sourceIdentity(source), SourceDisplayName: source.Name, PluginSubdir: action.PluginRelativePath,
+	})
+	if err != nil {
+		return Outcome{Status: "internal_error", Message: err.Error()}, nil
+	}
+	return Outcome{
+		Status: "success", Message: fmt.Sprintf("Updated %s.", action.PluginRelativePath),
+		Plugins: replaced.Plugins, RemovedPlugins: replaced.PreviousPlugins,
+	}, nil
+}
+
+func uninstallEntry(_ []Source, action Action) (Outcome, error) {
+	_, name, ok, err := plugin.FindMarketplace(action.SourceURLOrPath, action.PluginRelativePath)
+	if err != nil {
+		return Outcome{}, err
+	}
+	if !ok {
+		return Outcome{Status: "not_found", Message: "Marketplace plugin is not installed."}, nil
+	}
+	removed, err := plugin.Uninstall(name, true, false)
+	if err != nil {
+		return Outcome{Status: "internal_error", Message: err.Error()}, nil
+	}
+	return Outcome{Status: "success", Message: fmt.Sprintf("Uninstalled %s.", action.PluginRelativePath), Plugins: removed.Plugins}, nil
+}
+
+func resolveEntry(sources []Source, action Action) (Source, string, Entry, error) {
+	for _, source := range sources {
+		if sourceIdentity(source) != action.SourceURLOrPath {
+			continue
+		}
+		root, err := sourceRoot(source, false)
+		if err != nil {
+			return Source{}, "", Entry{}, err
+		}
+		for _, entry := range scanRoot(root, sourceIdentity(source)) {
+			if entry.RelativePath == action.PluginRelativePath {
+				return source, root, entry, nil
+			}
+		}
+		return Source{}, "", Entry{}, fmt.Errorf("marketplace plugin %q not found", action.PluginRelativePath)
+	}
+	return Source{}, "", Entry{}, fmt.Errorf("marketplace source %q not found", action.SourceURLOrPath)
+}
+
+func entryInstallSource(root string, entry Entry, relativePath string) (string, error) {
+	if entry.RemoteURL != "" {
+		source := entry.RemoteURL
+		if entry.RemoteSHA != "" {
+			source += "@" + entry.RemoteSHA
+		} else if entry.RemoteRef != "" {
+			source += "@" + entry.RemoteRef
+		}
+		if entry.RemoteSubdir != "" {
+			source += "#" + entry.RemoteSubdir
+		}
+		return source, nil
+	}
+	return safeJoin(root, relativePath)
+}
+
+func addSource(configPath, cwd string, action Action) Outcome {
+	if action.SourceURLOrPath == "" {
+		return Outcome{Status: "validation_error", Message: "Marketplace source is required."}
+	}
+	value := action.SourceURLOrPath
+	entry := config.MarketplaceSourceConfig{Name: sourceName(value)}
+	if strings.Contains(value, "://") || strings.HasPrefix(value, "git@") || githubShorthand(value) {
+		if githubShorthand(value) {
+			value = "https://github.com/" + value
+		}
+		entry.Git = value
+	} else {
+		if !filepath.IsAbs(value) {
+			value = filepath.Join(cwd, value)
+		}
+		entry.Path = filepath.Clean(value)
+	}
+	if err := config.UpdateMarketplace(configPath, func(settings *config.MarketplaceConfig) {
+		for _, existing := range settings.Sources {
+			if entry.Path != "" && existing.Path == entry.Path || entry.Git != "" && existing.Git == entry.Git {
+				return
+			}
+		}
+		settings.Sources = append(settings.Sources, entry)
+	}); err != nil {
+		return Outcome{Status: "internal_error", Message: err.Error()}
+	}
+	return Outcome{Status: "success", Message: "Marketplace source added."}
+}
+
+func removeSource(configPath, cwd string, action Action) Outcome {
+	if err := config.UpdateMarketplace(configPath, func(settings *config.MarketplaceConfig) {
+		filtered := settings.Sources[:0]
+		for _, item := range settings.Sources {
+			if resolveSourcePath(item.Path, cwd) != action.SourceURLOrPath && item.Git != action.SourceURLOrPath {
+				filtered = append(filtered, item)
+			}
+		}
+		settings.Sources = filtered
+	}); err != nil {
+		return Outcome{Status: "internal_error", Message: err.Error()}
+	}
+	return Outcome{Status: "success", Message: "Marketplace source removed."}
+}
+
+func sourceIdentity(source Source) string {
+	if source.Git != "" {
+		return source.Git
+	}
+	return source.Path
+}
+
+func sourceKind(source Source) string {
+	if source.Git != "" {
+		return "git"
+	}
+	return "local"
+}
+
+func sourceRoot(source Source, force bool) (string, error) {
+	if source.Git != "" {
+		home, err := marketplaceHome()
+		if err != nil {
+			return "", err
+		}
+		digest := sha256.Sum256([]byte(source.Git + "\x00" + source.Branch))
+		cache := filepath.Join(home, "marketplace-cache", fmt.Sprintf("%x", digest[:4]))
+		marker := filepath.Join(cache, ".gork-marketplace-sync")
+		if !force {
+			if info, err := os.Stat(marker); err == nil && time.Since(info.ModTime()) < 5*time.Minute {
+				return cache, nil
+			}
+		}
+		if !isDir(cache) {
+			args := []string{"clone", "--depth", "1"}
+			if source.Branch != "" {
+				args = append(args, "--branch", source.Branch)
+			}
+			args = append(args, "--", source.Git, cache)
+			if output, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+				return "", fmt.Errorf("git marketplace clone failed: %s", strings.TrimSpace(string(output)))
+			}
+		} else {
+			command := exec.Command("git", "pull", "--ff-only")
+			command.Dir = cache
+			if output, err := command.CombinedOutput(); err != nil {
+				return "", fmt.Errorf("git marketplace refresh failed: %s", strings.TrimSpace(string(output)))
+			}
+		}
+		_ = os.WriteFile(marker, []byte(time.Now().UTC().Format(time.RFC3339Nano)), 0o600)
+		return cache, nil
+	}
+	if !isDir(source.Path) {
+		return "", fmt.Errorf("marketplace path %q is not a directory", source.Path)
+	}
+	return source.Path, nil
+}
+
+type indexFile struct {
+	Plugins []indexEntry `json:"plugins"`
+}
+
+type indexEntry struct {
+	Name        string          `json:"name"`
+	Version     string          `json:"version"`
+	Description string          `json:"description"`
+	Category    string          `json:"category"`
+	Author      json.RawMessage `json:"author"`
+	Tags        []string        `json:"tags"`
+	Source      json.RawMessage `json:"source"`
+}
+
+func scanRoot(root, sourceIdentity string) []Entry {
+	registry, _ := plugin.LoadInstallRegistry()
+	for _, indexPath := range []string{
+		filepath.Join(root, ".grok-plugin", "marketplace.json"),
+		filepath.Join(root, ".claude-plugin", "marketplace.json"),
+	} {
+		data, err := os.ReadFile(indexPath)
+		if err != nil {
+			continue
+		}
+		var index indexFile
+		if json.Unmarshal(data, &index) == nil && len(index.Plugins) > 0 {
+			entries := make([]Entry, 0, len(index.Plugins))
+			for _, item := range index.Plugins {
+				path := ""
+				var source struct {
+					Path string `json:"path"`
+					URL  string `json:"url"`
+					Ref  string `json:"ref"`
+					SHA  string `json:"sha"`
+				}
+				if len(item.Source) > 0 {
+					var direct string
+					if json.Unmarshal(item.Source, &direct) == nil {
+						source.Path = direct
+					} else {
+						_ = json.Unmarshal(item.Source, &source)
+					}
+					path = source.Path
+				}
+				entry := Entry{Name: item.Name, Version: item.Version, Description: item.Description, Category: item.Category, Author: indexAuthor(item.Author), Tags: item.Tags, RelativePath: path}
+				if entry.RelativePath == "" {
+					if source.URL != "" {
+						entry.RelativePath = item.Name
+					} else {
+						entry.RelativePath = "plugins/" + item.Name
+					}
+				}
+				entry.RemoteURL, entry.RemoteRef, entry.RemoteSHA = source.URL, source.Ref, source.SHA
+				if source.URL != "" {
+					entry.RemoteSubdir = source.Path
+				}
+				if entry.RemoteURL == "" {
+					pluginRoot, err := safeJoin(root, entry.RelativePath)
+					if err != nil || !isDir(pluginRoot) {
+						continue
+					}
+					enrichEntry(&entry, pluginRoot)
+				}
+				entries = append(entries, withInstallStatus(entry, sourceIdentity, registry))
+			}
+			return entries
+		}
+	}
+	pluginsRoot := filepath.Join(root, "plugins")
+	entries, _ := os.ReadDir(pluginsRoot)
+	result := make([]Entry, 0, len(entries))
+	for _, item := range entries {
+		if !item.IsDir() || strings.HasPrefix(item.Name(), ".") {
+			continue
+		}
+		entry := Entry{Name: item.Name(), RelativePath: filepath.ToSlash(filepath.Join("plugins", item.Name()))}
+		enrichEntry(&entry, filepath.Join(pluginsRoot, item.Name()))
+		result = append(result, withInstallStatus(entry, sourceIdentity, registry))
+	}
+	defaultSkills := filepath.Join(root, "default-skills")
+	if count := countSkills(defaultSkills); count > 0 {
+		result = append(result, withInstallStatus(Entry{
+			Name: "default-skills", RelativePath: "default-skills", SkillCount: count,
+		}, sourceIdentity, registry))
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].RelativePath < result[j].RelativePath })
+	return result
+}
+
+func enrichEntry(entry *Entry, root string) {
+	var manifest struct {
+		Name        string `json:"name"`
+		Version     string `json:"version"`
+		Description string `json:"description"`
+	}
+	if data, err := os.ReadFile(filepath.Join(root, "plugin.json")); err == nil && json.Unmarshal(data, &manifest) == nil {
+		if manifest.Name != "" {
+			entry.Name = manifest.Name
+		}
+		entry.Version, entry.Description = manifest.Version, manifest.Description
+	}
+	entry.SkillCount = countSkills(filepath.Join(root, "skills"))
+	entry.HasHooks = isFile(filepath.Join(root, "hooks", "hooks.json"))
+	entry.HasAgents = isDir(filepath.Join(root, "agents"))
+	entry.HasMCP = isFile(filepath.Join(root, ".mcp.json"))
+}
+
+func withInstallStatus(entry Entry, sourceIdentity string, registry *plugin.InstallRegistry) Entry {
+	if registry == nil {
+		return entry
+	}
+	for _, repo := range registry.Repos {
+		if repo.Marketplace != nil && repo.Marketplace.SourceURLOrPath == sourceIdentity && repo.Marketplace.PluginSubdir == entry.RelativePath {
+			entry.InstallStatus = "installed"
+			for _, installed := range repo.Plugins {
+				entry.InstalledVersion = installed.Version
+				break
+			}
+			return entry
+		}
+	}
+	entry.InstallStatus = "not_installed"
+	return entry
+}
+
+func safeJoin(root, relative string) (string, error) {
+	if relative == "" || filepath.IsAbs(relative) {
+		return "", errors.New("marketplace plugin path is invalid")
+	}
+	candidate := filepath.Clean(filepath.Join(root, filepath.FromSlash(relative)))
+	if !pathWithin(root, candidate) {
+		return "", errors.New("marketplace plugin path escapes source")
+	}
+	return candidate, nil
+}
+
+func countSkills(root string) int {
+	entries, _ := os.ReadDir(root)
+	count := 0
+	for _, item := range entries {
+		if item.IsDir() && isFile(filepath.Join(root, item.Name(), "SKILL.md")) {
+			count++
+		}
+	}
+	return count
+}
+
+func isDir(path string) bool { info, err := os.Stat(path); return err == nil && info.IsDir() }
+func isFile(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
+}
+func pathWithin(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func githubShorthand(value string) bool {
+	if strings.HasPrefix(value, ".") || strings.HasPrefix(value, "/") || strings.HasPrefix(value, "~") {
+		return false
+	}
+	parts := strings.Split(value, "/")
+	return len(parts) == 2 && parts[0] != "" && parts[1] != ""
+}
+
+func sourceName(value string) string {
+	value = strings.TrimSuffix(strings.TrimRight(value, "/"), ".git")
+	if index := strings.LastIndexAny(value, "/:"); index >= 0 {
+		value = value[index+1:]
+	}
+	if value == "" {
+		return "marketplace"
+	}
+	return value
+}
+
+func resolveSourcePath(path, cwd string) string {
+	if path == "" {
+		return ""
+	}
+	if strings.HasPrefix(path, "~/") {
+		home, _ := os.UserHomeDir()
+		path = filepath.Join(home, path[2:])
+	} else if !filepath.IsAbs(path) {
+		path = filepath.Join(cwd, path)
+	}
+	return filepath.Clean(path)
+}
+
+func marketplaceHome() (string, error) {
+	if home := strings.TrimSpace(os.Getenv("GROK_HOME")); home != "" {
+		return filepath.Clean(home), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".grok"), nil
+}
+
+func indexAuthor(raw json.RawMessage) string {
+	var direct string
+	if json.Unmarshal(raw, &direct) == nil {
+		return direct
+	}
+	var author struct {
+		Name string `json:"name"`
+	}
+	_ = json.Unmarshal(raw, &author)
+	return author.Name
+}
