@@ -92,24 +92,26 @@ type response struct {
 }
 
 type Client struct {
-	name             string
-	cmd              *exec.Cmd
-	stdin            io.WriteCloser
-	httpURL          string
-	ssePostURL       string
-	sseStream        io.ReadCloser
-	httpClient       *http.Client
-	headers          map[string]string
-	sessionID        string
-	selectedProtocol string
-	notification     func(string)
-	sampling         SamplingHandler
-	pending          map[string]chan response
-	nextID           atomic.Uint64
-	mu               sync.Mutex
-	writeMu          sync.Mutex
-	done             chan struct{}
-	once             sync.Once
+	name              string
+	cmd               *exec.Cmd
+	stdin             io.WriteCloser
+	httpURL           string
+	ssePostURL        string
+	sseStream         io.ReadCloser
+	httpClient        *http.Client
+	headers           map[string]string
+	sessionID         string
+	selectedProtocol  string
+	resourceSubscribe bool
+	notification      func(string)
+	resourceUpdate    func(ResourceUpdate)
+	sampling          SamplingHandler
+	pending           map[string]chan response
+	nextID            atomic.Uint64
+	mu                sync.Mutex
+	writeMu           sync.Mutex
+	done              chan struct{}
+	once              sync.Once
 }
 
 type InitializeResult struct {
@@ -169,6 +171,10 @@ type ResourceContents struct {
 	MIMEType string `json:"mimeType,omitempty"`
 	Text     string `json:"text,omitempty"`
 	Blob     string `json:"blob,omitempty"`
+}
+
+type ResourceUpdate struct {
+	URI string `json:"uri"`
 }
 
 type PromptInfo struct {
@@ -239,6 +245,7 @@ func Start(ctx context.Context, cfg ProcessConfig) (*Client, InitializeResult, e
 		_ = client.Close()
 		return nil, InitializeResult{}, fmt.Errorf("MCP server %q selected unsupported protocol %q", cfg.Name, initialized.ProtocolVersion)
 	}
+	client.resourceSubscribe = initialized.Capabilities.Resources != nil && initialized.Capabilities.Resources.Subscribe
 	if err := client.notify("notifications/initialized", nil); err != nil {
 		_ = client.Close()
 		return nil, InitializeResult{}, err
@@ -283,12 +290,25 @@ func (c *Client) SetNotificationHandler(handler func(method string)) {
 	c.mu.Unlock()
 }
 
-func (c *Client) handleNotification(method string) {
+func (c *Client) SetResourceUpdateHandler(handler func(ResourceUpdate)) {
+	c.mu.Lock()
+	c.resourceUpdate = handler
+	c.mu.Unlock()
+}
+
+func (c *Client) handleNotification(method string, params json.RawMessage) {
 	c.mu.Lock()
 	handler := c.notification
+	resourceHandler := c.resourceUpdate
 	c.mu.Unlock()
 	if handler != nil {
 		go handler(method)
+	}
+	if method == "notifications/resources/updated" && resourceHandler != nil {
+		var update ResourceUpdate
+		if json.Unmarshal(params, &update) == nil && update.URI != "" {
+			go resourceHandler(update)
+		}
 	}
 }
 
@@ -315,6 +335,26 @@ func (c *Client) ReadResource(ctx context.Context, uri string) ([]ResourceConten
 	}
 	err := c.call(ctx, "resources/read", map[string]any{"uri": uri}, &result)
 	return result.Contents, err
+}
+
+func (c *Client) SubscribeResource(ctx context.Context, uri string) error {
+	if strings.TrimSpace(uri) == "" {
+		return errors.New("MCP resource URI is required")
+	}
+	if !c.resourceSubscribe {
+		return errors.New("MCP server does not support resource subscriptions")
+	}
+	return c.call(ctx, "resources/subscribe", map[string]any{"uri": uri}, nil)
+}
+
+func (c *Client) UnsubscribeResource(ctx context.Context, uri string) error {
+	if strings.TrimSpace(uri) == "" {
+		return errors.New("MCP resource URI is required")
+	}
+	if !c.resourceSubscribe {
+		return errors.New("MCP server does not support resource subscriptions")
+	}
+	return c.call(ctx, "resources/unsubscribe", map[string]any{"uri": uri}, nil)
 }
 
 func (c *Client) ListPrompts(ctx context.Context) ([]PromptInfo, error) {
@@ -482,7 +522,7 @@ func (c *Client) dispatch(message rpcMessage) {
 	}
 	if len(message.ID) == 0 {
 		if message.Method != "" {
-			c.handleNotification(message.Method)
+			c.handleNotification(message.Method, message.Params)
 		}
 		return
 	}

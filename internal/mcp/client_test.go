@@ -73,6 +73,22 @@ func TestStdioLifecycleAndToolCall(t *testing.T) {
 	if err != nil || !strings.Contains(read, "fixture resource") {
 		t.Fatalf("unexpected resource contents: %q err=%v", read, err)
 	}
+	updates := make(chan ResourceUpdate, 1)
+	client.SetResourceUpdateHandler(func(update ResourceUpdate) { updates <- update })
+	if err := client.SubscribeResource(context.Background(), "file:///fixture/readme.md"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case update := <-updates:
+		if update.URI != "file:///fixture/readme.md" {
+			t.Fatalf("unexpected resource update: %#v", update)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("MCP resource update was not dispatched")
+	}
+	if err := client.UnsubscribeResource(context.Background(), "file:///fixture/readme.md"); err != nil {
+		t.Fatal(err)
+	}
 	prompts := NewPromptAdapters(client, "fixture")
 	promptList, err := prompts[0].Execute(context.Background(), json.RawMessage(`{}`))
 	if err != nil || !strings.Contains(promptList, "review") {
@@ -91,6 +107,14 @@ func TestModelToolNameIsValidAndBounded(t *testing.T) {
 	}
 	if invalidToolName.MatchString(name) {
 		t.Fatalf("tool name contains invalid characters: %q", name)
+	}
+}
+
+func TestResourceSubscriptionRequiresServerCapability(t *testing.T) {
+	client := &Client{}
+	err := client.SubscribeResource(context.Background(), "file:///fixture/readme.md")
+	if err == nil || !strings.Contains(err.Error(), "does not support") {
+		t.Fatalf("unsupported subscription error=%v", err)
 	}
 }
 
@@ -134,8 +158,8 @@ func TestMCPHelperProcess(t *testing.T) {
 		var result any
 		switch request.Method {
 		case "initialize":
+			capabilities, _ := request.Params["capabilities"].(map[string]any)
 			if os.Getenv("GORK_GO_MCP_SAMPLE") == "1" {
-				capabilities, _ := request.Params["capabilities"].(map[string]any)
 				if _, ok := capabilities["sampling"]; !ok {
 					os.Exit(4)
 				}
@@ -143,7 +167,7 @@ func TestMCPHelperProcess(t *testing.T) {
 			result = map[string]any{
 				"protocolVersion": protocolVersion,
 				"capabilities": map[string]any{
-					"tools": map[string]any{}, "resources": map[string]any{}, "prompts": map[string]any{},
+					"tools": map[string]any{}, "resources": map[string]any{"subscribe": true}, "prompts": map[string]any{},
 				},
 				"serverInfo": map[string]any{"name": "fixture-server", "version": "1.0"},
 			}
@@ -179,6 +203,19 @@ func TestMCPHelperProcess(t *testing.T) {
 			result = map[string]any{"contents": []any{map[string]any{
 				"uri": request.Params["uri"], "mimeType": "text/markdown", "text": "fixture resource",
 			}}}
+		case "resources/subscribe":
+			if err := encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": map[string]any{}}); err != nil {
+				os.Exit(3)
+			}
+			if err := encoder.Encode(map[string]any{
+				"jsonrpc": "2.0", "method": "notifications/resources/updated",
+				"params": map[string]any{"uri": request.Params["uri"]},
+			}); err != nil {
+				os.Exit(3)
+			}
+			continue
+		case "resources/unsubscribe":
+			result = map[string]any{}
 		case "prompts/list":
 			result = map[string]any{"prompts": []any{map[string]any{
 				"name": "review", "description": "Review code",

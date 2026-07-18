@@ -89,6 +89,7 @@ func StartSSE(ctx context.Context, cfg HTTPConfig) (*Client, InitializeResult, e
 		return nil, InitializeResult{}, fmt.Errorf("MCP SSE server %q selected unsupported protocol %q", cfg.Name, initialized.ProtocolVersion)
 	}
 	client.selectedProtocol = initialized.ProtocolVersion
+	client.resourceSubscribe = initialized.Capabilities.Resources != nil && initialized.Capabilities.Resources.Subscribe
 	if err := client.notify("notifications/initialized", nil); err != nil {
 		_ = client.Close()
 		return nil, InitializeResult{}, err

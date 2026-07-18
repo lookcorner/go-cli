@@ -14,7 +14,7 @@ func TestEventStreamDispatchesNotificationBeforeResponse(t *testing.T) {
 	stream := "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/tools/list_changed\"}\n\n" +
 		"data: {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{}}\n\n"
 	var notification string
-	message, err := readMCPEventStream(strings.NewReader(stream), func(method string) { notification = method })
+	message, err := readMCPEventStream(strings.NewReader(stream), func(method string, _ json.RawMessage) { notification = method })
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -59,6 +59,7 @@ func StartHTTP(ctx context.Context, cfg HTTPConfig) (*Client, InitializeResult, 
 	}
 	client.mu.Lock()
 	client.selectedProtocol = initialized.ProtocolVersion
+	client.resourceSubscribe = initialized.Capabilities.Resources != nil && initialized.Capabilities.Resources.Subscribe
 	client.mu.Unlock()
 	if err := client.notify("notifications/initialized", nil); err != nil {
 		_ = client.Close()
@@ -133,7 +134,7 @@ func (c *Client) httpRequest(ctx context.Context, value any, expectResponse bool
 	return message, nil
 }
 
-func readMCPEventStream(reader io.Reader, onNotification func(string)) (rpcMessage, error) {
+func readMCPEventStream(reader io.Reader, onNotification func(string, json.RawMessage)) (rpcMessage, error) {
 	scanner := bufio.NewScanner(io.LimitReader(reader, 16<<20+1))
 	scanner.Buffer(make([]byte, 64<<10), 16<<20)
 	var dataLines []string
@@ -149,7 +150,7 @@ func readMCPEventStream(reader io.Reader, onNotification func(string)) (rpcMessa
 					return message, nil
 				}
 				if message.Method != "" && onNotification != nil {
-					onNotification(message.Method)
+					onNotification(message.Method, message.Params)
 				}
 			}
 			dataLines = nil
@@ -169,7 +170,7 @@ func readMCPEventStream(reader io.Reader, onNotification func(string)) (rpcMessa
 				return message, nil
 			}
 			if message.Method != "" && onNotification != nil {
-				onNotification(message.Method)
+				onNotification(message.Method, message.Params)
 			}
 		}
 	}
