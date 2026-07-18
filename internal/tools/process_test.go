@@ -14,6 +14,19 @@ import (
 	"github.com/lookcorner/go-cli/internal/workspace"
 )
 
+type recordingProcessObserver struct {
+	backgrounded chan ProcessBackgrounded
+	completed    chan ProcessSnapshot
+}
+
+func (o *recordingProcessObserver) TaskBackgrounded(event ProcessBackgrounded) {
+	o.backgrounded <- event
+}
+
+func (o *recordingProcessObserver) TaskCompleted(snapshot ProcessSnapshot) {
+	o.completed <- snapshot
+}
+
 func TestGorkTerminalToolForegroundReportsExitCode(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell fixture is Unix-specific")
@@ -294,12 +307,23 @@ func TestRegistryBackgroundTaskSnapshotsAndKillOutcomes(t *testing.T) {
 	}
 	registry := NewRegistry(ws, PromptApprover{Mode: PermissionAuto})
 	defer registry.Close()
-	completedID, err := registry.processes.Start(context.Background(), "printf hello")
+	observer := &recordingProcessObserver{backgrounded: make(chan ProcessBackgrounded, 2), completed: make(chan ProcessSnapshot, 2)}
+	registry.SetProcessObserver(observer)
+	ctx := WithToolCall(context.Background(), "call-1", "run_terminal_cmd")
+	completedID, err := registry.processes.StartDescribed(ctx, "printf hello", "print greeting", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
+	started := <-observer.backgrounded
+	if started.TaskID != completedID || started.ToolCallID != "call-1" || started.Description != "print greeting" || started.CWD != ws.Root() {
+		t.Fatalf("backgrounded=%#v", started)
+	}
 	if _, err := registry.processes.WaitOutput(context.Background(), completedID, time.Second); err != nil {
 		t.Fatal(err)
+	}
+	finished := <-observer.completed
+	if finished.TaskID != completedID || !finished.Completed || finished.Output != "hello" {
+		t.Fatalf("completed=%#v", finished)
 	}
 	snapshots := registry.BackgroundTasks()
 	if len(snapshots) != 1 || snapshots[0].TaskID != completedID || snapshots[0].Command != "printf hello" || snapshots[0].Output != "hello" || !snapshots[0].Completed || snapshots[0].ExitCode == nil || *snapshots[0].ExitCode != 0 || snapshots[0].EndTime == nil {

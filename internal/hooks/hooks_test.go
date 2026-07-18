@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"sort"
@@ -72,6 +73,33 @@ func TestPermissionDeniedHookReceivesToolPayload(t *testing.T) {
 	}
 	text := string(payload)
 	for _, expected := range []string{`"hookEventName":"permission_denied"`, `"toolName":"shell"`, `"toolUseId":"call-1"`, `"command":"git push"`} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("payload=%s missing %s", text, expected)
+		}
+	}
+}
+
+func TestNotificationHookMatchesTaskCompletion(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	root := t.TempDir()
+	payloadPath := filepath.Join(root, "notification.json")
+	script := filepath.Join(root, "capture.sh")
+	if err := os.WriteFile(script, []byte(fmt.Sprintf("#!/bin/sh\ncat > %q\n", payloadPath)), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	catalog := &Catalog{specs: []Spec{{
+		Event: Notification, Command: script, Matcher: "^task_complete$", matcher: regexp.MustCompile("^task_complete$"), Timeout: time.Second,
+	}}}
+	runner := &Runtime{Catalog: catalog, WorkspaceRoot: root, SessionID: "session-1"}
+	runner.Notification(context.Background(), "task_complete", "Background task completed: task-1", "", "info")
+	payload, err := os.ReadFile(payloadPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(payload)
+	for _, expected := range []string{`"hookEventName":"notification"`, `"notificationType":"task_complete"`, `"message":"Background task completed: task-1"`, `"level":"info"`} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("payload=%s missing %s", text, expected)
 		}

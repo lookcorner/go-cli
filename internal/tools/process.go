@@ -34,6 +34,22 @@ type ProcessManager struct {
 	environment  []string
 	shellPrelude string
 	rewind       *mutationCheckpoint
+	observerMu   sync.RWMutex
+	observer     ProcessObserver
+}
+
+type ProcessObserver interface {
+	TaskBackgrounded(ProcessBackgrounded)
+	TaskCompleted(ProcessSnapshot)
+}
+
+type ProcessBackgrounded struct {
+	ToolCallID  string
+	TaskID      string
+	Command     string
+	CWD         string
+	OutputFile  string
+	Description string
 }
 
 type backgroundProcess struct {
@@ -79,10 +95,18 @@ func NewProcessManager(ws *workspace.Workspace, approver Approver) *ProcessManag
 }
 
 func (m *ProcessManager) Start(ctx context.Context, command string) (string, error) {
-	return m.StartWithTimeout(ctx, command, 0)
+	return m.start(ctx, command, "", 0)
 }
 
 func (m *ProcessManager) StartWithTimeout(ctx context.Context, command string, timeout time.Duration) (string, error) {
+	return m.start(ctx, command, "", timeout)
+}
+
+func (m *ProcessManager) StartDescribed(ctx context.Context, command, description string, timeout time.Duration) (string, error) {
+	return m.start(ctx, command, description, timeout)
+}
+
+func (m *ProcessManager) start(ctx context.Context, command, description string, timeout time.Duration) (string, error) {
 	if strings.TrimSpace(command) == "" {
 		return "", errors.New("command must not be empty")
 	}
@@ -115,6 +139,12 @@ func (m *ProcessManager) StartWithTimeout(ctx context.Context, command string, t
 	}
 	m.processes[id] = process
 	m.mu.Unlock()
+	call, _ := ToolCallFromContext(ctx)
+	if observer := m.processObserver(); observer != nil {
+		observer.TaskBackgrounded(ProcessBackgrounded{
+			ToolCallID: call.ID, TaskID: id, Command: command, CWD: cmd.Dir, Description: description,
+		})
+	}
 	go func() {
 		err := cmd.Wait()
 		if checkpointErr := m.rewind.afterWorkspace(checkpoint); checkpointErr != nil {
@@ -124,6 +154,9 @@ func (m *ProcessManager) StartWithTimeout(ctx context.Context, command string, t
 		process.err = err
 		process.ended = time.Now()
 		process.mu.Unlock()
+		if observer := m.processObserver(); observer != nil {
+			observer.TaskCompleted(snapshotProcess(process, true))
+		}
 		close(process.done)
 	}()
 	if timeout > 0 {
@@ -144,6 +177,18 @@ func (m *ProcessManager) StartWithTimeout(ctx context.Context, command string, t
 		}()
 	}
 	return id, nil
+}
+
+func (m *ProcessManager) SetObserver(observer ProcessObserver) {
+	m.observerMu.Lock()
+	m.observer = observer
+	m.observerMu.Unlock()
+}
+
+func (m *ProcessManager) processObserver() ProcessObserver {
+	m.observerMu.RLock()
+	defer m.observerMu.RUnlock()
+	return m.observer
 }
 
 func (m *ProcessManager) RunForeground(ctx context.Context, command string, timeout time.Duration) (string, error) {
@@ -445,12 +490,15 @@ func (m *ProcessManager) Kill(ctx context.Context, id string) error {
 	if err := m.approver.Approve(ctx, "kill background command", id+": "+process.command); err != nil {
 		return err
 	}
-	if err := terminateProcess(process.cmd); err != nil {
-		return fmt.Errorf("terminate %s: %w", id, err)
-	}
 	process.mu.Lock()
 	process.killed = true
 	process.mu.Unlock()
+	if err := terminateProcess(process.cmd); err != nil {
+		process.mu.Lock()
+		process.killed = false
+		process.mu.Unlock()
+		return fmt.Errorf("terminate %s: %w", id, err)
+	}
 	select {
 	case <-process.done:
 		return nil
@@ -495,24 +543,7 @@ func (m *ProcessManager) Snapshots() []ProcessSnapshot {
 			completed = true
 		default:
 		}
-		process.mu.Lock()
-		ended, killed := process.ended, process.killed
-		process.mu.Unlock()
-		output, truncated := process.output.Snapshot()
-		item := ProcessSnapshot{
-			TaskID: process.id, Command: process.command, CWD: process.cmd.Dir,
-			StartTime: processTime(process.started), Output: output, Truncated: truncated,
-			Completed: completed, Kind: "bash", ExplicitlyKilled: killed,
-		}
-		if completed {
-			end := processTime(ended)
-			item.EndTime = &end
-			if process.cmd.ProcessState != nil && process.cmd.ProcessState.ExitCode() >= 0 {
-				code := process.cmd.ProcessState.ExitCode()
-				item.ExitCode = &code
-			}
-		}
-		result = append(result, item)
+		result = append(result, snapshotProcess(process, completed))
 	}
 	sort.Slice(result, func(i, j int) bool {
 		if result[i].StartTime == result[j].StartTime {
@@ -524,6 +555,27 @@ func (m *ProcessManager) Snapshots() []ProcessSnapshot {
 		return result[i].StartTime.SecsSinceEpoch < result[j].StartTime.SecsSinceEpoch
 	})
 	return result
+}
+
+func snapshotProcess(process *backgroundProcess, completed bool) ProcessSnapshot {
+	process.mu.Lock()
+	ended, killed := process.ended, process.killed
+	process.mu.Unlock()
+	output, truncated := process.output.Snapshot()
+	item := ProcessSnapshot{
+		TaskID: process.id, Command: process.command, CWD: process.cmd.Dir,
+		StartTime: processTime(process.started), Output: output, Truncated: truncated,
+		Completed: completed, Kind: "bash", ExplicitlyKilled: killed,
+	}
+	if completed {
+		end := processTime(ended)
+		item.EndTime = &end
+		if process.cmd.ProcessState != nil && process.cmd.ProcessState.ExitCode() >= 0 {
+			code := process.cmd.ProcessState.ExitCode()
+			item.ExitCode = &code
+		}
+	}
+	return item
 }
 
 func processTime(value time.Time) ProcessTime {
@@ -719,7 +771,7 @@ func (t *runTerminalCommandTool) Execute(ctx context.Context, raw json.RawMessag
 		timeout = time.Duration(min(*args.Timeout, uint64(300000))) * time.Millisecond
 	}
 	if args.IsBackground {
-		id, err := t.manager.StartWithTimeout(ctx, args.Command, timeout)
+		id, err := t.manager.StartDescribed(ctx, args.Command, args.Description, timeout)
 		if err != nil {
 			return "", err
 		}

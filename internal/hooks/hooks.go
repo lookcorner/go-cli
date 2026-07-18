@@ -304,6 +304,20 @@ func (r *Runtime) UserPromptSubmitted(ctx context.Context, prompt string) {
 	r.dispatch(ctx, UserPromptSubmit, "", map[string]any{"prompt": prompt}, false)
 }
 
+func (r *Runtime) Notification(ctx context.Context, notificationType, message, title, level string) {
+	payload := map[string]any{"notificationType": notificationType}
+	if message != "" {
+		payload["message"] = message
+	}
+	if title != "" {
+		payload["title"] = title
+	}
+	if level != "" {
+		payload["level"] = level
+	}
+	r.dispatch(ctx, Notification, notificationType, payload, false)
+}
+
 func (r *Runtime) BeforeTool(ctx context.Context, call api.ToolCall) error {
 	return r.dispatch(ctx, PreToolUse, call.Name, map[string]any{
 		"toolName": call.Name, "toolUseId": call.CallID, "toolInput": validJSON(call.Arguments), "toolInputTruncated": false, "subagentType": r.SubagentType,

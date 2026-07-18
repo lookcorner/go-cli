@@ -893,6 +893,38 @@ func TestTaskListAndKillWireContract(t *testing.T) {
 	}
 }
 
+func TestTaskLifecycleNotificationsWireContract(t *testing.T) {
+	var output bytes.Buffer
+	server := &Server{output: &output}
+	server.NotifyTaskBackgrounded("session-1", tools.ProcessBackgrounded{
+		ToolCallID: "call-1", TaskID: "task-1", Command: "sleep 1", CWD: "/work", Description: "wait",
+	})
+	code := 0
+	server.NotifyTaskCompleted("session-1", tools.ProcessSnapshot{
+		TaskID: "task-1", Command: "sleep 1", CWD: "/work", StartTime: tools.ProcessTime{SecsSinceEpoch: 10},
+		Completed: true, ExitCode: &code, Kind: "bash",
+	})
+	decoder := json.NewDecoder(&output)
+	started := decodeACP(t, decoder)
+	if started["method"] != "x.ai/task_backgrounded" {
+		t.Fatalf("started=%#v", started)
+	}
+	startedParams := started["params"].(map[string]any)
+	startedUpdate := startedParams["update"].(map[string]any)
+	if startedParams["sessionId"] != "session-1" || startedUpdate["sessionUpdate"] != "task_backgrounded" || startedUpdate["tool_call_id"] != "call-1" || startedUpdate["task_id"] != "task-1" || startedUpdate["description"] != "wait" {
+		t.Fatalf("started=%#v", started)
+	}
+	completed := decodeACP(t, decoder)
+	if completed["method"] != "x.ai/task_completed" {
+		t.Fatalf("completed=%#v", completed)
+	}
+	completedUpdate := completed["params"].(map[string]any)["update"].(map[string]any)
+	snapshot := completedUpdate["task_snapshot"].(map[string]any)
+	if completedUpdate["sessionUpdate"] != "task_completed" || completedUpdate["will_wake"] != false || snapshot["task_id"] != "task-1" || snapshot["completed"] != true {
+		t.Fatalf("completed=%#v", completed)
+	}
+}
+
 func TestSubagentGetListRunningAndCancelWireContract(t *testing.T) {
 	results := map[string]tools.SubagentResult{
 		"running-1": {ID: "running-1", Type: "explore", Description: "find code", Status: "running", StartedAtMS: 10, DurationMS: 20},

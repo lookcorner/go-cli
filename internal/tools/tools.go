@@ -319,6 +319,12 @@ func (r *Registry) BackgroundTasks() []ProcessSnapshot {
 	return r.processes.Snapshots()
 }
 
+func (r *Registry) SetProcessObserver(observer ProcessObserver) {
+	if r != nil && r.processes != nil {
+		r.processes.SetObserver(observer)
+	}
+}
+
 func (r *Registry) KillBackgroundTask(ctx context.Context, id string) (string, error) {
 	if r == nil || r.processes == nil {
 		return "not_found", nil

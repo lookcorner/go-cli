@@ -8,6 +8,30 @@ import (
 	"github.com/lookcorner/go-cli/internal/tools"
 )
 
+func (s *Server) NotifyTaskBackgrounded(sessionID string, event tools.ProcessBackgrounded) {
+	update := map[string]any{
+		"sessionUpdate": "task_backgrounded", "tool_call_id": event.ToolCallID,
+		"task_id": event.TaskID, "command": event.Command, "cwd": event.CWD,
+		"output_file": event.OutputFile,
+	}
+	if event.Description != "" {
+		update["description"] = event.Description
+	}
+	s.write(map[string]any{
+		"jsonrpc": "2.0", "method": "x.ai/task_backgrounded",
+		"params": map[string]any{"sessionId": sessionID, "update": update},
+	})
+}
+
+func (s *Server) NotifyTaskCompleted(sessionID string, snapshot tools.ProcessSnapshot) {
+	s.write(map[string]any{
+		"jsonrpc": "2.0", "method": "x.ai/task_completed",
+		"params": map[string]any{"sessionId": sessionID, "update": map[string]any{
+			"sessionUpdate": "task_completed", "task_snapshot": snapshot, "will_wake": false,
+		}},
+	})
+}
+
 func (s *Server) handleTasks(ctx context.Context, incoming message) {
 	var req struct {
 		SessionID string `json:"sessionId"`

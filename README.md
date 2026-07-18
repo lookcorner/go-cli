@@ -677,8 +677,9 @@ trusted projects contribute the corresponding repo settings and `.grok/hooks`.
 Vendor sources honor the `compat.<vendor>.hooks` gate. The runtime fires
 `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`,
 `PostToolUseFailure`, `Stop`, `StopFailure`, `PreCompact`, `PostCompact`, and
-`SessionEnd` plus permission-denied and subagent start/stop; structured
-notification producers remain.
+`SessionEnd` plus permission-denied, background task-completion notifications,
+and subagent start/stop. Permission-prompt, idle, and agent-error notification
+producers remain.
 
 Custom agent definitions are discovered from trusted project `.grok/agents`
 and `.claude/agents` directories from the current directory to the Git root,
@@ -694,7 +695,8 @@ model/reasoning-effort metadata, strict runtime-enum validation, tool allow/deny
 hook events. Background tasks survive completion of the parent turn and are
 cancelled during session cleanup. ACP exposes the typed `x.ai/subagent/get`,
 `list_running`, and `cancel` methods; background terminal processes separately
-use `x.ai/task/list` and `x.ai/task/kill`. Worktree isolation, an alternate child cwd,
+use `x.ai/task/list`, `x.ai/task/kill`, `x.ai/task_backgrounded`, and
+`x.ai/task_completed`. Worktree isolation, an alternate child cwd,
 durable cross-process task recovery, full live token/tool metrics, explicit
 model-slug allowlist validation, and `bypassPermissions` execution are not
 implemented yet.

@@ -386,6 +386,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	hookRuntime := &hooks.Runtime{
 		Catalog: hookCatalog, WorkspaceRoot: ws.Root(), SessionID: logger.ID(), Model: cfg.Model,
 	}
+	registry.SetProcessObserver(&sessionProcessObserver{hooks: hookRuntime})
 	defer hookRuntime.SessionEnded(context.Background(), "closed")
 	agentCatalog, agentErrors := agents.Discover(agents.Config{
 		WorkspaceRoot: ws.Root(), ProjectTrusted: projectTrusted, Compat: cfg.Compat, Plugins: plugins,
@@ -906,6 +907,27 @@ type sessionPluginState struct {
 	subagents *subagent.Manager
 }
 
+type sessionProcessObserver struct {
+	server    *acp.Server
+	sessionID string
+	hooks     *hooks.Runtime
+}
+
+func (o *sessionProcessObserver) TaskBackgrounded(event tools.ProcessBackgrounded) {
+	if o.server != nil {
+		o.server.NotifyTaskBackgrounded(o.sessionID, event)
+	}
+}
+
+func (o *sessionProcessObserver) TaskCompleted(snapshot tools.ProcessSnapshot) {
+	if o.server != nil {
+		o.server.NotifyTaskCompleted(o.sessionID, snapshot)
+	}
+	if o.hooks != nil {
+		o.hooks.Notification(context.Background(), "task_complete", "Background task completed: "+snapshot.TaskID, "", "info")
+	}
+}
+
 func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []string, tokenProvider api.TokenProvider, stdin io.Reader, stdout, stderr io.Writer) error {
 	mode := tools.PermissionMode(opts.approval)
 	if mode != tools.PermissionPrompt && mode != tools.PermissionAuto && mode != tools.PermissionDeny {
@@ -917,7 +939,8 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 	dynamicSkills := cloneSkillsConfig(cfg.Skills)
 	dynamicPlugins := clonePluginsConfig(cfg.Plugins)
 	pluginStates := make(map[*sessionPluginState]bool)
-	server := &acp.Server{SessionDir: opts.sessionDir, Factory: func(
+	var server *acp.Server
+	server = &acp.Server{SessionDir: opts.sessionDir, Factory: func(
 		sessionCtx context.Context,
 		sessionConfig acp.SessionConfig,
 		protocolApprover tools.Approver,
@@ -1068,6 +1091,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		pluginState.hookRun = &hooks.Runtime{
 			Catalog: pluginState.hooks, WorkspaceRoot: ws.Root(), SessionID: logger.ID(), Model: sessionCfg.Model,
 		}
+		registry.SetProcessObserver(&sessionProcessObserver{server: server, sessionID: logger.ID(), hooks: pluginState.hookRun})
 		agentCatalog, agentErrors := agents.Discover(agents.Config{
 			WorkspaceRoot: ws.Root(), ProjectTrusted: projectTrusted, Compat: sessionCfg.Compat, Plugins: plugins,
 		})
