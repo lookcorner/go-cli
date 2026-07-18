@@ -77,6 +77,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if len(args) > 0 && args[0] == "login" {
 		return runLogin(args[1:], stdout, stderr)
 	}
+	if len(args) > 0 && args[0] == "logout" {
+		return runLogout(args[1:], stdout, stderr)
+	}
 	var opts options
 	flags := flag.NewFlagSet("gork", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -101,7 +104,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	flags.IntVar(&opts.goalRuns, "goal-runs", 10, "maximum turns in --goal mode")
 	flags.BoolVar(&opts.acp, "acp", false, "serve Agent Client Protocol v1 over stdio")
 	flags.Usage = func() {
-		fmt.Fprintf(stderr, "Usage: gork [flags] [prompt]\n       gork login --device-auth\n\n")
+		fmt.Fprintf(stderr, "Usage: gork [flags] [prompt]\n       gork login --device-auth\n       gork logout\n\n")
 		flags.PrintDefaults()
 	}
 	if err := flags.Parse(args); err != nil {
@@ -423,6 +426,39 @@ func runLogin(args []string, stdout, stderr io.Writer) error {
 		return fmt.Errorf("save OAuth credentials: %w", err)
 	}
 	fmt.Fprintln(stdout, "Signed in")
+	return nil
+}
+
+func runLogout(args []string, stdout, stderr io.Writer) error {
+	cfg := auth.DefaultConfig()
+	var authFile string
+	flags := flag.NewFlagSet("gork logout", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	flags.StringVar(&cfg.Issuer, "issuer", cfg.Issuer, "OAuth issuer")
+	flags.StringVar(&cfg.ClientID, "client-id", cfg.ClientID, "OAuth client ID")
+	flags.StringVar(&authFile, "auth-file", "", "credential store path")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if len(flags.Args()) > 0 {
+		return fmt.Errorf("unexpected logout arguments: %s", strings.Join(flags.Args(), " "))
+	}
+	cfg.Issuer = strings.TrimRight(strings.TrimSpace(cfg.Issuer), "/")
+	cfg.ClientID = strings.TrimSpace(cfg.ClientID)
+	if cfg.Issuer == "" || cfg.ClientID == "" {
+		return errors.New("OAuth issuer and client ID are required")
+	}
+	if authFile == "" {
+		var err error
+		authFile, err = auth.DefaultPath()
+		if err != nil {
+			return err
+		}
+	}
+	if err := auth.Remove(authFile, cfg.Scope()); err != nil {
+		return fmt.Errorf("remove credentials: %w", err)
+	}
+	fmt.Fprintln(stdout, "Signed out")
 	return nil
 }
 

@@ -58,6 +58,7 @@ or `{"access_token":"...","refresh_token":"...","expires_in":3600}` to stdout;
 stderr remains visible for login instructions. `GROK_AUTH_TOKEN_TTL` (or
 `auth_token_ttl`) gives bare tokens a proactive refresh lifetime. Refresh calls
 receive `GROK_AUTH_EXPIRED=1` and are limited to five seconds.
+Use `gork logout` to remove only the current issuer/client credential scope.
 
 The default API base URL is `https://api.x.ai/v1`. Override it with
 `GORK_BASE_URL`, `--base-url`, or a config file. The default path matches Gork

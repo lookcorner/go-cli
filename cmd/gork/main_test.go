@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -134,5 +136,29 @@ func TestRunLoginDeviceFlow(t *testing.T) {
 	credential, err := auth.Load(authFile, (auth.Config{Issuer: server.URL, ClientID: "client-1"}).Scope())
 	if err != nil || credential.Key != "access-1" || credential.RefreshToken != "refresh-1" {
 		t.Fatalf("stored credential=%#v err=%v", credential, err)
+	}
+}
+
+func TestRunLogoutRemovesSelectedScope(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "auth.json")
+	selected := auth.Config{Issuer: "https://auth.example", ClientID: "client-1"}
+	if err := auth.Save(path, selected.Scope(), auth.Credential{Key: "remove"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := auth.Save(path, "sibling", auth.Credential{Key: "keep"}); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	if err := run([]string{"logout", "--issuer", selected.Issuer, "--client-id", selected.ClientID, "--auth-file", path}, strings.NewReader(""), &stdout, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != "Signed out\n" {
+		t.Fatalf("logout output=%q", stdout.String())
+	}
+	if _, err := auth.Load(path, selected.Scope()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("selected scope still loads: %v", err)
+	}
+	if credential, err := auth.Load(path, "sibling"); err != nil || credential.Key != "keep" {
+		t.Fatalf("sibling credential=%#v err=%v", credential, err)
 	}
 }

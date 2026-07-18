@@ -46,6 +46,34 @@ func Save(path, scope string, credential Credential) error {
 	return saveCredential(path, scope, credential)
 }
 
+func Remove(path, scope string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	lock, err := acquireFileLock(ctx, path)
+	if err != nil {
+		return err
+	}
+	defer lock.release()
+
+	storeMu.Lock()
+	defer storeMu.Unlock()
+	store, err := readStore(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if _, ok := store[scope]; !ok {
+		return nil
+	}
+	delete(store, scope)
+	if len(store) == 0 {
+		return os.Remove(path)
+	}
+	return writeStore(path, store)
+}
+
 func saveCredential(path, scope string, credential Credential) error {
 	storeMu.Lock()
 	defer storeMu.Unlock()

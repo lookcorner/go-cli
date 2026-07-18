@@ -140,6 +140,34 @@ func TestSavePreservesUnknownCredentialFields(t *testing.T) {
 	}
 }
 
+func TestRemoveDeletesOnlySelectedScope(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "auth.json")
+	if err := Save(path, "first", Credential{Key: "one"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Save(path, "second", Credential{Key: "two"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Remove(path, "first"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path, "first"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("removed scope still loads: %v", err)
+	}
+	if credential, err := Load(path, "second"); err != nil || credential.Key != "two" {
+		t.Fatalf("sibling scope=%#v err=%v", credential, err)
+	}
+	if err := Remove(path, "second"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("empty auth store still exists: %v", err)
+	}
+	if err := Remove(path, "second"); err != nil {
+		t.Fatalf("idempotent remove: %v", err)
+	}
+}
+
 func TestSaveBacksUpCorruptAuthStore(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "auth.json")
