@@ -20,8 +20,8 @@ func resizeTerminal(file *os.File, rows, cols uint16) error {
 	return pty.Setsize(file, &pty.Winsize{Rows: rows, Cols: cols})
 }
 
-func terminalHasForegroundProcess(file *os.File, shellPID int) bool {
-	foreground, err := unix.IoctlGetInt(int(file.Fd()), unix.TIOCGPGRP)
+func terminalHasForegroundProcess(fd, shellPID int) bool {
+	foreground, err := unix.IoctlGetInt(fd, unix.TIOCGPGRP)
 	return err == nil && foreground > 0 && foreground != shellPID
 }
 

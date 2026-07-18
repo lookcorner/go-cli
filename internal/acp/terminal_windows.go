@@ -16,7 +16,7 @@ func resizeTerminal(_ *os.File, _, _ uint16) error {
 	return errors.New("interactive PTY terminals are not supported on Windows")
 }
 
-func terminalHasForegroundProcess(_ *os.File, _ int) bool { return false }
+func terminalHasForegroundProcess(_ int, _ int) bool { return false }
 
 func killTerminalProcess(cmd *exec.Cmd) error {
 	if cmd.Process == nil {

@@ -27,6 +27,7 @@ type terminalManager struct {
 type ptyTerminal struct {
 	id      string
 	file    *os.File
+	fd      int
 	cmd     *exec.Cmd
 	cwd     string
 	name    string
@@ -106,7 +107,7 @@ func (m *terminalManager) create(shell, cwd string, env map[string]string, rows,
 		}
 	}
 	terminal := &ptyTerminal{
-		id: id, file: file, cmd: cmd, cwd: cwd, name: name, created: time.Now().Unix(),
+		id: id, file: file, fd: int(file.Fd()), cmd: cmd, cwd: cwd, name: name, created: time.Now().Unix(),
 		rows: rows, cols: cols, done: make(chan struct{}),
 	}
 	m.mu.Lock()
@@ -166,11 +167,12 @@ func (m *terminalManager) readOutput(terminal *ptyTerminal) {
 	terminal.busy = false
 	terminal.exited = true
 	terminal.exitCode = &code
+	// Keep file descriptor inspection in sampleActivity serialized with close.
+	_ = terminal.file.Close()
 	terminal.mu.Unlock()
 	if wasBusy {
 		m.sendActivity(terminal.id, false)
 	}
-	_ = terminal.file.Close()
 	close(terminal.done)
 	m.send("x.ai/terminal/pty/notification", map[string]any{
 		"terminalId": terminal.id, "type": "exit", "exitCode": code,
@@ -196,7 +198,7 @@ func (m *terminalManager) sampleActivity(terminal *ptyTerminal, reportCurrent bo
 		terminal.mu.Unlock()
 		return
 	}
-	busy := terminalHasForegroundProcess(terminal.file, terminal.cmd.Process.Pid)
+	busy := terminalHasForegroundProcess(terminal.fd, terminal.cmd.Process.Pid)
 	changed := busy != terminal.busy
 	terminal.busy = busy
 	terminal.mu.Unlock()
@@ -246,14 +248,16 @@ func (m *terminalManager) writeInput(id string, data []byte) error {
 		return err
 	}
 	terminal.mu.Lock()
-	exited := terminal.exited
-	terminal.mu.Unlock()
-	if exited {
+	if terminal.exited {
+		terminal.mu.Unlock()
 		return fmt.Errorf("terminal %q exited", id)
 	}
 	if _, err = terminal.file.Write(data); err != nil {
+		terminal.mu.Unlock()
 		return err
 	}
+	// Release the lock before sampling, which acquires it itself.
+	terminal.mu.Unlock()
 	m.sampleActivity(terminal, false)
 	return nil
 }
@@ -266,12 +270,15 @@ func (m *terminalManager) resize(id string, rows, cols uint16) error {
 	if err != nil {
 		return err
 	}
+	terminal.mu.Lock()
+	defer terminal.mu.Unlock()
+	if terminal.exited {
+		return fmt.Errorf("terminal %q exited", id)
+	}
 	if err := resizeTerminal(terminal.file, rows, cols); err != nil {
 		return err
 	}
-	terminal.mu.Lock()
 	terminal.rows, terminal.cols = rows, cols
-	terminal.mu.Unlock()
 	return nil
 }
 
@@ -340,7 +347,9 @@ func (m *terminalManager) kill(id string) (string, error) {
 	if !exited {
 		outcome = "killed"
 		_ = killTerminalProcess(terminal.cmd)
+		terminal.mu.Lock()
 		_ = terminal.file.Close()
+		terminal.mu.Unlock()
 		select {
 		case <-terminal.done:
 		case <-time.After(3 * time.Second):
@@ -367,7 +376,9 @@ func (m *terminalManager) closeAll() {
 		terminal.mu.Unlock()
 		if !exited {
 			_ = killTerminalProcess(terminal.cmd)
+			terminal.mu.Lock()
 			_ = terminal.file.Close()
+			terminal.mu.Unlock()
 			select {
 			case <-terminal.done:
 			case <-time.After(3 * time.Second):
