@@ -186,6 +186,66 @@ func TestParseMetadataPaths(t *testing.T) {
 	}
 }
 
+func TestParseMetadataOptionalFields(t *testing.T) {
+	metadata := parseMetadata(`---
+name: deploy
+description: Deploy safely
+argument-hint: environment name
+license: Apache-2.0
+compatibility: Requires git and docker
+allowed-tools: "Bash(git diff:*) read_file,edit_file"
+model: grok-4
+effort: high
+metadata:
+  short-description: Safe deploy
+  author: platform-team
+  version: "2.0"
+  ignored: true
+---
+Body
+`, "fallback")
+	if !metadata.HasAuthoredDescription || metadata.ShortDescription != "Safe deploy" || metadata.Author != "platform-team" || metadata.ArgumentHint != "environment name" {
+		t.Fatalf("optional display metadata=%#v", metadata)
+	}
+	if metadata.License != "Apache-2.0" || metadata.Compatibility != "Requires git and docker" || metadata.Model != "grok-4" || metadata.Effort != "high" {
+		t.Fatalf("optional execution metadata=%#v", metadata)
+	}
+	if strings.Join(metadata.AllowedTools, "|") != "Bash(git diff:*)|read_file|edit_file" || len(metadata.Metadata) != 1 || metadata.Metadata["version"] != "2.0" {
+		t.Fatalf("allowed tools or arbitrary metadata=%#v", metadata)
+	}
+	fallback := parseMetadata("---\nname: x\n---\nDerived body.\n", "x")
+	if fallback.HasAuthoredDescription {
+		t.Fatal("derived description was marked as authored")
+	}
+}
+
+func TestQualifiedSkillNamesResolveForToolAndSlashReferences(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "deploy")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("---\nname: deploy\ndescription: Deploy\n---\nRun $ARGUMENTS\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	catalog := &Catalog{byName: make(map[string]Skill)}
+	if err := catalog.scan(skillRoot{path: root, source: "user:grok", scope: "user"}); err != nil {
+		t.Fatal(err)
+	}
+	definition := catalog.Tool().Definition()
+	if !strings.Contains(definition.Description, "user:deploy") {
+		t.Fatalf("qualified name missing from tool definition: %s", definition.Description)
+	}
+	output, err := catalog.Tool().Execute(context.Background(), json.RawMessage(`{"name":"USER:DEPLOY","args":"staging"}`))
+	if err != nil || !strings.Contains(output, "Run staging") {
+		t.Fatalf("qualified tool invocation output=%q err=%v", output, err)
+	}
+	information := catalog.ExpandReferences("/USER:DEPLOY production", "")
+	if !strings.Contains(information, `<skill name="USER:DEPLOY" args="production">`) || !strings.Contains(information, "Run production") {
+		t.Fatalf("qualified slash invocation=%s", information)
+	}
+}
+
 func TestParseMetadataDescriptionFallback(t *testing.T) {
 	tests := []struct {
 		name string
@@ -427,7 +487,7 @@ func TestSameScopeSkillCopiesUseDirectoryNames(t *testing.T) {
 		t.Fatalf("same-scope names=%q, want %q", got, want)
 	}
 	for _, name := range []string{"backup-review", "japandi2", "my-review"} {
-		if skill := catalog.byName[name]; !skill.rekeyed || skill.baseName != skill.Name {
+		if skill := catalog.byName[name]; !skill.rekeyed || skill.baseName != skill.Name || skill.DisplayName == "" {
 			t.Fatalf("copied skill %q was not rekeyed: %#v", name, skill)
 		}
 	}

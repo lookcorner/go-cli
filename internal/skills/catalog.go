@@ -40,7 +40,18 @@ var claudeDefaultSkills = map[string]bool{
 
 type Skill struct {
 	Name                   string
+	DisplayName            string
 	Description            string
+	HasAuthoredDescription bool
+	ShortDescription       string
+	Author                 string
+	ArgumentHint           string
+	License                string
+	Compatibility          string
+	Metadata               map[string]string
+	AllowedTools           []string
+	Model                  string
+	Effort                 string
 	Path                   string
 	Source                 string
 	Paths                  []string
@@ -309,6 +320,10 @@ func (c *Catalog) loadSkill(path string, info os.FileInfo, root skillRoot, comma
 	skill := Skill{
 		Name: metadata.Name, Description: metadata.Description, Path: real, Source: root.source,
 		Paths: metadata.Paths, WhenToUse: metadata.WhenToUse, UserInvocable: metadata.UserInvocable,
+		HasAuthoredDescription: metadata.HasAuthoredDescription, ShortDescription: metadata.ShortDescription,
+		Author: metadata.Author, ArgumentHint: metadata.ArgumentHint, License: metadata.License,
+		Compatibility: metadata.Compatibility, Metadata: metadata.Metadata, AllowedTools: metadata.AllowedTools,
+		Model: metadata.Model, Effort: metadata.Effort,
 		baseName: normalizeSkillName(fallbackName), scope: root.scope,
 		frontmatterDisabled: metadata.DisableModelInvocation, digest: sha256.Sum256(data),
 	}
@@ -340,7 +355,7 @@ func (c *Catalog) insertSkill(skill Skill, active bool) error {
 			return err
 		}
 		c.deleteName(incumbent.Name)
-		incumbent.Name, incumbent.rekeyed = incumbent.baseName, true
+		incumbent.DisplayName, incumbent.Name, incumbent.rekeyed = incumbent.Name, incumbent.baseName, true
 		if err := c.store(incumbent, incumbentActive); err != nil {
 			return err
 		}
@@ -353,7 +368,7 @@ func (c *Catalog) insertSkill(skill Skill, active bool) error {
 		if err := c.requireCapacity(); err != nil {
 			return err
 		}
-		skill.Name, skill.rekeyed = skill.baseName, true
+		skill.DisplayName, skill.Name, skill.rekeyed = skill.Name, skill.baseName, true
 		return c.store(skill, active)
 	}
 	if c.canRekey(incumbent) {
@@ -361,7 +376,7 @@ func (c *Catalog) insertSkill(skill Skill, active bool) error {
 			return err
 		}
 		c.deleteName(incumbent.Name)
-		incumbent.Name, incumbent.rekeyed = incumbent.baseName, true
+		incumbent.DisplayName, incumbent.Name, incumbent.rekeyed = incumbent.Name, incumbent.baseName, true
 		if err := c.store(incumbent, incumbentActive); err != nil {
 			return err
 		}
@@ -392,7 +407,7 @@ func (c *Catalog) store(skill Skill, active bool) error {
 			return err
 		}
 	}
-	skill.DisableModelInvocation = skill.frontmatterDisabled || c.disabled[skill.Name]
+	skill.DisableModelInvocation = skill.frontmatterDisabled || c.disabled[skill.Name] || c.disabled[qualifiedSkillName(skill)]
 	if active {
 		if c.byName == nil {
 			c.byName = make(map[string]Skill)
@@ -800,10 +815,13 @@ func (c *Catalog) modelSkillNamesLocked() []string {
 }
 
 func (c *Catalog) toolSkillNamesLocked() []string {
-	names := make([]string, 0, len(c.byName))
+	names := make([]string, 0, len(c.byName)*2)
 	for name, skill := range c.byName {
 		if skill.UserInvocable && !skill.DisableModelInvocation {
 			names = append(names, name)
+			if qualified := qualifiedSkillName(skill); qualified != name {
+				names = append(names, qualified)
+			}
 		}
 	}
 	sort.Strings(names)
@@ -826,9 +844,12 @@ func (t *Tool) Definition() api.ToolDefinition {
 		Type: "function", Name: "skill",
 		Description: "Load the complete SKILL.md instructions for one discovered skill. Available names: " + strings.Join(names, ", "),
 		Parameters: map[string]any{
-			"type":       "object",
-			"properties": map[string]any{"name": nameSchema},
-			"required":   []string{"name"}, "additionalProperties": false,
+			"type": "object",
+			"properties": map[string]any{
+				"name": nameSchema,
+				"args": map[string]any{"type": "string", "description": "Optional arguments for the skill"},
+			},
+			"required": []string{"name"}, "additionalProperties": false,
 		},
 	}
 }
@@ -836,12 +857,13 @@ func (t *Tool) Definition() api.ToolDefinition {
 func (t *Tool) Execute(_ context.Context, raw json.RawMessage) (string, error) {
 	var args struct {
 		Name string `json:"name"`
+		Args string `json:"args"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return "", fmt.Errorf("decode skill arguments: %w", err)
 	}
 	t.catalog.mu.RLock()
-	skill, ok := t.catalog.byName[args.Name]
+	skill, ok := t.catalog.resolveSkillLocked(args.Name)
 	t.catalog.mu.RUnlock()
 	if !ok || !skill.UserInvocable || skill.DisableModelInvocation {
 		return "", fmt.Errorf("unknown skill %q", args.Name)
@@ -853,15 +875,26 @@ func (t *Tool) Execute(_ context.Context, raw json.RawMessage) (string, error) {
 	if len(data) > maxSkillBytes || !utf8.Valid(data) {
 		return "", fmt.Errorf("skill %q is too large or no longer UTF-8", args.Name)
 	}
+	body := substituteSkillArguments(string(data), args.Args, filepath.Dir(skill.Path), "")
 	return fmt.Sprintf(
 		"<skill name=\"%s\" description=\"%s\" path=\"%s\">\n%s\n</skill>",
-		skill.Name, skill.Description, skill.Path, data,
+		skill.Name, skill.Description, skill.Path, body,
 	), nil
 }
 
 type skillMetadata struct {
 	Name                   string
 	Description            string
+	HasAuthoredDescription bool
+	ShortDescription       string
+	Author                 string
+	ArgumentHint           string
+	License                string
+	Compatibility          string
+	Metadata               map[string]string
+	AllowedTools           []string
+	Model                  string
+	Effort                 string
 	Paths                  []string
 	WhenToUse              string
 	UserInvocable          bool
@@ -890,6 +923,13 @@ func parseMetadata(content, fallbackName string) skillMetadata {
 		WhenToUseAlias         yaml.Node `yaml:"when_to_use"`
 		UserInvocable          yaml.Node `yaml:"user-invocable"`
 		DisableModelInvocation yaml.Node `yaml:"disable-model-invocation"`
+		ArgumentHint           yaml.Node `yaml:"argument-hint"`
+		License                yaml.Node `yaml:"license"`
+		Compatibility          yaml.Node `yaml:"compatibility"`
+		AllowedTools           yaml.Node `yaml:"allowed-tools"`
+		Model                  yaml.Node `yaml:"model"`
+		Effort                 yaml.Node `yaml:"effort"`
+		Metadata               yaml.Node `yaml:"metadata"`
 	}
 	if yaml.Unmarshal([]byte(content[4:4+end]), &metadata) != nil {
 		result.Description = capSkillText(descriptionFromBody(body, result.Name))
@@ -902,6 +942,7 @@ func parseMetadata(content, fallbackName string) skillMetadata {
 	}
 	if metadata.Description.Kind == yaml.ScalarNode {
 		result.Description = capSkillText(metadata.Description.Value)
+		result.HasAuthoredDescription = strings.TrimSpace(metadata.Description.Value) != ""
 	}
 	if result.Description == "" {
 		result.Description = capSkillText(descriptionFromBody(body, result.Name))
@@ -914,11 +955,37 @@ func parseMetadata(content, fallbackName string) skillMetadata {
 		result.WhenToUse = capSkillText(whenToUse.Value)
 	}
 	if metadata.UserInvocable.Kind != 0 {
-		result.UserInvocable = metadata.UserInvocable.Kind == yaml.ScalarNode && strings.EqualFold(metadata.UserInvocable.Value, "true")
+		result.UserInvocable = metadata.UserInvocable.Kind == yaml.ScalarNode && metadata.UserInvocable.Value == "true"
 	}
-	result.DisableModelInvocation = metadata.DisableModelInvocation.Kind == yaml.ScalarNode && strings.EqualFold(metadata.DisableModelInvocation.Value, "true")
+	result.DisableModelInvocation = metadata.DisableModelInvocation.Kind == yaml.ScalarNode && metadata.DisableModelInvocation.Value == "true"
 	result.Paths = parseSkillPaths(metadata.Paths)
+	result.ArgumentHint = skillScalar(metadata.ArgumentHint)
+	result.License = skillScalar(metadata.License)
+	result.Compatibility = skillScalar(metadata.Compatibility)
+	result.Model = skillScalar(metadata.Model)
+	result.Effort = skillScalar(metadata.Effort)
+	result.AllowedTools = parseAllowedTools(metadata.AllowedTools)
+	result.ShortDescription, result.Author, result.Metadata = parseSkillMetadata(metadata.Metadata)
 	return result
+}
+
+func (c *Catalog) resolveSkillLocked(name string) (Skill, bool) {
+	if skill, ok := c.byName[name]; ok {
+		return skill, true
+	}
+	for skillName, skill := range c.byName {
+		if strings.EqualFold(skillName, name) || strings.EqualFold(qualifiedSkillName(skill), name) {
+			return skill, true
+		}
+	}
+	return Skill{}, false
+}
+
+func qualifiedSkillName(skill Skill) string {
+	if skill.scope == "" {
+		return skill.Name
+	}
+	return skill.scope + ":" + skill.Name
 }
 
 func capSkillText(value string) string {
@@ -944,14 +1011,96 @@ func normalizeSkillName(name string) string {
 	return strings.Trim(slug.String(), "-")
 }
 
+func skillScalar(node yaml.Node) string {
+	if node.Kind != yaml.ScalarNode || node.Tag == "!!null" {
+		return ""
+	}
+	return strings.TrimSpace(node.Value)
+}
+
+func parseSkillMetadata(node yaml.Node) (shortDescription, author string, metadata map[string]string) {
+	if node.Kind != yaml.MappingNode {
+		return "", "", nil
+	}
+	for index := 0; index+1 < len(node.Content); index += 2 {
+		key, value := node.Content[index], node.Content[index+1]
+		if key.Kind != yaml.ScalarNode || value.Kind != yaml.ScalarNode || value.Tag != "!!str" {
+			continue
+		}
+		name, text := strings.TrimSpace(key.Value), strings.TrimSpace(value.Value)
+		if name == "" || text == "" {
+			continue
+		}
+		switch name {
+		case "short-description":
+			shortDescription = text
+		case "author":
+			author = text
+		default:
+			if metadata == nil {
+				metadata = make(map[string]string)
+			}
+			metadata[name] = text
+		}
+	}
+	return shortDescription, author, metadata
+}
+
+func parseAllowedTools(node yaml.Node) []string {
+	var tools []string
+	switch node.Kind {
+	case yaml.ScalarNode:
+		if node.Tag == "!!str" {
+			tools = splitTopLevel(node.Value, '(', ')', true)
+		}
+	case yaml.SequenceNode:
+		for _, item := range node.Content {
+			if item.Kind == yaml.ScalarNode && item.Tag == "!!str" && strings.TrimSpace(item.Value) != "" {
+				tools = append(tools, strings.TrimSpace(item.Value))
+			}
+		}
+	}
+	return tools
+}
+
+func splitTopLevel(value string, open, close rune, splitSpace bool) []string {
+	var values []string
+	var current strings.Builder
+	depth := 0
+	flush := func() {
+		if value := strings.TrimSpace(current.String()); value != "" {
+			values = append(values, value)
+		}
+		current.Reset()
+	}
+	for _, char := range value {
+		switch {
+		case char == open:
+			depth++
+			current.WriteRune(char)
+		case char == close:
+			depth--
+			current.WriteRune(char)
+		case depth <= 0 && (char == ',' || splitSpace && (char == ' ' || char == '\t' || char == '\n')):
+			flush()
+		default:
+			current.WriteRune(char)
+		}
+	}
+	flush()
+	return values
+}
+
 func parseSkillPaths(node yaml.Node) []string {
 	var raw []string
 	switch node.Kind {
 	case yaml.ScalarNode:
-		raw = splitSkillPaths(node.Value)
+		if node.Tag == "!!str" {
+			raw = splitSkillPaths(node.Value)
+		}
 	case yaml.SequenceNode:
 		for _, item := range node.Content {
-			if item.Kind == yaml.ScalarNode {
+			if item.Kind == yaml.ScalarNode && item.Tag == "!!str" {
 				raw = append(raw, splitSkillPaths(item.Value)...)
 			}
 		}
@@ -973,22 +1122,7 @@ func parseSkillPaths(node yaml.Node) []string {
 }
 
 func splitSkillPaths(value string) []string {
-	var paths []string
-	start, depth := 0, 0
-	for index, char := range value {
-		switch char {
-		case '{':
-			depth++
-		case '}':
-			depth--
-		case ',':
-			if depth <= 0 {
-				paths = append(paths, strings.TrimSpace(value[start:index]))
-				start = index + 1
-			}
-		}
-	}
-	return append(paths, strings.TrimSpace(value[start:]))
+	return splitTopLevel(value, '{', '}', false)
 }
 
 func descriptionFromBody(body, fallback string) string {

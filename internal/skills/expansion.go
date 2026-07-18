@@ -24,8 +24,10 @@ func (c *Catalog) ExpandReferences(text, sessionID string) string {
 	c.mu.RLock()
 	available := make(map[string]Skill, len(c.byName))
 	for name, skill := range c.byName {
-		if skill.UserInvocable && !c.disabled[name] {
+		qualified := qualifiedSkillName(skill)
+		if skill.UserInvocable && !c.disabled[name] && !c.disabled[qualified] {
 			available[name] = skill
+			available[qualified] = skill
 		}
 	}
 	c.mu.RUnlock()
@@ -79,7 +81,7 @@ func parseSkillReferences(text string, available map[string]Skill) []skillRefere
 			end++
 		}
 		name := text[index+1 : end]
-		skill, ok := available[name]
+		skill, ok := available[strings.ToLower(name)]
 		if !ok {
 			index = end
 			continue

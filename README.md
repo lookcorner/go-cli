@@ -511,6 +511,11 @@ Known user-invocable Skills can also be referenced directly in prompts as
 `$ARGUMENTS`, `$ARGUMENTS[N]`, `$N`, `${SKILL_DIR}`, and
 `${CLAUDE_SKILL_DIR}`, `${SESSION_ID}`, and `${CLAUDE_SESSION_ID}`
 substitutions; arguments are appended when no argument placeholder is present.
+The model-facing `skill` tool accepts the same optional `args` value, and both
+paths accept qualified names such as `user:deploy` or `local:review`.
+Additional compatible frontmatter is preserved for clients and future UI use:
+`argument-hint`, `license`, `compatibility`, `allowed-tools`, `model`, `effort`,
+and string-valued `metadata` entries including `short-description` and `author`.
 
 The `[skills]` config accepts additional directories or individual `SKILL.md`
 files. Paths support `~`; relative paths resolve from the workspace. `ignore`
