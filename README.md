@@ -418,6 +418,18 @@ skills override same-named user or parent skills.
 Skills with a scalar or list `paths` value in YAML frontmatter stay hidden until a successful
 file read, directory listing, or edit touches a matching path.
 
+The `[skills]` config accepts additional directories or individual `SKILL.md`
+files. Paths support `~`; relative paths resolve from the workspace. `ignore`
+removes matching path prefixes, while `disabled` keeps named skills discoverable
+but hides them from model invocation:
+
+```toml
+[skills]
+paths = ["~/shared-skills", "project-skills"]
+ignore = ["~/shared-skills/experimental"]
+disabled = ["manual-only"]
+```
+
 Claude and Cursor discovery surfaces default to enabled. They can be disabled
 independently in `config.toml`, with matching `GROK_<VENDOR>_<SURFACE>_ENABLED`
 environment variables taking precedence:

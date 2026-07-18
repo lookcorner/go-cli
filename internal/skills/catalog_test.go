@@ -229,7 +229,7 @@ func TestDiscoverScopesSkillsFromHomeThroughWorkspace(t *testing.T) {
 	writeSkill(filepath.Join(cwd, ".claude", "skills"), "shared", "cwd")
 	writeSkill(filepath.Join(home, ".cursor", "skills"), "cursor-only", "cursor")
 
-	catalog, err := discover(cwd, home, grokHome, compat.Default())
+	catalog, err := discover(cwd, home, grokHome, Config{Compat: compat.Default()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,13 +263,63 @@ func TestSkillCompatibilityGatesAreIndependent(t *testing.T) {
 	}
 	cfg := compat.Default()
 	cfg.Cursor.Skills = false
-	catalog, err := discover(repo, home, filepath.Join(home, ".grok"), cfg)
+	catalog, err := discover(repo, home, filepath.Join(home, ".grok"), Config{Compat: cfg})
 	if err != nil {
 		t.Fatal(err)
 	}
 	joined := strings.Join(catalog.Names(), ",")
 	if strings.Contains(joined, "cursor-") || !strings.Contains(joined, "claude-home") || !strings.Contains(joined, "claude-project") {
 		t.Fatalf("unexpected gated skills: %s", joined)
+	}
+}
+
+func TestConfiguredSkillPathsIgnoreAndDisabled(t *testing.T) {
+	home := t.TempDir()
+	root := t.TempDir()
+	writeSkill := func(path, name, description string) string {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		content := "---\nname: " + name + "\ndescription: " + description + "\n---\nBody\n"
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	shared := filepath.Join(home, "shared-skills")
+	writeSkill(filepath.Join(shared, "live", "SKILL.md"), "live", "live config")
+	writeSkill(filepath.Join(shared, "disabled", "SKILL.md"), "disabled", "disabled config")
+	ignored := filepath.Join(shared, "ignored")
+	writeSkill(filepath.Join(ignored, "SKILL.md"), "ignored", "ignored config")
+	writeSkill(filepath.Join(shared, "shared", "SKILL.md"), "shared", "config copy")
+	writeSkill(filepath.Join(root, "relative-skills", "relative", "SKILL.md"), "relative", "relative config")
+	directRoot := t.TempDir()
+	direct := writeSkill(filepath.Join(directRoot, "direct", "SKILL.md"), "direct", "direct file")
+	writeSkill(filepath.Join(directRoot, "unwanted", "SKILL.md"), "unwanted", "must not load")
+	writeSkill(filepath.Join(root, ".grok", "skills", "shared", "SKILL.md"), "shared", "workspace copy")
+
+	catalog, err := discover(root, home, "", Config{
+		Compat: compat.Default(),
+		Paths:  []string{"~/shared-skills", "relative-skills", direct},
+		Ignore: []string{"~/shared-skills/ignored"}, Disabled: []string{"disabled"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "direct,disabled,live,relative,shared"
+	if got := strings.Join(catalog.Names(), ","); got != want {
+		t.Fatalf("configured skill names=%q, want %q", got, want)
+	}
+	if skill := catalog.byName["shared"]; skill.Description != "workspace copy" || skill.Source != "workspace:grok" {
+		t.Fatalf("workspace skill did not override config path: %#v", skill)
+	}
+	summary := catalog.Summary()
+	if strings.Contains(summary, "disabled config") || strings.Contains(summary, "ignored config") || strings.Contains(summary, "must not load") || !strings.Contains(summary, "direct file") || !strings.Contains(summary, "relative config") {
+		t.Fatalf("unexpected configured skill summary: %s", summary)
+	}
+	if _, err := catalog.Tool().Execute(context.Background(), json.RawMessage(`{"name":"disabled"}`)); err == nil {
+		t.Fatal("config-disabled skill was model-invocable")
 	}
 }
 
@@ -319,7 +369,7 @@ func TestMatchesPathsChecksParentDirectories(t *testing.T) {
 
 func TestCatalogDiscoversSkillsBelowInitialWorkspace(t *testing.T) {
 	root := t.TempDir()
-	catalog, err := discover(root, "", "", compat.Default())
+	catalog, err := discover(root, "", "", Config{Compat: compat.Default()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -345,7 +395,7 @@ func TestCatalogRegistersDirectlyTouchedSkillFile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(existingDir, "SKILL.md"), []byte("---\nname: existing\n---\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	catalog, err := discover(root, "", "", compat.Default())
+	catalog, err := discover(root, "", "", Config{Compat: compat.Default()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -364,7 +414,7 @@ func TestCatalogRegistersDirectlyTouchedSkillFile(t *testing.T) {
 
 func TestDynamicallyDiscoveredConditionalSkillWaitsForNextTouch(t *testing.T) {
 	root := t.TempDir()
-	catalog, err := discover(root, "", "", compat.Default())
+	catalog, err := discover(root, "", "", Config{Compat: compat.Default()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -385,7 +435,7 @@ func TestDynamicallyDiscoveredConditionalSkillWaitsForNextTouch(t *testing.T) {
 
 func TestCatalogWatcherReloadsAddedChangedAndDeletedSkills(t *testing.T) {
 	root := t.TempDir()
-	catalog, err := discover(root, "", "", compat.Default())
+	catalog, err := discover(root, "", "", Config{Compat: compat.Default()})
 	if err != nil {
 		t.Fatal(err)
 	}

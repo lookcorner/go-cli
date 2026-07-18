@@ -27,6 +27,11 @@ hard_clear_age_turns = 10
 # Omit allowed_domains to use the built-in documentation-domain list.
 # An explicit empty list blocks every web_fetch request.
 
+[skills]
+# paths = ["~/shared-skills", "/absolute/path/to/SKILL.md"]
+# ignore = ["~/shared-skills/experimental"]
+# disabled = ["manual-only"]
+
 [mcp_servers.example]
 command = "example-mcp-server"
 args = []

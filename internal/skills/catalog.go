@@ -38,24 +38,33 @@ type Skill struct {
 	digest                 [sha256.Size]byte
 }
 
+type Config struct {
+	Compat   compat.Config
+	Paths    []string
+	Ignore   []string
+	Disabled []string
+}
+
 type skillRoot struct {
 	path   string
 	source string
 }
 
 type Catalog struct {
-	root    string
-	compat  compat.Config
-	byName  map[string]Skill
-	pending map[string]Skill
-	checked map[string]bool
-	roots   []skillRoot
-	seen    map[string]bool
-	changed bool
-	mu      sync.RWMutex
+	root     string
+	compat   compat.Config
+	byName   map[string]Skill
+	pending  map[string]Skill
+	checked  map[string]bool
+	roots    []skillRoot
+	ignore   []string
+	disabled map[string]bool
+	seen     map[string]bool
+	changed  bool
+	mu       sync.RWMutex
 }
 
-func Discover(workspaceRoot string, cfg compat.Config) (*Catalog, error) {
+func Discover(workspaceRoot string, cfg Config) (*Catalog, error) {
 	home, _ := os.UserHomeDir()
 	grokHome := os.Getenv("GROK_HOME")
 	if grokHome == "" && home != "" {
@@ -64,16 +73,21 @@ func Discover(workspaceRoot string, cfg compat.Config) (*Catalog, error) {
 	return discover(workspaceRoot, home, grokHome, cfg)
 }
 
-func discover(workspaceRoot, home, grokHome string, cfg compat.Config) (*Catalog, error) {
+func discover(workspaceRoot, home, grokHome string, cfg Config) (*Catalog, error) {
 	if real, err := filepath.EvalSymlinks(workspaceRoot); err == nil {
 		workspaceRoot = real
 	}
 	var roots []skillRoot
+	for _, path := range cfg.Paths {
+		if path = resolveConfigPath(path, home, workspaceRoot); path != "" {
+			roots = append(roots, skillRoot{path, "config"})
+		}
+	}
 	if home != "" {
-		if cfg.Cursor.Skills {
+		if cfg.Compat.Cursor.Skills {
 			roots = append(roots, skillRoot{filepath.Join(home, ".cursor", "skills"), "user:cursor"})
 		}
-		if cfg.Claude.Skills {
+		if cfg.Compat.Claude.Skills {
 			roots = append(roots, skillRoot{filepath.Join(home, ".claude", "skills"), "user:claude"})
 		}
 		roots = append(roots, skillRoot{filepath.Join(home, ".agents", "skills"), "user:agents"})
@@ -84,10 +98,10 @@ func discover(workspaceRoot, home, grokHome string, cfg compat.Config) (*Catalog
 	gitRoot := workspace.GitRoot(workspaceRoot)
 	for _, scope := range workspace.ProjectScopes(gitRoot, workspaceRoot) {
 		var dirs []string
-		if cfg.Cursor.Skills {
+		if cfg.Compat.Cursor.Skills {
 			dirs = append(dirs, ".cursor")
 		}
-		if cfg.Claude.Skills {
+		if cfg.Compat.Claude.Skills {
 			dirs = append(dirs, ".claude")
 		}
 		dirs = append(dirs, ".agents", ".gork", ".grok")
@@ -97,8 +111,18 @@ func discover(workspaceRoot, home, grokHome string, cfg compat.Config) (*Catalog
 			})
 		}
 	}
+	disabled := make(map[string]bool, len(cfg.Disabled))
+	for _, name := range cfg.Disabled {
+		disabled[name] = true
+	}
+	ignore := make([]string, 0, len(cfg.Ignore))
+	for _, path := range cfg.Ignore {
+		if path = resolveConfigPath(path, home, workspaceRoot); path != "" {
+			ignore = append(ignore, path)
+		}
+	}
 	catalog := &Catalog{
-		root: workspaceRoot, compat: cfg, roots: append([]skillRoot(nil), roots...),
+		root: workspaceRoot, compat: cfg.Compat, roots: append([]skillRoot(nil), roots...), ignore: ignore, disabled: disabled,
 		byName: make(map[string]Skill), pending: make(map[string]Skill), checked: make(map[string]bool), seen: make(map[string]bool),
 	}
 	for _, root := range roots {
@@ -110,6 +134,25 @@ func discover(workspaceRoot, home, grokHome string, cfg compat.Config) (*Catalog
 		}
 	}
 	return catalog, nil
+}
+
+func resolveConfigPath(path, home, workspaceRoot string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	if path == "~" && home != "" {
+		path = home
+	} else if strings.HasPrefix(path, "~/") && home != "" {
+		path = filepath.Join(home, path[2:])
+	} else if !filepath.IsAbs(path) {
+		path = filepath.Join(workspaceRoot, path)
+	}
+	path = filepath.Clean(path)
+	if real, err := filepath.EvalSymlinks(path); err == nil {
+		return real
+	}
+	return path
 }
 
 func (c *Catalog) scanOnce(root, source string) error {
@@ -136,7 +179,10 @@ func (c *Catalog) scan(root, source string) error {
 		return fmt.Errorf("stat skills root %q: %w", root, err)
 	}
 	if !info.IsDir() {
-		return nil
+		if !strings.EqualFold(filepath.Base(root), "SKILL.md") {
+			return nil
+		}
+		return c.loadSkill(root, info, source)
 	}
 	return filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -149,51 +195,60 @@ func (c *Catalog) scan(root, source string) error {
 		if err != nil {
 			return err
 		}
-		if info.Size() > maxSkillBytes {
-			return fmt.Errorf("skill %q exceeds %d bytes", path, maxSkillBytes)
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		if !utf8.Valid(data) {
-			return fmt.Errorf("skill %q is not UTF-8", path)
-		}
-		metadata := parseMetadata(string(data), filepath.Base(filepath.Dir(path)))
-		if metadata.Name == "" {
+		return c.loadSkill(path, info, source)
+	})
+}
+
+func (c *Catalog) loadSkill(path string, info os.FileInfo, source string) error {
+	if info.Size() > maxSkillBytes {
+		return fmt.Errorf("skill %q exceeds %d bytes", path, maxSkillBytes)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	if !utf8.Valid(data) {
+		return fmt.Errorf("skill %q is not UTF-8", path)
+	}
+	real, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return fmt.Errorf("resolve skill %q: %w", path, err)
+	}
+	for _, ignored := range c.ignore {
+		if pathWithin(ignored, real) {
 			return nil
 		}
-		if c.seen != nil {
-			c.seen[metadata.Name] = true
-		}
-		if _, active := c.byName[metadata.Name]; !active {
-			if _, held := c.pending[metadata.Name]; !held && len(c.byName)+len(c.pending) >= maxSkills {
-				return errors.New("skill discovery exceeded 500 skills")
-			}
-		}
-		real, err := filepath.EvalSymlinks(path)
-		if err != nil {
-			return fmt.Errorf("resolve skill %q: %w", path, err)
-		}
-		// Later roots have higher priority, so workspace skills override user skills.
-		active, wasActive := c.byName[metadata.Name]
-		delete(c.byName, metadata.Name)
-		delete(c.pending, metadata.Name)
-		skill := Skill{
-			Name: metadata.Name, Description: metadata.Description, Path: real, Source: source,
-			Paths: metadata.Paths, WhenToUse: metadata.WhenToUse,
-			DisableModelInvocation: metadata.DisableModelInvocation, digest: sha256.Sum256(data),
-		}
-		if len(metadata.Paths) == 0 || wasActive && active.Path == real {
-			c.byName[metadata.Name] = skill
-		} else {
-			if c.pending == nil {
-				c.pending = make(map[string]Skill)
-			}
-			c.pending[metadata.Name] = skill
-		}
+	}
+	metadata := parseMetadata(string(data), filepath.Base(filepath.Dir(path)))
+	if metadata.Name == "" {
 		return nil
-	})
+	}
+	if c.seen != nil {
+		c.seen[metadata.Name] = true
+	}
+	if _, active := c.byName[metadata.Name]; !active {
+		if _, held := c.pending[metadata.Name]; !held && len(c.byName)+len(c.pending) >= maxSkills {
+			return errors.New("skill discovery exceeded 500 skills")
+		}
+	}
+	// Later roots have higher priority, so workspace skills override config and user skills.
+	active, wasActive := c.byName[metadata.Name]
+	delete(c.byName, metadata.Name)
+	delete(c.pending, metadata.Name)
+	skill := Skill{
+		Name: metadata.Name, Description: metadata.Description, Path: real, Source: source,
+		Paths: metadata.Paths, WhenToUse: metadata.WhenToUse,
+		DisableModelInvocation: metadata.DisableModelInvocation || c.disabled[metadata.Name], digest: sha256.Sum256(data),
+	}
+	if len(metadata.Paths) == 0 || wasActive && active.Path == real {
+		c.byName[metadata.Name] = skill
+	} else {
+		if c.pending == nil {
+			c.pending = make(map[string]Skill)
+		}
+		c.pending[metadata.Name] = skill
+	}
+	return nil
 }
 
 func (c *Catalog) Count() int {
@@ -231,6 +286,7 @@ func (c *Catalog) reload() error {
 	defer c.mu.Unlock()
 	fresh := &Catalog{
 		root: c.root, compat: c.compat, roots: append([]skillRoot(nil), c.roots...),
+		ignore: append([]string(nil), c.ignore...), disabled: c.disabled,
 		byName: make(map[string]Skill, len(c.byName)), pending: make(map[string]Skill, len(c.pending)),
 		checked: make(map[string]bool), seen: make(map[string]bool),
 	}

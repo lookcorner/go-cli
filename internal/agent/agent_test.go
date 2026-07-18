@@ -179,7 +179,7 @@ func TestRunnerAnnouncesConditionalSkillAfterFileTool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	catalog, err := skills.Discover(ws.Root(), compat.Default())
+	catalog, err := skills.Discover(ws.Root(), skills.Config{Compat: compat.Default()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +223,7 @@ func TestRunnerIncludesWatchedSkillInNextRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	catalog, err := skills.Discover(ws.Root(), compat.Default())
+	catalog, err := skills.Discover(ws.Root(), skills.Config{Compat: compat.Default()})
 	if err != nil {
 		t.Fatal(err)
 	}

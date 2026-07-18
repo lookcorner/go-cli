@@ -172,7 +172,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return err
 	}
 	projectInstructions := workspace.FormatInstructions(instructionFiles)
-	skillCatalog, err := skills.Discover(ws.Root(), cfg.Compat)
+	skillCatalog, err := skills.Discover(ws.Root(), skills.Config{
+		Compat: cfg.Compat, Paths: cfg.Skills.Paths, Ignore: cfg.Skills.Ignore, Disabled: cfg.Skills.Disabled,
+	})
 	if err != nil {
 		return err
 	}
@@ -373,7 +375,9 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		if err != nil {
 			return nil, nil, err
 		}
-		catalog, err := skills.Discover(ws.Root(), cfg.Compat)
+		catalog, err := skills.Discover(ws.Root(), skills.Config{
+			Compat: cfg.Compat, Paths: cfg.Skills.Paths, Ignore: cfg.Skills.Ignore, Disabled: cfg.Skills.Disabled,
+		})
 		if err != nil {
 			return nil, nil, err
 		}

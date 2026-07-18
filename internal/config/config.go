@@ -31,6 +31,7 @@ type Config struct {
 	AutoCompactThresholdPercent int                        `json:"auto_compact_threshold_percent,omitempty"`
 	Pruning                     PruningConfig              `json:"pruning"`
 	Compat                      compat.Config              `json:"compat"`
+	Skills                      SkillsConfig               `json:"skills,omitempty"`
 	HTTPTimeout                 time.Duration              `json:"-"`
 	WebSearch                   WebSearchConfig            `json:"web_search,omitempty"`
 	WebFetch                    WebFetchConfig             `json:"web_fetch,omitempty"`
@@ -59,6 +60,12 @@ type PermissionRule struct {
 	Tool        string  `json:"tool,omitempty" toml:"tool"`
 	Pattern     *string `json:"pattern,omitempty" toml:"pattern"`
 	PatternMode string  `json:"pattern_mode,omitempty" toml:"pattern_mode"`
+}
+
+type SkillsConfig struct {
+	Paths    []string `json:"paths,omitempty" toml:"paths"`
+	Ignore   []string `json:"ignore,omitempty" toml:"ignore"`
+	Disabled []string `json:"disabled,omitempty" toml:"disabled"`
 }
 
 type PruningConfig struct {
@@ -119,6 +126,7 @@ type fileConfig struct {
 	ContextWindow int                        `json:"context_window,omitempty" toml:"context_window"`
 	Compaction    fileCompactionConfig       `json:"compaction,omitempty" toml:"compaction"`
 	Compat        fileCompatConfig           `json:"compat,omitempty" toml:"compat"`
+	Skills        SkillsConfig               `json:"skills,omitempty" toml:"skills"`
 	Models        struct {
 		Default   string `toml:"default"`
 		WebSearch string `toml:"web_search"`
@@ -253,6 +261,7 @@ func Load(path string) (Config, error) {
 		}
 		applyPruningConfig(&cfg.Pruning, disk.Compaction.Pruning)
 		applyCompatConfig(&cfg.Compat, disk.Compat)
+		cfg.Skills = disk.Skills
 		if disk.HTTPTimeout != "" {
 			d, err := time.ParseDuration(disk.HTTPTimeout)
 			if err != nil {

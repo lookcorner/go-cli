@@ -73,6 +73,11 @@ settings = { gopls = { staticcheck = true } }
 proxy_endpoint = "https://toml-proxy.example"
 allowed_domains = ["example.com", "vercel.com/docs"]
 
+[skills]
+paths = ["~/shared-skills", "project-skills"]
+ignore = ["~/shared-skills/ignored"]
+disabled = ["manual-only"]
+
 [[permission.rules]]
 action = "allow"
 tool = "bash"
@@ -132,6 +137,9 @@ pattern = ".env*"
 	}
 	if len(cfg.Permission.Rules) != 2 || cfg.Permission.Rules[0].Action != "allow" || *cfg.Permission.Rules[1].Pattern != ".env*" {
 		t.Fatalf("unexpected permission config: %#v", cfg.Permission)
+	}
+	if strings.Join(cfg.Skills.Paths, ",") != "~/shared-skills,project-skills" || strings.Join(cfg.Skills.Ignore, ",") != "~/shared-skills/ignored" || strings.Join(cfg.Skills.Disabled, ",") != "manual-only" {
+		t.Fatalf("unexpected skills config: %#v", cfg.Skills)
 	}
 }
 
