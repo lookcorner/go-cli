@@ -912,6 +912,7 @@ func (s *Server) startSession(ctx context.Context, id string, sessionConfig Sess
 		id: id, cwd: sessionConfig.CWD, updated: time.Now().UTC(), previous: previous,
 		runner: runner, close: closeRuntime, promptIndex: promptIndex, activePrompt: -1, rewind: rewind, logPath: sessionPath, mode: mode,
 	}
+	runner.SessionID = id
 	runner.ToolObserver = &sessionToolObserver{server: s, sessionID: id}
 	runner.Tools.SetRewindStore(rewind, func() int {
 		created.mu.Lock()

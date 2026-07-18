@@ -46,6 +46,7 @@ type Runner struct {
 	Tools                   *tools.Registry
 	Skills                  *skills.Catalog
 	Logger                  EventLogger
+	SessionID               string
 	Model                   string
 	Instructions            string
 	MaxSteps                int
@@ -109,7 +110,7 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 		return Result{}, fmt.Errorf("persist user prompt: %w", err)
 	}
 	if r.Skills != nil {
-		if information := r.Skills.ExpandReferences(prompt); information != "" {
+		if information := r.Skills.ExpandReferences(prompt, r.SessionID); information != "" {
 			switch value := content.(type) {
 			case string:
 				content = "<user_query>\n" + value + "\n</user_query>\n" + information

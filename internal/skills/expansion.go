@@ -17,7 +17,7 @@ type skillReference struct {
 }
 
 // ExpandReferences loads user-invocable /skill references from text.
-func (c *Catalog) ExpandReferences(text string) string {
+func (c *Catalog) ExpandReferences(text, sessionID string) string {
 	if c == nil {
 		return ""
 	}
@@ -39,7 +39,7 @@ func (c *Catalog) ExpandReferences(text string) string {
 		if err != nil || len(data) > maxSkillBytes || !utf8.Valid(data) {
 			continue
 		}
-		body := substituteSkillArguments(string(data), ref.args, filepath.Dir(ref.skill.Path))
+		body := substituteSkillArguments(string(data), ref.args, filepath.Dir(ref.skill.Path), sessionID)
 		if ref.args == "" {
 			blocks = append(blocks, fmt.Sprintf("<skill name=\"%s\">\n%s\n</skill>", ref.name, body))
 		} else {
@@ -101,7 +101,7 @@ func isASCIISpace(char byte) bool {
 	return char == ' ' || char == '\t' || char == '\n' || char == '\r'
 }
 
-func substituteSkillArguments(body, args, skillDir string) string {
+func substituteSkillArguments(body, args, skillDir, sessionID string) string {
 	argv := strings.Fields(args)
 	usedArgs := false
 	for index := len(argv) + 20; index >= 0; index-- {
@@ -124,6 +124,10 @@ func substituteSkillArguments(body, args, skillDir string) string {
 	}
 	body = strings.ReplaceAll(body, "${SKILL_DIR}", skillDir)
 	body = strings.ReplaceAll(body, "${CLAUDE_SKILL_DIR}", skillDir)
+	if sessionID != "" {
+		body = strings.ReplaceAll(body, "${SESSION_ID}", sessionID)
+		body = strings.ReplaceAll(body, "${CLAUDE_SESSION_ID}", sessionID)
+	}
 	if args != "" && !usedArgs {
 		body += "\n\n**ARGUMENTS:** " + args
 	}

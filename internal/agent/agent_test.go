@@ -220,7 +220,7 @@ func TestRunnerExpandsUserSkillReferences(t *testing.T) {
 	if err := os.MkdirAll(skillDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: commit\ndescription: Commit changes\ndisable-model-invocation: true\n---\nCommit $ARGUMENTS"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: commit\ndescription: Commit changes\ndisable-model-invocation: true\n---\nCommit $ARGUMENTS in ${SESSION_ID}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	ws, err := workspace.Open(root)
@@ -234,12 +234,12 @@ func TestRunnerExpandsUserSkillReferences(t *testing.T) {
 	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
 	defer registry.Close()
 	streamer := &fakeStreamer{results: []api.StreamResult{{ResponseID: "resp_1", Text: "done"}}}
-	runner := Runner{Client: streamer, Tools: registry, Skills: catalog, Model: "test", MaxSteps: 1}
+	runner := Runner{Client: streamer, Tools: registry, Skills: catalog, SessionID: "session-123", Model: "test", MaxSteps: 1}
 	if _, err := runner.Run(context.Background(), "/commit fix typo"); err != nil {
 		t.Fatal(err)
 	}
 	content, ok := streamer.requests[0].Input[0].Content.(string)
-	if !ok || !strings.Contains(content, "<user_query>\n/commit fix typo\n</user_query>") || !strings.Contains(content, `<skill name="commit" args="fix typo">`) || !strings.Contains(content, "Commit fix typo") {
+	if !ok || !strings.Contains(content, "<user_query>\n/commit fix typo\n</user_query>") || !strings.Contains(content, `<skill name="commit" args="fix typo">`) || !strings.Contains(content, "Commit fix typo in session-123") {
 		t.Fatalf("skill reference was not expanded into the model request: %#v", streamer.requests[0].Input)
 	}
 }

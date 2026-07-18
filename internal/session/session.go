@@ -761,6 +761,10 @@ func CurrentMode(path string) (string, error) {
 
 func (l *Logger) Path() string { return l.path }
 
+func (l *Logger) ID() string {
+	return strings.TrimSuffix(filepath.Base(l.path), ".jsonl")
+}
+
 func ArtifactDir(sessionPath string) (string, error) {
 	base := filepath.Base(sessionPath)
 	if filepath.Ext(base) != ".jsonl" {

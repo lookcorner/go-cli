@@ -297,7 +297,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 	runner := &agent.Runner{
 		Client: client, Tools: registry, Skills: skillCatalog, Logger: logger,
-		Model: cfg.Model, Instructions: cfg.SystemPrompt, MaxSteps: cfg.MaxSteps,
+		SessionID: logger.ID(),
+		Model:     cfg.Model, Instructions: cfg.SystemPrompt, MaxSteps: cfg.MaxSteps,
 		TextOutput: stdout, StatusOutput: stderr,
 		ContextWindow: cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,
 	}

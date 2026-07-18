@@ -29,6 +29,29 @@ type fixtureStreamer struct {
 
 type blockingStreamer struct{ started chan struct{} }
 
+func TestStartSessionAssignsRunnerSessionID(t *testing.T) {
+	root := t.TempDir()
+	server := &Server{
+		SessionDir: t.TempDir(), sessions: make(map[string]*session),
+		Factory: func(_ context.Context, cfg SessionConfig, approver tools.Approver, _, _ io.Writer) (*agent.Runner, func(), error) {
+			ws, err := workspace.Open(cfg.CWD)
+			if err != nil {
+				return nil, nil, err
+			}
+			registry := tools.NewRegistry(ws, approver)
+			return &agent.Runner{Tools: registry}, func() { _ = registry.Close() }, nil
+		},
+	}
+	created, err := server.startSession(context.Background(), "session-123", SessionConfig{CWD: root}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer created.close()
+	if created.runner.SessionID != "session-123" {
+		t.Fatalf("runner session ID=%q", created.runner.SessionID)
+	}
+}
+
 func (f *blockingStreamer) StreamResponse(ctx context.Context, _ api.ResponseRequest, _ func(string)) (api.StreamResult, error) {
 	close(f.started)
 	<-ctx.Done()

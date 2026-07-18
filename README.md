@@ -433,8 +433,8 @@ Known user-invocable Skills can also be referenced directly in prompts as
 `/skill-name arguments`. Multiple references are expanded into the reference
 `<skill_information>` envelope before the model call. Skill bodies support
 `$ARGUMENTS`, `$ARGUMENTS[N]`, `$N`, `${SKILL_DIR}`, and
-`${CLAUDE_SKILL_DIR}` substitutions; arguments are appended when no argument
-placeholder is present.
+`${CLAUDE_SKILL_DIR}`, `${SESSION_ID}`, and `${CLAUDE_SESSION_ID}`
+substitutions; arguments are appended when no argument placeholder is present.
 
 The `[skills]` config accepts additional directories or individual `SKILL.md`
 files. Paths support `~`; relative paths resolve from the workspace. `ignore`

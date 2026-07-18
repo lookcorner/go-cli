@@ -324,6 +324,17 @@ func TestArtifactDirIsScopedToSessionID(t *testing.T) {
 	}
 }
 
+func TestLoggerExposesSessionID(t *testing.T) {
+	logger, err := NewLoggerWithID(t.TempDir(), "session-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logger.Close()
+	if logger.ID() != "session-123" {
+		t.Fatalf("session ID=%q", logger.ID())
+	}
+}
+
 func TestForkAtPromptUsesLiveTimeline(t *testing.T) {
 	dir := t.TempDir()
 	logger, err := NewLoggerWithID(dir, "parent")
