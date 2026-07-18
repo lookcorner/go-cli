@@ -466,16 +466,16 @@ func (s *Server) handleWorktreeManagement(ctx context.Context, incoming message)
 			s.respondError(incoming.ID, -32000, err.Error())
 			return
 		}
-		s.respond(incoming.ID, report)
+		s.respond(incoming.ID, worktreeGCToWire(report))
 	case "x.ai/git/worktree/db/stats":
-		s.respond(incoming.ID, s.worktrees.Stats())
+		s.respond(incoming.ID, worktreeStatsToWire(s.worktrees.Stats()))
 	case "x.ai/git/worktree/db/rebuild":
 		report, err := s.worktrees.Rebuild(ctx)
 		if err != nil {
 			s.respondError(incoming.ID, -32000, err.Error())
 			return
 		}
-		s.respond(incoming.ID, report)
+		s.respond(incoming.ID, worktreeRebuildToWire(report))
 	case "x.ai/git/worktree/db/path":
 		s.respond(incoming.ID, map[string]any{"path": s.worktrees.StatePath()})
 	}
@@ -500,10 +500,14 @@ func (s *Server) handleWorktreeFork(ctx context.Context, incoming message) {
 	if existed {
 		status = "exists"
 	}
-	s.respond(incoming.ID, map[string]any{
+	response := map[string]any{
 		"status": status, "sessionId": req.NewSessionID, "worktreePath": result.WorktreePath,
 		"sourceGitRoot": result.SourceGitRoot,
-	})
+	}
+	if existed && result.Commit != nil {
+		response["commit"] = *result.Commit
+	}
+	s.respond(incoming.ID, response)
 	if !existed {
 		s.write(map[string]any{
 			"jsonrpc": "2.0", "method": "x.ai/git/worktree/status",
@@ -536,10 +540,14 @@ func (s *Server) handleWorktree(ctx context.Context, incoming message) {
 		if existed {
 			status = "exists"
 		}
-		s.respond(incoming.ID, map[string]any{
+		response := map[string]any{
 			"status": status, "sessionId": req.SessionID, "worktreePath": record.Path,
 			"sourceGitRoot": record.SourceRepo,
-		})
+		}
+		if existed {
+			response["commit"] = record.HeadCommit
+		}
+		s.respond(incoming.ID, response)
 		if !existed {
 			s.write(map[string]any{
 				"jsonrpc": "2.0", "method": "x.ai/git/worktree/status",
@@ -559,7 +567,7 @@ func (s *Server) handleWorktree(ctx context.Context, incoming message) {
 			s.respondError(incoming.ID, -32602, "invalid worktree list parameters")
 			return
 		}
-		s.respond(incoming.ID, s.worktrees.List(req.Repo, req.Types, req.IncludeAll))
+		s.respond(incoming.ID, worktreeRecordWires(s.worktrees.List(req.Repo, req.Types, req.IncludeAll)))
 	case "x.ai/git/worktree/show":
 		var req struct {
 			IDOrPath string `json:"idOrPath"`
@@ -573,7 +581,7 @@ func (s *Server) handleWorktree(ctx context.Context, incoming message) {
 			s.respond(incoming.ID, nil)
 			return
 		}
-		s.respond(incoming.ID, record)
+		s.respond(incoming.ID, worktreeRecordToWire(record))
 	case "x.ai/git/worktree/remove":
 		var req worktrees.RemoveRequest
 		if json.Unmarshal(incoming.Params, &req) != nil {

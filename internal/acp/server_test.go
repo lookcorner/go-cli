@@ -595,18 +595,36 @@ func TestWorktreeExtensionsCreateListShowAndRemove(t *testing.T) {
 		t.Fatalf("unexpected worktree notification: %#v", notification)
 	}
 	encodeACP(t, encoder, map[string]any{
+		"jsonrpc": "2.0", "id": 11, "method": "x.ai/git/worktree/create",
+		"params": map[string]any{
+			"sessionId": "wt-session", "sourcePath": root, "worktreePath": dest,
+			"copyMode": "clean", "worktreeType": "linked", "label": "ACP Test",
+		},
+	})
+	existing := decodeACP(t, decoder)["result"].(map[string]any)
+	if existing["status"] != "exists" || existing["commit"] == nil {
+		t.Fatalf("unexpected existing worktree response: %#v", existing)
+	}
+	encodeACP(t, encoder, map[string]any{
 		"jsonrpc": "2.0", "id": 2, "method": "x.ai/git/worktree/list", "params": map[string]any{},
 	})
 	listed := decodeACP(t, decoder)
 	records := listed["result"].([]any)
-	if len(records) != 1 || records[0].(map[string]any)["path"] != dest {
+	if len(records) != 1 {
 		t.Fatalf("unexpected worktree list: %#v", listed)
+	}
+	listedRecord := records[0].(map[string]any)
+	if listedRecord["path"] != dest || listedRecord["session_id"] != "wt-session" || listedRecord["source_repo"] == nil || listedRecord["created_at"] == nil {
+		t.Fatalf("unexpected worktree list: %#v", listed)
+	}
+	if _, exists := listedRecord["sessionId"]; exists {
+		t.Fatalf("worktree list used non-reference field names: %#v", listedRecord)
 	}
 	encodeACP(t, encoder, map[string]any{
 		"jsonrpc": "2.0", "id": 3, "method": "x.ai/git/worktree/show", "params": map[string]any{"idOrPath": dest},
 	})
 	shown := decodeACP(t, decoder)
-	if shown["result"].(map[string]any)["sessionId"] != "wt-session" {
+	if shown["result"].(map[string]any)["session_id"] != "wt-session" {
 		t.Fatalf("unexpected worktree show: %#v", shown)
 	}
 	if err := os.WriteFile(filepath.Join(dest, "tracked.txt"), []byte("applied\n"), 0o600); err != nil {
@@ -651,7 +669,7 @@ func TestWorktreeExtensionsCreateListShowAndRemove(t *testing.T) {
 	}
 	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 42, "method": "x.ai/git/worktree/db/stats", "params": map[string]any{}})
 	stats := decodeACP(t, decoder)
-	if stats["result"].(map[string]any)["totalRecords"].(float64) != 1 {
+	if stats["result"].(map[string]any)["total_records"].(float64) != 1 {
 		t.Fatalf("unexpected worktree stats: %#v", stats)
 	}
 	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 43, "method": "x.ai/git/worktree/db/path", "params": map[string]any{}})
@@ -659,12 +677,17 @@ func TestWorktreeExtensionsCreateListShowAndRemove(t *testing.T) {
 	if !strings.HasSuffix(dbPath["result"].(map[string]any)["path"].(string), "worktrees.json") {
 		t.Fatalf("unexpected worktree DB path: %#v", dbPath)
 	}
+	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 45, "method": "x.ai/git/worktree/db/rebuild", "params": map[string]any{}})
+	rebuild := decodeACP(t, decoder)["result"].(map[string]any)
+	if _, exists := rebuild["already_tracked"]; !exists {
+		t.Fatalf("unexpected worktree rebuild report: %#v", rebuild)
+	}
 	encodeACP(t, encoder, map[string]any{
 		"jsonrpc": "2.0", "id": 44, "method": "x.ai/git/worktree/gc",
 		"params": map[string]any{"dryRun": true, "maxAge": "0s", "force": true},
 	})
 	gc := decodeACP(t, decoder)
-	if gc["result"].(map[string]any)["expiredRemoved"].(float64) != 1 {
+	if gc["result"].(map[string]any)["expired_removed"].(float64) != 1 {
 		t.Fatalf("unexpected worktree GC dry-run: %#v", gc)
 	}
 	if _, err := os.Stat(dest); err != nil {
