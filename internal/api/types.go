@@ -33,7 +33,12 @@ type ResponseRequest struct {
 	ParallelToolCalls  bool             `json:"parallel_tool_calls"`
 	PreviousResponseID string           `json:"previous_response_id,omitempty"`
 	MaxOutputTokens    int64            `json:"max_output_tokens,omitempty"`
+	Reasoning          *ReasoningConfig `json:"reasoning,omitempty"`
 	Stream             bool             `json:"stream"`
+}
+
+type ReasoningConfig struct {
+	Effort string `json:"effort"`
 }
 
 type ToolCall struct {

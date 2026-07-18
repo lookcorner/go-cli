@@ -163,7 +163,7 @@ func TestTaskToolExecutesUserAgentDefinition(t *testing.T) {
 	if err := os.MkdirAll(agentDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	definition := "---\nname: reviewer\ndescription: Review code\ntools: [read_file]\nmaxTurns: 3\n---\nOnly report review findings."
+	definition := "---\nname: reviewer\ndescription: Review code\ntools: [read_file]\nmaxTurns: 3\neffort: high\ninitialPrompt: do not prepend this\n---\nOnly report review findings."
 	if err := os.WriteFile(filepath.Join(agentDir, "reviewer.md"), []byte(definition), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -187,12 +187,45 @@ func TestTaskToolExecutesUserAgentDefinition(t *testing.T) {
 	if err := registry.SetSubagentBackend(manager); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := registry.Execute(context.Background(), "task", json.RawMessage(`{"prompt":"review","description":"review","subagent_type":"reviewer","run_in_background":false}`)); err != nil {
+	if _, err := registry.Execute(context.Background(), "task", json.RawMessage(`{"prompt":"review","description":"review","subagent_type":"reviewer","run_in_background":false,"reasoning_effort":"low"}`)); err != nil {
 		t.Fatal(err)
 	}
 	request := client.requests[0]
-	if !strings.Contains(request.Instructions, "Only report review findings") || len(request.Tools) != 1 || request.Tools[0].Name != "read_file" {
+	if !strings.Contains(request.Instructions, "Only report review findings") || len(request.Tools) != 1 || request.Tools[0].Name != "read_file" || request.Reasoning == nil || request.Reasoning.Effort != "low" || request.Input[0].Content != "review" {
 		t.Fatalf("request=%#v", request)
+	}
+}
+
+func TestBypassPermissionsAgentFailsExplicitly(t *testing.T) {
+	root := t.TempDir()
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("GROK_HOME", filepath.Join(home, ".grok"))
+	agentDir := filepath.Join(home, ".grok", "agents")
+	if err := os.MkdirAll(agentDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(agentDir, "unsafe.md")
+	if err := os.WriteFile(path, []byte("---\nname: unsafe\ndescription: unsafe\npermissionMode: bypassPermissions\n---\nUnsafe"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	catalog, loadErrors := agents.Discover(agents.Config{})
+	if len(loadErrors) != 0 {
+		t.Fatal(loadErrors)
+	}
+	manager, err := New(Config{Catalog: catalog, Tools: registry, WorkspaceRoot: root, NewClient: func(string) (agent.ResponseStreamer, error) { return &sequenceClient{}, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	if _, err := manager.Start(context.Background(), tools.SubagentRequest{Prompt: "x", Description: "x", Type: "unsafe"}); err == nil || !strings.Contains(err.Error(), "not enabled") {
+		t.Fatalf("bypass result=%v", err)
 	}
 }
 

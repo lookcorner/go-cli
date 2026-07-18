@@ -37,7 +37,7 @@ type frontmatter struct {
 	Description     string     `yaml:"description"`
 	Tools           stringList `yaml:"tools"`
 	DisallowedTools stringList `yaml:"disallowedTools"`
-	MaxTurns        int        `yaml:"maxTurns"`
+	MaxTurns        *int       `yaml:"maxTurns"`
 	Model           string     `yaml:"model"`
 	Effort          string     `yaml:"effort"`
 	PermissionMode  string     `yaml:"permissionMode"`
@@ -275,15 +275,40 @@ func parse(path, pluginName, scope string) (Definition, error) {
 	if name == "" || strings.TrimSpace(metadata.Description) == "" {
 		return Definition{}, fmt.Errorf("parse agent %q: name and description are required", path)
 	}
-	if metadata.MaxTurns < 0 {
-		return Definition{}, fmt.Errorf("parse agent %q: maxTurns must not be negative", path)
+	if metadata.MaxTurns != nil && *metadata.MaxTurns <= 0 {
+		return Definition{}, fmt.Errorf("parse agent %q: maxTurns must be greater than 0", path)
+	}
+	effort := strings.TrimSpace(metadata.Effort)
+	permissionMode := strings.TrimSpace(metadata.PermissionMode)
+	isolation := strings.TrimSpace(metadata.Isolation)
+	if !oneOf(effort, "", "low", "medium", "high", "xhigh", "max") {
+		return Definition{}, fmt.Errorf("parse agent %q: invalid effort %q", path, effort)
+	}
+	if !oneOf(permissionMode, "", "default", "acceptEdits", "auto", "dontAsk", "bypassPermissions", "plan") {
+		return Definition{}, fmt.Errorf("parse agent %q: invalid permissionMode %q", path, permissionMode)
+	}
+	if !oneOf(isolation, "", "none", "worktree") {
+		return Definition{}, fmt.Errorf("parse agent %q: invalid isolation %q", path, isolation)
+	}
+	maxTurns := 0
+	if metadata.MaxTurns != nil {
+		maxTurns = *metadata.MaxTurns
 	}
 	return Definition{
 		Name: name, Description: strings.TrimSpace(metadata.Description), Tools: metadata.Tools,
-		DisallowedTools: metadata.DisallowedTools, MaxTurns: metadata.MaxTurns,
+		DisallowedTools: metadata.DisallowedTools, MaxTurns: maxTurns,
 		Prompt: strings.TrimSpace(text[4+end+5:]), Path: path, Plugin: pluginName,
-		Scope: scope, Model: strings.TrimSpace(metadata.Model), Effort: strings.TrimSpace(metadata.Effort),
-		PermissionMode: strings.TrimSpace(metadata.PermissionMode), Isolation: strings.TrimSpace(metadata.Isolation),
+		Scope: scope, Model: strings.TrimSpace(metadata.Model), Effort: effort,
+		PermissionMode: permissionMode, Isolation: isolation,
 		Background: metadata.Background, InitialPrompt: strings.TrimSpace(metadata.InitialPrompt),
 	}, nil
+}
+
+func oneOf(value string, choices ...string) bool {
+	for _, choice := range choices {
+		if value == choice {
+			return true
+		}
+	}
+	return false
 }

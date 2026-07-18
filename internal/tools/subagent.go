@@ -13,16 +13,17 @@ import (
 )
 
 type SubagentRequest struct {
-	Prompt         string
-	Description    string
-	Type           string
-	Background     bool
-	BackgroundSet  bool
-	CapabilityMode string
-	Isolation      string
-	ResumeFrom     string
-	CWD            string
-	Model          string
+	Prompt          string
+	Description     string
+	Type            string
+	Background      bool
+	BackgroundSet   bool
+	CapabilityMode  string
+	Isolation       string
+	ResumeFrom      string
+	CWD             string
+	Model           string
+	ReasoningEffort string
 }
 
 type SubagentResult struct {
@@ -80,20 +81,22 @@ func (t *subagentTool) Definition() api.ToolDefinition {
 		"resume_from":       map[string]any{"type": "string"},
 		"cwd":               map[string]any{"type": "string"},
 		"model":             map[string]any{"type": "string"},
+		"reasoning_effort":  map[string]any{"type": "string", "enum": []string{"low", "medium", "high", "xhigh", "max"}},
 	}, "prompt", "description")}
 }
 
 func (t *subagentTool) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
 	var args struct {
-		Prompt         string `json:"prompt"`
-		Description    string `json:"description"`
-		Type           string `json:"subagent_type"`
-		Background     *bool  `json:"run_in_background"`
-		CapabilityMode string `json:"capability_mode"`
-		Isolation      string `json:"isolation"`
-		ResumeFrom     string `json:"resume_from"`
-		CWD            string `json:"cwd"`
-		Model          string `json:"model"`
+		Prompt          string `json:"prompt"`
+		Description     string `json:"description"`
+		Type            string `json:"subagent_type"`
+		Background      *bool  `json:"run_in_background"`
+		CapabilityMode  string `json:"capability_mode"`
+		Isolation       string `json:"isolation"`
+		ResumeFrom      string `json:"resume_from"`
+		CWD             string `json:"cwd"`
+		Model           string `json:"model"`
+		ReasoningEffort string `json:"reasoning_effort"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return "", fmt.Errorf("decode task arguments: %w", err)
@@ -117,6 +120,7 @@ func (t *subagentTool) Execute(ctx context.Context, raw json.RawMessage) (string
 		BackgroundSet:  args.Background != nil,
 		CapabilityMode: args.CapabilityMode, Isolation: args.Isolation, ResumeFrom: args.ResumeFrom,
 		CWD: args.CWD, Model: args.Model,
+		ReasoningEffort: args.ReasoningEffort,
 	})
 	if err != nil {
 		return "", err

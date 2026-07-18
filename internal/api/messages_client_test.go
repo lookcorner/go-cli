@@ -46,6 +46,14 @@ func TestParseMessagesSSE(t *testing.T) {
 	}
 }
 
+func TestMessagesClientRejectsReasoningEffortOverride(t *testing.T) {
+	client := NewMessagesClient("https://example.invalid/v1", "key", &http.Client{})
+	_, err := client.StreamResponse(context.Background(), ResponseRequest{Model: "model", Reasoning: &ReasoningConfig{Effort: "high"}}, nil)
+	if err == nil || !strings.Contains(err.Error(), "does not support reasoning effort") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
 func TestMessagesClientCarriesToolHistory(t *testing.T) {
 	var requests []map[string]any
 	httpClient := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {

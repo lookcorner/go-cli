@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -89,6 +90,9 @@ func (c *MessagesClient) RewindHistory(messages []session.Message) {
 func (c *MessagesClient) SetPruning(config PruningConfig) { c.pruning = config }
 
 func (c *MessagesClient) StreamResponse(ctx context.Context, request ResponseRequest, onText func(string)) (StreamResult, error) {
+	if request.Reasoning != nil {
+		return StreamResult{}, errors.New("messages backend does not support reasoning effort overrides")
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	history := append([]messagesMessage(nil), c.history...)

@@ -72,6 +72,7 @@ type Runner struct {
 	Logger                  EventLogger
 	SessionID               string
 	Model                   string
+	ReasoningEffort         string
 	Instructions            string
 	MaxSteps                int
 	TextOutput              io.Writer
@@ -193,6 +194,9 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 			ParallelToolCalls:  false,
 			PreviousResponseID: previousResponseID,
 			Stream:             true,
+		}
+		if r.ReasoningEffort != "" {
+			request.Reasoning = &api.ReasoningConfig{Effort: r.ReasoningEffort}
 		}
 		r.log("model_request", map[string]any{"step": step, "previous_response_id": previousResponseID})
 		streamed, err := r.Client.StreamResponse(ctx, request, func(delta string) {

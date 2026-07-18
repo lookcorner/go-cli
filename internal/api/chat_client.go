@@ -147,6 +147,9 @@ func (c *ChatClient) StreamResponse(ctx context.Context, request ResponseRequest
 	if request.MaxOutputTokens > 0 {
 		payload["max_completion_tokens"] = request.MaxOutputTokens
 	}
+	if request.Reasoning != nil {
+		payload["reasoning_effort"] = request.Reasoning.Effort
+	}
 	if len(definitions) > 0 {
 		payload["tools"] = definitions
 		payload["tool_choice"] = "auto"

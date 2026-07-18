@@ -88,3 +88,21 @@ func TestDiscoverPluginAgentsSkipsNonExecutablePlugin(t *testing.T) {
 		t.Fatalf("definitions=%#v errors=%#v", definitions, errors)
 	}
 }
+
+func TestAgentFrontmatterRejectsInvalidRuntimeValues(t *testing.T) {
+	for name, field := range map[string]string{
+		"zero-turns": "maxTurns: 0", "bad-effort": "effort: extreme",
+		"bad-permission": "permissionMode: always", "bad-isolation": "isolation: container",
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "agent.md")
+			content := "---\nname: test\ndescription: test\n" + field + "\n---\nPrompt"
+			if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Parse(path, ""); err == nil {
+				t.Fatalf("accepted %s", field)
+			}
+		})
+	}
+}

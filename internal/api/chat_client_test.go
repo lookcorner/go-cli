@@ -89,7 +89,7 @@ func TestChatClientCarriesToolHistory(t *testing.T) {
 
 	client := NewChatClient("https://example.invalid/v1", "key", httpClient)
 	first, err := client.StreamResponse(context.Background(), ResponseRequest{
-		Model: "model", Instructions: "system", Stream: true,
+		Model: "model", Instructions: "system", Stream: true, Reasoning: &ReasoningConfig{Effort: "high"},
 		Input: []InputItem{{Type: "message", Role: "user", Content: "inspect"}},
 	}, nil)
 	if err != nil {
@@ -110,6 +110,9 @@ func TestChatClientCarriesToolHistory(t *testing.T) {
 	}
 	if len(requests) != 2 {
 		t.Fatalf("expected two requests, got %d", len(requests))
+	}
+	if requests[0]["reasoning_effort"] != "high" {
+		t.Fatalf("reasoning effort missing: %#v", requests[0])
 	}
 	messages, ok := requests[1]["messages"].([]any)
 	if !ok || len(messages) != 4 {

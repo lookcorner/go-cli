@@ -108,6 +108,13 @@ func (m *Manager) Start(ctx context.Context, request tools.SubagentRequest) (too
 	if !ok {
 		return tools.SubagentResult{}, fmt.Errorf("unknown subagent type %q", request.Type)
 	}
+	if definition.PermissionMode == "bypassPermissions" {
+		return tools.SubagentResult{}, errors.New("subagent permissionMode bypassPermissions is not enabled")
+	}
+	effort := first(request.ReasoningEffort, definition.Effort)
+	if !validEffort(effort) {
+		return tools.SubagentResult{}, fmt.Errorf("invalid subagent reasoning_effort %q", effort)
+	}
 	if request.CWD != "" && canonicalPath(request.CWD) != canonicalPath(m.workspaceRoot) {
 		return tools.SubagentResult{}, errors.New("custom subagent cwd is not supported by this workspace session")
 	}
@@ -133,7 +140,7 @@ func (m *Manager) Start(ctx context.Context, request tools.SubagentRequest) (too
 	}
 	view := m.tools.View(definition.Tools, definition.DisallowedTools, capability)
 	id := newID()
-	runner := &agent.Runner{Client: client, Tools: view, Model: model, Instructions: definition.Prompt, SessionID: id, MaxSteps: definition.MaxTurns}
+	runner := &agent.Runner{Client: client, Tools: view, Model: model, ReasoningEffort: effort, Instructions: definition.Prompt, SessionID: id, MaxSteps: definition.MaxTurns}
 	var hookRuntime *hooks.Runtime
 	if m.hooks != nil {
 		hookRuntime = &hooks.Runtime{Catalog: m.hooks, WorkspaceRoot: m.workspaceRoot, SessionID: id, Model: model, SubagentType: request.Type}
@@ -143,11 +150,7 @@ func (m *Manager) Start(ctx context.Context, request tools.SubagentRequest) (too
 	m.mu.Lock()
 	m.tasks[id] = current
 	m.mu.Unlock()
-	prompt := request.Prompt
-	if definition.InitialPrompt != "" {
-		prompt = definition.InitialPrompt + "\n\n" + prompt
-	}
-	return m.launch(ctx, current, prompt, background)
+	return m.launch(ctx, current, request.Prompt, background)
 }
 
 func (m *Manager) resume(ctx context.Context, request tools.SubagentRequest, definition agents.Definition, background bool) (tools.SubagentResult, error) {
@@ -179,7 +182,8 @@ func (m *Manager) resume(ctx context.Context, request tools.SubagentRequest, def
 	}
 	runner := &agent.Runner{
 		Client: previous.runner.Client, Tools: previous.runner.Tools, Model: previous.runner.Model,
-		Instructions: previous.runner.Instructions, SessionID: id, MaxSteps: previous.runner.MaxSteps,
+		ReasoningEffort: first(request.ReasoningEffort, definition.Effort, previous.runner.ReasoningEffort),
+		Instructions:    previous.runner.Instructions, SessionID: id, MaxSteps: previous.runner.MaxSteps,
 	}
 	if hookRuntime != nil {
 		runner.HookPolicy = hookRuntime
@@ -188,11 +192,7 @@ func (m *Manager) resume(ctx context.Context, request tools.SubagentRequest, def
 	m.mu.Lock()
 	m.tasks[id] = current
 	m.mu.Unlock()
-	prompt := request.Prompt
-	if definition.InitialPrompt != "" {
-		prompt = definition.InitialPrompt + "\n\n" + prompt
-	}
-	return m.launch(ctx, current, prompt, background)
+	return m.launch(ctx, current, request.Prompt, background)
 }
 
 func (m *Manager) launch(caller context.Context, current *task, prompt string, background bool) (tools.SubagentResult, error) {
@@ -367,6 +367,15 @@ func first(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func validEffort(value string) bool {
+	switch value {
+	case "", "low", "medium", "high", "xhigh", "max":
+		return true
+	default:
+		return false
+	}
 }
 
 func canonicalPath(path string) string {
