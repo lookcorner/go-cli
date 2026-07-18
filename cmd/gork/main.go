@@ -742,6 +742,9 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	var skillsMu sync.Mutex
+	dynamicSkills := cloneSkillsConfig(cfg.Skills)
+	catalogs := make(map[*skills.Catalog]bool)
 	server := &acp.Server{SessionDir: opts.sessionDir, Factory: func(
 		sessionCtx context.Context,
 		sessionConfig acp.SessionConfig,
@@ -761,7 +764,11 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		if !projectTrusted {
 			fmt.Fprintln(statusOutput, "[gork] project executable configuration is disabled for this untrusted workspace")
 		}
-		sessionCfg, catalog, plugins, err := discoverWorkspace(ws.Root(), cfg, projectTrusted)
+		skillsMu.Lock()
+		sessionBase := cfg
+		sessionBase.Skills = cloneSkillsConfig(dynamicSkills)
+		skillsMu.Unlock()
+		sessionCfg, catalog, plugins, err := discoverWorkspace(ws.Root(), sessionBase, projectTrusted)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -862,12 +869,45 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		}
 		watchCtx, stopSkills := context.WithCancel(sessionCtx)
 		catalog.Watch(watchCtx, time.Second)
+		skillsMu.Lock()
+		catalogs[catalog] = true
+		skillsMu.Unlock()
 		var closeOnce sync.Once
 		closeRuntime := func() {
 			closeOnce.Do(func() {
 				stopSkills()
+				skillsMu.Lock()
+				delete(catalogs, catalog)
+				skillsMu.Unlock()
 				cleanup()
 			})
+		}
+		updateSkills := func(_ context.Context, update func(*skills.Settings)) (skills.Settings, error) {
+			if err := config.UpdateSkills(opts.configPath, func(stored *config.SkillsConfig) {
+				settings := skillSettings(*stored)
+				update(&settings)
+				*stored = storedSkillSettings(settings)
+			}); err != nil {
+				return skills.Settings{}, err
+			}
+			reloaded, err := config.Load(opts.configPath)
+			if err != nil {
+				return skills.Settings{}, err
+			}
+			settings := cloneSkillsConfig(reloaded.Skills)
+			skillsMu.Lock()
+			dynamicSkills = cloneSkillsConfig(settings)
+			activeCatalogs := make([]*skills.Catalog, 0, len(catalogs))
+			for active := range catalogs {
+				activeCatalogs = append(activeCatalogs, active)
+			}
+			skillsMu.Unlock()
+			for _, active := range activeCatalogs {
+				if err := active.Reconfigure(skillSettings(settings)); err != nil {
+					return skills.Settings{}, err
+				}
+			}
+			return skillSettings(settings), nil
 		}
 		return &agent.Runner{
 			Client: modelClient, Tools: registry, Skills: catalog, Plugins: plugins, Logger: logger,
@@ -875,6 +915,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			TextOutput: textOutput, StatusOutput: statusOutput,
 			ContextWindow: cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,
 			UpdateMCPServers: mcpRuntime.Update, MCPServers: mcpRuntime.Configs,
+			UpdateSkills: updateSkills,
 		}, closeRuntime, nil
 	}}
 	if err := server.Serve(ctx, stdin, stdout); err != nil {
@@ -882,6 +923,27 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		return err
 	}
 	return nil
+}
+
+func cloneSkillsConfig(source config.SkillsConfig) config.SkillsConfig {
+	return config.SkillsConfig{
+		Paths: append([]string(nil), source.Paths...), Ignore: append([]string(nil), source.Ignore...),
+		Disabled: append([]string(nil), source.Disabled...),
+	}
+}
+
+func skillSettings(source config.SkillsConfig) skills.Settings {
+	return skills.Settings{
+		Paths: append([]string(nil), source.Paths...), Ignore: append([]string(nil), source.Ignore...),
+		Disabled: append([]string(nil), source.Disabled...),
+	}
+}
+
+func storedSkillSettings(source skills.Settings) config.SkillsConfig {
+	return config.SkillsConfig{
+		Paths: append([]string(nil), source.Paths...), Ignore: append([]string(nil), source.Ignore...),
+		Disabled: append([]string(nil), source.Disabled...),
+	}
 }
 
 func discoverWorkspace(root string, cfg config.Config, projectTrusted bool) (config.Config, *skills.Catalog, []plugin.Plugin, error) {

@@ -655,7 +655,7 @@ func TestSkillsExtensionWireContract(t *testing.T) {
 	current := &session{id: "skill-session", cwd: root, runner: &agent.Runner{Skills: catalog}}
 	var output bytes.Buffer
 	server := &Server{output: &output, sessions: map[string]*session{"skill-session": current}}
-	server.handleSkills(message{ID: json.RawMessage("1"), Method: "x.ai/skills/list", Params: json.RawMessage(`{"cwd":` + strconv.Quote(root) + `}`)})
+	server.handleSkills(context.Background(), message{ID: json.RawMessage("1"), Method: "x.ai/skills/list", Params: json.RawMessage(`{"cwd":` + strconv.Quote(root) + `}`)})
 	var response map[string]any
 	if err := json.NewDecoder(&output).Decode(&response); err != nil {
 		t.Fatal(err)
@@ -665,13 +665,74 @@ func TestSkillsExtensionWireContract(t *testing.T) {
 		t.Fatalf("unexpected skills list: %#v", response)
 	}
 	output.Reset()
-	server.handleSkills(message{ID: json.RawMessage("2"), Method: "x.ai/skills/config", Params: json.RawMessage(`{"cwd":` + strconv.Quote(root) + `}`)})
+	server.handleSkills(context.Background(), message{ID: json.RawMessage("2"), Method: "x.ai/skills/config", Params: json.RawMessage(`{"cwd":` + strconv.Quote(root) + `}`)})
 	if err := json.NewDecoder(&output).Decode(&response); err != nil {
 		t.Fatal(err)
 	}
 	config := response["result"].(map[string]any)["result"].(map[string]any)
 	if config["totalSkills"].(float64) != 1 || len(config["skills"].([]any)) != 1 {
 		t.Fatalf("unexpected skills config: %#v", response)
+	}
+}
+
+func TestSkillsMutationExtensions(t *testing.T) {
+	root := t.TempDir()
+	custom := filepath.Join(root, "custom")
+	skillDir := filepath.Join(custom, "review")
+	if err := os.MkdirAll(skillDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: review\ndescription: Review changes\n---\nReview.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := skills.Discover(root, skills.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := skills.Settings{}
+	runner := &agent.Runner{Skills: catalog}
+	runner.UpdateSkills = func(_ context.Context, update func(*skills.Settings)) (skills.Settings, error) {
+		update(&settings)
+		err := catalog.Reconfigure(settings)
+		return settings, err
+	}
+	current := &session{id: "skills-mutate", cwd: root, runner: runner}
+	var output bytes.Buffer
+	server := &Server{output: &output, sessions: map[string]*session{"skills-mutate": current}}
+
+	decode := func() map[string]any {
+		t.Helper()
+		var response map[string]any
+		if err := json.NewDecoder(&output).Decode(&response); err != nil {
+			t.Fatal(err)
+		}
+		output.Reset()
+		return response["result"].(map[string]any)["result"].(map[string]any)
+	}
+	server.handleSkills(context.Background(), message{ID: json.RawMessage("1"), Method: "x.ai/skills/add", Params: json.RawMessage(`{"cwd":` + strconv.Quote(root) + `,"path":` + strconv.Quote(custom) + `}`)})
+	added := decode()
+	if added["addedCount"].(float64) != 1 || added["total"].(float64) != 1 || len(settings.Paths) != 1 {
+		t.Fatalf("unexpected add result=%#v settings=%#v", added, settings)
+	}
+	server.handleSkills(context.Background(), message{ID: json.RawMessage("2"), Method: "x.ai/skills/toggle", Params: json.RawMessage(`{"cwd":` + strconv.Quote(root) + `,"name":"review","enabled":false}`)})
+	toggled := decode()
+	if toggled["skills"].([]any)[0].(map[string]any)["enabled"] != false || strings.Join(settings.Disabled, "|") != "review" {
+		t.Fatalf("unexpected toggle result=%#v settings=%#v", toggled, settings)
+	}
+	server.handleSkills(context.Background(), message{ID: json.RawMessage("3"), Method: "x.ai/skills/remove", Params: json.RawMessage(`{"cwd":` + strconv.Quote(root) + `,"path":` + strconv.Quote(custom) + `}`)})
+	removed := decode()
+	if len(removed["skills"].([]any)) != 0 || len(settings.Paths) != 0 {
+		t.Fatalf("unexpected remove result=%#v settings=%#v", removed, settings)
+	}
+	settings.Paths = []string{custom}
+	settings.Disabled = []string{"review"}
+	if err := catalog.Reconfigure(settings); err != nil {
+		t.Fatal(err)
+	}
+	server.handleSkills(context.Background(), message{ID: json.RawMessage("4"), Method: "x.ai/skills/reset", Params: json.RawMessage(`{"cwd":` + strconv.Quote(root) + `}`)})
+	reset := decode()
+	if len(settings.Paths) != 0 || len(settings.Disabled) != 0 || len(reset["skills"].([]any)) != 0 {
+		t.Fatalf("unexpected reset result=%#v settings=%#v", reset, settings)
 	}
 }
 

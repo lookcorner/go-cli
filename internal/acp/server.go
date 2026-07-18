@@ -220,8 +220,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleMCP(ctx, incoming)
 		case "x.ai/commands/list", "x.ai/workspaces/list":
 			s.handleStaticExtension(incoming)
-		case "x.ai/skills/list", "x.ai/skills/config":
-			s.handleSkills(incoming)
+		case "x.ai/skills/list", "x.ai/skills/config", "x.ai/skills/add", "x.ai/skills/remove", "x.ai/skills/reset", "x.ai/skills/toggle":
+			s.handleSkills(ctx, incoming)
 		case "x.ai/plugins/list":
 			s.handlePlugins(incoming)
 		case "x.ai/fs/list", "x.ai/fs/exists", "x.ai/fs/read_file", "x.ai/fs/write_file", "x.ai/fs/delete_file":
@@ -489,34 +489,6 @@ func (s *Server) handleStaticExtension(incoming message) {
 			"_meta":      map[string]any{"x.ai/partial": map[string]any{"workspaces": true, "reason": "no_oauth"}},
 		}})
 	}
-}
-
-func (s *Server) handleSkills(incoming message) {
-	var req struct {
-		CWD string `json:"cwd"`
-	}
-	if json.Unmarshal(incoming.Params, &req) != nil {
-		s.respondError(incoming.ID, -32602, "invalid skills parameters")
-		return
-	}
-	var current *session
-	s.mu.Lock()
-	for _, candidate := range s.sessions {
-		if req.CWD == "" || candidate.cwd == req.CWD {
-			current = candidate
-			break
-		}
-	}
-	s.mu.Unlock()
-	if current == nil || current.runner == nil || current.runner.Skills == nil {
-		s.respond(incoming.ID, map[string]any{"result": nil, "error": "skills catalog is unavailable for this cwd"})
-		return
-	}
-	if incoming.Method == "x.ai/skills/list" {
-		s.respond(incoming.ID, map[string]any{"result": map[string]any{"skills": current.runner.Skills.List()}})
-		return
-	}
-	s.respond(incoming.ID, map[string]any{"result": current.runner.Skills.ConfigInfo()})
 }
 
 func (s *Server) handleFS(incoming message) {

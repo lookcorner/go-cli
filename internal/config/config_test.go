@@ -760,3 +760,59 @@ func TestFolderTrustConfigAndEnvironmentPrecedence(t *testing.T) {
 		t.Fatal("folder trust environment override was ignored")
 	}
 }
+
+func TestUpdateSkillsPreservesOtherConfiguration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[models]\ndefault = \"local\"\n\n[skills]\npaths = [\"old\"]\nignore = [\"ignored\"]\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateSkills(path, func(settings *SkillsConfig) {
+		settings.Paths = append(settings.Paths, "new")
+		settings.Disabled = []string{"review"}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := toml.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	models := raw["models"].(map[string]any)
+	skillTable := raw["skills"].(map[string]any)
+	if models["default"] != "local" || strings.Join(anyStrings(skillTable["paths"]), "|") != "old|new" || strings.Join(anyStrings(skillTable["disabled"]), "|") != "review" {
+		t.Fatalf("unexpected updated config: %#v", raw)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o640 {
+		t.Fatalf("config mode=%v", info.Mode().Perm())
+	}
+	if err := UpdateSkills(path, func(settings *SkillsConfig) { *settings = SkillsConfig{} }); err != nil {
+		t.Fatal(err)
+	}
+	data, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = nil
+	if err := toml.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := raw["skills"]; exists || raw["models"].(map[string]any)["default"] != "local" {
+		t.Fatalf("skills reset damaged config: %#v", raw)
+	}
+}
+
+func anyStrings(value any) []string {
+	items, _ := value.([]any)
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		result = append(result, item.(string))
+	}
+	return result
+}

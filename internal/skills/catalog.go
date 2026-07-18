@@ -111,6 +111,12 @@ type Config struct {
 	Plugins  []plugin.Plugin
 }
 
+type Settings struct {
+	Paths    []string
+	Ignore   []string
+	Disabled []string
+}
+
 type skillRoot struct {
 	path       string
 	source     string
@@ -124,6 +130,7 @@ type skillRoot struct {
 type Catalog struct {
 	root        string
 	compat      compat.Config
+	config      Config
 	byName      map[string]Skill
 	pending     map[string]Skill
 	checked     map[string]bool
@@ -216,7 +223,7 @@ func discover(workspaceRoot, home, grokHome string, cfg Config) (*Catalog, error
 		}
 	}
 	catalog := &Catalog{
-		root: workspaceRoot, compat: cfg.Compat, roots: append([]skillRoot(nil), roots...), ignore: ignore, disabled: disabled,
+		root: workspaceRoot, compat: cfg.Compat, config: cloneConfig(cfg), roots: append([]skillRoot(nil), roots...), ignore: ignore, disabled: disabled,
 		byName: make(map[string]Skill), pending: make(map[string]Skill), checked: make(map[string]bool),
 	}
 	for _, root := range roots {
@@ -228,6 +235,42 @@ func discover(workspaceRoot, home, grokHome string, cfg Config) (*Catalog, error
 		}
 	}
 	return catalog, nil
+}
+
+func cloneConfig(cfg Config) Config {
+	cfg.Paths = append([]string(nil), cfg.Paths...)
+	cfg.Ignore = append([]string(nil), cfg.Ignore...)
+	cfg.Disabled = append([]string(nil), cfg.Disabled...)
+	cfg.Plugins = append([]plugin.Plugin(nil), cfg.Plugins...)
+	return cfg
+}
+
+func (c *Catalog) Reconfigure(settings Settings) error {
+	if c == nil {
+		return nil
+	}
+	c.mu.RLock()
+	cfg := cloneConfig(c.config)
+	c.mu.RUnlock()
+	cfg.Paths = append([]string(nil), settings.Paths...)
+	cfg.Ignore = append([]string(nil), settings.Ignore...)
+	cfg.Disabled = append([]string(nil), settings.Disabled...)
+	fresh, err := Discover(c.root, cfg)
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	c.compat, c.config = fresh.compat, fresh.config
+	c.byName, c.pending, c.checked = fresh.byName, fresh.pending, fresh.checked
+	c.roots, c.ignore, c.disabled = fresh.roots, fresh.ignore, fresh.disabled
+	c.activePaths, c.changed = fresh.activePaths, true
+	c.mu.Unlock()
+	return nil
+}
+
+func ResolveConfigPath(path, workspaceRoot string) string {
+	home, _ := os.UserHomeDir()
+	return resolveConfigPath(path, home, workspaceRoot)
 }
 
 func appendSkillRoots(roots []skillRoot, configDir, source, scope string) []skillRoot {

@@ -60,6 +60,7 @@ type Runner struct {
 	CompactThresholdPercent int
 	UpdateMCPServers        func(context.Context, []mcp.ServerConfig) error
 	MCPServers              func() []mcp.ServerConfig
+	UpdateSkills            func(context.Context, func(*skills.Settings)) (skills.Settings, error)
 	lastInputTokens         int
 	pendingSummary          string
 }

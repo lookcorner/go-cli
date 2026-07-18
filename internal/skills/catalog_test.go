@@ -72,6 +72,33 @@ func TestCatalogListAndConfigInfo(t *testing.T) {
 	}
 }
 
+func TestCatalogReconfigureRebuildsCustomRootsAndDisabledState(t *testing.T) {
+	root := t.TempDir()
+	first := filepath.Join(root, "first")
+	second := filepath.Join(root, "second")
+	for path, name := range map[string]string{first: "first-skill", second: "second-skill"} {
+		dir := filepath.Join(path, name)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		content := "---\nname: " + name + "\ndescription: test\n---\nBody.\n"
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	catalog, err := discover(root, "", "", Config{Paths: []string{first}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.Reconfigure(Settings{Paths: []string{second}, Disabled: []string{"second-skill"}}); err != nil {
+		t.Fatal(err)
+	}
+	items := catalog.List()
+	if len(items) != 1 || items[0].Name != "second-skill" || items[0].Enabled {
+		t.Fatalf("unexpected reconfigured catalog: %#v", items)
+	}
+}
+
 func TestSkillInvocationMetadataControlsToolVisibility(t *testing.T) {
 	root := t.TempDir()
 	for name, frontmatter := range map[string]string{

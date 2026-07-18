@@ -658,6 +658,11 @@ ignore = ["~/shared-skills/experimental"]
 disabled = ["manual-only"]
 ```
 
+ACP clients can persist and apply these settings with `x.ai/skills/add`,
+`remove`, `reset`, and `toggle`. Updates atomically rewrite the user config,
+preserve unrelated tables, and rebuild all live session catalogs. New sessions
+also use the updated settings.
+
 Claude and Cursor discovery surfaces default to enabled. They can be disabled
 independently in `config.toml`, with matching `GROK_<VENDOR>_<SURFACE>_ENABLED`
 environment variables taking precedence:
