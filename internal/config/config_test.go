@@ -59,6 +59,7 @@ type = "sse"
 
 [lsp_servers.gopls]
 command = "gopls"
+transport = "stdio"
 extensions = [".go"]
 initialization_options = { usePlaceholders = true }
 settings = { gopls = { staticcheck = true } }
@@ -109,7 +110,7 @@ pattern = ".env*"
 	if cfg.MCPServers["legacy"].Type != "sse" {
 		t.Fatalf("unexpected MCP SSE config: %#v", cfg.MCPServers["legacy"])
 	}
-	if cfg.LSPServers["gopls"].Command != "gopls" || len(cfg.LSPServers["gopls"].Extensions) != 1 {
+	if cfg.LSPServers["gopls"].Command != "gopls" || cfg.LSPServers["gopls"].Transport != "stdio" || len(cfg.LSPServers["gopls"].Extensions) != 1 {
 		t.Fatalf("unexpected LSP config: %#v", cfg.LSPServers)
 	}
 	if cfg.LSPServers["gopls"].InitializationOptions["usePlaceholders"] != true || cfg.LSPServers["gopls"].Settings["gopls"].(map[string]any)["staticcheck"] != true {

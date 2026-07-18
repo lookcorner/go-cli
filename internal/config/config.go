@@ -82,6 +82,7 @@ type MCPServerConfig struct {
 
 type LSPServerConfig struct {
 	Command               string            `json:"command" toml:"command"`
+	Transport             string            `json:"transport,omitempty" toml:"transport"`
 	Args                  []string          `json:"args,omitempty" toml:"args"`
 	Env                   map[string]string `json:"env,omitempty" toml:"env"`
 	Extensions            []string          `json:"extensions,omitempty" toml:"extensions"`

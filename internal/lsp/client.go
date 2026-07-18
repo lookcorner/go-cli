@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/url"
 	"os"
 	"os/exec"
@@ -24,6 +25,7 @@ import (
 type ProcessConfig struct {
 	Name                  string
 	Command               string
+	Transport             string
 	Args                  []string
 	Env                   map[string]string
 	Extensions            []string
@@ -87,20 +89,40 @@ func Start(ctx context.Context, cfg ProcessConfig) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.CommandContext(ctx, cfg.Command, cfg.Args...)
-	cmd.Dir = ws.Root()
-	cmd.Env = mergeEnv(os.Environ(), cfg.Env)
-	cmd.Stderr = cfg.Stderr
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return nil, fmt.Errorf("create LSP stdin: %w", err)
+	transport := strings.ToLower(strings.TrimSpace(cfg.Transport))
+	if transport == "" {
+		transport = "stdio"
 	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, fmt.Errorf("create LSP stdout: %w", err)
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("start LSP server %q: %w", cfg.Name, err)
+	var cmd *exec.Cmd
+	var stdin io.WriteCloser
+	var stdout io.Reader
+	switch transport {
+	case "stdio":
+		cmd = exec.CommandContext(ctx, cfg.Command, cfg.Args...)
+		cmd.Dir = ws.Root()
+		cmd.Env = mergeEnv(os.Environ(), cfg.Env)
+		cmd.Stderr = cfg.Stderr
+		stdin, err = cmd.StdinPipe()
+		if err != nil {
+			return nil, fmt.Errorf("create LSP stdin: %w", err)
+		}
+		stdout, err = cmd.StdoutPipe()
+		if err != nil {
+			return nil, fmt.Errorf("create LSP stdout: %w", err)
+		}
+		if err = cmd.Start(); err != nil {
+			return nil, fmt.Errorf("start LSP server %q: %w", cfg.Name, err)
+		}
+	case "socket":
+		dialCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		connection, dialErr := (&net.Dialer{}).DialContext(dialCtx, "tcp", cfg.Command)
+		cancel()
+		if dialErr != nil {
+			return nil, fmt.Errorf("connect LSP server %q at %q: %w", cfg.Name, cfg.Command, dialErr)
+		}
+		stdin, stdout = connection, connection
+	default:
+		return nil, fmt.Errorf("LSP server %q has unsupported transport %q", cfg.Name, cfg.Transport)
 	}
 	client := &Client{
 		name: cfg.Name, root: ws.Root(), extensions: normalizeExtensions(cfg.Extensions),
@@ -400,6 +422,10 @@ func (c *Client) Close() error {
 	cancel()
 	_ = c.notify("exit", nil)
 	_ = c.stdin.Close()
+	if c.cmd == nil {
+		c.failPending(io.EOF)
+		return nil
+	}
 	wait := make(chan error, 1)
 	go func() { wait <- c.cmd.Wait() }()
 	select {

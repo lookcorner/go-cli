@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -81,6 +82,95 @@ func TestReadContentLength(t *testing.T) {
 	}
 	if length != 12 {
 		t.Fatalf("got %d, want 12", length)
+	}
+}
+
+func TestSocketLifecycle(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	serverDone := make(chan error, 1)
+	go func() {
+		connection, err := listener.Accept()
+		if err != nil {
+			serverDone <- err
+			return
+		}
+		defer connection.Close()
+		reader := bufio.NewReader(connection)
+		for {
+			length, err := readContentLength(reader)
+			if err != nil {
+				serverDone <- err
+				return
+			}
+			body := make([]byte, length)
+			if _, err := io.ReadFull(reader, body); err != nil {
+				serverDone <- err
+				return
+			}
+			var message rpcMessage
+			if err := json.Unmarshal(body, &message); err != nil {
+				serverDone <- err
+				return
+			}
+			if message.Method == "exit" {
+				serverDone <- nil
+				return
+			}
+			if len(message.ID) == 0 {
+				continue
+			}
+			var id any
+			_ = json.Unmarshal(message.ID, &id)
+			var result any
+			switch message.Method {
+			case "initialize":
+				result = map[string]any{"capabilities": map[string]any{"hoverProvider": true}}
+			case "textDocument/hover":
+				result = map[string]any{"contents": "socket hover"}
+			case "shutdown":
+				result = nil
+			default:
+				serverDone <- fmt.Errorf("unexpected socket LSP method %q", message.Method)
+				return
+			}
+			body, err = json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "result": result})
+			if err != nil {
+				serverDone <- err
+				return
+			}
+			if _, err := fmt.Fprintf(connection, "Content-Length: %d\r\n\r\n", len(body)); err == nil {
+				_, err = connection.Write(body)
+			}
+			if err != nil {
+				serverDone <- err
+				return
+			}
+		}
+	}()
+	client, err := Start(context.Background(), ProcessConfig{
+		Name: "socket-fixture", Command: listener.Addr().String(), Transport: "socket", Root: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := client.Request(context.Background(), "textDocument/hover", map[string]any{})
+	if err != nil || !strings.Contains(string(result), "socket hover") {
+		t.Fatalf("socket hover=%s err=%v", result, err)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-serverDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("socket LSP server did not receive exit")
 	}
 }
 
