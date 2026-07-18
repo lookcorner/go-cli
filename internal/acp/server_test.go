@@ -406,6 +406,34 @@ func TestUnifiedSessionListWireContract(t *testing.T) {
 	}
 }
 
+func TestExtensionSessionCloseIsIdempotent(t *testing.T) {
+	var output bytes.Buffer
+	closed := 0
+	server := &Server{output: &output, sessions: map[string]*session{"close-session": {
+		id: "close-session", close: func() { closed++ },
+	}}}
+	call := func(id int) map[string]any {
+		t.Helper()
+		output.Reset()
+		server.handleExtensionSessionClose(message{ID: json.RawMessage(strconv.Itoa(id)), Method: "x.ai/session/close", Params: json.RawMessage(`{"sessionId":"close-session"}`)})
+		var response map[string]any
+		if err := json.NewDecoder(&output).Decode(&response); err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}
+	for id := 1; id <= 2; id++ {
+		response := call(id)
+		extension := response["result"].(map[string]any)
+		if extension["result"].(map[string]any)["success"] != true || extension["error"] != nil {
+			t.Fatalf("unexpected extension close response: %#v", response)
+		}
+	}
+	if closed != 1 {
+		t.Fatalf("close function called %d times", closed)
+	}
+}
+
 func TestStaticExtensionsAndCompactCommand(t *testing.T) {
 	var output bytes.Buffer
 	streamer := &fixtureStreamer{results: []api.StreamResult{{Text: "preserve the implementation state"}}}

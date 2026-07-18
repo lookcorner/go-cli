@@ -283,6 +283,9 @@ encoding, title/ID search, page limits, `kind`/`cwd` facet filters, and window
 facet counts. Its conversations partial flag remains false because this build
 has no cloud conversations backend.
 
+`x.ai/session/close` performs idempotent live-session shutdown using the same
+runtime and cancellation cleanup as the standard ACP close method.
+
 `x.ai/workspaces/list` returns the reference-compatible partial `no_oauth`
 response because this local build has no cloud workspace backend.
 

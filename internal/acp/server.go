@@ -218,6 +218,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleSessionRoster(ctx, incoming)
 		case "x.ai/session/list":
 			s.handleUnifiedSessionList(incoming)
+		case "x.ai/session/close":
+			s.handleExtensionSessionClose(incoming)
 		case "x.ai/commands/list", "x.ai/workspaces/list":
 			s.handleStaticExtension(incoming)
 		case "x.ai/skills/list", "x.ai/skills/config":
@@ -1864,14 +1866,23 @@ func validHTTPHeaderName(name string) bool {
 	return true
 }
 
-func (s *Server) closeSession(id string) {
+func (s *Server) closeSession(id string) bool {
 	s.mu.Lock()
 	current := s.sessions[id]
 	delete(s.sessions, id)
 	s.mu.Unlock()
-	if current != nil {
+	if current == nil {
+		return false
+	}
+	current.mu.Lock()
+	if current.cancel != nil {
+		current.cancel()
+	}
+	current.mu.Unlock()
+	if current.close != nil {
 		current.close()
 	}
+	return true
 }
 
 func (s *Server) handleListSessions(incoming message) {
@@ -2145,21 +2156,23 @@ func (s *Server) handleClose(incoming message) {
 		s.respondError(incoming.ID, -32602, "invalid session close parameters")
 		return
 	}
-	s.mu.Lock()
-	current := s.sessions[params.SessionID]
-	delete(s.sessions, params.SessionID)
-	s.mu.Unlock()
-	if current == nil {
+	if !s.closeSession(params.SessionID) {
 		s.respondError(incoming.ID, -32602, "unknown session")
 		return
 	}
-	current.mu.Lock()
-	if current.cancel != nil {
-		current.cancel()
-	}
-	current.mu.Unlock()
-	current.close()
 	s.respond(incoming.ID, map[string]any{})
+}
+
+func (s *Server) handleExtensionSessionClose(incoming message) {
+	var params struct {
+		SessionID string `json:"sessionId"`
+	}
+	if json.Unmarshal(incoming.Params, &params) != nil || params.SessionID == "" {
+		s.respondError(incoming.ID, -32602, "sessionId is required")
+		return
+	}
+	s.closeSession(params.SessionID)
+	s.respond(incoming.ID, map[string]any{"result": map[string]any{"success": true}, "error": nil})
 }
 
 func (s *Server) lookupSession(id string) *session {
