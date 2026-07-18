@@ -299,7 +299,8 @@ permission path used by model tool calls. `x.ai/mcp/read_resource` returns raw
 text or base64 resource contents. `x.ai/session/update_mcp_servers` safely
 restarts the session MCP runtime, preserves project/plugin base servers, and
 restores the previous runtime if replacement fails. Sessionless agent-level MCP
-pools, OAuth enrollment, and automatic config-file reload are not yet available.
+pools and OAuth enrollment are not yet available. Local MCP configuration files
+reload automatically without dropping client-provided session servers.
 For local-only sessions, `x.ai/mcp/auth_status` reports no pending authentication
 and `x.ai/mcp/auth_trigger` returns an explicit unsupported result.
 
@@ -518,7 +519,9 @@ global Cursor `mcp.json`, and `.mcp.json` files from the Git root through the
 workspace. Precedence is TOML, plugins, Claude, Cursor, then `.mcp.json`; closer
 project files win within one source. `${VAR}` and `$VAR` are expanded without
 removing unknown variables. Plugin MCP values additionally support the plugin
-root/data substitutions used by plugin skills.
+root/data substitutions used by plugin skills. CLI and ACP sessions poll these
+local inputs by content and atomically reload MCP servers after changes while
+preserving ACP client-provided server overrides.
 
 MCP Streamable HTTP endpoints use `url` instead of `command`. Gork sends the
 negotiated protocol and session headers, accepts both JSON and SSE responses,

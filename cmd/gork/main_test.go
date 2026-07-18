@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/auth"
@@ -177,6 +178,30 @@ func TestStartLSPServersRegistersDynamicToolWithoutInitialServers(t *testing.T) 
 	}
 	if !found {
 		t.Fatal("dynamic LSP tool was not registered")
+	}
+}
+
+func TestWatchMCPConfigReloadsChangedFiles(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".mcp.json")
+	if err := os.WriteFile(path, []byte(`{"mcpServers":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	reloaded := make(chan struct{}, 1)
+	watchMCPConfig(ctx, 5*time.Millisecond, func() ([]string, error) {
+		return []string{path}, nil
+	}, func() error {
+		reloaded <- struct{}{}
+		return nil
+	}, io.Discard)
+	if err := os.WriteFile(path, []byte(`{"mcpServers":{"added":{"command":"server"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-reloaded:
+	case <-time.After(time.Second):
+		t.Fatal("MCP config change was not reloaded")
 	}
 }
 

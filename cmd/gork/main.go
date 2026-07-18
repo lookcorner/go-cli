@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -236,7 +237,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	cfg, skillCatalog, _, err := discoverWorkspace(ws.Root(), cfg, projectTrusted)
+	workspaceSource := cfg
+	cfg, skillCatalog, plugins, err := discoverWorkspace(ws.Root(), workspaceSource, projectTrusted)
 	if err != nil {
 		return err
 	}
@@ -345,15 +347,24 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		}
 		fmt.Fprintf(statusOutput, "[gork] discovered %d skill(s)\n", skillCatalog.Count())
 	}
-	mcpClients, err := startMCPServers(ctx, cfg, ws.Root(), registry, approver, tokenProvider, statusOutput)
-	if err != nil {
+	mcpRuntime := newSessionMCPRuntime(ctx, cfg, ws.Root(), registry, approver, tokenProvider, statusOutput)
+	if err := mcpRuntime.Update(ctx, nil); err != nil {
 		return err
 	}
-	defer func() {
-		for _, mcpClient := range mcpClients {
-			_ = mcpClient.Close()
+	defer mcpRuntime.Close()
+	watchMCPConfig(ctx, time.Second, func() ([]string, error) {
+		return config.MCPWatchPaths(ws.Root(), opts.configPath, workspaceSource, plugins, projectTrusted), nil
+	}, func() error {
+		reloaded, err := config.Load(opts.configPath)
+		if err != nil {
+			return err
 		}
-	}()
+		workspaceSource.MCPServers = reloaded.MCPServers
+		workspaceSource.Compat = reloaded.Compat
+		base := workspaceSource
+		base.MCPServers = config.DiscoverMCPServers(ws.Root(), base, plugins, projectTrusted)
+		return mcpRuntime.UpdateBase(ctx, base)
+	}, statusOutput)
 	lspManager, err := startLSPServers(ctx, cfg, ws, registry, statusOutput)
 	if err != nil {
 		return err
@@ -367,6 +378,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		Model:     cfg.Model, Instructions: cfg.SystemPrompt, MaxSteps: cfg.MaxSteps,
 		TextOutput: stdout, StatusOutput: stderr,
 		ContextWindow: cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,
+		UpdateMCPServers: mcpRuntime.Update, MCPServers: mcpRuntime.Configs,
 	}
 	if opts.tui {
 		return tui.Run(ctx, runner, tuiBridge, prompt, opts.previousID, resumedTranscript, ws.Root(), cfg.Model)
@@ -736,6 +748,7 @@ func modelPruningConfig(cfg config.Config) api.PruningConfig {
 }
 
 type sessionPluginState struct {
+	updateMu  sync.Mutex
 	root      string
 	trusted   bool
 	catalog   *skills.Catalog
@@ -902,6 +915,34 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		extensionsMu.Lock()
 		pluginStates[pluginState] = true
 		extensionsMu.Unlock()
+		watchMCPConfig(sessionCtx, time.Second, func() ([]string, error) {
+			extensionsMu.Lock()
+			defer extensionsMu.Unlock()
+			return config.MCPWatchPaths(pluginState.root, opts.configPath, pluginState.mcpSource, pluginState.inventory, pluginState.trusted), nil
+		}, func() error {
+			pluginState.updateMu.Lock()
+			defer pluginState.updateMu.Unlock()
+			reloaded, err := config.Load(opts.configPath)
+			if err != nil {
+				return err
+			}
+			extensionsMu.Lock()
+			source := pluginState.mcpSource
+			inventory := append([]plugin.Plugin(nil), pluginState.inventory...)
+			extensionsMu.Unlock()
+			source.MCPServers = reloaded.MCPServers
+			source.Compat = reloaded.Compat
+			base := source
+			base.MCPServers = config.DiscoverMCPServers(pluginState.root, base, enabledPlugins(inventory), pluginState.trusted)
+			if err := pluginState.mcp.UpdateBase(sessionCtx, base); err != nil {
+				return err
+			}
+			extensionsMu.Lock()
+			pluginState.mcpSource.MCPServers = reloaded.MCPServers
+			pluginState.mcpSource.Compat = reloaded.Compat
+			extensionsMu.Unlock()
+			return nil
+		}, statusOutput)
 		var closeOnce sync.Once
 		closeRuntime := func() {
 			closeOnce.Do(func() {
@@ -967,22 +1008,31 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			}
 			extensionsMu.Unlock()
 			for _, state := range states {
+				state.updateMu.Lock()
 				extensionsMu.Lock()
 				previousInventory := append([]plugin.Plugin(nil), state.inventory...)
+				mcpSource := state.mcpSource
 				extensionsMu.Unlock()
 				inventory, err := plugin.Inventory(state.root, plugin.Config{
 					Paths: settings.Paths, Enabled: settings.Enabled, Disabled: settings.Disabled,
 					ProjectTrusted: state.trusted,
 				})
 				if err != nil {
+					state.updateMu.Unlock()
 					return nil, err
 				}
 				if err := state.catalog.ReconfigurePlugins(enabledPlugins(inventory)); err != nil {
+					state.updateMu.Unlock()
 					return nil, err
 				}
-				mcpBase := state.mcpSource
+				mcpBase := mcpSource
 				mcpBase.MCPServers = config.DiscoverMCPServers(state.root, mcpBase, enabledPlugins(inventory), state.trusted)
 				if err := state.mcp.UpdateBase(updateCtx, mcpBase); err != nil {
+					rollbackErr := state.catalog.ReconfigurePlugins(enabledPlugins(previousInventory))
+					state.updateMu.Unlock()
+					if rollbackErr != nil {
+						return nil, errors.Join(err, fmt.Errorf("restore previous plugin catalog: %w", rollbackErr))
+					}
 					return nil, err
 				}
 				lspBase := state.lspSource
@@ -992,16 +1042,18 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 					if catalogErr := state.catalog.ReconfigurePlugins(enabledPlugins(previousInventory)); catalogErr != nil {
 						rollbackErr = errors.Join(rollbackErr, catalogErr)
 					}
-					previousMCP := state.mcpSource
+					previousMCP := mcpSource
 					previousMCP.MCPServers = config.DiscoverMCPServers(state.root, previousMCP, enabledPlugins(previousInventory), state.trusted)
 					if mcpErr := state.mcp.UpdateBase(updateCtx, previousMCP); mcpErr != nil {
 						rollbackErr = errors.Join(rollbackErr, mcpErr)
 					}
+					state.updateMu.Unlock()
 					return nil, errors.Join(err, rollbackErr)
 				}
 				extensionsMu.Lock()
 				state.inventory = append([]plugin.Plugin(nil), inventory...)
 				extensionsMu.Unlock()
+				state.updateMu.Unlock()
 			}
 			return pluginInventory(), nil
 		}
@@ -1612,6 +1664,65 @@ func cloneMCPConfigMap(source map[string]config.MCPServerConfig) map[string]conf
 		cloned[name] = server
 	}
 	return cloned
+}
+
+func watchMCPConfig(
+	ctx context.Context,
+	interval time.Duration,
+	paths func() ([]string, error),
+	reload func() error,
+	stderr io.Writer,
+) {
+	currentPaths, err := paths()
+	if err != nil {
+		fmt.Fprintln(stderr, "[gork] MCP config watch failed:", err)
+		return
+	}
+	fingerprint := fileSetFingerprint(currentPaths)
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+			currentPaths, err := paths()
+			if err != nil {
+				fmt.Fprintln(stderr, "[gork] MCP config watch failed:", err)
+				continue
+			}
+			next := fileSetFingerprint(currentPaths)
+			if next == fingerprint {
+				continue
+			}
+			if err := reload(); err != nil {
+				fmt.Fprintln(stderr, "[gork] MCP config reload failed:", err)
+				continue
+			}
+			fingerprint = next
+			fmt.Fprintln(stderr, "[gork] MCP configuration reloaded")
+		}
+	}()
+}
+
+func fileSetFingerprint(paths []string) [sha256.Size]byte {
+	hash := sha256.New()
+	for _, path := range paths {
+		_, _ = io.WriteString(hash, path)
+		hash.Write([]byte{0})
+		data, err := os.ReadFile(path)
+		if err != nil {
+			_, _ = io.WriteString(hash, err.Error())
+		} else {
+			hash.Write(data)
+		}
+		hash.Write([]byte{0})
+	}
+	var result [sha256.Size]byte
+	copy(result[:], hash.Sum(nil))
+	return result
 }
 
 func cloneMCPServerConfigs(source []mcp.ServerConfig) []mcp.ServerConfig {
