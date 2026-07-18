@@ -86,6 +86,8 @@ type LSPServerConfig struct {
 	WorkspaceFolder       string            `json:"workspace_folder,omitempty" toml:"workspace_folder"`
 	StartupTimeoutMS      int               `json:"startup_timeout,omitempty" toml:"startup_timeout"`
 	ShutdownTimeoutMS     int               `json:"shutdown_timeout,omitempty" toml:"shutdown_timeout"`
+	RestartOnCrash        bool              `json:"restart_on_crash,omitempty" toml:"restart_on_crash"`
+	MaxRestarts           *int              `json:"max_restarts,omitempty" toml:"max_restarts"`
 	Args                  []string          `json:"args,omitempty" toml:"args"`
 	Env                   map[string]string `json:"env,omitempty" toml:"env"`
 	Extensions            []string          `json:"extensions,omitempty" toml:"extensions"`

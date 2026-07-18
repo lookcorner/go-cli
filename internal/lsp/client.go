@@ -35,6 +35,9 @@ type ProcessConfig struct {
 	Stderr                io.Writer
 	StartupTimeout        time.Duration
 	ShutdownTimeout       time.Duration
+	RestartOnCrash        bool
+	MaxRestarts           int
+	RestartBackoff        time.Duration
 }
 
 type rpcError struct {
@@ -82,6 +85,7 @@ type Client struct {
 	done        chan struct{}
 	once        sync.Once
 	shutdown    time.Duration
+	config      ProcessConfig
 }
 
 func Start(ctx context.Context, cfg ProcessConfig) (*Client, error) {
@@ -136,7 +140,7 @@ func Start(ctx context.Context, cfg ProcessConfig) (*Client, error) {
 		cmd: cmd, stdin: stdin, pending: make(map[string]chan response),
 		documents: make(map[string]documentState), diagnostics: make(map[string]json.RawMessage),
 		settings: cfg.Settings, workspace: ws,
-		done: make(chan struct{}), shutdown: cfg.ShutdownTimeout,
+		done: make(chan struct{}), shutdown: cfg.ShutdownTimeout, config: cfg,
 	}
 	if client.shutdown <= 0 {
 		client.shutdown = 5 * time.Second
@@ -186,8 +190,20 @@ func Start(ctx context.Context, cfg ProcessConfig) (*Client, error) {
 	return client, nil
 }
 
-func (c *Client) Name() string         { return c.name }
-func (c *Client) Extensions() []string { return append([]string(nil), c.extensions...) }
+func (c *Client) Name() string                { return c.name }
+func (c *Client) Extensions() []string        { return append([]string(nil), c.extensions...) }
+func (c *Client) doneSignal() <-chan struct{} { return c.done }
+
+func (c *Client) trackedDocumentURIs() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	result := make([]string, 0, len(c.documents))
+	for uri := range c.documents {
+		result = append(result, uri)
+	}
+	sort.Strings(result)
+	return result
+}
 
 func (c *Client) Request(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	var result json.RawMessage

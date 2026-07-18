@@ -174,6 +174,49 @@ func TestSocketLifecycle(t *testing.T) {
 	}
 }
 
+func TestManagerRestartsCrashedServer(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(t.TempDir(), "crashed")
+	client, err := Start(context.Background(), ProcessConfig{
+		Name: "restart-fixture", Command: os.Args[0],
+		Args: []string{"-test.run=TestLSPHelperProcess"},
+		Env: map[string]string{
+			"GORK_GO_LSP_HELPER": "1", "GORK_GO_LSP_CRASH_MARKER": marker,
+		},
+		Extensions: []string{"go"}, Root: root, Stderr: io.Discard,
+		InitializationOptions: map[string]any{"usePlaceholders": true},
+		RestartOnCrash:        true, MaxRestarts: 2, RestartBackoff: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws, _ := workspace.Open(root)
+	manager := NewManager(ws)
+	if err := manager.Add(client); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	tool := manager.Tool()
+	request := json.RawMessage(`{"server":"restart-fixture","operation":"hover","path":"main.go","line":1,"character":1}`)
+	if _, err := tool.Execute(context.Background(), request); err == nil {
+		t.Fatal("first hover did not observe fixture crash")
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		result, err := tool.Execute(context.Background(), request)
+		if err == nil && strings.Contains(result, "fixture hover") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("restarted LSP did not recover: result=%q err=%v", result, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestLSPHelperProcess(t *testing.T) {
 	if os.Getenv("GORK_GO_LSP_HELPER") != "1" {
 		return
@@ -288,6 +331,12 @@ func TestLSPHelperProcess(t *testing.T) {
 			}
 			result = map[string]any{"capabilities": map[string]any{"hoverProvider": true}}
 		case "textDocument/hover":
+			if marker := os.Getenv("GORK_GO_LSP_CRASH_MARKER"); marker != "" {
+				if _, err := os.Stat(marker); os.IsNotExist(err) {
+					_ = os.WriteFile(marker, []byte("crashed"), 0o600)
+					os.Exit(13)
+				}
+			}
 			result = map[string]any{"contents": map[string]any{"kind": "plaintext", "value": "fixture hover"}}
 		case "shutdown":
 			result = nil

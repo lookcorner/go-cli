@@ -570,6 +570,10 @@ func startLSPServers(
 			}
 		}
 		fmt.Fprintf(stderr, "[gork] starting LSP server: %s\n", name)
+		maxRestarts := 3
+		if server.MaxRestarts != nil {
+			maxRestarts = *server.MaxRestarts
+		}
 		client, err := lsp.Start(ctx, lsp.ProcessConfig{
 			Name: name, Command: server.Command, Transport: server.Transport, Args: server.Args,
 			Env: server.Env, Extensions: server.Extensions,
@@ -577,6 +581,8 @@ func startLSPServers(
 			Root: root, Stderr: stderr,
 			StartupTimeout:  time.Duration(server.StartupTimeoutMS) * time.Millisecond,
 			ShutdownTimeout: time.Duration(server.ShutdownTimeoutMS) * time.Millisecond,
+			RestartOnCrash:  server.RestartOnCrash,
+			MaxRestarts:     maxRestarts,
 		})
 		if err != nil {
 			_ = manager.Close()

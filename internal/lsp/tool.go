@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/workspace"
@@ -17,24 +19,42 @@ import (
 type Manager struct {
 	workspace *workspace.Workspace
 	clients   map[string]*Client
+	mu        sync.RWMutex
+	done      chan struct{}
+	closed    bool
+	wg        sync.WaitGroup
+	ctx       context.Context
+	cancel    context.CancelFunc
 }
 
 func NewManager(ws *workspace.Workspace) *Manager {
-	return &Manager{workspace: ws, clients: make(map[string]*Client)}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &Manager{workspace: ws, clients: make(map[string]*Client), done: make(chan struct{}), ctx: ctx, cancel: cancel}
 }
 
 func (m *Manager) Add(client *Client) error {
 	if client == nil {
 		return errors.New("LSP client is nil")
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return errors.New("LSP manager is closed")
+	}
 	if _, exists := m.clients[client.Name()]; exists {
 		return fmt.Errorf("LSP server %q already exists", client.Name())
 	}
 	m.clients[client.Name()] = client
+	if client.config.RestartOnCrash && client.config.MaxRestarts > 0 {
+		m.wg.Add(1)
+		go m.monitor(client.Name(), client)
+	}
 	return nil
 }
 
 func (m *Manager) Names() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	names := make([]string, 0, len(m.clients))
 	for name := range m.clients {
 		names = append(names, name)
@@ -44,12 +64,31 @@ func (m *Manager) Names() []string {
 }
 
 func (m *Manager) Close() error {
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return nil
+	}
+	m.closed = true
+	close(m.done)
+	m.cancel()
+	clients := make(map[string]*Client, len(m.clients))
+	for name, client := range m.clients {
+		clients[name] = client
+	}
+	m.mu.Unlock()
 	var failures []string
-	for _, name := range m.Names() {
-		if err := m.clients[name].Close(); err != nil {
+	names := make([]string, 0, len(clients))
+	for name := range clients {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if err := clients[name].Close(); err != nil {
 			failures = append(failures, name+": "+err.Error())
 		}
 	}
+	m.wg.Wait()
 	if len(failures) > 0 {
 		return errors.New(strings.Join(failures, "; "))
 	}
@@ -57,6 +96,89 @@ func (m *Manager) Close() error {
 }
 
 func (m *Manager) Tool() *Tool { return &Tool{manager: m} }
+
+func (m *Manager) client(name string) *Client {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.clients[name]
+}
+
+func (m *Manager) monitor(name string, client *Client) {
+	defer m.wg.Done()
+	attempts := 0
+	backoff := client.config.RestartBackoff
+	if backoff <= 0 {
+		backoff = time.Second
+	}
+	for {
+		select {
+		case <-m.done:
+			return
+		case <-client.doneSignal():
+		}
+		m.mu.RLock()
+		closed := m.closed
+		m.mu.RUnlock()
+		if closed {
+			return
+		}
+		tracked := client.trackedDocumentURIs()
+		_ = client.Close()
+		restarted := false
+		for attempts < client.config.MaxRestarts {
+			select {
+			case <-m.done:
+				return
+			case <-time.After(backoff):
+			}
+			attempts++
+			next, err := Start(m.ctx, client.config)
+			if err == nil {
+				for _, uri := range tracked {
+					path, pathErr := pathFromFileURI(uri)
+					if pathErr == nil {
+						_, pathErr = next.SyncDocument(path)
+					}
+					if pathErr != nil {
+						err = pathErr
+						break
+					}
+				}
+			}
+			if err != nil {
+				if next != nil {
+					_ = next.Close()
+				}
+				backoff = min(backoff*2, 30*time.Second)
+				continue
+			}
+			m.mu.Lock()
+			if m.closed || m.clients[name] != client {
+				m.mu.Unlock()
+				_ = next.Close()
+				return
+			}
+			m.clients[name] = next
+			m.mu.Unlock()
+			client = next
+			backoff = client.config.RestartBackoff
+			if backoff <= 0 {
+				backoff = time.Second
+			}
+			restarted = true
+			break
+		}
+		if restarted {
+			continue
+		}
+		m.mu.Lock()
+		if m.clients[name] == client {
+			delete(m.clients, name)
+		}
+		m.mu.Unlock()
+		return
+	}
+}
 
 type Tool struct{ manager *Manager }
 
@@ -93,7 +215,7 @@ func (t *Tool) Execute(ctx context.Context, raw json.RawMessage) (string, error)
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return "", fmt.Errorf("decode LSP arguments: %w", err)
 	}
-	client := t.manager.clients[args.Server]
+	client := t.manager.client(args.Server)
 	if client == nil {
 		return "", fmt.Errorf("unknown LSP server %q", args.Server)
 	}

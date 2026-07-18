@@ -63,6 +63,8 @@ transport = "stdio"
 workspace_folder = "backend"
 startup_timeout = 12000
 shutdown_timeout = 3000
+restart_on_crash = true
+max_restarts = 4
 extensions = [".go"]
 initialization_options = { usePlaceholders = true }
 settings = { gopls = { staticcheck = true } }
@@ -121,6 +123,9 @@ pattern = ".env*"
 	}
 	if cfg.LSPServers["gopls"].WorkspaceFolder != "backend" || cfg.LSPServers["gopls"].StartupTimeoutMS != 12000 || cfg.LSPServers["gopls"].ShutdownTimeoutMS != 3000 {
 		t.Fatalf("unexpected LSP lifecycle config: %#v", cfg.LSPServers["gopls"])
+	}
+	if !cfg.LSPServers["gopls"].RestartOnCrash || cfg.LSPServers["gopls"].MaxRestarts == nil || *cfg.LSPServers["gopls"].MaxRestarts != 4 {
+		t.Fatalf("unexpected LSP restart config: %#v", cfg.LSPServers["gopls"])
 	}
 	if cfg.WebFetch.ProxyEndpoint != "https://toml-proxy.example" || !cfg.WebFetch.ProxyConfigured || !cfg.WebFetch.DomainsConfigured || len(cfg.WebFetch.AllowedDomains) != 2 {
 		t.Fatalf("unexpected web fetch config: %#v", cfg.WebFetch)
