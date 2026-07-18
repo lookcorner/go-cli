@@ -321,6 +321,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		ProxyEndpoint: cfg.WebFetch.ProxyEndpoint, AllowedDomains: cfg.WebFetch.AllowedDomains,
 		RestrictDomains: cfg.WebFetch.DomainsConfigured,
 	})
+	if err := registry.ConfigureHunkState(artifactDir); err != nil {
+		_ = registry.Close()
+		return err
+	}
 	if search, enabled := cfg.WebSearchEndpoint(); enabled {
 		if err := registry.Register(tools.NewWebSearchTool(search.BaseURL, search.APIKey, search.Model, &http.Client{Timeout: cfg.HTTPTimeout})); err != nil {
 			return err

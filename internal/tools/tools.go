@@ -276,6 +276,16 @@ func (r *Registry) ConfigureWebFetch(config WebFetchConfig) {
 	}
 }
 
+func (r *Registry) ConfigureHunkState(artifactDir string) error {
+	if artifactDir == "" {
+		return errors.New("session artifact directory is required")
+	}
+	if r.hunks == nil {
+		return errors.New("hunk tracker unavailable")
+	}
+	return r.hunks.configureState(filepath.Join(artifactDir, "hunks.json"))
+}
+
 func (r *Registry) SetRewindStore(store *workspace.RewindStore, promptIndex func() int) {
 	r.rewind.mu.Lock()
 	r.rewind.store, r.rewind.promptIndex = store, promptIndex
@@ -308,10 +318,14 @@ func (r *Registry) SetReadPolicy(approver Approver) {
 }
 
 func (r *Registry) Close() error {
-	if r.processes == nil {
-		return nil
+	var stateErr, processErr error
+	if r.hunks != nil {
+		stateErr = r.hunks.saveState()
 	}
-	return r.processes.Close()
+	if r.processes != nil {
+		processErr = r.processes.Close()
+	}
+	return errors.Join(stateErr, processErr)
 }
 
 func (r *Registry) Register(tool Tool) error {

@@ -81,6 +81,7 @@ type HunkTracker struct {
 	promptIndex func() int
 	accepted    map[string]bool
 	stats       HunkSessionStats
+	statePath   string
 	actionMu    sync.Mutex
 }
 
@@ -551,6 +552,10 @@ func (t *HunkTracker) parseDiff(diff string) []Hunk {
 	}
 	for scanner.Scan() {
 		line := scanner.Text()
+		if strings.HasPrefix(line, "diff --git ") {
+			flush()
+			continue
+		}
 		if strings.HasPrefix(line, "--- a/") {
 			path = strings.TrimPrefix(line, "--- a/")
 			continue

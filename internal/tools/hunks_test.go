@@ -219,6 +219,68 @@ func TestHunkTrackerSessionSummaryTracksTurnsAndActions(t *testing.T) {
 	}
 }
 
+func TestHunkTrackerStateSurvivesRegistryRestart(t *testing.T) {
+	root, first := newHunkFixture(t, map[string]string{"accepted.txt": "before\n", "pending.txt": "before\n"})
+	artifactDir := t.TempDir()
+	if err := first.ConfigureHunkState(artifactDir); err != nil {
+		t.Fatal(err)
+	}
+	promptIndex := 4
+	first.SetRewindStore(nil, func() int { return promptIndex })
+	for _, name := range []string{"accepted.txt", "pending.txt"} {
+		arguments, _ := json.Marshal(map[string]string{"path": name, "old_text": "before", "new_text": "after"})
+		if _, err := first.Execute(context.Background(), "edit_file", arguments); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hunks, err := first.HunkTracker().Hunks(context.Background(), "accepted.txt", "agent")
+	if err != nil || len(hunks) != 1 {
+		t.Fatalf("accepted fixture hunks=%#v err=%v", hunks, err)
+	}
+	if _, err := first.HunkTracker().HunkAction(context.Background(), hunks[0].ID, "accept"); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := NewRegistry(ws, PromptApprover{Mode: PermissionAuto})
+	t.Cleanup(func() { _ = second.Close() })
+	if err := second.ConfigureHunkState(artifactDir); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := second.HunkTracker().Hunks(context.Background(), "", "agent")
+	if err != nil || len(restored) != 1 || restored[0].Path != "pending.txt" || restored[0].PromptIndex == nil || *restored[0].PromptIndex != 4 {
+		t.Fatalf("restored hunks=%#v err=%v", restored, err)
+	}
+	summary, err := second.HunkTracker().Summary(context.Background())
+	if err != nil || summary.Stats.AcceptedHunks != 1 || summary.PendingHunks != 1 {
+		t.Fatalf("restored summary=%#v err=%v", summary, err)
+	}
+}
+
+func TestHunkTrackerStateRejectsCorruptFile(t *testing.T) {
+	_, registry := newHunkFixture(t, map[string]string{"tracked.txt": "before\n"})
+	artifactDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(artifactDir, "hunks.json"), []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.ConfigureHunkState(artifactDir); err == nil {
+		t.Fatal("corrupt hunk state was accepted")
+	}
+	if err := registry.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(artifactDir, "hunks.json"))
+	if err != nil || string(data) != "not json" {
+		t.Fatalf("corrupt state was overwritten: %q err=%v", data, err)
+	}
+}
+
 func TestHunkTrackerAcceptAndRejectActions(t *testing.T) {
 	root, registry := newHunkFixture(t, map[string]string{"tracked.txt": "before\n"})
 	if _, err := registry.Execute(context.Background(), "edit_file", json.RawMessage(`{

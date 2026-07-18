@@ -46,9 +46,20 @@ func TestStartSessionAssignsRunnerSessionID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer created.close()
+	closed := false
+	defer func() {
+		if !closed {
+			created.close()
+		}
+	}()
 	if created.runner.SessionID != "session-123" {
 		t.Fatalf("runner session ID=%q", created.runner.SessionID)
+	}
+	created.close()
+	closed = true
+	statePath := filepath.Join(server.SessionDir, "artifacts", "session-123", "hunks.json")
+	if info, err := os.Stat(statePath); err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("session hunk state was not persisted: %v", err)
 	}
 }
 

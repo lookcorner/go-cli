@@ -918,6 +918,15 @@ func (s *Server) startSession(ctx context.Context, id string, sessionConfig Sess
 		closeRuntime()
 		return nil, pathErr
 	}
+	artifactDir, err := sessionlog.ArtifactDir(sessionPath)
+	if err != nil {
+		closeRuntime()
+		return nil, err
+	}
+	if err := runner.Tools.ConfigureHunkState(artifactDir); err != nil {
+		closeRuntime()
+		return nil, err
+	}
 	checkpointPath := filepath.Join(filepath.Dir(sessionPath), "rewind", id+".jsonl")
 	rewind, err := workspace.NewRewindStore(ws, checkpointPath)
 	if err != nil {
