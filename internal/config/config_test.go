@@ -605,6 +605,35 @@ paths = ["user-skills"]
 	}
 }
 
+func TestManagedPolicyEndpointConfiguration(t *testing.T) {
+	t.Setenv("GROK_CLI_CHAT_PROXY_BASE_URL", "")
+	t.Setenv("GROK_MANAGED_CONFIG_URL", "")
+	t.Setenv("GROK_DEPLOYMENT_KEY", "")
+	path := filepath.Join(t.TempDir(), "config.toml")
+	data := []byte(`
+[endpoints]
+cli_chat_proxy_base_url = "https://proxy.example/v1/"
+managed_config_url = "https://managed.example/config"
+deployment_key = "disk-key"
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProxyBaseURL != "https://proxy.example/v1" || cfg.ManagedPolicyURL() != "https://managed.example/config" || cfg.DeploymentKey != "disk-key" {
+		t.Fatalf("managed endpoints=%#v", cfg)
+	}
+	t.Setenv("GROK_MANAGED_CONFIG_URL", "https://env.example/config")
+	t.Setenv("GROK_DEPLOYMENT_KEY", "env-key")
+	cfg, err = Load(path)
+	if err != nil || cfg.ManagedPolicyURL() != "https://env.example/config" || cfg.DeploymentKey != "env-key" {
+		t.Fatalf("managed endpoint env precedence=%#v err=%v", cfg, err)
+	}
+}
+
 func TestManagedConfigLayerOrder(t *testing.T) {
 	systemPath := filepath.Join(t.TempDir(), "system.toml")
 	managedPath := filepath.Join(t.TempDir(), "managed.toml")

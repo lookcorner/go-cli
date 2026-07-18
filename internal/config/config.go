@@ -19,7 +19,10 @@ import (
 	"golang.org/x/mod/semver"
 )
 
-const defaultBaseURL = "https://api.x.ai/v1"
+const (
+	defaultBaseURL  = "https://api.x.ai/v1"
+	defaultProxyURL = "https://cli-chat-proxy.grok.com/v1"
+)
 
 type Config struct {
 	APIKey                      string                     `json:"api_key,omitempty"`
@@ -47,6 +50,9 @@ type Config struct {
 	ForceLoginTeamConfigured    bool                       `json:"-"`
 	DisableAPIKeyAuth           bool                       `json:"disable_api_key_auth,omitempty"`
 	PreferredAuthMethod         string                     `json:"preferred_auth_method,omitempty"`
+	ProxyBaseURL                string                     `json:"proxy_base_url,omitempty"`
+	ManagedConfigURL            string                     `json:"managed_config_url,omitempty"`
+	DeploymentKey               string                     `json:"deployment_key,omitempty"`
 }
 
 type WebSearchConfig struct {
@@ -151,6 +157,13 @@ type fileConfig struct {
 	Toolset      struct {
 		WebFetch fileWebFetchConfig `json:"web_fetch,omitempty" toml:"web_fetch"`
 	} `json:"toolset,omitempty" toml:"toolset"`
+	Endpoints fileEndpointsConfig `json:"endpoints,omitempty" toml:"endpoints"`
+}
+
+type fileEndpointsConfig struct {
+	CLIChatProxyBaseURL string `json:"cli_chat_proxy_base_url,omitempty" toml:"cli_chat_proxy_base_url"`
+	ManagedConfigURL    string `json:"managed_config_url,omitempty" toml:"managed_config_url"`
+	DeploymentKey       string `json:"deployment_key,omitempty" toml:"deployment_key"`
 }
 
 type fileAuthConfig struct {
@@ -235,6 +248,7 @@ type fileCompatConfig struct {
 func Load(path string) (Config, error) {
 	cfg := Config{
 		BaseURL:                     defaultBaseURL,
+		ProxyBaseURL:                defaultProxyURL,
 		Backend:                     "responses",
 		MaxSteps:                    20,
 		HTTPTimeout:                 10 * time.Minute,
@@ -371,6 +385,15 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.Skills.Disabled != nil {
 		cfg.Skills.Disabled = append([]string(nil), disk.Skills.Disabled...)
+	}
+	if disk.Endpoints.CLIChatProxyBaseURL != "" {
+		cfg.ProxyBaseURL = strings.TrimRight(disk.Endpoints.CLIChatProxyBaseURL, "/")
+	}
+	if disk.Endpoints.ManagedConfigURL != "" {
+		cfg.ManagedConfigURL = disk.Endpoints.ManagedConfigURL
+	}
+	if disk.Endpoints.DeploymentKey != "" {
+		cfg.DeploymentKey = disk.Endpoints.DeploymentKey
 	}
 	if disk.GrokComConfig.AuthProviderCommand != "" || disk.AuthProviderCommand != "" {
 		cfg.AuthProviderCommand = disk.GrokComConfig.AuthProviderCommand
@@ -512,8 +535,24 @@ func applyEnv(cfg *Config) {
 			cfg.DisableAPIKeyAuth = true
 		}
 	}
+	if value := strings.TrimSpace(os.Getenv("GROK_CLI_CHAT_PROXY_BASE_URL")); value != "" {
+		cfg.ProxyBaseURL = strings.TrimRight(value, "/")
+	}
+	if value := strings.TrimSpace(os.Getenv("GROK_MANAGED_CONFIG_URL")); value != "" {
+		cfg.ManagedConfigURL = value
+	}
+	if value := strings.TrimSpace(os.Getenv("GROK_DEPLOYMENT_KEY")); value != "" {
+		cfg.DeploymentKey = value
+	}
 	applyCompatEnv(&cfg.Compat.Cursor, "CURSOR")
 	applyCompatEnv(&cfg.Compat.Claude, "CLAUDE")
+}
+
+func (c Config) ManagedPolicyURL() string {
+	if strings.TrimSpace(c.ManagedConfigURL) != "" {
+		return strings.TrimSpace(c.ManagedConfigURL)
+	}
+	return strings.TrimRight(c.ProxyBaseURL, "/") + "/deployment/config"
 }
 
 func requirementsPaths() []string {

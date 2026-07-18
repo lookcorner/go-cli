@@ -124,7 +124,7 @@ func TestRunLoginDeviceFlow(t *testing.T) {
 	defer server.Close()
 	authFile := filepath.Join(t.TempDir(), "auth.json")
 	configPath := filepath.Join(t.TempDir(), "config.toml")
-	if err := os.WriteFile(configPath, []byte("base_url = \""+server.URL+"\"\n"), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte("base_url = \""+server.URL+"\"\n[endpoints]\ncli_chat_proxy_base_url = \""+server.URL+"\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
@@ -140,6 +140,49 @@ func TestRunLoginDeviceFlow(t *testing.T) {
 	credential, err := auth.Load(authFile, (auth.Config{Issuer: server.URL, ClientID: "client-1"}).Scope())
 	if err != nil || credential.Key != "access-1" || credential.RefreshToken != "refresh-1" {
 		t.Fatalf("stored credential=%#v err=%v", credential, err)
+	}
+}
+
+func TestRunSetupInstallsManagedConfiguration(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	t.Setenv("GROK_DEPLOYMENT_KEY", "deployment-secret")
+	managed := "[models]\ndefault = \"managed\"\n"
+	requirements := "[auth]\npreferred_method = \"oidc\"\n"
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("Authorization") != "Bearer deployment-secret" {
+			t.Fatalf("setup authorization=%q", request.Header.Get("Authorization"))
+		}
+		_ = json.NewEncoder(writer).Encode(map[string]any{
+			"deployment_id": "deployment-1", "managed_config": managed, "requirements": requirements,
+		})
+	}))
+	defer server.Close()
+	path := filepath.Join(home, "config.toml")
+	if err := os.WriteFile(path, []byte("[endpoints]\nmanaged_config_url = \""+server.URL+"\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	if err := run([]string{"setup", "--config", path}, strings.NewReader(""), &stdout, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != "Managed configuration updated\n" {
+		t.Fatalf("setup output=%q", stdout.String())
+	}
+	if data, err := os.ReadFile(filepath.Join(home, "managed_config.toml")); err != nil || string(data) != managed {
+		t.Fatalf("managed config=%q err=%v", data, err)
+	}
+	if data, err := os.ReadFile(filepath.Join(home, "requirements.toml")); err != nil || string(data) != requirements {
+		t.Fatalf("requirements=%q err=%v", data, err)
+	}
+}
+
+func TestRunSetupRequiresManagedPrincipal(t *testing.T) {
+	t.Setenv("GROK_HOME", t.TempDir())
+	t.Setenv("GROK_DEPLOYMENT_KEY", "")
+	err := run([]string{"setup"}, strings.NewReader(""), io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "GROK_DEPLOYMENT_KEY") {
+		t.Fatalf("setup without principal error=%v", err)
 	}
 }
 
@@ -164,6 +207,33 @@ func TestRunLogoutRemovesSelectedScope(t *testing.T) {
 	}
 	if credential, err := auth.Load(path, "sibling"); err != nil || credential.Key != "keep" {
 		t.Fatalf("sibling credential=%#v err=%v", credential, err)
+	}
+}
+
+func TestRunLogoutClearsTeamManagedPolicy(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	t.Setenv("GROK_DEPLOYMENT_KEY", "")
+	authConfig := auth.DefaultConfig()
+	if err := auth.Save(filepath.Join(home, "auth.json"), authConfig.Scope(), auth.Credential{Key: "team-token", TeamID: "team-1"}); err != nil {
+		t.Fatal(err)
+	}
+	for name, data := range map[string]string{
+		"managed_config.toml":      "[auth]\npreferred_method = \"oidc\"\n",
+		"requirements.toml":        "[auth]\npreferred_method = \"oidc\"\n",
+		"managed_config.sync.json": "{}\n",
+	} {
+		if err := os.WriteFile(filepath.Join(home, name), []byte(data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := run([]string{"logout"}, strings.NewReader(""), io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"managed_config.toml", "requirements.toml", "managed_config.sync.json"} {
+		if _, err := os.Stat(filepath.Join(home, name)); !os.IsNotExist(err) {
+			t.Fatalf("team policy %s was not removed: %v", name, err)
+		}
 	}
 }
 

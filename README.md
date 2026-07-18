@@ -64,6 +64,20 @@ stderr remains visible for login instructions. `GROK_AUTH_TOKEN_TTL` (or
 receive `GROK_AUTH_EXPIRED=1` and are limited to five seconds.
 Use `gork logout` to remove only the current issuer/client credential scope.
 
+Enterprise managed policy can be fetched with `gork setup`. Configure
+`GROK_DEPLOYMENT_KEY`, or sign in with a team account, then the client requests
+`{cli_chat_proxy_base_url}/deployment/config`. Override the endpoint with
+`GROK_MANAGED_CONFIG_URL` or `[endpoints].managed_config_url`. Served
+`managed_config.toml` and `requirements.toml` files are replaced atomically;
+withdrawn files are removed. Team login performs the same sync on a best-effort
+basis.
+
+The signed-policy implementation verifies the server's exact Ed25519 payload,
+principal binding, expiry and byte-for-byte disk contents before enforcing a
+fail-closed policy. The trusted key set is compile-time only and intentionally
+empty in this compatibility build, matching the referenced Gork Build commit;
+there is no environment switch that can enable or disable signature trust.
+
 `force_login_team_uuid` under `[grok_com_config]` accepts one team UUID or an array of
 allowed UUIDs. It rejects personal/wrong-team tokens before persistence and
 disables API-key authentication so the policy cannot be bypassed. OAuth2
@@ -113,6 +127,11 @@ win over CLI `--allow`. Invalid requirements soft-fail by default. Set
 `fail_closed = true` in a valid layer, or
 `GROK_MANAGED_CONFIG_FAIL_CLOSED=true`, to make policy loading errors stop
 startup. See `requirements.example.toml`.
+
+On macOS, an administrator-forced `requirements_toml_base64` value in the
+`ai.x.grok` managed-preferences domain is applied after the system requirements
+layer. User-created preference values are ignored; CoreFoundation must report
+the value as forced by device management.
 
 `[models].web_search` may select another `[model.<name>]` Responses provider
 for the `web_search` tool; otherwise a Responses-backed main model is reused.

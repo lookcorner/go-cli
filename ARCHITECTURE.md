@@ -15,7 +15,8 @@ implementation.
 - `internal/agent` owns the model/tool turn loop and context compaction.
 - `internal/auth` owns login protocols, credential policy, scoped persistence,
   and token refresh serialization.
-- `internal/config` owns managed, user, environment, requirements, and OS-enforced MDM precedence.
+- `internal/config` owns managed, user, environment, requirements, signed remote policy,
+  and OS-enforced MDM precedence.
 - `internal/compat` owns resolved vendor compatibility values shared by
   configuration, instruction discovery, and skill discovery.
 

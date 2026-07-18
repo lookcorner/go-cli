@@ -79,6 +79,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if len(args) > 0 && args[0] == "logout" {
 		return runLogout(args[1:], stdout, stderr)
 	}
+	if len(args) > 0 && args[0] == "setup" {
+		return runSetup(args[1:], stdout, stderr)
+	}
 	var opts options
 	flags := flag.NewFlagSet("gork", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -103,7 +106,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	flags.IntVar(&opts.goalRuns, "goal-runs", 10, "maximum turns in --goal mode")
 	flags.BoolVar(&opts.acp, "acp", false, "serve Agent Client Protocol v1 over stdio")
 	flags.Usage = func() {
-		fmt.Fprintf(stderr, "Usage: gork [flags] [prompt]\n       gork login [--oauth|--device-auth]\n       gork logout\n\n")
+		fmt.Fprintf(stderr, "Usage: gork [flags] [prompt]\n       gork login [--oauth|--device-auth]\n       gork logout\n       gork setup\n\n")
 		flags.PrintDefaults()
 	}
 	if err := flags.Parse(args); err != nil {
@@ -128,6 +131,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 
 	cfg, err := config.Load(opts.configPath)
 	if err != nil {
+		return err
+	}
+	if err := verifyManagedPolicy(cfg); err != nil {
 		return err
 	}
 	if opts.model != "" {
@@ -443,12 +449,98 @@ func runLogin(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			return err
 		}
 	}
-	credential = client.Enrich(ctx, appConfig.BaseURL, "", credential)
+	credential = client.Enrich(ctx, appConfig.ProxyBaseURL, "", credential)
 	if err := auth.Save(authFile, cfg.Scope(), credential); err != nil {
 		return fmt.Errorf("save OAuth credentials: %w", err)
 	}
+	if _, _, err := syncManagedPolicy(ctx, appConfig, &credential); err != nil {
+		fmt.Fprintf(stderr, "Managed configuration was not updated: %v\n", err)
+	}
 	fmt.Fprintln(stdout, "Signed in")
 	return nil
+}
+
+func runSetup(args []string, stdout, stderr io.Writer) error {
+	var configPath string
+	flags := flag.NewFlagSet("gork setup", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	flags.StringVar(&configPath, "config", "", "path to config file")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if len(flags.Args()) > 0 {
+		return fmt.Errorf("unexpected setup arguments: %s", strings.Join(flags.Args(), " "))
+	}
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return err
+	}
+	credential := loadStoredCredential(cfg)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	changed, attempted, err := syncManagedPolicy(ctx, cfg, credential)
+	if err != nil {
+		return err
+	}
+	if !attempted {
+		return errors.New("setup requires GROK_DEPLOYMENT_KEY or a team sign-in")
+	}
+	if changed {
+		fmt.Fprintln(stdout, "Managed configuration updated")
+	} else {
+		fmt.Fprintln(stdout, "Managed configuration is up to date")
+	}
+	return nil
+}
+
+func syncManagedPolicy(ctx context.Context, cfg config.Config, credential *auth.Credential) (bool, bool, error) {
+	token, team, fingerprint := cfg.DeploymentKey, "", ""
+	if token != "" {
+		fingerprint = config.DeploymentKeyFingerprint(token)
+	} else if credential != nil && credential.TeamID != "" {
+		token, team = credential.Key, credential.TeamID
+	}
+	if token == "" {
+		return false, false, nil
+	}
+	home, err := config.PolicyHome()
+	if err != nil {
+		return false, true, err
+	}
+	client := config.NewPolicyClient(&http.Client{Timeout: 15 * time.Second})
+	changed, err := client.Sync(ctx, home, cfg.ManagedPolicyURL(), token, team, fingerprint)
+	return changed, true, err
+}
+
+func verifyManagedPolicy(cfg config.Config) error {
+	home, err := config.PolicyHome()
+	if err != nil {
+		return err
+	}
+	expected, fingerprint := "", ""
+	if cfg.DeploymentKey != "" {
+		fingerprint = config.DeploymentKeyFingerprint(cfg.DeploymentKey)
+	} else if credential := loadStoredCredential(cfg); credential != nil {
+		expected = credential.TeamID
+	}
+	if err := config.VerifyManagedPolicy(home, expected, fingerprint); err != nil {
+		return fmt.Errorf("managed policy verification failed: %w", err)
+	}
+	return nil
+}
+
+func loadStoredCredential(cfg config.Config) *auth.Credential {
+	path, err := auth.DefaultPath()
+	if err != nil {
+		return nil
+	}
+	authConfig := auth.DefaultConfig()
+	applyAuthPolicy(&authConfig, cfg)
+	credential, err := auth.Load(path, authConfig.Scope())
+	if err != nil || credential.TeamID == "" {
+		return nil
+	}
+	return &credential
 }
 
 func completeDeviceLogin(ctx context.Context, client *auth.Client, cfg auth.Config, noBrowser bool, stderr io.Writer) (auth.Credential, error) {
@@ -500,12 +592,13 @@ func applyAuthPolicy(target *auth.Config, source config.Config) {
 
 func runLogout(args []string, stdout, stderr io.Writer) error {
 	cfg := auth.DefaultConfig()
-	var authFile string
+	var authFile, configPath string
 	flags := flag.NewFlagSet("gork logout", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.StringVar(&cfg.Issuer, "issuer", cfg.Issuer, "OAuth issuer")
 	flags.StringVar(&cfg.ClientID, "client-id", cfg.ClientID, "OAuth client ID")
 	flags.StringVar(&authFile, "auth-file", "", "credential store path")
+	flags.StringVar(&configPath, "config", "", "path to config file")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -524,8 +617,19 @@ func runLogout(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 	}
+	credential, _ := auth.Load(authFile, cfg.Scope())
 	if err := auth.Remove(authFile, cfg.Scope()); err != nil {
 		return fmt.Errorf("remove credentials: %w", err)
+	}
+	appConfig, configErr := config.Load(configPath)
+	if configErr == nil && appConfig.DeploymentKey == "" && credential.TeamID != "" {
+		if home, err := config.PolicyHome(); err == nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := config.ClearManagedPolicy(ctx, home); err != nil {
+				return fmt.Errorf("clear managed policy: %w", err)
+			}
+		}
 	}
 	fmt.Fprintln(stdout, "Signed out")
 	return nil
