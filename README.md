@@ -46,7 +46,8 @@ device flow and stores scoped credentials in `~/.grok/auth.json` (or
 `$GROK_HOME/auth.json`). Gork Go loads that token when no API-key environment
 variable is set and refreshes it within five minutes of expiration. OAuth
 issuer, client ID, and scopes honor `GROK_OAUTH2_*` / `GROK_OIDC_*` environment
-overrides. Refresh and write transactions coordinate through
+overrides. Login opens the verification URL with the platform browser; use
+`--no-browser` in SSH or headless environments. Refresh and write transactions coordinate through
 `auth.json.lock`, including cancellation and stale-lock recovery. Model API
 requests retry once after a 401 using a freshly resolved credential; concurrent
 401s reuse the first successful refresh.

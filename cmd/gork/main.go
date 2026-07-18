@@ -354,10 +354,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 func runLogin(args []string, stdout, stderr io.Writer) error {
 	cfg := auth.DefaultConfig()
 	var authFile, scopes string
-	var deviceAuth bool
+	var deviceAuth, noBrowser bool
 	flags := flag.NewFlagSet("gork login", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.BoolVar(&deviceAuth, "device-auth", true, "sign in with the OAuth device flow")
+	flags.BoolVar(&noBrowser, "no-browser", false, "print the verification URL without opening a browser")
 	flags.StringVar(&cfg.Issuer, "issuer", cfg.Issuer, "OAuth issuer")
 	flags.StringVar(&cfg.ClientID, "client-id", cfg.ClientID, "OAuth client ID")
 	flags.StringVar(&scopes, "scopes", strings.Join(cfg.Scopes, " "), "space-separated OAuth scopes")
@@ -395,7 +396,16 @@ func runLogin(args []string, stdout, stderr io.Writer) error {
 	if displayURL == "" {
 		displayURL = code.VerificationURI
 	}
-	fmt.Fprintf(stderr, "Open this URL to sign in:\n\n  %s\n\nCode: %s\n\nWaiting for authorization...\n", displayURL, code.UserCode)
+	fmt.Fprintf(stderr, "Open this URL to sign in:\n\n  %s\n\n", displayURL)
+	if !noBrowser && !openBrowser(displayURL) {
+		fmt.Fprint(stderr, "Could not open a browser automatically; open the URL above manually.\n\n")
+	}
+	if code.VerificationURIComplete != "" {
+		fmt.Fprintf(stderr, "Confirm this code in your browser:\n\n  %s\n", code.UserCode)
+	} else {
+		fmt.Fprintf(stderr, "Enter this code in your browser:\n\n  %s\n", code.UserCode)
+	}
+	fmt.Fprint(stderr, "\nOnly continue with a code you requested. Do not share it.\n\nWaiting for authorization...\n")
 	credential, err := client.CompleteDeviceLogin(ctx, cfg, code)
 	if err != nil {
 		return err

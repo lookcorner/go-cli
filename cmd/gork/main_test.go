@@ -83,6 +83,27 @@ func TestXAIBaseURLDetection(t *testing.T) {
 	}
 }
 
+func TestBrowserCommandUsesPlatformLaunchersWithoutShell(t *testing.T) {
+	rawURL := "https://accounts.x.ai/device?code=A&B"
+	for _, test := range []struct {
+		goos    string
+		command string
+		args    []string
+	}{
+		{"darwin", "open", []string{rawURL}},
+		{"linux", "xdg-open", []string{rawURL}},
+		{"windows", "rundll32", []string{"url.dll,FileProtocolHandler", rawURL}},
+	} {
+		command, args := browserCommand(test.goos, rawURL)
+		if command != test.command || strings.Join(args, "\x00") != strings.Join(test.args, "\x00") {
+			t.Fatalf("browser command for %s: %q %#v", test.goos, command, args)
+		}
+	}
+	if command, args := browserCommand("linux", ""); command != "" || args != nil {
+		t.Fatalf("empty URL should not produce a browser command: %q %#v", command, args)
+	}
+}
+
 func TestRunLoginDeviceFlow(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
@@ -102,7 +123,7 @@ func TestRunLoginDeviceFlow(t *testing.T) {
 	authFile := filepath.Join(t.TempDir(), "auth.json")
 	var stdout, stderr bytes.Buffer
 	err := run([]string{
-		"login", "--issuer", server.URL, "--client-id", "client-1", "--scopes", "openid", "--auth-file", authFile,
+		"login", "--issuer", server.URL, "--client-id", "client-1", "--scopes", "openid", "--auth-file", authFile, "--no-browser",
 	}, strings.NewReader(""), &stdout, &stderr)
 	if err != nil {
 		t.Fatal(err)
