@@ -26,6 +26,8 @@ Go 1.25 or newer is required.
 ```sh
 go test ./...
 go build -o gork ./cmd/gork
+# Release build with version-aware config matching:
+make build VERSION=0.2.0
 ```
 
 The headless runtime uses the Go standard library; the full-screen UI pins
@@ -97,6 +99,11 @@ On Unix, `/etc/grok/managed_config.toml` is the lowest disk layer. It is
 overlaid by `$GROK_HOME/managed_config.toml` and then the user `config.toml`.
 Nested tables merge recursively, arrays replace, and environment/CLI values are
 applied afterward.
+
+Every TOML disk layer may include `[[version_overrides]]` with inclusive
+`minimum_version` and/or `maximum_version`. Matching patches are applied in
+ascending minimum-version order before that layer is merged; equal minimums
+retain declaration order so the later patch wins.
 
 Managed authentication and permission policy may be placed in
 `$GROK_HOME/requirements.toml` (or `~/.grok/requirements.toml`). On Unix,

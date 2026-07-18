@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 func TestLoadGrokTOMLModelAndServers(t *testing.T) {
@@ -439,20 +441,111 @@ func TestRequirementsFailClosedParsing(t *testing.T) {
 
 func TestRequirementsVersionOverridesRespectFailClosed(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "requirements.toml")
-	data := []byte("fail_closed = true\n[[version_overrides]]\nminimum_version = \"1.0.0\"\n")
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := applyRequirementsFiles(&Config{}, []string{path}); err == nil || !strings.Contains(err.Error(), "version_overrides") {
-		t.Fatalf("unsupported fail-closed version override error=%v", err)
-	}
-	data = []byte("[grok_com_config]\ndisable_api_key_auth = true\n[[version_overrides]]\nminimum_version = \"1.0.0\"\n")
+	data := []byte("fail_closed = true\n[[version_overrides]]\nmaximum_version = \"0.1.0\"\n[version_overrides.grok_com_config]\ndisable_api_key_auth = true\n")
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg := Config{}
+	if err := applyRequirementsFiles(&cfg, []string{path}); err != nil || !cfg.DisableAPIKeyAuth {
+		t.Fatalf("matching requirements override cfg=%#v err=%v", cfg, err)
+	}
+	data = []byte("fail_closed = true\n[[version_overrides]]\nminimum_version = \"not-a-version\"\n")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyRequirementsFiles(&Config{}, []string{path}); err == nil || !strings.Contains(err.Error(), "minimum_version") {
+		t.Fatalf("invalid fail-closed override error=%v", err)
+	}
+	data = []byte("[grok_com_config]\ndisable_api_key_auth = true\n[[version_overrides]]\nminimum_version = \"not-a-version\"\n")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg = Config{}
 	if err := applyRequirementsFiles(&cfg, []string{path}); err != nil || cfg.DisableAPIKeyAuth {
-		t.Fatalf("soft version override layer was not skipped: cfg=%#v err=%v", cfg, err)
+		t.Fatalf("invalid soft override layer was not skipped: cfg=%#v err=%v", cfg, err)
+	}
+}
+
+func TestApplyVersionOverridesOrderingAndBounds(t *testing.T) {
+	var layer map[string]any
+	data := []byte(`
+[feature]
+value = "base"
+
+[[version_overrides]]
+minimum_version = "1.8.0"
+[version_overrides.feature]
+value = "late"
+
+[[version_overrides]]
+minimum_version = "1.0.0"
+maximum_version = "1.8.0"
+[version_overrides.feature]
+value = "early"
+
+[[version_overrides]]
+minimum_version = "1.8.0"
+[version_overrides.feature]
+value = "same-minimum-later"
+`)
+	if err := toml.Unmarshal(data, &layer); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyVersionOverrides(layer, "1.8.0"); err != nil {
+		t.Fatal(err)
+	}
+	feature := layer["feature"].(map[string]any)
+	if feature["value"] != "same-minimum-later" {
+		t.Fatalf("ordered override=%#v", layer)
+	}
+	if _, ok := layer["version_overrides"]; ok {
+		t.Fatal("version_overrides was not stripped")
+	}
+	reinjection := map[string]any{"version_overrides": []map[string]any{{
+		"minimum_version": "1.0.0", "version_overrides": []any{}, "campaigns": []any{}, "keep": true,
+	}}}
+	if err := applyVersionOverrides(reinjection, "1.0.0"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := reinjection["version_overrides"]; ok {
+		t.Fatal("patch reintroduced version_overrides")
+	}
+	if _, ok := reinjection["campaigns"]; ok {
+		t.Fatal("patch reintroduced campaigns")
+	}
+	if reinjection["keep"] != true {
+		t.Fatal("ordinary patch value was stripped")
+	}
+	for _, test := range []struct {
+		minimum string
+		maximum string
+		current string
+		applies bool
+	}{
+		{minimum: "1.7.0", current: "1.7.0", applies: true},
+		{maximum: "2.0.0", current: "2.0.0", applies: true},
+		{minimum: "1.7.0", current: "1.6.9"},
+		{maximum: "2.0.0", current: "2.0.1"},
+	} {
+		entry := map[string]any{"enabled": true}
+		if test.minimum != "" {
+			entry["minimum_version"] = test.minimum
+		}
+		if test.maximum != "" {
+			entry["maximum_version"] = test.maximum
+		}
+		candidate := map[string]any{"version_overrides": []map[string]any{entry}}
+		if err := applyVersionOverrides(candidate, test.current); err != nil {
+			t.Fatal(err)
+		}
+		_, applied := candidate["enabled"]
+		if applied != test.applies {
+			t.Fatalf("bounds min=%q max=%q current=%q applied=%v", test.minimum, test.maximum, test.current, applied)
+		}
+	}
+	invalid := map[string]any{"version_overrides": []map[string]any{{"minimum_version": "v1.0.0"}}}
+	if err := applyVersionOverrides(invalid, "1.0.0"); err == nil || !strings.Contains(err.Error(), "minimum_version") {
+		t.Fatalf("Rust-incompatible semver was accepted: %v", err)
 	}
 }
 
@@ -468,6 +561,11 @@ model = "managed-model"
 base_url = "https://managed.example/v1"
 backend = "chat_completions"
 context_window = 90000
+
+[[version_overrides]]
+minimum_version = "0.1.0-dev"
+[version_overrides.model.shared]
+context_window = 91000
 
 [mcp_servers.managed]
 command = "managed-mcp"
@@ -496,7 +594,7 @@ paths = ["user-skills"]
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Model != "user-model" || cfg.BaseURL != "https://managed.example/v1" || cfg.Backend != "chat_completions" || cfg.ContextWindow != 90000 {
+	if cfg.Model != "user-model" || cfg.BaseURL != "https://managed.example/v1" || cfg.Backend != "chat_completions" || cfg.ContextWindow != 91000 {
 		t.Fatalf("merged model config=%#v", cfg)
 	}
 	if cfg.MCPServers["managed"].Command != "managed-mcp" || cfg.MCPServers["user"].Command != "user-mcp" {

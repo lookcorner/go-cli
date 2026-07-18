@@ -8,12 +8,15 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/lookcorner/go-cli/internal/compat"
+	"github.com/lookcorner/go-cli/internal/version"
 	"github.com/pelletier/go-toml/v2"
+	"golang.org/x/mod/semver"
 )
 
 const defaultBaseURL = "https://api.x.ai/v1"
@@ -554,6 +557,9 @@ func loadMergedTOML(paths []string) (fileConfig, bool, error) {
 		if err := toml.Unmarshal(data, &layer); err != nil {
 			return fileConfig{}, false, fmt.Errorf("parse config %q: %w", path, err)
 		}
+		if err := applyVersionOverrides(layer, version.Current); err != nil {
+			return fileConfig{}, false, fmt.Errorf("parse config %q: %w", path, err)
+		}
 		deepMergeMap(merged, layer)
 		found = true
 	}
@@ -583,6 +589,100 @@ func deepMergeMap(base, override map[string]any) {
 	}
 }
 
+type versionPatch struct {
+	minimum string
+	maximum string
+	patch   map[string]any
+}
+
+func applyVersionOverrides(layer map[string]any, current string) error {
+	raw, ok := layer["version_overrides"]
+	delete(layer, "version_overrides")
+	if !ok {
+		return nil
+	}
+	current, err := normalizedSemver(current)
+	if err != nil {
+		return fmt.Errorf("current version: %w", err)
+	}
+	entries, err := versionEntries(raw)
+	if err != nil {
+		return err
+	}
+	patches := make([]versionPatch, 0, len(entries))
+	for index, entry := range entries {
+		patch := make(map[string]any, len(entry))
+		for key, value := range entry {
+			patch[key] = value
+		}
+		minimum, err := patchVersion(patch, "minimum_version", "v0.0.0")
+		if err != nil {
+			return fmt.Errorf("version_overrides[%d].minimum_version: %w", index, err)
+		}
+		maximum, err := patchVersion(patch, "maximum_version", "")
+		if err != nil {
+			return fmt.Errorf("version_overrides[%d].maximum_version: %w", index, err)
+		}
+		delete(patch, "version_overrides")
+		delete(patch, "campaigns")
+		patches = append(patches, versionPatch{minimum: minimum, maximum: maximum, patch: patch})
+	}
+	sort.SliceStable(patches, func(i, j int) bool { return semver.Compare(patches[i].minimum, patches[j].minimum) < 0 })
+	for _, candidate := range patches {
+		if semver.Compare(current, candidate.minimum) < 0 || candidate.maximum != "" && semver.Compare(current, candidate.maximum) > 0 {
+			continue
+		}
+		deepMergeMap(layer, candidate.patch)
+	}
+	return nil
+}
+
+func versionEntries(raw any) ([]map[string]any, error) {
+	if entries, ok := raw.([]map[string]any); ok {
+		return entries, nil
+	}
+	values, ok := raw.([]any)
+	if !ok {
+		return nil, errors.New("version_overrides must be an array of tables")
+	}
+	entries := make([]map[string]any, 0, len(values))
+	for _, value := range values {
+		entry, ok := value.(map[string]any)
+		if !ok {
+			return nil, errors.New("version_overrides must be an array of tables")
+		}
+		entries = append(entries, entry)
+	}
+	return entries, nil
+}
+
+func patchVersion(patch map[string]any, key, fallback string) (string, error) {
+	raw, ok := patch[key]
+	delete(patch, key)
+	if !ok {
+		return fallback, nil
+	}
+	value, ok := raw.(string)
+	if !ok {
+		return "", errors.New("must be a semver string")
+	}
+	if strings.HasPrefix(strings.TrimSpace(value), "v") {
+		return "", fmt.Errorf("%q is not valid semver", value)
+	}
+	return normalizedSemver(value)
+}
+
+func normalizedSemver(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if !strings.HasPrefix(value, "v") {
+		value = "v" + value
+	}
+	if !semver.IsValid(value) {
+		return "", fmt.Errorf("%q is not valid semver", strings.TrimPrefix(value, "v"))
+	}
+	return value, nil
+}
+
 func applyRequirementsFiles(cfg *Config, paths []string) error {
 	envFailClosed, _ := envBoolValue(os.Getenv("GROK_MANAGED_CONFIG_FAIL_CLOSED"))
 	envDisablesAPIKey, _ := envBoolValue(os.Getenv("GROK_DISABLE_API_KEY_AUTH"))
@@ -601,11 +701,15 @@ func applyRequirementsFiles(cfg *Config, paths []string) error {
 		var raw map[string]any
 		if toml.Unmarshal(data, &raw) == nil {
 			fileFailClosed, _ = raw["fail_closed"].(bool)
-			if _, hasVersionOverrides := raw["version_overrides"]; hasVersionOverrides {
+			if err := applyVersionOverrides(raw, version.Current); err != nil {
 				if envFailClosed || fileFailClosed {
-					return fmt.Errorf("parse requirements %q: version_overrides are not supported", path)
+					return fmt.Errorf("parse requirements %q: %w", path, err)
 				}
 				continue
+			}
+			data, err = toml.Marshal(raw)
+			if err != nil {
+				return err
 			}
 		}
 		var requirement requirementsFile

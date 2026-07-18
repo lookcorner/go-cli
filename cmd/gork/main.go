@@ -29,11 +29,10 @@ import (
 	"github.com/lookcorner/go-cli/internal/skills"
 	"github.com/lookcorner/go-cli/internal/tools"
 	"github.com/lookcorner/go-cli/internal/tui"
+	"github.com/lookcorner/go-cli/internal/version"
 	"github.com/lookcorner/go-cli/internal/workspace"
 	worktrees "github.com/lookcorner/go-cli/internal/worktree"
 )
-
-const version = "0.1.0-dev"
 
 type options struct {
 	configPath  string
@@ -111,7 +110,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return err
 	}
 	if opts.showVersion {
-		fmt.Fprintln(stdout, version)
+		fmt.Fprintln(stdout, version.Current)
 		return nil
 	}
 	if opts.tui && opts.interactive {

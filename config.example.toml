@@ -34,6 +34,12 @@ hard_clear_age_turns = 10
 [auth]
 # preferred_method = "oidc" # or "api_key"
 
+# [[version_overrides]]
+# minimum_version = "0.2.0"
+# maximum_version = "0.3.0"
+# [version_overrides.auth]
+# preferred_method = "oidc"
+
 [toolset.web_fetch]
 # proxy_endpoint = "https://proxy.example:8443"
 # allowed_domains = ["docs.example.com", "example.com/docs"]
