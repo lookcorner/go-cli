@@ -119,7 +119,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	flags.BoolVar(&opts.acp, "acp", false, "serve Agent Client Protocol v1 over stdio")
 	flags.BoolVar(&opts.trust, "trust", false, "trust this workspace's executable project configuration")
 	flags.Usage = func() {
-		fmt.Fprintf(stderr, "Usage: gork [flags] [prompt]\n       gork login [--oauth|--device-auth]\n       gork logout\n       gork setup\n       gork plugin <list|install|update|uninstall>\n\n")
+		fmt.Fprintf(stderr, "Usage: gork [flags] [prompt]\n       gork login [--oauth|--device-auth]\n       gork logout\n       gork setup\n       gork plugin <list|install|update|uninstall|marketplace>\n\n")
 		flags.PrintDefaults()
 	}
 	if err := flags.Parse(args); err != nil {
@@ -610,7 +610,7 @@ func runSetup(args []string, stdout, stderr io.Writer) error {
 
 func runPlugin(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("plugin command is required: list, install, update, or uninstall")
+		return errors.New("plugin command is required: list, install, update, uninstall, or marketplace")
 	}
 	switch args[0] {
 	case "list":
@@ -705,9 +705,116 @@ func runPlugin(args []string, stdout, stderr io.Writer) error {
 		}
 		fmt.Fprintf(stdout, "Uninstalled %d plugin(s) from %s: %s\n", len(outcome.Plugins), outcome.RepoKey, strings.Join(outcome.Plugins, ", "))
 		return nil
+	case "marketplace":
+		return runMarketplace(args[1:], stdout, stderr)
 	default:
 		return fmt.Errorf("unknown plugin command %q", args[0])
 	}
+}
+
+func runMarketplace(args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 {
+		return errors.New("marketplace command is required: list, add, remove, or update")
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	switch args[0] {
+	case "list":
+		flags := flag.NewFlagSet("gork plugin marketplace list", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		asJSON := flags.Bool("json", false, "emit machine-readable JSON")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if flags.NArg() != 0 {
+			return errors.New("usage: gork plugin marketplace list [--json]")
+		}
+		sources, err := marketplace.Sources("", cwd)
+		if err != nil {
+			return err
+		}
+		if *asJSON {
+			items := make([]map[string]any, 0, len(sources))
+			for _, source := range sources {
+				detail := map[string]any{}
+				kind := "local"
+				if source.Git != "" {
+					kind, detail["url"] = "git", source.Git
+					if source.Branch != "" {
+						detail["branch"] = source.Branch
+					}
+				} else {
+					detail["path"] = source.Path
+				}
+				items = append(items, map[string]any{"name": source.Name, "kind": kind, "source": detail})
+			}
+			encoder := json.NewEncoder(stdout)
+			encoder.SetIndent("", "  ")
+			return encoder.Encode(items)
+		}
+		if len(sources) == 0 {
+			fmt.Fprintln(stdout, "No marketplace sources configured.")
+			return nil
+		}
+		for _, source := range sources {
+			identity := source.Path
+			if source.Git != "" {
+				identity = source.Git
+			}
+			fmt.Fprintf(stdout, "  %s: %s\n", source.Name, identity)
+		}
+		return nil
+	case "add", "remove":
+		if len(args) != 2 {
+			return fmt.Errorf("usage: gork plugin marketplace %s <git-url-or-local-path>", args[0])
+		}
+		actionType := "add_source"
+		if args[0] == "remove" {
+			actionType = "remove_source"
+		}
+		outcome, err := marketplace.Execute("", cwd, marketplace.Action{Type: actionType, SourceURLOrPath: args[1]})
+		return printMarketplaceOutcome(stdout, outcome, err)
+	case "update":
+		if len(args) > 2 {
+			return errors.New("usage: gork plugin marketplace update [source-name]")
+		}
+		identity := ""
+		if len(args) == 2 {
+			sources, err := marketplace.Sources("", cwd)
+			if err != nil {
+				return err
+			}
+			for _, source := range sources {
+				if source.Name == args[1] {
+					identity = source.Path
+					if source.Git != "" {
+						identity = source.Git
+					}
+					break
+				}
+			}
+			if identity == "" {
+				return fmt.Errorf("marketplace source %q not found", args[1])
+			}
+		}
+		outcome, err := marketplace.Execute("", cwd, marketplace.Action{Type: "refresh", SourceURLOrPath: identity})
+		return printMarketplaceOutcome(stdout, outcome, err)
+	default:
+		return fmt.Errorf("unknown marketplace command %q", args[0])
+	}
+}
+
+func printMarketplaceOutcome(stdout io.Writer, outcome marketplace.Outcome, err error) error {
+	if err != nil {
+		return err
+	}
+	if outcome.Status != "success" {
+		return errors.New(outcome.Message)
+	}
+	fmt.Fprintln(stdout, outcome.Message)
+	return nil
 }
 
 func syncManagedPolicy(ctx context.Context, cfg config.Config, credential *auth.Credential, attempts int) (bool, bool, error) {
@@ -1367,7 +1474,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			}
 			var update func(*plugin.Settings)
 			switch action.Type {
-			case "install", "uninstall", "update":
+			case "install", "uninstall", "update", "remove_source":
 				update = func(settings *plugin.Settings) { applyMarketplacePlugins(settings, action.Type, outcome) }
 			default:
 				return outcome, nil
@@ -1410,14 +1517,14 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 
 func applyMarketplacePlugins(settings *plugin.Settings, action string, outcome marketplace.Outcome) {
 	removed := outcome.RemovedPlugins
-	if action == "uninstall" {
+	if action == "uninstall" || action == "remove_source" {
 		removed = outcome.Plugins
 	}
 	for _, name := range removed {
 		settings.Enabled = slices.DeleteFunc(settings.Enabled, func(value string) bool { return value == name })
 		settings.Disabled = slices.DeleteFunc(settings.Disabled, func(value string) bool { return value == name })
 	}
-	if action == "uninstall" {
+	if action == "uninstall" || action == "remove_source" {
 		return
 	}
 	for _, name := range outcome.Plugins {

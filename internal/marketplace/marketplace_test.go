@@ -189,6 +189,8 @@ func TestAddAndRemoveMarketplaceSource(t *testing.T) {
 	t.Setenv("GROK_HOME", grokHome)
 	configPath := filepath.Join(grokHome, "config.toml")
 	cwd := t.TempDir()
+	mustMkdir(t, filepath.Join(cwd, "catalog", "plugins", "demo"))
+	mustWrite(t, filepath.Join(cwd, "catalog", "plugins", "demo", "plugin.json"), `{"name":"demo","version":"1.0.0"}`)
 	outcome, err := Execute(configPath, cwd, Action{Type: "add_source", SourceURLOrPath: "./catalog"})
 	if err != nil || outcome.Status != "success" {
 		t.Fatalf("add source=%#v err=%v", outcome, err)
@@ -197,13 +199,37 @@ func TestAddAndRemoveMarketplaceSource(t *testing.T) {
 	if err != nil || len(sources) != 1 || sources[0].Path != filepath.Join(cwd, "catalog") {
 		t.Fatalf("sources=%#v err=%v", sources, err)
 	}
+	if duplicate, err := Execute(configPath, cwd, Action{Type: "add_source", SourceURLOrPath: "./catalog"}); err != nil || duplicate.Status != "validation_error" {
+		t.Fatalf("duplicate source=%#v err=%v", duplicate, err)
+	}
+	if installed, err := Execute(configPath, cwd, Action{Type: "install", SourceURLOrPath: sources[0].Path, PluginRelativePath: "plugins/demo"}); err != nil || installed.Status != "success" {
+		t.Fatalf("install source plugin=%#v err=%v", installed, err)
+	}
+	if err := config.UpdatePlugins(configPath, func(settings *config.PluginsConfig) { settings.Enabled = []string{"demo"} }); err != nil {
+		t.Fatal(err)
+	}
 	outcome, err = Execute(configPath, cwd, Action{Type: "remove_source", SourceURLOrPath: sources[0].Path})
-	if err != nil || outcome.Status != "success" {
+	if err != nil || outcome.Status != "success" || strings.Join(outcome.Plugins, "|") != "demo" {
 		t.Fatalf("remove source=%#v err=%v", outcome, err)
 	}
 	sources, _ = Sources(configPath, cwd)
 	if len(sources) != 0 {
 		t.Fatalf("source was not removed: %#v", sources)
+	}
+	registry, _ := plugin.LoadInstallRegistry()
+	cfg, _ := config.Load(configPath)
+	if len(registry.Repos) != 0 || len(cfg.Plugins.Enabled) != 0 {
+		t.Fatalf("source plugin not removed: registry=%#v plugins=%#v", registry.Repos, cfg.Plugins)
+	}
+	if missing, err := Execute(configPath, cwd, Action{Type: "remove_source", SourceURLOrPath: "./catalog"}); err != nil || missing.Status != "not_found" {
+		t.Fatalf("missing source=%#v err=%v", missing, err)
+	}
+	if added, err := Execute(configPath, cwd, Action{Type: "add_source", SourceURLOrPath: "owner/catalog"}); err != nil || added.Status != "success" {
+		t.Fatalf("github shorthand=%#v err=%v", added, err)
+	}
+	sources, _ = Sources(configPath, cwd)
+	if len(sources) != 1 || sources[0].Git != "https://github.com/owner/catalog.git" {
+		t.Fatalf("normalized source=%#v", sources)
 	}
 }
 

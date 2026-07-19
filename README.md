@@ -729,6 +729,10 @@ gork plugin install owner/repository@v1.2.0
 gork plugin list
 gork plugin update [plugin-name]
 gork plugin uninstall [--confirm] [--keep-data] plugin-name
+gork plugin marketplace list [--json]
+gork plugin marketplace add <git-url-or-local-path>
+gork plugin marketplace remove <git-url-or-local-path>
+gork plugin marketplace update [source-name]
 ```
 
 Local installs are full snapshots rather than symlinks. New sessions and
@@ -754,8 +758,10 @@ ACP `x.ai/marketplace/list` scans `.grok-plugin/marketplace.json` (with
 action endpoint refreshes/adds/removes sources and installs, transactionally
 updates, or uninstalls catalog plugins. Git sources use a persistent
 `$GROK_HOME/marketplace-cache`; remote index entries may pin a tag or commit SHA.
-Official-source auto-registration, Claude known-marketplace imports, component
-catalog details, and marketplace CLI commands are not yet implemented.
+The CLI manages the same source registry; removing a source also uninstalls its
+plugins and clears their enabled/disabled settings. Official-source
+auto-registration, Claude known-marketplace imports, and component catalog
+details are not yet implemented.
 
 The `[skills]` config accepts additional directories or individual `SKILL.md`
 files. Paths support `~`; relative paths resolve from the workspace. `ignore`

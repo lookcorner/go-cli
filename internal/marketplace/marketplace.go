@@ -120,7 +120,7 @@ func Execute(configPath, cwd string, action Action) (Outcome, error) {
 		}
 		return Outcome{Status: "success", Message: "Marketplace sources refreshed."}, nil
 	case "add_source":
-		return addSource(configPath, cwd, action), nil
+		return addSource(configPath, cwd, sources, action), nil
 	case "remove_source":
 		return removeSource(configPath, cwd, action), nil
 	case "install":
@@ -234,22 +234,30 @@ func entryInstallSource(root string, entry Entry, relativePath string) (string, 
 	return safeJoin(root, relativePath)
 }
 
-func addSource(configPath, cwd string, action Action) Outcome {
-	if action.SourceURLOrPath == "" {
+func addSource(configPath, cwd string, sources []Source, action Action) Outcome {
+	if strings.TrimSpace(action.SourceURLOrPath) == "" {
 		return Outcome{Status: "validation_error", Message: "Marketplace source is required."}
 	}
-	value := action.SourceURLOrPath
+	path, git := normalizeSource(action.SourceURLOrPath, cwd)
+	if path != "" {
+		if info, err := os.Stat(path); err != nil || !info.IsDir() {
+			return Outcome{Status: "validation_error", Message: "Local marketplace path not found (or is not a directory): " + path}
+		}
+	}
+	for _, source := range sources {
+		if path != "" && source.Path == path || git != "" && sameGit(source.Git, git) {
+			return Outcome{Status: "validation_error", Message: "Marketplace source already configured: " + action.SourceURLOrPath}
+		}
+	}
+	value := path
+	if git != "" {
+		value = git
+	}
 	entry := config.MarketplaceSourceConfig{Name: sourceName(value)}
-	if strings.Contains(value, "://") || strings.HasPrefix(value, "git@") || githubShorthand(value) {
-		if githubShorthand(value) {
-			value = "https://github.com/" + value
-		}
-		entry.Git = value
+	if git != "" {
+		entry.Git = git
 	} else {
-		if !filepath.IsAbs(value) {
-			value = filepath.Join(cwd, value)
-		}
-		entry.Path = filepath.Clean(value)
+		entry.Path = path
 	}
 	if err := config.UpdateMarketplace(configPath, func(settings *config.MarketplaceConfig) {
 		for _, existing := range settings.Sources {
@@ -265,10 +273,29 @@ func addSource(configPath, cwd string, action Action) Outcome {
 }
 
 func removeSource(configPath, cwd string, action Action) Outcome {
+	path, git := normalizeSource(action.SourceURLOrPath, cwd)
+	sources, err := Sources(configPath, cwd)
+	if err != nil {
+		return Outcome{Status: "internal_error", Message: err.Error()}
+	}
+	identity := ""
+	for _, source := range sources {
+		if path != "" && source.Path == path || git != "" && sameGit(source.Git, git) {
+			identity = sourceIdentity(source)
+			break
+		}
+	}
+	if identity == "" {
+		return Outcome{Status: "not_found", Message: fmt.Sprintf("Marketplace source %q not found.", action.SourceURLOrPath)}
+	}
+	removed, err := uninstallSourcePlugins(identity)
+	if err != nil {
+		return Outcome{Status: "internal_error", Message: err.Error()}
+	}
 	if err := config.UpdateMarketplace(configPath, func(settings *config.MarketplaceConfig) {
 		filtered := settings.Sources[:0]
 		for _, item := range settings.Sources {
-			if resolveSourcePath(item.Path, cwd) != action.SourceURLOrPath && item.Git != action.SourceURLOrPath {
+			if resolveSourcePath(item.Path, cwd) != identity && item.Git != identity {
 				filtered = append(filtered, item)
 			}
 		}
@@ -276,7 +303,75 @@ func removeSource(configPath, cwd string, action Action) Outcome {
 	}); err != nil {
 		return Outcome{Status: "internal_error", Message: err.Error()}
 	}
-	return Outcome{Status: "success", Message: "Marketplace source removed."}
+	if len(removed) > 0 {
+		if err := config.UpdatePlugins(configPath, func(settings *config.PluginsConfig) {
+			for _, name := range removed {
+				settings.Enabled = removeString(settings.Enabled, name)
+				settings.Disabled = removeString(settings.Disabled, name)
+			}
+		}); err != nil {
+			return Outcome{Status: "internal_error", Message: err.Error()}
+		}
+	}
+	message := "Marketplace source removed."
+	if len(removed) > 0 {
+		message = fmt.Sprintf("Marketplace source removed and uninstalled %d plugin(s): %s", len(removed), strings.Join(removed, ", "))
+	}
+	return Outcome{Status: "success", Message: message, Plugins: removed}
+}
+
+func normalizeSource(value, cwd string) (path, git string) {
+	value = strings.TrimSpace(value)
+	local := filepath.IsAbs(value) || strings.HasPrefix(value, ".") || strings.HasPrefix(value, "~") || strings.HasPrefix(value, "\\") || len(value) >= 3 && value[1] == ':' && (value[2] == '/' || value[2] == '\\')
+	if local {
+		return resolveSourcePath(value, cwd), ""
+	}
+	if !strings.Contains(value, "://") && !strings.Contains(value, "git@") {
+		value = "https://github.com/" + strings.TrimSuffix(value, ".git") + ".git"
+	}
+	return "", value
+}
+
+func sameGit(left, right string) bool {
+	return strings.TrimSuffix(left, ".git") == strings.TrimSuffix(right, ".git")
+}
+
+func uninstallSourcePlugins(identity string) ([]string, error) {
+	registry, err := plugin.LoadInstallRegistry()
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, repo := range registry.Repos {
+		if repo.Marketplace == nil || repo.Marketplace.SourceURLOrPath != identity {
+			continue
+		}
+		for name := range repo.Plugins {
+			names = append(names, name)
+			break
+		}
+	}
+	sort.Strings(names)
+	var removed []string
+	for _, name := range names {
+		outcome, err := plugin.Uninstall(name, true, false)
+		if err != nil {
+			return removed, err
+		}
+		removed = append(removed, outcome.Plugins...)
+	}
+	sort.Strings(removed)
+	return removed, nil
+}
+
+func removeString(values []string, target string) []string {
+	result := values[:0]
+	for _, value := range values {
+		if value != target {
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 func sourceIdentity(source Source) string {
@@ -487,14 +582,6 @@ func isFile(path string) bool {
 func pathWithin(root, path string) bool {
 	rel, err := filepath.Rel(root, path)
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
-}
-
-func githubShorthand(value string) bool {
-	if strings.HasPrefix(value, ".") || strings.HasPrefix(value, "/") || strings.HasPrefix(value, "~") {
-		return false
-	}
-	parts := strings.Split(value, "/")
-	return len(parts) == 2 && parts[0] != "" && parts[1] != ""
 }
 
 func sourceName(value string) string {

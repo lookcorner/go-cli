@@ -262,6 +262,12 @@ func TestApplyMarketplacePlugins(t *testing.T) {
 	if strings.Join(settings.Enabled, "|") != "keep" {
 		t.Fatalf("uninstalled marketplace settings=%#v", settings)
 	}
+	settings.Enabled = append(settings.Enabled, "source-plugin")
+	settings.Disabled = append(settings.Disabled, "source-disabled")
+	applyMarketplacePlugins(&settings, "remove_source", marketplace.Outcome{Plugins: []string{"source-plugin", "source-disabled"}})
+	if strings.Join(settings.Enabled, "|") != "keep" || len(settings.Disabled) != 0 {
+		t.Fatalf("removed source settings=%#v", settings)
+	}
 }
 
 func TestMCPHTTPHeadersUseBearerTokenEnvironment(t *testing.T) {
@@ -697,5 +703,36 @@ func TestPermissionPromptNotifierOnlyWrapsAskPaths(t *testing.T) {
 	}
 	if err := defaultPrompt.Approve(context.Background(), "shell", "go test ./..."); err != nil || count != 2 {
 		t.Fatalf("default prompt err=%v count=%d", err, count)
+	}
+}
+
+func TestPluginMarketplaceCLI(t *testing.T) {
+	t.Setenv("GROK_HOME", filepath.Join(t.TempDir(), ".grok"))
+	source := filepath.Join(t.TempDir(), "team-catalog")
+	if err := os.MkdirAll(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if err := runPlugin([]string{"marketplace", "add", source}, &stdout, &stderr); err != nil || !strings.Contains(stdout.String(), "source added") {
+		t.Fatalf("add stdout=%q stderr=%q err=%v", stdout.String(), stderr.String(), err)
+	}
+	stdout.Reset()
+	if err := runPlugin([]string{"marketplace", "list", "--json"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	var listed []map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &listed); err != nil || len(listed) != 1 || listed[0]["name"] != "team-catalog" || listed[0]["kind"] != "local" || listed[0]["source"].(map[string]any)["path"] != source {
+		t.Fatalf("listed=%#v output=%q err=%v", listed, stdout.String(), err)
+	}
+	stdout.Reset()
+	if err := runPlugin([]string{"marketplace", "update", "team-catalog"}, &stdout, &stderr); err != nil || !strings.Contains(stdout.String(), "refreshed") {
+		t.Fatalf("update stdout=%q err=%v", stdout.String(), err)
+	}
+	stdout.Reset()
+	if err := runPlugin([]string{"marketplace", "remove", source}, &stdout, &stderr); err != nil || !strings.Contains(stdout.String(), "source removed") {
+		t.Fatalf("remove stdout=%q err=%v", stdout.String(), err)
+	}
+	if err := runPlugin([]string{"marketplace", "add", filepath.Join(source, "missing")}, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("missing local source err=%v", err)
 	}
 }
