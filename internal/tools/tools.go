@@ -266,6 +266,9 @@ func (r *Registry) ForWorkspace(ws *workspace.Workspace) *Registry {
 		child.tools["web_fetch"] = r.webFetch
 	}
 	for name, tool := range r.tools {
+		if bound, ok := tool.(interface{ WorkspaceBound() bool }); ok && bound.WorkspaceBound() {
+			continue
+		}
 		if _, workspaceBound := child.tools[name]; !workspaceBound {
 			child.tools[name] = tool
 		}

@@ -22,6 +22,10 @@ func (t fixtureTool) Definition() api.ToolDefinition {
 }
 func (t fixtureTool) Execute(context.Context, json.RawMessage) (string, error) { return t.name, nil }
 
+type fixtureWorkspaceTool struct{ fixtureTool }
+
+func (fixtureWorkspaceTool) WorkspaceBound() bool { return true }
+
 func TestRegistryForWorkspaceRebindsCoreToolsAndKeepsExternalTools(t *testing.T) {
 	parentRoot := t.TempDir()
 	childRoot := t.TempDir()
@@ -38,6 +42,9 @@ func TestRegistryForWorkspaceRebindsCoreToolsAndKeepsExternalTools(t *testing.T)
 	if err := parent.Register(fixtureTool{name: "external"}); err != nil {
 		t.Fatal(err)
 	}
+	if err := parent.Register(fixtureWorkspaceTool{fixtureTool{name: "bound"}}); err != nil {
+		t.Fatal(err)
+	}
 	child := parent.ForWorkspace(childWS)
 	defer child.Close()
 	if _, err := child.Execute(context.Background(), "write_file", json.RawMessage(`{"path":"child.txt","content":"child"}`)); err != nil {
@@ -45,6 +52,9 @@ func TestRegistryForWorkspaceRebindsCoreToolsAndKeepsExternalTools(t *testing.T)
 	}
 	if _, err := child.Execute(context.Background(), "external", json.RawMessage(`{}`)); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := child.Execute(context.Background(), "bound", json.RawMessage(`{}`)); err == nil || !strings.Contains(err.Error(), "unknown tool") {
+		t.Fatalf("workspace-bound external tool was shared: %v", err)
 	}
 	if data, err := os.ReadFile(filepath.Join(childRoot, "child.txt")); err != nil || string(data) != "child" {
 		t.Fatalf("child data=%q err=%v", data, err)

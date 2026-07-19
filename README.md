@@ -700,13 +700,20 @@ inherit parent MCP servers. User and trusted-project agent definitions may add
 private inline hooks; plugin inline hooks are ignored, and resumed agents retain
 their original merged hook set. A fresh task may select another existing `cwd`;
 workspace-bound tools are rebuilt for that directory while external adapters
-are shared, and resume keeps the source task's effective cwd.
+that are independent of workspace state are shared, and resume keeps the source
+task's effective cwd.
+`isolation: worktree` creates a dirty-state-preserving linked worktree and
+rebinds the same workspace tools there. Completion runs stop hooks, snapshots
+the resulting tree to `refs/gork/subagents/<id>`, and removes the directory;
+an in-process resume rehydrates the same path from that snapshot. Creation
+failure falls back to the requested/shared cwd, while snapshot failure keeps
+the worktree available instead of discarding changes.
 Background tasks survive completion of the parent turn and are
 cancelled during session cleanup. ACP exposes the typed `x.ai/subagent/get`,
 `list_running`, and `cancel` methods; background terminal processes separately
 use `x.ai/task/list`, `x.ai/task/kill`, `x.ai/task_backgrounded`, and
-`x.ai/task_completed`. Worktree isolation, durable cross-process task recovery,
-full live token/tool metrics, and
+`x.ai/task_completed`. Durable cross-process task recovery, full live token/tool
+metrics, and
 agent-owned `mcpServers` plus `bypassPermissions` execution are not implemented
 yet.
 

@@ -107,6 +107,8 @@ type permissionResult struct {
 	err      error
 }
 
+func (s *Server) WorktreeManager() *worktrees.Manager { return s.worktrees }
+
 type promptBlock struct {
 	Type     string `json:"type"`
 	Text     string `json:"text"`

@@ -406,11 +406,15 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		resolved, ok := cfg.ResolveModel(slug)
 		return subagent.ModelRuntime{Profile: slug, Model: resolved.Model, ContextWindow: resolved.ContextWindow, CompactThresholdPercent: resolved.AutoCompactThresholdPercent}, ok
 	}
+	worktreeManager, err := worktrees.NewManager(opts.sessionDir)
+	if err != nil {
+		return err
+	}
 	subagents, err := subagent.New(subagent.Config{
 		Context: ctx, Catalog: agentCatalog, Tools: registry, WorkspaceRoot: ws.Root(), ParentModel: cfg.Model,
 		ContextWindow: cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,
 		ResolveModel: resolveSubagentModel, AvailableModels: cfg.ModelSlugs(), Skills: skillCatalog,
-		SkillConfig: workspaceSkillsConfig(cfg, plugins),
+		SkillConfig: workspaceSkillsConfig(cfg, plugins), Worktrees: worktreeManager,
 		NewClient: func(model subagent.ModelRuntime) (agent.ResponseStreamer, error) {
 			child := cfg
 			if model.Profile != "" {
@@ -1151,7 +1155,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			Context: sessionCtx, Catalog: agentCatalog, Tools: registry, WorkspaceRoot: ws.Root(), ParentModel: sessionCfg.Model,
 			ContextWindow: sessionCfg.ContextWindow, CompactThresholdPercent: sessionCfg.AutoCompactThresholdPercent,
 			ResolveModel: resolveSubagentModel, AvailableModels: sessionCfg.ModelSlugs(), Skills: catalog,
-			SkillConfig: workspaceSkillsConfig(sessionCfg, plugins),
+			SkillConfig: workspaceSkillsConfig(sessionCfg, plugins), Worktrees: server.WorktreeManager(),
 			NewClient: func(model subagent.ModelRuntime) (agent.ResponseStreamer, error) {
 				child := sessionCfg
 				if model.Profile != "" {

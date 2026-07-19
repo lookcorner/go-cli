@@ -19,6 +19,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/skills"
 	"github.com/lookcorner/go-cli/internal/tools"
 	"github.com/lookcorner/go-cli/internal/workspace"
+	"github.com/lookcorner/go-cli/internal/worktree"
 )
 
 type Observer interface {
@@ -48,6 +49,7 @@ type Config struct {
 	NewClient               func(ModelRuntime) (agent.ResponseStreamer, error)
 	Observer                Observer
 	Hooks                   *hooks.Catalog
+	Worktrees               *worktree.Manager
 }
 
 type Manager struct {
@@ -67,25 +69,28 @@ type Manager struct {
 	newClient               func(ModelRuntime) (agent.ResponseStreamer, error)
 	observer                Observer
 	hooks                   *hooks.Catalog
+	worktrees               *worktree.Manager
 	tasks                   map[string]*task
 }
 
 type task struct {
-	mu          sync.Mutex
-	id          string
-	typeName    string
-	description string
-	started     time.Time
-	cancel      context.CancelFunc
-	done        chan struct{}
-	once        sync.Once
-	result      tools.SubagentResult
-	runner      *agent.Runner
-	hookRuntime *hooks.Runtime
-	cwd         string
-	ownedTools  *tools.Registry
-	responseID  string
-	resumed     bool
+	mu           sync.Mutex
+	id           string
+	typeName     string
+	description  string
+	started      time.Time
+	cancel       context.CancelFunc
+	done         chan struct{}
+	once         sync.Once
+	result       tools.SubagentResult
+	runner       *agent.Runner
+	hookRuntime  *hooks.Runtime
+	cwd          string
+	ownedTools   *tools.Registry
+	worktreePath string
+	snapshotRef  string
+	responseID   string
+	resumed      bool
 }
 
 func New(config Config) (*Manager, error) {
@@ -103,7 +108,7 @@ func New(config Config) (*Manager, error) {
 		contextWindow: config.ContextWindow, compactThresholdPercent: config.CompactThresholdPercent,
 		resolveModel: config.ResolveModel, availableModels: append([]string(nil), config.AvailableModels...),
 		skills: config.Skills, skillConfig: config.SkillConfig,
-		newClient: config.NewClient, observer: config.Observer, hooks: config.Hooks, tasks: make(map[string]*task),
+		newClient: config.NewClient, observer: config.Observer, hooks: config.Hooks, worktrees: config.Worktrees, tasks: make(map[string]*task),
 	}, nil
 }
 
@@ -143,8 +148,8 @@ func (m *Manager) Start(ctx context.Context, request tools.SubagentRequest) (too
 		return tools.SubagentResult{}, fmt.Errorf("invalid subagent reasoning_effort %q", effort)
 	}
 	isolation := first(request.Isolation, definition.Isolation)
-	if isolation != "" && isolation != "none" {
-		return tools.SubagentResult{}, errors.New("subagent worktree isolation is not implemented")
+	if isolation != "" && isolation != "none" && isolation != "worktree" {
+		return tools.SubagentResult{}, fmt.Errorf("invalid subagent isolation %q", isolation)
 	}
 	background := request.Background
 	if !request.BackgroundSet && definition.Background != nil {
@@ -153,7 +158,8 @@ func (m *Manager) Start(ctx context.Context, request tools.SubagentRequest) (too
 	if request.ResumeFrom != "" {
 		return m.resume(ctx, request, definition, background)
 	}
-	childRoot, childRegistry, err := m.childWorkspace(request.CWD)
+	id := newID()
+	childRoot, childRegistry, worktreePath, err := m.prepareWorkspace(ctx, id, request.CWD, isolation)
 	if err != nil {
 		return tools.SubagentResult{}, err
 	}
@@ -162,6 +168,7 @@ func (m *Manager) Start(ctx context.Context, request tools.SubagentRequest) (too
 		defer func() {
 			if !keepRegistry {
 				_ = childRegistry.Close()
+				m.removeWorktree(worktreePath)
 			}
 		}()
 	}
@@ -218,7 +225,6 @@ func (m *Manager) Start(ctx context.Context, request tools.SubagentRequest) (too
 			return tools.SubagentResult{}, err
 		}
 	}
-	id := newID()
 	runner := &agent.Runner{
 		Client: client, Tools: view, Model: model.Model, ReasoningEffort: effort, Instructions: instructions,
 		SessionID: id, MaxSteps: definition.MaxTurns, ContextWindow: model.ContextWindow,
@@ -229,7 +235,7 @@ func (m *Manager) Start(ctx context.Context, request tools.SubagentRequest) (too
 		hookRuntime = &hooks.Runtime{Catalog: catalog, WorkspaceRoot: childRoot, SessionID: id, Model: model.Model, SubagentType: request.Type}
 		runner.HookPolicy = hookRuntime
 	}
-	current := &task{id: id, typeName: request.Type, description: request.Description, started: time.Now(), done: make(chan struct{}), runner: runner, hookRuntime: hookRuntime, cwd: childRoot, ownedTools: childRegistry}
+	current := &task{id: id, typeName: request.Type, description: request.Description, started: time.Now(), done: make(chan struct{}), runner: runner, hookRuntime: hookRuntime, cwd: childRoot, ownedTools: childRegistry, worktreePath: worktreePath}
 	m.mu.Lock()
 	m.tasks[id] = current
 	m.mu.Unlock()
@@ -260,6 +266,12 @@ func (m *Manager) resume(ctx context.Context, request tools.SubagentRequest, def
 	previous.resumed = true
 	previous.mu.Unlock()
 	id := newID()
+	if err := m.rehydrateWorktree(ctx, previous, id); err != nil {
+		previous.mu.Lock()
+		previous.resumed = false
+		previous.mu.Unlock()
+		return tools.SubagentResult{}, err
+	}
 	var hookRuntime *hooks.Runtime
 	if previous.hookRuntime != nil {
 		hookRuntime = &hooks.Runtime{Catalog: previous.hookRuntime.Catalog, WorkspaceRoot: previous.cwd, SessionID: id, Model: previous.runner.Model, SubagentType: request.Type}
@@ -274,7 +286,7 @@ func (m *Manager) resume(ctx context.Context, request tools.SubagentRequest, def
 	if hookRuntime != nil {
 		runner.HookPolicy = hookRuntime
 	}
-	current := &task{id: id, typeName: request.Type, description: request.Description, started: time.Now(), done: make(chan struct{}), runner: runner, responseID: previous.responseID, hookRuntime: hookRuntime, cwd: previous.cwd, ownedTools: previous.ownedTools}
+	current := &task{id: id, typeName: request.Type, description: request.Description, started: time.Now(), done: make(chan struct{}), runner: runner, responseID: previous.responseID, hookRuntime: hookRuntime, cwd: previous.cwd, ownedTools: previous.ownedTools, worktreePath: previous.worktreePath}
 	m.mu.Lock()
 	m.tasks[id] = current
 	m.mu.Unlock()
@@ -310,13 +322,14 @@ func (m *Manager) launch(caller context.Context, current *task, prompt string, b
 		}
 		current.responseID = result.ResponseID
 		duration := time.Since(current.started).Milliseconds()
-		current.finish(tools.SubagentResult{ID: current.id, Type: current.typeName, Status: status, Output: output, ToolCalls: result.ToolCalls, Turns: result.Steps, DurationMS: duration, Description: current.description, StartedAtMS: current.started.UnixMilli(), ContextWindow: current.runner.ContextWindow})
 		if m.observer != nil {
 			m.observer.SubagentEnded(context.Background(), current.id, current.typeName, status, duration)
 		}
 		if current.hookRuntime != nil {
 			current.hookRuntime.SubagentEnded(context.Background(), current.id, current.typeName, status, duration)
 		}
+		worktreeDir := m.disposeWorktree(current, status)
+		current.finish(tools.SubagentResult{ID: current.id, Type: current.typeName, Status: status, Output: output, ToolCalls: result.ToolCalls, Turns: result.Steps, DurationMS: duration, WorktreeDir: worktreeDir, Description: current.description, StartedAtMS: current.started.UnixMilli(), ContextWindow: current.runner.ContextWindow})
 	}
 	if background {
 		go run()
@@ -337,7 +350,7 @@ func (t *task) finish(result tools.SubagentResult) {
 }
 
 func (t *task) runningResult() tools.SubagentResult {
-	return tools.SubagentResult{ID: t.id, Type: t.typeName, Status: "running", Description: t.description, StartedAtMS: t.started.UnixMilli(), DurationMS: time.Since(t.started).Milliseconds(), ContextWindow: t.runner.ContextWindow}
+	return tools.SubagentResult{ID: t.id, Type: t.typeName, Status: "running", WorktreeDir: t.worktreePath, Description: t.description, StartedAtMS: t.started.UnixMilli(), DurationMS: time.Since(t.started).Milliseconds(), ContextWindow: t.runner.ContextWindow}
 }
 
 func (m *Manager) Has(id string) bool {
@@ -533,6 +546,74 @@ func (m *Manager) childWorkspace(raw string) (string, *tools.Registry, error) {
 		return m.workspaceRoot, nil, nil
 	}
 	return ws.Root(), m.tools.ForWorkspace(ws), nil
+}
+
+func (m *Manager) prepareWorkspace(ctx context.Context, id, rawCWD, isolation string) (string, *tools.Registry, string, error) {
+	if isolation != "worktree" || m.worktrees == nil {
+		root, registry, err := m.childWorkspace(rawCWD)
+		return root, registry, "", err
+	}
+	record, _, err := m.worktrees.Create(ctx, worktree.CreateRequest{
+		SessionID: id, SourcePath: m.workspaceRoot, CopyMode: "dirty", WorktreeType: "linked", Label: "subagent-" + id,
+	})
+	if err != nil {
+		root, registry, sharedErr := m.childWorkspace(rawCWD)
+		return root, registry, "", sharedErr
+	}
+	effective, err := worktree.EffectiveCWD(ctx, m.workspaceRoot, record.Path)
+	if err != nil {
+		m.removeWorktree(record.Path)
+		root, registry, sharedErr := m.childWorkspace(rawCWD)
+		return root, registry, "", sharedErr
+	}
+	root, registry, err := m.childWorkspace(effective)
+	if err != nil {
+		m.removeWorktree(record.Path)
+		return "", nil, "", err
+	}
+	return root, registry, record.Path, nil
+}
+
+func (m *Manager) disposeWorktree(current *task, status string) string {
+	if current.worktreePath == "" || m.worktrees == nil {
+		return current.worktreePath
+	}
+	ref := "refs/gork/subagents/" + current.id
+	if _, err := worktree.SnapshotToRef(context.Background(), current.worktreePath, ref, "subagent "+current.id+" "+status); err != nil {
+		return current.worktreePath
+	}
+	current.snapshotRef = ref
+	removed, _, err := m.worktrees.Remove(context.Background(), worktree.RemoveRequest{WorktreePath: current.worktreePath, Force: true})
+	if err != nil || !removed {
+		return current.worktreePath
+	}
+	return ""
+}
+
+func (m *Manager) rehydrateWorktree(ctx context.Context, previous *task, id string) error {
+	if previous.worktreePath == "" {
+		return nil
+	}
+	if info, err := os.Stat(previous.worktreePath); err == nil && info.IsDir() {
+		return nil
+	}
+	if m.worktrees == nil || previous.snapshotRef == "" {
+		return errors.New("subagent worktree is unavailable for resume")
+	}
+	if _, err := m.worktrees.Rehydrate(ctx, worktree.RehydrateRequest{
+		SessionID: id, SourceRepo: m.workspaceRoot, WorktreePath: previous.worktreePath,
+		SnapshotRef: previous.snapshotRef, Label: "subagent-" + id,
+	}); err != nil {
+		return fmt.Errorf("rehydrate subagent worktree: %w", err)
+	}
+	_ = worktree.DeleteSnapshotRef(ctx, m.workspaceRoot, previous.snapshotRef)
+	return nil
+}
+
+func (m *Manager) removeWorktree(path string) {
+	if path != "" && m.worktrees != nil {
+		_, _, _ = m.worktrees.Remove(context.Background(), worktree.RemoveRequest{WorktreePath: path, Force: true})
+	}
 }
 
 func sanitizeCWD(value string) string {

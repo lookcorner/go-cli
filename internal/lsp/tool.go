@@ -217,6 +217,8 @@ func (m *Manager) monitor(name string, client *Client) {
 
 type Tool struct{ manager *Manager }
 
+func (t *Tool) WorkspaceBound() bool { return true }
+
 func (t *Tool) Definition() api.ToolDefinition {
 	return api.ToolDefinition{
 		Type: "function", Name: "lsp",

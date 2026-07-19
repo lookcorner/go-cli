@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/skills"
 	"github.com/lookcorner/go-cli/internal/tools"
 	"github.com/lookcorner/go-cli/internal/workspace"
+	"github.com/lookcorner/go-cli/internal/worktree"
 )
 
 type sequenceClient struct {
@@ -389,6 +391,122 @@ func TestSanitizeCWD(t *testing.T) {
 			t.Fatalf("sanitizeCWD(%q)=%q want=%q", input, got, want)
 		}
 	}
+}
+
+func TestSubagentWorktreeSnapshotsAndRehydratesOnResume(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git unavailable")
+	}
+	root := t.TempDir()
+	runGitFixture(t, root, "init", "-q")
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("clean\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGitFixture(t, root, "add", "tracked.txt")
+	runGitFixture(t, root, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "initial")
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("dirty parent\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root = ws.Root()
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	worktrees, err := worktree.NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("GROK_HOME", filepath.Join(home, ".grok"))
+	agentDir := filepath.Join(home, ".grok", "agents")
+	if err := os.MkdirAll(agentDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	definition := "---\nname: isolated\ndescription: isolated\nhooks:\n  Stop:\n    - hooks:\n        - type: command\n          command: printf hook > hook.txt\n---\nWork in isolation."
+	if err := os.WriteFile(filepath.Join(agentDir, "isolated.md"), []byte(definition), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	catalog, loadErrors := agents.Discover(agents.Config{})
+	if len(loadErrors) != 0 {
+		t.Fatal(loadErrors)
+	}
+	client := &sequenceClient{results: []api.StreamResult{
+		{ResponseID: "wt-1", ToolCalls: []api.ToolCall{
+			{CallID: "read-dirty", Name: "read_file", Arguments: json.RawMessage(`{"path":"tracked.txt"}`)},
+			{CallID: "write-child", Name: "write_file", Arguments: json.RawMessage(`{"path":"isolated.txt","content":"isolated"}`)},
+		}},
+		{ResponseID: "wt-2", Text: "first done"},
+		{ResponseID: "wt-3", ToolCalls: []api.ToolCall{
+			{CallID: "read-child", Name: "read_file", Arguments: json.RawMessage(`{"path":"isolated.txt"}`)},
+			{CallID: "read-hook", Name: "read_file", Arguments: json.RawMessage(`{"path":"hook.txt"}`)},
+		}},
+		{ResponseID: "wt-4", Text: "resume done"},
+	}}
+	manager, err := New(Config{
+		Catalog: catalog, Tools: registry, Worktrees: worktrees, WorkspaceRoot: root, ParentModel: "parent",
+		NewClient: func(ModelRuntime) (agent.ResponseStreamer, error) { return client, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	first, err := manager.Start(context.Background(), tools.SubagentRequest{
+		Prompt: "edit", Description: "edit", Type: "isolated", Isolation: "worktree", BackgroundSet: true,
+	})
+	if err != nil || first.Status != "completed" || first.WorktreeDir != "" {
+		t.Fatalf("first=%#v err=%v", first, err)
+	}
+	firstTask := manager.tasks[first.ID]
+	if firstTask.worktreePath == "" || firstTask.snapshotRef == "" {
+		t.Fatalf("worktree task=%#v", firstTask)
+	}
+	if _, err := os.Stat(firstTask.worktreePath); !os.IsNotExist(err) {
+		t.Fatalf("completed worktree was not removed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "isolated.txt")); !os.IsNotExist(err) {
+		t.Fatalf("isolated write touched parent: %v", err)
+	}
+	firstFollowup, _ := json.Marshal(client.requests[1].Input)
+	if !strings.Contains(string(firstFollowup), "dirty parent") {
+		t.Fatalf("worktree did not preserve parent dirty state: %s", firstFollowup)
+	}
+	runGitFixture(t, root, "rev-parse", "--verify", firstTask.snapshotRef+"^{commit}")
+	oldRef := firstTask.snapshotRef
+	second, err := manager.Start(context.Background(), tools.SubagentRequest{
+		Prompt: "resume", Description: "resume", Type: "isolated", ResumeFrom: first.ID,
+		CWD: t.TempDir(), Isolation: "none", BackgroundSet: true,
+	})
+	if err != nil || second.Status != "completed" || second.WorktreeDir != "" {
+		t.Fatalf("second=%#v err=%v", second, err)
+	}
+	secondTask := manager.tasks[second.ID]
+	if secondTask.worktreePath != firstTask.worktreePath || secondTask.snapshotRef == "" {
+		t.Fatalf("resumed worktree task=%#v", secondTask)
+	}
+	if _, err := os.Stat(secondTask.worktreePath); !os.IsNotExist(err) {
+		t.Fatalf("resumed worktree was not removed: %v", err)
+	}
+	resumeFollowup, _ := json.Marshal(client.requests[3].Input)
+	if !strings.Contains(string(resumeFollowup), "isolated") || !strings.Contains(string(resumeFollowup), "hook") {
+		t.Fatalf("resume did not restore isolated change: %s", resumeFollowup)
+	}
+	command := exec.Command("git", "-C", root, "rev-parse", "--verify", oldRef+"^{commit}")
+	if err := command.Run(); err == nil {
+		t.Fatalf("old snapshot ref still exists: %s", oldRef)
+	}
+}
+
+func runGitFixture(t *testing.T, root string, args ...string) string {
+	t.Helper()
+	command := exec.Command("git", append([]string{"-C", root}, args...)...)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, output)
+	}
+	return strings.TrimSpace(string(output))
 }
 
 func TestBackgroundSubagentPollAndKill(t *testing.T) {
