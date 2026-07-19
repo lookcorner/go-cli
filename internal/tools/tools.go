@@ -263,7 +263,11 @@ func (r *Registry) ForWorkspace(ws *workspace.Workspace) *Registry {
 	child.readPolicy = r.readPolicy
 	if r.webFetch != nil {
 		child.webFetch = r.webFetch
-		child.tools["web_fetch"] = r.webFetch
+		if _, enabled := r.tools["web_fetch"]; enabled {
+			child.tools["web_fetch"] = r.webFetch
+		} else {
+			delete(child.tools, "web_fetch")
+		}
 	}
 	for name, tool := range r.tools {
 		if bound, ok := tool.(interface{ WorkspaceBound() bool }); ok && bound.WorkspaceBound() {
@@ -301,6 +305,16 @@ func (r *Registry) ConfigureWebFetch(config WebFetchConfig) {
 	}
 	if r.readFile != nil {
 		r.readFile.artifactRoot = config.ArtifactDir
+	}
+}
+
+func (r *Registry) SetWebFetchEnabled(enabled bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if enabled {
+		r.tools["web_fetch"] = r.webFetch
+	} else {
+		delete(r.tools, "web_fetch")
 	}
 }
 

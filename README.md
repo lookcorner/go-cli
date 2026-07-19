@@ -444,7 +444,9 @@ entries may be host-wide (`docs.example.com`) or path-scoped
 (`example.com/docs`). Omitting the list uses Gork Build's built-in documentation
 domain allowlist. TOML proxy configuration takes precedence over
 `GROK_WEB_FETCH_PROXY`; a configured list replaces the defaults, and an
-explicit empty list blocks all fetches.
+explicit empty list blocks all fetches. The tool is registered only when enabled
+by `[features] web_fetch = true`, `GROK_WEB_FETCH=true`, or authenticated remote
+settings; environment and TOML values take precedence over remote settings.
 
 The Gork Build-compatible file surface includes `read_file`, `list_dir`,
 `grep`, and `search_replace`; text, extracted PPTX, and PDF `format: "text"`

@@ -146,7 +146,6 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	_ = marketplace.AutoRegisterOfficial(opts.configPath)
 	if err := prepareManagedPolicy(&cfg, opts.configPath, stderr); err != nil {
 		return err
 	}
@@ -199,6 +198,13 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			return fmt.Errorf("load dynamic credentials: %w", authErr)
 		}
 	}
+	if tokenProvider != nil {
+		settingsCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		remote := config.FetchRemoteSettings(settingsCtx, cfg.ProxyBaseURL, cfg.APIKey, &http.Client{Timeout: 3 * time.Second})
+		cancel()
+		cfg.ApplyRemoteSettings(remote)
+	}
+	_ = marketplace.AutoRegisterOfficial(opts.configPath, cfg.OfficialMarketplaceAutoRegister)
 	allowRules, askRules, denyRules, err := permissionRules(cfg.Permission, opts.allow, opts.deny)
 	if err != nil {
 		return err
@@ -337,6 +343,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		ProxyEndpoint: cfg.WebFetch.ProxyEndpoint, AllowedDomains: cfg.WebFetch.AllowedDomains,
 		RestrictDomains: cfg.WebFetch.DomainsConfigured,
 	})
+	registry.SetWebFetchEnabled(cfg.WebFetch.Enabled)
 	if err := registry.ConfigureHunkState(artifactDir); err != nil {
 		_ = registry.Close()
 		return err
@@ -1192,6 +1199,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			ProxyEndpoint: cfg.WebFetch.ProxyEndpoint, AllowedDomains: cfg.WebFetch.AllowedDomains,
 			RestrictDomains: cfg.WebFetch.DomainsConfigured,
 		})
+		registry.SetWebFetchEnabled(cfg.WebFetch.Enabled)
 		if sessionConfig.ResumePath == "" {
 			model := cfg.Model
 			if sessionConfig.Model != "" {

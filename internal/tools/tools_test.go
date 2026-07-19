@@ -45,6 +45,7 @@ func TestRegistryForWorkspaceRebindsCoreToolsAndKeepsExternalTools(t *testing.T)
 	if err := parent.Register(fixtureWorkspaceTool{fixtureTool{name: "bound"}}); err != nil {
 		t.Fatal(err)
 	}
+	parent.SetWebFetchEnabled(false)
 	child := parent.ForWorkspace(childWS)
 	defer child.Close()
 	if _, err := child.Execute(context.Background(), "write_file", json.RawMessage(`{"path":"child.txt","content":"child"}`)); err != nil {
@@ -55,6 +56,9 @@ func TestRegistryForWorkspaceRebindsCoreToolsAndKeepsExternalTools(t *testing.T)
 	}
 	if _, err := child.Execute(context.Background(), "bound", json.RawMessage(`{}`)); err == nil || !strings.Contains(err.Error(), "unknown tool") {
 		t.Fatalf("workspace-bound external tool was shared: %v", err)
+	}
+	if parent.HasTool("web_fetch") || child.HasTool("web_fetch") {
+		t.Fatal("disabled web_fetch was restored in a child workspace")
 	}
 	if data, err := os.ReadFile(filepath.Join(childRoot, "child.txt")); err != nil || string(data) != "child" {
 		t.Fatalf("child data=%q err=%v", data, err)

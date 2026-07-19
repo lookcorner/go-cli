@@ -93,10 +93,14 @@ func Sources(configPath, cwd string) ([]Source, error) {
 	return result, nil
 }
 
-// AutoRegisterOfficial applies the reference implementation's default-off
-// environment gate and records a sticky flag so a removed source stays removed.
-func AutoRegisterOfficial(configPath string) error {
-	if enabled, ok := boolEnv("GROK_OFFICIAL_MARKETPLACE_AUTO_REGISTER"); !ok || !enabled {
+// AutoRegisterOfficial applies the reference implementation's default-off gate
+// and records a sticky flag so a removed source stays removed.
+func AutoRegisterOfficial(configPath string, resolved ...bool) error {
+	enabled, ok := boolEnv("GROK_OFFICIAL_MARKETPLACE_AUTO_REGISTER")
+	if len(resolved) > 0 {
+		enabled, ok = resolved[0], true
+	}
+	if !ok || !enabled {
 		return nil
 	}
 	cfg, err := config.Load(configPath)

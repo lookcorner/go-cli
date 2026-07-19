@@ -25,38 +25,40 @@ const (
 )
 
 type Config struct {
-	APIKey                      string                     `json:"api_key,omitempty"`
-	BaseURL                     string                     `json:"base_url,omitempty"`
-	Model                       string                     `json:"model,omitempty"`
-	Backend                     string                     `json:"backend,omitempty"`
-	SystemPrompt                string                     `json:"system_prompt,omitempty"`
-	MaxSteps                    int                        `json:"max_steps,omitempty"`
-	MCPServers                  map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
-	LSPServers                  map[string]LSPServerConfig `json:"lsp_servers,omitempty"`
-	Permission                  PermissionConfig           `json:"permission,omitempty"`
-	ContextWindow               int                        `json:"context_window,omitempty"`
-	AutoCompactThresholdPercent int                        `json:"auto_compact_threshold_percent,omitempty"`
-	Pruning                     PruningConfig              `json:"pruning"`
-	Compat                      compat.Config              `json:"compat"`
-	Skills                      SkillsConfig               `json:"skills,omitempty"`
-	Plugins                     PluginsConfig              `json:"plugins,omitempty"`
-	Marketplace                 MarketplaceConfig          `json:"marketplace,omitempty"`
-	HTTPTimeout                 time.Duration              `json:"-"`
-	WebSearch                   WebSearchConfig            `json:"web_search,omitempty"`
-	WebFetch                    WebFetchConfig             `json:"web_fetch,omitempty"`
-	AuthProviderCommand         string                     `json:"auth_provider_command,omitempty"`
-	AuthTokenTTL                time.Duration              `json:"-"`
-	AuthPrincipalType           string                     `json:"auth_principal_type,omitempty"`
-	AuthPrincipalID             string                     `json:"auth_principal_id,omitempty"`
-	ForceLoginTeams             []string                   `json:"force_login_team_uuid,omitempty"`
-	ForceLoginTeamConfigured    bool                       `json:"-"`
-	DisableAPIKeyAuth           bool                       `json:"disable_api_key_auth,omitempty"`
-	PreferredAuthMethod         string                     `json:"preferred_auth_method,omitempty"`
-	ProxyBaseURL                string                     `json:"proxy_base_url,omitempty"`
-	ManagedConfigURL            string                     `json:"managed_config_url,omitempty"`
-	DeploymentKey               string                     `json:"deployment_key,omitempty"`
-	FolderTrustEnabled          bool                       `json:"folder_trust_enabled"`
-	ModelProfiles               map[string]ModelProfile    `json:"-"`
+	APIKey                          string                     `json:"api_key,omitempty"`
+	BaseURL                         string                     `json:"base_url,omitempty"`
+	Model                           string                     `json:"model,omitempty"`
+	Backend                         string                     `json:"backend,omitempty"`
+	SystemPrompt                    string                     `json:"system_prompt,omitempty"`
+	MaxSteps                        int                        `json:"max_steps,omitempty"`
+	MCPServers                      map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
+	LSPServers                      map[string]LSPServerConfig `json:"lsp_servers,omitempty"`
+	Permission                      PermissionConfig           `json:"permission,omitempty"`
+	ContextWindow                   int                        `json:"context_window,omitempty"`
+	AutoCompactThresholdPercent     int                        `json:"auto_compact_threshold_percent,omitempty"`
+	Pruning                         PruningConfig              `json:"pruning"`
+	Compat                          compat.Config              `json:"compat"`
+	Skills                          SkillsConfig               `json:"skills,omitempty"`
+	Plugins                         PluginsConfig              `json:"plugins,omitempty"`
+	Marketplace                     MarketplaceConfig          `json:"marketplace,omitempty"`
+	OfficialMarketplaceAutoRegister bool                       `json:"-"`
+	HTTPTimeout                     time.Duration              `json:"-"`
+	WebSearch                       WebSearchConfig            `json:"web_search,omitempty"`
+	WebFetch                        WebFetchConfig             `json:"web_fetch,omitempty"`
+	AuthProviderCommand             string                     `json:"auth_provider_command,omitempty"`
+	AuthTokenTTL                    time.Duration              `json:"-"`
+	AuthPrincipalType               string                     `json:"auth_principal_type,omitempty"`
+	AuthPrincipalID                 string                     `json:"auth_principal_id,omitempty"`
+	ForceLoginTeams                 []string                   `json:"force_login_team_uuid,omitempty"`
+	ForceLoginTeamConfigured        bool                       `json:"-"`
+	DisableAPIKeyAuth               bool                       `json:"disable_api_key_auth,omitempty"`
+	PreferredAuthMethod             string                     `json:"preferred_auth_method,omitempty"`
+	ProxyBaseURL                    string                     `json:"proxy_base_url,omitempty"`
+	ManagedConfigURL                string                     `json:"managed_config_url,omitempty"`
+	DeploymentKey                   string                     `json:"deployment_key,omitempty"`
+	FolderTrustEnabled              bool                       `json:"folder_trust_enabled"`
+	ModelProfiles                   map[string]ModelProfile    `json:"-"`
+	compatConfigured                compat.Config
 }
 
 type ModelProfile struct {
@@ -76,6 +78,8 @@ type WebSearchConfig struct {
 }
 
 type WebFetchConfig struct {
+	Enabled           bool     `json:"enabled"`
+	EnabledConfigured bool     `json:"-"`
 	ProxyEndpoint     string   `json:"proxy_endpoint,omitempty"`
 	AllowedDomains    []string `json:"allowed_domains,omitempty"`
 	ProxyConfigured   bool     `json:"-"`
@@ -162,27 +166,30 @@ func (c MCPServerConfig) IsEnabled() bool {
 }
 
 type fileConfig struct {
-	APIKey              string                     `json:"api_key,omitempty" toml:"api_key"`
-	BaseURL             string                     `json:"base_url,omitempty" toml:"base_url"`
-	Model               string                     `json:"model,omitempty" toml:"model_name"`
-	Backend             string                     `json:"backend,omitempty" toml:"backend"`
-	SystemPrompt        string                     `json:"system_prompt,omitempty" toml:"system_prompt"`
-	MaxSteps            int                        `json:"max_steps,omitempty" toml:"max_steps"`
-	HTTPTimeout         string                     `json:"http_timeout,omitempty" toml:"http_timeout"`
-	MCPServers          map[string]MCPServerConfig `json:"mcp_servers,omitempty" toml:"mcp_servers"`
-	LSPServers          map[string]LSPServerConfig `json:"lsp_servers,omitempty" toml:"lsp_servers"`
-	Permission          PermissionConfig           `json:"permission,omitempty" toml:"permission"`
-	Session             sessionConfig              `json:"session,omitempty" toml:"session"`
-	ContextWindow       int                        `json:"context_window,omitempty" toml:"context_window"`
-	Compaction          fileCompactionConfig       `json:"compaction,omitempty" toml:"compaction"`
-	Compat              fileCompatConfig           `json:"compat,omitempty" toml:"compat"`
-	Skills              SkillsConfig               `json:"skills,omitempty" toml:"skills"`
-	Plugins             PluginsConfig              `json:"plugins,omitempty" toml:"plugins"`
-	Marketplace         MarketplaceConfig          `json:"marketplace,omitempty" toml:"marketplace"`
-	AuthProviderCommand string                     `json:"auth_provider_command,omitempty" toml:"auth_provider_command"`
-	AuthTokenTTL        int64                      `json:"auth_token_ttl,omitempty" toml:"auth_token_ttl"`
-	GrokComConfig       fileGrokComConfig          `json:"grok_com_config,omitempty" toml:"grok_com_config"`
-	Auth                fileAuthConfig             `json:"auth,omitempty" toml:"auth"`
+	APIKey        string                     `json:"api_key,omitempty" toml:"api_key"`
+	BaseURL       string                     `json:"base_url,omitempty" toml:"base_url"`
+	Model         string                     `json:"model,omitempty" toml:"model_name"`
+	Backend       string                     `json:"backend,omitempty" toml:"backend"`
+	SystemPrompt  string                     `json:"system_prompt,omitempty" toml:"system_prompt"`
+	MaxSteps      int                        `json:"max_steps,omitempty" toml:"max_steps"`
+	HTTPTimeout   string                     `json:"http_timeout,omitempty" toml:"http_timeout"`
+	MCPServers    map[string]MCPServerConfig `json:"mcp_servers,omitempty" toml:"mcp_servers"`
+	LSPServers    map[string]LSPServerConfig `json:"lsp_servers,omitempty" toml:"lsp_servers"`
+	Permission    PermissionConfig           `json:"permission,omitempty" toml:"permission"`
+	Session       sessionConfig              `json:"session,omitempty" toml:"session"`
+	ContextWindow int                        `json:"context_window,omitempty" toml:"context_window"`
+	Compaction    fileCompactionConfig       `json:"compaction,omitempty" toml:"compaction"`
+	Compat        fileCompatConfig           `json:"compat,omitempty" toml:"compat"`
+	Skills        SkillsConfig               `json:"skills,omitempty" toml:"skills"`
+	Plugins       PluginsConfig              `json:"plugins,omitempty" toml:"plugins"`
+	Marketplace   MarketplaceConfig          `json:"marketplace,omitempty" toml:"marketplace"`
+	Features      struct {
+		WebFetch *bool `json:"web_fetch,omitempty" toml:"web_fetch"`
+	} `json:"features,omitempty" toml:"features"`
+	AuthProviderCommand string            `json:"auth_provider_command,omitempty" toml:"auth_provider_command"`
+	AuthTokenTTL        int64             `json:"auth_token_ttl,omitempty" toml:"auth_token_ttl"`
+	GrokComConfig       fileGrokComConfig `json:"grok_com_config,omitempty" toml:"grok_com_config"`
+	Auth                fileAuthConfig    `json:"auth,omitempty" toml:"auth"`
 	Models              struct {
 		Default   string `toml:"default"`
 		WebSearch string `toml:"web_search"`
@@ -408,6 +415,9 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 		cfg.WebFetch.ProxyEndpoint = *disk.Toolset.WebFetch.ProxyEndpoint
 		cfg.WebFetch.ProxyConfigured = true
 	}
+	if disk.Features.WebFetch != nil {
+		cfg.WebFetch.Enabled, cfg.WebFetch.EnabledConfigured = *disk.Features.WebFetch, true
+	}
 	if disk.Toolset.WebFetch.AllowedDomains != nil {
 		cfg.WebFetch.AllowedDomains = append([]string(nil), disk.Toolset.WebFetch.AllowedDomains...)
 		cfg.WebFetch.DomainsConfigured = true
@@ -420,6 +430,7 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	applyPruningConfig(&cfg.Pruning, disk.Compaction.Pruning)
 	applyCompatConfig(&cfg.Compat, disk.Compat)
+	markCompatConfig(&cfg.compatConfigured, disk.Compat)
 	if disk.Skills.Paths != nil {
 		cfg.Skills.Paths = append([]string(nil), disk.Skills.Paths...)
 	}
@@ -602,6 +613,19 @@ func applyCompatConfig(target *compat.Config, source fileCompatConfig) {
 	applyVendorCompat(&target.Claude, source.Claude)
 }
 
+func markCompatConfig(target *compat.Config, source fileCompatConfig) {
+	markVendorCompat(&target.Cursor, source.Cursor)
+	markVendorCompat(&target.Claude, source.Claude)
+}
+
+func markVendorCompat(target *compat.Vendor, source fileVendorCompat) {
+	target.Skills = target.Skills || source.Skills != nil
+	target.Rules = target.Rules || source.Rules != nil
+	target.Agents = target.Agents || source.Agents != nil
+	target.Mcps = target.Mcps || source.Mcps != nil
+	target.Hooks = target.Hooks || source.Hooks != nil
+}
+
 func applyVendorCompat(target *compat.Vendor, source fileVendorCompat) {
 	if source.Skills != nil {
 		target.Skills = *source.Skills
@@ -714,6 +738,12 @@ func applyEnv(cfg *Config) {
 	applyCompatEnv(&cfg.Compat.Claude, "CLAUDE")
 	if value, ok := envBool("GROK_FOLDER_TRUST"); ok {
 		cfg.FolderTrustEnabled = value
+	}
+	if value, ok := envBool("GROK_WEB_FETCH"); ok {
+		cfg.WebFetch.Enabled, cfg.WebFetch.EnabledConfigured = value, true
+	}
+	if value, ok := envBool("GROK_OFFICIAL_MARKETPLACE_AUTO_REGISTER"); ok {
+		cfg.OfficialMarketplaceAutoRegister = value
 	}
 }
 
