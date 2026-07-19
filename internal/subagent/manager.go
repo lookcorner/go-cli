@@ -179,6 +179,11 @@ func (m *Manager) Start(ctx context.Context, request tools.SubagentRequest) (too
 		capability = "read-only"
 	}
 	view := m.tools.View(definition.Tools, definition.DisallowedTools, capability)
+	if definition.Plugin != "" {
+		view.FilterMCPServers(func(string) bool { return false })
+	} else {
+		view.FilterMCPServers(definition.MCPInheritance.Allows)
+	}
 	childSkills, err := m.childSkills(definition)
 	if err != nil {
 		return tools.SubagentResult{}, err

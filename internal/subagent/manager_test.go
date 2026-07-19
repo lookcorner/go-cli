@@ -14,6 +14,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/agents"
 	"github.com/lookcorner/go-cli/internal/api"
+	"github.com/lookcorner/go-cli/internal/plugin"
 	"github.com/lookcorner/go-cli/internal/skills"
 	"github.com/lookcorner/go-cli/internal/tools"
 	"github.com/lookcorner/go-cli/internal/workspace"
@@ -46,6 +47,17 @@ type recordingObserver struct {
 	mu     sync.Mutex
 	events []string
 }
+
+type fixtureMCPTool struct {
+	name   string
+	server string
+}
+
+func (t fixtureMCPTool) Definition() api.ToolDefinition {
+	return api.ToolDefinition{Type: "function", Name: t.name, Parameters: map[string]any{"type": "object"}}
+}
+func (t fixtureMCPTool) Execute(context.Context, json.RawMessage) (string, error) { return t.name, nil }
+func (t fixtureMCPTool) MCPServerName() string                                    { return t.server }
 
 func (o *recordingObserver) SubagentStarted(_ context.Context, id, agentType, _ string) {
 	o.mu.Lock()
@@ -121,6 +133,87 @@ func TestTaskToolRunsFilteredSubagentAndResumes(t *testing.T) {
 	observer.mu.Unlock()
 	if !strings.Contains(events, "explore:completed") {
 		t.Fatalf("observer events=%q", events)
+	}
+}
+
+func TestSubagentFiltersInheritedMCPServers(t *testing.T) {
+	root := t.TempDir()
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	for _, tool := range []fixtureMCPTool{
+		{name: "mcp__github__read", server: "github"},
+		{name: "mcp__slack__search", server: "slack"},
+	} {
+		if err := registry.Register(tool); err != nil {
+			t.Fatal(err)
+		}
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("GROK_HOME", filepath.Join(home, ".grok"))
+	agentDir := filepath.Join(home, ".grok", "agents")
+	if err := os.MkdirAll(agentDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	agentsByMode := map[string]string{
+		"all":    "",
+		"none":   "mcpInheritance: none\n",
+		"named":  "mcpInheritance:\n  named: [github]\n",
+		"except": "mcpInheritance:\n  except: [github]\n",
+	}
+	for name, inheritance := range agentsByMode {
+		content := "---\nname: " + name + "\ndescription: test\n" + inheritance + "---\nTest."
+		if err := os.WriteFile(filepath.Join(agentDir, name+".md"), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pluginDir := filepath.Join(t.TempDir(), "agents")
+	if err := os.MkdirAll(pluginDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginDir, "worker.md"), []byte("---\nname: worker\ndescription: plugin worker\n---\nTest."), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	catalog, loadErrors := agents.Discover(agents.Config{Plugins: []plugin.Plugin{{Name: "fixture", AgentDirs: []string{pluginDir}, Executable: true}}})
+	if len(loadErrors) != 0 {
+		t.Fatal(loadErrors)
+	}
+	client := &sequenceClient{results: []api.StreamResult{{Text: "all"}, {Text: "none"}, {Text: "named"}, {Text: "except"}, {Text: "plugin"}}}
+	manager, err := New(Config{
+		Catalog: catalog, Tools: registry, WorkspaceRoot: root, ParentModel: "parent",
+		NewClient: func(ModelRuntime) (agent.ResponseStreamer, error) { return client, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	tests := []struct {
+		typeName string
+		want     string
+	}{
+		{typeName: "all", want: "mcp__github__read|mcp__slack__search"},
+		{typeName: "none"},
+		{typeName: "named", want: "mcp__github__read"},
+		{typeName: "except", want: "mcp__slack__search"},
+		{typeName: "fixture:worker"},
+	}
+	for index, test := range tests {
+		if _, err := manager.Start(context.Background(), tools.SubagentRequest{Prompt: "test", Description: "test", Type: test.typeName, BackgroundSet: true}); err != nil {
+			t.Fatalf("start %s: %v", test.typeName, err)
+		}
+		var names []string
+		for _, definition := range client.requests[index].Tools {
+			if strings.HasPrefix(definition.Name, "mcp__") {
+				names = append(names, definition.Name)
+			}
+		}
+		if got := strings.Join(names, "|"); got != test.want {
+			t.Fatalf("%s MCP tools=%q want=%q", test.typeName, got, test.want)
+		}
 	}
 }
 

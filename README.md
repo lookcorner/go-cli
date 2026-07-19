@@ -694,14 +694,17 @@ tool infrastructure. It supports foreground and background execution,
 model/reasoning-effort metadata, inherited context-window/compaction settings,
 profile-aware model validation/routing, strict runtime-enum validation, tool
 allow/deny lists, capability modes, isolated parent-skill snapshots, per-agent
-skill preloading/discovery/inheritance controls, and subagent hook events.
+skill preloading/discovery/inheritance controls, `all`/`none`/`named`/`except`
+parent MCP inheritance filters, and subagent hook events. Plugin agents do not
+inherit parent MCP servers.
 Background tasks survive completion of the parent turn and are
 cancelled during session cleanup. ACP exposes the typed `x.ai/subagent/get`,
 `list_running`, and `cancel` methods; background terminal processes separately
 use `x.ai/task/list`, `x.ai/task/kill`, `x.ai/task_backgrounded`, and
 `x.ai/task_completed`. Worktree isolation, an alternate child cwd,
 durable cross-process task recovery, full live token/tool metrics, and
-`bypassPermissions` execution are not implemented yet.
+agent-owned `mcpServers` plus `bypassPermissions` execution are not implemented
+yet.
 
 The same direct-install lifecycle is available outside ACP:
 

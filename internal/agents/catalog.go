@@ -32,24 +32,79 @@ type Definition struct {
 	Skills          []string
 	DiscoverSkills  bool
 	InheritSkills   bool
+	MCPInheritance  MCPInheritance
 	Builtin         bool
 }
 
+type MCPInheritance struct {
+	Mode  string
+	Names []string
+}
+
+func (m MCPInheritance) Allows(name string) bool {
+	matched := false
+	for _, candidate := range m.Names {
+		if candidate == name {
+			matched = true
+			break
+		}
+	}
+	switch m.Mode {
+	case "none":
+		return false
+	case "named":
+		return matched
+	case "except":
+		return !matched
+	default:
+		return true
+	}
+}
+
+func (m *MCPInheritance) UnmarshalYAML(node *yaml.Node) error {
+	switch node.Kind {
+	case yaml.ScalarNode:
+		mode := strings.TrimSpace(node.Value)
+		if mode != "all" && mode != "none" {
+			return fmt.Errorf("mcpInheritance must be all, none, named, or except")
+		}
+		*m = MCPInheritance{Mode: mode}
+		return nil
+	case yaml.MappingNode:
+		if len(node.Content) != 2 {
+			return fmt.Errorf("mcpInheritance must contain exactly one named or except list")
+		}
+		mode := strings.TrimSpace(node.Content[0].Value)
+		if mode != "named" && mode != "except" {
+			return fmt.Errorf("mcpInheritance must be all, none, named, or except")
+		}
+		var names []string
+		if err := node.Content[1].Decode(&names); err != nil {
+			return fmt.Errorf("mcpInheritance %s must be a list: %w", mode, err)
+		}
+		*m = MCPInheritance{Mode: mode, Names: names}
+		return nil
+	default:
+		return fmt.Errorf("mcpInheritance must be all, none, named, or except")
+	}
+}
+
 type frontmatter struct {
-	Name            string     `yaml:"name"`
-	Description     string     `yaml:"description"`
-	Tools           stringList `yaml:"tools"`
-	DisallowedTools stringList `yaml:"disallowedTools"`
-	MaxTurns        *int       `yaml:"maxTurns"`
-	Model           string     `yaml:"model"`
-	Effort          string     `yaml:"effort"`
-	PermissionMode  string     `yaml:"permissionMode"`
-	Isolation       string     `yaml:"isolation"`
-	Background      *bool      `yaml:"background"`
-	InitialPrompt   string     `yaml:"initialPrompt"`
-	Skills          stringList `yaml:"skills"`
-	DiscoverSkills  *bool      `yaml:"discoverSkills"`
-	InheritSkills   *bool      `yaml:"inheritSkills"`
+	Name            string          `yaml:"name"`
+	Description     string          `yaml:"description"`
+	Tools           stringList      `yaml:"tools"`
+	DisallowedTools stringList      `yaml:"disallowedTools"`
+	MaxTurns        *int            `yaml:"maxTurns"`
+	Model           string          `yaml:"model"`
+	Effort          string          `yaml:"effort"`
+	PermissionMode  string          `yaml:"permissionMode"`
+	Isolation       string          `yaml:"isolation"`
+	Background      *bool           `yaml:"background"`
+	InitialPrompt   string          `yaml:"initialPrompt"`
+	Skills          stringList      `yaml:"skills"`
+	DiscoverSkills  *bool           `yaml:"discoverSkills"`
+	InheritSkills   *bool           `yaml:"inheritSkills"`
+	MCPInheritance  *MCPInheritance `yaml:"mcpInheritance"`
 }
 
 type Config struct {
@@ -159,9 +214,9 @@ func (c *Catalog) ByName(name string) (Definition, bool) {
 
 func builtinDefinitions() []Definition {
 	return []Definition{
-		{Name: "general-purpose", Description: "General-purpose agent for multi-step implementation and investigation.", Prompt: "Complete the delegated task autonomously. Inspect relevant evidence, use tools as needed, verify the result, and return a concise outcome to the parent agent.", Scope: "built-in", DiscoverSkills: true, InheritSkills: true, Builtin: true},
-		{Name: "explore", Description: "Fast read-only agent for searching and understanding a codebase.", Prompt: "Explore the codebase without modifying it. Return concrete findings with file paths and the evidence needed by the parent agent.", Tools: []string{"read_file", "list_files", "search_files", "list_dir", "grep", "web_search", "web_fetch"}, Scope: "built-in", DiscoverSkills: true, Builtin: true},
-		{Name: "plan", Description: "Read-only agent for producing implementation plans from repository evidence.", Prompt: "Inspect the relevant code without modifying it. Produce an implementation-ready plan grounded in repository evidence, including edge cases and verification.", Tools: []string{"read_file", "list_files", "search_files", "list_dir", "grep", "web_search", "web_fetch"}, Scope: "built-in", DiscoverSkills: true, Builtin: true},
+		{Name: "general-purpose", Description: "General-purpose agent for multi-step implementation and investigation.", Prompt: "Complete the delegated task autonomously. Inspect relevant evidence, use tools as needed, verify the result, and return a concise outcome to the parent agent.", Scope: "built-in", DiscoverSkills: true, InheritSkills: true, MCPInheritance: MCPInheritance{Mode: "all"}, Builtin: true},
+		{Name: "explore", Description: "Fast read-only agent for searching and understanding a codebase.", Prompt: "Explore the codebase without modifying it. Return concrete findings with file paths and the evidence needed by the parent agent.", Tools: []string{"read_file", "list_files", "search_files", "list_dir", "grep", "web_search", "web_fetch"}, Scope: "built-in", DiscoverSkills: true, MCPInheritance: MCPInheritance{Mode: "all"}, Builtin: true},
+		{Name: "plan", Description: "Read-only agent for producing implementation plans from repository evidence.", Prompt: "Inspect the relevant code without modifying it. Produce an implementation-ready plan grounded in repository evidence, including edge cases and verification.", Tools: []string{"read_file", "list_files", "search_files", "list_dir", "grep", "web_search", "web_fetch"}, Scope: "built-in", DiscoverSkills: true, MCPInheritance: MCPInheritance{Mode: "all"}, Builtin: true},
 	}
 }
 
@@ -301,11 +356,15 @@ func parse(path, pluginName, scope string) (Definition, error) {
 		maxTurns = *metadata.MaxTurns
 	}
 	discoverSkills, inheritSkills := true, true
+	mcpInheritance := MCPInheritance{Mode: "all"}
 	if metadata.DiscoverSkills != nil {
 		discoverSkills = *metadata.DiscoverSkills
 	}
 	if metadata.InheritSkills != nil {
 		inheritSkills = *metadata.InheritSkills
+	}
+	if metadata.MCPInheritance != nil {
+		mcpInheritance = *metadata.MCPInheritance
 	}
 	return Definition{
 		Name: name, Description: strings.TrimSpace(metadata.Description), Tools: metadata.Tools,
@@ -314,7 +373,7 @@ func parse(path, pluginName, scope string) (Definition, error) {
 		Scope: scope, Model: strings.TrimSpace(metadata.Model), Effort: effort,
 		PermissionMode: permissionMode, Isolation: isolation,
 		Background: metadata.Background, InitialPrompt: strings.TrimSpace(metadata.InitialPrompt),
-		Skills: metadata.Skills, DiscoverSkills: discoverSkills, InheritSkills: inheritSkills,
+		Skills: metadata.Skills, DiscoverSkills: discoverSkills, InheritSkills: inheritSkills, MCPInheritance: mcpInheritance,
 	}, nil
 }
 

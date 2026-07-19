@@ -444,6 +444,20 @@ func (r *Registry) HasTool(name string) bool {
 	return ok
 }
 
+func (r *Registry) FilterMCPServers(keep func(string) bool) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for name, tool := range r.tools {
+		marker, ok := tool.(interface{ MCPServerName() string })
+		if ok && !keep(marker.MCPServerName()) {
+			delete(r.tools, name)
+		}
+	}
+}
+
 // View reuses the parent's concurrency-safe tools while applying a child-only
 // allow/deny policy. The returned registry does not own parent resources.
 func (r *Registry) View(allowed, denied []string, capability string) *Registry {
