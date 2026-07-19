@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/hooks"
 	"github.com/lookcorner/go-cli/internal/skills"
 	"github.com/lookcorner/go-cli/internal/tools"
+	"github.com/lookcorner/go-cli/internal/workspace"
 )
 
 type Observer interface {
@@ -80,6 +82,8 @@ type task struct {
 	result      tools.SubagentResult
 	runner      *agent.Runner
 	hookRuntime *hooks.Runtime
+	cwd         string
+	ownedTools  *tools.Registry
 	responseID  string
 	resumed     bool
 }
@@ -138,9 +142,6 @@ func (m *Manager) Start(ctx context.Context, request tools.SubagentRequest) (too
 	if !validEffort(effort) {
 		return tools.SubagentResult{}, fmt.Errorf("invalid subagent reasoning_effort %q", effort)
 	}
-	if request.CWD != "" && canonicalPath(request.CWD) != canonicalPath(m.workspaceRoot) {
-		return tools.SubagentResult{}, errors.New("custom subagent cwd is not supported by this workspace session")
-	}
 	isolation := first(request.Isolation, definition.Isolation)
 	if isolation != "" && isolation != "none" {
 		return tools.SubagentResult{}, errors.New("subagent worktree isolation is not implemented")
@@ -151,6 +152,18 @@ func (m *Manager) Start(ctx context.Context, request tools.SubagentRequest) (too
 	}
 	if request.ResumeFrom != "" {
 		return m.resume(ctx, request, definition, background)
+	}
+	childRoot, childRegistry, err := m.childWorkspace(request.CWD)
+	if err != nil {
+		return tools.SubagentResult{}, err
+	}
+	keepRegistry := false
+	if childRegistry != nil {
+		defer func() {
+			if !keepRegistry {
+				_ = childRegistry.Close()
+			}
+		}()
 	}
 	model := ModelRuntime{Model: m.parentModel, ContextWindow: m.contextWindow, CompactThresholdPercent: m.compactThresholdPercent}
 	if request.Model != "" {
@@ -178,13 +191,17 @@ func (m *Manager) Start(ctx context.Context, request tools.SubagentRequest) (too
 	if capability == "" && (request.Type == "explore" || request.Type == "plan") {
 		capability = "read-only"
 	}
-	view := m.tools.View(definition.Tools, definition.DisallowedTools, capability)
+	toolSource := m.tools
+	if childRegistry != nil {
+		toolSource = childRegistry
+	}
+	view := toolSource.View(definition.Tools, definition.DisallowedTools, capability)
 	if definition.Plugin != "" {
 		view.FilterMCPServers(func(string) bool { return false })
 	} else {
 		view.FilterMCPServers(definition.MCPInheritance.Allows)
 	}
-	childSkills, err := m.childSkills(definition)
+	childSkills, err := m.childSkills(definition, childRoot)
 	if err != nil {
 		return tools.SubagentResult{}, err
 	}
@@ -208,14 +225,15 @@ func (m *Manager) Start(ctx context.Context, request tools.SubagentRequest) (too
 		CompactThresholdPercent: model.CompactThresholdPercent, Skills: childSkills,
 	}
 	var hookRuntime *hooks.Runtime
-	if catalog := m.childHooks(definition); catalog != nil {
-		hookRuntime = &hooks.Runtime{Catalog: catalog, WorkspaceRoot: m.workspaceRoot, SessionID: id, Model: model.Model, SubagentType: request.Type}
+	if catalog := m.childHooks(definition, childRoot); catalog != nil {
+		hookRuntime = &hooks.Runtime{Catalog: catalog, WorkspaceRoot: childRoot, SessionID: id, Model: model.Model, SubagentType: request.Type}
 		runner.HookPolicy = hookRuntime
 	}
-	current := &task{id: id, typeName: request.Type, description: request.Description, started: time.Now(), done: make(chan struct{}), runner: runner, hookRuntime: hookRuntime}
+	current := &task{id: id, typeName: request.Type, description: request.Description, started: time.Now(), done: make(chan struct{}), runner: runner, hookRuntime: hookRuntime, cwd: childRoot, ownedTools: childRegistry}
 	m.mu.Lock()
 	m.tasks[id] = current
 	m.mu.Unlock()
+	keepRegistry = true
 	return m.launch(ctx, current, request.Prompt, background)
 }
 
@@ -244,7 +262,7 @@ func (m *Manager) resume(ctx context.Context, request tools.SubagentRequest, def
 	id := newID()
 	var hookRuntime *hooks.Runtime
 	if previous.hookRuntime != nil {
-		hookRuntime = &hooks.Runtime{Catalog: previous.hookRuntime.Catalog, WorkspaceRoot: m.workspaceRoot, SessionID: id, Model: previous.runner.Model, SubagentType: request.Type}
+		hookRuntime = &hooks.Runtime{Catalog: previous.hookRuntime.Catalog, WorkspaceRoot: previous.cwd, SessionID: id, Model: previous.runner.Model, SubagentType: request.Type}
 	}
 	runner := &agent.Runner{
 		Client: previous.runner.Client, Tools: previous.runner.Tools, Model: previous.runner.Model,
@@ -256,7 +274,7 @@ func (m *Manager) resume(ctx context.Context, request tools.SubagentRequest, def
 	if hookRuntime != nil {
 		runner.HookPolicy = hookRuntime
 	}
-	current := &task{id: id, typeName: request.Type, description: request.Description, started: time.Now(), done: make(chan struct{}), runner: runner, responseID: previous.responseID, hookRuntime: hookRuntime}
+	current := &task{id: id, typeName: request.Type, description: request.Description, started: time.Now(), done: make(chan struct{}), runner: runner, responseID: previous.responseID, hookRuntime: hookRuntime, cwd: previous.cwd, ownedTools: previous.ownedTools}
 	m.mu.Lock()
 	m.tasks[id] = current
 	m.mu.Unlock()
@@ -426,6 +444,13 @@ func (m *Manager) Close() {
 			return
 		}
 	}
+	closed := make(map[*tools.Registry]bool)
+	for _, current := range tasks {
+		if current.ownedTools != nil && !closed[current.ownedTools] {
+			closed[current.ownedTools] = true
+			_ = current.ownedTools.Close()
+		}
+	}
 }
 
 func newID() string {
@@ -459,7 +484,7 @@ func (m *Manager) resolve(model string) (ModelRuntime, bool) {
 	return m.resolveModel(model)
 }
 
-func (m *Manager) childSkills(definition agents.Definition) (*skills.Catalog, error) {
+func (m *Manager) childSkills(definition agents.Definition, root string) (*skills.Catalog, error) {
 	if !definition.DiscoverSkills {
 		return nil, nil
 	}
@@ -472,14 +497,56 @@ func (m *Manager) childSkills(definition agents.Definition) (*skills.Catalog, er
 		config.Ignore = nil
 		config.Disabled = nil
 	}
-	return skills.Discover(m.workspaceRoot, config)
+	return skills.Discover(root, config)
 }
 
-func (m *Manager) childHooks(definition agents.Definition) *hooks.Catalog {
+func (m *Manager) childHooks(definition agents.Definition, root string) *hooks.Catalog {
 	if len(definition.Hooks) == 0 || definition.Plugin != "" || definition.Scope == "project" && (m.hooks == nil || !m.hooks.ProjectTrusted()) {
 		return m.hooks
 	}
-	return m.hooks.WithInline(definition.Hooks, m.workspaceRoot, "agent/"+definition.Name+"/", "agent "+definition.Name)
+	return m.hooks.WithInline(definition.Hooks, root, "agent/"+definition.Name+"/", "agent "+definition.Name)
+}
+
+func (m *Manager) childWorkspace(raw string) (string, *tools.Registry, error) {
+	path := sanitizeCWD(raw)
+	if path == "" {
+		return m.workspaceRoot, nil, nil
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(m.workspaceRoot, path)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil, fmt.Errorf("subagent cwd %q does not exist", path)
+		}
+		return "", nil, fmt.Errorf("stat subagent cwd %q: %w", path, err)
+	}
+	if !info.IsDir() {
+		return "", nil, fmt.Errorf("subagent cwd %q is not a directory", path)
+	}
+	ws, err := workspace.Open(path)
+	if err != nil {
+		return "", nil, err
+	}
+	if canonicalPath(ws.Root()) == canonicalPath(m.workspaceRoot) {
+		return m.workspaceRoot, nil, nil
+	}
+	return ws.Root(), m.tools.ForWorkspace(ws), nil
+}
+
+func sanitizeCWD(value string) string {
+	value = strings.TrimSpace(strings.Trim(strings.TrimSpace(value), "\"'`"))
+	switch strings.ToLower(value) {
+	case "", "null", "none", "undefined":
+		return ""
+	}
+	if value == "~" || strings.HasPrefix(value, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			value = filepath.Join(home, strings.TrimPrefix(value, "~/"))
+		}
+	}
+	return value
 }
 
 func canonicalPath(path string) string {

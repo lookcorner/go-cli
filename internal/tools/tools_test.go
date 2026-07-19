@@ -22,6 +22,38 @@ func (t fixtureTool) Definition() api.ToolDefinition {
 }
 func (t fixtureTool) Execute(context.Context, json.RawMessage) (string, error) { return t.name, nil }
 
+func TestRegistryForWorkspaceRebindsCoreToolsAndKeepsExternalTools(t *testing.T) {
+	parentRoot := t.TempDir()
+	childRoot := t.TempDir()
+	parentWS, err := workspace.Open(parentRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	childWS, err := workspace.Open(childRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent := NewRegistry(parentWS, PromptApprover{Mode: PermissionAuto})
+	defer parent.Close()
+	if err := parent.Register(fixtureTool{name: "external"}); err != nil {
+		t.Fatal(err)
+	}
+	child := parent.ForWorkspace(childWS)
+	defer child.Close()
+	if _, err := child.Execute(context.Background(), "write_file", json.RawMessage(`{"path":"child.txt","content":"child"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := child.Execute(context.Background(), "external", json.RawMessage(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(filepath.Join(childRoot, "child.txt")); err != nil || string(data) != "child" {
+		t.Fatalf("child data=%q err=%v", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(parentRoot, "child.txt")); !os.IsNotExist(err) {
+		t.Fatalf("rebased write touched parent workspace: %v", err)
+	}
+}
+
 func TestEditFileRequiresUniqueMatch(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "sample.txt")

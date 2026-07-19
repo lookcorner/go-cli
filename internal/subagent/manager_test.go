@@ -298,6 +298,99 @@ func TestSubagentInlineHooksAreIsolatedSecureAndResume(t *testing.T) {
 	}
 }
 
+func TestSubagentCustomCWDRebindsToolsAndPersistsOnResume(t *testing.T) {
+	root := t.TempDir()
+	childRoot := t.TempDir()
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, childRoot = ws.Root(), canonicalPath(childRoot)
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	catalog, loadErrors := agents.Discover(agents.Config{})
+	if len(loadErrors) != 0 {
+		t.Fatal(loadErrors)
+	}
+	client := &sequenceClient{results: []api.StreamResult{
+		{ResponseID: "cwd-1", Text: "first"},
+		{ResponseID: "cwd-2", Text: "second"},
+		{ResponseID: "cwd-3", Text: "third"},
+	}}
+	manager, err := New(Config{
+		Catalog: catalog, Tools: registry, WorkspaceRoot: root, ParentModel: "parent",
+		NewClient: func(ModelRuntime) (agent.ResponseStreamer, error) { return client, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	first, err := manager.Start(context.Background(), tools.SubagentRequest{
+		Prompt: "first", Description: "first", Type: "general-purpose", CWD: "  \"" + childRoot + "\"  ", BackgroundSet: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstTask := manager.tasks[first.ID]
+	if firstTask.cwd != childRoot || firstTask.ownedTools == nil {
+		t.Fatalf("cwd=%q ownedTools=%p", firstTask.cwd, firstTask.ownedTools)
+	}
+	if _, err := firstTask.runner.Tools.Execute(context.Background(), "write_file", json.RawMessage(`{"path":"child.txt","content":"child"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(filepath.Join(childRoot, "child.txt")); err != nil || string(data) != "child" {
+		t.Fatalf("child data=%q err=%v", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "child.txt")); !os.IsNotExist(err) {
+		t.Fatalf("custom cwd write touched parent: %v", err)
+	}
+	if runtime.GOOS != "windows" {
+		output, err := firstTask.runner.Tools.Execute(context.Background(), "shell", json.RawMessage(`{"command":"pwd"}`))
+		if err != nil || !strings.Contains(output, childRoot) {
+			t.Fatalf("shell cwd output=%q err=%v", output, err)
+		}
+	}
+	second, err := manager.Start(context.Background(), tools.SubagentRequest{
+		Prompt: "second", Description: "second", Type: "general-purpose", ResumeFrom: first.ID, CWD: root, BackgroundSet: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondTask := manager.tasks[second.ID]
+	if secondTask.cwd != childRoot || secondTask.ownedTools != firstTask.ownedTools || secondTask.runner.Tools != firstTask.runner.Tools {
+		t.Fatal("resume did not preserve source cwd and tool state")
+	}
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, []byte("file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Start(context.Background(), tools.SubagentRequest{Prompt: "bad", Description: "bad", Type: "general-purpose", CWD: file}); err == nil || !strings.Contains(err.Error(), "not a directory") {
+		t.Fatalf("file cwd error=%v", err)
+	}
+	missing := filepath.Join(t.TempDir(), "missing")
+	if _, err := manager.Start(context.Background(), tools.SubagentRequest{Prompt: "bad", Description: "bad", Type: "general-purpose", CWD: missing}); err == nil || !strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("missing cwd error=%v", err)
+	}
+	third, err := manager.Start(context.Background(), tools.SubagentRequest{Prompt: "third", Description: "third", Type: "general-purpose", CWD: "none", BackgroundSet: true})
+	if err != nil || manager.tasks[third.ID].cwd != root || manager.tasks[third.ID].ownedTools != nil {
+		t.Fatalf("sentinel cwd task=%#v err=%v", manager.tasks[third.ID], err)
+	}
+}
+
+func TestSanitizeCWD(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	for input, want := range map[string]string{
+		`"  /tmp  "`: "/tmp", "'/tmp": "/tmp", "/tmp`": "/tmp",
+		"": "", " null ": "", "NONE": "", "undefined": "",
+		"~/project": filepath.Join(home, "project"), "relative": "relative",
+	} {
+		if got := sanitizeCWD(input); got != want {
+			t.Fatalf("sanitizeCWD(%q)=%q want=%q", input, got, want)
+		}
+	}
+}
+
 func TestBackgroundSubagentPollAndKill(t *testing.T) {
 	root := t.TempDir()
 	ws, err := workspace.Open(root)

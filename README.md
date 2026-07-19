@@ -698,13 +698,15 @@ skill preloading/discovery/inheritance controls, `all`/`none`/`named`/`except`
 parent MCP inheritance filters, and subagent hook events. Plugin agents do not
 inherit parent MCP servers. User and trusted-project agent definitions may add
 private inline hooks; plugin inline hooks are ignored, and resumed agents retain
-their original merged hook set.
+their original merged hook set. A fresh task may select another existing `cwd`;
+workspace-bound tools are rebuilt for that directory while external adapters
+are shared, and resume keeps the source task's effective cwd.
 Background tasks survive completion of the parent turn and are
 cancelled during session cleanup. ACP exposes the typed `x.ai/subagent/get`,
 `list_running`, and `cancel` methods; background terminal processes separately
 use `x.ai/task/list`, `x.ai/task/kill`, `x.ai/task_backgrounded`, and
-`x.ai/task_completed`. Worktree isolation, an alternate child cwd,
-durable cross-process task recovery, full live token/tool metrics, and
+`x.ai/task_completed`. Worktree isolation, durable cross-process task recovery,
+full live token/tool metrics, and
 agent-owned `mcpServers` plus `bypassPermissions` execution are not implemented
 yet.
 

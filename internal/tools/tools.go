@@ -122,6 +122,7 @@ func ToolCallFromContext(ctx context.Context) (ToolCallContext, bool) {
 type Registry struct {
 	mu         sync.RWMutex
 	tools      map[string]Tool
+	approver   Approver
 	processes  *ProcessManager
 	goal       *GoalStore
 	readPolicy Approver
@@ -242,7 +243,7 @@ func NewRegistry(ws *workspace.Workspace, approver Approver) *Registry {
 		webFetch,
 	}
 	registry := &Registry{
-		tools: make(map[string]Tool, len(items)), processes: processes, goal: goal,
+		tools: make(map[string]Tool, len(items)), approver: approver, processes: processes, goal: goal,
 		hunks: NewHunkTracker(ws), rewind: rewind, readFile: readFile, webFetch: webFetch,
 		subagents: subagents,
 	}
@@ -250,6 +251,27 @@ func NewRegistry(ws *workspace.Workspace, approver Approver) *Registry {
 		registry.tools[item.Definition().Name] = item
 	}
 	return registry
+}
+
+// ForWorkspace rebuilds workspace-bound tools while sharing external adapters.
+func (r *Registry) ForWorkspace(ws *workspace.Workspace) *Registry {
+	if r == nil {
+		return nil
+	}
+	child := NewRegistry(ws, r.approver)
+	r.mu.RLock()
+	child.readPolicy = r.readPolicy
+	if r.webFetch != nil {
+		child.webFetch = r.webFetch
+		child.tools["web_fetch"] = r.webFetch
+	}
+	for name, tool := range r.tools {
+		if _, workspaceBound := child.tools[name]; !workspaceBound {
+			child.tools[name] = tool
+		}
+	}
+	r.mu.RUnlock()
+	return child
 }
 
 type WebFetchConfig struct {
@@ -479,7 +501,7 @@ func (r *Registry) View(allowed, denied []string, capability string) *Registry {
 		}
 		items[name] = tool
 	}
-	return &Registry{tools: items, readPolicy: r.readPolicy, hunks: r.hunks, rewind: r.rewind, readFile: r.readFile, webFetch: r.webFetch, subagents: r.subagents}
+	return &Registry{tools: items, approver: r.approver, readPolicy: r.readPolicy, hunks: r.hunks, rewind: r.rewind, readFile: r.readFile, webFetch: r.webFetch, subagents: r.subagents}
 }
 
 func toolNameSet(values []string) map[string]bool {
