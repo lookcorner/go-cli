@@ -1129,6 +1129,16 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		textOutput io.Writer,
 		statusOutput io.Writer,
 	) (*agent.Runner, func(), error) {
+		cfg := cfg
+		if tokenProvider != nil {
+			token := cfg.APIKey
+			if refreshed, err := tokenProvider(sessionCtx, ""); err == nil && refreshed != "" {
+				token = refreshed
+			}
+			settingsCtx, cancel := context.WithTimeout(sessionCtx, 5*time.Second)
+			cfg.ApplyRemoteSettings(config.FetchRemoteSettings(settingsCtx, cfg.ProxyBaseURL, token, &http.Client{Timeout: 3 * time.Second}))
+			cancel()
+		}
 		ws, err := workspace.Open(sessionConfig.CWD)
 		if err != nil {
 			return nil, nil, err
