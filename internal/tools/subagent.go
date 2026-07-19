@@ -27,17 +27,21 @@ type SubagentRequest struct {
 }
 
 type SubagentResult struct {
-	ID            string `json:"subagent_id"`
-	Type          string `json:"subagent_type"`
-	Status        string `json:"status"`
-	Output        string `json:"output,omitempty"`
-	ToolCalls     int    `json:"tool_calls,omitempty"`
-	Turns         int    `json:"turns,omitempty"`
-	DurationMS    int64  `json:"duration_ms,omitempty"`
-	WorktreeDir   string `json:"worktree_path,omitempty"`
-	Description   string `json:"description,omitempty"`
-	StartedAtMS   int64  `json:"started_at_epoch_ms,omitempty"`
-	ContextWindow int    `json:"context_window_tokens,omitempty"`
+	ID            string   `json:"subagent_id"`
+	Type          string   `json:"subagent_type"`
+	Status        string   `json:"status"`
+	Output        string   `json:"output,omitempty"`
+	ToolCalls     int      `json:"tool_calls,omitempty"`
+	Turns         int      `json:"turns,omitempty"`
+	DurationMS    int64    `json:"duration_ms,omitempty"`
+	WorktreeDir   string   `json:"worktree_path,omitempty"`
+	Description   string   `json:"description,omitempty"`
+	StartedAtMS   int64    `json:"started_at_epoch_ms,omitempty"`
+	ContextWindow int      `json:"context_window_tokens,omitempty"`
+	TokensUsed    int      `json:"tokens_used,omitempty"`
+	ContextUsage  int      `json:"context_usage_pct,omitempty"`
+	ToolsUsed     []string `json:"tools_used,omitempty"`
+	ErrorCount    int      `json:"error_count,omitempty"`
 }
 
 type SubagentBackend interface {

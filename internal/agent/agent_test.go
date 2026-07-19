@@ -164,21 +164,26 @@ func TestRunnerExecutesToolLoop(t *testing.T) {
 		t.Fatal(err)
 	}
 	streamer := &fakeStreamer{results: []api.StreamResult{
-		{ResponseID: "resp_1", ToolCalls: []api.ToolCall{{CallID: "call_1", Name: "read_file", Arguments: json.RawMessage(`{"path":"README.md"}`)}}},
-		{ResponseID: "resp_2", Text: "done"},
+		{ResponseID: "resp_1", Usage: api.Usage{InputTokens: 10, OutputTokens: 2, TotalTokens: 12}, ToolCalls: []api.ToolCall{{CallID: "call_1", Name: "read_file", Arguments: json.RawMessage(`{"path":"README.md"}`)}}},
+		{ResponseID: "resp_2", Text: "done", Usage: api.Usage{InputTokens: 15, OutputTokens: 3, TotalTokens: 18}},
 	}}
 	var output bytes.Buffer
+	var progress Progress
 	runner := Runner{
 		Client: streamer,
 		Tools:  tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionDeny}),
 		Model:  "test-model", MaxSteps: 3, TextOutput: &output,
+		Progress: func(value Progress) { progress = value },
 	}
 	result, err := runner.RunTurn(context.Background(), "inspect the readme", "resp_0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Text != "done" || result.Steps != 2 || output.String() != "done" {
+	if result.Text != "done" || result.Steps != 2 || result.InputTokens != 15 || result.TokensUsed != 30 || result.ToolCalls != 1 || strings.Join(result.ToolsUsed, "|") != "read_file" || result.ErrorCount != 0 || output.String() != "done" {
 		t.Fatalf("unexpected result=%#v output=%q", result, output.String())
+	}
+	if progress.Turns != 2 || progress.TokensUsed != 30 || progress.InputTokens != 15 || progress.ToolCalls != 1 || strings.Join(progress.ToolsUsed, "|") != "read_file" {
+		t.Fatalf("progress=%#v", progress)
 	}
 	if len(streamer.requests) != 2 {
 		t.Fatalf("expected two requests, got %d", len(streamer.requests))

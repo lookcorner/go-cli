@@ -29,13 +29,14 @@ type sequenceClient struct {
 	results  []api.StreamResult
 	requests []api.ResponseRequest
 	block    bool
+	blockAt  int
 }
 
 func (c *sequenceClient) StreamResponse(ctx context.Context, request api.ResponseRequest, _ func(string)) (api.StreamResult, error) {
 	c.mu.Lock()
 	c.requests = append(c.requests, request)
 	index := len(c.requests) - 1
-	block := c.block
+	block := c.block || c.blockAt > 0 && index+1 >= c.blockAt
 	c.mu.Unlock()
 	if block {
 		<-ctx.Done()
@@ -45,6 +46,12 @@ func (c *sequenceClient) StreamResponse(ctx context.Context, request api.Respons
 		return api.StreamResult{}, errors.New("missing fixture response")
 	}
 	return c.results[index], nil
+}
+
+func (c *sequenceClient) requestCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.requests)
 }
 
 type recordingObserver struct {
@@ -548,6 +555,49 @@ func TestBackgroundSubagentPollAndKill(t *testing.T) {
 	output, err := manager.Output(context.Background(), started.ID, time.Second)
 	if err != nil || output.Status != "cancelled" {
 		t.Fatalf("output=%#v err=%v", output, err)
+	}
+}
+
+func TestRunningSubagentReportsLiveMetrics(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("metrics"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	catalog, _ := agents.Discover(agents.Config{})
+	client := &sequenceClient{blockAt: 2, results: []api.StreamResult{{
+		ResponseID: "metrics-1", Usage: api.Usage{InputTokens: 25, OutputTokens: 5, TotalTokens: 30},
+		ToolCalls: []api.ToolCall{{CallID: "read", Name: "read_file", Arguments: json.RawMessage(`{"path":"README.md"}`)}},
+	}}}
+	manager, err := New(Config{
+		Context: context.Background(), Catalog: catalog, Tools: registry, WorkspaceRoot: root,
+		ContextWindow: 100, NewClient: func(ModelRuntime) (agent.ResponseStreamer, error) { return client, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	started, err := manager.Start(context.Background(), tools.SubagentRequest{
+		Prompt: "metrics", Description: "metrics", Type: "general-purpose", Background: true, BackgroundSet: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for client.requestCount() < 2 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	live, err := manager.Output(context.Background(), started.ID, 0)
+	if err != nil || live.Status != "running" || live.Turns != 1 || live.ToolCalls != 1 || live.TokensUsed != 30 || live.ContextUsage != 25 || strings.Join(live.ToolsUsed, "|") != "read_file" || live.ErrorCount != 0 {
+		t.Fatalf("live=%#v err=%v", live, err)
+	}
+	if _, err := manager.Kill(context.Background(), started.ID); err != nil {
+		t.Fatal(err)
 	}
 }
 

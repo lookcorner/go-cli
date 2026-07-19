@@ -79,6 +79,7 @@ type Runner struct {
 	StatusOutput            io.Writer
 	ToolObserver            ToolObserver
 	HookPolicy              HookPolicy
+	Progress                func(Progress)
 	ContextWindow           int
 	CompactThresholdPercent int
 	UpdateMCPServers        func(context.Context, []mcp.ServerConfig) error
@@ -99,6 +100,18 @@ type Result struct {
 	InputTokens   int
 	ContextWindow int
 	ToolCalls     int
+	TokensUsed    int
+	ToolsUsed     []string
+	ErrorCount    int
+}
+
+type Progress struct {
+	Turns       int
+	ToolCalls   int
+	TokensUsed  int
+	InputTokens int
+	ToolsUsed   []string
+	ErrorCount  int
 }
 
 func (r *Runner) Run(ctx context.Context, prompt string) (Result, error) {
@@ -179,6 +192,18 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 	}
 
 	input := []api.InputItem{{Type: "message", Role: "user", Content: content}}
+	progress := Progress{}
+	seenTools := make(map[string]bool)
+	publish := func() {
+		final.Steps, final.ToolCalls = progress.Turns, progress.ToolCalls
+		final.InputTokens, final.TokensUsed = progress.InputTokens, progress.TokensUsed
+		final.ToolsUsed, final.ErrorCount = append(final.ToolsUsed[:0], progress.ToolsUsed...), progress.ErrorCount
+		if r.Progress != nil {
+			copy := progress
+			copy.ToolsUsed = append([]string(nil), progress.ToolsUsed...)
+			r.Progress(copy)
+		}
+	}
 	for step := 1; step <= r.MaxSteps; step++ {
 		if r.Skills != nil {
 			if reminder := r.Skills.DrainReminder(); reminder != "" {
@@ -205,6 +230,8 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 			}
 		})
 		if err != nil {
+			progress.Turns, progress.ErrorCount = step, progress.ErrorCount+1
+			publish()
 			r.log("model_error", map[string]any{"step": step, "error": err.Error()})
 			return final, err
 		}
@@ -212,6 +239,13 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 			ResponseID: streamed.ResponseID, Text: streamed.Text, Steps: step,
 			InputTokens: streamed.Usage.InputTokens, ContextWindow: r.ContextWindow,
 		}
+		progress.Turns, progress.InputTokens = step, streamed.Usage.InputTokens
+		tokens := streamed.Usage.TotalTokens
+		if tokens == 0 {
+			tokens = streamed.Usage.InputTokens + streamed.Usage.OutputTokens
+		}
+		progress.TokensUsed += tokens
+		publish()
 		if streamed.Usage.InputTokens > 0 {
 			r.lastInputTokens = streamed.Usage.InputTokens
 		}
@@ -224,13 +258,20 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 			return final, nil
 		}
 		if streamed.ResponseID == "" {
+			progress.ErrorCount++
+			publish()
 			return final, errors.New("model returned tool calls without a response ID")
 		}
 		previousResponseID = streamed.ResponseID
 		input = make([]api.InputItem, 0, len(streamed.ToolCalls))
 		var imageParts []api.ContentPart
 		for _, call := range streamed.ToolCalls {
-			final.ToolCalls++
+			progress.ToolCalls++
+			if !seenTools[call.Name] {
+				seenTools[call.Name] = true
+				progress.ToolsUsed = append(progress.ToolsUsed, call.Name)
+			}
+			publish()
 			r.status("tool %s", call.Name)
 			r.log("tool_call", map[string]any{
 				"step": step, "call_id": call.CallID, "name": call.Name,
@@ -256,6 +297,8 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 				r.ToolObserver.ToolFinished(call, toolResult, toolErr)
 			}
 			if toolErr != nil {
+				progress.ErrorCount++
+				publish()
 				output = "ERROR: " + toolErr.Error()
 			}
 			r.log("tool_result", map[string]any{
@@ -286,6 +329,8 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 			input = append(input, api.InputItem{Type: "message", Role: "user", Content: imageParts})
 		}
 	}
+	progress.ErrorCount++
+	publish()
 	return final, fmt.Errorf("agent reached maximum of %d model steps", r.MaxSteps)
 }
 

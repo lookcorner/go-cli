@@ -712,8 +712,9 @@ Background tasks survive completion of the parent turn and are
 cancelled during session cleanup. ACP exposes the typed `x.ai/subagent/get`,
 `list_running`, and `cancel` methods; background terminal processes separately
 use `x.ai/task/list`, `x.ai/task/kill`, `x.ai/task_backgrounded`, and
-`x.ai/task_completed`. Durable cross-process task recovery, full live token/tool
-metrics, and
+`x.ai/task_completed`. Running and completed subagent snapshots report real
+turn, tool-call, token, context-usage, unique-tool, and error metrics. Durable
+cross-process task recovery, live subagent push notifications, and
 agent-owned `mcpServers` plus `bypassPermissions` execution are not implemented
 yet.
 

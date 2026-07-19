@@ -91,6 +91,7 @@ type task struct {
 	snapshotRef  string
 	responseID   string
 	resumed      bool
+	progress     agent.Progress
 }
 
 func New(config Config) (*Manager, error) {
@@ -236,6 +237,7 @@ func (m *Manager) Start(ctx context.Context, request tools.SubagentRequest) (too
 		runner.HookPolicy = hookRuntime
 	}
 	current := &task{id: id, typeName: request.Type, description: request.Description, started: time.Now(), done: make(chan struct{}), runner: runner, hookRuntime: hookRuntime, cwd: childRoot, ownedTools: childRegistry, worktreePath: worktreePath}
+	runner.Progress = current.updateProgress
 	m.mu.Lock()
 	m.tasks[id] = current
 	m.mu.Unlock()
@@ -287,6 +289,7 @@ func (m *Manager) resume(ctx context.Context, request tools.SubagentRequest, def
 		runner.HookPolicy = hookRuntime
 	}
 	current := &task{id: id, typeName: request.Type, description: request.Description, started: time.Now(), done: make(chan struct{}), runner: runner, responseID: previous.responseID, hookRuntime: hookRuntime, cwd: previous.cwd, ownedTools: previous.ownedTools, worktreePath: previous.worktreePath}
+	runner.Progress = current.updateProgress
 	m.mu.Lock()
 	m.tasks[id] = current
 	m.mu.Unlock()
@@ -329,7 +332,13 @@ func (m *Manager) launch(caller context.Context, current *task, prompt string, b
 			current.hookRuntime.SubagentEnded(context.Background(), current.id, current.typeName, status, duration)
 		}
 		worktreeDir := m.disposeWorktree(current, status)
-		current.finish(tools.SubagentResult{ID: current.id, Type: current.typeName, Status: status, Output: output, ToolCalls: result.ToolCalls, Turns: result.Steps, DurationMS: duration, WorktreeDir: worktreeDir, Description: current.description, StartedAtMS: current.started.UnixMilli(), ContextWindow: current.runner.ContextWindow})
+		current.finish(tools.SubagentResult{
+			ID: current.id, Type: current.typeName, Status: status, Output: output,
+			ToolCalls: result.ToolCalls, Turns: result.Steps, TokensUsed: result.TokensUsed,
+			ContextWindow: current.runner.ContextWindow, ContextUsage: contextUsage(result.InputTokens, current.runner.ContextWindow),
+			ToolsUsed: append([]string{}, result.ToolsUsed...), ErrorCount: result.ErrorCount,
+			DurationMS: duration, WorktreeDir: worktreeDir, Description: current.description, StartedAtMS: current.started.UnixMilli(),
+		})
 	}
 	if background {
 		go run()
@@ -350,7 +359,29 @@ func (t *task) finish(result tools.SubagentResult) {
 }
 
 func (t *task) runningResult() tools.SubagentResult {
-	return tools.SubagentResult{ID: t.id, Type: t.typeName, Status: "running", WorktreeDir: t.worktreePath, Description: t.description, StartedAtMS: t.started.UnixMilli(), DurationMS: time.Since(t.started).Milliseconds(), ContextWindow: t.runner.ContextWindow}
+	t.mu.Lock()
+	progress := t.progress
+	t.mu.Unlock()
+	return tools.SubagentResult{
+		ID: t.id, Type: t.typeName, Status: "running", WorktreeDir: t.worktreePath,
+		Description: t.description, StartedAtMS: t.started.UnixMilli(), DurationMS: time.Since(t.started).Milliseconds(),
+		Turns: progress.Turns, ToolCalls: progress.ToolCalls, TokensUsed: progress.TokensUsed,
+		ContextWindow: t.runner.ContextWindow, ContextUsage: contextUsage(progress.InputTokens, t.runner.ContextWindow),
+		ToolsUsed: append([]string{}, progress.ToolsUsed...), ErrorCount: progress.ErrorCount,
+	}
+}
+
+func (t *task) updateProgress(progress agent.Progress) {
+	t.mu.Lock()
+	t.progress = progress
+	t.mu.Unlock()
+}
+
+func contextUsage(tokens, window int) int {
+	if tokens <= 0 || window <= 0 {
+		return 0
+	}
+	return min(100, tokens*100/window)
 }
 
 func (m *Manager) Has(id string) bool {

@@ -173,13 +173,17 @@ func (s *Server) findSubagent(id string) (*session, tools.SubagentResult, bool) 
 }
 
 func liveSubagentDTO(parentID string, result tools.SubagentResult) map[string]any {
+	toolsUsed := result.ToolsUsed
+	if toolsUsed == nil {
+		toolsUsed = []string{}
+	}
 	return map[string]any{
 		"subagentId": result.ID, "parentSessionId": parentID, "childSessionId": result.ID,
 		"subagentType": result.Type, "description": result.Description,
 		"startedAtEpochMs": result.StartedAtMS, "durationMs": result.DurationMS,
 		"turnCount": result.Turns, "toolCallCount": result.ToolCalls,
-		"tokensUsed": 0, "contextWindowTokens": result.ContextWindow, "contextUsagePct": 0,
-		"toolsUsed": []string{}, "errorCount": 0,
+		"tokensUsed": result.TokensUsed, "contextWindowTokens": result.ContextWindow, "contextUsagePct": result.ContextUsage,
+		"toolsUsed": toolsUsed, "errorCount": result.ErrorCount,
 	}
 }
 
@@ -195,7 +199,13 @@ func subagentDTO(parentID string, result tools.SubagentResult) map[string]any {
 			item[key] = value
 		}
 	case "completed":
+		toolsUsed := result.ToolsUsed
+		if toolsUsed == nil {
+			toolsUsed = []string{}
+		}
 		item["output"], item["toolCalls"], item["turns"] = result.Output, result.ToolCalls, result.Turns
+		item["tokensUsed"], item["contextWindowTokens"], item["contextUsagePct"] = result.TokensUsed, result.ContextWindow, result.ContextUsage
+		item["toolsUsed"], item["errorCount"] = toolsUsed, result.ErrorCount
 		if result.WorktreeDir != "" {
 			item["worktreePath"] = result.WorktreeDir
 		}

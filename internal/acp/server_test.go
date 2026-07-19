@@ -927,8 +927,8 @@ func TestTaskLifecycleNotificationsWireContract(t *testing.T) {
 
 func TestSubagentGetListRunningAndCancelWireContract(t *testing.T) {
 	results := map[string]tools.SubagentResult{
-		"running-1": {ID: "running-1", Type: "explore", Description: "find code", Status: "running", StartedAtMS: 10, DurationMS: 20, ContextWindow: 256000},
-		"done-1":    {ID: "done-1", Type: "general-purpose", Description: "implement", Status: "completed", Output: "done", ToolCalls: 3, Turns: 2, StartedAtMS: 30, DurationMS: 40},
+		"running-1": {ID: "running-1", Type: "explore", Description: "find code", Status: "running", StartedAtMS: 10, DurationMS: 20, Turns: 2, ToolCalls: 3, TokensUsed: 1200, ContextWindow: 256000, ContextUsage: 40, ToolsUsed: []string{"read_file", "grep"}, ErrorCount: 1},
+		"done-1":    {ID: "done-1", Type: "general-purpose", Description: "implement", Status: "completed", Output: "done", ToolCalls: 3, Turns: 2, TokensUsed: 2400, ContextWindow: 128000, ContextUsage: 50, ToolsUsed: []string{"write_file"}, StartedAtMS: 30, DurationMS: 40},
 	}
 	var getTimeout time.Duration
 	current := &session{id: "parent-1", runner: &agent.Runner{
@@ -961,12 +961,13 @@ func TestSubagentGetListRunningAndCancelWireContract(t *testing.T) {
 
 	listed := request("x.ai/subagent/list_running", `{"sessionId":"parent-1"}`)
 	items := listed["result"].(map[string]any)["subagents"].([]any)
-	if len(items) != 1 || items[0].(map[string]any)["subagentId"] != "running-1" || items[0].(map[string]any)["parentSessionId"] != "parent-1" || items[0].(map[string]any)["contextWindowTokens"] != float64(256000) {
+	running := items[0].(map[string]any)
+	if len(items) != 1 || running["subagentId"] != "running-1" || running["parentSessionId"] != "parent-1" || running["contextWindowTokens"] != float64(256000) || running["tokensUsed"] != float64(1200) || running["contextUsagePct"] != float64(40) || running["errorCount"] != float64(1) || len(running["toolsUsed"].([]any)) != 2 {
 		t.Fatalf("listed=%#v", listed)
 	}
 	got := request("x.ai/subagent/get", `{"subagentId":"done-1","block":true,"timeoutMs":25}`)
 	snapshot := got["result"].(map[string]any)["snapshot"].(map[string]any)
-	if snapshot["status"] != "completed" || snapshot["output"] != "done" || snapshot["toolCalls"] != float64(3) || getTimeout != 25*time.Millisecond {
+	if snapshot["status"] != "completed" || snapshot["output"] != "done" || snapshot["toolCalls"] != float64(3) || snapshot["tokensUsed"] != float64(2400) || snapshot["contextUsagePct"] != float64(50) || len(snapshot["toolsUsed"].([]any)) != 1 || getTimeout != 25*time.Millisecond {
 		t.Fatalf("snapshot=%#v timeout=%s", snapshot, getTimeout)
 	}
 	cancelled := request("x.ai/subagent/cancel", `{"subagentId":"done-1"}`)
