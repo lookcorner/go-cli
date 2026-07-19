@@ -670,3 +670,32 @@ func TestRequirementsDenyCannotBeOverriddenByCLIAllow(t *testing.T) {
 		t.Fatalf("CLI allow bypassed requirements deny: %v", err)
 	}
 }
+
+func TestPermissionPromptNotifierOnlyWrapsAskPaths(t *testing.T) {
+	count := 0
+	notifier := &permissionPromptApprover{base: tools.PromptApprover{Mode: tools.PermissionAuto}}
+	notifier.SetNotify(func() { count++ })
+	policy, err := tools.NewPolicyApprover(
+		tools.PromptApprover{Mode: tools.PermissionAuto}, notifier,
+		[]string{"Bash(git status)"}, []string{"Bash(git push *)"}, []string{"Bash(rm *)"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := policy.Approve(context.Background(), "shell", "git status"); err != nil || count != 0 {
+		t.Fatalf("allow err=%v count=%d", err, count)
+	}
+	if err := policy.Approve(context.Background(), "shell", "rm file"); err == nil || count != 0 {
+		t.Fatalf("deny err=%v count=%d", err, count)
+	}
+	if err := policy.Approve(context.Background(), "shell", "git push origin main"); err != nil || count != 1 {
+		t.Fatalf("ask err=%v count=%d", err, count)
+	}
+	defaultPrompt, err := tools.NewPolicyApprover(notifier, notifier, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := defaultPrompt.Approve(context.Background(), "shell", "go test ./..."); err != nil || count != 2 {
+		t.Fatalf("default prompt err=%v count=%d", err, count)
+	}
+}

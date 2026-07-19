@@ -317,6 +317,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		approver = tools.PromptApprover{Mode: mode, Input: inputReader, Output: stderr}
 		askApprover = tools.PromptApprover{Mode: tools.PermissionPrompt, Input: inputReader, Output: stderr}
 	}
+	permissionPrompts := &permissionPromptApprover{base: askApprover}
+	askApprover = permissionPrompts
+	if mode == tools.PermissionPrompt {
+		approver = permissionPrompts
+	}
 	approver, err = tools.NewPolicyApprover(approver, askApprover, allowRules, askRules, denyRules)
 	if err != nil {
 		return err
@@ -386,6 +391,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	hookRuntime := &hooks.Runtime{
 		Catalog: hookCatalog, WorkspaceRoot: ws.Root(), SessionID: logger.ID(), Model: cfg.Model,
 	}
+	permissionPrompts.SetNotify(func() {
+		hookRuntime.Notification(context.Background(), "permission_prompt", "Tool permission requested", "", "info")
+	})
 	registry.SetProcessObserver(&sessionProcessObserver{hooks: hookRuntime})
 	defer hookRuntime.SessionEnded(context.Background(), "closed")
 	agentCatalog, agentErrors := agents.Discover(agents.Config{
@@ -913,6 +921,28 @@ type sessionProcessObserver struct {
 	hooks     *hooks.Runtime
 }
 
+type permissionPromptApprover struct {
+	base   tools.Approver
+	mu     sync.RWMutex
+	notify func()
+}
+
+func (a *permissionPromptApprover) SetNotify(notify func()) {
+	a.mu.Lock()
+	a.notify = notify
+	a.mu.Unlock()
+}
+
+func (a *permissionPromptApprover) Approve(ctx context.Context, action, detail string) error {
+	a.mu.RLock()
+	notify := a.notify
+	a.mu.RUnlock()
+	if notify != nil {
+		notify()
+	}
+	return a.base.Approve(ctx, action, detail)
+}
+
 func (o *sessionProcessObserver) TaskBackgrounded(event tools.ProcessBackgrounded) {
 	if o.server != nil {
 		o.server.NotifyTaskBackgrounded(o.sessionID, event)
@@ -969,11 +999,12 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			return nil, nil, err
 		}
 		instructions := joinInstructions(cfg.SystemPrompt, workspace.FormatInstructions(instructionFiles), catalog.Summary())
-		approver := protocolApprover
+		permissionPrompts := &permissionPromptApprover{base: protocolApprover}
+		var approver tools.Approver = permissionPrompts
 		if mode != tools.PermissionPrompt {
 			approver = tools.PromptApprover{Mode: mode}
 		}
-		approver, err = tools.NewPolicyApprover(approver, protocolApprover, allowRules, askRules, denyRules)
+		approver, err = tools.NewPolicyApprover(approver, permissionPrompts, allowRules, askRules, denyRules)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -985,7 +1016,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			}
 		}
 		readPolicy, err := tools.NewPolicyApprover(
-			tools.PromptApprover{Mode: tools.PermissionAuto}, protocolApprover,
+			tools.PromptApprover{Mode: tools.PermissionAuto}, permissionPrompts,
 			allowRules, askRules, denyRules,
 		)
 		if err != nil {
@@ -1091,6 +1122,9 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		pluginState.hookRun = &hooks.Runtime{
 			Catalog: pluginState.hooks, WorkspaceRoot: ws.Root(), SessionID: logger.ID(), Model: sessionCfg.Model,
 		}
+		permissionPrompts.SetNotify(func() {
+			pluginState.hookRun.Notification(context.Background(), "permission_prompt", "Tool permission requested", "", "info")
+		})
 		registry.SetProcessObserver(&sessionProcessObserver{server: server, sessionID: logger.ID(), hooks: pluginState.hookRun})
 		agentCatalog, agentErrors := agents.Discover(agents.Config{
 			WorkspaceRoot: ws.Root(), ProjectTrusted: projectTrusted, Compat: sessionCfg.Compat, Plugins: plugins,

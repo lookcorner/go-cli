@@ -677,8 +677,8 @@ trusted projects contribute the corresponding repo settings and `.grok/hooks`.
 Vendor sources honor the `compat.<vendor>.hooks` gate. The runtime fires
 `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`,
 `PostToolUseFailure`, `Stop`, `StopFailure`, `PreCompact`, `PostCompact`, and
-`SessionEnd` plus permission-denied, background task-completion notifications,
-and subagent start/stop. Permission-prompt, idle, and agent-error notification
+`SessionEnd` plus permission-prompt/denied, background task-completion
+notifications, and subagent start/stop. Idle and agent-error notification
 producers remain.
 
 Custom agent definitions are discovered from trusted project `.grok/agents`
