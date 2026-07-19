@@ -763,8 +763,9 @@ plugins and clears their enabled/disabled settings. It also imports
 `extraKnownMarketplaces` from `settings.local.json` and `settings.json`, then
 `plugins/known_marketplaces.json`, under both `$GROK_HOME` and `~/.claude`.
 Set `GROK_OFFICIAL_MARKETPLACE_AUTO_REGISTER=true` to register the official xAI
-source once; removing it records that choice. Component catalog details and the
-remote feature-flag gate are not yet implemented.
+source once; removing it records that choice. Version 1 `plugin-index.json`
+catalogs enrich indexed plugins with sanitized skill, command, agent, MCP, hook,
+and LSP component inventories. The remote feature-flag gate is not yet implemented.
 
 The `[skills]` config accepts additional directories or individual `SKILL.md`
 files. Paths support `~`; relative paths resolve from the workspace. `ignore`

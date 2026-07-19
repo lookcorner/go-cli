@@ -1189,7 +1189,7 @@ func TestMarketplaceExtensionsWireContract(t *testing.T) {
 	called := false
 	runner := &agent.Runner{
 		MarketplaceList: func() ([]marketplace.ScanResult, error) {
-			return []marketplace.ScanResult{{SourceName: "Local", SourceKind: "local", SourceURLOrPath: "/catalog", Plugins: []marketplace.Entry{{Name: "demo", RelativePath: "plugins/demo", InstallStatus: "not_installed"}}}}, nil
+			return []marketplace.ScanResult{{SourceName: "Local", SourceKind: "local", SourceURLOrPath: "/catalog", Plugins: []marketplace.Entry{{Name: "demo", RelativePath: "plugins/demo", InstallStatus: "not_installed", Components: &marketplace.Components{Skills: []marketplace.Component{{Name: "review", Description: "Review code"}}}}}}}, nil
 		},
 		MarketplaceAction: func(_ context.Context, action marketplace.Action) (marketplace.Outcome, error) {
 			called = action.Type == "install" && action.SourceURLOrPath == "/catalog" && action.PluginRelativePath == "plugins/demo"
@@ -1205,7 +1205,10 @@ func TestMarketplaceExtensionsWireContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	sources := response["result"].(map[string]any)["result"].(map[string]any)["sources"].([]any)
-	if len(sources) != 1 {
+	plugins := sources[0].(map[string]any)["plugins"].([]any)
+	components := plugins[0].(map[string]any)["components"].(map[string]any)
+	skills := components["skills"].([]any)
+	if len(sources) != 1 || skills[0].(map[string]any)["name"] != "review" || skills[0].(map[string]any)["description"] != "Review code" {
 		t.Fatalf("marketplace list=%#v", response)
 	}
 	output.Reset()

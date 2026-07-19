@@ -29,23 +29,27 @@ type Source struct {
 }
 
 type Entry struct {
-	Name             string   `json:"name"`
-	Version          string   `json:"version,omitempty"`
-	Description      string   `json:"description,omitempty"`
-	Category         string   `json:"category,omitempty"`
-	Author           string   `json:"author,omitempty"`
-	Tags             []string `json:"tags,omitempty"`
-	RelativePath     string   `json:"relativePath"`
-	SkillCount       int      `json:"skillCount"`
-	HasHooks         bool     `json:"hasHooks"`
-	HasAgents        bool     `json:"hasAgents"`
-	HasMCP           bool     `json:"hasMcp"`
-	InstallStatus    string   `json:"installStatus"`
-	InstalledVersion string   `json:"installedVersion,omitempty"`
-	RemoteURL        string   `json:"remoteUrl,omitempty"`
-	RemoteRef        string   `json:"remoteRef,omitempty"`
-	RemoteSHA        string   `json:"remoteSha,omitempty"`
-	RemoteSubdir     string   `json:"remoteSubdir,omitempty"`
+	Name             string      `json:"name"`
+	Version          string      `json:"version,omitempty"`
+	Description      string      `json:"description,omitempty"`
+	Category         string      `json:"category,omitempty"`
+	Author           string      `json:"author,omitempty"`
+	Tags             []string    `json:"tags,omitempty"`
+	Keywords         []string    `json:"keywords,omitempty"`
+	Domains          []string    `json:"domains,omitempty"`
+	Homepage         string      `json:"homepage,omitempty"`
+	RelativePath     string      `json:"relativePath"`
+	SkillCount       int         `json:"skillCount"`
+	HasHooks         bool        `json:"hasHooks"`
+	HasAgents        bool        `json:"hasAgents"`
+	HasMCP           bool        `json:"hasMcp"`
+	InstallStatus    string      `json:"installStatus"`
+	InstalledVersion string      `json:"installedVersion,omitempty"`
+	RemoteURL        string      `json:"remoteUrl,omitempty"`
+	RemoteRef        string      `json:"remoteRef,omitempty"`
+	RemoteSHA        string      `json:"remoteSha,omitempty"`
+	RemoteSubdir     string      `json:"remoteSubdir,omitempty"`
+	Components       *Components `json:"components,omitempty"`
 }
 
 type ScanResult struct {
@@ -651,6 +655,9 @@ type indexEntry struct {
 	Category    string          `json:"category"`
 	Author      json.RawMessage `json:"author"`
 	Tags        []string        `json:"tags"`
+	Keywords    []string        `json:"keywords"`
+	Domains     []string        `json:"domains"`
+	Homepage    string          `json:"homepage"`
 	Source      json.RawMessage `json:"source"`
 }
 
@@ -666,6 +673,7 @@ func scanRoot(root, sourceIdentity string) []Entry {
 		}
 		var index indexFile
 		if json.Unmarshal(data, &index) == nil && len(index.Plugins) > 0 {
+			catalog := loadComponentCatalog(root)
 			entries := make([]Entry, 0, len(index.Plugins))
 			for _, item := range index.Plugins {
 				path := ""
@@ -684,7 +692,7 @@ func scanRoot(root, sourceIdentity string) []Entry {
 					}
 					path = source.Path
 				}
-				entry := Entry{Name: item.Name, Version: item.Version, Description: item.Description, Category: item.Category, Author: indexAuthor(item.Author), Tags: item.Tags, RelativePath: path}
+				entry := Entry{Name: item.Name, Version: item.Version, Description: item.Description, Category: item.Category, Author: indexAuthor(item.Author), Tags: item.Tags, Keywords: item.Keywords, Domains: item.Domains, Homepage: item.Homepage, RelativePath: path}
 				if entry.RelativePath == "" {
 					if source.URL != "" {
 						entry.RelativePath = item.Name
@@ -693,6 +701,9 @@ func scanRoot(root, sourceIdentity string) []Entry {
 					}
 				}
 				entry.RemoteURL, entry.RemoteRef, entry.RemoteSHA = source.URL, source.Ref, source.SHA
+				if catalog != nil && (source.URL == "" || source.SHA != "") {
+					entry.Components = catalog.components(item.Name, source.SHA)
+				}
 				if source.URL != "" {
 					entry.RemoteSubdir = source.Path
 				}
