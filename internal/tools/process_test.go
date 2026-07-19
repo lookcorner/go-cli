@@ -17,6 +17,7 @@ import (
 type recordingProcessObserver struct {
 	backgrounded chan ProcessBackgrounded
 	completed    chan ProcessSnapshot
+	consumed     chan string
 }
 
 func (o *recordingProcessObserver) TaskBackgrounded(event ProcessBackgrounded) {
@@ -25,6 +26,12 @@ func (o *recordingProcessObserver) TaskBackgrounded(event ProcessBackgrounded) {
 
 func (o *recordingProcessObserver) TaskCompleted(snapshot ProcessSnapshot) {
 	o.completed <- snapshot
+}
+
+func (o *recordingProcessObserver) TaskConsumed(taskID string) {
+	if o.consumed != nil {
+		o.consumed <- taskID
+	}
 }
 
 func TestGorkTerminalToolForegroundReportsExitCode(t *testing.T) {
@@ -345,5 +352,61 @@ func TestRegistryBackgroundTaskSnapshotsAndKillOutcomes(t *testing.T) {
 	snapshots = registry.BackgroundTasks()
 	if len(snapshots) != 2 || !snapshots[1].ExplicitlyKilled {
 		t.Fatalf("killed snapshot=%#v", snapshots)
+	}
+}
+
+func TestProcessWaitOutputTracksBlockingConsumptionAndTimeout(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture is Unix-specific")
+	}
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewProcessManager(ws, PromptApprover{Mode: PermissionAuto})
+	defer manager.Close()
+	observer := &recordingProcessObserver{
+		backgrounded: make(chan ProcessBackgrounded, 2), completed: make(chan ProcessSnapshot, 2), consumed: make(chan string, 2),
+	}
+	manager.SetObserver(observer)
+	blockedID, err := manager.Start(context.Background(), "sleep 0.05; printf blocked")
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-observer.backgrounded
+	output, err := manager.WaitOutput(context.Background(), blockedID, time.Second)
+	if err != nil || !strings.Contains(output, "blocked") {
+		t.Fatalf("output=%q err=%v", output, err)
+	}
+	blocked := <-observer.completed
+	if !blocked.BlockWaited || <-observer.consumed != blockedID {
+		t.Fatalf("snapshot=%#v", blocked)
+	}
+
+	timedID, err := manager.Start(context.Background(), "sleep 0.05; printf timed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-observer.backgrounded
+	if output, err := manager.WaitOutput(context.Background(), timedID, time.Millisecond); err != nil || !strings.Contains(output, "status: running") {
+		t.Fatalf("timed output=%q err=%v", output, err)
+	}
+	timed := <-observer.completed
+	if timed.BlockWaited {
+		t.Fatalf("timed out waiter suppressed wake: %#v", timed)
+	}
+	if _, err := manager.WaitOutput(context.Background(), timedID, 0); err != nil {
+		t.Fatal(err)
+	}
+	if consumed := <-observer.consumed; consumed != timedID {
+		t.Fatalf("consumed=%q want=%q", consumed, timedID)
+	}
+	if _, err := manager.WaitOutput(context.Background(), timedID, 0); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case duplicate := <-observer.consumed:
+		t.Fatalf("duplicate consumption=%q", duplicate)
+	default:
 	}
 }

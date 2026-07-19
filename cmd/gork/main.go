@@ -402,7 +402,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	permissionPrompts.SetNotify(func() {
 		hookRuntime.Notification(context.Background(), "permission_prompt", "Tool permission requested", "", "info")
 	})
-	registry.SetProcessObserver(&sessionProcessObserver{hooks: hookRuntime})
+	registry.SetProcessObserver(&sessionProcessObserver{sessionID: logger.ID(), logger: logger, hooks: hookRuntime})
 	defer hookRuntime.SessionEnded(context.Background(), "closed")
 	agentCatalog, agentErrors := agents.Discover(agents.Config{
 		WorkspaceRoot: ws.Root(), ProjectTrusted: projectTrusted, Compat: cfg.Compat, Plugins: plugins,
@@ -1055,7 +1055,9 @@ type sessionPluginState struct {
 type sessionProcessObserver struct {
 	server    *acp.Server
 	sessionID string
+	logger    *session.Logger
 	hooks     *hooks.Runtime
+	autoWake  bool
 }
 
 type sessionSubagentObserver struct {
@@ -1087,17 +1089,30 @@ func (a *permissionPromptApprover) Approve(ctx context.Context, action, detail s
 }
 
 func (o *sessionProcessObserver) TaskBackgrounded(event tools.ProcessBackgrounded) {
+	if o.logger != nil {
+		_ = o.logger.Append("task_backgrounded", acp.TaskBackgroundedUpdate(event))
+	}
 	if o.server != nil {
 		o.server.NotifyTaskBackgrounded(o.sessionID, event)
 	}
 }
 
 func (o *sessionProcessObserver) TaskCompleted(snapshot tools.ProcessSnapshot) {
+	willWake := o.server != nil && o.autoWake && !snapshot.BlockWaited && !snapshot.ExplicitlyKilled && o.server.QueueTaskWake(o.sessionID, snapshot)
+	if o.logger != nil {
+		_ = o.logger.Append("task_completed", acp.TaskCompletedUpdate(snapshot, willWake))
+	}
 	if o.server != nil {
-		o.server.NotifyTaskCompleted(o.sessionID, snapshot)
+		o.server.NotifyTaskCompleted(o.sessionID, snapshot, willWake)
 	}
 	if o.hooks != nil {
 		o.hooks.Notification(context.Background(), "task_complete", "Background task completed: "+snapshot.TaskID, "", "info")
+	}
+}
+
+func (o *sessionProcessObserver) TaskConsumed(taskID string) {
+	if o.server != nil {
+		o.server.CancelTaskWake(o.sessionID, taskID)
 	}
 }
 
@@ -1303,7 +1318,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		permissionPrompts.SetNotify(func() {
 			pluginState.hookRun.Notification(context.Background(), "permission_prompt", "Tool permission requested", "", "info")
 		})
-		registry.SetProcessObserver(&sessionProcessObserver{server: server, sessionID: logger.ID(), hooks: pluginState.hookRun})
+		registry.SetProcessObserver(&sessionProcessObserver{server: server, sessionID: logger.ID(), logger: logger, hooks: pluginState.hookRun, autoWake: sessionCfg.AutoWakeEnabled})
 		agentCatalog, agentErrors := agents.Discover(agents.Config{
 			WorkspaceRoot: ws.Root(), ProjectTrusted: projectTrusted, Compat: sessionCfg.Compat, Plugins: plugins,
 		})

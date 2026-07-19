@@ -904,7 +904,7 @@ func TestTaskLifecycleNotificationsWireContract(t *testing.T) {
 	server.NotifyTaskCompleted("session-1", tools.ProcessSnapshot{
 		TaskID: "task-1", Command: "sleep 1", CWD: "/work", StartTime: tools.ProcessTime{SecsSinceEpoch: 10},
 		Completed: true, ExitCode: &code, Kind: "bash",
-	})
+	}, false)
 	decoder := json.NewDecoder(&output)
 	started := decodeACP(t, decoder)
 	if started["method"] != "x.ai/task_backgrounded" {
@@ -967,6 +967,7 @@ func TestSessionReplayIncludesSubagentLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	code := 0
 	for _, event := range []struct {
 		kind string
 		data any
@@ -976,6 +977,8 @@ func TestSessionReplayIncludesSubagentLifecycle(t *testing.T) {
 		{"model_response", map[string]any{"text": "working", "response_id": "r1", "tool_call_count": 0}},
 		{"subagent_spawned", SubagentStartedUpdate("parent-1", subagent.Started{ID: "child-1", Type: "explore", Description: "find"})},
 		{"subagent_finished", SubagentFinishedUpdate(tools.SubagentResult{ID: "child-1", Type: "explore", Status: "completed", Output: "done"})},
+		{"task_backgrounded", TaskBackgroundedUpdate(tools.ProcessBackgrounded{TaskID: "task-1", Command: "make test", CWD: "/work"})},
+		{"task_completed", TaskCompletedUpdate(tools.ProcessSnapshot{TaskID: "task-1", Command: "make test", Completed: true, ExitCode: &code}, true)},
 	} {
 		if err := logger.Append(event.kind, event.data); err != nil {
 			t.Fatal(err)
@@ -1001,7 +1004,7 @@ func TestSessionReplayIncludesSubagentLifecycle(t *testing.T) {
 		}
 		messages = append(messages, message)
 	}
-	if len(messages) != 4 {
+	if len(messages) != 6 {
 		t.Fatalf("messages=%#v", messages)
 	}
 	spawn := messages[2]["params"].(map[string]any)["update"].(map[string]any)
@@ -1009,9 +1012,14 @@ func TestSessionReplayIncludesSubagentLifecycle(t *testing.T) {
 	if messages[2]["method"] != "x.ai/session_notification" || spawn["sessionUpdate"] != "subagent_spawned" || spawn["subagent_id"] != "child-1" || finish["sessionUpdate"] != "subagent_finished" || finish["output"] != "done" {
 		t.Fatalf("messages=%#v", messages)
 	}
+	taskStarted := messages[4]["params"].(map[string]any)["update"].(map[string]any)
+	taskFinished := messages[5]["params"].(map[string]any)["update"].(map[string]any)
+	if messages[4]["method"] != "x.ai/task_backgrounded" || taskStarted["task_id"] != "task-1" || messages[5]["method"] != "x.ai/task_completed" || taskFinished["will_wake"] != true {
+		t.Fatalf("task lifecycle=%#v", messages[4:])
+	}
 }
 
-func TestSubagentAutoWakeQueueRunsSerially(t *testing.T) {
+func TestSyntheticWakeQueueRunsSerially(t *testing.T) {
 	root := t.TempDir()
 	ws, err := workspace.Open(root)
 	if err != nil {
@@ -1031,6 +1039,7 @@ func TestSubagentAutoWakeQueueRunsSerially(t *testing.T) {
 	streamer := &fixtureStreamer{results: []api.StreamResult{
 		{ResponseID: "wake-1", Text: "first wake"},
 		{ResponseID: "wake-2", Text: "second wake"},
+		{ResponseID: "wake-3", Text: "task wake"},
 	}}
 	current := &session{
 		id: "parent-1", ctx: context.Background(), cwd: root, previous: "parent-response", activePrompt: -1,
@@ -1040,27 +1049,31 @@ func TestSubagentAutoWakeQueueRunsSerially(t *testing.T) {
 	server := &Server{output: &output, sessions: map[string]*session{"parent-1": current}}
 	first := tools.SubagentResult{ID: "child-1", Type: "explore", Description: "first", Status: "completed", DurationMS: 1000, WillWake: true}
 	second := tools.SubagentResult{ID: "child-2", Type: "general-purpose", Description: "second", Status: "failed", DurationMS: 2000, WillWake: true}
-	if !server.QueueSubagentWake("parent-1", first) || !server.QueueSubagentWake("parent-1", second) {
+	code := 0
+	task := tools.ProcessSnapshot{TaskID: "task-1", Command: "make test", Completed: true, ExitCode: &code}
+	if !server.QueueSubagentWake("parent-1", first) || !server.QueueSubagentWake("parent-1", second) || !server.QueueTaskWake("parent-1", task) {
 		t.Fatal("wake queue rejected an active session")
 	}
 	server.NotifySubagentEnded("parent-1", first)
 	server.NotifySubagentEnded("parent-1", second)
+	server.NotifyTaskCompleted("parent-1", task, true)
 	server.wg.Wait()
 	streamer.mu.Lock()
 	defer streamer.mu.Unlock()
-	if len(streamer.requests) != 2 || streamer.requests[0].PreviousResponseID != "parent-response" || streamer.requests[1].PreviousResponseID != "wake-1" {
+	if len(streamer.requests) != 3 || streamer.requests[0].PreviousResponseID != "parent-response" || streamer.requests[1].PreviousResponseID != "wake-1" || streamer.requests[2].PreviousResponseID != "wake-2" {
 		t.Fatalf("requests=%#v", streamer.requests)
 	}
 	firstInput, _ := json.Marshal(streamer.requests[0].Input)
 	secondInput, _ := json.Marshal(streamer.requests[1].Input)
-	if !strings.Contains(string(firstInput), "child-1") || !strings.Contains(string(secondInput), "child-2") {
-		t.Fatalf("inputs=%s / %s", firstInput, secondInput)
+	taskInput, _ := json.Marshal(streamer.requests[2].Input)
+	if !strings.Contains(string(firstInput), "child-1") || !strings.Contains(string(secondInput), "child-2") || !strings.Contains(string(taskInput), "task-1") {
+		t.Fatalf("inputs=%s / %s / %s", firstInput, secondInput, taskInput)
 	}
 	transcript, err := sessionlog.Transcript(logger.Path())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(transcript) != 2 || transcript[0].Text != "first wake" || transcript[1].Text != "second wake" {
+	if len(transcript) != 3 || transcript[0].Text != "first wake" || transcript[1].Text != "second wake" || transcript[2].Text != "task wake" {
 		t.Fatalf("transcript=%#v", transcript)
 	}
 	for _, message := range transcript {
@@ -1073,7 +1086,7 @@ func TestSubagentAutoWakeQueueRunsSerially(t *testing.T) {
 		t.Fatalf("synthetic prompt leaked into history: %#v err=%v", history, err)
 	}
 	current.mu.Lock()
-	if current.running || len(current.wakeQueue) != 0 || current.previous != "wake-2" {
+	if current.running || len(current.wakeQueue) != 0 || current.previous != "wake-3" {
 		current.mu.Unlock()
 		t.Fatalf("session=%#v", current)
 	}

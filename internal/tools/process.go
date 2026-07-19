@@ -43,6 +43,10 @@ type ProcessObserver interface {
 	TaskCompleted(ProcessSnapshot)
 }
 
+type ProcessConsumptionObserver interface {
+	TaskConsumed(string)
+}
+
 type ProcessBackgrounded struct {
 	ToolCallID  string
 	TaskID      string
@@ -53,16 +57,51 @@ type ProcessBackgrounded struct {
 }
 
 type backgroundProcess struct {
-	id      string
-	command string
-	cmd     *exec.Cmd
-	output  *tailBuffer
-	started time.Time
-	done    chan struct{}
-	mu      sync.Mutex
-	err     error
-	ended   time.Time
-	killed  bool
+	id          string
+	command     string
+	cmd         *exec.Cmd
+	output      *tailBuffer
+	started     time.Time
+	done        chan struct{}
+	mu          sync.Mutex
+	err         error
+	ended       time.Time
+	killed      bool
+	terminal    bool
+	blockWaited bool
+	consumed    bool
+	waiters     map[*processWaitSlot]struct{}
+}
+
+type processWaitSlot struct {
+	mu     sync.Mutex
+	active bool
+	done   chan struct{}
+}
+
+func newProcessWaitSlot() *processWaitSlot {
+	return &processWaitSlot{active: true, done: make(chan struct{}, 1)}
+}
+
+func (s *processWaitSlot) deliver() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.active {
+		return false
+	}
+	s.active = false
+	s.done <- struct{}{}
+	return true
+}
+
+func (s *processWaitSlot) cancel() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.active {
+		return false
+	}
+	s.active = false
+	return true
 }
 
 type ProcessTime struct {
@@ -154,6 +193,7 @@ func (m *ProcessManager) start(ctx context.Context, command, description string,
 		process.err = err
 		process.ended = time.Now()
 		process.mu.Unlock()
+		process.deliverWaiters()
 		if observer := m.processObserver(); observer != nil {
 			observer.TaskCompleted(snapshotProcess(process, true))
 		}
@@ -465,16 +505,86 @@ func (m *ProcessManager) WaitOutput(ctx context.Context, id string, timeout time
 		return "", err
 	}
 	if timeout > 0 {
+		waiter := newProcessWaitSlot()
+		process.mu.Lock()
+		if process.terminal {
+			process.mu.Unlock()
+			<-process.done
+			m.consume(process)
+			return m.Output(id)
+		}
+		if process.waiters == nil {
+			process.waiters = make(map[*processWaitSlot]struct{})
+		}
+		process.waiters[waiter] = struct{}{}
+		process.mu.Unlock()
 		timer := time.NewTimer(timeout)
 		defer timer.Stop()
 		select {
-		case <-process.done:
+		case <-waiter.done:
 		case <-timer.C:
+			if !waiter.cancel() {
+				<-waiter.done
+			} else {
+				process.removeWaiter(waiter)
+			}
 		case <-ctx.Done():
-			return "", ctx.Err()
+			if !waiter.cancel() {
+				<-waiter.done
+			} else {
+				process.removeWaiter(waiter)
+				return "", ctx.Err()
+			}
 		}
 	}
+	process.mu.Lock()
+	terminal := process.terminal
+	process.mu.Unlock()
+	if terminal {
+		<-process.done
+		m.consume(process)
+	}
 	return m.Output(id)
+}
+
+func (p *backgroundProcess) deliverWaiters() {
+	p.mu.Lock()
+	p.terminal = true
+	waiters := make([]*processWaitSlot, 0, len(p.waiters))
+	for waiter := range p.waiters {
+		waiters = append(waiters, waiter)
+	}
+	p.waiters = nil
+	p.mu.Unlock()
+	delivered := false
+	for _, waiter := range waiters {
+		if waiter.deliver() {
+			delivered = true
+		}
+	}
+	if delivered {
+		p.mu.Lock()
+		p.blockWaited = true
+		p.mu.Unlock()
+	}
+}
+
+func (p *backgroundProcess) removeWaiter(waiter *processWaitSlot) {
+	p.mu.Lock()
+	delete(p.waiters, waiter)
+	p.mu.Unlock()
+}
+
+func (m *ProcessManager) consume(process *backgroundProcess) {
+	process.mu.Lock()
+	consume := !process.consumed
+	process.consumed = true
+	process.mu.Unlock()
+	if consume {
+		if observer, ok := m.processObserver().(ProcessConsumptionObserver); ok {
+			observer.TaskConsumed(process.id)
+		}
+	}
 }
 
 func (m *ProcessManager) Kill(ctx context.Context, id string) error {
@@ -559,13 +669,13 @@ func (m *ProcessManager) Snapshots() []ProcessSnapshot {
 
 func snapshotProcess(process *backgroundProcess, completed bool) ProcessSnapshot {
 	process.mu.Lock()
-	ended, killed := process.ended, process.killed
+	ended, killed, blockWaited := process.ended, process.killed, process.blockWaited
 	process.mu.Unlock()
 	output, truncated := process.output.Snapshot()
 	item := ProcessSnapshot{
 		TaskID: process.id, Command: process.command, CWD: process.cmd.Dir,
 		StartTime: processTime(process.started), Output: output, Truncated: truncated,
-		Completed: completed, Kind: "bash", ExplicitlyKilled: killed,
+		Completed: completed, Kind: "bash", BlockWaited: blockWaited, ExplicitlyKilled: killed,
 	}
 	if completed {
 		end := processTime(ended)

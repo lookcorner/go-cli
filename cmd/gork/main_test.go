@@ -33,7 +33,7 @@ type samplingStreamer struct {
 	request api.ResponseRequest
 }
 
-func TestSubagentObserverPersistsOnlyLifecycleEvents(t *testing.T) {
+func TestSessionObserversPersistOnlyLifecycleEvents(t *testing.T) {
 	logger, err := session.NewLoggerWithID(t.TempDir(), "parent-session")
 	if err != nil {
 		t.Fatal(err)
@@ -44,6 +44,9 @@ func TestSubagentObserverPersistsOnlyLifecycleEvents(t *testing.T) {
 	})
 	observer.SubagentProgress(context.Background(), tools.SubagentResult{ID: "child-1", Status: "running", Turns: 1})
 	observer.SubagentEnded(context.Background(), tools.SubagentResult{ID: "child-1", Type: "explore", Status: "completed", Output: "done"})
+	processObserver := &sessionProcessObserver{sessionID: logger.ID(), logger: logger}
+	processObserver.TaskBackgrounded(tools.ProcessBackgrounded{TaskID: "task-1", Command: "build", CWD: "/work"})
+	processObserver.TaskCompleted(tools.ProcessSnapshot{TaskID: "task-1", Command: "build", Completed: true})
 	path := logger.Path()
 	if err := logger.Close(); err != nil {
 		t.Fatal(err)
@@ -53,7 +56,7 @@ func TestSubagentObserverPersistsOnlyLifecycleEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	log := string(data)
-	if strings.Count(log, `"kind":"subagent_spawned"`) != 1 || strings.Count(log, `"kind":"subagent_finished"`) != 1 || strings.Contains(log, "subagent_progress") {
+	if strings.Count(log, `"kind":"subagent_spawned"`) != 1 || strings.Count(log, `"kind":"subagent_finished"`) != 1 || strings.Count(log, `"kind":"task_backgrounded"`) != 1 || strings.Count(log, `"kind":"task_completed"`) != 1 || strings.Contains(log, "subagent_progress") {
 		t.Fatalf("log=%s", log)
 	}
 }

@@ -54,12 +54,20 @@ func (s *Server) NotifySubagentEnded(sessionID string, result tools.SubagentResu
 	s.notifySubagent(sessionID, SubagentFinishedUpdate(result))
 	if result.WillWake {
 		if current := s.lookupSession(sessionID); current != nil {
-			s.startNextSubagentWake(current)
+			s.startNextWake(current)
 		}
 	}
 }
 
 func (s *Server) QueueSubagentWake(sessionID string, result tools.SubagentResult) bool {
+	return s.queueWake(sessionID, syntheticWake{id: result.ID, prompt: formatSubagentWake(result)})
+}
+
+func (s *Server) QueueTaskWake(sessionID string, snapshot tools.ProcessSnapshot) bool {
+	return s.queueWake(sessionID, syntheticWake{id: snapshot.TaskID, prompt: formatTaskWake(snapshot)})
+}
+
+func (s *Server) queueWake(sessionID string, wake syntheticWake) bool {
 	if s.closing.Load() {
 		return false
 	}
@@ -72,34 +80,42 @@ func (s *Server) QueueSubagentWake(sessionID string, result tools.SubagentResult
 		current.mu.Unlock()
 		return false
 	}
-	current.wakeQueue = append(current.wakeQueue, result)
+	current.wakeQueue = append(current.wakeQueue, wake)
 	current.mu.Unlock()
 	return true
 }
 
 func (s *Server) CancelSubagentWake(sessionID, subagentID string) {
+	s.cancelWake(sessionID, subagentID)
+}
+
+func (s *Server) CancelTaskWake(sessionID, taskID string) {
+	s.cancelWake(sessionID, taskID)
+}
+
+func (s *Server) cancelWake(sessionID, id string) {
 	current := s.lookupSession(sessionID)
 	if current == nil {
 		return
 	}
 	current.mu.Lock()
 	kept := current.wakeQueue[:0]
-	for _, result := range current.wakeQueue {
-		if result.ID != subagentID {
-			kept = append(kept, result)
+	for _, wake := range current.wakeQueue {
+		if wake.id != id {
+			kept = append(kept, wake)
 		}
 	}
 	current.wakeQueue = kept
 	current.mu.Unlock()
 }
 
-func (s *Server) startNextSubagentWake(current *session) {
+func (s *Server) startNextWake(current *session) {
 	current.mu.Lock()
 	if current.closed || current.ctx == nil || current.ctx.Err() != nil || current.running || len(current.wakeQueue) == 0 {
 		current.mu.Unlock()
 		return
 	}
-	result := current.wakeQueue[0]
+	wake := current.wakeQueue[0]
 	current.wakeQueue = current.wakeQueue[1:]
 	runCtx, cancel := context.WithCancel(current.ctx)
 	current.cancel, current.running = cancel, true
@@ -108,13 +124,12 @@ func (s *Server) startNextSubagentWake(current *session) {
 	current.updated = time.Now().UTC()
 	previous, mode := current.previous, current.mode
 	current.mu.Unlock()
-	prompt := formatSubagentWake(result)
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
 		baseInstructions := current.runner.Instructions
 		current.runner.Instructions = instructionsForMode(baseInstructions, mode)
-		turn, err := current.runner.RunSyntheticTurn(runCtx, prompt, previous)
+		turn, err := current.runner.RunSyntheticTurn(runCtx, wake.prompt, previous)
 		current.runner.Instructions = baseInstructions
 		points, pointsErr := sessionlog.RewindPoints(current.logPath)
 		current.mu.Lock()
@@ -127,7 +142,7 @@ func (s *Server) startNextSubagentWake(current *session) {
 		}
 		current.updated = time.Now().UTC()
 		current.mu.Unlock()
-		s.startNextSubagentWake(current)
+		s.startNextWake(current)
 	}()
 }
 
@@ -138,6 +153,15 @@ func formatSubagentWake(result tools.SubagentResult) string {
 	}
 	return fmt.Sprintf("<system-reminder>\nBackground subagent %q (%s: %q) completed %s.\nDuration: %.1fs | Tool calls: %d | Turns: %d\nUse get_task_output with task_ids [%q] to retrieve the full result.\n</system-reminder>",
 		result.ID, result.Type, result.Description, status, float64(result.DurationMS)/1000, result.ToolCalls, result.Turns, result.ID)
+}
+
+func formatTaskWake(snapshot tools.ProcessSnapshot) string {
+	status := "successfully"
+	if snapshot.ExitCode == nil || *snapshot.ExitCode != 0 {
+		status = "with failure"
+	}
+	return fmt.Sprintf("<system-reminder>\nBackground task %q completed %s.\nCommand: %s\nUse get_task_output with task_ids [%q] to retrieve the full output.\n</system-reminder>",
+		snapshot.TaskID, status, snapshot.Command, snapshot.TaskID)
 }
 
 func SubagentFinishedUpdate(result tools.SubagentResult) map[string]any {
@@ -164,6 +188,14 @@ func (s *Server) notifySubagent(sessionID string, update map[string]any) {
 }
 
 func (s *Server) NotifyTaskBackgrounded(sessionID string, event tools.ProcessBackgrounded) {
+	update := TaskBackgroundedUpdate(event)
+	s.write(map[string]any{
+		"jsonrpc": "2.0", "method": "x.ai/task_backgrounded",
+		"params": map[string]any{"sessionId": sessionID, "update": update},
+	})
+}
+
+func TaskBackgroundedUpdate(event tools.ProcessBackgrounded) map[string]any {
 	update := map[string]any{
 		"sessionUpdate": "task_backgrounded", "tool_call_id": event.ToolCallID,
 		"task_id": event.TaskID, "command": event.Command, "cwd": event.CWD,
@@ -172,19 +204,23 @@ func (s *Server) NotifyTaskBackgrounded(sessionID string, event tools.ProcessBac
 	if event.Description != "" {
 		update["description"] = event.Description
 	}
-	s.write(map[string]any{
-		"jsonrpc": "2.0", "method": "x.ai/task_backgrounded",
-		"params": map[string]any{"sessionId": sessionID, "update": update},
-	})
+	return update
 }
 
-func (s *Server) NotifyTaskCompleted(sessionID string, snapshot tools.ProcessSnapshot) {
+func (s *Server) NotifyTaskCompleted(sessionID string, snapshot tools.ProcessSnapshot, willWake bool) {
 	s.write(map[string]any{
 		"jsonrpc": "2.0", "method": "x.ai/task_completed",
-		"params": map[string]any{"sessionId": sessionID, "update": map[string]any{
-			"sessionUpdate": "task_completed", "task_snapshot": snapshot, "will_wake": false,
-		}},
+		"params": map[string]any{"sessionId": sessionID, "update": TaskCompletedUpdate(snapshot, willWake)},
 	})
+	if willWake {
+		if current := s.lookupSession(sessionID); current != nil {
+			s.startNextWake(current)
+		}
+	}
+}
+
+func TaskCompletedUpdate(snapshot tools.ProcessSnapshot, willWake bool) map[string]any {
+	return map[string]any{"sessionUpdate": "task_completed", "task_snapshot": snapshot, "will_wake": willWake}
 }
 
 func (s *Server) handleTasks(ctx context.Context, incoming message) {

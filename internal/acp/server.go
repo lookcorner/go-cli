@@ -100,8 +100,13 @@ type session struct {
 	logPath      string
 	mode         string
 	mcpServers   []MCPServer
-	wakeQueue    []tools.SubagentResult
+	wakeQueue    []syntheticWake
 	closed       bool
+}
+
+type syntheticWake struct {
+	id     string
+	prompt string
 }
 
 type permissionResult struct {
@@ -1630,7 +1635,7 @@ func (s *Server) handlePrompt(parent context.Context, incoming message) {
 		if err == nil || stopReason == "cancelled" {
 			s.respond(incoming.ID, map[string]any{"stopReason": stopReason})
 		}
-		s.startNextSubagentWake(current)
+		s.startNextWake(current)
 	}()
 }
 
@@ -1673,7 +1678,7 @@ func (s *Server) handleCompactPrompt(parent context.Context, incoming message, c
 		if err == nil || stopReason == "cancelled" {
 			s.respond(incoming.ID, map[string]any{"stopReason": stopReason})
 		}
-		s.startNextSubagentWake(current)
+		s.startNextWake(current)
 	}()
 }
 
@@ -1775,7 +1780,7 @@ func (s *Server) replaySession(path, sessionID string) error {
 			s.notify(sessionID, map[string]any{"sessionUpdate": updateType, "content": content})
 		}
 	}
-	events, err := sessionlog.Events(path, "subagent_spawned", "subagent_finished")
+	events, err := sessionlog.Events(path, "subagent_spawned", "subagent_finished", "task_backgrounded", "task_completed")
 	if err != nil {
 		return err
 	}
@@ -1784,7 +1789,14 @@ func (s *Server) replaySession(path, sessionID string) error {
 		if !ok {
 			return fmt.Errorf("invalid %s event", event.Kind)
 		}
-		s.notifySubagent(sessionID, update)
+		switch event.Kind {
+		case "subagent_spawned", "subagent_finished":
+			s.notifySubagent(sessionID, update)
+		case "task_backgrounded":
+			s.write(map[string]any{"jsonrpc": "2.0", "method": "x.ai/task_backgrounded", "params": map[string]any{"sessionId": sessionID, "update": update}})
+		case "task_completed":
+			s.write(map[string]any{"jsonrpc": "2.0", "method": "x.ai/task_completed", "params": map[string]any{"sessionId": sessionID, "update": update}})
+		}
 	}
 	return nil
 }

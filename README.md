@@ -715,13 +715,15 @@ Background tasks survive completion of the parent turn and are
 cancelled during session cleanup. ACP exposes the typed `x.ai/subagent/get`,
 `list_running`, and `cancel` methods; background terminal processes separately
 use `x.ai/task/list`, `x.ai/task/kill`, `x.ai/task_backgrounded`, and
-`x.ai/task_completed`. Running and completed subagent snapshots report real
+`x.ai/task_completed`; task lifecycle events are persisted in the parent JSONL
+and replayed on ACP load. Running and completed subagent snapshots report real
 turn, tool-call, token, context-usage, unique-tool, and error metrics. ACP also
 pushes reference-shaped `subagent_spawned`, rate-limited `subagent_progress`,
 and `subagent_finished` session notifications. Child histories and scoped
 metadata are persisted per parent session; restart loads terminal results,
 reconciles interrupted tasks once, and replays persisted lifecycle notifications.
-ACP sessions queue successful or failed background completions as serialized
+ACP sessions queue successful or failed background subagent and terminal-task
+completions as serialized
 synthetic turns when `GROK_AUTO_WAKE` (or `[features] auto_wake`) is enabled;
 blocking result consumption, timeouts, explicit cancellation, and session close
 are coordinated so `will_wake` reflects an accepted queue entry.
