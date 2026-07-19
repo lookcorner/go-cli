@@ -214,9 +214,13 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 				input = append(input, api.InputItem{Type: "message", Role: "user", Content: reminder})
 			}
 		}
+		requestInstructions := instructions
+		if mode := r.Tools.ModeInstructions(); mode != "" && !strings.Contains(requestInstructions, mode) {
+			requestInstructions = strings.TrimSpace(requestInstructions + "\n\n" + mode)
+		}
 		request := api.ResponseRequest{
 			Model:              r.Model,
-			Instructions:       instructions,
+			Instructions:       requestInstructions,
 			Input:              input,
 			Tools:              r.Tools.Definitions(),
 			ToolChoice:         "auto",

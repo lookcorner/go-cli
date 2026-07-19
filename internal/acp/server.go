@@ -65,6 +65,7 @@ type Server struct {
 	mu          sync.Mutex
 	sessions    map[string]*session
 	pending     map[string]chan permissionResult
+	pendingPlan map[string]chan planApprovalResult
 	nextSession atomic.Uint64
 	nextRequest atomic.Uint64
 	closing     atomic.Bool
@@ -117,6 +118,11 @@ type permissionResult struct {
 	err      error
 }
 
+type planApprovalResult struct {
+	decision tools.PlanModeDecision
+	err      error
+}
+
 func (s *Server) WorktreeManager() *worktrees.Manager { return s.worktrees }
 
 type promptBlock struct {
@@ -142,6 +148,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 	s.closing.Store(false)
 	s.sessions = make(map[string]*session)
 	s.pending = make(map[string]chan permissionResult)
+	s.pendingPlan = make(map[string]chan planApprovalResult)
 	manager, err := worktrees.NewManager(s.SessionDir)
 	if err != nil {
 		return err
@@ -1536,6 +1543,10 @@ func (s *Server) startSession(ctx context.Context, id string, sessionConfig Sess
 		closeRuntime()
 		return nil, modeErr
 	}
+	if err := runner.Tools.SetPlanMode(mode == "plan"); err != nil {
+		closeRuntime()
+		return nil, err
+	}
 	created := &session{
 		id: id, ctx: ctx, cwd: sessionConfig.CWD, updated: time.Now().UTC(), previous: previous,
 		runner: runner, close: closeRuntime, promptIndex: promptIndex, activePrompt: -1, rewind: rewind, logPath: sessionPath, mode: mode,
@@ -1619,7 +1630,7 @@ func (s *Server) handlePrompt(parent context.Context, incoming message) {
 	go func() {
 		defer s.wg.Done()
 		baseInstructions := current.runner.Instructions
-		current.runner.Instructions = instructionsForMode(baseInstructions, mode)
+		current.runner.Instructions = turnInstructionsForMode(baseInstructions, mode)
 		result, err := current.runner.RunTurnParts(runCtx, prompt, content, previous)
 		current.runner.Instructions = baseInstructions
 		points, pointsErr := sessionlog.RewindPoints(current.logPath)
@@ -1830,6 +1841,11 @@ func (s *Server) handleSetMode(incoming message) {
 		s.respond(incoming.ID, map[string]any{})
 		return
 	}
+	if err := current.runner.Tools.SetPlanMode(params.ModeID == "plan"); err != nil {
+		current.mu.Unlock()
+		s.respondError(incoming.ID, -32000, err.Error())
+		return
+	}
 	if current.runner.Logger != nil {
 		if err := current.runner.Logger.Append("session_mode", map[string]any{"mode_id": params.ModeID}); err != nil {
 			current.mu.Unlock()
@@ -1872,6 +1888,13 @@ func instructionsForMode(base, mode string) string {
 		return instruction
 	}
 	return base + "\n\n" + instruction
+}
+
+func turnInstructionsForMode(base, mode string) string {
+	if mode == "plan" {
+		return base
+	}
+	return instructionsForMode(base, mode)
 }
 
 func parseMCPServers(params []mcpServerParam) ([]MCPServer, error) {
@@ -2264,6 +2287,12 @@ func (s *Server) closeAll() {
 		default:
 		}
 	}
+	for _, pending := range s.pendingPlan {
+		select {
+		case pending <- planApprovalResult{err: io.EOF}:
+		default:
+		}
+	}
 	s.mu.Unlock()
 	for _, current := range sessions {
 		current.mu.Lock()
@@ -2394,7 +2423,7 @@ func acpToolKind(name string) string {
 		return "edit"
 	case "run_terminal_cmd", "shell", "monitor", "start_background_command", "kill_task", "kill_background_command":
 		return "execute"
-	case "todo_write", "update_goal":
+	case "todo_write", "update_goal", "enter_plan_mode", "exit_plan_mode":
 		return "think"
 	default:
 		return "other"
@@ -2445,8 +2474,22 @@ func (a *serverApprover) Approve(ctx context.Context, action, detail string) err
 func (s *Server) handleClientResponse(incoming message) {
 	key := strings.Trim(string(incoming.ID), "\"")
 	s.mu.Lock()
+	planPending := s.pendingPlan[key]
 	pending := s.pending[key]
 	s.mu.Unlock()
+	if planPending != nil {
+		if len(incoming.Error) > 0 && string(incoming.Error) != "null" {
+			planPending <- planApprovalResult{err: errors.New("ACP plan approval request failed")}
+			return
+		}
+		var response tools.PlanModeDecision
+		if json.Unmarshal(incoming.Result, &response) != nil || response.Outcome == "" {
+			planPending <- planApprovalResult{err: errors.New("invalid ACP plan approval response")}
+			return
+		}
+		planPending <- planApprovalResult{decision: response}
+		return
+	}
 	if pending == nil {
 		return
 	}

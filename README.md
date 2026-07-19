@@ -18,6 +18,13 @@ also accept `/loop [interval] <prompt>`, which expands to the reference
 `scheduler_create` workflow without inventing a default interval. ACP advertises
 both commands through `x.ai/commands/list`.
 
+The model can call `enter_plan_mode` to enter a persisted, read-only planning
+phase. While active, workspace mutations are limited to `.grok/plan.md`; shell,
+background, scheduler mutation, image-generation, task, monitor, and MCP tools
+are blocked. `exit_plan_mode` presents that file for approval, including the
+ACP `x.ai/exit_plan_mode` reverse request, and applies the decision before the
+next model step in the same turn.
+
 Workspace instruction and skill discovery respects repository and global Git
 ignore rules through Git's own matching engine. Project instructions load from
 the Git root through the current workspace so deeper files take precedence.

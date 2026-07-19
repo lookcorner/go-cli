@@ -350,7 +350,7 @@ func (s *Scheduler) saveLocked() error {
 	if err != nil {
 		return err
 	}
-	return replaceSchedulerState(name, s.state)
+	return replaceStateFile(name, s.state)
 }
 
 func (s *Scheduler) emit(event schedulerEvent) {

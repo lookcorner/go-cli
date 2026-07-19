@@ -352,6 +352,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		_ = registry.Close()
 		return err
 	}
+	if err := registry.ConfigurePlanMode(artifactDir); err != nil {
+		_ = registry.Close()
+		return err
+	}
 	if search, enabled := cfg.WebSearchEndpoint(); enabled {
 		if err := registry.Register(tools.NewWebSearchTool(search.BaseURL, search.APIKey, search.Model, &http.Client{Timeout: cfg.HTTPTimeout})); err != nil {
 			return err
@@ -414,9 +418,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		scheduledQueue = newScheduledWakeQueue()
 		schedulerObserver = scheduledQueue
 	}
-	processObserver := &sessionProcessObserver{sessionID: logger.ID(), logger: logger, hooks: hookRuntime, scheduler: schedulerObserver}
+	processObserver := &sessionProcessObserver{sessionID: logger.ID(), logger: logger, hooks: hookRuntime, scheduler: schedulerObserver, planApprover: askApprover}
 	registry.SetProcessObserver(processObserver)
 	registry.SetSchedulerObserver(processObserver)
+	registry.SetPlanModeObserver(processObserver)
 	defer hookRuntime.SessionEnded(context.Background(), "closed")
 	agentCatalog, agentErrors := agents.Discover(agents.Config{
 		WorkspaceRoot: ws.Root(), ProjectTrusted: projectTrusted, Compat: cfg.Compat, Plugins: plugins,
@@ -1060,12 +1065,13 @@ type sessionPluginState struct {
 }
 
 type sessionProcessObserver struct {
-	server    *acp.Server
-	sessionID string
-	logger    *session.Logger
-	hooks     *hooks.Runtime
-	autoWake  bool
-	scheduler tools.SchedulerObserver
+	server       *acp.Server
+	sessionID    string
+	logger       *session.Logger
+	hooks        *hooks.Runtime
+	autoWake     bool
+	scheduler    tools.SchedulerObserver
+	planApprover tools.Approver
 }
 
 type sessionSubagentObserver struct {
@@ -1154,6 +1160,36 @@ func (o *sessionProcessObserver) ScheduledTaskRemoved(taskID string) {
 	}
 	if o.scheduler != nil {
 		o.scheduler.ScheduledTaskRemoved(taskID)
+	}
+}
+
+func (o *sessionProcessObserver) PlanModeEntered(event tools.PlanModeEvent) {
+	if o.logger != nil {
+		_ = o.logger.Append("session_mode", map[string]any{"mode_id": "plan"})
+	}
+	if o.server != nil {
+		o.server.NotifyPlanModeChanged(o.sessionID, "plan")
+	}
+}
+
+func (o *sessionProcessObserver) ApprovePlanModeExit(ctx context.Context, event tools.PlanModeEvent) (tools.PlanModeDecision, error) {
+	if o.server != nil {
+		return o.server.RequestPlanModeExit(ctx, o.sessionID, event)
+	}
+	if o.planApprover != nil {
+		if err := o.planApprover.Approve(ctx, "exit plan mode", event.PlanContent); err != nil {
+			return tools.PlanModeDecision{}, err
+		}
+	}
+	return tools.PlanModeDecision{Outcome: "approved"}, nil
+}
+
+func (o *sessionProcessObserver) PlanModeExited(event tools.PlanModeEvent) {
+	if o.logger != nil {
+		_ = o.logger.Append("session_mode", map[string]any{"mode_id": "default"})
+	}
+	if o.server != nil {
+		o.server.NotifyPlanModeChanged(o.sessionID, "default")
 	}
 }
 
@@ -1291,6 +1327,11 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			_ = registry.Close()
 			return nil, nil, err
 		}
+		if err := registry.ConfigurePlanMode(artifactDir); err != nil {
+			_ = logger.Close()
+			_ = registry.Close()
+			return nil, nil, err
+		}
 		registry.SetWebFetchEnabled(cfg.WebFetch.Enabled)
 		if sessionConfig.ResumePath == "" {
 			model := cfg.Model
@@ -1370,9 +1411,10 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		permissionPrompts.SetNotify(func() {
 			pluginState.hookRun.Notification(context.Background(), "permission_prompt", "Tool permission requested", "", "info")
 		})
-		processObserver := &sessionProcessObserver{server: server, sessionID: logger.ID(), logger: logger, hooks: pluginState.hookRun, autoWake: sessionCfg.AutoWakeEnabled}
+		processObserver := &sessionProcessObserver{server: server, sessionID: logger.ID(), logger: logger, hooks: pluginState.hookRun, autoWake: sessionCfg.AutoWakeEnabled, planApprover: permissionPrompts}
 		registry.SetProcessObserver(processObserver)
 		registry.SetSchedulerObserver(processObserver)
+		registry.SetPlanModeObserver(processObserver)
 		agentCatalog, agentErrors := agents.Discover(agents.Config{
 			WorkspaceRoot: ws.Root(), ProjectTrusted: projectTrusted, Compat: sessionCfg.Compat, Plugins: plugins,
 		})

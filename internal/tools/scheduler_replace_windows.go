@@ -4,7 +4,7 @@ package tools
 
 import "golang.org/x/sys/windows"
 
-func replaceSchedulerState(source, target string) error {
+func replaceStateFile(source, target string) error {
 	from, err := windows.UTF16PtrFromString(source)
 	if err != nil {
 		return err

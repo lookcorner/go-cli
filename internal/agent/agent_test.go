@@ -154,6 +154,47 @@ func (f *fakeStreamer) StreamResponse(_ context.Context, request api.ResponseReq
 	return result, nil
 }
 
+func TestRunnerAppliesPlanModeChangesWithinToolLoop(t *testing.T) {
+	tests := []struct {
+		name        string
+		initialPlan bool
+		tool        string
+		firstPlan   bool
+		secondPlan  bool
+	}{
+		{name: "enter", tool: "enter_plan_mode", secondPlan: true},
+		{name: "exit", initialPlan: true, tool: "exit_plan_mode", firstPlan: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ws, err := workspace.Open(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+			defer registry.Close()
+			if err := registry.SetPlanMode(tt.initialPlan); err != nil {
+				t.Fatal(err)
+			}
+			streamer := &fakeStreamer{results: []api.StreamResult{
+				{ResponseID: "resp_1", ToolCalls: []api.ToolCall{{CallID: "call_1", Name: tt.tool, Arguments: json.RawMessage(`{}`)}}},
+				{ResponseID: "resp_2", Text: "done"},
+			}}
+			runner := Runner{Client: streamer, Tools: registry, Model: "test", MaxSteps: 2}
+			if _, err := runner.Run(context.Background(), "plan this"); err != nil {
+				t.Fatal(err)
+			}
+			if len(streamer.requests) != 2 {
+				t.Fatalf("requests=%d", len(streamer.requests))
+			}
+			const marker = "Plan mode is active."
+			if strings.Contains(streamer.requests[0].Instructions, marker) != tt.firstPlan || strings.Contains(streamer.requests[1].Instructions, marker) != tt.secondPlan {
+				t.Fatalf("plan instructions before=%q after=%q", streamer.requests[0].Instructions, streamer.requests[1].Instructions)
+			}
+		})
+	}
+}
+
 func TestRunnerExecutesToolLoop(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("hello agent\n"), 0o600); err != nil {

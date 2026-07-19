@@ -4,6 +4,6 @@ package tools
 
 import "os"
 
-func replaceSchedulerState(source, target string) error {
+func replaceStateFile(source, target string) error {
 	return os.Rename(source, target)
 }

@@ -129,6 +129,58 @@ func TestGitExtensionWireContract(t *testing.T) {
 	}
 }
 
+func TestPlanModeExitApprovalWireContract(t *testing.T) {
+	tests := []tools.PlanModeDecision{
+		{Outcome: "approved"},
+		{Outcome: "cancelled", Feedback: "add rollback steps"},
+	}
+	for _, expected := range tests {
+		t.Run(expected.Outcome, func(t *testing.T) {
+			reader, writer := io.Pipe()
+			defer reader.Close()
+			server := &Server{output: writer, pendingPlan: make(map[string]chan planApprovalResult)}
+			type result struct {
+				decision tools.PlanModeDecision
+				err      error
+			}
+			done := make(chan result, 1)
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			go func() {
+				decision, err := server.RequestPlanModeExit(ctx, "sess-1", tools.PlanModeEvent{
+					ToolCallID: "call-1", PlanContent: "# Plan",
+				})
+				done <- result{decision: decision, err: err}
+			}()
+
+			var request message
+			if err := json.NewDecoder(reader).Decode(&request); err != nil {
+				t.Fatal(err)
+			}
+			if request.Method != "x.ai/exit_plan_mode" {
+				t.Fatalf("method=%q", request.Method)
+			}
+			var params map[string]any
+			if err := json.Unmarshal(request.Params, &params); err != nil {
+				t.Fatal(err)
+			}
+			if params["sessionId"] != "sess-1" || params["toolCallId"] != "call-1" || params["planContent"] != "# Plan" {
+				t.Fatalf("params=%#v", params)
+			}
+			encoded, err := json.Marshal(expected)
+			if err != nil {
+				t.Fatal(err)
+			}
+			server.handleClientResponse(message{ID: request.ID, Result: encoded})
+			got := <-done
+			if got.err != nil || got.decision != expected {
+				t.Fatalf("decision=%#v err=%v", got.decision, got.err)
+			}
+			_ = writer.Close()
+		})
+	}
+}
+
 func TestCheckoutSessionHeadWireContract(t *testing.T) {
 	root := t.TempDir()
 	runACPGit(t, root, "init", "-q")
@@ -1790,6 +1842,13 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 	if response := decodeACP(t, decoder); int(response["id"].(float64)) != 23 {
 		t.Fatalf("unexpected set mode response: %#v", response)
 	}
+	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 24, "method": "session/set_mode", "params": map[string]any{
+		"sessionId": sessionID, "modeId": "default",
+	}})
+	_ = decodeACP(t, decoder)
+	if response := decodeACP(t, decoder); int(response["id"].(float64)) != 24 {
+		t.Fatalf("unexpected set default mode response: %#v", response)
+	}
 	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 3, "method": "session/prompt", "params": map[string]any{
 		"sessionId": sessionID, "prompt": []any{map[string]any{"type": "text", "text": "create the file"}},
 	}})
@@ -1965,6 +2024,13 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "made.txt")); !os.IsNotExist(err) {
 		t.Fatalf("all-mode rewind did not restore files: %v", err)
 	}
+	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 25, "method": "session/set_mode", "params": map[string]any{
+		"sessionId": sessionID, "modeId": "plan",
+	}})
+	_ = decodeACP(t, decoder)
+	if response := decodeACP(t, decoder); int(response["id"].(float64)) != 25 {
+		t.Fatalf("unexpected restore plan mode response: %#v", response)
+	}
 	encodeACP(t, encoder, map[string]any{
 		"jsonrpc": "2.0", "id": 39, "method": "session/prompt",
 		"params": map[string]any{"sessionId": sessionID, "prompt": []any{map[string]any{"type": "text", "text": "replacement"}}},
@@ -1978,7 +2044,7 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 		t.Fatalf("unexpected replacement completion: %#v", replacementDone)
 	}
 	streamer.mu.Lock()
-	if len(streamer.requests) != 3 || streamer.requests[2].PreviousResponseID != "" || !strings.Contains(streamer.requests[0].Instructions, "Session mode: plan") {
+	if len(streamer.requests) != 3 || streamer.requests[2].PreviousResponseID != "" || !strings.Contains(streamer.requests[2].Instructions, "Plan mode is active.") {
 		t.Fatalf("rewound prompt used the discarded response chain: %#v", streamer.requests)
 	}
 	streamer.mu.Unlock()

@@ -298,7 +298,7 @@ func (s *Server) startNextWake(current *session) {
 	go func() {
 		defer s.wg.Done()
 		baseInstructions := current.runner.Instructions
-		current.runner.Instructions = instructionsForMode(baseInstructions, mode)
+		current.runner.Instructions = turnInstructionsForMode(baseInstructions, mode)
 		turn, err := current.runner.RunSyntheticTurn(runCtx, wake.prompt, previous)
 		current.runner.Instructions = baseInstructions
 		points, pointsErr := sessionlog.RewindPoints(current.logPath)
