@@ -15,6 +15,7 @@ import (
 func TestLocalMarketplaceLifecycle(t *testing.T) {
 	grokHome := filepath.Join(t.TempDir(), ".grok")
 	t.Setenv("GROK_HOME", grokHome)
+	t.Setenv("HOME", filepath.Dir(grokHome))
 	root := t.TempDir()
 	pluginRoot := filepath.Join(root, "plugins", "demo")
 	mustMkdir(t, filepath.Join(pluginRoot, "skills", "review"))
@@ -64,6 +65,122 @@ func TestLocalMarketplaceLifecycle(t *testing.T) {
 	}
 }
 
+func TestExtraSourcesUseReferenceOrderAndDeduplication(t *testing.T) {
+	home := t.TempDir()
+	grokRoot := filepath.Join(home, ".grok")
+	claudeRoot := filepath.Join(home, ".claude")
+	mustWrite(t, filepath.Join(grokRoot, "settings.local.json"), `{"extraKnownMarketplaces":{
+  "first":{"source":{"source":"git","url":"https://example.com/shared.git"}},
+  "local-one":{"source":{"source":"local","path":"~/catalog"}},
+  "bad":{"source":{"source":"github"}}
+}}`)
+	mustWrite(t, filepath.Join(grokRoot, "settings.json"), `{"extraKnownMarketplaces":{
+  "duplicate":{"source":{"source":"git","url":"https://example.com/shared.git"}},
+  "github":{"source":{"source":"github","repo":"owner/catalog"}}
+}}`)
+	mustWrite(t, filepath.Join(claudeRoot, "settings.local.json"), "not json")
+	mustWrite(t, filepath.Join(claudeRoot, "settings.json"), `{"extraKnownMarketplaces":{
+  "local-two":{"source":{"source":"local","path":"~/catalog"}}
+}}`)
+	mustWrite(t, filepath.Join(grokRoot, "plugins", "known_marketplaces.json"), `{
+  "known":{"source":{"source":"git","url":"https://example.com/known.git"}}
+}`)
+	mustWrite(t, filepath.Join(claudeRoot, "plugins", "known_marketplaces.json"), `{
+  "late-duplicate":{"source":{"source":"github","repo":"owner/catalog"}}
+}`)
+
+	t.Setenv("HOME", home)
+	sources := extraSources([]Source{{Name: "configured", Git: "https://example.com/configured.git"}}, []string{grokRoot, claudeRoot})
+	byName := make(map[string]Source, len(sources))
+	for _, source := range sources {
+		byName[source.Name] = source
+	}
+	if len(sources) != 5 || byName["first"].Git != "https://example.com/shared.git" || byName["github"].Git != "https://github.com/owner/catalog.git" || byName["known"].Git != "https://example.com/known.git" {
+		t.Fatalf("imported sources=%#v", sources)
+	}
+	if _, ok := byName["duplicate"]; ok {
+		t.Fatal("later settings URL should lose first-wins deduplication")
+	}
+	if _, ok := byName["late-duplicate"]; ok {
+		t.Fatal("known marketplace URL should be deduplicated after settings files")
+	}
+	wantLocal := filepath.Join(home, "catalog")
+	if byName["local-one"].Path != wantLocal || byName["local-two"].Path != wantLocal {
+		t.Fatalf("local sources=%#v", sources)
+	}
+}
+
+func TestOfficialMarketplaceAutoRegistrationIsSticky(t *testing.T) {
+	home := filepath.Join(t.TempDir(), ".grok")
+	t.Setenv("GROK_HOME", home)
+	t.Setenv("HOME", filepath.Dir(home))
+	t.Setenv("GROK_OFFICIAL_MARKETPLACE_AUTO_REGISTER", "true")
+	configPath := filepath.Join(home, "config.toml")
+
+	if err := AutoRegisterOfficial(configPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := AutoRegisterOfficial(configPath); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(configPath)
+	if err != nil || !cfg.Marketplace.OfficialMarketplaceAutoInstalled || len(cfg.Marketplace.Sources) != 1 || cfg.Marketplace.Sources[0].Name != OfficialSourceName || cfg.Marketplace.Sources[0].Git != OfficialSourceGit {
+		t.Fatalf("registered config=%#v err=%v", cfg.Marketplace, err)
+	}
+	outcome, err := Execute(configPath, t.TempDir(), Action{Type: "remove_source", SourceURLOrPath: OfficialSourceGit})
+	if err != nil || outcome.Status != "success" {
+		t.Fatalf("remove outcome=%#v err=%v", outcome, err)
+	}
+	if err := AutoRegisterOfficial(configPath); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = config.Load(configPath)
+	if err != nil || !cfg.Marketplace.OfficialMarketplaceAutoInstalled || len(cfg.Marketplace.Sources) != 0 {
+		t.Fatalf("sticky config=%#v err=%v", cfg.Marketplace, err)
+	}
+}
+
+func TestOfficialMarketplaceAlreadyInGrokSettingsOnlySetsFlag(t *testing.T) {
+	home := filepath.Join(t.TempDir(), ".grok")
+	t.Setenv("GROK_HOME", home)
+	t.Setenv("HOME", filepath.Dir(home))
+	t.Setenv("GROK_OFFICIAL_MARKETPLACE_AUTO_REGISTER", "yes")
+	mustWrite(t, filepath.Join(home, "settings.json"), `{"extraKnownMarketplaces":{
+  "official":{"source":{"source":"git","url":"https://github.com/xai-org/plugin-marketplace.git"}}
+}}`)
+	configPath := filepath.Join(home, "config.toml")
+	if err := AutoRegisterOfficial(configPath); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(configPath)
+	if err != nil || !cfg.Marketplace.OfficialMarketplaceAutoInstalled || len(cfg.Marketplace.Sources) != 0 {
+		t.Fatalf("config=%#v err=%v", cfg.Marketplace, err)
+	}
+}
+
+func TestRemoveImportedMarketplaceSource(t *testing.T) {
+	home := t.TempDir()
+	grokHome := filepath.Join(home, ".grok")
+	t.Setenv("HOME", home)
+	t.Setenv("GROK_HOME", grokHome)
+	mustWrite(t, filepath.Join(grokHome, "settings.json"), `{"theme":"dark","extraKnownMarketplaces":{
+  "remove":{"source":{"source":"git","url":"https://example.com/remove.git"}},
+  "keep":{"source":{"source":"git","url":"https://example.com/keep.git"}}
+}}`)
+	outcome, err := Execute(filepath.Join(grokHome, "config.toml"), t.TempDir(), Action{Type: "remove_source", SourceURLOrPath: "https://example.com/remove.git"})
+	if err != nil || outcome.Status != "success" {
+		t.Fatalf("outcome=%#v err=%v", outcome, err)
+	}
+	sources, err := Sources(filepath.Join(grokHome, "config.toml"), t.TempDir())
+	if err != nil || len(sources) != 1 || sources[0].Name != "keep" {
+		t.Fatalf("sources=%#v err=%v", sources, err)
+	}
+	data, err := os.ReadFile(filepath.Join(grokHome, "settings.json"))
+	if err != nil || !strings.Contains(string(data), `"theme": "dark"`) {
+		t.Fatalf("settings=%q err=%v", data, err)
+	}
+}
+
 func TestMarketplaceIndexAndTraversal(t *testing.T) {
 	t.Setenv("GROK_HOME", filepath.Join(t.TempDir(), ".grok"))
 	root := t.TempDir()
@@ -90,6 +207,7 @@ func TestMarketplaceIndexAndTraversal(t *testing.T) {
 func TestRemoteMarketplaceSHAUpdate(t *testing.T) {
 	grokHome := filepath.Join(t.TempDir(), ".grok")
 	t.Setenv("GROK_HOME", grokHome)
+	t.Setenv("HOME", filepath.Dir(grokHome))
 	workspace := t.TempDir()
 	remote := filepath.Join(workspace, "remote.git")
 	working := filepath.Join(workspace, "working")
@@ -147,6 +265,7 @@ func TestRemoteMarketplaceSHAUpdate(t *testing.T) {
 func TestGitMarketplaceSourceRefresh(t *testing.T) {
 	grokHome := filepath.Join(t.TempDir(), ".grok")
 	t.Setenv("GROK_HOME", grokHome)
+	t.Setenv("HOME", filepath.Dir(grokHome))
 	workspace := t.TempDir()
 	remote := filepath.Join(workspace, "catalog.git")
 	working := filepath.Join(workspace, "catalog")
@@ -187,6 +306,7 @@ func TestGitMarketplaceSourceRefresh(t *testing.T) {
 func TestAddAndRemoveMarketplaceSource(t *testing.T) {
 	grokHome := filepath.Join(t.TempDir(), ".grok")
 	t.Setenv("GROK_HOME", grokHome)
+	t.Setenv("HOME", filepath.Dir(grokHome))
 	configPath := filepath.Join(grokHome, "config.toml")
 	cwd := t.TempDir()
 	mustMkdir(t, filepath.Join(cwd, "catalog", "plugins", "demo"))
@@ -242,6 +362,9 @@ func mustMkdir(t *testing.T, path string) {
 
 func mustWrite(t *testing.T, path, value string) {
 	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
 		t.Fatal(err)
 	}

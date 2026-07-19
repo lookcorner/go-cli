@@ -146,6 +146,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	_ = marketplace.AutoRegisterOfficial(opts.configPath)
 	if err := prepareManagedPolicy(&cfg, opts.configPath, stderr); err != nil {
 		return err
 	}
@@ -716,6 +717,7 @@ func runMarketplace(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		return errors.New("marketplace command is required: list, add, remove, or update")
 	}
+	_ = marketplace.AutoRegisterOfficial("")
 	cwd, err := os.Getwd()
 	if err != nil {
 		return err

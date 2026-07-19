@@ -12,10 +12,17 @@ func UpdateMarketplace(path string, update func(*MarketplaceConfig)) error {
 			return err
 		}
 		update(&settings)
-		if len(settings.Sources) == 0 {
+		if len(settings.Sources) == 0 && !settings.OfficialMarketplaceAutoInstalled {
 			delete(root, "marketplace")
 		} else {
-			root["marketplace"] = map[string]any{"sources": settings.Sources}
+			marketplace := make(map[string]any)
+			if len(settings.Sources) > 0 {
+				marketplace["sources"] = settings.Sources
+			}
+			if settings.OfficialMarketplaceAutoInstalled {
+				marketplace["official_marketplace_auto_installed"] = true
+			}
+			root["marketplace"] = marketplace
 		}
 		return nil
 	})

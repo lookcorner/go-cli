@@ -759,9 +759,12 @@ action endpoint refreshes/adds/removes sources and installs, transactionally
 updates, or uninstalls catalog plugins. Git sources use a persistent
 `$GROK_HOME/marketplace-cache`; remote index entries may pin a tag or commit SHA.
 The CLI manages the same source registry; removing a source also uninstalls its
-plugins and clears their enabled/disabled settings. Official-source
-auto-registration, Claude known-marketplace imports, and component catalog
-details are not yet implemented.
+plugins and clears their enabled/disabled settings. It also imports
+`extraKnownMarketplaces` from `settings.local.json` and `settings.json`, then
+`plugins/known_marketplaces.json`, under both `$GROK_HOME` and `~/.claude`.
+Set `GROK_OFFICIAL_MARKETPLACE_AUTO_REGISTER=true` to register the official xAI
+source once; removing it records that choice. Component catalog details and the
+remote feature-flag gate are not yet implemented.
 
 The `[skills]` config accepts additional directories or individual `SKILL.md`
 files. Paths support `~`; relative paths resolve from the workspace. `ignore`

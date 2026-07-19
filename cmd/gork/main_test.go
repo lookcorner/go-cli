@@ -707,7 +707,9 @@ func TestPermissionPromptNotifierOnlyWrapsAskPaths(t *testing.T) {
 }
 
 func TestPluginMarketplaceCLI(t *testing.T) {
+	t.Setenv("GROK_OFFICIAL_MARKETPLACE_AUTO_REGISTER", "false")
 	t.Setenv("GROK_HOME", filepath.Join(t.TempDir(), ".grok"))
+	t.Setenv("HOME", t.TempDir())
 	source := filepath.Join(t.TempDir(), "team-catalog")
 	if err := os.MkdirAll(source, 0o700); err != nil {
 		t.Fatal(err)
@@ -734,5 +736,19 @@ func TestPluginMarketplaceCLI(t *testing.T) {
 	}
 	if err := runPlugin([]string{"marketplace", "add", filepath.Join(source, "missing")}, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("missing local source err=%v", err)
+	}
+}
+
+func TestPluginMarketplaceCLIAutoRegistersOfficialSource(t *testing.T) {
+	t.Setenv("GROK_HOME", filepath.Join(t.TempDir(), ".grok"))
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("GROK_OFFICIAL_MARKETPLACE_AUTO_REGISTER", "true")
+	var stdout bytes.Buffer
+	if err := runPlugin([]string{"marketplace", "list", "--json"}, &stdout, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	var listed []map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &listed); err != nil || len(listed) != 1 || listed[0]["name"] != marketplace.OfficialSourceName || listed[0]["source"].(map[string]any)["url"] != marketplace.OfficialSourceGit {
+		t.Fatalf("listed=%#v output=%q err=%v", listed, stdout.String(), err)
 	}
 }

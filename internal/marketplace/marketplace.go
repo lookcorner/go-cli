@@ -16,6 +16,11 @@ import (
 	"github.com/lookcorner/go-cli/internal/plugin"
 )
 
+const (
+	OfficialSourceName = "xAI Official"
+	OfficialSourceGit  = "https://github.com/xai-org/plugin-marketplace.git"
+)
+
 type Source struct {
 	Name   string
 	Path   string
@@ -79,8 +84,207 @@ func Sources(configPath, cwd string) ([]Source, error) {
 		path := resolveSourcePath(item.Path, cwd)
 		result = append(result, Source{Name: item.Name, Path: path, Git: item.Git, Branch: item.Branch})
 	}
+	result = append(result, extraSources(result, marketplaceRoots())...)
 	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
 	return result, nil
+}
+
+// AutoRegisterOfficial applies the reference implementation's default-off
+// environment gate and records a sticky flag so a removed source stays removed.
+func AutoRegisterOfficial(configPath string) error {
+	if enabled, ok := boolEnv("GROK_OFFICIAL_MARKETPLACE_AUTO_REGISTER"); !ok || !enabled {
+		return nil
+	}
+	cfg, err := config.Load(configPath)
+	if err != nil || cfg.Marketplace.OfficialMarketplaceAutoInstalled {
+		return err
+	}
+	existing := make([]Source, 0, len(cfg.Marketplace.Sources))
+	for _, item := range cfg.Marketplace.Sources {
+		existing = append(existing, Source{Name: item.Name, Path: item.Path, Git: item.Git, Branch: item.Branch})
+	}
+	for _, source := range append(existing, extraSources(existing, marketplaceRoots()[:1])...) {
+		if isOfficialSource(source.Git) {
+			return config.UpdateMarketplace(configPath, func(settings *config.MarketplaceConfig) {
+				settings.OfficialMarketplaceAutoInstalled = true
+			})
+		}
+	}
+	return config.UpdateMarketplace(configPath, func(settings *config.MarketplaceConfig) {
+		settings.Sources = append(settings.Sources, config.MarketplaceSourceConfig{Name: OfficialSourceName, Git: OfficialSourceGit})
+		settings.OfficialMarketplaceAutoInstalled = true
+	})
+}
+
+type settingsEntry struct {
+	Source struct {
+		Kind string `json:"source"`
+		URL  string `json:"url"`
+		Repo string `json:"repo"`
+		Path string `json:"path"`
+	} `json:"source"`
+}
+
+func extraSources(existing []Source, roots []string) []Source {
+	seen := make(map[string]bool)
+	for _, source := range existing {
+		if source.Git != "" {
+			seen[source.Git] = true
+		}
+	}
+	var result []Source
+	load := func(path string, nested bool) {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return
+		}
+		var raw map[string]json.RawMessage
+		if json.Unmarshal(data, &raw) != nil {
+			return
+		}
+		if nested {
+			if json.Unmarshal(raw["extraKnownMarketplaces"], &raw) != nil {
+				return
+			}
+		}
+		names := make([]string, 0, len(raw))
+		for name := range raw {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			var entry settingsEntry
+			if json.Unmarshal(raw[name], &entry) != nil {
+				continue
+			}
+			source, ok := entry.source(name)
+			if !ok || source.Git != "" && seen[source.Git] {
+				continue
+			}
+			if source.Git != "" {
+				seen[source.Git] = true
+			}
+			result = append(result, source)
+		}
+	}
+	for _, root := range roots {
+		load(filepath.Join(root, "settings.local.json"), true)
+		load(filepath.Join(root, "settings.json"), true)
+	}
+	for _, root := range roots {
+		load(filepath.Join(root, "plugins", "known_marketplaces.json"), false)
+	}
+	return result
+}
+
+func removeExtraSource(identity string) (bool, error) {
+	removed := false
+	remove := func(path string, nested bool) error {
+		data, err := os.ReadFile(path)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		var document map[string]json.RawMessage
+		if json.Unmarshal(data, &document) != nil {
+			return nil
+		}
+		entries := document
+		if nested {
+			entries = nil
+			if json.Unmarshal(document["extraKnownMarketplaces"], &entries) != nil {
+				return nil
+			}
+		}
+		changed := false
+		for name, raw := range entries {
+			var entry settingsEntry
+			if json.Unmarshal(raw, &entry) != nil {
+				continue
+			}
+			source, ok := entry.source(name)
+			if ok && (sourceIdentity(source) == identity || source.Git != "" && sameGit(source.Git, identity)) {
+				delete(entries, name)
+				changed = true
+			}
+		}
+		if !changed {
+			return nil
+		}
+		if nested {
+			raw, err := json.Marshal(entries)
+			if err != nil {
+				return err
+			}
+			document["extraKnownMarketplaces"] = raw
+		}
+		updated, err := json.MarshalIndent(document, "", "  ")
+		if err != nil {
+			return err
+		}
+		removed = true
+		return os.WriteFile(path, append(updated, '\n'), 0o600)
+	}
+	for _, root := range marketplaceRoots() {
+		for _, name := range []string{"settings.local.json", "settings.json"} {
+			if err := remove(filepath.Join(root, name), true); err != nil {
+				return removed, err
+			}
+		}
+		if err := remove(filepath.Join(root, "plugins", "known_marketplaces.json"), false); err != nil {
+			return removed, err
+		}
+	}
+	return removed, nil
+}
+
+func (entry settingsEntry) source(name string) (Source, bool) {
+	switch entry.Source.Kind {
+	case "git":
+		return Source{Name: name, Git: entry.Source.URL}, entry.Source.URL != ""
+	case "github":
+		return Source{Name: name, Git: "https://github.com/" + entry.Source.Repo + ".git"}, entry.Source.Repo != ""
+	case "local":
+		return Source{Name: name, Path: resolveSourcePath(entry.Source.Path, "")}, entry.Source.Path != ""
+	default:
+		return Source{}, false
+	}
+}
+
+func marketplaceRoots() []string {
+	grok, _ := marketplaceHome()
+	roots := []string{grok}
+	if home, err := os.UserHomeDir(); err == nil {
+		roots = append(roots, filepath.Join(home, ".claude"))
+	}
+	return roots
+}
+
+func boolEnv(name string) (bool, bool) {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
+	case "1", "true", "yes", "on", "enabled":
+		return true, true
+	case "0", "false", "no", "off", "disabled":
+		return false, true
+	default:
+		return false, false
+	}
+}
+
+func isOfficialSource(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.TrimSuffix(strings.TrimSuffix(value, "/"), ".git")
+	for _, prefix := range []string{"https://", "http://", "ssh://", "git@"} {
+		value = strings.TrimPrefix(value, prefix)
+	}
+	value = strings.TrimPrefix(value, "www.")
+	ownerRepo := strings.TrimPrefix(value, "github.com/")
+	if ownerRepo == value {
+		ownerRepo = strings.TrimPrefix(value, "github.com:")
+	}
+	return ownerRepo == "xai-org/plugin-marketplace"
 }
 
 func List(configPath, cwd string) ([]ScanResult, error) {
@@ -266,6 +470,9 @@ func addSource(configPath, cwd string, sources []Source, action Action) Outcome 
 			}
 		}
 		settings.Sources = append(settings.Sources, entry)
+		if isOfficialSource(entry.Git) {
+			settings.OfficialMarketplaceAutoInstalled = true
+		}
 	}); err != nil {
 		return Outcome{Status: "internal_error", Message: err.Error()}
 	}
@@ -300,7 +507,13 @@ func removeSource(configPath, cwd string, action Action) Outcome {
 			}
 		}
 		settings.Sources = filtered
+		if isOfficialSource(identity) {
+			settings.OfficialMarketplaceAutoInstalled = true
+		}
 	}); err != nil {
+		return Outcome{Status: "internal_error", Message: err.Error()}
+	}
+	if _, err := removeExtraSource(identity); err != nil {
 		return Outcome{Status: "internal_error", Message: err.Error()}
 	}
 	if len(removed) > 0 {

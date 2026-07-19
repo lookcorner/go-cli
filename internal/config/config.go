@@ -106,7 +106,8 @@ type PluginsConfig struct {
 }
 
 type MarketplaceConfig struct {
-	Sources []MarketplaceSourceConfig `json:"sources,omitempty" toml:"sources"`
+	Sources                          []MarketplaceSourceConfig `json:"sources,omitempty" toml:"sources"`
+	OfficialMarketplaceAutoInstalled bool                      `json:"official_marketplace_auto_installed,omitempty" toml:"official_marketplace_auto_installed"`
 }
 
 type MarketplaceSourceConfig struct {
@@ -439,6 +440,9 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.Marketplace.Sources != nil {
 		cfg.Marketplace.Sources = append([]MarketplaceSourceConfig(nil), disk.Marketplace.Sources...)
+	}
+	if disk.Marketplace.OfficialMarketplaceAutoInstalled {
+		cfg.Marketplace.OfficialMarketplaceAutoInstalled = true
 	}
 	if disk.FolderTrust.Enabled != nil {
 		cfg.FolderTrustEnabled = *disk.FolderTrust.Enabled
