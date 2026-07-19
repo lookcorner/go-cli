@@ -315,6 +315,9 @@ type Runtime struct {
 	SessionID     string
 	Model         string
 	SubagentType  string
+	idleMu        sync.Mutex
+	idleTimer     *time.Timer
+	closed        bool
 }
 
 type DeniedError struct {
@@ -331,6 +334,7 @@ func (r *Runtime) SessionStarted(ctx context.Context) {
 }
 
 func (r *Runtime) UserPromptSubmitted(ctx context.Context, prompt string) {
+	r.cancelIdle(false)
 	r.dispatch(ctx, UserPromptSubmit, "", map[string]any{"prompt": prompt}, false)
 }
 
@@ -384,10 +388,15 @@ func validJSON(value []byte) json.RawMessage {
 
 func (r *Runtime) Stopped(ctx context.Context, reason string, runErr error) {
 	if runErr != nil {
+		r.cancelIdle(false)
 		r.dispatch(ctx, StopFailure, "", map[string]any{"error": runErr.Error()}, false)
+		if !errors.Is(runErr, context.Canceled) {
+			r.Notification(context.Background(), "agent_error", runErr.Error(), "", "error")
+		}
 		return
 	}
 	r.dispatch(ctx, Stop, "", map[string]any{"reason": reason}, false)
+	r.armIdle()
 }
 
 func (r *Runtime) BeforeCompact(ctx context.Context, source string) {
@@ -407,7 +416,52 @@ func (r *Runtime) SubagentEnded(ctx context.Context, id, agentType, status strin
 }
 
 func (r *Runtime) SessionEnded(ctx context.Context, reason string) {
+	r.cancelIdle(true)
 	r.dispatch(ctx, SessionEnd, "", map[string]any{"reason": reason}, false)
+}
+
+func (r *Runtime) armIdle() {
+	if r == nil || r.Catalog == nil {
+		return
+	}
+	delay := 60 * time.Second
+	if value, err := time.ParseDuration(strings.TrimSpace(os.Getenv("GROK_IDLE_NOTIFICATION_DELAY_MS")) + "ms"); err == nil && value >= 0 {
+		delay = value
+	}
+	r.idleMu.Lock()
+	if r.closed {
+		r.idleMu.Unlock()
+		return
+	}
+	if r.idleTimer != nil {
+		r.idleTimer.Stop()
+	}
+	r.idleTimer = time.AfterFunc(delay, func() {
+		r.idleMu.Lock()
+		if r.closed {
+			r.idleMu.Unlock()
+			return
+		}
+		r.idleTimer = nil
+		r.idleMu.Unlock()
+		r.Notification(context.Background(), "idle_prompt", "Turn complete", "", "info")
+	})
+	r.idleMu.Unlock()
+}
+
+func (r *Runtime) cancelIdle(closeRuntime bool) {
+	if r == nil {
+		return
+	}
+	r.idleMu.Lock()
+	if r.idleTimer != nil {
+		r.idleTimer.Stop()
+		r.idleTimer = nil
+	}
+	if closeRuntime {
+		r.closed = true
+	}
+	r.idleMu.Unlock()
 }
 
 func (r *Runtime) dispatch(ctx context.Context, event Event, toolName string, payload map[string]any, blocking bool) error {

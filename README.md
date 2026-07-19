@@ -678,8 +678,8 @@ Vendor sources honor the `compat.<vendor>.hooks` gate. The runtime fires
 `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`,
 `PostToolUseFailure`, `Stop`, `StopFailure`, `PreCompact`, `PostCompact`, and
 `SessionEnd` plus permission-prompt/denied, background task-completion
-notifications, and subagent start/stop. Idle and agent-error notification
-producers remain.
+notifications, subagent start/stop, model/turn `agent_error`, and a cancellable
+60-second post-turn `idle_prompt` notification.
 
 Custom agent definitions are discovered from trusted project `.grok/agents`
 and `.claude/agents` directories from the current directory to the Git root,

@@ -106,6 +106,50 @@ func TestNotificationHookMatchesTaskCompletion(t *testing.T) {
 	}
 }
 
+func TestAgentErrorAndIdleNotificationHooks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	t.Setenv("GROK_IDLE_NOTIFICATION_DELAY_MS", "10")
+	root := t.TempDir()
+	payloadPath := filepath.Join(root, "notifications.jsonl")
+	script := filepath.Join(root, "capture.sh")
+	if err := os.WriteFile(script, []byte(fmt.Sprintf("#!/bin/sh\ncat >> %q\nprintf '\\n' >> %q\n", payloadPath, payloadPath)), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	catalog := &Catalog{specs: []Spec{{Event: Notification, Command: script, Timeout: time.Second}}}
+	runner := &Runtime{Catalog: catalog, WorkspaceRoot: root, SessionID: "session-1"}
+	runner.Stopped(context.Background(), "failed", errors.New("model unavailable"))
+	runner.Stopped(context.Background(), "completed", nil)
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		data, _ := os.ReadFile(payloadPath)
+		if strings.Contains(string(data), `"notificationType":"idle_prompt"`) {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	data, err := os.ReadFile(payloadPath)
+	if err != nil || !strings.Contains(string(data), `"notificationType":"agent_error"`) || !strings.Contains(string(data), `"message":"model unavailable"`) || !strings.Contains(string(data), `"level":"error"`) || !strings.Contains(string(data), `"notificationType":"idle_prompt"`) || !strings.Contains(string(data), `"message":"Turn complete"`) {
+		t.Fatalf("notifications=%q err=%v", data, err)
+	}
+	if err := os.WriteFile(payloadPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runner.Stopped(context.Background(), "completed", nil)
+	runner.UserPromptSubmitted(context.Background(), "next")
+	time.Sleep(30 * time.Millisecond)
+	if data, _ := os.ReadFile(payloadPath); strings.TrimSpace(string(data)) != "" {
+		t.Fatalf("cancelled idle notification fired: %s", data)
+	}
+	runner.Stopped(context.Background(), "completed", nil)
+	runner.SessionEnded(context.Background(), "closed")
+	time.Sleep(30 * time.Millisecond)
+	if data, _ := os.ReadFile(payloadPath); strings.TrimSpace(string(data)) != "" {
+		t.Fatalf("closed runtime emitted idle notification: %s", data)
+	}
+}
+
 func TestHookFailuresFailOpenAndDisabledStatePersists(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("GROK_HOME", home)
