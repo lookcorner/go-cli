@@ -18,6 +18,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/agents"
 	"github.com/lookcorner/go-cli/internal/hooks"
 	"github.com/lookcorner/go-cli/internal/mcp"
+	"github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/skills"
 	"github.com/lookcorner/go-cli/internal/tools"
 	"github.com/lookcorner/go-cli/internal/workspace"
@@ -65,6 +66,8 @@ type Config struct {
 	ProgressInterval        time.Duration
 	ParentMCPServers        []mcp.ServerConfig
 	StartMCPServers         func(context.Context, string, *tools.Registry, []mcp.ServerConfig) (func(), error)
+	SessionDir              string
+	ParentSessionID         string
 }
 
 type Manager struct {
@@ -88,6 +91,8 @@ type Manager struct {
 	progressInterval        time.Duration
 	parentMCPServers        []mcp.ServerConfig
 	startMCPServers         func(context.Context, string, *tools.Registry, []mcp.ServerConfig) (func(), error)
+	sessionDir              string
+	parentSessionID         string
 	tasks                   map[string]*task
 }
 
@@ -96,6 +101,7 @@ type task struct {
 	id           string
 	typeName     string
 	description  string
+	prompt       string
 	started      time.Time
 	cancel       context.CancelFunc
 	done         chan struct{}
@@ -114,6 +120,29 @@ type task struct {
 	capability   string
 	resumedFrom  string
 	mcpResource  *mcpResource
+	logger       *session.Logger
+	metaPath     string
+}
+
+type persistedTask struct {
+	SubagentID     string     `json:"subagent_id"`
+	ParentSession  string     `json:"parent_session_id"`
+	ChildSession   string     `json:"child_session_id"`
+	Type           string     `json:"subagent_type"`
+	Description    string     `json:"description"`
+	Prompt         string     `json:"prompt"`
+	Status         string     `json:"status"`
+	StartedAt      time.Time  `json:"started_at"`
+	CompletedAt    *time.Time `json:"completed_at,omitempty"`
+	DurationMS     int64      `json:"duration_ms,omitempty"`
+	ToolCalls      int        `json:"tool_calls,omitempty"`
+	Turns          int        `json:"turns,omitempty"`
+	Error          string     `json:"error,omitempty"`
+	ResumedFrom    string     `json:"resumed_from,omitempty"`
+	ChildCWD       string     `json:"child_cwd,omitempty"`
+	WorktreePath   string     `json:"worktree_path,omitempty"`
+	SnapshotRef    string     `json:"snapshot_ref,omitempty"`
+	EffectiveModel string     `json:"effective_model_id,omitempty"`
 }
 
 type mcpResource struct {
@@ -144,7 +173,8 @@ func New(config Config) (*Manager, error) {
 		skills: config.Skills, skillConfig: config.SkillConfig,
 		newClient: config.NewClient, observer: config.Observer, hooks: config.Hooks, worktrees: config.Worktrees,
 		progressInterval: config.ProgressInterval, parentMCPServers: append([]mcp.ServerConfig(nil), config.ParentMCPServers...),
-		startMCPServers: config.StartMCPServers, tasks: make(map[string]*task),
+		startMCPServers: config.StartMCPServers, sessionDir: config.SessionDir, parentSessionID: config.ParentSessionID,
+		tasks: make(map[string]*task),
 	}, nil
 }
 
@@ -296,7 +326,10 @@ func (m *Manager) Start(ctx context.Context, request tools.SubagentRequest) (too
 		hookRuntime = &hooks.Runtime{Catalog: catalog, WorkspaceRoot: childRoot, SessionID: id, Model: model.Model, SubagentType: request.Type}
 		runner.HookPolicy = hookRuntime
 	}
-	current := &task{id: id, typeName: request.Type, description: request.Description, started: time.Now(), done: make(chan struct{}), runner: runner, hookRuntime: hookRuntime, cwd: childRoot, ownedTools: childRegistry, worktreePath: worktreePath, model: model.Model, capability: capability, mcpResource: ownedMCPResource}
+	current := &task{id: id, typeName: request.Type, description: request.Description, prompt: request.Prompt, started: time.Now(), done: make(chan struct{}), runner: runner, hookRuntime: hookRuntime, cwd: childRoot, ownedTools: childRegistry, worktreePath: worktreePath, model: model.Model, capability: capability, mcpResource: ownedMCPResource}
+	if err := m.startPersistence(current, request.Prompt, ""); err != nil {
+		return tools.SubagentResult{}, err
+	}
 	runner.Progress = current.updateProgress
 	m.mu.Lock()
 	m.tasks[id] = current
@@ -348,7 +381,13 @@ func (m *Manager) resume(ctx context.Context, request tools.SubagentRequest, def
 	if hookRuntime != nil {
 		runner.HookPolicy = hookRuntime
 	}
-	current := &task{id: id, typeName: request.Type, description: request.Description, started: time.Now(), done: make(chan struct{}), runner: runner, responseID: previous.responseID, hookRuntime: hookRuntime, cwd: previous.cwd, ownedTools: previous.ownedTools, worktreePath: previous.worktreePath, model: runner.Model, capability: previous.capability, resumedFrom: previous.id, mcpResource: previous.mcpResource}
+	current := &task{id: id, typeName: request.Type, description: request.Description, prompt: request.Prompt, started: time.Now(), done: make(chan struct{}), runner: runner, responseID: previous.responseID, hookRuntime: hookRuntime, cwd: previous.cwd, ownedTools: previous.ownedTools, worktreePath: previous.worktreePath, model: runner.Model, capability: previous.capability, resumedFrom: previous.id, mcpResource: previous.mcpResource}
+	if err := m.startPersistence(current, request.Prompt, previous.id); err != nil {
+		previous.mu.Lock()
+		previous.resumed = false
+		previous.mu.Unlock()
+		return tools.SubagentResult{}, err
+	}
 	runner.Progress = current.updateProgress
 	m.mu.Lock()
 	m.tasks[id] = current
@@ -400,6 +439,7 @@ func (m *Manager) launch(caller context.Context, current *task, prompt string, b
 			ToolsUsed: append([]string{}, result.ToolsUsed...), ErrorCount: result.ErrorCount,
 			DurationMS: duration, WorktreeDir: worktreeDir, Description: current.description, StartedAtMS: current.started.UnixMilli(),
 		}
+		m.finishPersistence(current, final)
 		stopProgress()
 		if m.observer != nil {
 			m.observer.SubagentEnded(context.Background(), final)
@@ -415,6 +455,102 @@ func (m *Manager) launch(caller context.Context, current *task, prompt string, b
 		return current.result, errors.New(current.result.Output)
 	}
 	return current.result, nil
+}
+
+func (m *Manager) startPersistence(current *task, prompt, resumedFrom string) error {
+	if m.sessionDir == "" || m.parentSessionID == "" {
+		return nil
+	}
+	var logger *session.Logger
+	created := false
+	var err error
+	if resumedFrom == "" {
+		logger, err = session.NewLoggerWithID(m.sessionDir, current.id)
+		created = err == nil
+	} else {
+		if _, _, err = session.Fork(m.sessionDir, resumedFrom, current.id, current.cwd, current.model, nil); err == nil {
+			created = true
+			logger, current.responseID, err = session.Resume(filepath.Join(m.sessionDir, current.id+".jsonl"))
+		}
+	}
+	if err != nil {
+		if created {
+			_ = os.Remove(filepath.Join(m.sessionDir, current.id+".jsonl"))
+		}
+		return fmt.Errorf("persist subagent session: %w", err)
+	}
+	current.logger, current.runner.Logger = logger, logger
+	if resumedFrom == "" {
+		if err := logger.Append("session_metadata", map[string]any{
+			"cwd": current.cwd, "modelId": current.model, "parentSessionId": m.parentSessionID,
+			"sessionKind": "subagent", "subagentType": current.typeName,
+		}); err != nil {
+			_ = logger.Close()
+			_ = os.Remove(logger.Path())
+			return err
+		}
+	}
+	current.metaPath = filepath.Join(m.sessionDir, "subagents", m.parentSessionID, current.id, "meta.json")
+	if err := writeTaskMeta(current.metaPath, persistedTask{
+		SubagentID: current.id, ParentSession: m.parentSessionID, ChildSession: current.id,
+		Type: current.typeName, Description: current.description, Prompt: prompt, Status: "running",
+		StartedAt: current.started.UTC(), ResumedFrom: resumedFrom, ChildCWD: current.cwd,
+		WorktreePath: current.worktreePath, EffectiveModel: current.model,
+	}); err != nil {
+		_ = logger.Close()
+		_ = os.Remove(logger.Path())
+		return err
+	}
+	return nil
+}
+
+func (m *Manager) finishPersistence(current *task, result tools.SubagentResult) {
+	if current.metaPath != "" {
+		completed := time.Now().UTC()
+		record := persistedTask{
+			SubagentID: current.id, ParentSession: m.parentSessionID, ChildSession: current.id,
+			Type: current.typeName, Description: current.description, Prompt: current.prompt, Status: result.Status,
+			StartedAt: current.started.UTC(), CompletedAt: &completed, DurationMS: result.DurationMS,
+			ToolCalls: result.ToolCalls, Turns: result.Turns, ResumedFrom: current.resumedFrom,
+			ChildCWD: current.cwd, WorktreePath: current.worktreePath, SnapshotRef: current.snapshotRef,
+			EffectiveModel: current.model,
+		}
+		if result.Status != "completed" {
+			record.Error = result.Output
+		}
+		_ = writeTaskMeta(current.metaPath, record)
+	}
+	if current.logger != nil {
+		_ = current.logger.Close()
+	}
+}
+
+func writeTaskMeta(path string, record persistedTask) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		return err
+	}
+	temp, err := os.CreateTemp(filepath.Dir(path), ".meta-*")
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+	if err := temp.Chmod(0o600); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if _, err = temp.Write(append(data, '\n')); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err = temp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tempPath, path)
 }
 
 func (m *Manager) publishProgress(ctx context.Context, current *task) func() {

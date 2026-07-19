@@ -737,6 +737,141 @@ func TestRunningSubagentReportsLiveMetrics(t *testing.T) {
 	}
 }
 
+func TestSubagentPersistsChildHistoryAndResumeFork(t *testing.T) {
+	root := t.TempDir()
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	catalog, _ := agents.Discover(agents.Config{})
+	client := &sequenceClient{results: []api.StreamResult{
+		{ResponseID: "first-response", Text: "first done"},
+		{ResponseID: "second-response", Text: "second done"},
+	}}
+	sessionDir := t.TempDir()
+	manager, err := New(Config{
+		Context: context.Background(), Catalog: catalog, Tools: registry, WorkspaceRoot: root,
+		ParentModel: "test", SessionDir: sessionDir, ParentSessionID: "parent-session",
+		NewClient: func(ModelRuntime) (agent.ResponseStreamer, error) { return client, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	first, err := manager.Start(context.Background(), tools.SubagentRequest{
+		Prompt: "first prompt", Description: "persist", Type: "general-purpose", BackgroundSet: true,
+	})
+	if err != nil || first.Status != "completed" {
+		t.Fatalf("first=%#v err=%v", first, err)
+	}
+	firstLog, err := os.ReadFile(filepath.Join(sessionDir, first.ID+".jsonl"))
+	if err != nil || !strings.Contains(string(firstLog), "first prompt") || !strings.Contains(string(firstLog), "first done") {
+		t.Fatalf("first log=%q err=%v", firstLog, err)
+	}
+	metaPath := filepath.Join(sessionDir, "subagents", "parent-session", first.ID, "meta.json")
+	var meta persistedTask
+	data, err := os.ReadFile(metaPath)
+	if err != nil || json.Unmarshal(data, &meta) != nil || meta.Status != "completed" || meta.ChildSession != first.ID || meta.EffectiveModel != "test" {
+		t.Fatalf("meta=%#v data=%q err=%v", meta, data, err)
+	}
+	resumed, err := manager.Start(context.Background(), tools.SubagentRequest{
+		Prompt: "second prompt", Description: "resume", Type: "general-purpose", ResumeFrom: first.ID, BackgroundSet: true,
+	})
+	if err != nil || resumed.Status != "completed" {
+		t.Fatalf("resumed=%#v err=%v", resumed, err)
+	}
+	resumedLog, err := os.ReadFile(filepath.Join(sessionDir, resumed.ID+".jsonl"))
+	if err != nil || !strings.Contains(string(resumedLog), "first prompt") || !strings.Contains(string(resumedLog), "second prompt") || !strings.Contains(string(resumedLog), "second done") {
+		t.Fatalf("resumed log=%q err=%v", resumedLog, err)
+	}
+}
+
+func TestSubagentPersistenceFailureRemovesChildLog(t *testing.T) {
+	root := t.TempDir()
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	catalog, _ := agents.Discover(agents.Config{})
+	sessionDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(sessionDir, "subagents"), []byte("blocked"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := New(Config{
+		Context: context.Background(), Catalog: catalog, Tools: registry, WorkspaceRoot: root,
+		ParentModel: "test", SessionDir: sessionDir, ParentSessionID: "parent-session",
+		NewClient: func(ModelRuntime) (agent.ResponseStreamer, error) { return &sequenceClient{}, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	if _, err := manager.Start(context.Background(), tools.SubagentRequest{
+		Prompt: "prompt", Description: "persist", Type: "general-purpose", BackgroundSet: true,
+	}); err == nil {
+		t.Fatal("expected metadata persistence failure")
+	}
+	logs, err := filepath.Glob(filepath.Join(sessionDir, "*.jsonl"))
+	if err != nil || len(logs) != 0 {
+		t.Fatalf("logs=%v err=%v", logs, err)
+	}
+}
+
+func TestSubagentPersistenceCollisionKeepsExistingLog(t *testing.T) {
+	sessionDir := t.TempDir()
+	path := filepath.Join(sessionDir, "subagent_existing.jsonl")
+	const existing = "existing session\n"
+	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager := &Manager{sessionDir: sessionDir, parentSessionID: "parent-session"}
+	current := &task{id: "subagent_existing", runner: &agent.Runner{}}
+	if err := manager.startPersistence(current, "prompt", ""); err == nil {
+		t.Fatal("expected session ID collision")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != existing {
+		t.Fatalf("data=%q err=%v", data, err)
+	}
+}
+
+func TestManagerClosePersistsCancelledSubagent(t *testing.T) {
+	root := t.TempDir()
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	catalog, _ := agents.Discover(agents.Config{})
+	client := &sequenceClient{block: true}
+	sessionDir := t.TempDir()
+	manager, err := New(Config{
+		Context: context.Background(), Catalog: catalog, Tools: registry, WorkspaceRoot: root,
+		ParentModel: "test", SessionDir: sessionDir, ParentSessionID: "parent-session",
+		NewClient: func(ModelRuntime) (agent.ResponseStreamer, error) { return client, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := manager.Start(context.Background(), tools.SubagentRequest{
+		Prompt: "wait", Description: "persist", Type: "general-purpose", Background: true, BackgroundSet: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.Close()
+	data, err := os.ReadFile(filepath.Join(sessionDir, "subagents", "parent-session", started.ID, "meta.json"))
+	var meta persistedTask
+	if err != nil || json.Unmarshal(data, &meta) != nil || meta.Status != "cancelled" || meta.CompletedAt == nil {
+		t.Fatalf("meta=%#v data=%q err=%v", meta, data, err)
+	}
+}
+
 func TestTaskToolExecutesUserAgentDefinition(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

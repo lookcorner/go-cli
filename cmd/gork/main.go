@@ -423,6 +423,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		ContextWindow: cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,
 		ResolveModel: resolveSubagentModel, AvailableModels: cfg.ModelSlugs(), Skills: skillCatalog,
 		SkillConfig: workspaceSkillsConfig(cfg, plugins), Worktrees: worktreeManager,
+		SessionDir: filepath.Dir(logger.Path()), ParentSessionID: logger.ID(),
 		ParentMCPServers: mcpRuntime.Configs(),
 		StartMCPServers: func(childCtx context.Context, root string, childTools *tools.Registry, servers []mcp.ServerConfig) (func(), error) {
 			return startSubagentMCPServers(childCtx, cfg, root, childTools, approver, tokenProvider, statusOutput, servers)
@@ -1304,7 +1305,8 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			ContextWindow: sessionCfg.ContextWindow, CompactThresholdPercent: sessionCfg.AutoCompactThresholdPercent,
 			ResolveModel: resolveSubagentModel, AvailableModels: sessionCfg.ModelSlugs(), Skills: catalog,
 			SkillConfig: workspaceSkillsConfig(sessionCfg, plugins), Worktrees: server.WorktreeManager(),
-			Observer:         &sessionSubagentObserver{server: server, sessionID: logger.ID()},
+			Observer:   &sessionSubagentObserver{server: server, sessionID: logger.ID()},
+			SessionDir: filepath.Dir(logger.Path()), ParentSessionID: logger.ID(),
 			ParentMCPServers: mcpRuntime.Configs(),
 			StartMCPServers: func(childCtx context.Context, root string, childTools *tools.Registry, servers []mcp.ServerConfig) (func(), error) {
 				return startSubagentMCPServers(childCtx, sessionCfg, root, childTools, approver, tokenProvider, statusOutput, servers)
