@@ -44,13 +44,19 @@ func TestSessionObserversPersistOnlyLifecycleEvents(t *testing.T) {
 	})
 	observer.SubagentProgress(context.Background(), tools.SubagentResult{ID: "child-1", Status: "running", Turns: 1})
 	observer.SubagentEnded(context.Background(), tools.SubagentResult{ID: "child-1", Type: "explore", Status: "completed", Output: "done"})
-	processObserver := &sessionProcessObserver{sessionID: logger.ID(), logger: logger}
+	scheduled := newScheduledWakeQueue()
+	processObserver := &sessionProcessObserver{sessionID: logger.ID(), logger: logger, scheduler: scheduled}
 	processObserver.TaskBackgrounded(tools.ProcessBackgrounded{TaskID: "task-1", Command: "build", CWD: "/work"})
 	processObserver.MonitorEvent(tools.MonitorEvent{TaskID: "task-1", Description: "watch build", EventText: "tick"})
 	processObserver.TaskCompleted(tools.ProcessSnapshot{TaskID: "task-1", Command: "build", Completed: true})
 	processObserver.ScheduledTaskCreated(tools.ScheduledTaskCreated{TaskID: "loop-1", Prompt: "check", HumanSchedule: "every 1 minute"})
 	processObserver.ScheduledTaskFired(tools.ScheduledTaskFired{TaskID: "loop-1", Prompt: "check", HumanSchedule: "every 1 minute"})
 	processObserver.ScheduledTaskRemoved("loop-1")
+	if event, ok := scheduled.Take(); !ok || event.TaskID != "loop-1" {
+		t.Fatalf("scheduled observer event=%#v ok=%v", event, ok)
+	} else {
+		scheduled.Done(event.TaskID)
+	}
 	path := logger.Path()
 	if err := logger.Close(); err != nil {
 		t.Fatal(err)

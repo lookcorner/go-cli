@@ -489,8 +489,10 @@ limit, sustained-overload stop, ACP notification drain, and completion-wake
 deduplication. `scheduler_create`, `scheduler_list`, and `scheduler_delete`
 manage up to 50 one-shot or recurring prompts; intervals have a 60-second
 minimum, recurring tasks expire after seven days, and only `durable: true`
-tasks are restored from session state. ACP fires scheduled prompts through the
-serialized synthetic-turn queue and exposes `x.ai/scheduler/delete`.
+tasks are restored from session state. One-shot headless, REPL, TUI, and ACP sessions
+fire scheduled prompts through a serialized synthetic-turn queue while
+preserving the current response-ID chain; ACP also exposes
+`x.ai/scheduler/delete`.
 
 Each run is recorded as a mode-0600 JSONL event log under the user cache
 directory. `--session-dir` selects another location.
@@ -740,7 +742,8 @@ are coordinated so `will_wake` reflects an accepted queue entry.
 User and trusted-project agent
 definitions may attach named or inline `mcpServers`; owned servers override an
 inherited server with the same name and remain private to that subagent.
-Non-ACP parent auto-wake and `bypassPermissions` execution are not implemented yet.
+Non-ACP background-task/subagent auto-wake and `bypassPermissions` execution
+are not implemented yet.
 
 The same direct-install lifecycle is available outside ACP:
 

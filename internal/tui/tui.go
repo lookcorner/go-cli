@@ -27,6 +27,7 @@ type turnDoneEvent struct {
 	err    error
 }
 type compactDoneEvent struct{ err error }
+type scheduledFiredEvent struct{ event tools.ScheduledTaskFired }
 
 type Bridge struct {
 	ctx    context.Context
@@ -42,6 +43,15 @@ func NewBridge(parent context.Context, mode tools.PermissionMode) *Bridge {
 }
 
 func (b *Bridge) Close() { b.once.Do(b.cancel) }
+
+func (b *Bridge) ScheduledTaskCreated(tools.ScheduledTaskCreated) {}
+func (b *Bridge) ScheduledTaskRemoved(string)                     {}
+func (b *Bridge) ScheduledTaskFired(event tools.ScheduledTaskFired) {
+	select {
+	case b.events <- scheduledFiredEvent{event: event}:
+	case <-b.ctx.Done():
+	}
+}
 
 func (b *Bridge) TextWriter() io.Writer   { return bridgeWriter{bridge: b, status: false} }
 func (b *Bridge) StatusWriter() io.Writer { return bridgeWriter{bridge: b, status: true} }
@@ -126,6 +136,8 @@ type model struct {
 	approval   *approvalEvent
 	turnCancel context.CancelFunc
 	initial    string
+	scheduled  []tools.ScheduledTaskFired
+	activeTask string
 }
 
 func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPrompt, previousID, initialTranscript, workspace, modelName string) error {
@@ -192,6 +204,24 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				m.status += fmt.Sprintf(" · context %d/%d (%d%%)", msg.result.InputTokens, msg.result.ContextWindow, percent)
 			}
 		}
+		m.activeTask = ""
+		if command := m.startScheduled(); command != nil {
+			return m, command
+		}
+	case scheduledFiredEvent:
+		if msg.event.TaskID != m.activeTask {
+			duplicate := false
+			for _, event := range m.scheduled {
+				duplicate = duplicate || event.TaskID == msg.event.TaskID
+			}
+			if !duplicate {
+				m.scheduled = append(m.scheduled, msg.event)
+			}
+		}
+		if command := m.startScheduled(); command != nil {
+			return m, tea.Batch(waitForBridge(m.bridge), command)
+		}
+		return m, waitForBridge(m.bridge)
 	case compactDoneEvent:
 		m.running = false
 		m.turnCancel = nil
@@ -200,6 +230,9 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.previousID = ""
 			m.status = "context compacted"
+		}
+		if command := m.startScheduled(); command != nil {
+			return m, command
 		}
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
@@ -313,6 +346,27 @@ func runTurn(ctx context.Context, runner *agent.Runner, prompt, previousID strin
 		result, err := runner.RunTurn(ctx, prompt, previousID)
 		return turnDoneEvent{result: result, err: err}
 	}
+}
+
+func runSyntheticTurn(ctx context.Context, runner *agent.Runner, prompt, previousID string) tea.Cmd {
+	return func() tea.Msg {
+		result, err := runner.RunSyntheticTurn(ctx, prompt, previousID)
+		return turnDoneEvent{result: result, err: err}
+	}
+}
+
+func (m *model) startScheduled() tea.Cmd {
+	if m.running || len(m.scheduled) == 0 {
+		return nil
+	}
+	event := m.scheduled[0]
+	m.scheduled = m.scheduled[1:]
+	m.activeTask, m.running = event.TaskID, true
+	turnCtx, cancel := context.WithCancel(m.ctx)
+	m.turnCancel = cancel
+	m.beginTurn(event.Prompt)
+	m.status = "scheduled task " + event.TaskID
+	return runSyntheticTurn(turnCtx, m.runner, event.Prompt, m.previousID)
 }
 
 func runCompact(ctx context.Context, runner *agent.Runner, previousID string) tea.Cmd {

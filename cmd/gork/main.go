@@ -406,7 +406,15 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	permissionPrompts.SetNotify(func() {
 		hookRuntime.Notification(context.Background(), "permission_prompt", "Tool permission requested", "", "info")
 	})
-	processObserver := &sessionProcessObserver{sessionID: logger.ID(), logger: logger, hooks: hookRuntime}
+	var scheduledQueue *scheduledWakeQueue
+	var schedulerObserver tools.SchedulerObserver
+	if tuiBridge != nil {
+		schedulerObserver = tuiBridge
+	} else {
+		scheduledQueue = newScheduledWakeQueue()
+		schedulerObserver = scheduledQueue
+	}
+	processObserver := &sessionProcessObserver{sessionID: logger.ID(), logger: logger, hooks: hookRuntime, scheduler: schedulerObserver}
 	registry.SetProcessObserver(processObserver)
 	registry.SetSchedulerObserver(processObserver)
 	defer hookRuntime.SessionEnded(context.Background(), "closed")
@@ -472,7 +480,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		if resumedTranscript != "" {
 			fmt.Fprintln(stdout, resumedTranscript)
 		}
-		return interactiveLoop(ctx, runner, inputReader, stdout, stderr, prompt, opts.previousID)
+		return interactiveLoop(ctx, runner, scheduledQueue, inputReader, stdout, stderr, prompt, opts.previousID)
 	}
 	if opts.goal {
 		if err := registry.BeginGoal(prompt); err != nil {
@@ -480,15 +488,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		}
 		return goalLoop(ctx, runner, registry, stdout, stderr, prompt, opts.previousID, opts.goalRuns)
 	}
-	prompt, _ = tools.ExpandLoopCommand(prompt)
-	result, err := runner.RunTurn(ctx, prompt, opts.previousID)
-	if err != nil {
-		return err
-	}
-	if result.Text != "" && !strings.HasSuffix(result.Text, "\n") {
-		fmt.Fprintln(stdout)
-	}
-	return nil
+	return runHeadless(ctx, runner, scheduledQueue, stdout, stderr, prompt, opts.previousID)
 }
 
 func runLogin(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
@@ -1065,6 +1065,7 @@ type sessionProcessObserver struct {
 	logger    *session.Logger
 	hooks     *hooks.Runtime
 	autoWake  bool
+	scheduler tools.SchedulerObserver
 }
 
 type sessionSubagentObserver struct {
@@ -1130,11 +1131,17 @@ func (o *sessionProcessObserver) ScheduledTaskCreated(event tools.ScheduledTaskC
 	if o.server != nil {
 		o.server.NotifyScheduledTaskCreated(o.sessionID, event)
 	}
+	if o.scheduler != nil {
+		o.scheduler.ScheduledTaskCreated(event)
+	}
 }
 
 func (o *sessionProcessObserver) ScheduledTaskFired(event tools.ScheduledTaskFired) {
 	if o.server != nil {
 		o.server.NotifyScheduledTaskFired(o.sessionID, event)
+	}
+	if o.scheduler != nil {
+		o.scheduler.ScheduledTaskFired(event)
 	}
 }
 
@@ -1144,6 +1151,9 @@ func (o *sessionProcessObserver) ScheduledTaskRemoved(taskID string) {
 	}
 	if o.server != nil {
 		o.server.NotifyScheduledTaskRemoved(o.sessionID, taskID)
+	}
+	if o.scheduler != nil {
+		o.scheduler.ScheduledTaskRemoved(taskID)
 	}
 }
 
@@ -1884,6 +1894,7 @@ func joinInstructions(parts ...string) string {
 func interactiveLoop(
 	ctx context.Context,
 	runner *agent.Runner,
+	scheduled *scheduledWakeQueue,
 	input *bufio.Reader,
 	stdout io.Writer,
 	stderr io.Writer,
@@ -1891,39 +1902,96 @@ func interactiveLoop(
 	previousResponseID string,
 ) error {
 	fmt.Fprintln(stderr, "[gork] interactive mode; /exit to quit, /help for commands")
-	prompt := strings.TrimSpace(initialPrompt)
-	for {
-		if prompt == "" {
-			fmt.Fprint(stderr, "\ngork> ")
+	type readResult struct {
+		line string
+		err  error
+	}
+	lines := make(chan readResult, 1)
+	go func() {
+		for {
 			line, err := input.ReadString('\n')
-			if err != nil && !errors.Is(err, io.EOF) {
-				return fmt.Errorf("read interactive prompt: %w", err)
+			select {
+			case lines <- readResult{line: line, err: err}:
+			case <-ctx.Done():
+				return
 			}
-			prompt = strings.TrimSpace(line)
-			if errors.Is(err, io.EOF) && prompt == "" {
+			if err != nil {
+				return
+			}
+		}
+	}()
+	prompt := strings.TrimSpace(initialPrompt)
+	inputClosed := false
+	promptShown := false
+	for {
+		scheduledID := ""
+		if prompt == "" {
+			if inputClosed {
 				return nil
 			}
-		}
-		switch prompt {
-		case "":
-			continue
-		case "/exit", "/quit":
-			return nil
-		case "/help":
-			fmt.Fprintln(stderr, "Commands: /compact, /loop, /help, /exit. Every other line is sent as a prompt.")
-			prompt = ""
-			continue
-		case "/compact":
-			if _, err := runner.Compact(ctx, previousResponseID); err != nil {
-				fmt.Fprintln(stderr, "[gork] compact failed:", err)
-			} else {
-				previousResponseID = ""
+			var read readResult
+			select {
+			case read = <-lines:
+			default:
+				if event, ok := scheduled.Take(); ok {
+					prompt, scheduledID = event.Prompt, event.TaskID
+					promptShown = false
+					fmt.Fprintf(stderr, "\n[gork] scheduled task %s fired\n", event.TaskID)
+					break
+				}
+				if !promptShown {
+					fmt.Fprint(stderr, "\ngork> ")
+					promptShown = true
+				}
+				select {
+				case read = <-lines:
+				case <-scheduled.Notify():
+					continue
+				case <-ctx.Done():
+					return ctx.Err()
+				}
 			}
-			prompt = ""
-			continue
+			if scheduledID == "" {
+				if read.err != nil && !errors.Is(read.err, io.EOF) {
+					return fmt.Errorf("read interactive prompt: %w", read.err)
+				}
+				prompt = strings.TrimSpace(read.line)
+				inputClosed = errors.Is(read.err, io.EOF)
+				promptShown = false
+				if inputClosed && prompt == "" {
+					return nil
+				}
+			}
 		}
-		prompt, _ = tools.ExpandLoopCommand(prompt)
-		result, err := runner.RunTurn(ctx, prompt, previousResponseID)
+		if scheduledID == "" {
+			switch prompt {
+			case "":
+				continue
+			case "/exit", "/quit":
+				return nil
+			case "/help":
+				fmt.Fprintln(stderr, "Commands: /compact, /loop, /help, /exit. Every other line is sent as a prompt.")
+				prompt = ""
+				continue
+			case "/compact":
+				if _, err := runner.Compact(ctx, previousResponseID); err != nil {
+					fmt.Fprintln(stderr, "[gork] compact failed:", err)
+				} else {
+					previousResponseID = ""
+				}
+				prompt = ""
+				continue
+			}
+			prompt, _ = tools.ExpandLoopCommand(prompt)
+		}
+		var result agent.Result
+		var err error
+		if scheduledID != "" {
+			result, err = runner.RunSyntheticTurn(ctx, prompt, previousResponseID)
+			scheduled.Done(scheduledID)
+		} else {
+			result, err = runner.RunTurn(ctx, prompt, previousResponseID)
+		}
 		if err != nil {
 			fmt.Fprintln(stderr, "[gork] turn failed:", err)
 			if ctx.Err() != nil {
@@ -1936,6 +2004,40 @@ func interactiveLoop(
 			}
 		}
 		prompt = ""
+		if inputClosed {
+			return nil
+		}
+	}
+}
+
+func runHeadless(ctx context.Context, runner *agent.Runner, scheduled *scheduledWakeQueue, stdout, stderr io.Writer, prompt, previousResponseID string) error {
+	prompt, _ = tools.ExpandLoopCommand(prompt)
+	result, err := runner.RunTurn(ctx, prompt, previousResponseID)
+	if err != nil {
+		return err
+	}
+	previousResponseID = result.ResponseID
+	if result.Text != "" && !strings.HasSuffix(result.Text, "\n") {
+		fmt.Fprintln(stdout)
+	}
+	for {
+		event, ok, err := scheduled.Next(ctx)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return nil
+		}
+		fmt.Fprintf(stderr, "[gork] scheduled task %s fired\n", event.TaskID)
+		result, err = runner.RunSyntheticTurn(ctx, event.Prompt, previousResponseID)
+		scheduled.Done(event.TaskID)
+		if err != nil {
+			return err
+		}
+		previousResponseID = result.ResponseID
+		if result.Text != "" && !strings.HasSuffix(result.Text, "\n") {
+			fmt.Fprintln(stdout)
+		}
 	}
 }
 
