@@ -3,8 +3,10 @@ package acp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
+	sessionlog "github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/subagent"
 	"github.com/lookcorner/go-cli/internal/tools"
 )
@@ -50,6 +52,92 @@ func (s *Server) NotifySubagentProgress(sessionID string, result tools.SubagentR
 
 func (s *Server) NotifySubagentEnded(sessionID string, result tools.SubagentResult) {
 	s.notifySubagent(sessionID, SubagentFinishedUpdate(result))
+	if result.WillWake {
+		if current := s.lookupSession(sessionID); current != nil {
+			s.startNextSubagentWake(current)
+		}
+	}
+}
+
+func (s *Server) QueueSubagentWake(sessionID string, result tools.SubagentResult) bool {
+	if s.closing.Load() {
+		return false
+	}
+	current := s.lookupSession(sessionID)
+	if current == nil {
+		return false
+	}
+	current.mu.Lock()
+	if current.closed || current.ctx == nil || current.ctx.Err() != nil || s.closing.Load() {
+		current.mu.Unlock()
+		return false
+	}
+	current.wakeQueue = append(current.wakeQueue, result)
+	current.mu.Unlock()
+	return true
+}
+
+func (s *Server) CancelSubagentWake(sessionID, subagentID string) {
+	current := s.lookupSession(sessionID)
+	if current == nil {
+		return
+	}
+	current.mu.Lock()
+	kept := current.wakeQueue[:0]
+	for _, result := range current.wakeQueue {
+		if result.ID != subagentID {
+			kept = append(kept, result)
+		}
+	}
+	current.wakeQueue = kept
+	current.mu.Unlock()
+}
+
+func (s *Server) startNextSubagentWake(current *session) {
+	current.mu.Lock()
+	if current.closed || current.ctx == nil || current.ctx.Err() != nil || current.running || len(current.wakeQueue) == 0 {
+		current.mu.Unlock()
+		return
+	}
+	result := current.wakeQueue[0]
+	current.wakeQueue = current.wakeQueue[1:]
+	runCtx, cancel := context.WithCancel(current.ctx)
+	current.cancel, current.running = cancel, true
+	current.activePrompt = current.promptIndex
+	current.promptIndex++
+	current.updated = time.Now().UTC()
+	previous, mode := current.previous, current.mode
+	current.mu.Unlock()
+	prompt := formatSubagentWake(result)
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		baseInstructions := current.runner.Instructions
+		current.runner.Instructions = instructionsForMode(baseInstructions, mode)
+		turn, err := current.runner.RunSyntheticTurn(runCtx, prompt, previous)
+		current.runner.Instructions = baseInstructions
+		points, pointsErr := sessionlog.RewindPoints(current.logPath)
+		current.mu.Lock()
+		if err == nil {
+			current.previous = turn.ResponseID
+		}
+		current.running, current.activePrompt, current.cancel = false, -1, nil
+		if pointsErr == nil {
+			current.promptIndex = len(points)
+		}
+		current.updated = time.Now().UTC()
+		current.mu.Unlock()
+		s.startNextSubagentWake(current)
+	}()
+}
+
+func formatSubagentWake(result tools.SubagentResult) string {
+	status := "successfully"
+	if result.Status != "completed" {
+		status = "with failure"
+	}
+	return fmt.Sprintf("<system-reminder>\nBackground subagent %q (%s: %q) completed %s.\nDuration: %.1fs | Tool calls: %d | Turns: %d\nUse get_task_output with task_ids [%q] to retrieve the full result.\n</system-reminder>",
+		result.ID, result.Type, result.Description, status, float64(result.DurationMS)/1000, result.ToolCalls, result.Turns, result.ID)
 }
 
 func SubagentFinishedUpdate(result tools.SubagentResult) map[string]any {
@@ -58,7 +146,7 @@ func SubagentFinishedUpdate(result tools.SubagentResult) map[string]any {
 		"child_session_id": result.ID, "status": result.Status,
 		"tool_calls": result.ToolCalls, "turns": result.Turns,
 		"duration_ms": result.DurationMS, "tokens_used": result.TokensUsed,
-		"will_wake": false,
+		"will_wake": result.WillWake,
 	}
 	if result.Status == "completed" {
 		update["output"] = result.Output

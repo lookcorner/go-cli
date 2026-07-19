@@ -721,10 +721,14 @@ pushes reference-shaped `subagent_spawned`, rate-limited `subagent_progress`,
 and `subagent_finished` session notifications. Child histories and scoped
 metadata are persisted per parent session; restart loads terminal results,
 reconciles interrupted tasks once, and replays persisted lifecycle notifications.
+ACP sessions queue successful or failed background completions as serialized
+synthetic turns when `GROK_AUTO_WAKE` (or `[features] auto_wake`) is enabled;
+blocking result consumption, timeouts, explicit cancellation, and session close
+are coordinated so `will_wake` reflects an accepted queue entry.
 User and trusted-project agent
 definitions may attach named or inline `mcpServers`; owned servers override an
 inherited server with the same name and remain private to that subagent.
-Parent auto-wake and `bypassPermissions` execution are not implemented yet.
+Non-ACP parent auto-wake and `bypassPermissions` execution are not implemented yet.
 
 The same direct-install lifecycle is available outside ACP:
 

@@ -322,9 +322,10 @@ func readInfo(path, id string) (Info, error) {
 		case "user_prompt":
 			if info.Title == "" {
 				var data struct {
-					Text string `json:"text"`
+					Text      string `json:"text"`
+					Synthetic bool   `json:"synthetic"`
 				}
-				if json.Unmarshal(event.Data, &data) == nil {
+				if json.Unmarshal(event.Data, &data) == nil && !data.Synthetic {
 					info.Title = titleFromText(data.Text)
 				}
 			}
@@ -620,19 +621,24 @@ func Events(path string, kinds ...string) ([]Event, error) {
 
 func transcriptFromEvents(path string, events []storedEvent, allowEmpty bool) ([]Message, error) {
 	var current, completed []Message
+	forceAssistantBoundary := false
 	for index, event := range events {
 		line := index + 1
 		switch event.Kind {
 		case "user_prompt":
 			var data struct {
-				Text    string    `json:"text"`
-				Content []Content `json:"content"`
+				Text      string    `json:"text"`
+				Content   []Content `json:"content"`
+				Synthetic bool      `json:"synthetic"`
 			}
 			if err := json.Unmarshal(event.Data, &data); err != nil {
 				return nil, fmt.Errorf("parse user prompt on session line %d: %w", line, err)
 			}
-			if data.Text != "" || len(data.Content) > 0 {
+			if data.Synthetic {
+				forceAssistantBoundary = true
+			} else if data.Text != "" || len(data.Content) > 0 {
 				current = append(current, Message{Role: "user", Text: data.Text, Content: data.Content})
+				forceAssistantBoundary = false
 			}
 		case "model_response":
 			var data struct {
@@ -644,11 +650,12 @@ func transcriptFromEvents(path string, events []storedEvent, allowEmpty bool) ([
 				return nil, fmt.Errorf("parse model response on session line %d: %w", line, err)
 			}
 			if data.Text != "" {
-				if len(current) > 0 && current[len(current)-1].Role == "assistant" {
+				if !forceAssistantBoundary && len(current) > 0 && current[len(current)-1].Role == "assistant" {
 					current[len(current)-1].Text += data.Text
 				} else {
 					current = append(current, Message{Role: "assistant", Text: data.Text})
 				}
+				forceAssistantBoundary = false
 			}
 			if data.ResponseID != "" && data.ToolCallCount == 0 {
 				completed = append([]Message(nil), current...)

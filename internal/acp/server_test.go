@@ -1011,6 +1011,93 @@ func TestSessionReplayIncludesSubagentLifecycle(t *testing.T) {
 	}
 }
 
+func TestSubagentAutoWakeQueueRunsSerially(t *testing.T) {
+	root := t.TempDir()
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	dir := t.TempDir()
+	logger, err := sessionlog.NewLoggerWithID(dir, "parent-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logger.Close()
+	if err := logger.Append("session_metadata", map[string]any{"cwd": root}); err != nil {
+		t.Fatal(err)
+	}
+	streamer := &fixtureStreamer{results: []api.StreamResult{
+		{ResponseID: "wake-1", Text: "first wake"},
+		{ResponseID: "wake-2", Text: "second wake"},
+	}}
+	current := &session{
+		id: "parent-1", ctx: context.Background(), cwd: root, previous: "parent-response", activePrompt: -1,
+		runner: &agent.Runner{Client: streamer, Tools: registry, Logger: logger, Model: "test"}, logPath: logger.Path(),
+	}
+	var output bytes.Buffer
+	server := &Server{output: &output, sessions: map[string]*session{"parent-1": current}}
+	first := tools.SubagentResult{ID: "child-1", Type: "explore", Description: "first", Status: "completed", DurationMS: 1000, WillWake: true}
+	second := tools.SubagentResult{ID: "child-2", Type: "general-purpose", Description: "second", Status: "failed", DurationMS: 2000, WillWake: true}
+	if !server.QueueSubagentWake("parent-1", first) || !server.QueueSubagentWake("parent-1", second) {
+		t.Fatal("wake queue rejected an active session")
+	}
+	server.NotifySubagentEnded("parent-1", first)
+	server.NotifySubagentEnded("parent-1", second)
+	server.wg.Wait()
+	streamer.mu.Lock()
+	defer streamer.mu.Unlock()
+	if len(streamer.requests) != 2 || streamer.requests[0].PreviousResponseID != "parent-response" || streamer.requests[1].PreviousResponseID != "wake-1" {
+		t.Fatalf("requests=%#v", streamer.requests)
+	}
+	firstInput, _ := json.Marshal(streamer.requests[0].Input)
+	secondInput, _ := json.Marshal(streamer.requests[1].Input)
+	if !strings.Contains(string(firstInput), "child-1") || !strings.Contains(string(secondInput), "child-2") {
+		t.Fatalf("inputs=%s / %s", firstInput, secondInput)
+	}
+	transcript, err := sessionlog.Transcript(logger.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(transcript) != 2 || transcript[0].Text != "first wake" || transcript[1].Text != "second wake" {
+		t.Fatalf("transcript=%#v", transcript)
+	}
+	for _, message := range transcript {
+		if message.Role == "user" || strings.Contains(message.Text, "child-1") || strings.Contains(message.Text, "child-2") {
+			t.Fatalf("synthetic prompt leaked into transcript: %#v", transcript)
+		}
+	}
+	history, err := sessionlog.PromptHistory(dir, root, "parent-1", true)
+	if err != nil || len(history) != 0 {
+		t.Fatalf("synthetic prompt leaked into history: %#v err=%v", history, err)
+	}
+	current.mu.Lock()
+	if current.running || len(current.wakeQueue) != 0 || current.previous != "wake-2" {
+		current.mu.Unlock()
+		t.Fatalf("session=%#v", current)
+	}
+	current.running = true
+	current.mu.Unlock()
+	third := tools.SubagentResult{ID: "child-3", Type: "explore", Status: "completed"}
+	if !server.QueueSubagentWake("parent-1", third) {
+		t.Fatal("queued wake was rejected")
+	}
+	server.CancelSubagentWake("parent-1", third.ID)
+	current.mu.Lock()
+	if len(current.wakeQueue) != 0 {
+		current.mu.Unlock()
+		t.Fatalf("consumed wake remained queued: %#v", current.wakeQueue)
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	current.ctx, current.running = cancelled, false
+	current.mu.Unlock()
+	if server.QueueSubagentWake("parent-1", tools.SubagentResult{ID: "child-4"}) {
+		t.Fatal("wake queue accepted a cancelled parent context")
+	}
+}
+
 func TestSubagentGetListRunningAndCancelWireContract(t *testing.T) {
 	results := map[string]tools.SubagentResult{
 		"running-1": {ID: "running-1", Type: "explore", Description: "find code", Status: "running", StartedAtMS: 10, DurationMS: 20, Turns: 2, ToolCalls: 3, TokensUsed: 1200, ContextWindow: 256000, ContextUsage: 40, ToolsUsed: []string{"read_file", "grep"}, ErrorCount: 1},

@@ -68,6 +68,8 @@ type Config struct {
 	StartMCPServers         func(context.Context, string, *tools.Registry, []mcp.ServerConfig) (func(), error)
 	SessionDir              string
 	ParentSessionID         string
+	AutoWake                func(tools.SubagentResult) bool
+	CancelWake              func(string)
 }
 
 type Manager struct {
@@ -93,6 +95,8 @@ type Manager struct {
 	startMCPServers         func(context.Context, string, *tools.Registry, []mcp.ServerConfig) (func(), error)
 	sessionDir              string
 	parentSessionID         string
+	autoWake                func(tools.SubagentResult) bool
+	cancelWake              func(string)
 	tasks                   map[string]*task
 }
 
@@ -122,6 +126,42 @@ type task struct {
 	mcpResource  *mcpResource
 	logger       *session.Logger
 	metaPath     string
+	background   bool
+	explicitKill bool
+	terminal     bool
+	waiters      map[*waitSlot]struct{}
+	wakeConsumed bool
+}
+
+type waitSlot struct {
+	mu     sync.Mutex
+	active bool
+	result chan tools.SubagentResult
+}
+
+func newWaitSlot() *waitSlot {
+	return &waitSlot{active: true, result: make(chan tools.SubagentResult, 1)}
+}
+
+func (s *waitSlot) deliver(result tools.SubagentResult) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.active {
+		return false
+	}
+	s.active = false
+	s.result <- result
+	return true
+}
+
+func (s *waitSlot) cancel() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.active {
+		return false
+	}
+	s.active = false
+	return true
 }
 
 type persistedTask struct {
@@ -176,7 +216,7 @@ func New(config Config) (*Manager, error) {
 		newClient: config.NewClient, observer: config.Observer, hooks: config.Hooks, worktrees: config.Worktrees,
 		progressInterval: config.ProgressInterval, parentMCPServers: append([]mcp.ServerConfig(nil), config.ParentMCPServers...),
 		startMCPServers: config.StartMCPServers, sessionDir: config.SessionDir, parentSessionID: config.ParentSessionID,
-		tasks: make(map[string]*task),
+		autoWake: config.AutoWake, cancelWake: config.CancelWake, tasks: make(map[string]*task),
 	}
 	for _, result := range manager.loadPersistedTasks() {
 		if manager.observer != nil {
@@ -483,6 +523,7 @@ func (m *Manager) launch(caller context.Context, current *task, prompt string, b
 	runCtx, cancel := context.WithCancel(base)
 	current.mu.Lock()
 	current.cancel = cancel
+	current.background = background
 	current.mu.Unlock()
 	if m.observer != nil {
 		m.observer.SubagentStarted(runCtx, Started{
@@ -521,6 +562,13 @@ func (m *Manager) launch(caller context.Context, current *task, prompt string, b
 		}
 		m.finishPersistence(current, final)
 		stopProgress()
+		consumed := current.deliverWaiters(final)
+		current.mu.Lock()
+		shouldWake := current.background && !current.explicitKill && final.Status != "cancelled" && !consumed
+		current.mu.Unlock()
+		if shouldWake && m.autoWake != nil {
+			final.WillWake = m.autoWake(final)
+		}
 		if m.observer != nil {
 			m.observer.SubagentEnded(context.Background(), final)
 		}
@@ -684,7 +732,7 @@ func (m *Manager) loadPersistedTasks() []tools.SubagentResult {
 			id: record.SubagentID, typeName: record.Type, description: record.Description, prompt: record.Prompt,
 			started: record.StartedAt, done: make(chan struct{}), result: result, cwd: record.ChildCWD,
 			worktreePath: record.WorktreePath, snapshotRef: record.SnapshotRef, model: record.EffectiveModel,
-			resumedFrom: record.ResumedFrom, metaPath: path,
+			resumedFrom: record.ResumedFrom, metaPath: path, terminal: true,
 		}
 		close(current.done)
 		m.tasks[current.id] = current
@@ -767,6 +815,40 @@ func (t *task) finish(result tools.SubagentResult) {
 	})
 }
 
+func (t *task) deliverWaiters(result tools.SubagentResult) bool {
+	t.mu.Lock()
+	t.terminal = true
+	waiters := make([]*waitSlot, 0, len(t.waiters))
+	for waiter := range t.waiters {
+		waiters = append(waiters, waiter)
+	}
+	t.waiters = nil
+	t.mu.Unlock()
+	delivered := false
+	for _, waiter := range waiters {
+		if waiter.deliver(result) {
+			delivered = true
+		}
+	}
+	return delivered
+}
+
+func (t *task) removeWaiter(waiter *waitSlot) {
+	t.mu.Lock()
+	delete(t.waiters, waiter)
+	t.mu.Unlock()
+}
+
+func (m *Manager) consumeWake(current *task) {
+	current.mu.Lock()
+	consume := current.result.WillWake && !current.wakeConsumed
+	current.wakeConsumed = current.wakeConsumed || consume
+	current.mu.Unlock()
+	if consume && m.cancelWake != nil {
+		m.cancelWake(current.id)
+	}
+}
+
 func (t *task) runningResult() tools.SubagentResult {
 	t.mu.Lock()
 	progress := t.progress
@@ -807,21 +889,51 @@ func (m *Manager) Output(ctx context.Context, id string, timeout time.Duration) 
 		return tools.SubagentResult{}, fmt.Errorf("unknown subagent %q", id)
 	}
 	if timeout <= 0 {
+		current.mu.Lock()
+		terminal := current.terminal
+		current.mu.Unlock()
+		if terminal {
+			<-current.done
+			m.consumeWake(current)
+			return current.result, nil
+		}
 		select {
 		case <-current.done:
+			m.consumeWake(current)
 			return current.result, nil
 		default:
 			return current.runningResult(), nil
 		}
 	}
+	waiter := newWaitSlot()
+	current.mu.Lock()
+	if current.terminal {
+		current.mu.Unlock()
+		<-current.done
+		m.consumeWake(current)
+		return current.result, nil
+	}
+	if current.waiters == nil {
+		current.waiters = make(map[*waitSlot]struct{})
+	}
+	current.waiters[waiter] = struct{}{}
+	current.mu.Unlock()
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
-	case <-current.done:
-		return current.result, nil
+	case result := <-waiter.result:
+		return result, nil
 	case <-timer.C:
+		if !waiter.cancel() {
+			return <-waiter.result, nil
+		}
+		current.removeWaiter(waiter)
 		return current.runningResult(), nil
 	case <-ctx.Done():
+		if !waiter.cancel() {
+			return <-waiter.result, nil
+		}
+		current.removeWaiter(waiter)
 		return tools.SubagentResult{}, ctx.Err()
 	}
 }
@@ -858,6 +970,16 @@ func (m *Manager) Kill(ctx context.Context, id string) (string, error) {
 		return "already_finished", nil
 	default:
 		current.mu.Lock()
+		if current.terminal {
+			current.mu.Unlock()
+			select {
+			case <-current.done:
+				return "already_finished", nil
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		}
+		current.explicitKill = true
 		cancel := current.cancel
 		current.mu.Unlock()
 		if cancel != nil {

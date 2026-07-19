@@ -33,6 +33,23 @@ type sequenceClient struct {
 	blockAt  int
 }
 
+type gatedClient struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+	result  api.StreamResult
+}
+
+func (c *gatedClient) StreamResponse(ctx context.Context, _ api.ResponseRequest, _ func(string)) (api.StreamResult, error) {
+	c.once.Do(func() { close(c.started) })
+	select {
+	case <-c.release:
+		return c.result, nil
+	case <-ctx.Done():
+		return api.StreamResult{}, ctx.Err()
+	}
+}
+
 func (c *sequenceClient) StreamResponse(ctx context.Context, request api.ResponseRequest, _ func(string)) (api.StreamResult, error) {
 	c.mu.Lock()
 	c.requests = append(c.requests, request)
@@ -744,6 +761,122 @@ func TestRunningSubagentReportsLiveMetrics(t *testing.T) {
 	if len(observer.ended) != 1 || observer.ended[0].Status != "cancelled" || observer.ended[0].TokensUsed != 30 {
 		t.Fatalf("ended=%#v", observer.ended)
 	}
+}
+
+func TestSubagentAutoWakeDecisionTracksConsumptionTimeoutAndKill(t *testing.T) {
+	newManager := func(t *testing.T, client agent.ResponseStreamer, wake func(tools.SubagentResult) bool) *Manager {
+		t.Helper()
+		root := t.TempDir()
+		ws, err := workspace.Open(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+		t.Cleanup(func() { _ = registry.Close() })
+		catalog, _ := agents.Discover(agents.Config{})
+		manager, err := New(Config{
+			Context: context.Background(), Catalog: catalog, Tools: registry, WorkspaceRoot: root,
+			ParentModel: "test", AutoWake: wake,
+			NewClient: func(ModelRuntime) (agent.ResponseStreamer, error) { return client, nil },
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(manager.Close)
+		return manager
+	}
+	start := func(t *testing.T, manager *Manager, client *gatedClient) tools.SubagentResult {
+		t.Helper()
+		started, err := manager.Start(context.Background(), tools.SubagentRequest{
+			Prompt: "work", Description: "work", Type: "general-purpose", Background: true, BackgroundSet: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		<-client.started
+		return started
+	}
+
+	t.Run("unconsumed completion wakes", func(t *testing.T) {
+		client := &gatedClient{started: make(chan struct{}), release: make(chan struct{}), result: api.StreamResult{ResponseID: "done", Text: "done"}}
+		wakes, cancelled := 0, 0
+		manager := newManager(t, client, func(tools.SubagentResult) bool { wakes++; return true })
+		manager.cancelWake = func(string) { cancelled++ }
+		started := start(t, manager, client)
+		close(client.release)
+		<-manager.tasks[started.ID].done
+		result, _ := manager.Output(context.Background(), started.ID, 0)
+		_, _ = manager.Output(context.Background(), started.ID, 0)
+		if wakes != 1 || cancelled != 1 || !result.WillWake {
+			t.Fatalf("wakes=%d cancelled=%d result=%#v", wakes, cancelled, result)
+		}
+	})
+
+	t.Run("blocking consumer suppresses wake", func(t *testing.T) {
+		client := &gatedClient{started: make(chan struct{}), release: make(chan struct{}), result: api.StreamResult{ResponseID: "done", Text: "done"}}
+		wakes := 0
+		manager := newManager(t, client, func(tools.SubagentResult) bool { wakes++; return true })
+		started := start(t, manager, client)
+		output := make(chan tools.SubagentResult, 1)
+		go func() {
+			result, _ := manager.Output(context.Background(), started.ID, time.Second)
+			output <- result
+		}()
+		deadline := time.Now().Add(time.Second)
+		for {
+			current := manager.tasks[started.ID]
+			current.mu.Lock()
+			waiting := len(current.waiters)
+			current.mu.Unlock()
+			if waiting == 1 || time.Now().After(deadline) {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+		close(client.release)
+		if result := <-output; result.Status != "completed" || wakes != 0 {
+			t.Fatalf("result=%#v wakes=%d", result, wakes)
+		}
+	})
+
+	t.Run("timed out consumer leaves wake armed", func(t *testing.T) {
+		client := &gatedClient{started: make(chan struct{}), release: make(chan struct{}), result: api.StreamResult{ResponseID: "done", Text: "done"}}
+		wakes := 0
+		manager := newManager(t, client, func(tools.SubagentResult) bool { wakes++; return true })
+		started := start(t, manager, client)
+		if result, err := manager.Output(context.Background(), started.ID, time.Millisecond); err != nil || result.Status != "running" {
+			t.Fatalf("result=%#v err=%v", result, err)
+		}
+		close(client.release)
+		<-manager.tasks[started.ID].done
+		if wakes != 1 {
+			t.Fatalf("wakes=%d", wakes)
+		}
+	})
+
+	t.Run("kill suppresses wake", func(t *testing.T) {
+		client := &gatedClient{started: make(chan struct{}), release: make(chan struct{})}
+		wakes := 0
+		manager := newManager(t, client, func(tools.SubagentResult) bool { wakes++; return true })
+		started := start(t, manager, client)
+		if outcome, err := manager.Kill(context.Background(), started.ID); err != nil || outcome != "killed" {
+			t.Fatalf("outcome=%q err=%v", outcome, err)
+		}
+		if wakes != 0 {
+			t.Fatalf("wakes=%d", wakes)
+		}
+	})
+
+	t.Run("foreground completion does not wake", func(t *testing.T) {
+		wakes := 0
+		manager := newManager(t, &sequenceClient{results: []api.StreamResult{{ResponseID: "done", Text: "done"}}}, func(tools.SubagentResult) bool { wakes++; return true })
+		result, err := manager.Start(context.Background(), tools.SubagentRequest{
+			Prompt: "work", Description: "work", Type: "general-purpose", Background: false, BackgroundSet: true,
+		})
+		if err != nil || result.Status != "completed" || wakes != 0 || result.WillWake {
+			t.Fatalf("result=%#v wakes=%d err=%v", result, wakes, err)
+		}
+	})
 }
 
 func TestSubagentPersistsChildHistoryAndResumeFork(t *testing.T) {

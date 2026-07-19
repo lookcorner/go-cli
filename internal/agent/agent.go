@@ -119,17 +119,21 @@ func (r *Runner) Run(ctx context.Context, prompt string) (Result, error) {
 }
 
 func (r *Runner) RunTurn(ctx context.Context, prompt, previousResponseID string) (Result, error) {
-	return r.runTurn(ctx, prompt, prompt, previousResponseID)
+	return r.runTurn(ctx, prompt, prompt, previousResponseID, false)
+}
+
+func (r *Runner) RunSyntheticTurn(ctx context.Context, prompt, previousResponseID string) (Result, error) {
+	return r.runTurn(ctx, prompt, prompt, previousResponseID, true)
 }
 
 func (r *Runner) RunTurnParts(ctx context.Context, prompt string, parts []api.ContentPart, previousResponseID string) (Result, error) {
 	if len(parts) == 0 {
 		return Result{}, errors.New("prompt content must not be empty")
 	}
-	return r.runTurn(ctx, prompt, parts, previousResponseID)
+	return r.runTurn(ctx, prompt, parts, previousResponseID, false)
 }
 
-func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previousResponseID string) (final Result, runErr error) {
+func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previousResponseID string, synthetic bool) (final Result, runErr error) {
 	if r.Client == nil || r.Tools == nil {
 		return Result{}, errors.New("agent client and tools are required")
 	}
@@ -164,7 +168,7 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 			previousResponseID = ""
 		}
 	}
-	if err := r.logPrompt(prompt, content); err != nil {
+	if err := r.logPrompt(prompt, content, synthetic); err != nil {
 		return Result{}, fmt.Errorf("persist user prompt: %w", err)
 	}
 	if r.Skills != nil {
@@ -397,9 +401,12 @@ func (r *Runner) log(kind string, data any) {
 	}
 }
 
-func (r *Runner) logPrompt(text string, value any) error {
+func (r *Runner) logPrompt(text string, value any, synthetic bool) error {
 	if r.Logger == nil {
 		return nil
+	}
+	if synthetic {
+		return r.Logger.Append("user_prompt", map[string]any{"text": text, "synthetic": true})
 	}
 	parts, ok := value.([]api.ContentPart)
 	if !ok {

@@ -110,9 +110,10 @@ func promptRecords(path, sessionID string) ([]promptRecord, error) {
 			continue
 		}
 		var data struct {
-			Text string `json:"text"`
+			Text      string `json:"text"`
+			Synthetic bool   `json:"synthetic"`
 		}
-		if json.Unmarshal(event.Data, &data) == nil {
+		if json.Unmarshal(event.Data, &data) == nil && !data.Synthetic {
 			records = append(records, promptRecord{text: data.Text, time: event.Time, sessionID: sessionID, index: len(records)})
 		}
 	}
@@ -300,9 +301,10 @@ func searchableContent(dir, id string) (string, error) {
 			continue
 		}
 		var data struct {
-			Text string `json:"text"`
+			Text      string `json:"text"`
+			Synthetic bool   `json:"synthetic"`
 		}
-		if json.Unmarshal(event.Data, &data) == nil && data.Text != "" {
+		if json.Unmarshal(event.Data, &data) == nil && data.Text != "" && !(event.Kind == "user_prompt" && data.Synthetic) {
 			content.WriteString(data.Text)
 			content.WriteByte('\n')
 		}

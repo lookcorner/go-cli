@@ -57,8 +57,10 @@ type Config struct {
 	ManagedConfigURL                string                     `json:"managed_config_url,omitempty"`
 	DeploymentKey                   string                     `json:"deployment_key,omitempty"`
 	FolderTrustEnabled              bool                       `json:"folder_trust_enabled"`
+	AutoWakeEnabled                 bool                       `json:"-"`
 	ModelProfiles                   map[string]ModelProfile    `json:"-"`
 	compatConfigured                compat.Config
+	autoWakeConfigured              bool
 }
 
 type ModelProfile struct {
@@ -185,6 +187,7 @@ type fileConfig struct {
 	Marketplace   MarketplaceConfig          `json:"marketplace,omitempty" toml:"marketplace"`
 	Features      struct {
 		WebFetch *bool `json:"web_fetch,omitempty" toml:"web_fetch"`
+		AutoWake *bool `json:"auto_wake,omitempty" toml:"auto_wake"`
 	} `json:"features,omitempty" toml:"features"`
 	AuthProviderCommand string            `json:"auth_provider_command,omitempty" toml:"auth_provider_command"`
 	AuthTokenTTL        int64             `json:"auth_token_ttl,omitempty" toml:"auth_token_ttl"`
@@ -304,6 +307,7 @@ func Load(path string) (Config, error) {
 		AutoCompactThresholdPercent: 85,
 		Compat:                      compat.Default(),
 		FolderTrustEnabled:          true,
+		AutoWakeEnabled:             true,
 		Pruning:                     PruningConfig{Enabled: true, KeepLastNTurns: 3, SoftTrimThreshold: 4000, SoftTrimHead: 1500, SoftTrimTail: 1500, HardClearAgeTurns: 10},
 	}
 	if path == "" {
@@ -417,6 +421,9 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.Features.WebFetch != nil {
 		cfg.WebFetch.Enabled, cfg.WebFetch.EnabledConfigured = *disk.Features.WebFetch, true
+	}
+	if disk.Features.AutoWake != nil {
+		cfg.AutoWakeEnabled, cfg.autoWakeConfigured = *disk.Features.AutoWake, true
 	}
 	if disk.Toolset.WebFetch.AllowedDomains != nil {
 		cfg.WebFetch.AllowedDomains = append([]string(nil), disk.Toolset.WebFetch.AllowedDomains...)
@@ -741,6 +748,9 @@ func applyEnv(cfg *Config) {
 	}
 	if value, ok := envBool("GROK_WEB_FETCH"); ok {
 		cfg.WebFetch.Enabled, cfg.WebFetch.EnabledConfigured = value, true
+	}
+	if value, ok := envBool("GROK_AUTO_WAKE"); ok {
+		cfg.AutoWakeEnabled, cfg.autoWakeConfigured = value, true
 	}
 	if value, ok := envBool("GROK_OFFICIAL_MARKETPLACE_AUTO_REGISTER"); ok {
 		cfg.OfficialMarketplaceAutoRegister = value

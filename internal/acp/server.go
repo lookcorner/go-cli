@@ -84,6 +84,7 @@ type message struct {
 
 type session struct {
 	id           string
+	ctx          context.Context
 	cwd          string
 	title        string
 	updated      time.Time
@@ -99,6 +100,8 @@ type session struct {
 	logPath      string
 	mode         string
 	mcpServers   []MCPServer
+	wakeQueue    []tools.SubagentResult
+	closed       bool
 }
 
 type permissionResult struct {
@@ -1524,7 +1527,7 @@ func (s *Server) startSession(ctx context.Context, id string, sessionConfig Sess
 		return nil, modeErr
 	}
 	created := &session{
-		id: id, cwd: sessionConfig.CWD, updated: time.Now().UTC(), previous: previous,
+		id: id, ctx: ctx, cwd: sessionConfig.CWD, updated: time.Now().UTC(), previous: previous,
 		runner: runner, close: closeRuntime, promptIndex: promptIndex, activePrompt: -1, rewind: rewind, logPath: sessionPath, mode: mode,
 		mcpServers: append([]MCPServer(nil), sessionConfig.MCPServers...),
 	}
@@ -1627,6 +1630,7 @@ func (s *Server) handlePrompt(parent context.Context, incoming message) {
 		if err == nil || stopReason == "cancelled" {
 			s.respond(incoming.ID, map[string]any{"stopReason": stopReason})
 		}
+		s.startNextSubagentWake(current)
 	}()
 }
 
@@ -1669,6 +1673,7 @@ func (s *Server) handleCompactPrompt(parent context.Context, incoming message, c
 		if err == nil || stopReason == "cancelled" {
 			s.respond(incoming.ID, map[string]any{"stopReason": stopReason})
 		}
+		s.startNextSubagentWake(current)
 	}()
 }
 
@@ -1909,6 +1914,8 @@ func (s *Server) closeSession(id string) bool {
 		return false
 	}
 	current.mu.Lock()
+	current.closed = true
+	current.wakeQueue = nil
 	if current.cancel != nil {
 		current.cancel()
 	}
@@ -2065,6 +2072,7 @@ func (s *Server) handleCancel(raw json.RawMessage) {
 		return
 	}
 	current.mu.Lock()
+	current.wakeQueue = nil
 	if current.cancel != nil {
 		current.cancel()
 	}
@@ -2238,6 +2246,8 @@ func (s *Server) closeAll() {
 	s.mu.Unlock()
 	for _, current := range sessions {
 		current.mu.Lock()
+		current.closed = true
+		current.wakeQueue = nil
 		if current.cancel != nil {
 			current.cancel()
 		}
