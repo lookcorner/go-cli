@@ -5,8 +5,67 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/lookcorner/go-cli/internal/subagent"
 	"github.com/lookcorner/go-cli/internal/tools"
 )
+
+func (s *Server) NotifySubagentStarted(sessionID string, event subagent.Started) {
+	update := map[string]any{
+		"sessionUpdate": "subagent_spawned", "subagent_id": event.ID,
+		"parent_session_id": sessionID, "child_session_id": event.ID,
+		"subagent_type": event.Type, "description": event.Description,
+		"effective_context_source": "new", "context_normalized": false,
+	}
+	if event.Model != "" {
+		update["model"] = event.Model
+	}
+	if event.CapabilityMode != "" {
+		update["capability_mode"] = event.CapabilityMode
+	}
+	if event.ResumedFrom != "" {
+		update["resumed_from"] = event.ResumedFrom
+		update["effective_context_source"] = "resumed"
+	}
+	s.notifySubagent(sessionID, update)
+}
+
+func (s *Server) NotifySubagentProgress(sessionID string, result tools.SubagentResult) {
+	toolsUsed := result.ToolsUsed
+	if toolsUsed == nil {
+		toolsUsed = []string{}
+	}
+	s.notifySubagent(sessionID, map[string]any{
+		"sessionUpdate": "subagent_progress", "subagent_id": result.ID,
+		"parent_session_id": sessionID, "child_session_id": result.ID,
+		"duration_ms": result.DurationMS, "turn_count": result.Turns,
+		"tool_call_count": result.ToolCalls, "tokens_used": result.TokensUsed,
+		"context_window_tokens": result.ContextWindow, "context_usage_pct": result.ContextUsage,
+		"tools_used": toolsUsed, "error_count": result.ErrorCount,
+	})
+}
+
+func (s *Server) NotifySubagentEnded(sessionID string, result tools.SubagentResult) {
+	update := map[string]any{
+		"sessionUpdate": "subagent_finished", "subagent_id": result.ID,
+		"child_session_id": result.ID, "status": result.Status,
+		"tool_calls": result.ToolCalls, "turns": result.Turns,
+		"duration_ms": result.DurationMS, "tokens_used": result.TokensUsed,
+		"will_wake": false,
+	}
+	if result.Status == "completed" {
+		update["output"] = result.Output
+	} else if result.Output != "" {
+		update["error"] = result.Output
+	}
+	s.notifySubagent(sessionID, update)
+}
+
+func (s *Server) notifySubagent(sessionID string, update map[string]any) {
+	s.write(map[string]any{
+		"jsonrpc": "2.0", "method": "x.ai/session_notification",
+		"params": map[string]any{"sessionId": sessionID, "update": update},
+	})
+}
 
 func (s *Server) NotifyTaskBackgrounded(sessionID string, event tools.ProcessBackgrounded) {
 	update := map[string]any{

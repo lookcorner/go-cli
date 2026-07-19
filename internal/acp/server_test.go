@@ -24,6 +24,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/plugin"
 	sessionlog "github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/skills"
+	"github.com/lookcorner/go-cli/internal/subagent"
 	"github.com/lookcorner/go-cli/internal/tools"
 	"github.com/lookcorner/go-cli/internal/workspace"
 )
@@ -922,6 +923,41 @@ func TestTaskLifecycleNotificationsWireContract(t *testing.T) {
 	snapshot := completedUpdate["task_snapshot"].(map[string]any)
 	if completedUpdate["sessionUpdate"] != "task_completed" || completedUpdate["will_wake"] != false || snapshot["task_id"] != "task-1" || snapshot["completed"] != true {
 		t.Fatalf("completed=%#v", completed)
+	}
+}
+
+func TestSubagentLifecycleNotificationsWireContract(t *testing.T) {
+	var output bytes.Buffer
+	server := &Server{output: &output}
+	server.NotifySubagentStarted("parent-1", subagent.Started{
+		ID: "child-1", Type: "explore", Description: "find code", Model: "grok-4",
+		CapabilityMode: "read-only", ResumedFrom: "child-0",
+	})
+	server.NotifySubagentProgress("parent-1", tools.SubagentResult{
+		ID: "child-1", DurationMS: 2500, Turns: 2, ToolCalls: 3, TokensUsed: 1200,
+		ContextWindow: 256000, ContextUsage: 40, ToolsUsed: []string{"read_file", "grep"}, ErrorCount: 1,
+	})
+	server.NotifySubagentEnded("parent-1", tools.SubagentResult{
+		ID: "child-1", Status: "completed", Output: "done", DurationMS: 3000,
+		Turns: 2, ToolCalls: 3, TokensUsed: 1400,
+	})
+
+	decoder := json.NewDecoder(&output)
+	spawned := decodeACP(t, decoder)
+	spawnedParams := spawned["params"].(map[string]any)
+	spawnedUpdate := spawnedParams["update"].(map[string]any)
+	if spawned["method"] != "x.ai/session_notification" || spawnedParams["sessionId"] != "parent-1" || spawnedUpdate["sessionUpdate"] != "subagent_spawned" || spawnedUpdate["subagent_id"] != "child-1" || spawnedUpdate["parent_session_id"] != "parent-1" || spawnedUpdate["child_session_id"] != "child-1" || spawnedUpdate["subagent_type"] != "explore" || spawnedUpdate["effective_context_source"] != "resumed" || spawnedUpdate["context_normalized"] != false || spawnedUpdate["capability_mode"] != "read-only" || spawnedUpdate["model"] != "grok-4" || spawnedUpdate["resumed_from"] != "child-0" {
+		t.Fatalf("spawned=%#v", spawned)
+	}
+	progress := decodeACP(t, decoder)
+	progressUpdate := progress["params"].(map[string]any)["update"].(map[string]any)
+	if progress["method"] != "x.ai/session_notification" || progressUpdate["sessionUpdate"] != "subagent_progress" || progressUpdate["duration_ms"] != float64(2500) || progressUpdate["turn_count"] != float64(2) || progressUpdate["tool_call_count"] != float64(3) || progressUpdate["tokens_used"] != float64(1200) || progressUpdate["context_window_tokens"] != float64(256000) || progressUpdate["context_usage_pct"] != float64(40) || len(progressUpdate["tools_used"].([]any)) != 2 || progressUpdate["error_count"] != float64(1) {
+		t.Fatalf("progress=%#v", progress)
+	}
+	finished := decodeACP(t, decoder)
+	finishedUpdate := finished["params"].(map[string]any)["update"].(map[string]any)
+	if finished["method"] != "x.ai/session_notification" || finishedUpdate["sessionUpdate"] != "subagent_finished" || finishedUpdate["status"] != "completed" || finishedUpdate["output"] != "done" || finishedUpdate["tool_calls"] != float64(3) || finishedUpdate["turns"] != float64(2) || finishedUpdate["duration_ms"] != float64(3000) || finishedUpdate["tokens_used"] != float64(1400) || finishedUpdate["will_wake"] != false || finishedUpdate["error"] != nil {
+		t.Fatalf("finished=%#v", finished)
 	}
 }
 

@@ -936,6 +936,11 @@ type sessionProcessObserver struct {
 	hooks     *hooks.Runtime
 }
 
+type sessionSubagentObserver struct {
+	server    *acp.Server
+	sessionID string
+}
+
 type permissionPromptApprover struct {
 	base   tools.Approver
 	mu     sync.RWMutex
@@ -971,6 +976,18 @@ func (o *sessionProcessObserver) TaskCompleted(snapshot tools.ProcessSnapshot) {
 	if o.hooks != nil {
 		o.hooks.Notification(context.Background(), "task_complete", "Background task completed: "+snapshot.TaskID, "", "info")
 	}
+}
+
+func (o *sessionSubagentObserver) SubagentStarted(_ context.Context, event subagent.Started) {
+	o.server.NotifySubagentStarted(o.sessionID, event)
+}
+
+func (o *sessionSubagentObserver) SubagentProgress(_ context.Context, result tools.SubagentResult) {
+	o.server.NotifySubagentProgress(o.sessionID, result)
+}
+
+func (o *sessionSubagentObserver) SubagentEnded(_ context.Context, result tools.SubagentResult) {
+	o.server.NotifySubagentEnded(o.sessionID, result)
 }
 
 func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []string, tokenProvider api.TokenProvider, stdin io.Reader, stdout, stderr io.Writer) error {
@@ -1156,6 +1173,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			ContextWindow: sessionCfg.ContextWindow, CompactThresholdPercent: sessionCfg.AutoCompactThresholdPercent,
 			ResolveModel: resolveSubagentModel, AvailableModels: sessionCfg.ModelSlugs(), Skills: catalog,
 			SkillConfig: workspaceSkillsConfig(sessionCfg, plugins), Worktrees: server.WorktreeManager(),
+			Observer: &sessionSubagentObserver{server: server, sessionID: logger.ID()},
 			NewClient: func(model subagent.ModelRuntime) (agent.ResponseStreamer, error) {
 				child := sessionCfg
 				if model.Profile != "" {

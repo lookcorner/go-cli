@@ -55,8 +55,10 @@ func (c *sequenceClient) requestCount() int {
 }
 
 type recordingObserver struct {
-	mu     sync.Mutex
-	events []string
+	mu       sync.Mutex
+	events   []string
+	progress []tools.SubagentResult
+	ended    []tools.SubagentResult
 }
 
 type fixtureMCPTool struct {
@@ -70,15 +72,22 @@ func (t fixtureMCPTool) Definition() api.ToolDefinition {
 func (t fixtureMCPTool) Execute(context.Context, json.RawMessage) (string, error) { return t.name, nil }
 func (t fixtureMCPTool) MCPServerName() string                                    { return t.server }
 
-func (o *recordingObserver) SubagentStarted(_ context.Context, id, agentType, _ string) {
+func (o *recordingObserver) SubagentStarted(_ context.Context, event Started) {
 	o.mu.Lock()
-	o.events = append(o.events, "start:"+id+":"+agentType)
+	o.events = append(o.events, "start:"+event.ID+":"+event.Type)
 	o.mu.Unlock()
 }
 
-func (o *recordingObserver) SubagentEnded(_ context.Context, id, agentType, status string, _ int64) {
+func (o *recordingObserver) SubagentProgress(_ context.Context, result tools.SubagentResult) {
 	o.mu.Lock()
-	o.events = append(o.events, "end:"+id+":"+agentType+":"+status)
+	o.progress = append(o.progress, result)
+	o.mu.Unlock()
+}
+
+func (o *recordingObserver) SubagentEnded(_ context.Context, result tools.SubagentResult) {
+	o.mu.Lock()
+	o.events = append(o.events, "end:"+result.ID+":"+result.Type+":"+result.Status)
+	o.ended = append(o.ended, result)
 	o.mu.Unlock()
 }
 
@@ -570,6 +579,7 @@ func TestRunningSubagentReportsLiveMetrics(t *testing.T) {
 	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
 	defer registry.Close()
 	catalog, _ := agents.Discover(agents.Config{})
+	observer := &recordingObserver{}
 	client := &sequenceClient{blockAt: 2, results: []api.StreamResult{{
 		ResponseID: "metrics-1", Usage: api.Usage{InputTokens: 25, OutputTokens: 5, TotalTokens: 30},
 		ToolCalls: []api.ToolCall{{CallID: "read", Name: "read_file", Arguments: json.RawMessage(`{"path":"README.md"}`)}},
@@ -577,6 +587,7 @@ func TestRunningSubagentReportsLiveMetrics(t *testing.T) {
 	manager, err := New(Config{
 		Context: context.Background(), Catalog: catalog, Tools: registry, WorkspaceRoot: root,
 		ContextWindow: 100, NewClient: func(ModelRuntime) (agent.ResponseStreamer, error) { return client, nil },
+		Observer: observer, ProgressInterval: 5 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -593,11 +604,31 @@ func TestRunningSubagentReportsLiveMetrics(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	live, err := manager.Output(context.Background(), started.ID, 0)
-	if err != nil || live.Status != "running" || live.Turns != 1 || live.ToolCalls != 1 || live.TokensUsed != 30 || live.ContextUsage != 25 || strings.Join(live.ToolsUsed, "|") != "read_file" || live.ErrorCount != 0 {
+	if err != nil || live.Status != "running" || live.Turns != 1 || live.ToolCalls != 1 || live.TokensUsed != 25 || live.ContextUsage != 25 || strings.Join(live.ToolsUsed, "|") != "read_file" || live.ErrorCount != 0 {
 		t.Fatalf("live=%#v err=%v", live, err)
 	}
+	deadline = time.Now().Add(time.Second)
+	for {
+		observer.mu.Lock()
+		published := len(observer.progress) > 0
+		observer.mu.Unlock()
+		if published || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	observer.mu.Lock()
+	if len(observer.progress) == 0 || observer.progress[0].TokensUsed != 25 || observer.progress[0].ContextUsage != 25 {
+		t.Fatalf("progress=%#v", observer.progress)
+	}
+	observer.mu.Unlock()
 	if _, err := manager.Kill(context.Background(), started.ID); err != nil {
 		t.Fatal(err)
+	}
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	if len(observer.ended) != 1 || observer.ended[0].Status != "cancelled" || observer.ended[0].TokensUsed != 30 {
+		t.Fatalf("ended=%#v", observer.ended)
 	}
 }
 

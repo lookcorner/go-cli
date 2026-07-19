@@ -713,10 +713,11 @@ cancelled during session cleanup. ACP exposes the typed `x.ai/subagent/get`,
 `list_running`, and `cancel` methods; background terminal processes separately
 use `x.ai/task/list`, `x.ai/task/kill`, `x.ai/task_backgrounded`, and
 `x.ai/task_completed`. Running and completed subagent snapshots report real
-turn, tool-call, token, context-usage, unique-tool, and error metrics. Durable
-cross-process task recovery, live subagent push notifications, and
-agent-owned `mcpServers` plus `bypassPermissions` execution are not implemented
-yet.
+turn, tool-call, token, context-usage, unique-tool, and error metrics. ACP also
+pushes reference-shaped `subagent_spawned`, rate-limited `subagent_progress`,
+and `subagent_finished` session notifications. Durable cross-process task
+recovery, notification persistence/auto-wake, and agent-owned `mcpServers` plus
+`bypassPermissions` execution are not implemented yet.
 
 The same direct-install lifecycle is available outside ACP:
 

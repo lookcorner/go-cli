@@ -23,8 +23,18 @@ import (
 )
 
 type Observer interface {
-	SubagentStarted(context.Context, string, string, string)
-	SubagentEnded(context.Context, string, string, string, int64)
+	SubagentStarted(context.Context, Started)
+	SubagentProgress(context.Context, tools.SubagentResult)
+	SubagentEnded(context.Context, tools.SubagentResult)
+}
+
+type Started struct {
+	ID             string
+	Type           string
+	Description    string
+	Model          string
+	CapabilityMode string
+	ResumedFrom    string
 }
 
 type ModelRuntime struct {
@@ -50,6 +60,7 @@ type Config struct {
 	Observer                Observer
 	Hooks                   *hooks.Catalog
 	Worktrees               *worktree.Manager
+	ProgressInterval        time.Duration
 }
 
 type Manager struct {
@@ -70,6 +81,7 @@ type Manager struct {
 	observer                Observer
 	hooks                   *hooks.Catalog
 	worktrees               *worktree.Manager
+	progressInterval        time.Duration
 	tasks                   map[string]*task
 }
 
@@ -92,6 +104,9 @@ type task struct {
 	responseID   string
 	resumed      bool
 	progress     agent.Progress
+	model        string
+	capability   string
+	resumedFrom  string
 }
 
 func New(config Config) (*Manager, error) {
@@ -109,7 +124,8 @@ func New(config Config) (*Manager, error) {
 		contextWindow: config.ContextWindow, compactThresholdPercent: config.CompactThresholdPercent,
 		resolveModel: config.ResolveModel, availableModels: append([]string(nil), config.AvailableModels...),
 		skills: config.Skills, skillConfig: config.SkillConfig,
-		newClient: config.NewClient, observer: config.Observer, hooks: config.Hooks, worktrees: config.Worktrees, tasks: make(map[string]*task),
+		newClient: config.NewClient, observer: config.Observer, hooks: config.Hooks, worktrees: config.Worktrees,
+		progressInterval: config.ProgressInterval, tasks: make(map[string]*task),
 	}, nil
 }
 
@@ -236,7 +252,7 @@ func (m *Manager) Start(ctx context.Context, request tools.SubagentRequest) (too
 		hookRuntime = &hooks.Runtime{Catalog: catalog, WorkspaceRoot: childRoot, SessionID: id, Model: model.Model, SubagentType: request.Type}
 		runner.HookPolicy = hookRuntime
 	}
-	current := &task{id: id, typeName: request.Type, description: request.Description, started: time.Now(), done: make(chan struct{}), runner: runner, hookRuntime: hookRuntime, cwd: childRoot, ownedTools: childRegistry, worktreePath: worktreePath}
+	current := &task{id: id, typeName: request.Type, description: request.Description, started: time.Now(), done: make(chan struct{}), runner: runner, hookRuntime: hookRuntime, cwd: childRoot, ownedTools: childRegistry, worktreePath: worktreePath, model: model.Model, capability: capability}
 	runner.Progress = current.updateProgress
 	m.mu.Lock()
 	m.tasks[id] = current
@@ -288,7 +304,7 @@ func (m *Manager) resume(ctx context.Context, request tools.SubagentRequest, def
 	if hookRuntime != nil {
 		runner.HookPolicy = hookRuntime
 	}
-	current := &task{id: id, typeName: request.Type, description: request.Description, started: time.Now(), done: make(chan struct{}), runner: runner, responseID: previous.responseID, hookRuntime: hookRuntime, cwd: previous.cwd, ownedTools: previous.ownedTools, worktreePath: previous.worktreePath}
+	current := &task{id: id, typeName: request.Type, description: request.Description, started: time.Now(), done: make(chan struct{}), runner: runner, responseID: previous.responseID, hookRuntime: hookRuntime, cwd: previous.cwd, ownedTools: previous.ownedTools, worktreePath: previous.worktreePath, model: runner.Model, capability: previous.capability, resumedFrom: previous.id}
 	runner.Progress = current.updateProgress
 	m.mu.Lock()
 	m.tasks[id] = current
@@ -306,11 +322,15 @@ func (m *Manager) launch(caller context.Context, current *task, prompt string, b
 	current.cancel = cancel
 	current.mu.Unlock()
 	if m.observer != nil {
-		m.observer.SubagentStarted(runCtx, current.id, current.typeName, current.description)
+		m.observer.SubagentStarted(runCtx, Started{
+			ID: current.id, Type: current.typeName, Description: current.description,
+			Model: current.model, CapabilityMode: current.capability, ResumedFrom: current.resumedFrom,
+		})
 	}
 	if current.hookRuntime != nil {
 		current.hookRuntime.SubagentStarted(runCtx, current.id, current.typeName, current.description)
 	}
+	stopProgress := m.publishProgress(runCtx, current)
 	run := func() {
 		result, err := current.runner.RunTurn(runCtx, prompt, current.responseID)
 		status, output := "completed", result.Text
@@ -325,20 +345,22 @@ func (m *Manager) launch(caller context.Context, current *task, prompt string, b
 		}
 		current.responseID = result.ResponseID
 		duration := time.Since(current.started).Milliseconds()
-		if m.observer != nil {
-			m.observer.SubagentEnded(context.Background(), current.id, current.typeName, status, duration)
-		}
 		if current.hookRuntime != nil {
 			current.hookRuntime.SubagentEnded(context.Background(), current.id, current.typeName, status, duration)
 		}
 		worktreeDir := m.disposeWorktree(current, status)
-		current.finish(tools.SubagentResult{
+		final := tools.SubagentResult{
 			ID: current.id, Type: current.typeName, Status: status, Output: output,
 			ToolCalls: result.ToolCalls, Turns: result.Steps, TokensUsed: result.TokensUsed,
 			ContextWindow: current.runner.ContextWindow, ContextUsage: contextUsage(result.InputTokens, current.runner.ContextWindow),
 			ToolsUsed: append([]string{}, result.ToolsUsed...), ErrorCount: result.ErrorCount,
 			DurationMS: duration, WorktreeDir: worktreeDir, Description: current.description, StartedAtMS: current.started.UnixMilli(),
-		})
+		}
+		stopProgress()
+		if m.observer != nil {
+			m.observer.SubagentEnded(context.Background(), final)
+		}
+		current.finish(final)
 	}
 	if background {
 		go run()
@@ -349,6 +371,49 @@ func (m *Manager) launch(caller context.Context, current *task, prompt string, b
 		return current.result, errors.New(current.result.Output)
 	}
 	return current.result, nil
+}
+
+func (m *Manager) publishProgress(ctx context.Context, current *task) func() {
+	if m.observer == nil {
+		return func() {}
+	}
+	interval := m.progressInterval
+	if interval <= 0 {
+		interval = 2 * time.Second
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		var last agent.Progress
+		lastEmit := time.Now()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				current.mu.Lock()
+				progress := current.progress
+				progress.ToolsUsed = append([]string(nil), progress.ToolsUsed...)
+				current.mu.Unlock()
+				changed := progress.Turns != last.Turns || progress.ToolCalls != last.ToolCalls || progress.InputTokens != last.InputTokens || progress.ErrorCount != last.ErrorCount || progress.TokensUsed != last.TokensUsed
+				if !changed && time.Since(lastEmit) < 4*interval {
+					continue
+				}
+				last, lastEmit = progress, time.Now()
+				m.observer.SubagentProgress(ctx, current.runningResult())
+			}
+		}
+	}()
+	var once sync.Once
+	return func() {
+		once.Do(func() { close(stop) })
+		<-done
+	}
 }
 
 func (t *task) finish(result tools.SubagentResult) {
@@ -365,7 +430,7 @@ func (t *task) runningResult() tools.SubagentResult {
 	return tools.SubagentResult{
 		ID: t.id, Type: t.typeName, Status: "running", WorktreeDir: t.worktreePath,
 		Description: t.description, StartedAtMS: t.started.UnixMilli(), DurationMS: time.Since(t.started).Milliseconds(),
-		Turns: progress.Turns, ToolCalls: progress.ToolCalls, TokensUsed: progress.TokensUsed,
+		Turns: progress.Turns, ToolCalls: progress.ToolCalls, TokensUsed: progress.InputTokens,
 		ContextWindow: t.runner.ContextWindow, ContextUsage: contextUsage(progress.InputTokens, t.runner.ContextWindow),
 		ToolsUsed: append([]string{}, progress.ToolsUsed...), ErrorCount: progress.ErrorCount,
 	}
