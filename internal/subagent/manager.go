@@ -24,28 +24,32 @@ type Observer interface {
 }
 
 type Config struct {
-	Context       context.Context
-	Catalog       *agents.Catalog
-	Tools         *tools.Registry
-	WorkspaceRoot string
-	ParentModel   string
-	NewClient     func(string) (agent.ResponseStreamer, error)
-	Observer      Observer
-	Hooks         *hooks.Catalog
+	Context                 context.Context
+	Catalog                 *agents.Catalog
+	Tools                   *tools.Registry
+	WorkspaceRoot           string
+	ParentModel             string
+	ContextWindow           int
+	CompactThresholdPercent int
+	NewClient               func(string) (agent.ResponseStreamer, error)
+	Observer                Observer
+	Hooks                   *hooks.Catalog
 }
 
 type Manager struct {
-	ctx           context.Context
-	cancel        context.CancelFunc
-	mu            sync.RWMutex
-	catalog       *agents.Catalog
-	tools         *tools.Registry
-	workspaceRoot string
-	parentModel   string
-	newClient     func(string) (agent.ResponseStreamer, error)
-	observer      Observer
-	hooks         *hooks.Catalog
-	tasks         map[string]*task
+	ctx                     context.Context
+	cancel                  context.CancelFunc
+	mu                      sync.RWMutex
+	catalog                 *agents.Catalog
+	tools                   *tools.Registry
+	workspaceRoot           string
+	parentModel             string
+	contextWindow           int
+	compactThresholdPercent int
+	newClient               func(string) (agent.ResponseStreamer, error)
+	observer                Observer
+	hooks                   *hooks.Catalog
+	tasks                   map[string]*task
 }
 
 type task struct {
@@ -76,6 +80,7 @@ func New(config Config) (*Manager, error) {
 	return &Manager{
 		ctx: ctx, cancel: cancel, catalog: config.Catalog, tools: config.Tools,
 		workspaceRoot: config.WorkspaceRoot, parentModel: config.ParentModel,
+		contextWindow: config.ContextWindow, compactThresholdPercent: config.CompactThresholdPercent,
 		newClient: config.NewClient, observer: config.Observer, hooks: config.Hooks, tasks: make(map[string]*task),
 	}, nil
 }
@@ -140,7 +145,11 @@ func (m *Manager) Start(ctx context.Context, request tools.SubagentRequest) (too
 	}
 	view := m.tools.View(definition.Tools, definition.DisallowedTools, capability)
 	id := newID()
-	runner := &agent.Runner{Client: client, Tools: view, Model: model, ReasoningEffort: effort, Instructions: definition.Prompt, SessionID: id, MaxSteps: definition.MaxTurns}
+	runner := &agent.Runner{
+		Client: client, Tools: view, Model: model, ReasoningEffort: effort, Instructions: definition.Prompt,
+		SessionID: id, MaxSteps: definition.MaxTurns, ContextWindow: m.contextWindow,
+		CompactThresholdPercent: m.compactThresholdPercent,
+	}
 	var hookRuntime *hooks.Runtime
 	if m.hooks != nil {
 		hookRuntime = &hooks.Runtime{Catalog: m.hooks, WorkspaceRoot: m.workspaceRoot, SessionID: id, Model: model, SubagentType: request.Type}
@@ -184,6 +193,7 @@ func (m *Manager) resume(ctx context.Context, request tools.SubagentRequest, def
 		Client: previous.runner.Client, Tools: previous.runner.Tools, Model: previous.runner.Model,
 		ReasoningEffort: first(request.ReasoningEffort, definition.Effort, previous.runner.ReasoningEffort),
 		Instructions:    previous.runner.Instructions, SessionID: id, MaxSteps: previous.runner.MaxSteps,
+		ContextWindow: previous.runner.ContextWindow, CompactThresholdPercent: previous.runner.CompactThresholdPercent,
 	}
 	if hookRuntime != nil {
 		runner.HookPolicy = hookRuntime
@@ -221,7 +231,7 @@ func (m *Manager) launch(caller context.Context, current *task, prompt string, b
 		}
 		current.responseID = result.ResponseID
 		duration := time.Since(current.started).Milliseconds()
-		current.finish(tools.SubagentResult{ID: current.id, Type: current.typeName, Status: status, Output: output, ToolCalls: result.ToolCalls, Turns: result.Steps, DurationMS: duration, Description: current.description, StartedAtMS: current.started.UnixMilli()})
+		current.finish(tools.SubagentResult{ID: current.id, Type: current.typeName, Status: status, Output: output, ToolCalls: result.ToolCalls, Turns: result.Steps, DurationMS: duration, Description: current.description, StartedAtMS: current.started.UnixMilli(), ContextWindow: current.runner.ContextWindow})
 		if m.observer != nil {
 			m.observer.SubagentEnded(context.Background(), current.id, current.typeName, status, duration)
 		}
@@ -245,7 +255,7 @@ func (t *task) finish(result tools.SubagentResult) {
 }
 
 func (t *task) runningResult() tools.SubagentResult {
-	return tools.SubagentResult{ID: t.id, Type: t.typeName, Status: "running", Description: t.description, StartedAtMS: t.started.UnixMilli(), DurationMS: time.Since(t.started).Milliseconds()}
+	return tools.SubagentResult{ID: t.id, Type: t.typeName, Status: "running", Description: t.description, StartedAtMS: t.started.UnixMilli(), DurationMS: time.Since(t.started).Milliseconds(), ContextWindow: t.runner.ContextWindow}
 }
 
 func (m *Manager) Has(id string) bool {

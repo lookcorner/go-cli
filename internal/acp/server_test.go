@@ -927,7 +927,7 @@ func TestTaskLifecycleNotificationsWireContract(t *testing.T) {
 
 func TestSubagentGetListRunningAndCancelWireContract(t *testing.T) {
 	results := map[string]tools.SubagentResult{
-		"running-1": {ID: "running-1", Type: "explore", Description: "find code", Status: "running", StartedAtMS: 10, DurationMS: 20},
+		"running-1": {ID: "running-1", Type: "explore", Description: "find code", Status: "running", StartedAtMS: 10, DurationMS: 20, ContextWindow: 256000},
 		"done-1":    {ID: "done-1", Type: "general-purpose", Description: "implement", Status: "completed", Output: "done", ToolCalls: 3, Turns: 2, StartedAtMS: 30, DurationMS: 40},
 	}
 	var getTimeout time.Duration
@@ -961,7 +961,7 @@ func TestSubagentGetListRunningAndCancelWireContract(t *testing.T) {
 
 	listed := request("x.ai/subagent/list_running", `{"sessionId":"parent-1"}`)
 	items := listed["result"].(map[string]any)["subagents"].([]any)
-	if len(items) != 1 || items[0].(map[string]any)["subagentId"] != "running-1" || items[0].(map[string]any)["parentSessionId"] != "parent-1" {
+	if len(items) != 1 || items[0].(map[string]any)["subagentId"] != "running-1" || items[0].(map[string]any)["parentSessionId"] != "parent-1" || items[0].(map[string]any)["contextWindowTokens"] != float64(256000) {
 		t.Fatalf("listed=%#v", listed)
 	}
 	got := request("x.ai/subagent/get", `{"subagentId":"done-1","block":true,"timeoutMs":25}`)

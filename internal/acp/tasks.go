@@ -178,7 +178,7 @@ func liveSubagentDTO(parentID string, result tools.SubagentResult) map[string]an
 		"subagentType": result.Type, "description": result.Description,
 		"startedAtEpochMs": result.StartedAtMS, "durationMs": result.DurationMS,
 		"turnCount": result.Turns, "toolCallCount": result.ToolCalls,
-		"tokensUsed": 0, "contextWindowTokens": 0, "contextUsagePct": 0,
+		"tokensUsed": 0, "contextWindowTokens": result.ContextWindow, "contextUsagePct": 0,
 		"toolsUsed": []string{}, "errorCount": 0,
 	}
 }

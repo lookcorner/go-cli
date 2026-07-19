@@ -74,6 +74,7 @@ func TestTaskToolRunsFilteredSubagentAndResumes(t *testing.T) {
 	observer := &recordingObserver{}
 	manager, err := New(Config{
 		Context: context.Background(), Catalog: catalog, Tools: registry, WorkspaceRoot: root, ParentModel: "parent",
+		ContextWindow: 256000, CompactThresholdPercent: 80,
 		NewClient: func(string) (agent.ResponseStreamer, error) { return client, nil }, Observer: observer,
 	})
 	if err != nil {
@@ -104,6 +105,12 @@ func TestTaskToolRunsFilteredSubagentAndResumes(t *testing.T) {
 	var second tools.SubagentResult
 	if json.Unmarshal([]byte(secondRaw), &second) != nil || second.Output != "continued" || client.requests[1].PreviousResponseID != "child-1" {
 		t.Fatalf("second=%q requests=%#v", secondRaw, client.requests)
+	}
+	for _, id := range []string{first.ID, second.ID} {
+		runner := manager.tasks[id].runner
+		if runner.ContextWindow != 256000 || runner.CompactThresholdPercent != 80 {
+			t.Fatalf("task %s context=%d threshold=%d", id, runner.ContextWindow, runner.CompactThresholdPercent)
+		}
 	}
 	observer.mu.Lock()
 	events := strings.Join(observer.events, "|")

@@ -691,7 +691,8 @@ replace a built-in, and plugin agents use `plugin-name:agent-name` identities.
 The `task` tool runs these definitions through the existing Runner and parent
 tool infrastructure. It supports foreground and background execution,
 `get_task_output`, `kill_task`, completed-agent resume, per-agent turn limits,
-model/reasoning-effort metadata, strict runtime-enum validation, tool allow/deny lists, capability modes, and subagent
+model/reasoning-effort metadata, inherited context-window/compaction settings,
+strict runtime-enum validation, tool allow/deny lists, capability modes, and subagent
 hook events. Background tasks survive completion of the parent turn and are
 cancelled during session cleanup. ACP exposes the typed `x.ai/subagent/get`,
 `list_running`, and `cancel` methods; background terminal processes separately
