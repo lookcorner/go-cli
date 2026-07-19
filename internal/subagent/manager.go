@@ -15,6 +15,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/agents"
 	"github.com/lookcorner/go-cli/internal/hooks"
+	"github.com/lookcorner/go-cli/internal/skills"
 	"github.com/lookcorner/go-cli/internal/tools"
 )
 
@@ -40,6 +41,7 @@ type Config struct {
 	CompactThresholdPercent int
 	ResolveModel            func(string) (ModelRuntime, bool)
 	AvailableModels         []string
+	Skills                  *skills.Catalog
 	NewClient               func(ModelRuntime) (agent.ResponseStreamer, error)
 	Observer                Observer
 	Hooks                   *hooks.Catalog
@@ -57,6 +59,7 @@ type Manager struct {
 	compactThresholdPercent int
 	resolveModel            func(string) (ModelRuntime, bool)
 	availableModels         []string
+	skills                  *skills.Catalog
 	newClient               func(ModelRuntime) (agent.ResponseStreamer, error)
 	observer                Observer
 	hooks                   *hooks.Catalog
@@ -93,6 +96,7 @@ func New(config Config) (*Manager, error) {
 		workspaceRoot: config.WorkspaceRoot, parentModel: config.ParentModel,
 		contextWindow: config.ContextWindow, compactThresholdPercent: config.CompactThresholdPercent,
 		resolveModel: config.ResolveModel, availableModels: append([]string(nil), config.AvailableModels...),
+		skills:    config.Skills,
 		newClient: config.NewClient, observer: config.Observer, hooks: config.Hooks, tasks: make(map[string]*task),
 	}, nil
 }
@@ -173,11 +177,17 @@ func (m *Manager) Start(ctx context.Context, request tools.SubagentRequest) (too
 		capability = "read-only"
 	}
 	view := m.tools.View(definition.Tools, definition.DisallowedTools, capability)
+	childSkills := m.skills.Clone()
+	if childSkills != nil && view.HasTool("skill") {
+		if _, err := view.Replace([]string{"skill"}, []tools.Tool{childSkills.Tool()}); err != nil {
+			return tools.SubagentResult{}, err
+		}
+	}
 	id := newID()
 	runner := &agent.Runner{
 		Client: client, Tools: view, Model: model.Model, ReasoningEffort: effort, Instructions: definition.Prompt,
 		SessionID: id, MaxSteps: definition.MaxTurns, ContextWindow: model.ContextWindow,
-		CompactThresholdPercent: model.CompactThresholdPercent,
+		CompactThresholdPercent: model.CompactThresholdPercent, Skills: childSkills,
 	}
 	var hookRuntime *hooks.Runtime
 	if m.hooks != nil {
@@ -223,6 +233,7 @@ func (m *Manager) resume(ctx context.Context, request tools.SubagentRequest, def
 		ReasoningEffort: first(request.ReasoningEffort, definition.Effort, previous.runner.ReasoningEffort),
 		Instructions:    previous.runner.Instructions, SessionID: id, MaxSteps: previous.runner.MaxSteps,
 		ContextWindow: previous.runner.ContextWindow, CompactThresholdPercent: previous.runner.CompactThresholdPercent,
+		Skills: previous.runner.Skills,
 	}
 	if hookRuntime != nil {
 		runner.HookPolicy = hookRuntime

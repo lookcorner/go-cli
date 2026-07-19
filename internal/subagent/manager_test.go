@@ -14,6 +14,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/agents"
 	"github.com/lookcorner/go-cli/internal/api"
+	"github.com/lookcorner/go-cli/internal/skills"
 	"github.com/lookcorner/go-cli/internal/tools"
 	"github.com/lookcorner/go-cli/internal/workspace"
 )
@@ -273,6 +274,74 @@ func TestBypassPermissionsAgentFailsExplicitly(t *testing.T) {
 	defer manager.Close()
 	if _, err := manager.Start(context.Background(), tools.SubagentRequest{Prompt: "x", Description: "x", Type: "unsafe"}); err == nil || !strings.Contains(err.Error(), "not enabled") {
 		t.Fatalf("bypass result=%v", err)
+	}
+}
+
+func TestSubagentSkillsAreClonedAndResumeKeepsChildState(t *testing.T) {
+	root := t.TempDir()
+	skillRoot := filepath.Join(t.TempDir(), "skills")
+	skillDir := filepath.Join(skillRoot, "go-files")
+	if err := os.MkdirAll(skillDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	content := "---\nname: go-files\ndescription: Go guidance\npaths: ['src/main.go']\n---\nUse Go guidance."
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	parentSkills, err := skills.Discover(root, skills.Config{Paths: []string{skillRoot}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	if err := registry.Register(parentSkills.Tool()); err != nil {
+		t.Fatal(err)
+	}
+	agentCatalog, _ := agents.Discover(agents.Config{})
+	client := &sequenceClient{results: []api.StreamResult{{ResponseID: "skills-1", Text: "first"}, {ResponseID: "skills-2", Text: "second"}}}
+	manager, err := New(Config{
+		Catalog: agentCatalog, Tools: registry, Skills: parentSkills, WorkspaceRoot: root, ParentModel: "parent",
+		NewClient: func(ModelRuntime) (agent.ResponseStreamer, error) { return client, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	first, err := manager.Start(context.Background(), tools.SubagentRequest{Prompt: "inspect", Description: "inspect", Type: "general-purpose", BackgroundSet: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	childSkills := manager.tasks[first.ID].runner.Skills
+	if childSkills == nil || childSkills == parentSkills {
+		t.Fatalf("child skills=%p parent=%p", childSkills, parentSkills)
+	}
+	if reminder := childSkills.Activate("read_file", json.RawMessage(`{"path":"src/main.go"}`)); !strings.Contains(reminder, "go-files") {
+		t.Fatalf("child activation=%q", reminder)
+	}
+	if reminder := parentSkills.Activate("read_file", json.RawMessage(`{"path":"src/main.go"}`)); !strings.Contains(reminder, "go-files") {
+		t.Fatalf("parent was polluted by child activation: %q", reminder)
+	}
+	childToolVisible := false
+	for _, definition := range manager.tasks[first.ID].runner.Tools.Definitions() {
+		if definition.Name == "skill" && strings.Contains(definition.Description, "go-files") {
+			childToolVisible = true
+		}
+	}
+	if !childToolVisible {
+		t.Fatal("child skill tool did not use cloned catalog")
+	}
+	second, err := manager.Start(context.Background(), tools.SubagentRequest{
+		Prompt: "continue", Description: "continue", Type: "general-purpose", ResumeFrom: first.ID, BackgroundSet: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manager.tasks[second.ID].runner.Skills != childSkills {
+		t.Fatal("resume replaced child skill state")
 	}
 }
 

@@ -434,6 +434,16 @@ func (r *Registry) SnapshotTools() []Tool {
 	return items
 }
 
+func (r *Registry) HasTool(name string) bool {
+	if r == nil {
+		return false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	_, ok := r.tools[name]
+	return ok
+}
+
 // View reuses the parent's concurrency-safe tools while applying a child-only
 // allow/deny policy. The returned registry does not own parent resources.
 func (r *Registry) View(allowed, denied []string, capability string) *Registry {

@@ -693,14 +693,15 @@ tool infrastructure. It supports foreground and background execution,
 `get_task_output`, `kill_task`, completed-agent resume, per-agent turn limits,
 model/reasoning-effort metadata, inherited context-window/compaction settings,
 profile-aware model validation/routing, strict runtime-enum validation, tool
-allow/deny lists, capability modes, and subagent
+allow/deny lists, capability modes, isolated parent-skill snapshots, and subagent
 hook events. Background tasks survive completion of the parent turn and are
 cancelled during session cleanup. ACP exposes the typed `x.ai/subagent/get`,
 `list_running`, and `cancel` methods; background terminal processes separately
 use `x.ai/task/list`, `x.ai/task/kill`, `x.ai/task_backgrounded`, and
 `x.ai/task_completed`. Worktree isolation, an alternate child cwd,
 durable cross-process task recovery, full live token/tool metrics, and
-`bypassPermissions` execution are not implemented yet.
+agent-specific skill discovery controls plus `bypassPermissions` execution are
+not implemented yet.
 
 The same direct-install lifecycle is available outside ACP:
 

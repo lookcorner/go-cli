@@ -409,7 +409,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	subagents, err := subagent.New(subagent.Config{
 		Context: ctx, Catalog: agentCatalog, Tools: registry, WorkspaceRoot: ws.Root(), ParentModel: cfg.Model,
 		ContextWindow: cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,
-		ResolveModel: resolveSubagentModel, AvailableModels: cfg.ModelSlugs(),
+		ResolveModel: resolveSubagentModel, AvailableModels: cfg.ModelSlugs(), Skills: skillCatalog,
 		NewClient: func(model subagent.ModelRuntime) (agent.ResponseStreamer, error) {
 			child := cfg
 			if model.Profile != "" {
@@ -1149,7 +1149,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		subagentManager, err = subagent.New(subagent.Config{
 			Context: sessionCtx, Catalog: agentCatalog, Tools: registry, WorkspaceRoot: ws.Root(), ParentModel: sessionCfg.Model,
 			ContextWindow: sessionCfg.ContextWindow, CompactThresholdPercent: sessionCfg.AutoCompactThresholdPercent,
-			ResolveModel: resolveSubagentModel, AvailableModels: sessionCfg.ModelSlugs(),
+			ResolveModel: resolveSubagentModel, AvailableModels: sessionCfg.ModelSlugs(), Skills: catalog,
 			NewClient: func(model subagent.ModelRuntime) (agent.ResponseStreamer, error) {
 				child := sessionCfg
 				if model.Profile != "" {

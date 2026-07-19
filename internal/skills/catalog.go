@@ -621,6 +621,54 @@ func (c *Catalog) Count() int {
 	return len(c.byName) + len(c.pending)
 }
 
+func (c *Catalog) Clone() *Catalog {
+	if c == nil {
+		return nil
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	result := &Catalog{
+		root: c.root, compat: c.compat, config: c.config,
+		byName: make(map[string]Skill, len(c.byName)), pending: make(map[string]Skill, len(c.pending)),
+		checked: make(map[string]bool, len(c.checked)), roots: append([]skillRoot(nil), c.roots...),
+		ignore: append([]string(nil), c.ignore...), disabled: make(map[string]bool, len(c.disabled)),
+		activePaths: make(map[string]bool, len(c.activePaths)),
+	}
+	result.config.Paths = append([]string(nil), c.config.Paths...)
+	result.config.Ignore = append([]string(nil), c.config.Ignore...)
+	result.config.Disabled = append([]string(nil), c.config.Disabled...)
+	result.config.Plugins = append([]plugin.Plugin(nil), c.config.Plugins...)
+	for name, skill := range c.byName {
+		result.byName[name] = cloneSkill(skill)
+	}
+	for name, skill := range c.pending {
+		result.pending[name] = cloneSkill(skill)
+	}
+	for name, value := range c.checked {
+		result.checked[name] = value
+	}
+	for name, value := range c.disabled {
+		result.disabled[name] = value
+	}
+	for path, value := range c.activePaths {
+		result.activePaths[path] = value
+	}
+	return result
+}
+
+func cloneSkill(skill Skill) Skill {
+	result := skill
+	result.AllowedTools = append([]string(nil), skill.AllowedTools...)
+	result.Paths = append([]string(nil), skill.Paths...)
+	if skill.Metadata != nil {
+		result.Metadata = make(map[string]string, len(skill.Metadata))
+		for key, value := range skill.Metadata {
+			result.Metadata[key] = value
+		}
+	}
+	return result
+}
+
 func (c *Catalog) List() []Info {
 	if c == nil {
 		return []Info{}
