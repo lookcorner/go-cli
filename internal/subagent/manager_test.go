@@ -288,6 +288,20 @@ func TestSubagentSkillsAreClonedAndResumeKeepsChildState(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	alwaysDir := filepath.Join(skillRoot, "always")
+	if err := os.MkdirAll(alwaysDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(alwaysDir, "SKILL.md"), []byte("---\nname: always\ndescription: Always guidance\n---\nAlways instructions."), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	localDir := filepath.Join(root, ".grok", "skills", "local")
+	if err := os.MkdirAll(localDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(localDir, "SKILL.md"), []byte("---\nname: local\ndescription: Local guidance\n---\nLocal instructions."), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	parentSkills, err := skills.Discover(root, skills.Config{Paths: []string{skillRoot}})
 	if err != nil {
 		t.Fatal(err)
@@ -301,23 +315,45 @@ func TestSubagentSkillsAreClonedAndResumeKeepsChildState(t *testing.T) {
 	if err := registry.Register(parentSkills.Tool()); err != nil {
 		t.Fatal(err)
 	}
-	agentCatalog, _ := agents.Discover(agents.Config{})
-	client := &sequenceClient{results: []api.StreamResult{{ResponseID: "skills-1", Text: "first"}, {ResponseID: "skills-2", Text: "second"}}}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("GROK_HOME", filepath.Join(home, ".grok"))
+	agentDir := filepath.Join(home, ".grok", "agents")
+	if err := os.MkdirAll(agentDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "skilled.md"), []byte("---\nname: skilled\ndescription: skilled\ntools: [read_file, skill]\nskills: [always]\n---\nUse skills."), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "no-skills.md"), []byte("---\nname: no-skills\ndescription: no skills\ntools: [skill]\ndiscoverSkills: false\n---\nNo skills."), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "fresh-skills.md"), []byte("---\nname: fresh-skills\ndescription: fresh skills\ntools: [skill]\ninheritSkills: false\n---\nFresh skills."), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	agentCatalog, loadErrors := agents.Discover(agents.Config{})
+	if len(loadErrors) != 0 {
+		t.Fatal(loadErrors)
+	}
+	client := &sequenceClient{results: []api.StreamResult{{ResponseID: "skills-1", Text: "first"}, {ResponseID: "skills-2", Text: "second"}, {ResponseID: "skills-3", Text: "third"}, {ResponseID: "skills-4", Text: "fourth"}}}
 	manager, err := New(Config{
-		Catalog: agentCatalog, Tools: registry, Skills: parentSkills, WorkspaceRoot: root, ParentModel: "parent",
+		Catalog: agentCatalog, Tools: registry, Skills: parentSkills, SkillConfig: skills.Config{Paths: []string{skillRoot}}, WorkspaceRoot: root, ParentModel: "parent",
 		NewClient: func(ModelRuntime) (agent.ResponseStreamer, error) { return client, nil },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer manager.Close()
-	first, err := manager.Start(context.Background(), tools.SubagentRequest{Prompt: "inspect", Description: "inspect", Type: "general-purpose", BackgroundSet: true})
+	first, err := manager.Start(context.Background(), tools.SubagentRequest{Prompt: "inspect", Description: "inspect", Type: "skilled", BackgroundSet: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	childSkills := manager.tasks[first.ID].runner.Skills
 	if childSkills == nil || childSkills == parentSkills {
 		t.Fatalf("child skills=%p parent=%p", childSkills, parentSkills)
+	}
+	if !strings.Contains(client.requests[0].Instructions, `<skill name="always"`) || !strings.Contains(client.requests[0].Instructions, "Always instructions") {
+		t.Fatalf("preloaded instructions=%q", client.requests[0].Instructions)
 	}
 	if reminder := childSkills.Activate("read_file", json.RawMessage(`{"path":"src/main.go"}`)); !strings.Contains(reminder, "go-files") {
 		t.Fatalf("child activation=%q", reminder)
@@ -327,7 +363,7 @@ func TestSubagentSkillsAreClonedAndResumeKeepsChildState(t *testing.T) {
 	}
 	childToolVisible := false
 	for _, definition := range manager.tasks[first.ID].runner.Tools.Definitions() {
-		if definition.Name == "skill" && strings.Contains(definition.Description, "go-files") {
+		if definition.Name == "skill" && strings.Contains(definition.Description, "go-files") && !strings.Contains(definition.Description, "always") {
 			childToolVisible = true
 		}
 	}
@@ -335,13 +371,28 @@ func TestSubagentSkillsAreClonedAndResumeKeepsChildState(t *testing.T) {
 		t.Fatal("child skill tool did not use cloned catalog")
 	}
 	second, err := manager.Start(context.Background(), tools.SubagentRequest{
-		Prompt: "continue", Description: "continue", Type: "general-purpose", ResumeFrom: first.ID, BackgroundSet: true,
+		Prompt: "continue", Description: "continue", Type: "skilled", ResumeFrom: first.ID, BackgroundSet: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if manager.tasks[second.ID].runner.Skills != childSkills {
 		t.Fatal("resume replaced child skill state")
+	}
+	third, err := manager.Start(context.Background(), tools.SubagentRequest{Prompt: "none", Description: "none", Type: "no-skills", BackgroundSet: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manager.tasks[third.ID].runner.Skills != nil || manager.tasks[third.ID].runner.Tools.HasTool("skill") {
+		t.Fatal("discoverSkills=false retained skill state or tool")
+	}
+	fourth, err := manager.Start(context.Background(), tools.SubagentRequest{Prompt: "fresh", Description: "fresh", Type: "fresh-skills", BackgroundSet: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	definitions := manager.tasks[fourth.ID].runner.Tools.Definitions()
+	if len(definitions) != 1 || definitions[0].Name != "skill" || !strings.Contains(definitions[0].Description, "local") || strings.Contains(definitions[0].Description, "always") {
+		t.Fatalf("fresh skill definitions=%#v", definitions)
 	}
 }
 

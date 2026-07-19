@@ -410,6 +410,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		Context: ctx, Catalog: agentCatalog, Tools: registry, WorkspaceRoot: ws.Root(), ParentModel: cfg.Model,
 		ContextWindow: cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,
 		ResolveModel: resolveSubagentModel, AvailableModels: cfg.ModelSlugs(), Skills: skillCatalog,
+		SkillConfig: workspaceSkillsConfig(cfg, plugins),
 		NewClient: func(model subagent.ModelRuntime) (agent.ResponseStreamer, error) {
 			child := cfg
 			if model.Profile != "" {
@@ -1150,6 +1151,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			Context: sessionCtx, Catalog: agentCatalog, Tools: registry, WorkspaceRoot: ws.Root(), ParentModel: sessionCfg.Model,
 			ContextWindow: sessionCfg.ContextWindow, CompactThresholdPercent: sessionCfg.AutoCompactThresholdPercent,
 			ResolveModel: resolveSubagentModel, AvailableModels: sessionCfg.ModelSlugs(), Skills: catalog,
+			SkillConfig: workspaceSkillsConfig(sessionCfg, plugins),
 			NewClient: func(model subagent.ModelRuntime) (agent.ResponseStreamer, error) {
 				child := sessionCfg
 				if model.Profile != "" {
@@ -1403,6 +1405,14 @@ func cloneSkillsConfig(source config.SkillsConfig) config.SkillsConfig {
 	}
 }
 
+func workspaceSkillsConfig(cfg config.Config, inventory []plugin.Plugin) skills.Config {
+	return skills.Config{
+		Compat: cfg.Compat, Paths: append([]string(nil), cfg.Skills.Paths...),
+		Ignore: append([]string(nil), cfg.Skills.Ignore...), Disabled: append([]string(nil), cfg.Skills.Disabled...),
+		Plugins: enabledPlugins(inventory),
+	}
+}
+
 func clonePluginsConfig(source config.PluginsConfig) config.PluginsConfig {
 	return config.PluginsConfig{
 		Paths: append([]string(nil), source.Paths...), Enabled: append([]string(nil), source.Enabled...),
@@ -1465,10 +1475,7 @@ func discoverWorkspace(root string, cfg config.Config, projectTrusted bool) (con
 	}
 	cfg.MCPServers = config.DiscoverMCPServers(root, cfg, plugins, projectTrusted)
 	cfg.LSPServers = config.DiscoverLSPServers(root, cfg, plugins, projectTrusted)
-	catalog, err := skills.Discover(root, skills.Config{
-		Compat: cfg.Compat, Paths: cfg.Skills.Paths, Ignore: cfg.Skills.Ignore,
-		Disabled: cfg.Skills.Disabled, Plugins: plugins,
-	})
+	catalog, err := skills.Discover(root, workspaceSkillsConfig(cfg, plugins))
 	return cfg, catalog, inventory, err
 }
 

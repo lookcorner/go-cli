@@ -42,6 +42,7 @@ type Config struct {
 	ResolveModel            func(string) (ModelRuntime, bool)
 	AvailableModels         []string
 	Skills                  *skills.Catalog
+	SkillConfig             skills.Config
 	NewClient               func(ModelRuntime) (agent.ResponseStreamer, error)
 	Observer                Observer
 	Hooks                   *hooks.Catalog
@@ -60,6 +61,7 @@ type Manager struct {
 	resolveModel            func(string) (ModelRuntime, bool)
 	availableModels         []string
 	skills                  *skills.Catalog
+	skillConfig             skills.Config
 	newClient               func(ModelRuntime) (agent.ResponseStreamer, error)
 	observer                Observer
 	hooks                   *hooks.Catalog
@@ -96,7 +98,7 @@ func New(config Config) (*Manager, error) {
 		workspaceRoot: config.WorkspaceRoot, parentModel: config.ParentModel,
 		contextWindow: config.ContextWindow, compactThresholdPercent: config.CompactThresholdPercent,
 		resolveModel: config.ResolveModel, availableModels: append([]string(nil), config.AvailableModels...),
-		skills:    config.Skills,
+		skills: config.Skills, skillConfig: config.SkillConfig,
 		newClient: config.NewClient, observer: config.Observer, hooks: config.Hooks, tasks: make(map[string]*task),
 	}, nil
 }
@@ -177,15 +179,26 @@ func (m *Manager) Start(ctx context.Context, request tools.SubagentRequest) (too
 		capability = "read-only"
 	}
 	view := m.tools.View(definition.Tools, definition.DisallowedTools, capability)
-	childSkills := m.skills.Clone()
-	if childSkills != nil && view.HasTool("skill") {
-		if _, err := view.Replace([]string{"skill"}, []tools.Tool{childSkills.Tool()}); err != nil {
+	childSkills, err := m.childSkills(definition)
+	if err != nil {
+		return tools.SubagentResult{}, err
+	}
+	instructions := definition.Prompt
+	if childSkills != nil {
+		instructions = childSkills.Preload(definition.Skills) + instructions
+	}
+	if view.HasTool("skill") {
+		var replacement []tools.Tool
+		if childSkills != nil {
+			replacement = []tools.Tool{childSkills.Tool()}
+		}
+		if _, err := view.Replace([]string{"skill"}, replacement); err != nil {
 			return tools.SubagentResult{}, err
 		}
 	}
 	id := newID()
 	runner := &agent.Runner{
-		Client: client, Tools: view, Model: model.Model, ReasoningEffort: effort, Instructions: definition.Prompt,
+		Client: client, Tools: view, Model: model.Model, ReasoningEffort: effort, Instructions: instructions,
 		SessionID: id, MaxSteps: definition.MaxTurns, ContextWindow: model.ContextWindow,
 		CompactThresholdPercent: model.CompactThresholdPercent, Skills: childSkills,
 	}
@@ -433,6 +446,22 @@ func (m *Manager) resolve(model string) (ModelRuntime, bool) {
 		return ModelRuntime{Model: model, ContextWindow: m.contextWindow, CompactThresholdPercent: m.compactThresholdPercent}, true
 	}
 	return m.resolveModel(model)
+}
+
+func (m *Manager) childSkills(definition agents.Definition) (*skills.Catalog, error) {
+	if !definition.DiscoverSkills {
+		return nil, nil
+	}
+	if definition.InheritSkills && m.skills != nil {
+		return m.skills.Clone(), nil
+	}
+	config := m.skillConfig
+	if !definition.InheritSkills {
+		config.Paths = nil
+		config.Ignore = nil
+		config.Disabled = nil
+	}
+	return skills.Discover(m.workspaceRoot, config)
 }
 
 func canonicalPath(path string) string {

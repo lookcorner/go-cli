@@ -29,6 +29,9 @@ type Definition struct {
 	Isolation       string
 	Background      *bool
 	InitialPrompt   string
+	Skills          []string
+	DiscoverSkills  bool
+	InheritSkills   bool
 	Builtin         bool
 }
 
@@ -44,6 +47,9 @@ type frontmatter struct {
 	Isolation       string     `yaml:"isolation"`
 	Background      *bool      `yaml:"background"`
 	InitialPrompt   string     `yaml:"initialPrompt"`
+	Skills          stringList `yaml:"skills"`
+	DiscoverSkills  *bool      `yaml:"discoverSkills"`
+	InheritSkills   *bool      `yaml:"inheritSkills"`
 }
 
 type Config struct {
@@ -153,9 +159,9 @@ func (c *Catalog) ByName(name string) (Definition, bool) {
 
 func builtinDefinitions() []Definition {
 	return []Definition{
-		{Name: "general-purpose", Description: "General-purpose agent for multi-step implementation and investigation.", Prompt: "Complete the delegated task autonomously. Inspect relevant evidence, use tools as needed, verify the result, and return a concise outcome to the parent agent.", Scope: "built-in", Builtin: true},
-		{Name: "explore", Description: "Fast read-only agent for searching and understanding a codebase.", Prompt: "Explore the codebase without modifying it. Return concrete findings with file paths and the evidence needed by the parent agent.", Tools: []string{"read_file", "list_files", "search_files", "list_dir", "grep", "web_search", "web_fetch"}, Scope: "built-in", Builtin: true},
-		{Name: "plan", Description: "Read-only agent for producing implementation plans from repository evidence.", Prompt: "Inspect the relevant code without modifying it. Produce an implementation-ready plan grounded in repository evidence, including edge cases and verification.", Tools: []string{"read_file", "list_files", "search_files", "list_dir", "grep", "web_search", "web_fetch"}, Scope: "built-in", Builtin: true},
+		{Name: "general-purpose", Description: "General-purpose agent for multi-step implementation and investigation.", Prompt: "Complete the delegated task autonomously. Inspect relevant evidence, use tools as needed, verify the result, and return a concise outcome to the parent agent.", Scope: "built-in", DiscoverSkills: true, InheritSkills: true, Builtin: true},
+		{Name: "explore", Description: "Fast read-only agent for searching and understanding a codebase.", Prompt: "Explore the codebase without modifying it. Return concrete findings with file paths and the evidence needed by the parent agent.", Tools: []string{"read_file", "list_files", "search_files", "list_dir", "grep", "web_search", "web_fetch"}, Scope: "built-in", DiscoverSkills: true, Builtin: true},
+		{Name: "plan", Description: "Read-only agent for producing implementation plans from repository evidence.", Prompt: "Inspect the relevant code without modifying it. Produce an implementation-ready plan grounded in repository evidence, including edge cases and verification.", Tools: []string{"read_file", "list_files", "search_files", "list_dir", "grep", "web_search", "web_fetch"}, Scope: "built-in", DiscoverSkills: true, Builtin: true},
 	}
 }
 
@@ -294,6 +300,13 @@ func parse(path, pluginName, scope string) (Definition, error) {
 	if metadata.MaxTurns != nil {
 		maxTurns = *metadata.MaxTurns
 	}
+	discoverSkills, inheritSkills := true, true
+	if metadata.DiscoverSkills != nil {
+		discoverSkills = *metadata.DiscoverSkills
+	}
+	if metadata.InheritSkills != nil {
+		inheritSkills = *metadata.InheritSkills
+	}
 	return Definition{
 		Name: name, Description: strings.TrimSpace(metadata.Description), Tools: metadata.Tools,
 		DisallowedTools: metadata.DisallowedTools, MaxTurns: maxTurns,
@@ -301,6 +314,7 @@ func parse(path, pluginName, scope string) (Definition, error) {
 		Scope: scope, Model: strings.TrimSpace(metadata.Model), Effort: effort,
 		PermissionMode: permissionMode, Isolation: isolation,
 		Background: metadata.Background, InitialPrompt: strings.TrimSpace(metadata.InitialPrompt),
+		Skills: metadata.Skills, DiscoverSkills: discoverSkills, InheritSkills: inheritSkills,
 	}, nil
 }
 

@@ -669,6 +669,51 @@ func cloneSkill(skill Skill) Skill {
 	return result
 }
 
+func (c *Catalog) Preload(names []string) string {
+	if c == nil || len(names) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(names))
+	for _, name := range names {
+		c.mu.RLock()
+		key, pending, skill, ok := c.resolveAnySkillLocked(name)
+		c.mu.RUnlock()
+		if !ok {
+			continue
+		}
+		content, err := renderSkill(skill, "")
+		if err != nil {
+			continue
+		}
+		parts = append(parts, content)
+		c.mu.Lock()
+		if pending {
+			delete(c.pending, key)
+		} else {
+			delete(c.byName, key)
+		}
+		c.mu.Unlock()
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "\n\n" + strings.Join(parts, "\n\n") + "\n\n"
+}
+
+func (c *Catalog) resolveAnySkillLocked(name string) (string, bool, Skill, bool) {
+	for key, skill := range c.byName {
+		if strings.EqualFold(key, name) || strings.EqualFold(qualifiedSkillName(skill), name) {
+			return key, false, skill, true
+		}
+	}
+	for key, skill := range c.pending {
+		if strings.EqualFold(key, name) || strings.EqualFold(qualifiedSkillName(skill), name) {
+			return key, true, skill, true
+		}
+	}
+	return "", false, Skill{}, false
+}
+
 func (c *Catalog) List() []Info {
 	if c == nil {
 		return []Info{}
@@ -1142,14 +1187,18 @@ func (t *Tool) Execute(_ context.Context, raw json.RawMessage) (string, error) {
 	if !ok || !skill.UserInvocable || skill.DisableModelInvocation {
 		return "", fmt.Errorf("unknown skill %q", args.Name)
 	}
+	return renderSkill(skill, args.Args)
+}
+
+func renderSkill(skill Skill, args string) (string, error) {
 	data, err := os.ReadFile(skill.Path)
 	if err != nil {
-		return "", fmt.Errorf("read skill %q: %w", args.Name, err)
+		return "", fmt.Errorf("read skill %q: %w", skill.Name, err)
 	}
 	if len(data) > maxSkillBytes || !utf8.Valid(data) {
-		return "", fmt.Errorf("skill %q is too large or no longer UTF-8", args.Name)
+		return "", fmt.Errorf("skill %q is too large or no longer UTF-8", skill.Name)
 	}
-	body := substituteSkillArguments(string(data), args.Args, expansionContext{
+	body := substituteSkillArguments(string(data), args, expansionContext{
 		SkillDir: filepath.Dir(skill.Path), PluginRoot: skill.PluginRoot, PluginData: skill.PluginData,
 	})
 	return fmt.Sprintf(

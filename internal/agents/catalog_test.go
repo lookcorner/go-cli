@@ -18,7 +18,7 @@ func TestDiscoverPluginAgents(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "review.md")
-	content := "---\nname: reviewer\ndescription: Review code\ntools: read_file, grep\ndisallowedTools: [shell]\nmaxTurns: 8\nmodel: fast\neffort: high\npermissionMode: plan\nisolation: worktree\nbackground: true\ninitialPrompt: Start here\n---\n\nReview carefully.\n"
+	content := "---\nname: reviewer\ndescription: Review code\ntools: read_file, grep\ndisallowedTools: [shell]\nmaxTurns: 8\nmodel: fast\neffort: high\npermissionMode: plan\nisolation: worktree\nbackground: true\ninitialPrompt: Start here\nskills: [review, test]\ndiscoverSkills: false\ninheritSkills: false\n---\n\nReview carefully.\n"
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -27,7 +27,7 @@ func TestDiscoverPluginAgents(t *testing.T) {
 		t.Fatalf("definitions=%#v errors=%#v", definitions, errors)
 	}
 	got := definitions[0]
-	if got.Name != "reviewer" || got.Description != "Review code" || strings.Join(got.Tools, "|") != "read_file|grep" || strings.Join(got.DisallowedTools, "|") != "shell" || got.MaxTurns != 8 || got.Prompt != "Review carefully." || got.Model != "fast" || got.Effort != "high" || got.PermissionMode != "plan" || got.Isolation != "worktree" || got.Background == nil || !*got.Background || got.InitialPrompt != "Start here" {
+	if got.Name != "reviewer" || got.Description != "Review code" || strings.Join(got.Tools, "|") != "read_file|grep" || strings.Join(got.DisallowedTools, "|") != "shell" || got.MaxTurns != 8 || got.Prompt != "Review carefully." || got.Model != "fast" || got.Effort != "high" || got.PermissionMode != "plan" || got.Isolation != "worktree" || got.Background == nil || !*got.Background || got.InitialPrompt != "Start here" || strings.Join(got.Skills, "|") != "review|test" || got.DiscoverSkills || got.InheritSkills {
 		t.Fatalf("definition=%#v", got)
 	}
 }
