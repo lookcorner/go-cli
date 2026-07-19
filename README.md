@@ -25,6 +25,14 @@ are blocked. `exit_plan_mode` presents that file for approval, including the
 ACP `x.ai/exit_plan_mode` reverse request, and applies the decision before the
 next model step in the same turn.
 
+`ask_user_question` accepts one or more option-based questions and remains
+available in plan mode. ACP sessions send `x.ai/ask_user_question`, advertise
+the pending interaction, wait for accepted, cancelled, clarification, or
+skip-interview responses, and feed the formatted answer back into the same
+tool loop. One questionnaire has a shared 30-minute timeout, overridable with
+`GROK_ASK_USER_QUESTION_TIMEOUT_SECS`; non-ACP sessions use the reference
+fire-and-forget confirmation fallback until a native question UI is available.
+
 Workspace instruction and skill discovery respects repository and global Git
 ignore rules through Git's own matching engine. Project instructions load from
 the Git root through the current workspace so deeper files take precedence.

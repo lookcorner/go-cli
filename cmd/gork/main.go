@@ -1193,6 +1193,13 @@ func (o *sessionProcessObserver) PlanModeExited(event tools.PlanModeEvent) {
 	}
 }
 
+func (o *sessionProcessObserver) AskUserQuestion(ctx context.Context, request tools.UserQuestionRequest) (tools.UserQuestionResponse, error) {
+	if o.server == nil {
+		return tools.UserQuestionResponse{Outcome: "questions_sent"}, nil
+	}
+	return o.server.RequestUserQuestion(ctx, o.sessionID, request)
+}
+
 func (o *sessionProcessObserver) TaskConsumed(taskID string) {
 	if o.server != nil {
 		o.server.CancelTaskWake(o.sessionID, taskID)
@@ -1415,6 +1422,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		registry.SetProcessObserver(processObserver)
 		registry.SetSchedulerObserver(processObserver)
 		registry.SetPlanModeObserver(processObserver)
+		registry.SetUserQuestionObserver(processObserver)
 		agentCatalog, agentErrors := agents.Discover(agents.Config{
 			WorkspaceRoot: ws.Root(), ProjectTrusted: projectTrusted, Compat: sessionCfg.Compat, Plugins: plugins,
 		})

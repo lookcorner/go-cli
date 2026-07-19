@@ -57,21 +57,22 @@ type mcpServerParam struct {
 type Factory func(context.Context, SessionConfig, tools.Approver, io.Writer, io.Writer) (*agent.Runner, func(), error)
 
 type Server struct {
-	Factory     Factory
-	SessionDir  string
-	input       io.Reader
-	output      io.Writer
-	writeMu     sync.Mutex
-	mu          sync.Mutex
-	sessions    map[string]*session
-	pending     map[string]chan permissionResult
-	pendingPlan map[string]chan planApprovalResult
-	nextSession atomic.Uint64
-	nextRequest atomic.Uint64
-	closing     atomic.Bool
-	wg          sync.WaitGroup
-	worktrees   *worktrees.Manager
-	terminals   *terminalManager
+	Factory         Factory
+	SessionDir      string
+	input           io.Reader
+	output          io.Writer
+	writeMu         sync.Mutex
+	mu              sync.Mutex
+	sessions        map[string]*session
+	pending         map[string]chan permissionResult
+	pendingPlan     map[string]chan planApprovalResult
+	pendingQuestion map[string]chan userQuestionResult
+	nextSession     atomic.Uint64
+	nextRequest     atomic.Uint64
+	closing         atomic.Bool
+	wg              sync.WaitGroup
+	worktrees       *worktrees.Manager
+	terminals       *terminalManager
 }
 
 type message struct {
@@ -123,6 +124,11 @@ type planApprovalResult struct {
 	err      error
 }
 
+type userQuestionResult struct {
+	response tools.UserQuestionResponse
+	err      error
+}
+
 func (s *Server) WorktreeManager() *worktrees.Manager { return s.worktrees }
 
 type promptBlock struct {
@@ -149,6 +155,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 	s.sessions = make(map[string]*session)
 	s.pending = make(map[string]chan permissionResult)
 	s.pendingPlan = make(map[string]chan planApprovalResult)
+	s.pendingQuestion = make(map[string]chan userQuestionResult)
 	manager, err := worktrees.NewManager(s.SessionDir)
 	if err != nil {
 		return err
@@ -2293,6 +2300,12 @@ func (s *Server) closeAll() {
 		default:
 		}
 	}
+	for _, pending := range s.pendingQuestion {
+		select {
+		case pending <- userQuestionResult{err: io.EOF}:
+		default:
+		}
+	}
 	s.mu.Unlock()
 	for _, current := range sessions {
 		current.mu.Lock()
@@ -2423,7 +2436,7 @@ func acpToolKind(name string) string {
 		return "edit"
 	case "run_terminal_cmd", "shell", "monitor", "start_background_command", "kill_task", "kill_background_command":
 		return "execute"
-	case "todo_write", "update_goal", "enter_plan_mode", "exit_plan_mode":
+	case "todo_write", "update_goal", "enter_plan_mode", "exit_plan_mode", "ask_user_question":
 		return "think"
 	default:
 		return "other"
@@ -2475,6 +2488,7 @@ func (s *Server) handleClientResponse(incoming message) {
 	key := strings.Trim(string(incoming.ID), "\"")
 	s.mu.Lock()
 	planPending := s.pendingPlan[key]
+	questionPending := s.pendingQuestion[key]
 	pending := s.pending[key]
 	s.mu.Unlock()
 	if planPending != nil {
@@ -2488,6 +2502,15 @@ func (s *Server) handleClientResponse(incoming message) {
 			return
 		}
 		planPending <- planApprovalResult{decision: response}
+		return
+	}
+	if questionPending != nil {
+		if len(incoming.Error) > 0 && string(incoming.Error) != "null" {
+			questionPending <- userQuestionResult{err: errors.New("ACP user question request failed")}
+			return
+		}
+		response, err := decodeUserQuestionResponse(incoming.Result)
+		questionPending <- userQuestionResult{response: response, err: err}
 		return
 	}
 	if pending == nil {

@@ -128,6 +128,7 @@ type Registry struct {
 	scheduler     *Scheduler
 	ownsScheduler bool
 	plan          *PlanMode
+	questions     *UserQuestions
 	readPolicy    Approver
 	hunks         *HunkTracker
 	rewind        *mutationCheckpoint
@@ -220,6 +221,7 @@ func NewRegistry(ws *workspace.Workspace, approver Approver) *Registry {
 	goal := NewGoalStore()
 	scheduler := NewScheduler()
 	plan := NewPlanMode(ws, approver)
+	questions := &UserQuestions{plan: plan}
 	rewind := &mutationCheckpoint{}
 	processes.rewind = rewind
 	readFile := &readFileTool{ws: ws}
@@ -251,12 +253,13 @@ func NewRegistry(ws *workspace.Workspace, approver Approver) *Registry {
 		&schedulerDeleteTool{scheduler: scheduler},
 		&enterPlanModeTool{mode: plan},
 		&exitPlanModeTool{mode: plan},
+		&askUserQuestionTool{questions: questions},
 		webFetch,
 	}
 	registry := &Registry{
 		tools: make(map[string]Tool, len(items)), approver: approver, processes: processes, goal: goal,
 		hunks: NewHunkTracker(ws), rewind: rewind, readFile: readFile, webFetch: webFetch,
-		subagents: subagents, scheduler: scheduler, ownsScheduler: true, plan: plan,
+		subagents: subagents, scheduler: scheduler, ownsScheduler: true, plan: plan, questions: questions,
 	}
 	for _, item := range items {
 		registry.tools[item.Definition().Name] = item
@@ -273,10 +276,11 @@ func (r *Registry) ForWorkspace(ws *workspace.Workspace) *Registry {
 	_ = child.scheduler.Close()
 	child.scheduler, child.ownsScheduler = r.scheduler, false
 	child.plan = r.plan
+	child.questions = r.questions
 	for _, name := range []string{"scheduler_create", "scheduler_list", "scheduler_delete"} {
 		delete(child.tools, name)
 	}
-	for _, name := range []string{"enter_plan_mode", "exit_plan_mode"} {
+	for _, name := range []string{"enter_plan_mode", "exit_plan_mode", "ask_user_question"} {
 		delete(child.tools, name)
 	}
 	r.mu.RLock()
@@ -302,7 +306,7 @@ func (r *Registry) ForWorkspace(ws *workspace.Workspace) *Registry {
 			child.tools[name] = tool
 		}
 	}
-	for _, name := range []string{"enter_plan_mode", "exit_plan_mode"} {
+	for _, name := range []string{"enter_plan_mode", "exit_plan_mode", "ask_user_question"} {
 		if tool := r.tools[name]; tool != nil {
 			child.tools[name] = tool
 		}
@@ -417,6 +421,12 @@ func (r *Registry) ConfigurePlanMode(artifactDir string) error {
 func (r *Registry) SetPlanModeObserver(observer PlanModeObserver) {
 	if r != nil && r.plan != nil {
 		r.plan.SetObserver(observer)
+	}
+}
+
+func (r *Registry) SetUserQuestionObserver(observer UserQuestionObserver) {
+	if r != nil && r.questions != nil {
+		r.questions.SetObserver(observer)
 	}
 }
 
@@ -598,7 +608,7 @@ func (r *Registry) View(allowed, denied []string, capability string) *Registry {
 		}
 		items[name] = tool
 	}
-	return &Registry{tools: items, approver: r.approver, readPolicy: r.readPolicy, hunks: r.hunks, rewind: r.rewind, readFile: r.readFile, webFetch: r.webFetch, subagents: r.subagents, scheduler: r.scheduler, plan: r.plan}
+	return &Registry{tools: items, approver: r.approver, readPolicy: r.readPolicy, hunks: r.hunks, rewind: r.rewind, readFile: r.readFile, webFetch: r.webFetch, subagents: r.subagents, scheduler: r.scheduler, plan: r.plan, questions: r.questions}
 }
 
 func toolNameSet(values []string) map[string]bool {

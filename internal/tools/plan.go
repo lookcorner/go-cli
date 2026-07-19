@@ -98,7 +98,7 @@ func (m *PlanMode) Instructions() string {
 	if !m.Active() {
 		return ""
 	}
-	return "Plan mode is active. Investigate the codebase and produce a concrete implementation plan. Do not modify the workspace except for .grok/plan.md. Keep the plan file current, then call exit_plan_mode when it is ready for approval."
+	return "Plan mode is active. Investigate the codebase and produce a concrete implementation plan. Use ask_user_question to clarify requirements when needed. Do not modify the workspace except for .grok/plan.md. Keep the plan file current, then call exit_plan_mode when it is ready for approval."
 }
 
 func (m *PlanMode) Allow(name string, raw json.RawMessage, tool Tool) error {
