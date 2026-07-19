@@ -566,10 +566,13 @@ func TestSubagentWorktreeSnapshotsAndRehydratesOnResume(t *testing.T) {
 		}},
 		{ResponseID: "wt-4", Text: "resume done"},
 	}}
-	manager, err := New(Config{
+	sessionDir := t.TempDir()
+	managerConfig := Config{
 		Catalog: catalog, Tools: registry, Worktrees: worktrees, WorkspaceRoot: root, ParentModel: "parent",
+		SessionDir: sessionDir, ParentSessionID: "parent-session",
 		NewClient: func(ModelRuntime) (agent.ResponseStreamer, error) { return client, nil },
-	})
+	}
+	manager, err := New(managerConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -596,6 +599,12 @@ func TestSubagentWorktreeSnapshotsAndRehydratesOnResume(t *testing.T) {
 	}
 	runGitFixture(t, root, "rev-parse", "--verify", firstTask.snapshotRef+"^{commit}")
 	oldRef := firstTask.snapshotRef
+	manager.Close()
+	manager, err = New(managerConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
 	second, err := manager.Start(context.Background(), tools.SubagentRequest{
 		Prompt: "resume", Description: "resume", Type: "isolated", ResumeFrom: first.ID,
 		CWD: t.TempDir(), Isolation: "none", BackgroundSet: true,
@@ -869,6 +878,142 @@ func TestManagerClosePersistsCancelledSubagent(t *testing.T) {
 	var meta persistedTask
 	if err != nil || json.Unmarshal(data, &meta) != nil || meta.Status != "cancelled" || meta.CompletedAt == nil {
 		t.Fatalf("meta=%#v data=%q err=%v", meta, data, err)
+	}
+}
+
+func TestPersistedSubagentLoadsAndResumesAfterRestart(t *testing.T) {
+	root := t.TempDir()
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	catalog, _ := agents.Discover(agents.Config{})
+	sessionDir := t.TempDir()
+	firstClient := &sequenceClient{results: []api.StreamResult{{ResponseID: "first-response", Text: "first done"}}}
+	firstManager, err := New(Config{
+		Context: context.Background(), Catalog: catalog, Tools: registry, WorkspaceRoot: root,
+		ParentModel: "test", SessionDir: sessionDir, ParentSessionID: "parent-session",
+		NewClient: func(ModelRuntime) (agent.ResponseStreamer, error) { return firstClient, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := firstManager.Start(context.Background(), tools.SubagentRequest{
+		Prompt: "first prompt", Description: "persist", Type: "general-purpose", BackgroundSet: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstManager.Close()
+
+	secondClient := &sequenceClient{results: []api.StreamResult{{ResponseID: "second-response", Text: "second done"}}}
+	secondManager, err := New(Config{
+		Context: context.Background(), Catalog: catalog, Tools: registry, WorkspaceRoot: root,
+		ParentModel: "test", SessionDir: sessionDir, ParentSessionID: "parent-session",
+		NewClient: func(ModelRuntime) (agent.ResponseStreamer, error) { return secondClient, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer secondManager.Close()
+	loaded, err := secondManager.Output(context.Background(), first.ID, 0)
+	if err != nil || loaded.Status != "completed" || loaded.Output != "first done" {
+		t.Fatalf("loaded=%#v err=%v", loaded, err)
+	}
+	resumed, err := secondManager.Start(context.Background(), tools.SubagentRequest{
+		Prompt: "second prompt", Description: "resume", Type: "general-purpose", ResumeFrom: first.ID, BackgroundSet: true,
+	})
+	if err != nil || resumed.Status != "completed" || resumed.Output != "second done" {
+		t.Fatalf("resumed=%#v err=%v", resumed, err)
+	}
+	if len(secondClient.requests) != 1 || secondClient.requests[0].PreviousResponseID != "first-response" {
+		t.Fatalf("requests=%#v", secondClient.requests)
+	}
+	thirdManager, err := New(Config{
+		Context: context.Background(), Catalog: catalog, Tools: registry, WorkspaceRoot: root,
+		ParentModel: "test", SessionDir: sessionDir, ParentSessionID: "parent-session",
+		NewClient: func(ModelRuntime) (agent.ResponseStreamer, error) { return &sequenceClient{}, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer thirdManager.Close()
+	if _, err := thirdManager.Start(context.Background(), tools.SubagentRequest{
+		Prompt: "again", Description: "again", Type: "general-purpose", ResumeFrom: first.ID, BackgroundSet: true,
+	}); err == nil || !strings.Contains(err.Error(), "already been resumed") {
+		t.Fatalf("repeated resume error=%v", err)
+	}
+}
+
+func TestSubagentRestartReconcilesOrphanOnceAndIgnoresInvalidMetadata(t *testing.T) {
+	root := t.TempDir()
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	catalog, _ := agents.Discover(agents.Config{})
+	sessionDir := t.TempDir()
+	parentID := "parent-session"
+	started := time.Now().Add(-time.Second).UTC()
+	orphanID := "subagent_orphan"
+	orphanPath := filepath.Join(sessionDir, "subagents", parentID, orphanID, "meta.json")
+	if err := writeTaskMeta(orphanPath, persistedTask{
+		SubagentID: orphanID, ChildSession: orphanID, ParentSession: parentID, Type: "general-purpose",
+		Description: "orphan", Prompt: "wait", Status: "running", StartedAt: started, ChildCWD: root, EffectiveModel: "test",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	invalidDir := filepath.Join(sessionDir, "subagents", parentID, "subagent_invalid")
+	if err := os.MkdirAll(invalidDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(invalidDir, "meta.json"), []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	foreignID := "subagent_foreign"
+	if err := writeTaskMeta(filepath.Join(sessionDir, "subagents", parentID, foreignID, "meta.json"), persistedTask{
+		SubagentID: foreignID, ChildSession: foreignID, ParentSession: "other-parent", Type: "general-purpose",
+		Status: "completed", StartedAt: started,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	observer := &recordingObserver{}
+	newManager := func(observer Observer) *Manager {
+		manager, err := New(Config{
+			Context: context.Background(), Catalog: catalog, Tools: registry, WorkspaceRoot: root,
+			ParentModel: "test", SessionDir: sessionDir, ParentSessionID: parentID, Observer: observer,
+			NewClient: func(ModelRuntime) (agent.ResponseStreamer, error) { return &sequenceClient{}, nil },
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return manager
+	}
+	firstManager := newManager(observer)
+	result, err := firstManager.Output(context.Background(), orphanID, 0)
+	if err != nil || result.Status != "cancelled" || result.Output != orphanedTaskError || result.DurationMS < 900 {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	if firstManager.Has("subagent_invalid") || firstManager.Has(foreignID) {
+		t.Fatalf("loaded invalid tasks=%#v", firstManager.List())
+	}
+	observer.mu.Lock()
+	if len(observer.ended) != 1 || observer.ended[0].ID != orphanID {
+		t.Fatalf("ended=%#v", observer.ended)
+	}
+	observer.mu.Unlock()
+	firstManager.Close()
+	secondObserver := &recordingObserver{}
+	secondManager := newManager(secondObserver)
+	defer secondManager.Close()
+	secondObserver.mu.Lock()
+	defer secondObserver.mu.Unlock()
+	if len(secondObserver.ended) != 0 {
+		t.Fatalf("orphan emitted twice: %#v", secondObserver.ended)
 	}
 }
 

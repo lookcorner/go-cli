@@ -22,6 +22,8 @@ import (
 	"github.com/lookcorner/go-cli/internal/marketplace"
 	"github.com/lookcorner/go-cli/internal/mcp"
 	"github.com/lookcorner/go-cli/internal/plugin"
+	"github.com/lookcorner/go-cli/internal/session"
+	"github.com/lookcorner/go-cli/internal/subagent"
 	"github.com/lookcorner/go-cli/internal/tools"
 	"github.com/lookcorner/go-cli/internal/version"
 	"github.com/lookcorner/go-cli/internal/workspace"
@@ -29,6 +31,31 @@ import (
 
 type samplingStreamer struct {
 	request api.ResponseRequest
+}
+
+func TestSubagentObserverPersistsOnlyLifecycleEvents(t *testing.T) {
+	logger, err := session.NewLoggerWithID(t.TempDir(), "parent-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := &sessionSubagentObserver{sessionID: logger.ID(), logger: logger}
+	observer.SubagentStarted(context.Background(), subagent.Started{
+		ID: "child-1", Type: "explore", Description: "find code", Model: "test", CapabilityMode: "read-only",
+	})
+	observer.SubagentProgress(context.Background(), tools.SubagentResult{ID: "child-1", Status: "running", Turns: 1})
+	observer.SubagentEnded(context.Background(), tools.SubagentResult{ID: "child-1", Type: "explore", Status: "completed", Output: "done"})
+	path := logger.Path()
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := string(data)
+	if strings.Count(log, `"kind":"subagent_spawned"`) != 1 || strings.Count(log, `"kind":"subagent_finished"`) != 1 || strings.Contains(log, "subagent_progress") {
+		t.Fatalf("log=%s", log)
+	}
 }
 
 func TestSessionMCPRuntimeMergesAndRestoresConfiguration(t *testing.T) {

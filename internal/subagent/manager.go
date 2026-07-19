@@ -145,6 +145,8 @@ type persistedTask struct {
 	EffectiveModel string     `json:"effective_model_id,omitempty"`
 }
 
+const orphanedTaskError = "interrupted by process restart"
+
 type mcpResource struct {
 	once  sync.Once
 	close func()
@@ -165,7 +167,7 @@ func New(config Config) (*Manager, error) {
 		ctx = context.Background()
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	return &Manager{
+	manager := &Manager{
 		ctx: ctx, cancel: cancel, catalog: config.Catalog, tools: config.Tools,
 		workspaceRoot: config.WorkspaceRoot, parentModel: config.ParentModel,
 		contextWindow: config.ContextWindow, compactThresholdPercent: config.CompactThresholdPercent,
@@ -175,7 +177,13 @@ func New(config Config) (*Manager, error) {
 		progressInterval: config.ProgressInterval, parentMCPServers: append([]mcp.ServerConfig(nil), config.ParentMCPServers...),
 		startMCPServers: config.StartMCPServers, sessionDir: config.SessionDir, parentSessionID: config.ParentSessionID,
 		tasks: make(map[string]*task),
-	}, nil
+	}
+	for _, result := range manager.loadPersistedTasks() {
+		if manager.observer != nil {
+			manager.observer.SubagentEnded(context.Background(), result)
+		}
+	}
+	return manager, nil
 }
 
 func (m *Manager) SetCatalog(catalog *agents.Catalog) {
@@ -256,13 +264,37 @@ func (m *Manager) Start(ctx context.Context, request tools.SubagentRequest) (too
 			model.Model = definition.Model
 		}
 	}
-	client, err := m.newClient(model)
-	if err != nil {
-		return tools.SubagentResult{}, err
-	}
 	capability := request.CapabilityMode
 	if capability == "" && (request.Type == "explore" || request.Type == "plan") {
 		capability = "read-only"
+	}
+	runner, hookRuntime, ownedMCPResource, err := m.buildRuntime(childRoot, childRegistry, definition, model, effort, id, request.Type, capability)
+	if err != nil {
+		return tools.SubagentResult{}, err
+	}
+	if ownedMCPResource != nil {
+		defer func() {
+			if !keepRegistry {
+				ownedMCPResource.Close()
+			}
+		}()
+	}
+	current := &task{id: id, typeName: request.Type, description: request.Description, prompt: request.Prompt, started: time.Now(), done: make(chan struct{}), runner: runner, hookRuntime: hookRuntime, cwd: childRoot, ownedTools: childRegistry, worktreePath: worktreePath, model: model.Model, capability: capability, mcpResource: ownedMCPResource}
+	if err := m.startPersistence(current, request.Prompt, ""); err != nil {
+		return tools.SubagentResult{}, err
+	}
+	runner.Progress = current.updateProgress
+	m.mu.Lock()
+	m.tasks[id] = current
+	m.mu.Unlock()
+	keepRegistry = true
+	return m.launch(ctx, current, request.Prompt, background)
+}
+
+func (m *Manager) buildRuntime(root string, childRegistry *tools.Registry, definition agents.Definition, model ModelRuntime, effort, id, typeName, capability string) (*agent.Runner, *hooks.Runtime, *mcpResource, error) {
+	client, err := m.newClient(model)
+	if err != nil {
+		return nil, nil, nil, err
 	}
 	toolSource := m.tools
 	if childRegistry != nil {
@@ -276,9 +308,9 @@ func (m *Manager) Start(ctx context.Context, request tools.SubagentRequest) (too
 	}
 	ownedMCP, err := m.ownedMCPServers(definition)
 	if err != nil {
-		return tools.SubagentResult{}, err
+		return nil, nil, nil, err
 	}
-	var ownedMCPResource *mcpResource
+	var resource *mcpResource
 	if len(ownedMCP) > 0 {
 		ownedNames := make(map[string]bool, len(ownedMCP))
 		for _, server := range ownedMCP {
@@ -286,22 +318,18 @@ func (m *Manager) Start(ctx context.Context, request tools.SubagentRequest) (too
 		}
 		view.FilterMCPServers(func(name string) bool { return !ownedNames[name] })
 		if m.startMCPServers == nil {
-			return tools.SubagentResult{}, errors.New("subagent-owned MCP servers are not available")
+			return nil, nil, nil, errors.New("subagent-owned MCP servers are not available")
 		}
-		closeMCP, err := m.startMCPServers(m.ctx, childRoot, view, ownedMCP)
+		closeMCP, err := m.startMCPServers(m.ctx, root, view, ownedMCP)
 		if err != nil {
-			return tools.SubagentResult{}, err
+			return nil, nil, nil, err
 		}
-		ownedMCPResource = &mcpResource{close: closeMCP}
-		defer func() {
-			if !keepRegistry {
-				ownedMCPResource.Close()
-			}
-		}()
+		resource = &mcpResource{close: closeMCP}
 	}
-	childSkills, err := m.childSkills(definition, childRoot)
+	childSkills, err := m.childSkills(definition, root)
 	if err != nil {
-		return tools.SubagentResult{}, err
+		resource.Close()
+		return nil, nil, nil, err
 	}
 	instructions := definition.Prompt
 	if childSkills != nil {
@@ -313,7 +341,8 @@ func (m *Manager) Start(ctx context.Context, request tools.SubagentRequest) (too
 			replacement = []tools.Tool{childSkills.Tool()}
 		}
 		if _, err := view.Replace([]string{"skill"}, replacement); err != nil {
-			return tools.SubagentResult{}, err
+			resource.Close()
+			return nil, nil, nil, err
 		}
 	}
 	runner := &agent.Runner{
@@ -322,20 +351,11 @@ func (m *Manager) Start(ctx context.Context, request tools.SubagentRequest) (too
 		CompactThresholdPercent: model.CompactThresholdPercent, Skills: childSkills,
 	}
 	var hookRuntime *hooks.Runtime
-	if catalog := m.childHooks(definition, childRoot); catalog != nil {
-		hookRuntime = &hooks.Runtime{Catalog: catalog, WorkspaceRoot: childRoot, SessionID: id, Model: model.Model, SubagentType: request.Type}
+	if catalog := m.childHooks(definition, root); catalog != nil {
+		hookRuntime = &hooks.Runtime{Catalog: catalog, WorkspaceRoot: root, SessionID: id, Model: model.Model, SubagentType: typeName}
 		runner.HookPolicy = hookRuntime
 	}
-	current := &task{id: id, typeName: request.Type, description: request.Description, prompt: request.Prompt, started: time.Now(), done: make(chan struct{}), runner: runner, hookRuntime: hookRuntime, cwd: childRoot, ownedTools: childRegistry, worktreePath: worktreePath, model: model.Model, capability: capability, mcpResource: ownedMCPResource}
-	if err := m.startPersistence(current, request.Prompt, ""); err != nil {
-		return tools.SubagentResult{}, err
-	}
-	runner.Progress = current.updateProgress
-	m.mu.Lock()
-	m.tasks[id] = current
-	m.mu.Unlock()
-	keepRegistry = true
-	return m.launch(ctx, current, request.Prompt, background)
+	return runner, hookRuntime, resource, nil
 }
 
 func (m *Manager) resume(ctx context.Context, request tools.SubagentRequest, definition agents.Definition, background bool) (tools.SubagentResult, error) {
@@ -367,6 +387,14 @@ func (m *Manager) resume(ctx context.Context, request tools.SubagentRequest, def
 		previous.mu.Unlock()
 		return tools.SubagentResult{}, err
 	}
+	if previous.runner == nil {
+		if err := m.restoreTaskRuntime(previous, definition); err != nil {
+			previous.mu.Lock()
+			previous.resumed = false
+			previous.mu.Unlock()
+			return tools.SubagentResult{}, err
+		}
+	}
 	var hookRuntime *hooks.Runtime
 	if previous.hookRuntime != nil {
 		hookRuntime = &hooks.Runtime{Catalog: previous.hookRuntime.Catalog, WorkspaceRoot: previous.cwd, SessionID: id, Model: previous.runner.Model, SubagentType: request.Type}
@@ -393,6 +421,58 @@ func (m *Manager) resume(ctx context.Context, request tools.SubagentRequest, def
 	m.tasks[id] = current
 	m.mu.Unlock()
 	return m.launch(ctx, current, request.Prompt, background)
+}
+
+func (m *Manager) restoreTaskRuntime(previous *task, definition agents.Definition) error {
+	root := previous.cwd
+	if root == "" {
+		root = m.workspaceRoot
+	}
+	effectiveRoot, childRegistry, err := m.childWorkspace(root)
+	if err != nil {
+		return err
+	}
+	root = effectiveRoot
+	model, err := m.persistedModelRuntime(previous.model)
+	if err != nil {
+		if childRegistry != nil {
+			_ = childRegistry.Close()
+		}
+		return err
+	}
+	capability := ""
+	if previous.typeName == "explore" || previous.typeName == "plan" {
+		capability = "read-only"
+	}
+	runner, hookRuntime, resource, err := m.buildRuntime(root, childRegistry, definition, model, definition.Effort, previous.id, previous.typeName, capability)
+	if err != nil {
+		if childRegistry != nil {
+			_ = childRegistry.Close()
+		}
+		return err
+	}
+	previous.runner, previous.hookRuntime, previous.ownedTools = runner, hookRuntime, childRegistry
+	previous.cwd, previous.model, previous.capability, previous.mcpResource = root, model.Model, capability, resource
+	return nil
+}
+
+func (m *Manager) persistedModelRuntime(modelID string) (ModelRuntime, error) {
+	if modelID == "" {
+		modelID = m.parentModel
+	}
+	fallback := ModelRuntime{Model: modelID, ContextWindow: m.contextWindow, CompactThresholdPercent: m.compactThresholdPercent}
+	if m.resolveModel == nil {
+		return fallback, nil
+	}
+	for _, slug := range m.availableModels {
+		if candidate, ok := m.resolve(slug); ok && candidate.Model == modelID {
+			return candidate, nil
+		}
+	}
+	if modelID == m.parentModel {
+		return fallback, nil
+	}
+	return ModelRuntime{}, fmt.Errorf("resume_from subagent model %q is unavailable", modelID)
 }
 
 func (m *Manager) launch(caller context.Context, current *task, prompt string, background bool) (tools.SubagentResult, error) {
@@ -550,7 +630,91 @@ func writeTaskMeta(path string, record persistedTask) error {
 	if err = temp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tempPath, path)
+	return replaceFile(tempPath, path)
+}
+
+func (m *Manager) loadPersistedTasks() []tools.SubagentResult {
+	if m.sessionDir == "" || m.parentSessionID == "" {
+		return nil
+	}
+	root := filepath.Join(m.sessionDir, "subagents", m.parentSessionID)
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil
+	}
+	var reconciled []tools.SubagentResult
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		path := filepath.Join(root, entry.Name(), "meta.json")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var record persistedTask
+		if json.Unmarshal(data, &record) != nil || record.ParentSession != m.parentSessionID ||
+			record.SubagentID != entry.Name() || record.ChildSession != record.SubagentID || record.StartedAt.IsZero() {
+			continue
+		}
+		wasOrphaned := false
+		switch record.Status {
+		case "running":
+			completed := time.Now().UTC()
+			record.Status, record.Error, record.CompletedAt = "cancelled", orphanedTaskError, &completed
+			record.DurationMS = max(0, completed.Sub(record.StartedAt).Milliseconds())
+			if writeTaskMeta(path, record) != nil {
+				continue
+			}
+			wasOrphaned = true
+		case "completed", "failed", "cancelled":
+		default:
+			continue
+		}
+		output := record.Error
+		if record.Status == "completed" {
+			output = persistedOutput(m.sessionDir, record.ChildSession)
+		}
+		result := tools.SubagentResult{
+			ID: record.SubagentID, Type: record.Type, Description: record.Description,
+			Status: record.Status, Output: output, ToolCalls: record.ToolCalls, Turns: record.Turns,
+			DurationMS: record.DurationMS, StartedAtMS: record.StartedAt.UnixMilli(), ContextWindow: m.contextWindow,
+		}
+		current := &task{
+			id: record.SubagentID, typeName: record.Type, description: record.Description, prompt: record.Prompt,
+			started: record.StartedAt, done: make(chan struct{}), result: result, cwd: record.ChildCWD,
+			worktreePath: record.WorktreePath, snapshotRef: record.SnapshotRef, model: record.EffectiveModel,
+			resumedFrom: record.ResumedFrom, metaPath: path,
+		}
+		close(current.done)
+		m.tasks[current.id] = current
+		if wasOrphaned {
+			reconciled = append(reconciled, result)
+		}
+	}
+	for _, current := range m.tasks {
+		if source := m.tasks[current.resumedFrom]; source != nil {
+			source.resumed = true
+		}
+	}
+	return reconciled
+}
+
+func persistedOutput(dir, id string) string {
+	path, err := session.PathForID(dir, id)
+	if err != nil {
+		return ""
+	}
+	messages, err := session.Transcript(path)
+	if err != nil {
+		return ""
+	}
+	for index := len(messages) - 1; index >= 0; index-- {
+		if messages[index].Role == "assistant" {
+			return messages[index].Text
+		}
+	}
+	return ""
 }
 
 func (m *Manager) publishProgress(ctx context.Context, current *task) func() {

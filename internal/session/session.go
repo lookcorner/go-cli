@@ -592,6 +592,32 @@ func Transcript(path string) ([]Message, error) {
 	return transcriptFromEvents(path, events, rewound)
 }
 
+// Events returns selected events from the live timeline after rewinds.
+func Events(path string, kinds ...string) ([]Event, error) {
+	events, _, _, err := liveTimeline(path)
+	if err != nil {
+		return nil, err
+	}
+	selected := make(map[string]bool, len(kinds))
+	for _, kind := range kinds {
+		selected[kind] = true
+	}
+	result := make([]Event, 0)
+	for _, event := range events {
+		if len(selected) > 0 && !selected[event.Kind] {
+			continue
+		}
+		var data any
+		if len(event.Data) > 0 && string(event.Data) != "null" {
+			if err := json.Unmarshal(event.Data, &data); err != nil {
+				return nil, fmt.Errorf("parse %s event: %w", event.Kind, err)
+			}
+		}
+		result = append(result, Event{Time: event.Time, Kind: event.Kind, Data: data})
+	}
+	return result, nil
+}
+
 func transcriptFromEvents(path string, events []storedEvent, allowEmpty bool) ([]Message, error) {
 	var current, completed []Message
 	for index, event := range events {

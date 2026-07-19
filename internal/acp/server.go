@@ -1719,46 +1719,16 @@ func (s *Server) handleRestoreSession(ctx context.Context, incoming message, rep
 		s.respondError(incoming.ID, -32602, err.Error())
 		return
 	}
+	if replay {
+		if err := s.replaySession(path, params.SessionID); err != nil {
+			s.respondError(incoming.ID, -32000, err.Error())
+			return
+		}
+	}
 	config := SessionConfig{CWD: params.CWD, Model: model, SessionID: params.SessionID, ResumePath: path, MCPServers: servers}
 	if _, err := s.startSession(ctx, params.SessionID, config, previous); err != nil {
 		s.respondError(incoming.ID, -32000, err.Error())
 		return
-	}
-	if replay {
-		messages, err := sessionlog.Transcript(path)
-		if err != nil {
-			s.closeSession(params.SessionID)
-			s.respondError(incoming.ID, -32000, err.Error())
-			return
-		}
-		for _, historical := range messages {
-			updateType := "agent_message_chunk"
-			if historical.Role == "user" {
-				updateType = "user_message_chunk"
-			}
-			if historical.Role != "user" || len(historical.Content) == 0 {
-				s.notify(params.SessionID, map[string]any{
-					"sessionUpdate": updateType,
-					"content":       map[string]any{"type": "text", "text": historical.Text},
-				})
-				continue
-			}
-			for _, part := range historical.Content {
-				content := map[string]any{"type": part.Type}
-				if part.Type == "text" {
-					content["text"] = part.Text
-				} else if part.Data != "" {
-					content["data"] = part.Data
-					content["mimeType"] = part.MimeType
-				} else {
-					content["uri"] = part.URI
-				}
-				s.notify(params.SessionID, map[string]any{
-					"sessionUpdate": updateType,
-					"content":       content,
-				})
-			}
-		}
 	}
 	current := s.lookupSession(params.SessionID)
 	mode := "default"
@@ -1768,6 +1738,50 @@ func (s *Server) handleRestoreSession(ctx context.Context, incoming message, rep
 		current.mu.Unlock()
 	}
 	s.respond(incoming.ID, map[string]any{"sessionId": params.SessionID, "modes": sessionModes(mode)})
+}
+
+func (s *Server) replaySession(path, sessionID string) error {
+	messages, err := sessionlog.Transcript(path)
+	if err != nil {
+		return err
+	}
+	for _, historical := range messages {
+		updateType := "agent_message_chunk"
+		if historical.Role == "user" {
+			updateType = "user_message_chunk"
+		}
+		if historical.Role != "user" || len(historical.Content) == 0 {
+			s.notify(sessionID, map[string]any{
+				"sessionUpdate": updateType,
+				"content":       map[string]any{"type": "text", "text": historical.Text},
+			})
+			continue
+		}
+		for _, part := range historical.Content {
+			content := map[string]any{"type": part.Type}
+			if part.Type == "text" {
+				content["text"] = part.Text
+			} else if part.Data != "" {
+				content["data"] = part.Data
+				content["mimeType"] = part.MimeType
+			} else {
+				content["uri"] = part.URI
+			}
+			s.notify(sessionID, map[string]any{"sessionUpdate": updateType, "content": content})
+		}
+	}
+	events, err := sessionlog.Events(path, "subagent_spawned", "subagent_finished")
+	if err != nil {
+		return err
+	}
+	for _, event := range events {
+		update, ok := event.Data.(map[string]any)
+		if !ok {
+			return fmt.Errorf("invalid %s event", event.Kind)
+		}
+		s.notifySubagent(sessionID, update)
+	}
+	return nil
 }
 
 func (s *Server) handleSetMode(incoming message) {

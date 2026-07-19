@@ -961,6 +961,56 @@ func TestSubagentLifecycleNotificationsWireContract(t *testing.T) {
 	}
 }
 
+func TestSessionReplayIncludesSubagentLifecycle(t *testing.T) {
+	dir := t.TempDir()
+	logger, err := sessionlog.NewLoggerWithID(dir, "parent-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []struct {
+		kind string
+		data any
+	}{
+		{"session_metadata", map[string]any{"cwd": t.TempDir()}},
+		{"user_prompt", map[string]any{"text": "delegate"}},
+		{"model_response", map[string]any{"text": "working", "response_id": "r1", "tool_call_count": 0}},
+		{"subagent_spawned", SubagentStartedUpdate("parent-1", subagent.Started{ID: "child-1", Type: "explore", Description: "find"})},
+		{"subagent_finished", SubagentFinishedUpdate(tools.SubagentResult{ID: "child-1", Type: "explore", Status: "completed", Output: "done"})},
+	} {
+		if err := logger.Append(event.kind, event.data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := logger.Path()
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	server := &Server{output: &output}
+	if err := server.replaySession(path, "parent-1"); err != nil {
+		t.Fatal(err)
+	}
+	decoder := json.NewDecoder(&output)
+	var messages []map[string]any
+	for {
+		var message map[string]any
+		if err := decoder.Decode(&message); err == io.EOF {
+			break
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		messages = append(messages, message)
+	}
+	if len(messages) != 4 {
+		t.Fatalf("messages=%#v", messages)
+	}
+	spawn := messages[2]["params"].(map[string]any)["update"].(map[string]any)
+	finish := messages[3]["params"].(map[string]any)["update"].(map[string]any)
+	if messages[2]["method"] != "x.ai/session_notification" || spawn["sessionUpdate"] != "subagent_spawned" || spawn["subagent_id"] != "child-1" || finish["sessionUpdate"] != "subagent_finished" || finish["output"] != "done" {
+		t.Fatalf("messages=%#v", messages)
+	}
+}
+
 func TestSubagentGetListRunningAndCancelWireContract(t *testing.T) {
 	results := map[string]tools.SubagentResult{
 		"running-1": {ID: "running-1", Type: "explore", Description: "find code", Status: "running", StartedAtMS: 10, DurationMS: 20, Turns: 2, ToolCalls: 3, TokensUsed: 1200, ContextWindow: 256000, ContextUsage: 40, ToolsUsed: []string{"read_file", "grep"}, ErrorCount: 1},

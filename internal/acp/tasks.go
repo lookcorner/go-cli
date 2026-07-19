@@ -10,6 +10,10 @@ import (
 )
 
 func (s *Server) NotifySubagentStarted(sessionID string, event subagent.Started) {
+	s.notifySubagent(sessionID, SubagentStartedUpdate(sessionID, event))
+}
+
+func SubagentStartedUpdate(sessionID string, event subagent.Started) map[string]any {
 	update := map[string]any{
 		"sessionUpdate": "subagent_spawned", "subagent_id": event.ID,
 		"parent_session_id": sessionID, "child_session_id": event.ID,
@@ -26,7 +30,7 @@ func (s *Server) NotifySubagentStarted(sessionID string, event subagent.Started)
 		update["resumed_from"] = event.ResumedFrom
 		update["effective_context_source"] = "resumed"
 	}
-	s.notifySubagent(sessionID, update)
+	return update
 }
 
 func (s *Server) NotifySubagentProgress(sessionID string, result tools.SubagentResult) {
@@ -45,6 +49,10 @@ func (s *Server) NotifySubagentProgress(sessionID string, result tools.SubagentR
 }
 
 func (s *Server) NotifySubagentEnded(sessionID string, result tools.SubagentResult) {
+	s.notifySubagent(sessionID, SubagentFinishedUpdate(result))
+}
+
+func SubagentFinishedUpdate(result tools.SubagentResult) map[string]any {
 	update := map[string]any{
 		"sessionUpdate": "subagent_finished", "subagent_id": result.ID,
 		"child_session_id": result.ID, "status": result.Status,
@@ -57,7 +65,7 @@ func (s *Server) NotifySubagentEnded(sessionID string, result tools.SubagentResu
 	} else if result.Output != "" {
 		update["error"] = result.Output
 	}
-	s.notifySubagent(sessionID, update)
+	return update
 }
 
 func (s *Server) notifySubagent(sessionID string, update map[string]any) {

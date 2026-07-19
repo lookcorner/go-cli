@@ -707,7 +707,8 @@ task's effective cwd.
 `isolation: worktree` creates a dirty-state-preserving linked worktree and
 rebinds the same workspace tools there. Completion runs stop hooks, snapshots
 the resulting tree to `refs/gork/subagents/<id>`, and removes the directory;
-an in-process resume rehydrates the same path from that snapshot. Creation
+a later process can resume the child JSONL and rehydrate the same path from
+that snapshot. Creation
 failure falls back to the requested/shared cwd, while snapshot failure keeps
 the worktree available instead of discarding changes.
 Background tasks survive completion of the parent turn and are
@@ -717,11 +718,13 @@ use `x.ai/task/list`, `x.ai/task/kill`, `x.ai/task_backgrounded`, and
 `x.ai/task_completed`. Running and completed subagent snapshots report real
 turn, tool-call, token, context-usage, unique-tool, and error metrics. ACP also
 pushes reference-shaped `subagent_spawned`, rate-limited `subagent_progress`,
-and `subagent_finished` session notifications. User and trusted-project agent
+and `subagent_finished` session notifications. Child histories and scoped
+metadata are persisted per parent session; restart loads terminal results,
+reconciles interrupted tasks once, and replays persisted lifecycle notifications.
+User and trusted-project agent
 definitions may attach named or inline `mcpServers`; owned servers override an
 inherited server with the same name and remain private to that subagent.
-Durable cross-process task recovery, notification persistence/auto-wake, and
-`bypassPermissions` execution are not implemented yet.
+Parent auto-wake and `bypassPermissions` execution are not implemented yet.
 
 The same direct-install lifecycle is available outside ACP:
 

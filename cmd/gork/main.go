@@ -423,6 +423,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		ContextWindow: cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,
 		ResolveModel: resolveSubagentModel, AvailableModels: cfg.ModelSlugs(), Skills: skillCatalog,
 		SkillConfig: workspaceSkillsConfig(cfg, plugins), Worktrees: worktreeManager,
+		Observer:   &sessionSubagentObserver{sessionID: logger.ID(), logger: logger},
 		SessionDir: filepath.Dir(logger.Path()), ParentSessionID: logger.ID(),
 		ParentMCPServers: mcpRuntime.Configs(),
 		StartMCPServers: func(childCtx context.Context, root string, childTools *tools.Registry, servers []mcp.ServerConfig) (func(), error) {
@@ -1060,6 +1061,7 @@ type sessionProcessObserver struct {
 type sessionSubagentObserver struct {
 	server    *acp.Server
 	sessionID string
+	logger    *session.Logger
 }
 
 type permissionPromptApprover struct {
@@ -1100,15 +1102,27 @@ func (o *sessionProcessObserver) TaskCompleted(snapshot tools.ProcessSnapshot) {
 }
 
 func (o *sessionSubagentObserver) SubagentStarted(_ context.Context, event subagent.Started) {
-	o.server.NotifySubagentStarted(o.sessionID, event)
+	if o.logger != nil {
+		_ = o.logger.Append("subagent_spawned", acp.SubagentStartedUpdate(o.sessionID, event))
+	}
+	if o.server != nil {
+		o.server.NotifySubagentStarted(o.sessionID, event)
+	}
 }
 
 func (o *sessionSubagentObserver) SubagentProgress(_ context.Context, result tools.SubagentResult) {
-	o.server.NotifySubagentProgress(o.sessionID, result)
+	if o.server != nil {
+		o.server.NotifySubagentProgress(o.sessionID, result)
+	}
 }
 
 func (o *sessionSubagentObserver) SubagentEnded(_ context.Context, result tools.SubagentResult) {
-	o.server.NotifySubagentEnded(o.sessionID, result)
+	if o.logger != nil {
+		_ = o.logger.Append("subagent_finished", acp.SubagentFinishedUpdate(result))
+	}
+	if o.server != nil {
+		o.server.NotifySubagentEnded(o.sessionID, result)
+	}
 }
 
 func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []string, tokenProvider api.TokenProvider, stdin io.Reader, stdout, stderr io.Writer) error {
@@ -1305,7 +1319,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			ContextWindow: sessionCfg.ContextWindow, CompactThresholdPercent: sessionCfg.AutoCompactThresholdPercent,
 			ResolveModel: resolveSubagentModel, AvailableModels: sessionCfg.ModelSlugs(), Skills: catalog,
 			SkillConfig: workspaceSkillsConfig(sessionCfg, plugins), Worktrees: server.WorktreeManager(),
-			Observer:   &sessionSubagentObserver{server: server, sessionID: logger.ID()},
+			Observer:   &sessionSubagentObserver{server: server, sessionID: logger.ID(), logger: logger},
 			SessionDir: filepath.Dir(logger.Path()), ParentSessionID: logger.ID(),
 			ParentMCPServers: mcpRuntime.Configs(),
 			StartMCPServers: func(childCtx context.Context, root string, childTools *tools.Registry, servers []mcp.ServerConfig) (func(), error) {
