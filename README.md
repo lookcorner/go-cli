@@ -696,7 +696,9 @@ profile-aware model validation/routing, strict runtime-enum validation, tool
 allow/deny lists, capability modes, isolated parent-skill snapshots, per-agent
 skill preloading/discovery/inheritance controls, `all`/`none`/`named`/`except`
 parent MCP inheritance filters, and subagent hook events. Plugin agents do not
-inherit parent MCP servers.
+inherit parent MCP servers. User and trusted-project agent definitions may add
+private inline hooks; plugin inline hooks are ignored, and resumed agents retain
+their original merged hook set.
 Background tasks survive completion of the parent turn and are
 cancelled during session cleanup. ACP exposes the typed `x.ai/subagent/get`,
 `list_running`, and `cancel` methods; background terminal processes separately

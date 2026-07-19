@@ -419,7 +419,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 				child.Model = model.Model
 			}
 			return newModelClient(child, tokenProvider)
-		}, Observer: hookRuntime, Hooks: hookCatalog,
+		}, Hooks: hookCatalog,
 	})
 	if err != nil {
 		return err
@@ -1160,7 +1160,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 					child.Model = model.Model
 				}
 				return newModelClient(child, tokenProvider)
-			}, Observer: pluginState.hookRun, Hooks: pluginState.hooks,
+			}, Hooks: pluginState.hooks,
 		})
 		if err != nil {
 			cleanup()

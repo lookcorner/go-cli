@@ -208,8 +208,8 @@ func (m *Manager) Start(ctx context.Context, request tools.SubagentRequest) (too
 		CompactThresholdPercent: model.CompactThresholdPercent, Skills: childSkills,
 	}
 	var hookRuntime *hooks.Runtime
-	if m.hooks != nil {
-		hookRuntime = &hooks.Runtime{Catalog: m.hooks, WorkspaceRoot: m.workspaceRoot, SessionID: id, Model: model.Model, SubagentType: request.Type}
+	if catalog := m.childHooks(definition); catalog != nil {
+		hookRuntime = &hooks.Runtime{Catalog: catalog, WorkspaceRoot: m.workspaceRoot, SessionID: id, Model: model.Model, SubagentType: request.Type}
 		runner.HookPolicy = hookRuntime
 	}
 	current := &task{id: id, typeName: request.Type, description: request.Description, started: time.Now(), done: make(chan struct{}), runner: runner, hookRuntime: hookRuntime}
@@ -243,8 +243,8 @@ func (m *Manager) resume(ctx context.Context, request tools.SubagentRequest, def
 	previous.mu.Unlock()
 	id := newID()
 	var hookRuntime *hooks.Runtime
-	if m.hooks != nil {
-		hookRuntime = &hooks.Runtime{Catalog: m.hooks, WorkspaceRoot: m.workspaceRoot, SessionID: id, Model: previous.runner.Model, SubagentType: request.Type}
+	if previous.hookRuntime != nil {
+		hookRuntime = &hooks.Runtime{Catalog: previous.hookRuntime.Catalog, WorkspaceRoot: m.workspaceRoot, SessionID: id, Model: previous.runner.Model, SubagentType: request.Type}
 	}
 	runner := &agent.Runner{
 		Client: previous.runner.Client, Tools: previous.runner.Tools, Model: previous.runner.Model,
@@ -275,6 +275,9 @@ func (m *Manager) launch(caller context.Context, current *task, prompt string, b
 	if m.observer != nil {
 		m.observer.SubagentStarted(runCtx, current.id, current.typeName, current.description)
 	}
+	if current.hookRuntime != nil {
+		current.hookRuntime.SubagentStarted(runCtx, current.id, current.typeName, current.description)
+	}
 	run := func() {
 		result, err := current.runner.RunTurn(runCtx, prompt, current.responseID)
 		status, output := "completed", result.Text
@@ -292,6 +295,9 @@ func (m *Manager) launch(caller context.Context, current *task, prompt string, b
 		current.finish(tools.SubagentResult{ID: current.id, Type: current.typeName, Status: status, Output: output, ToolCalls: result.ToolCalls, Turns: result.Steps, DurationMS: duration, Description: current.description, StartedAtMS: current.started.UnixMilli(), ContextWindow: current.runner.ContextWindow})
 		if m.observer != nil {
 			m.observer.SubagentEnded(context.Background(), current.id, current.typeName, status, duration)
+		}
+		if current.hookRuntime != nil {
+			current.hookRuntime.SubagentEnded(context.Background(), current.id, current.typeName, status, duration)
 		}
 	}
 	if background {
@@ -467,6 +473,13 @@ func (m *Manager) childSkills(definition agents.Definition) (*skills.Catalog, er
 		config.Disabled = nil
 	}
 	return skills.Discover(m.workspaceRoot, config)
+}
+
+func (m *Manager) childHooks(definition agents.Definition) *hooks.Catalog {
+	if len(definition.Hooks) == 0 || definition.Plugin != "" || definition.Scope == "project" && (m.hooks == nil || !m.hooks.ProjectTrusted()) {
+		return m.hooks
+	}
+	return m.hooks.WithInline(definition.Hooks, m.workspaceRoot, "agent/"+definition.Name+"/", "agent "+definition.Name)
 }
 
 func canonicalPath(path string) string {

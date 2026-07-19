@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -33,6 +34,7 @@ type Definition struct {
 	DiscoverSkills  bool
 	InheritSkills   bool
 	MCPInheritance  MCPInheritance
+	Hooks           json.RawMessage
 	Builtin         bool
 }
 
@@ -105,6 +107,7 @@ type frontmatter struct {
 	DiscoverSkills  *bool           `yaml:"discoverSkills"`
 	InheritSkills   *bool           `yaml:"inheritSkills"`
 	MCPInheritance  *MCPInheritance `yaml:"mcpInheritance"`
+	Hooks           yaml.Node       `yaml:"hooks"`
 }
 
 type Config struct {
@@ -366,6 +369,17 @@ func parse(path, pluginName, scope string) (Definition, error) {
 	if metadata.MCPInheritance != nil {
 		mcpInheritance = *metadata.MCPInheritance
 	}
+	var inlineHooks json.RawMessage
+	if metadata.Hooks.Kind != 0 {
+		var value map[string]any
+		if err := metadata.Hooks.Decode(&value); err != nil {
+			return Definition{}, fmt.Errorf("parse agent %q: hooks must be an object", path)
+		}
+		inlineHooks, err = json.Marshal(value)
+		if err != nil {
+			return Definition{}, fmt.Errorf("parse agent %q hooks: %w", path, err)
+		}
+	}
 	return Definition{
 		Name: name, Description: strings.TrimSpace(metadata.Description), Tools: metadata.Tools,
 		DisallowedTools: metadata.DisallowedTools, MaxTurns: maxTurns,
@@ -373,7 +387,7 @@ func parse(path, pluginName, scope string) (Definition, error) {
 		Scope: scope, Model: strings.TrimSpace(metadata.Model), Effort: effort,
 		PermissionMode: permissionMode, Isolation: isolation,
 		Background: metadata.Background, InitialPrompt: strings.TrimSpace(metadata.InitialPrompt),
-		Skills: metadata.Skills, DiscoverSkills: discoverSkills, InheritSkills: inheritSkills, MCPInheritance: mcpInheritance,
+		Skills: metadata.Skills, DiscoverSkills: discoverSkills, InheritSkills: inheritSkills, MCPInheritance: mcpInheritance, Hooks: inlineHooks,
 	}, nil
 }
 

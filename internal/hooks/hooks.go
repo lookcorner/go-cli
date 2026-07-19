@@ -250,6 +250,36 @@ func (c *Catalog) Snapshot() Snapshot {
 	return Snapshot{Hooks: hooks, LoadErrors: loadErrors}
 }
 
+func (c *Catalog) WithInline(data []byte, sourceDir, prefix, label string) *Catalog {
+	if len(data) == 0 {
+		return c
+	}
+	wrapper, err := json.Marshal(map[string]json.RawMessage{"hooks": data})
+	if err != nil {
+		return c
+	}
+	loaded, warnings := parseData(wrapper, filepath.Join(sourceDir, "agent.json"), prefix, label, nil, false)
+	for index := range loaded {
+		if loaded[index].Event == Stop {
+			loaded[index].Event = SubagentStop
+		}
+	}
+	result := &Catalog{disabled: make(map[string]bool)}
+	if c != nil {
+		c.mu.RLock()
+		result.specs = append(result.specs, c.specs...)
+		result.loadErrors = append(result.loadErrors, c.loadErrors...)
+		result.disabledPath, result.config = c.disabledPath, c.config
+		for name, disabled := range c.disabled {
+			result.disabled[name] = disabled
+		}
+		c.mu.RUnlock()
+	}
+	result.specs = append(result.specs, loaded...)
+	result.loadErrors = append(result.loadErrors, warnings...)
+	return result
+}
+
 func (c *Catalog) SetDisabled(ctx context.Context, names []string, disabled bool) error {
 	c.mu.RLock()
 	path := c.disabledPath

@@ -166,6 +166,29 @@ func TestInlinePluginHooks(t *testing.T) {
 	}
 }
 
+func TestCatalogWithInlineHooksIsIsolatedAndRemapsStop(t *testing.T) {
+	root := t.TempDir()
+	base := &Catalog{specs: []Spec{{Name: "global", Event: PreToolUse}}}
+	inline := []byte(`{"Stop":[{"hooks":[{"type":"command","command":"./done.sh"}]}],"PostToolUse":[{"hooks":[{"type":"command","command":"./after.sh"}]}]}`)
+	child := base.WithInline(inline, root, "agent/reviewer/", "agent reviewer")
+	if len(base.Snapshot().Hooks) != 1 {
+		t.Fatal("inline hooks mutated parent catalog")
+	}
+	snapshot := child.Snapshot()
+	var stop, post bool
+	for _, spec := range snapshot.Hooks {
+		if spec.Event == SubagentStop && spec.SourceDir == root && strings.HasPrefix(spec.Name, "agent/reviewer/") {
+			stop = true
+		}
+		if spec.Event == PostToolUse && spec.SourceDir == root {
+			post = true
+		}
+	}
+	if len(snapshot.Hooks) != 3 || !stop || !post {
+		t.Fatalf("snapshot=%#v", snapshot)
+	}
+}
+
 func TestPluginHooksFilterNonPluginEvents(t *testing.T) {
 	inline := []byte(`{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"stop"}]}],"StopFailure":[{"hooks":[{"type":"command","command":"failure"}]}]}}`)
 	catalog := DiscoverPlugins([]plugin.Plugin{{Name: "limited", Root: t.TempDir(), InlineHooks: inline, Executable: true}})

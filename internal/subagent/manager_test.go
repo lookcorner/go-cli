@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/agents"
 	"github.com/lookcorner/go-cli/internal/api"
+	"github.com/lookcorner/go-cli/internal/hooks"
 	"github.com/lookcorner/go-cli/internal/plugin"
 	"github.com/lookcorner/go-cli/internal/skills"
 	"github.com/lookcorner/go-cli/internal/tools"
@@ -214,6 +216,85 @@ func TestSubagentFiltersInheritedMCPServers(t *testing.T) {
 		if got := strings.Join(names, "|"); got != test.want {
 			t.Fatalf("%s MCP tools=%q want=%q", test.typeName, got, test.want)
 		}
+	}
+}
+
+func TestSubagentInlineHooksAreIsolatedSecureAndResume(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	root := t.TempDir()
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("GROK_HOME", filepath.Join(home, ".grok"))
+	capture := filepath.Join(root, "capture.jsonl")
+	script := filepath.Join(root, "capture.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\ncat >> "+strconvQuote(capture)+"\nprintf '\\n' >> "+strconvQuote(capture)+"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	agentDir := filepath.Join(home, ".grok", "agents")
+	if err := os.MkdirAll(agentDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	hooked := "---\nname: hooked\ndescription: hooked\nhooks:\n  Stop:\n    - hooks:\n        - type: command\n          command: ./capture.sh\n---\nTest."
+	if err := os.WriteFile(filepath.Join(agentDir, "hooked.md"), []byte(hooked), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pluginDir := filepath.Join(t.TempDir(), "agents")
+	if err := os.MkdirAll(pluginDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	pluginCapture := filepath.Join(root, "plugin-capture")
+	pluginAgent := "---\nname: worker\ndescription: worker\nhooks:\n  Stop:\n    - hooks:\n        - type: command\n          command: touch " + pluginCapture + "\n---\nTest."
+	if err := os.WriteFile(filepath.Join(pluginDir, "worker.md"), []byte(pluginAgent), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	catalog, loadErrors := agents.Discover(agents.Config{Plugins: []plugin.Plugin{{Name: "fixture", AgentDirs: []string{pluginDir}, Executable: true}}})
+	if len(loadErrors) != 0 {
+		t.Fatal(loadErrors)
+	}
+	hookCatalog := hooks.Discover(hooks.Config{WorkspaceRoot: root, ProjectTrusted: true})
+	if len(hookCatalog.Snapshot().Hooks) != 0 {
+		t.Fatal("test hook catalog unexpectedly discovered hooks")
+	}
+	client := &sequenceClient{results: []api.StreamResult{
+		{ResponseID: "hook-1", Text: "first"},
+		{ResponseID: "hook-2", Text: "second"},
+		{ResponseID: "hook-3", Text: "plugin"},
+	}}
+	manager, err := New(Config{
+		Catalog: catalog, Tools: registry, Hooks: hookCatalog, WorkspaceRoot: root, ParentModel: "parent",
+		NewClient: func(ModelRuntime) (agent.ResponseStreamer, error) { return client, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	first, err := manager.Start(context.Background(), tools.SubagentRequest{Prompt: "first", Description: "first", Type: "hooked", BackgroundSet: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Start(context.Background(), tools.SubagentRequest{Prompt: "second", Description: "second", Type: "hooked", ResumeFrom: first.ID, BackgroundSet: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Start(context.Background(), tools.SubagentRequest{Prompt: "plugin", Description: "plugin", Type: "fixture:worker", BackgroundSet: true}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(capture)
+	if err != nil || strings.Count(string(data), `"hookEventName":"subagent_stop"`) != 2 || strings.Count(string(data), `"subagentType":"hooked"`) != 2 {
+		t.Fatalf("capture=%q err=%v", data, err)
+	}
+	if _, err := os.Stat(pluginCapture); !os.IsNotExist(err) {
+		t.Fatalf("plugin inline hook executed: %v", err)
+	}
+	if len(hookCatalog.Snapshot().Hooks) != 0 {
+		t.Fatal("child inline hooks mutated parent catalog")
 	}
 }
 

@@ -57,6 +57,26 @@ func TestMCPInheritanceParsingAndDefaults(t *testing.T) {
 	}
 }
 
+func TestAgentHooksParseAsObject(t *testing.T) {
+	dir := t.TempDir()
+	valid := filepath.Join(dir, "valid.md")
+	content := "---\nname: valid\ndescription: test\nhooks:\n  Stop:\n    - hooks:\n        - type: command\n          command: ./done.sh\n---\nPrompt\n"
+	if err := os.WriteFile(valid, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	definition, err := Parse(valid, "")
+	if err != nil || !strings.Contains(string(definition.Hooks), `"Stop"`) || !strings.Contains(string(definition.Hooks), `"./done.sh"`) {
+		t.Fatalf("definition=%#v err=%v", definition, err)
+	}
+	invalid := filepath.Join(dir, "invalid.md")
+	if err := os.WriteFile(invalid, []byte("---\nname: invalid\ndescription: test\nhooks: bad\n---\nPrompt\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Parse(invalid, ""); err == nil || !strings.Contains(err.Error(), "hooks must be an object") {
+		t.Fatalf("invalid hooks error=%v", err)
+	}
+}
+
 func TestCatalogDiscoveryPrecedenceAndPluginQualification(t *testing.T) {
 	home := t.TempDir()
 	grokHome := filepath.Join(home, "custom-grok")
