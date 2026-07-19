@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	sessionlog "github.com/lookcorner/go-cli/internal/session"
@@ -64,7 +65,55 @@ func (s *Server) QueueSubagentWake(sessionID string, result tools.SubagentResult
 }
 
 func (s *Server) QueueTaskWake(sessionID string, snapshot tools.ProcessSnapshot) bool {
-	return s.queueWake(sessionID, syntheticWake{id: snapshot.TaskID, prompt: formatTaskWake(snapshot)})
+	if s.closing.Load() {
+		return false
+	}
+	current := s.lookupSession(sessionID)
+	if current == nil {
+		return false
+	}
+	current.mu.Lock()
+	if current.closed || current.ctx == nil || current.ctx.Err() != nil || s.closing.Load() {
+		current.mu.Unlock()
+		return false
+	}
+	current.wakeQueue = dropMonitorEvents(current.wakeQueue, snapshot.TaskID)
+	current.wakeQueue = append(current.wakeQueue, syntheticWake{id: snapshot.TaskID, prompt: formatTaskWake(snapshot)})
+	current.mu.Unlock()
+	return true
+}
+
+func (s *Server) NotifyMonitorEvent(sessionID string, event tools.MonitorEvent) {
+	s.write(map[string]any{
+		"jsonrpc": "2.0", "method": "x.ai/monitor_event",
+		"params": map[string]any{"sessionId": sessionID, "update": MonitorEventUpdate(event)},
+	})
+	if s.closing.Load() {
+		return
+	}
+	current := s.lookupSession(sessionID)
+	if current == nil {
+		return
+	}
+	current.mu.Lock()
+	if current.closed || current.ctx == nil || current.ctx.Err() != nil || s.closing.Load() {
+		current.mu.Unlock()
+		return
+	}
+	if n := len(current.wakeQueue); n > 0 && current.wakeQueue[n-1].monitorEvents != nil {
+		current.wakeQueue[n-1].monitorEvents = append(current.wakeQueue[n-1].monitorEvents, event)
+	} else {
+		current.wakeQueue = append(current.wakeQueue, syntheticWake{monitorEvents: []tools.MonitorEvent{event}})
+	}
+	current.mu.Unlock()
+	time.AfterFunc(200*time.Millisecond, func() { s.startNextWake(current) })
+}
+
+func MonitorEventUpdate(event tools.MonitorEvent) map[string]any {
+	return map[string]any{
+		"sessionUpdate": "monitor_event", "task_id": event.TaskID,
+		"description": event.Description, "event_text": event.EventText,
+	}
 }
 
 func (s *Server) queueWake(sessionID string, wake syntheticWake) bool {
@@ -99,6 +148,7 @@ func (s *Server) cancelWake(sessionID, id string) {
 		return
 	}
 	current.mu.Lock()
+	current.wakeQueue = dropMonitorEvents(current.wakeQueue, id)
 	kept := current.wakeQueue[:0]
 	for _, wake := range current.wakeQueue {
 		if wake.id != id {
@@ -109,6 +159,27 @@ func (s *Server) cancelWake(sessionID, id string) {
 	current.mu.Unlock()
 }
 
+func dropMonitorEvents(queue []syntheticWake, taskID string) []syntheticWake {
+	kept := queue[:0]
+	for _, wake := range queue {
+		if wake.monitorEvents == nil {
+			kept = append(kept, wake)
+			continue
+		}
+		events := wake.monitorEvents[:0]
+		for _, event := range wake.monitorEvents {
+			if event.TaskID != taskID {
+				events = append(events, event)
+			}
+		}
+		if len(events) > 0 {
+			wake.monitorEvents = events
+			kept = append(kept, wake)
+		}
+	}
+	return kept
+}
+
 func (s *Server) startNextWake(current *session) {
 	current.mu.Lock()
 	if current.closed || current.ctx == nil || current.ctx.Err() != nil || current.running || len(current.wakeQueue) == 0 {
@@ -117,6 +188,9 @@ func (s *Server) startNextWake(current *session) {
 	}
 	wake := current.wakeQueue[0]
 	current.wakeQueue = current.wakeQueue[1:]
+	if wake.monitorEvents != nil {
+		wake.prompt = formatMonitorWake(wake.monitorEvents)
+	}
 	runCtx, cancel := context.WithCancel(current.ctx)
 	current.cancel, current.running = cancel, true
 	current.activePrompt = current.promptIndex
@@ -164,6 +238,41 @@ func formatTaskWake(snapshot tools.ProcessSnapshot) string {
 		snapshot.TaskID, status, snapshot.Command, snapshot.TaskID)
 }
 
+func formatMonitorWake(events []tools.MonitorEvent) string {
+	if len(events) == 1 {
+		return wrapMonitorEvent(events[0])
+	}
+	groups := make(map[string][]tools.MonitorEvent)
+	order := make([]string, 0)
+	for _, event := range events {
+		if _, exists := groups[event.TaskID]; !exists {
+			order = append(order, event.TaskID)
+		}
+		groups[event.TaskID] = append(groups[event.TaskID], event)
+	}
+	var body strings.Builder
+	fmt.Fprintf(&body, "%d new monitor events:\n", len(events))
+	for _, taskID := range order {
+		group := groups[taskID]
+		fmt.Fprintf(&body, "<monitor description=\"%s\" task_id=\"%s\">\n", sanitizeMonitorAttribute(group[0].Description), taskID)
+		for index, event := range group {
+			fmt.Fprintf(&body, "[event %d]\n%s\n", index+1, event.EventText)
+		}
+		body.WriteString("</monitor>\n")
+	}
+	return strings.TrimSpace(body.String())
+}
+
+func wrapMonitorEvent(event tools.MonitorEvent) string {
+	return fmt.Sprintf("<monitor-event description=\"%s\" task_id=\"%s\">\n%s\n</monitor-event>",
+		sanitizeMonitorAttribute(event.Description), event.TaskID, event.EventText)
+}
+
+func sanitizeMonitorAttribute(value string) string {
+	value = strings.ReplaceAll(value, "\"", "'")
+	return strings.NewReplacer("\n", " ", "\r", " ").Replace(value)
+}
+
 func SubagentFinishedUpdate(result tools.SubagentResult) map[string]any {
 	update := map[string]any{
 		"sessionUpdate": "subagent_finished", "subagent_id": result.ID,
@@ -203,6 +312,9 @@ func TaskBackgroundedUpdate(event tools.ProcessBackgrounded) map[string]any {
 	}
 	if event.Description != "" {
 		update["description"] = event.Description
+	}
+	if event.Kind != "" {
+		update["kind"] = event.Kind
 	}
 	return update
 }

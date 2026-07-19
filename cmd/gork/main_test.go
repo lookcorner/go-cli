@@ -46,6 +46,7 @@ func TestSessionObserversPersistOnlyLifecycleEvents(t *testing.T) {
 	observer.SubagentEnded(context.Background(), tools.SubagentResult{ID: "child-1", Type: "explore", Status: "completed", Output: "done"})
 	processObserver := &sessionProcessObserver{sessionID: logger.ID(), logger: logger}
 	processObserver.TaskBackgrounded(tools.ProcessBackgrounded{TaskID: "task-1", Command: "build", CWD: "/work"})
+	processObserver.MonitorEvent(tools.MonitorEvent{TaskID: "task-1", Description: "watch build", EventText: "tick"})
 	processObserver.TaskCompleted(tools.ProcessSnapshot{TaskID: "task-1", Command: "build", Completed: true})
 	path := logger.Path()
 	if err := logger.Close(); err != nil {
@@ -56,7 +57,7 @@ func TestSessionObserversPersistOnlyLifecycleEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	log := string(data)
-	if strings.Count(log, `"kind":"subagent_spawned"`) != 1 || strings.Count(log, `"kind":"subagent_finished"`) != 1 || strings.Count(log, `"kind":"task_backgrounded"`) != 1 || strings.Count(log, `"kind":"task_completed"`) != 1 || strings.Contains(log, "subagent_progress") {
+	if strings.Count(log, `"kind":"subagent_spawned"`) != 1 || strings.Count(log, `"kind":"subagent_finished"`) != 1 || strings.Count(log, `"kind":"task_backgrounded"`) != 1 || strings.Count(log, `"kind":"task_completed"`) != 1 || strings.Contains(log, "subagent_progress") || strings.Contains(log, "watch build") {
 		t.Fatalf("log=%s", log)
 	}
 }

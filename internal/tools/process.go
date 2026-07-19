@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,12 +16,21 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/workspace"
 )
 
-const backgroundOutputBytes = 1 << 20
+const (
+	backgroundOutputBytes = 1 << 20
+	monitorLineBytes      = 500
+	monitorBatchBytes     = 3000
+	monitorDebounce       = 200 * time.Millisecond
+	monitorRateCapacity   = 10
+	monitorRateRefill     = 2 * time.Second
+	monitorOverloadLimit  = 30 * time.Second
+)
 
 type ProcessManager struct {
 	ws           *workspace.Workspace
@@ -47,6 +57,16 @@ type ProcessConsumptionObserver interface {
 	TaskConsumed(string)
 }
 
+type ProcessMonitorObserver interface {
+	MonitorEvent(MonitorEvent)
+}
+
+type MonitorEvent struct {
+	TaskID      string `json:"task_id"`
+	Description string `json:"description"`
+	EventText   string `json:"event_text"`
+}
+
 type ProcessBackgrounded struct {
 	ToolCallID  string
 	TaskID      string
@@ -54,6 +74,7 @@ type ProcessBackgrounded struct {
 	CWD         string
 	OutputFile  string
 	Description string
+	Kind        string
 }
 
 type backgroundProcess struct {
@@ -70,6 +91,8 @@ type backgroundProcess struct {
 	terminal    bool
 	blockWaited bool
 	consumed    bool
+	kind        string
+	monitor     *monitorWriter
 	waiters     map[*processWaitSlot]struct{}
 }
 
@@ -134,18 +157,22 @@ func NewProcessManager(ws *workspace.Workspace, approver Approver) *ProcessManag
 }
 
 func (m *ProcessManager) Start(ctx context.Context, command string) (string, error) {
-	return m.start(ctx, command, "", 0)
+	return m.start(ctx, command, "", 0, "bash")
 }
 
 func (m *ProcessManager) StartWithTimeout(ctx context.Context, command string, timeout time.Duration) (string, error) {
-	return m.start(ctx, command, "", timeout)
+	return m.start(ctx, command, "", timeout, "bash")
 }
 
 func (m *ProcessManager) StartDescribed(ctx context.Context, command, description string, timeout time.Duration) (string, error) {
-	return m.start(ctx, command, description, timeout)
+	return m.start(ctx, command, description, timeout, "bash")
 }
 
-func (m *ProcessManager) start(ctx context.Context, command, description string, timeout time.Duration) (string, error) {
+func (m *ProcessManager) StartMonitor(ctx context.Context, command, description string, timeout time.Duration) (string, error) {
+	return m.start(ctx, command, sanitizeMonitorDescription(description), timeout, "monitor")
+}
+
+func (m *ProcessManager) start(ctx context.Context, command, description string, timeout time.Duration, kind string) (string, error) {
 	if strings.TrimSpace(command) == "" {
 		return "", errors.New("command must not be empty")
 	}
@@ -160,18 +187,47 @@ func (m *ProcessManager) start(ctx context.Context, command, description string,
 	cmd.Dir, cmd.Env = m.shellSnapshot()
 	configureProcessGroup(cmd)
 	buffer := &tailBuffer{limit: backgroundOutputBytes}
-	cmd.Stdout = buffer
+	id := fmt.Sprintf("task_%d", m.nextID.Add(1))
+	process := &backgroundProcess{
+		id: id, command: command, cmd: cmd, output: buffer, started: time.Now(), done: make(chan struct{}),
+		kind: kind,
+	}
+	var monitorReady chan struct{}
+	if kind == "monitor" {
+		monitorReady = make(chan struct{})
+		process.monitor = newMonitorWriter(func(text string) {
+			<-monitorReady
+			if observer, ok := m.processObserver().(ProcessMonitorObserver); ok {
+				observer.MonitorEvent(MonitorEvent{TaskID: id, Description: description, EventText: text})
+			}
+		}, func(message string) {
+			<-monitorReady
+			process.mu.Lock()
+			if process.killed {
+				process.mu.Unlock()
+				return
+			}
+			process.killed = true
+			process.mu.Unlock()
+			if observer, ok := m.processObserver().(ProcessMonitorObserver); ok {
+				observer.MonitorEvent(MonitorEvent{TaskID: id, Description: description, EventText: message})
+			}
+			go terminateProcess(cmd)
+		})
+		cmd.Stdout = io.MultiWriter(buffer, process.monitor)
+	} else {
+		cmd.Stdout = buffer
+	}
 	cmd.Stderr = buffer
 	if err := cmd.Start(); err != nil {
 		return "", fmt.Errorf("start command: %w", err)
 	}
-	id := fmt.Sprintf("task_%d", m.nextID.Add(1))
-	process := &backgroundProcess{
-		id: id, command: command, cmd: cmd, output: buffer, started: time.Now(), done: make(chan struct{}),
-	}
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
+		if monitorReady != nil {
+			close(monitorReady)
+		}
 		_ = terminateProcess(cmd)
 		_ = cmd.Wait()
 		return "", errors.New("process manager is closed")
@@ -181,11 +237,17 @@ func (m *ProcessManager) start(ctx context.Context, command, description string,
 	call, _ := ToolCallFromContext(ctx)
 	if observer := m.processObserver(); observer != nil {
 		observer.TaskBackgrounded(ProcessBackgrounded{
-			ToolCallID: call.ID, TaskID: id, Command: command, CWD: cmd.Dir, Description: description,
+			ToolCallID: call.ID, TaskID: id, Command: command, CWD: cmd.Dir, Description: description, Kind: kind,
 		})
+	}
+	if monitorReady != nil {
+		close(monitorReady)
 	}
 	go func() {
 		err := cmd.Wait()
+		if process.monitor != nil {
+			process.monitor.Close()
+		}
 		if checkpointErr := m.rewind.afterWorkspace(checkpoint); checkpointErr != nil {
 			err = errors.Join(err, fmt.Errorf("checkpoint after background command: %w", checkpointErr))
 		}
@@ -675,7 +737,7 @@ func snapshotProcess(process *backgroundProcess, completed bool) ProcessSnapshot
 	item := ProcessSnapshot{
 		TaskID: process.id, Command: process.command, CWD: process.cmd.Dir,
 		StartTime: processTime(process.started), Output: output, Truncated: truncated,
-		Completed: completed, Kind: "bash", BlockWaited: blockWaited, ExplicitlyKilled: killed,
+		Completed: completed, Kind: process.kind, BlockWaited: blockWaited, ExplicitlyKilled: killed,
 	}
 	if completed {
 		end := processTime(ended)
@@ -768,6 +830,143 @@ type tailBuffer struct {
 	truncated bool
 }
 
+type monitorWriter struct {
+	mu               sync.Mutex
+	partial          []byte
+	pending          []string
+	timer            *time.Timer
+	emit             func(string)
+	autoKill         func(string)
+	tokens           int
+	lastRefill       time.Time
+	suppressed       int
+	suppressionStart time.Time
+	lastSuppression  time.Time
+	killed           bool
+	closed           bool
+}
+
+func newMonitorWriter(emit, autoKill func(string)) *monitorWriter {
+	return &monitorWriter{emit: emit, autoKill: autoKill, tokens: monitorRateCapacity, lastRefill: time.Now()}
+}
+
+func (w *monitorWriter) Write(data []byte) (int, error) {
+	w.mu.Lock()
+	if w.closed {
+		w.mu.Unlock()
+		return len(data), nil
+	}
+	w.partial = append(w.partial, data...)
+	if len(w.partial) > backgroundOutputBytes {
+		w.partial = append([]byte(nil), w.partial[len(w.partial)-backgroundOutputBytes:]...)
+	}
+	for {
+		index := bytes.IndexByte(w.partial, '\n')
+		if index < 0 {
+			break
+		}
+		w.addLineLocked(w.partial[:index])
+		w.partial = w.partial[index+1:]
+	}
+	w.mu.Unlock()
+	return len(data), nil
+}
+
+func (w *monitorWriter) addLineLocked(raw []byte) {
+	line := strings.TrimSpace(string(raw))
+	if line == "" {
+		return
+	}
+	w.pending = append(w.pending, truncateMonitorText(line, monitorLineBytes, "...(truncated)"))
+	if w.timer != nil {
+		w.timer.Stop()
+	}
+	w.timer = time.AfterFunc(monitorDebounce, w.flushBatch)
+}
+
+func (w *monitorWriter) flushBatch() {
+	w.mu.Lock()
+	if len(w.pending) == 0 || w.closed || w.killed {
+		w.mu.Unlock()
+		return
+	}
+	text := truncateMonitorText(strings.Join(w.pending, "\n"), monitorBatchBytes, "\n...(truncated)")
+	w.pending = nil
+	now := time.Now()
+	refills := int(now.Sub(w.lastRefill) / monitorRateRefill)
+	if refills > 0 {
+		w.tokens = min(monitorRateCapacity, w.tokens+refills)
+		w.lastRefill = w.lastRefill.Add(time.Duration(refills) * monitorRateRefill)
+	}
+	if w.tokens > 0 {
+		w.tokens--
+		suppressed := w.suppressed
+		w.suppressed = 0
+		if !w.lastSuppression.IsZero() && now.Sub(w.lastSuppression) > 3*monitorRateRefill {
+			w.suppressionStart = time.Time{}
+		}
+		emit := w.emit
+		w.mu.Unlock()
+		if suppressed > 0 {
+			emit(fmt.Sprintf("[%d events suppressed -- output rate too high. Consider restarting this monitor with a more selective filter.]", suppressed))
+		}
+		emit(text)
+		return
+	}
+	w.suppressed++
+	w.lastSuppression = now
+	if w.suppressionStart.IsZero() {
+		w.suppressionStart = now
+	}
+	overloaded := now.Sub(w.suppressionStart) > monitorOverloadLimit
+	suppressed := w.suppressed
+	autoKill := w.autoKill
+	if overloaded {
+		w.killed = true
+	}
+	w.mu.Unlock()
+	if overloaded {
+		autoKill(fmt.Sprintf("[Monitor stopped -- output rate remained too high (%d events suppressed over 30s). Restart it with a more selective filter.]", suppressed))
+	}
+}
+
+func (w *monitorWriter) Close() {
+	w.mu.Lock()
+	if w.closed {
+		w.mu.Unlock()
+		return
+	}
+	if w.timer != nil {
+		w.timer.Stop()
+	}
+	if line := strings.TrimSpace(string(w.partial)); line != "" {
+		w.pending = append(w.pending, truncateMonitorText(line, monitorLineBytes, "...(truncated)"))
+	}
+	w.partial = nil
+	w.mu.Unlock()
+	w.flushBatch()
+	w.mu.Lock()
+	w.closed = true
+	w.mu.Unlock()
+}
+
+func truncateMonitorText(value string, limit int, suffix string) string {
+	if len(value) <= limit {
+		return value
+	}
+	end := limit
+	for end > 0 && !utf8.RuneStart(value[end]) {
+		end--
+	}
+	return value[:end] + suffix
+}
+
+func sanitizeMonitorDescription(description string) string {
+	description = strings.ReplaceAll(description, "\"", "'")
+	description = strings.NewReplacer("\n", " ", "\r", " ").Replace(description)
+	return description
+}
+
 func (b *tailBuffer) Write(data []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -849,6 +1048,53 @@ func (t *killCommandTool) Definition() api.ToolDefinition {
 }
 
 type runTerminalCommandTool struct{ manager *ProcessManager }
+
+type monitorTool struct{ manager *ProcessManager }
+
+func (t *monitorTool) Definition() api.ToolDefinition {
+	return api.ToolDefinition{
+		Type: "function", Name: "monitor",
+		Description: "Run a background monitor. Each stdout line is delivered as a real-time event; do not poll or sleep while waiting.",
+		Parameters: objectSchema(map[string]any{
+			"command":     map[string]any{"type": "string", "description": "Shell command whose stdout lines are events."},
+			"description": map[string]any{"type": "string", "description": "Short description shown with each event."},
+			"timeout_ms":  map[string]any{"type": "integer", "minimum": 0},
+			"persistent":  map[string]any{"type": "boolean"},
+		}, "command", "description"),
+	}
+}
+
+func (t *monitorTool) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
+	var args struct {
+		Command     string  `json:"command"`
+		Description string  `json:"description"`
+		TimeoutMS   *uint64 `json:"timeout_ms"`
+		Persistent  bool    `json:"persistent"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return "", fmt.Errorf("decode monitor arguments: %w", err)
+	}
+	const maxTimeout = uint64(36_000_000)
+	if args.TimeoutMS != nil && *args.TimeoutMS > maxTimeout && !args.Persistent {
+		return "", fmt.Errorf("persistent must be true when timeout_ms exceeds %dms", maxTimeout)
+	}
+	timeoutMS := maxTimeout
+	if args.TimeoutMS != nil {
+		timeoutMS = *args.TimeoutMS
+	}
+	if args.Persistent {
+		timeoutMS = 0
+	}
+	id, err := t.manager.StartMonitor(ctx, args.Command, args.Description, time.Duration(timeoutMS)*time.Millisecond)
+	if err != nil {
+		return "", err
+	}
+	deadline := fmt.Sprintf("timeout %dms", timeoutMS)
+	if timeoutMS == 0 {
+		deadline = "persistent -- runs until kill_task or session end"
+	}
+	return fmt.Sprintf("Monitor started (task %s, %s).\nYou will be notified on each event. Keep working -- do not poll or sleep.", id, deadline), nil
+}
 
 func (t *runTerminalCommandTool) Definition() api.ToolDefinition {
 	return api.ToolDefinition{

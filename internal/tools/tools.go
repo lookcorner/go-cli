@@ -233,6 +233,7 @@ func NewRegistry(ws *workspace.Workspace, approver Approver) *Registry {
 		&commandOutputTool{manager: processes},
 		&killCommandTool{manager: processes},
 		&runTerminalCommandTool{manager: processes},
+		&monitorTool{manager: processes},
 		&taskOutputTool{manager: processes, subagents: subagents},
 		&killTaskTool{manager: processes, subagents: subagents},
 		&listDirTool{ws: ws},
@@ -525,7 +526,7 @@ func toolNameSet(values []string) map[string]bool {
 	result := make(map[string]bool, len(values))
 	aliases := map[string][]string{
 		"read": {"read_file"}, "write": {"write_file", "edit_file", "search_replace"},
-		"edit": {"write_file", "edit_file", "search_replace"}, "bash": {"shell", "run_terminal_cmd"},
+		"edit": {"write_file", "edit_file", "search_replace"}, "bash": {"shell", "run_terminal_cmd", "monitor"},
 		"grep": {"grep", "search_files"}, "glob": {"list_files", "search_files"},
 	}
 	for _, value := range values {
@@ -547,9 +548,9 @@ func toolNameSet(values []string) map[string]bool {
 func capabilityAllows(capability, name string) bool {
 	switch strings.ToLower(strings.TrimSpace(capability)) {
 	case "read-only", "readonly":
-		return name != "write_file" && name != "edit_file" && name != "search_replace" && name != "shell" && name != "run_terminal_cmd" && name != "start_command" && name != "kill_command"
+		return name != "write_file" && name != "edit_file" && name != "search_replace" && name != "shell" && name != "run_terminal_cmd" && name != "monitor" && name != "start_command" && name != "kill_command"
 	case "read-write", "readwrite":
-		return name != "shell" && name != "run_terminal_cmd" && name != "start_command" && name != "kill_command"
+		return name != "shell" && name != "run_terminal_cmd" && name != "monitor" && name != "start_command" && name != "kill_command"
 	case "execute":
 		return name != "write_file" && name != "edit_file" && name != "search_replace"
 	default:

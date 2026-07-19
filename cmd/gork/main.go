@@ -1110,6 +1110,12 @@ func (o *sessionProcessObserver) TaskCompleted(snapshot tools.ProcessSnapshot) {
 	}
 }
 
+func (o *sessionProcessObserver) MonitorEvent(event tools.MonitorEvent) {
+	if o.server != nil {
+		o.server.NotifyMonitorEvent(o.sessionID, event)
+	}
+}
+
 func (o *sessionProcessObserver) TaskConsumed(taskID string) {
 	if o.server != nil {
 		o.server.CancelTaskWake(o.sessionID, taskID)

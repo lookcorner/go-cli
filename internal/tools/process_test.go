@@ -18,6 +18,7 @@ type recordingProcessObserver struct {
 	backgrounded chan ProcessBackgrounded
 	completed    chan ProcessSnapshot
 	consumed     chan string
+	monitor      chan MonitorEvent
 }
 
 func (o *recordingProcessObserver) TaskBackgrounded(event ProcessBackgrounded) {
@@ -31,6 +32,86 @@ func (o *recordingProcessObserver) TaskCompleted(snapshot ProcessSnapshot) {
 func (o *recordingProcessObserver) TaskConsumed(taskID string) {
 	if o.consumed != nil {
 		o.consumed <- taskID
+	}
+}
+
+func (o *recordingProcessObserver) MonitorEvent(event MonitorEvent) {
+	if o.monitor != nil {
+		o.monitor <- event
+	}
+}
+
+func TestMonitorStreamsStdoutAndReportsMonitorKind(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture is Unix-specific")
+	}
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewProcessManager(ws, PromptApprover{Mode: PermissionAuto})
+	defer manager.Close()
+	observer := &recordingProcessObserver{
+		backgrounded: make(chan ProcessBackgrounded, 1), completed: make(chan ProcessSnapshot, 1), monitor: make(chan MonitorEvent, 2),
+	}
+	manager.SetObserver(observer)
+	result, err := (&monitorTool{manager: manager}).Execute(WithToolCall(context.Background(), "call-monitor", "monitor"), json.RawMessage(
+		`{"command":"printf 'ready\\n'; sleep 0.3; printf tail","description":"watch \"build\"\nstate","timeout_ms":1000}`,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result, "task_1") || !strings.Contains(result, "do not poll") {
+		t.Fatalf("unexpected monitor result: %s", result)
+	}
+	started := <-observer.backgrounded
+	if started.Kind != "monitor" || started.Description != "watch 'build' state" || started.ToolCallID != "call-monitor" {
+		t.Fatalf("background event=%#v", started)
+	}
+	first := <-observer.monitor
+	second := <-observer.monitor
+	if first.EventText != "ready" || second.EventText != "tail" || first.TaskID != started.TaskID {
+		t.Fatalf("monitor events=%#v / %#v", first, second)
+	}
+	completed := <-observer.completed
+	if completed.Kind != "monitor" || !completed.Completed || completed.ExitCode == nil || *completed.ExitCode != 0 {
+		t.Fatalf("completed=%#v", completed)
+	}
+}
+
+func TestMonitorWriterTruncatesAndRateLimitsBatches(t *testing.T) {
+	var events []string
+	w := newMonitorWriter(func(text string) { events = append(events, text) }, func(string) { t.Fatal("unexpected auto-kill") })
+	for index := 0; index < monitorRateCapacity+1; index++ {
+		w.mu.Lock()
+		w.addLineLocked([]byte(strings.Repeat("世", 200)))
+		w.timer.Stop()
+		w.mu.Unlock()
+		w.flushBatch()
+	}
+	if len(events) != monitorRateCapacity {
+		t.Fatalf("events=%d, want %d", len(events), monitorRateCapacity)
+	}
+	if len(events[0]) <= monitorLineBytes || !strings.HasSuffix(events[0], "...(truncated)") {
+		t.Fatalf("line was not safely truncated: %q", events[0])
+	}
+	w.Close()
+
+	killed := make(chan string, 1)
+	overloaded := newMonitorWriter(func(string) {}, func(message string) { killed <- message })
+	overloaded.mu.Lock()
+	overloaded.tokens = 0
+	overloaded.suppressionStart = time.Now().Add(-monitorOverloadLimit - time.Second)
+	overloaded.pending = []string{"too fast"}
+	overloaded.mu.Unlock()
+	overloaded.flushBatch()
+	select {
+	case message := <-killed:
+		if !strings.Contains(message, "Monitor stopped") {
+			t.Fatalf("auto-kill message=%q", message)
+		}
+	default:
+		t.Fatal("sustained overload did not stop monitor")
 	}
 }
 

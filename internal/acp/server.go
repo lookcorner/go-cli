@@ -105,8 +105,9 @@ type session struct {
 }
 
 type syntheticWake struct {
-	id     string
-	prompt string
+	id            string
+	prompt        string
+	monitorEvents []tools.MonitorEvent
 }
 
 type permissionResult struct {
@@ -2383,7 +2384,7 @@ func acpToolKind(name string) string {
 		return "search"
 	case "write_file", "edit_file", "search_replace":
 		return "edit"
-	case "run_terminal_cmd", "shell", "start_background_command", "kill_task", "kill_background_command":
+	case "run_terminal_cmd", "shell", "monitor", "start_background_command", "kill_task", "kill_background_command":
 		return "execute"
 	case "todo_write", "update_goal":
 		return "think"

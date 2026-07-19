@@ -1111,6 +1111,81 @@ func TestSyntheticWakeQueueRunsSerially(t *testing.T) {
 	}
 }
 
+func TestMonitorEventsUseWireChannelAndSyntheticQueue(t *testing.T) {
+	root := t.TempDir()
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	logger, err := sessionlog.NewLoggerWithID(t.TempDir(), "parent-monitor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logger.Close()
+	streamer := &fixtureStreamer{results: []api.StreamResult{{ResponseID: "monitor-wake", Text: "observed"}, {ResponseID: "completion-wake", Text: "done"}}}
+	current := &session{
+		id: "parent-monitor", ctx: context.Background(), cwd: root, previous: "parent-response", running: true, activePrompt: -1,
+		runner: &agent.Runner{Client: streamer, Tools: registry, Logger: logger, Model: "test"}, logPath: logger.Path(),
+	}
+	var output bytes.Buffer
+	server := &Server{output: &output, sessions: map[string]*session{"parent-monitor": current}}
+	server.NotifyMonitorEvent("parent-monitor", tools.MonitorEvent{TaskID: "monitor-1", Description: "watch build", EventText: "step 1"})
+	server.NotifyMonitorEvent("parent-monitor", tools.MonitorEvent{TaskID: "monitor-2", Description: "watch tests", EventText: "case 2"})
+	decoder := json.NewDecoder(&output)
+	for _, taskID := range []string{"monitor-1", "monitor-2"} {
+		var message map[string]any
+		if err := decoder.Decode(&message); err != nil {
+			t.Fatal(err)
+		}
+		params := message["params"].(map[string]any)
+		update := params["update"].(map[string]any)
+		if message["method"] != "x.ai/monitor_event" || params["sessionId"] != "parent-monitor" || update["task_id"] != taskID || update["sessionUpdate"] != "monitor_event" {
+			t.Fatalf("monitor wire message=%#v", message)
+		}
+	}
+	current.mu.Lock()
+	current.running = false
+	current.mu.Unlock()
+	server.startNextWake(current)
+	server.wg.Wait()
+	streamer.mu.Lock()
+	if len(streamer.requests) != 1 {
+		streamer.mu.Unlock()
+		t.Fatalf("requests=%#v", streamer.requests)
+	}
+	input, _ := json.Marshal(streamer.requests[0].Input)
+	streamer.mu.Unlock()
+	if !strings.Contains(string(input), "monitor-1") || !strings.Contains(string(input), "monitor-2") || !strings.Contains(string(input), "step 1") || !strings.Contains(string(input), "case 2") {
+		t.Fatalf("batched monitor input=%s", input)
+	}
+
+	current.mu.Lock()
+	current.running = true
+	current.mu.Unlock()
+	server.NotifyMonitorEvent("parent-monitor", tools.MonitorEvent{TaskID: "monitor-done", Description: "watch done", EventText: "last line"})
+	code := 0
+	snapshot := tools.ProcessSnapshot{TaskID: "monitor-done", Command: "watch", Kind: "monitor", Completed: true, ExitCode: &code}
+	if !server.QueueTaskWake("parent-monitor", snapshot) {
+		t.Fatal("completion wake rejected")
+	}
+	current.mu.Lock()
+	current.running = false
+	current.mu.Unlock()
+	server.NotifyTaskCompleted("parent-monitor", snapshot, true)
+	server.wg.Wait()
+	streamer.mu.Lock()
+	defer streamer.mu.Unlock()
+	if len(streamer.requests) != 2 {
+		t.Fatalf("requests=%#v", streamer.requests)
+	}
+	completionInput, _ := json.Marshal(streamer.requests[1].Input)
+	if strings.Contains(string(completionInput), "last line") || !strings.Contains(string(completionInput), "monitor-done") || streamer.requests[1].PreviousResponseID != "monitor-wake" {
+		t.Fatalf("completion input=%s request=%#v", completionInput, streamer.requests[1])
+	}
+}
+
 func TestSubagentGetListRunningAndCancelWireContract(t *testing.T) {
 	results := map[string]tools.SubagentResult{
 		"running-1": {ID: "running-1", Type: "explore", Description: "find code", Status: "running", StartedAtMS: 10, DurationMS: 20, Turns: 2, ToolCalls: 3, TokensUsed: 1200, ContextWindow: 256000, ContextUsage: 40, ToolsUsed: []string{"read_file", "grep"}, ErrorCount: 1},
