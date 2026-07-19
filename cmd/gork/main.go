@@ -415,6 +415,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		ContextWindow: cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,
 		ResolveModel: resolveSubagentModel, AvailableModels: cfg.ModelSlugs(), Skills: skillCatalog,
 		SkillConfig: workspaceSkillsConfig(cfg, plugins), Worktrees: worktreeManager,
+		ParentMCPServers: mcpRuntime.Configs(),
+		StartMCPServers: func(childCtx context.Context, root string, childTools *tools.Registry, servers []mcp.ServerConfig) (func(), error) {
+			return startSubagentMCPServers(childCtx, cfg, root, childTools, approver, tokenProvider, statusOutput, servers)
+		},
 		NewClient: func(model subagent.ModelRuntime) (agent.ResponseStreamer, error) {
 			child := cfg
 			if model.Profile != "" {
@@ -1173,7 +1177,11 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			ContextWindow: sessionCfg.ContextWindow, CompactThresholdPercent: sessionCfg.AutoCompactThresholdPercent,
 			ResolveModel: resolveSubagentModel, AvailableModels: sessionCfg.ModelSlugs(), Skills: catalog,
 			SkillConfig: workspaceSkillsConfig(sessionCfg, plugins), Worktrees: server.WorktreeManager(),
-			Observer: &sessionSubagentObserver{server: server, sessionID: logger.ID()},
+			Observer:         &sessionSubagentObserver{server: server, sessionID: logger.ID()},
+			ParentMCPServers: mcpRuntime.Configs(),
+			StartMCPServers: func(childCtx context.Context, root string, childTools *tools.Registry, servers []mcp.ServerConfig) (func(), error) {
+				return startSubagentMCPServers(childCtx, sessionCfg, root, childTools, approver, tokenProvider, statusOutput, servers)
+			},
 			NewClient: func(model subagent.ModelRuntime) (agent.ResponseStreamer, error) {
 				child := sessionCfg
 				if model.Profile != "" {
@@ -1847,6 +1855,34 @@ func startMCPServers(
 		fmt.Fprintf(stderr, "[gork] MCP %s ready: %d tool(s)\n", serverLabel, len(remoteTools))
 	}
 	return clients, nil
+}
+
+func startSubagentMCPServers(
+	ctx context.Context,
+	cfg config.Config,
+	workspaceRoot string,
+	registry *tools.Registry,
+	approver tools.Approver,
+	tokenProvider api.TokenProvider,
+	stderr io.Writer,
+	servers []mcp.ServerConfig,
+) (func(), error) {
+	cfg.MCPServers = make(map[string]config.MCPServerConfig, len(servers))
+	for _, server := range servers {
+		cfg.MCPServers[server.Name] = config.MCPServerConfig{
+			Type: server.Type, Command: server.Command, Args: append([]string(nil), server.Args...),
+			Env: cloneStringsMap(server.Env), URL: server.URL, Headers: cloneStringsMap(server.Headers),
+		}
+	}
+	clients, err := startMCPServers(ctx, cfg, workspaceRoot, registry, approver, tokenProvider, stderr)
+	if err != nil {
+		return nil, err
+	}
+	return func() {
+		for _, client := range clients {
+			_ = client.Close()
+		}
+	}, nil
 }
 
 type sessionMCPRuntime struct {

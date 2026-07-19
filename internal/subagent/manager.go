@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/agents"
 	"github.com/lookcorner/go-cli/internal/hooks"
+	"github.com/lookcorner/go-cli/internal/mcp"
 	"github.com/lookcorner/go-cli/internal/skills"
 	"github.com/lookcorner/go-cli/internal/tools"
 	"github.com/lookcorner/go-cli/internal/workspace"
@@ -61,6 +63,8 @@ type Config struct {
 	Hooks                   *hooks.Catalog
 	Worktrees               *worktree.Manager
 	ProgressInterval        time.Duration
+	ParentMCPServers        []mcp.ServerConfig
+	StartMCPServers         func(context.Context, string, *tools.Registry, []mcp.ServerConfig) (func(), error)
 }
 
 type Manager struct {
@@ -82,6 +86,8 @@ type Manager struct {
 	hooks                   *hooks.Catalog
 	worktrees               *worktree.Manager
 	progressInterval        time.Duration
+	parentMCPServers        []mcp.ServerConfig
+	startMCPServers         func(context.Context, string, *tools.Registry, []mcp.ServerConfig) (func(), error)
 	tasks                   map[string]*task
 }
 
@@ -107,6 +113,18 @@ type task struct {
 	model        string
 	capability   string
 	resumedFrom  string
+	mcpResource  *mcpResource
+}
+
+type mcpResource struct {
+	once  sync.Once
+	close func()
+}
+
+func (r *mcpResource) Close() {
+	if r != nil && r.close != nil {
+		r.once.Do(r.close)
+	}
 }
 
 func New(config Config) (*Manager, error) {
@@ -125,7 +143,8 @@ func New(config Config) (*Manager, error) {
 		resolveModel: config.ResolveModel, availableModels: append([]string(nil), config.AvailableModels...),
 		skills: config.Skills, skillConfig: config.SkillConfig,
 		newClient: config.NewClient, observer: config.Observer, hooks: config.Hooks, worktrees: config.Worktrees,
-		progressInterval: config.ProgressInterval, tasks: make(map[string]*task),
+		progressInterval: config.ProgressInterval, parentMCPServers: append([]mcp.ServerConfig(nil), config.ParentMCPServers...),
+		startMCPServers: config.StartMCPServers, tasks: make(map[string]*task),
 	}, nil
 }
 
@@ -225,6 +244,31 @@ func (m *Manager) Start(ctx context.Context, request tools.SubagentRequest) (too
 	} else {
 		view.FilterMCPServers(definition.MCPInheritance.Allows)
 	}
+	ownedMCP, err := m.ownedMCPServers(definition)
+	if err != nil {
+		return tools.SubagentResult{}, err
+	}
+	var ownedMCPResource *mcpResource
+	if len(ownedMCP) > 0 {
+		ownedNames := make(map[string]bool, len(ownedMCP))
+		for _, server := range ownedMCP {
+			ownedNames[server.Name] = true
+		}
+		view.FilterMCPServers(func(name string) bool { return !ownedNames[name] })
+		if m.startMCPServers == nil {
+			return tools.SubagentResult{}, errors.New("subagent-owned MCP servers are not available")
+		}
+		closeMCP, err := m.startMCPServers(m.ctx, childRoot, view, ownedMCP)
+		if err != nil {
+			return tools.SubagentResult{}, err
+		}
+		ownedMCPResource = &mcpResource{close: closeMCP}
+		defer func() {
+			if !keepRegistry {
+				ownedMCPResource.Close()
+			}
+		}()
+	}
 	childSkills, err := m.childSkills(definition, childRoot)
 	if err != nil {
 		return tools.SubagentResult{}, err
@@ -252,7 +296,7 @@ func (m *Manager) Start(ctx context.Context, request tools.SubagentRequest) (too
 		hookRuntime = &hooks.Runtime{Catalog: catalog, WorkspaceRoot: childRoot, SessionID: id, Model: model.Model, SubagentType: request.Type}
 		runner.HookPolicy = hookRuntime
 	}
-	current := &task{id: id, typeName: request.Type, description: request.Description, started: time.Now(), done: make(chan struct{}), runner: runner, hookRuntime: hookRuntime, cwd: childRoot, ownedTools: childRegistry, worktreePath: worktreePath, model: model.Model, capability: capability}
+	current := &task{id: id, typeName: request.Type, description: request.Description, started: time.Now(), done: make(chan struct{}), runner: runner, hookRuntime: hookRuntime, cwd: childRoot, ownedTools: childRegistry, worktreePath: worktreePath, model: model.Model, capability: capability, mcpResource: ownedMCPResource}
 	runner.Progress = current.updateProgress
 	m.mu.Lock()
 	m.tasks[id] = current
@@ -304,7 +348,7 @@ func (m *Manager) resume(ctx context.Context, request tools.SubagentRequest, def
 	if hookRuntime != nil {
 		runner.HookPolicy = hookRuntime
 	}
-	current := &task{id: id, typeName: request.Type, description: request.Description, started: time.Now(), done: make(chan struct{}), runner: runner, responseID: previous.responseID, hookRuntime: hookRuntime, cwd: previous.cwd, ownedTools: previous.ownedTools, worktreePath: previous.worktreePath, model: runner.Model, capability: previous.capability, resumedFrom: previous.id}
+	current := &task{id: id, typeName: request.Type, description: request.Description, started: time.Now(), done: make(chan struct{}), runner: runner, responseID: previous.responseID, hookRuntime: hookRuntime, cwd: previous.cwd, ownedTools: previous.ownedTools, worktreePath: previous.worktreePath, model: runner.Model, capability: previous.capability, resumedFrom: previous.id, mcpResource: previous.mcpResource}
 	runner.Progress = current.updateProgress
 	m.mu.Lock()
 	m.tasks[id] = current
@@ -554,10 +598,15 @@ func (m *Manager) Close() {
 		}
 	}
 	closed := make(map[*tools.Registry]bool)
+	closedMCP := make(map[*mcpResource]bool)
 	for _, current := range tasks {
 		if current.ownedTools != nil && !closed[current.ownedTools] {
 			closed[current.ownedTools] = true
 			_ = current.ownedTools.Close()
+		}
+		if current.mcpResource != nil && !closedMCP[current.mcpResource] {
+			closedMCP[current.mcpResource] = true
+			current.mcpResource.Close()
 		}
 	}
 }
@@ -591,6 +640,89 @@ func (m *Manager) resolve(model string) (ModelRuntime, bool) {
 		return ModelRuntime{Model: model, ContextWindow: m.contextWindow, CompactThresholdPercent: m.compactThresholdPercent}, true
 	}
 	return m.resolveModel(model)
+}
+
+func (m *Manager) ownedMCPServers(definition agents.Definition) ([]mcp.ServerConfig, error) {
+	if definition.Plugin != "" || len(definition.MCPServers) == 0 {
+		return nil, nil
+	}
+	parent := make(map[string]mcp.ServerConfig, len(m.parentMCPServers))
+	for _, server := range m.parentMCPServers {
+		parent[server.Name] = server
+	}
+	servers := make([]mcp.ServerConfig, 0, len(definition.MCPServers))
+	for _, ref := range definition.MCPServers {
+		if ref.Config == nil {
+			if server, ok := parent[ref.Name]; ok {
+				servers = append(servers, server)
+			}
+			continue
+		}
+		server, err := decodeMCPServer(ref)
+		if err != nil {
+			return nil, fmt.Errorf("agent %q mcpServers %q: %w", definition.Name, ref.Name, err)
+		}
+		servers = append(servers, server)
+	}
+	return servers, nil
+}
+
+func decodeMCPServer(ref agents.MCPServerRef) (mcp.ServerConfig, error) {
+	data, err := json.Marshal(ref.Config)
+	if err != nil {
+		return mcp.ServerConfig{}, err
+	}
+	var raw struct {
+		Type    string          `json:"type"`
+		Command string          `json:"command"`
+		Args    []string        `json:"args"`
+		Env     json.RawMessage `json:"env"`
+		URL     string          `json:"url"`
+		Headers json.RawMessage `json:"headers"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return mcp.ServerConfig{}, err
+	}
+	env, err := decodeNameValues(raw.Env)
+	if err != nil {
+		return mcp.ServerConfig{}, fmt.Errorf("env: %w", err)
+	}
+	headers, err := decodeNameValues(raw.Headers)
+	if err != nil {
+		return mcp.ServerConfig{}, fmt.Errorf("headers: %w", err)
+	}
+	if strings.TrimSpace(raw.Command) == "" && strings.TrimSpace(raw.URL) == "" {
+		return mcp.ServerConfig{}, errors.New("command or url is required")
+	}
+	return mcp.ServerConfig{
+		Name: ref.Name, Type: raw.Type, Command: raw.Command, Args: raw.Args,
+		Env: env, URL: raw.URL, Headers: headers,
+	}, nil
+}
+
+func decodeNameValues(raw json.RawMessage) (map[string]string, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var values map[string]string
+	if err := json.Unmarshal(raw, &values); err == nil {
+		return values, nil
+	}
+	var pairs []struct {
+		Name  string `json:"name"`
+		Value string `json:"value"`
+	}
+	if err := json.Unmarshal(raw, &pairs); err != nil {
+		return nil, errors.New("must be a string map or name/value list")
+	}
+	values = make(map[string]string, len(pairs))
+	for _, pair := range pairs {
+		if pair.Name == "" {
+			return nil, errors.New("name must not be empty")
+		}
+		values[pair.Name] = pair.Value
+	}
+	return values, nil
 }
 
 func (m *Manager) childSkills(definition agents.Definition, root string) (*skills.Catalog, error) {

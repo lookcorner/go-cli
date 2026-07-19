@@ -17,6 +17,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/agents"
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/hooks"
+	"github.com/lookcorner/go-cli/internal/mcp"
 	"github.com/lookcorner/go-cli/internal/plugin"
 	"github.com/lookcorner/go-cli/internal/skills"
 	"github.com/lookcorner/go-cli/internal/tools"
@@ -195,7 +196,7 @@ func TestSubagentFiltersInheritedMCPServers(t *testing.T) {
 	if err := os.MkdirAll(pluginDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(pluginDir, "worker.md"), []byte("---\nname: worker\ndescription: plugin worker\n---\nTest."), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(pluginDir, "worker.md"), []byte("---\nname: worker\ndescription: plugin worker\nmcpServers:\n  - private:\n      command: blocked\n---\nTest."), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	catalog, loadErrors := agents.Discover(agents.Config{Plugins: []plugin.Plugin{{Name: "fixture", AgentDirs: []string{pluginDir}, Executable: true}}})
@@ -234,6 +235,110 @@ func TestSubagentFiltersInheritedMCPServers(t *testing.T) {
 		if got := strings.Join(names, "|"); got != test.want {
 			t.Fatalf("%s MCP tools=%q want=%q", test.typeName, got, test.want)
 		}
+	}
+}
+
+func TestSubagentStartsAgentOwnedMCPServers(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("GROK_HOME", filepath.Join(home, ".grok"))
+	agentPath := filepath.Join(home, ".grok", "agents", "mcp-agent.md")
+	if err := os.MkdirAll(filepath.Dir(agentPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	definition := `---
+name: mcp-agent
+description: Uses private MCP servers
+mcpServers:
+  - parent
+  - missing
+  - owned:
+      command: owned-mcp
+      args: [--stdio]
+      env: {TOKEN: secret}
+  - name: remote
+    type: http
+    url: https://mcp.example/rpc
+    headers:
+      - name: Authorization
+        value: Bearer token
+---
+Use the owned tools.`
+	if err := os.WriteFile(agentPath, []byte(definition), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	if err := registry.Register(fixtureMCPTool{name: "parent_shared", server: "parent"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(fixtureMCPTool{name: "other_shared", server: "other"}); err != nil {
+		t.Fatal(err)
+	}
+	catalog, loadErrors := agents.Discover(agents.Config{})
+	if len(loadErrors) != 0 {
+		t.Fatal(loadErrors)
+	}
+	client := &sequenceClient{results: []api.StreamResult{{ResponseID: "owned-1", Text: "first"}, {ResponseID: "owned-2", Text: "second"}}}
+	var started []mcp.ServerConfig
+	var resourceCtx context.Context
+	closed := 0
+	manager, err := New(Config{
+		Context: context.Background(), Catalog: catalog, Tools: registry, WorkspaceRoot: root,
+		NewClient:        func(ModelRuntime) (agent.ResponseStreamer, error) { return client, nil },
+		ParentMCPServers: []mcp.ServerConfig{{Name: "parent", Command: "parent-mcp"}},
+		StartMCPServers: func(ctx context.Context, gotRoot string, child *tools.Registry, servers []mcp.ServerConfig) (func(), error) {
+			resourceCtx = ctx
+			if gotRoot != root {
+				t.Fatalf("root=%q want=%q", gotRoot, root)
+			}
+			started = append(started, servers...)
+			for _, server := range servers {
+				if err := child.Register(fixtureMCPTool{name: "owned_" + server.Name, server: server.Name}); err != nil {
+					return nil, err
+				}
+			}
+			return func() { closed++ }, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	caller, cancelCaller := context.WithCancel(context.Background())
+	first, err := manager.Start(caller, tools.SubagentRequest{Prompt: "first", Description: "first", Type: "mcp-agent", BackgroundSet: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelCaller()
+	select {
+	case <-resourceCtx.Done():
+		t.Fatal("owned MCP lifetime was tied to one caller")
+	default:
+	}
+	if len(started) != 3 || started[0].Name != "parent" || started[0].Command != "parent-mcp" || started[1].Name != "owned" || started[1].Env["TOKEN"] != "secret" || started[2].Name != "remote" || started[2].Headers["Authorization"] != "Bearer token" {
+		t.Fatalf("started=%#v", started)
+	}
+	toolNames := make(map[string]bool)
+	for _, tool := range client.requests[0].Tools {
+		toolNames[tool.Name] = true
+	}
+	if !toolNames["owned_parent"] || !toolNames["owned_owned"] || !toolNames["owned_remote"] || !toolNames["other_shared"] || toolNames["parent_shared"] {
+		t.Fatalf("tools=%#v", toolNames)
+	}
+	if _, err := manager.Start(context.Background(), tools.SubagentRequest{Prompt: "second", Description: "second", Type: "mcp-agent", ResumeFrom: first.ID, BackgroundSet: true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(started) != 3 {
+		t.Fatalf("resume restarted MCP servers: %#v", started)
+	}
+	manager.Close()
+	if closed != 1 {
+		t.Fatalf("MCP close count=%d", closed)
 	}
 }
 

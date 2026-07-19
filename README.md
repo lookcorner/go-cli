@@ -715,8 +715,10 @@ use `x.ai/task/list`, `x.ai/task/kill`, `x.ai/task_backgrounded`, and
 `x.ai/task_completed`. Running and completed subagent snapshots report real
 turn, tool-call, token, context-usage, unique-tool, and error metrics. ACP also
 pushes reference-shaped `subagent_spawned`, rate-limited `subagent_progress`,
-and `subagent_finished` session notifications. Durable cross-process task
-recovery, notification persistence/auto-wake, and agent-owned `mcpServers` plus
+and `subagent_finished` session notifications. User and trusted-project agent
+definitions may attach named or inline `mcpServers`; owned servers override an
+inherited server with the same name and remain private to that subagent.
+Durable cross-process task recovery, notification persistence/auto-wake, and
 `bypassPermissions` execution are not implemented yet.
 
 The same direct-install lifecycle is available outside ACP:

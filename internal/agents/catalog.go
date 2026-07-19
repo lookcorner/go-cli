@@ -2,6 +2,7 @@ package agents
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,6 +35,7 @@ type Definition struct {
 	DiscoverSkills  bool
 	InheritSkills   bool
 	MCPInheritance  MCPInheritance
+	MCPServers      []MCPServerRef
 	Hooks           json.RawMessage
 	Builtin         bool
 }
@@ -41,6 +43,51 @@ type Definition struct {
 type MCPInheritance struct {
 	Mode  string
 	Names []string
+}
+
+type MCPServerRef struct {
+	Name   string
+	Config map[string]any
+}
+
+type mcpServerRefs []MCPServerRef
+
+func (r *mcpServerRefs) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.SequenceNode {
+		return errors.New("mcpServers must be a list")
+	}
+	for _, item := range node.Content {
+		if item.Kind == yaml.ScalarNode && item.Tag == "!!str" {
+			name := strings.TrimSpace(item.Value)
+			if name == "" {
+				return errors.New("mcpServers name must not be empty")
+			}
+			*r = append(*r, MCPServerRef{Name: name})
+			continue
+		}
+		if item.Kind != yaml.MappingNode {
+			return errors.New("mcpServers entry must be a string or object")
+		}
+		var config map[string]any
+		if err := item.Decode(&config); err != nil {
+			return fmt.Errorf("mcpServers entry: %w", err)
+		}
+		if name, _ := config["name"].(string); strings.TrimSpace(name) != "" {
+			*r = append(*r, MCPServerRef{Name: strings.TrimSpace(name), Config: config})
+			continue
+		}
+		if len(config) != 1 {
+			return errors.New("mcpServers object must contain one named config or a name field")
+		}
+		for name, value := range config {
+			inline, ok := value.(map[string]any)
+			if !ok || strings.TrimSpace(name) == "" {
+				return fmt.Errorf("mcpServers inline config for %q must be an object", name)
+			}
+			*r = append(*r, MCPServerRef{Name: strings.TrimSpace(name), Config: inline})
+		}
+	}
+	return nil
 }
 
 func (m MCPInheritance) Allows(name string) bool {
@@ -107,6 +154,7 @@ type frontmatter struct {
 	DiscoverSkills  *bool           `yaml:"discoverSkills"`
 	InheritSkills   *bool           `yaml:"inheritSkills"`
 	MCPInheritance  *MCPInheritance `yaml:"mcpInheritance"`
+	MCPServers      mcpServerRefs   `yaml:"mcpServers"`
 	Hooks           yaml.Node       `yaml:"hooks"`
 }
 
@@ -387,7 +435,8 @@ func parse(path, pluginName, scope string) (Definition, error) {
 		Scope: scope, Model: strings.TrimSpace(metadata.Model), Effort: effort,
 		PermissionMode: permissionMode, Isolation: isolation,
 		Background: metadata.Background, InitialPrompt: strings.TrimSpace(metadata.InitialPrompt),
-		Skills: metadata.Skills, DiscoverSkills: discoverSkills, InheritSkills: inheritSkills, MCPInheritance: mcpInheritance, Hooks: inlineHooks,
+		Skills: metadata.Skills, DiscoverSkills: discoverSkills, InheritSkills: inheritSkills,
+		MCPInheritance: mcpInheritance, MCPServers: metadata.MCPServers, Hooks: inlineHooks,
 	}, nil
 }
 
