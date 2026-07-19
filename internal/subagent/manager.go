@@ -23,6 +23,13 @@ type Observer interface {
 	SubagentEnded(context.Context, string, string, string, int64)
 }
 
+type ModelRuntime struct {
+	Profile                 string
+	Model                   string
+	ContextWindow           int
+	CompactThresholdPercent int
+}
+
 type Config struct {
 	Context                 context.Context
 	Catalog                 *agents.Catalog
@@ -31,7 +38,9 @@ type Config struct {
 	ParentModel             string
 	ContextWindow           int
 	CompactThresholdPercent int
-	NewClient               func(string) (agent.ResponseStreamer, error)
+	ResolveModel            func(string) (ModelRuntime, bool)
+	AvailableModels         []string
+	NewClient               func(ModelRuntime) (agent.ResponseStreamer, error)
 	Observer                Observer
 	Hooks                   *hooks.Catalog
 }
@@ -46,7 +55,9 @@ type Manager struct {
 	parentModel             string
 	contextWindow           int
 	compactThresholdPercent int
-	newClient               func(string) (agent.ResponseStreamer, error)
+	resolveModel            func(string) (ModelRuntime, bool)
+	availableModels         []string
+	newClient               func(ModelRuntime) (agent.ResponseStreamer, error)
 	observer                Observer
 	hooks                   *hooks.Catalog
 	tasks                   map[string]*task
@@ -81,6 +92,7 @@ func New(config Config) (*Manager, error) {
 		ctx: ctx, cancel: cancel, catalog: config.Catalog, tools: config.Tools,
 		workspaceRoot: config.WorkspaceRoot, parentModel: config.ParentModel,
 		contextWindow: config.ContextWindow, compactThresholdPercent: config.CompactThresholdPercent,
+		resolveModel: config.ResolveModel, availableModels: append([]string(nil), config.AvailableModels...),
 		newClient: config.NewClient, observer: config.Observer, hooks: config.Hooks, tasks: make(map[string]*task),
 	}, nil
 }
@@ -134,7 +146,24 @@ func (m *Manager) Start(ctx context.Context, request tools.SubagentRequest) (too
 	if request.ResumeFrom != "" {
 		return m.resume(ctx, request, definition, background)
 	}
-	model := first(request.Model, definition.Model, m.parentModel)
+	model := ModelRuntime{Model: m.parentModel, ContextWindow: m.contextWindow, CompactThresholdPercent: m.compactThresholdPercent}
+	if request.Model != "" {
+		resolved, ok := m.resolve(request.Model)
+		if !ok {
+			valid := strings.Join(m.availableModels, ", ")
+			if valid == "" {
+				return tools.SubagentResult{}, fmt.Errorf("unknown Task.model slug %q; no valid model slugs are currently available; omit model to inherit the parent model", request.Model)
+			}
+			return tools.SubagentResult{}, fmt.Errorf("unknown Task.model slug %q; valid model slugs: %s; omit model to inherit the parent model", request.Model, valid)
+		}
+		model = resolved
+	} else if definition.Model != "" {
+		if resolved, ok := m.resolve(definition.Model); ok {
+			model = resolved
+		} else if m.resolveModel == nil {
+			model.Model = definition.Model
+		}
+	}
 	client, err := m.newClient(model)
 	if err != nil {
 		return tools.SubagentResult{}, err
@@ -146,13 +175,13 @@ func (m *Manager) Start(ctx context.Context, request tools.SubagentRequest) (too
 	view := m.tools.View(definition.Tools, definition.DisallowedTools, capability)
 	id := newID()
 	runner := &agent.Runner{
-		Client: client, Tools: view, Model: model, ReasoningEffort: effort, Instructions: definition.Prompt,
-		SessionID: id, MaxSteps: definition.MaxTurns, ContextWindow: m.contextWindow,
-		CompactThresholdPercent: m.compactThresholdPercent,
+		Client: client, Tools: view, Model: model.Model, ReasoningEffort: effort, Instructions: definition.Prompt,
+		SessionID: id, MaxSteps: definition.MaxTurns, ContextWindow: model.ContextWindow,
+		CompactThresholdPercent: model.CompactThresholdPercent,
 	}
 	var hookRuntime *hooks.Runtime
 	if m.hooks != nil {
-		hookRuntime = &hooks.Runtime{Catalog: m.hooks, WorkspaceRoot: m.workspaceRoot, SessionID: id, Model: model, SubagentType: request.Type}
+		hookRuntime = &hooks.Runtime{Catalog: m.hooks, WorkspaceRoot: m.workspaceRoot, SessionID: id, Model: model.Model, SubagentType: request.Type}
 		runner.HookPolicy = hookRuntime
 	}
 	current := &task{id: id, typeName: request.Type, description: request.Description, started: time.Now(), done: make(chan struct{}), runner: runner, hookRuntime: hookRuntime}
@@ -386,6 +415,13 @@ func validEffort(value string) bool {
 	default:
 		return false
 	}
+}
+
+func (m *Manager) resolve(model string) (ModelRuntime, bool) {
+	if m.resolveModel == nil {
+		return ModelRuntime{Model: model, ContextWindow: m.contextWindow, CompactThresholdPercent: m.compactThresholdPercent}, true
+	}
+	return m.resolveModel(model)
 }
 
 func canonicalPath(path string) string {

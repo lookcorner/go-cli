@@ -402,12 +402,21 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	for _, agentErr := range agentErrors {
 		fmt.Fprintln(statusOutput, "[gork] agent definition:", agentErr)
 	}
+	resolveSubagentModel := func(slug string) (subagent.ModelRuntime, bool) {
+		resolved, ok := cfg.ResolveModel(slug)
+		return subagent.ModelRuntime{Profile: slug, Model: resolved.Model, ContextWindow: resolved.ContextWindow, CompactThresholdPercent: resolved.AutoCompactThresholdPercent}, ok
+	}
 	subagents, err := subagent.New(subagent.Config{
 		Context: ctx, Catalog: agentCatalog, Tools: registry, WorkspaceRoot: ws.Root(), ParentModel: cfg.Model,
 		ContextWindow: cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,
-		NewClient: func(model string) (agent.ResponseStreamer, error) {
+		ResolveModel: resolveSubagentModel, AvailableModels: cfg.ModelSlugs(),
+		NewClient: func(model subagent.ModelRuntime) (agent.ResponseStreamer, error) {
 			child := cfg
-			child.Model = model
+			if model.Profile != "" {
+				child, _ = cfg.ResolveModel(model.Profile)
+			} else {
+				child.Model = model.Model
+			}
 			return newModelClient(child, tokenProvider)
 		}, Observer: hookRuntime, Hooks: hookCatalog,
 	})
@@ -1133,12 +1142,21 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		for _, agentErr := range agentErrors {
 			fmt.Fprintln(statusOutput, "[gork] agent definition:", agentErr)
 		}
+		resolveSubagentModel := func(slug string) (subagent.ModelRuntime, bool) {
+			resolved, ok := sessionCfg.ResolveModel(slug)
+			return subagent.ModelRuntime{Profile: slug, Model: resolved.Model, ContextWindow: resolved.ContextWindow, CompactThresholdPercent: resolved.AutoCompactThresholdPercent}, ok
+		}
 		subagentManager, err = subagent.New(subagent.Config{
 			Context: sessionCtx, Catalog: agentCatalog, Tools: registry, WorkspaceRoot: ws.Root(), ParentModel: sessionCfg.Model,
 			ContextWindow: sessionCfg.ContextWindow, CompactThresholdPercent: sessionCfg.AutoCompactThresholdPercent,
-			NewClient: func(model string) (agent.ResponseStreamer, error) {
+			ResolveModel: resolveSubagentModel, AvailableModels: sessionCfg.ModelSlugs(),
+			NewClient: func(model subagent.ModelRuntime) (agent.ResponseStreamer, error) {
 				child := sessionCfg
-				child.Model = model
+				if model.Profile != "" {
+					child, _ = sessionCfg.ResolveModel(model.Profile)
+				} else {
+					child.Model = model.Model
+				}
 				return newModelClient(child, tokenProvider)
 			}, Observer: pluginState.hookRun, Hooks: pluginState.hooks,
 		})

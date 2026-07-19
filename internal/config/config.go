@@ -56,6 +56,16 @@ type Config struct {
 	ManagedConfigURL            string                     `json:"managed_config_url,omitempty"`
 	DeploymentKey               string                     `json:"deployment_key,omitempty"`
 	FolderTrustEnabled          bool                       `json:"folder_trust_enabled"`
+	ModelProfiles               map[string]ModelProfile    `json:"-"`
+}
+
+type ModelProfile struct {
+	Model                       string
+	BaseURL                     string
+	APIKey                      string
+	Backend                     string
+	ContextWindow               int
+	AutoCompactThresholdPercent *int
 }
 
 type WebSearchConfig struct {
@@ -341,6 +351,7 @@ func Load(path string) (Config, error) {
 }
 
 func applyFileConfig(cfg *Config, disk *fileConfig) error {
+	mergeModelProfiles(cfg, disk.ModelEntries)
 	applyModelConfig(disk)
 	if disk.Models.WebSearch != "" {
 		entry, ok := disk.ModelEntries[disk.Models.WebSearch]
@@ -481,6 +492,105 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 		cfg.HTTPTimeout = duration
 	}
 	return nil
+}
+
+func mergeModelProfiles(cfg *Config, entries map[string]modelConfig) {
+	if len(entries) == 0 {
+		return
+	}
+	if cfg.ModelProfiles == nil {
+		cfg.ModelProfiles = make(map[string]ModelProfile)
+	}
+	for name, entry := range entries {
+		profile := cfg.ModelProfiles[name]
+		if entry.Model != "" {
+			profile.Model = entry.Model
+		}
+		if entry.BaseURL != "" {
+			profile.BaseURL = entry.BaseURL
+		}
+		if entry.APIKey != "" {
+			profile.APIKey = entry.APIKey
+		} else if key := firstConfiguredEnv(entry.EnvKey); key != "" {
+			profile.APIKey = key
+		}
+		if entry.Backend != "" {
+			profile.Backend = entry.Backend
+		}
+		if entry.ContextWindow > 0 {
+			profile.ContextWindow = entry.ContextWindow
+		}
+		if entry.AutoCompactThresholdPercent != nil {
+			value := *entry.AutoCompactThresholdPercent
+			profile.AutoCompactThresholdPercent = &value
+		}
+		cfg.ModelProfiles[name] = profile
+	}
+}
+
+func (c Config) ResolveModel(slug string) (Config, bool) {
+	slug = strings.TrimSpace(slug)
+	if slug == "" {
+		return Config{}, false
+	}
+	name, profile, ok := c.modelProfile(slug)
+	if !ok {
+		if slug == c.Model {
+			return c, true
+		}
+		return Config{}, false
+	}
+	result := c
+	result.Model = profile.Model
+	if result.Model == "" {
+		result.Model = name
+	}
+	if profile.BaseURL != "" {
+		result.BaseURL = strings.TrimRight(profile.BaseURL, "/")
+	}
+	if profile.APIKey != "" {
+		result.APIKey = profile.APIKey
+	}
+	if profile.Backend != "" {
+		result.Backend = profile.Backend
+	}
+	if profile.ContextWindow > 0 {
+		result.ContextWindow = profile.ContextWindow
+	}
+	if profile.AutoCompactThresholdPercent != nil {
+		result.AutoCompactThresholdPercent = *profile.AutoCompactThresholdPercent
+	}
+	return result, true
+}
+
+func (c Config) ModelSlugs() []string {
+	names := make([]string, 0, len(c.ModelProfiles))
+	for name := range c.ModelProfiles {
+		names = append(names, name)
+	}
+	if len(names) == 0 && c.Model != "" {
+		names = append(names, c.Model)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func (c Config) modelProfile(slug string) (string, ModelProfile, bool) {
+	if profile, ok := c.ModelProfiles[slug]; ok {
+		return slug, profile, true
+	}
+	names := make([]string, 0, len(c.ModelProfiles))
+	for name := range c.ModelProfiles {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		profile := c.ModelProfiles[name]
+		if profile.Model == slug {
+			return name, profile, true
+		}
+	}
+	return "", ModelProfile{}, false
 }
 
 func applyCompatConfig(target *compat.Config, source fileCompatConfig) {

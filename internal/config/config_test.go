@@ -117,6 +117,19 @@ pattern = ".env*"
 	if cfg.ContextWindow != 200000 || cfg.AutoCompactThresholdPercent != 80 {
 		t.Fatalf("unexpected compaction config: window=%d threshold=%d", cfg.ContextWindow, cfg.AutoCompactThresholdPercent)
 	}
+	if slugs := strings.Join(cfg.ModelSlugs(), ","); slugs != "local,search" {
+		t.Fatalf("model slugs=%q", slugs)
+	}
+	searchModel, ok := cfg.ResolveModel("search")
+	if !ok || searchModel.Model != "search-model-id" || searchModel.BaseURL != "https://search.example/v1" || searchModel.Backend != "responses" || searchModel.APIKey != "search-secret" {
+		t.Fatalf("search profile=%#v ok=%v", searchModel, ok)
+	}
+	if internal, ok := cfg.ResolveModel("search-model-id"); !ok || internal.Model != "search-model-id" {
+		t.Fatalf("internal profile=%#v ok=%v", internal, ok)
+	}
+	if _, ok := cfg.ResolveModel("missing"); ok {
+		t.Fatal("unknown model resolved")
+	}
 	if cfg.Pruning.KeepLastNTurns != 5 || cfg.Pruning.SoftTrimThreshold != 6000 || cfg.Pruning.SoftTrimHead != 1500 {
 		t.Fatalf("unexpected pruning config: %#v", cfg.Pruning)
 	}
@@ -152,6 +165,20 @@ pattern = ".env*"
 	}
 	if strings.Join(cfg.Skills.Paths, ",") != "~/shared-skills,project-skills" || strings.Join(cfg.Skills.Ignore, ",") != "~/shared-skills/ignored" || strings.Join(cfg.Skills.Disabled, ",") != "manual-only" {
 		t.Fatalf("unexpected skills config: %#v", cfg.Skills)
+	}
+}
+
+func TestResolveModelPrefersExactProfileKey(t *testing.T) {
+	cfg := Config{
+		Model: "collision", BaseURL: "https://parent.example/v1", Backend: "responses",
+		ModelProfiles: map[string]ModelProfile{
+			"collision": {Model: "exact-internal", BaseURL: "https://exact.example/v1", Backend: "chat_completions"},
+			"alias":     {Model: "collision", BaseURL: "https://alias.example/v1"},
+		},
+	}
+	resolved, ok := cfg.ResolveModel("collision")
+	if !ok || resolved.Model != "exact-internal" || resolved.BaseURL != "https://exact.example/v1" || resolved.Backend != "chat_completions" {
+		t.Fatalf("resolved=%#v ok=%v", resolved, ok)
 	}
 }
 

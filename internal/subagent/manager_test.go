@@ -75,7 +75,10 @@ func TestTaskToolRunsFilteredSubagentAndResumes(t *testing.T) {
 	manager, err := New(Config{
 		Context: context.Background(), Catalog: catalog, Tools: registry, WorkspaceRoot: root, ParentModel: "parent",
 		ContextWindow: 256000, CompactThresholdPercent: 80,
-		NewClient: func(string) (agent.ResponseStreamer, error) { return client, nil }, Observer: observer,
+		ResolveModel: func(model string) (ModelRuntime, bool) {
+			return ModelRuntime{Profile: model, Model: model, ContextWindow: 256000, CompactThresholdPercent: 80}, model == "parent"
+		}, AvailableModels: []string{"parent"},
+		NewClient: func(ModelRuntime) (agent.ResponseStreamer, error) { return client, nil }, Observer: observer,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -97,7 +100,7 @@ func TestTaskToolRunsFilteredSubagentAndResumes(t *testing.T) {
 			t.Fatalf("explore received disallowed tool %q", definition.Name)
 		}
 	}
-	resumeArgs := `{"prompt":"continue","description":"continue","subagent_type":"explore","run_in_background":false,"resume_from":` + strconvQuote(first.ID) + `}`
+	resumeArgs := `{"prompt":"continue","description":"continue","subagent_type":"explore","run_in_background":false,"model":"missing","resume_from":` + strconvQuote(first.ID) + `}`
 	secondRaw, err := registry.Execute(context.Background(), "task", json.RawMessage(resumeArgs))
 	if err != nil {
 		t.Fatal(err)
@@ -132,7 +135,7 @@ func TestBackgroundSubagentPollAndKill(t *testing.T) {
 	client := &sequenceClient{block: true}
 	manager, err := New(Config{
 		Context: context.Background(), Catalog: catalog, Tools: registry, WorkspaceRoot: root,
-		NewClient: func(string) (agent.ResponseStreamer, error) { return client, nil },
+		NewClient: func(ModelRuntime) (agent.ResponseStreamer, error) { return client, nil },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -170,7 +173,7 @@ func TestTaskToolExecutesUserAgentDefinition(t *testing.T) {
 	if err := os.MkdirAll(agentDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	definition := "---\nname: reviewer\ndescription: Review code\ntools: [read_file]\nmaxTurns: 3\neffort: high\ninitialPrompt: do not prepend this\n---\nOnly report review findings."
+	definition := "---\nname: reviewer\ndescription: Review code\ntools: [read_file]\nmaxTurns: 3\nmodel: role-model\neffort: high\ninitialPrompt: do not prepend this\n---\nOnly report review findings."
 	if err := os.WriteFile(filepath.Join(agentDir, "reviewer.md"), []byte(definition), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -185,8 +188,26 @@ func TestTaskToolExecutesUserAgentDefinition(t *testing.T) {
 	if len(loadErrors) != 0 {
 		t.Fatal(loadErrors)
 	}
-	client := &sequenceClient{results: []api.StreamResult{{ResponseID: "review", Text: "clean"}}}
-	manager, err := New(Config{Catalog: catalog, Tools: registry, WorkspaceRoot: root, ParentModel: "parent", NewClient: func(string) (agent.ResponseStreamer, error) { return client, nil }})
+	client := &sequenceClient{results: []api.StreamResult{{ResponseID: "review", Text: "clean"}, {ResponseID: "fallback", Text: "fallback"}}}
+	var createdModels, createdProfiles []string
+	manager, err := New(Config{
+		Catalog: catalog, Tools: registry, WorkspaceRoot: root, ParentModel: "parent",
+		ResolveModel: func(model string) (ModelRuntime, bool) {
+			switch model {
+			case "parent":
+				return ModelRuntime{Profile: "parent", Model: "parent", ContextWindow: 256000, CompactThresholdPercent: 80}, true
+			case "fast":
+				return ModelRuntime{Profile: "fast", Model: "fast-internal", ContextWindow: 64000, CompactThresholdPercent: 75}, true
+			default:
+				return ModelRuntime{}, false
+			}
+		}, AvailableModels: []string{"fast", "parent"},
+		NewClient: func(model ModelRuntime) (agent.ResponseStreamer, error) {
+			createdModels = append(createdModels, model.Model)
+			createdProfiles = append(createdProfiles, model.Profile)
+			return client, nil
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,12 +215,31 @@ func TestTaskToolExecutesUserAgentDefinition(t *testing.T) {
 	if err := registry.SetSubagentBackend(manager); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := registry.Execute(context.Background(), "task", json.RawMessage(`{"prompt":"review","description":"review","subagent_type":"reviewer","run_in_background":false,"reasoning_effort":"low"}`)); err != nil {
+	if _, err := registry.Execute(context.Background(), "task", json.RawMessage(`{"prompt":"review","description":"review","subagent_type":"reviewer","run_in_background":false,"model":"fast","reasoning_effort":"low"}`)); err != nil {
 		t.Fatal(err)
 	}
 	request := client.requests[0]
-	if !strings.Contains(request.Instructions, "Only report review findings") || len(request.Tools) != 1 || request.Tools[0].Name != "read_file" || request.Reasoning == nil || request.Reasoning.Effort != "low" || request.Input[0].Content != "review" {
+	if len(createdModels) != 1 || createdModels[0] != "fast-internal" || createdProfiles[0] != "fast" || !strings.Contains(request.Instructions, "Only report review findings") || len(request.Tools) != 1 || request.Tools[0].Name != "read_file" || request.Reasoning == nil || request.Reasoning.Effort != "low" || request.Input[0].Content != "review" {
 		t.Fatalf("request=%#v", request)
+	}
+	foundFast := false
+	for _, current := range manager.tasks {
+		if current.runner.Model == "fast-internal" {
+			foundFast = true
+			if current.runner.ContextWindow != 64000 || current.runner.CompactThresholdPercent != 75 {
+				t.Fatalf("fast runtime context=%d threshold=%d", current.runner.ContextWindow, current.runner.CompactThresholdPercent)
+			}
+		}
+	}
+	if !foundFast {
+		t.Fatal("fast runtime task not found")
+	}
+	fallback, err := manager.Start(context.Background(), tools.SubagentRequest{Prompt: "fallback", Description: "fallback", Type: "reviewer", BackgroundSet: true})
+	if err != nil || fallback.Output != "fallback" || len(createdModels) != 2 || createdModels[1] != "parent" {
+		t.Fatalf("fallback=%#v models=%#v err=%v", fallback, createdModels, err)
+	}
+	if _, err := manager.Start(context.Background(), tools.SubagentRequest{Prompt: "x", Description: "x", Type: "reviewer", Model: "missing"}); err == nil || !strings.Contains(err.Error(), "valid model slugs: fast, parent") {
+		t.Fatalf("unknown model error=%v", err)
 	}
 }
 
@@ -226,7 +266,7 @@ func TestBypassPermissionsAgentFailsExplicitly(t *testing.T) {
 	if len(loadErrors) != 0 {
 		t.Fatal(loadErrors)
 	}
-	manager, err := New(Config{Catalog: catalog, Tools: registry, WorkspaceRoot: root, NewClient: func(string) (agent.ResponseStreamer, error) { return &sequenceClient{}, nil }})
+	manager, err := New(Config{Catalog: catalog, Tools: registry, WorkspaceRoot: root, NewClient: func(ModelRuntime) (agent.ResponseStreamer, error) { return &sequenceClient{}, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}
