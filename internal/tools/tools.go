@@ -120,17 +120,19 @@ func ToolCallFromContext(ctx context.Context) (ToolCallContext, bool) {
 }
 
 type Registry struct {
-	mu         sync.RWMutex
-	tools      map[string]Tool
-	approver   Approver
-	processes  *ProcessManager
-	goal       *GoalStore
-	readPolicy Approver
-	hunks      *HunkTracker
-	rewind     *mutationCheckpoint
-	readFile   *readFileTool
-	webFetch   *webFetchTool
-	subagents  *subagentHolder
+	mu            sync.RWMutex
+	tools         map[string]Tool
+	approver      Approver
+	processes     *ProcessManager
+	goal          *GoalStore
+	scheduler     *Scheduler
+	ownsScheduler bool
+	readPolicy    Approver
+	hunks         *HunkTracker
+	rewind        *mutationCheckpoint
+	readFile      *readFileTool
+	webFetch      *webFetchTool
+	subagents     *subagentHolder
 }
 
 type mutationCheckpoint struct {
@@ -215,6 +217,7 @@ func NewRegistry(ws *workspace.Workspace, approver Approver) *Registry {
 	subagents := &subagentHolder{}
 	todos := newTodoStore()
 	goal := NewGoalStore()
+	scheduler := NewScheduler()
 	rewind := &mutationCheckpoint{}
 	processes.rewind = rewind
 	readFile := &readFileTool{ws: ws}
@@ -241,12 +244,15 @@ func NewRegistry(ws *workspace.Workspace, approver Approver) *Registry {
 		&searchReplaceTool{ws: ws, approver: approver, rewind: rewind},
 		&todoWriteTool{store: todos},
 		&updateGoalTool{store: goal},
+		&schedulerCreateTool{scheduler: scheduler},
+		&schedulerListTool{scheduler: scheduler},
+		&schedulerDeleteTool{scheduler: scheduler},
 		webFetch,
 	}
 	registry := &Registry{
 		tools: make(map[string]Tool, len(items)), approver: approver, processes: processes, goal: goal,
 		hunks: NewHunkTracker(ws), rewind: rewind, readFile: readFile, webFetch: webFetch,
-		subagents: subagents,
+		subagents: subagents, scheduler: scheduler, ownsScheduler: true,
 	}
 	for _, item := range items {
 		registry.tools[item.Definition().Name] = item
@@ -260,6 +266,11 @@ func (r *Registry) ForWorkspace(ws *workspace.Workspace) *Registry {
 		return nil
 	}
 	child := NewRegistry(ws, r.approver)
+	_ = child.scheduler.Close()
+	child.scheduler, child.ownsScheduler = r.scheduler, false
+	for _, name := range []string{"scheduler_create", "scheduler_list", "scheduler_delete"} {
+		delete(child.tools, name)
+	}
 	r.mu.RLock()
 	child.readPolicy = r.readPolicy
 	if r.webFetch != nil {
@@ -275,6 +286,11 @@ func (r *Registry) ForWorkspace(ws *workspace.Workspace) *Registry {
 			continue
 		}
 		if _, workspaceBound := child.tools[name]; !workspaceBound {
+			child.tools[name] = tool
+		}
+	}
+	for _, name := range []string{"scheduler_create", "scheduler_list", "scheduler_delete"} {
+		if tool := r.tools[name]; tool != nil {
 			child.tools[name] = tool
 		}
 	}
@@ -365,6 +381,26 @@ func (r *Registry) SetProcessObserver(observer ProcessObserver) {
 	}
 }
 
+func (r *Registry) ConfigureSchedulerState(artifactDir string) error {
+	if r == nil || r.scheduler == nil {
+		return errors.New("scheduler unavailable")
+	}
+	return r.scheduler.Configure(filepath.Join(artifactDir, "scheduler.json"))
+}
+
+func (r *Registry) SetSchedulerObserver(observer SchedulerObserver) {
+	if r != nil && r.scheduler != nil {
+		r.scheduler.SetObserver(observer)
+	}
+}
+
+func (r *Registry) DeleteScheduledTask(id string) (bool, error) {
+	if r == nil || r.scheduler == nil {
+		return false, nil
+	}
+	return r.scheduler.Delete(id)
+}
+
 func (r *Registry) KillBackgroundTask(ctx context.Context, id string) (string, error) {
 	if r == nil || r.processes == nil {
 		return "not_found", nil
@@ -393,14 +429,17 @@ func (r *Registry) SetReadPolicy(approver Approver) {
 }
 
 func (r *Registry) Close() error {
-	var stateErr, processErr error
+	var stateErr, processErr, schedulerErr error
 	if r.hunks != nil {
 		stateErr = r.hunks.saveState()
 	}
 	if r.processes != nil {
 		processErr = r.processes.Close()
 	}
-	return errors.Join(stateErr, processErr)
+	if r.ownsScheduler && r.scheduler != nil {
+		schedulerErr = r.scheduler.Close()
+	}
+	return errors.Join(stateErr, processErr, schedulerErr)
 }
 
 func (r *Registry) Register(tool Tool) error {
@@ -519,7 +558,7 @@ func (r *Registry) View(allowed, denied []string, capability string) *Registry {
 		}
 		items[name] = tool
 	}
-	return &Registry{tools: items, approver: r.approver, readPolicy: r.readPolicy, hunks: r.hunks, rewind: r.rewind, readFile: r.readFile, webFetch: r.webFetch, subagents: r.subagents}
+	return &Registry{tools: items, approver: r.approver, readPolicy: r.readPolicy, hunks: r.hunks, rewind: r.rewind, readFile: r.readFile, webFetch: r.webFetch, subagents: r.subagents, scheduler: r.scheduler}
 }
 
 func toolNameSet(values []string) map[string]bool {
@@ -548,7 +587,7 @@ func toolNameSet(values []string) map[string]bool {
 func capabilityAllows(capability, name string) bool {
 	switch strings.ToLower(strings.TrimSpace(capability)) {
 	case "read-only", "readonly":
-		return name != "write_file" && name != "edit_file" && name != "search_replace" && name != "shell" && name != "run_terminal_cmd" && name != "monitor" && name != "start_command" && name != "kill_command"
+		return name != "write_file" && name != "edit_file" && name != "search_replace" && name != "shell" && name != "run_terminal_cmd" && name != "monitor" && name != "start_command" && name != "kill_command" && !strings.HasPrefix(name, "scheduler_")
 	case "read-write", "readwrite":
 		return name != "shell" && name != "run_terminal_cmd" && name != "monitor" && name != "start_command" && name != "kill_command"
 	case "execute":

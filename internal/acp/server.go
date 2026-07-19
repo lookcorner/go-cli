@@ -101,6 +101,7 @@ type session struct {
 	mode         string
 	mcpServers   []MCPServer
 	wakeQueue    []syntheticWake
+	activeWakeID string
 	closed       bool
 }
 
@@ -239,6 +240,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleHooks(ctx, incoming)
 		case "x.ai/task/list", "x.ai/task/kill":
 			s.handleTasks(ctx, incoming)
+		case "x.ai/scheduler/delete":
+			s.handleScheduler(incoming)
 		case "x.ai/subagent/get", "x.ai/subagent/list_running", "x.ai/subagent/cancel":
 			s.handleSubagents(ctx, incoming)
 		case "x.ai/marketplace/list", "x.ai/marketplace/action":
@@ -489,9 +492,10 @@ func (s *Server) handleSessionSummaries(incoming message) {
 func (s *Server) handleStaticExtension(incoming message) {
 	switch incoming.Method {
 	case "x.ai/commands/list":
-		s.respond(incoming.ID, map[string]any{"commands": []any{map[string]any{
-			"name": "compact", "description": "Compress conversation history to save context window",
-		}}})
+		s.respond(incoming.ID, map[string]any{"commands": []any{
+			map[string]any{"name": "compact", "description": "Compress conversation history to save context window"},
+			map[string]any{"name": "loop", "description": "Run a prompt on a recurring interval", "argumentHint": "[interval] <prompt>"},
+		}})
 	case "x.ai/workspaces/list":
 		var req struct {
 			PageSize  *int   `json:"pageSize"`
@@ -1584,6 +1588,10 @@ func (s *Server) handlePrompt(parent context.Context, incoming message) {
 	if strings.TrimSpace(prompt) == "/compact" {
 		s.handleCompactPrompt(parent, incoming, current)
 		return
+	}
+	if expanded, ok := tools.ExpandLoopCommand(prompt); ok {
+		prompt = expanded
+		content = []api.ContentPart{{Type: "input_text", Text: expanded}}
 	}
 	current.mu.Lock()
 	if current.running {

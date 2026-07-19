@@ -33,7 +33,9 @@ implementation.
 - `internal/acp` translates ACP JSON-RPC requests and responses.
 - `cmd/gork` wires configuration, domains, and interactive or ACP transports.
 - `internal/api`, `internal/mcp`, and `internal/lsp` adapt external protocols.
-- `internal/tools` adapts domain-safe workspace operations to model tools.
+- `internal/tools` adapts domain-safe workspace operations to model tools. It
+  also owns the small session-local aggregates that exist only through the
+  tool surface: todos, goal state, background processes, and scheduled prompts.
 
 Adapters may coordinate domain operations, but filesystem, Git, session, and
 conflict decisions belong in their bounded context. Domain packages do not

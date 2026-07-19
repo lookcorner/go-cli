@@ -348,6 +348,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		_ = registry.Close()
 		return err
 	}
+	if err := registry.ConfigureSchedulerState(artifactDir); err != nil {
+		_ = registry.Close()
+		return err
+	}
 	if search, enabled := cfg.WebSearchEndpoint(); enabled {
 		if err := registry.Register(tools.NewWebSearchTool(search.BaseURL, search.APIKey, search.Model, &http.Client{Timeout: cfg.HTTPTimeout})); err != nil {
 			return err
@@ -402,7 +406,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	permissionPrompts.SetNotify(func() {
 		hookRuntime.Notification(context.Background(), "permission_prompt", "Tool permission requested", "", "info")
 	})
-	registry.SetProcessObserver(&sessionProcessObserver{sessionID: logger.ID(), logger: logger, hooks: hookRuntime})
+	processObserver := &sessionProcessObserver{sessionID: logger.ID(), logger: logger, hooks: hookRuntime}
+	registry.SetProcessObserver(processObserver)
+	registry.SetSchedulerObserver(processObserver)
 	defer hookRuntime.SessionEnded(context.Background(), "closed")
 	agentCatalog, agentErrors := agents.Discover(agents.Config{
 		WorkspaceRoot: ws.Root(), ProjectTrusted: projectTrusted, Compat: cfg.Compat, Plugins: plugins,
@@ -474,6 +480,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		}
 		return goalLoop(ctx, runner, registry, stdout, stderr, prompt, opts.previousID, opts.goalRuns)
 	}
+	prompt, _ = tools.ExpandLoopCommand(prompt)
 	result, err := runner.RunTurn(ctx, prompt, opts.previousID)
 	if err != nil {
 		return err
@@ -1116,6 +1123,30 @@ func (o *sessionProcessObserver) MonitorEvent(event tools.MonitorEvent) {
 	}
 }
 
+func (o *sessionProcessObserver) ScheduledTaskCreated(event tools.ScheduledTaskCreated) {
+	if o.logger != nil {
+		_ = o.logger.Append("scheduled_task_created", acp.ScheduledTaskCreatedUpdate(event))
+	}
+	if o.server != nil {
+		o.server.NotifyScheduledTaskCreated(o.sessionID, event)
+	}
+}
+
+func (o *sessionProcessObserver) ScheduledTaskFired(event tools.ScheduledTaskFired) {
+	if o.server != nil {
+		o.server.NotifyScheduledTaskFired(o.sessionID, event)
+	}
+}
+
+func (o *sessionProcessObserver) ScheduledTaskRemoved(taskID string) {
+	if o.logger != nil {
+		_ = o.logger.Append("scheduled_task_deleted", acp.ScheduledTaskDeletedUpdate(taskID))
+	}
+	if o.server != nil {
+		o.server.NotifyScheduledTaskRemoved(o.sessionID, taskID)
+	}
+}
+
 func (o *sessionProcessObserver) TaskConsumed(taskID string) {
 	if o.server != nil {
 		o.server.CancelTaskWake(o.sessionID, taskID)
@@ -1245,6 +1276,11 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			ProxyEndpoint: cfg.WebFetch.ProxyEndpoint, AllowedDomains: cfg.WebFetch.AllowedDomains,
 			RestrictDomains: cfg.WebFetch.DomainsConfigured,
 		})
+		if err := registry.ConfigureSchedulerState(artifactDir); err != nil {
+			_ = logger.Close()
+			_ = registry.Close()
+			return nil, nil, err
+		}
 		registry.SetWebFetchEnabled(cfg.WebFetch.Enabled)
 		if sessionConfig.ResumePath == "" {
 			model := cfg.Model
@@ -1324,7 +1360,9 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		permissionPrompts.SetNotify(func() {
 			pluginState.hookRun.Notification(context.Background(), "permission_prompt", "Tool permission requested", "", "info")
 		})
-		registry.SetProcessObserver(&sessionProcessObserver{server: server, sessionID: logger.ID(), logger: logger, hooks: pluginState.hookRun, autoWake: sessionCfg.AutoWakeEnabled})
+		processObserver := &sessionProcessObserver{server: server, sessionID: logger.ID(), logger: logger, hooks: pluginState.hookRun, autoWake: sessionCfg.AutoWakeEnabled}
+		registry.SetProcessObserver(processObserver)
+		registry.SetSchedulerObserver(processObserver)
 		agentCatalog, agentErrors := agents.Discover(agents.Config{
 			WorkspaceRoot: ws.Root(), ProjectTrusted: projectTrusted, Compat: sessionCfg.Compat, Plugins: plugins,
 		})
@@ -1872,7 +1910,7 @@ func interactiveLoop(
 		case "/exit", "/quit":
 			return nil
 		case "/help":
-			fmt.Fprintln(stderr, "Commands: /compact, /help, /exit. Every other line is sent as a prompt.")
+			fmt.Fprintln(stderr, "Commands: /compact, /loop, /help, /exit. Every other line is sent as a prompt.")
 			prompt = ""
 			continue
 		case "/compact":
@@ -1884,6 +1922,7 @@ func interactiveLoop(
 			prompt = ""
 			continue
 		}
+		prompt, _ = tools.ExpandLoopCommand(prompt)
 		result, err := runner.RunTurn(ctx, prompt, previousResponseID)
 		if err != nil {
 			fmt.Fprintln(stderr, "[gork] turn failed:", err)

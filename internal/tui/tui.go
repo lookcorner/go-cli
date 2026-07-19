@@ -153,6 +153,7 @@ func (m *model) Init() tea.Cmd {
 	}
 	prompt := m.initial
 	m.initial = ""
+	prompt, _ = tools.ExpandLoopCommand(prompt)
 	turnCtx, cancel := context.WithCancel(m.ctx)
 	m.turnCancel = cancel
 	m.running = true
@@ -268,6 +269,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.status = "compacting context"
 			return m, runCompact(turnCtx, m.runner, m.previousID)
 		}
+		prompt, _ = tools.ExpandLoopCommand(prompt)
 		m.beginTurn(prompt)
 		return m, runTurn(turnCtx, m.runner, prompt, m.previousID)
 	case tea.KeyBackspace:

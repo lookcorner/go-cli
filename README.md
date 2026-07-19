@@ -12,10 +12,11 @@ function-tool loop, workspace confinement, explicit mutation approval and
 local JSONL session records. See [COMPATIBILITY.md](COMPATIBILITY.md) for the
 feature-by-feature status.
 
-Interactive REPL and full-screen sessions accept `/compact` to summarize the
-current completed response chain and continue from a fresh context.
-ACP sessions accept the same command as a text prompt and advertise it through
-`x.ai/commands/list`.
+Interactive REPL, full-screen, and ACP sessions accept `/compact` to summarize
+the current completed response chain and continue from a fresh context. They
+also accept `/loop [interval] <prompt>`, which expands to the reference
+`scheduler_create` workflow without inventing a default interval. ACP advertises
+both commands through `x.ai/commands/list`.
 
 Workspace instruction and skill discovery respects repository and global Git
 ignore rules through Git's own matching engine. Project instructions load from
@@ -481,6 +482,15 @@ process is cleaned up when Gork exits. File operations resolve symlinks and
 reject paths outside the selected workspace. Shell commands start in the
 workspace, but they are not yet kernel-sandboxed; approval remains a security
 boundary.
+
+`monitor` runs a background command whose stdout is delivered as real-time,
+debounced events. It applies the reference line/batch limits, token-bucket rate
+limit, sustained-overload stop, ACP notification drain, and completion-wake
+deduplication. `scheduler_create`, `scheduler_list`, and `scheduler_delete`
+manage up to 50 one-shot or recurring prompts; intervals have a 60-second
+minimum, recurring tasks expire after seven days, and only `durable: true`
+tasks are restored from session state. ACP fires scheduled prompts through the
+serialized synthetic-turn queue and exposes `x.ai/scheduler/delete`.
 
 Each run is recorded as a mode-0600 JSONL event log under the user cache
 directory. `--session-dir` selects another location.

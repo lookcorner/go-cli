@@ -606,7 +606,7 @@ func TestStaticExtensionsAndCompactCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	commands := response["result"].(map[string]any)["commands"].([]any)
-	if len(commands) != 1 || commands[0].(map[string]any)["name"] != "compact" {
+	if len(commands) != 2 || commands[0].(map[string]any)["name"] != "compact" || commands[1].(map[string]any)["name"] != "loop" || commands[1].(map[string]any)["argumentHint"] != "[interval] <prompt>" {
 		t.Fatalf("unexpected commands response: %#v", response)
 	}
 	output.Reset()
@@ -639,6 +639,36 @@ func TestStaticExtensionsAndCompactCommand(t *testing.T) {
 	streamer.mu.Unlock()
 	if len(requests) != 1 || requests[0].PreviousResponseID != "response-1" || !strings.Contains(requests[0].Instructions, "handoff summary") {
 		t.Fatalf("unexpected compact request: %#v", requests)
+	}
+}
+
+func TestLoopCommandExpandsBeforeModelTurn(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	streamer := &fixtureStreamer{results: []api.StreamResult{{ResponseID: "loop-response", Text: "scheduled"}}}
+	current := &session{
+		id: "loop-session", ctx: context.Background(), cwd: t.TempDir(), activePrompt: -1,
+		runner: &agent.Runner{Client: streamer, Tools: registry, Model: "test-model"},
+	}
+	var output bytes.Buffer
+	server := &Server{output: &output, sessions: map[string]*session{"loop-session": current}}
+	server.handlePrompt(context.Background(), message{
+		ID: json.RawMessage("1"), Method: "session/prompt",
+		Params: json.RawMessage(`{"sessionId":"loop-session","prompt":[{"type":"text","text":"/loop every hour check deploy"}]}`),
+	})
+	server.wg.Wait()
+	streamer.mu.Lock()
+	defer streamer.mu.Unlock()
+	if len(streamer.requests) != 1 {
+		t.Fatalf("requests=%#v", streamer.requests)
+	}
+	input, _ := json.Marshal(streamer.requests[0].Input)
+	if !strings.Contains(string(input), "scheduler_create") || !strings.Contains(string(input), "every hour check deploy") || strings.Contains(string(input), `\"/loop`) {
+		t.Fatalf("loop input=%s", input)
 	}
 }
 
@@ -1183,6 +1213,81 @@ func TestMonitorEventsUseWireChannelAndSyntheticQueue(t *testing.T) {
 	completionInput, _ := json.Marshal(streamer.requests[1].Input)
 	if strings.Contains(string(completionInput), "last line") || !strings.Contains(string(completionInput), "monitor-done") || streamer.requests[1].PreviousResponseID != "monitor-wake" {
 		t.Fatalf("completion input=%s request=%#v", completionInput, streamer.requests[1])
+	}
+}
+
+func TestScheduledTaskNotificationsQueueOnceAndDelete(t *testing.T) {
+	root := t.TempDir()
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	logger, err := sessionlog.NewLoggerWithID(t.TempDir(), "parent-scheduler")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logger.Close()
+	streamer := &fixtureStreamer{results: []api.StreamResult{{ResponseID: "scheduled-response", Text: "checked"}}}
+	current := &session{
+		id: "parent-scheduler", ctx: context.Background(), cwd: root, previous: "parent-response", running: true, activePrompt: -1,
+		runner: &agent.Runner{Client: streamer, Tools: registry, Logger: logger, Model: "test"}, logPath: logger.Path(),
+	}
+	var output bytes.Buffer
+	server := &Server{output: &output, sessions: map[string]*session{"parent-scheduler": current}}
+	next := time.Now().Add(time.Minute).UTC().Format(time.RFC3339)
+	event := tools.ScheduledTaskFired{TaskID: "loop-1", Prompt: "check deployment", HumanSchedule: "every 1 minute", NextFireAt: &next}
+	server.NotifyScheduledTaskFired("parent-scheduler", event)
+	server.NotifyScheduledTaskFired("parent-scheduler", event)
+	decoder := json.NewDecoder(&output)
+	for index, method := range []string{"x.ai/scheduled_task_inject_prompt", "x.ai/scheduled_task_fired", "x.ai/scheduled_task_inject_prompt", "x.ai/scheduled_task_fired"} {
+		var message map[string]any
+		if err := decoder.Decode(&message); err != nil {
+			t.Fatal(err)
+		}
+		if message["method"] != method {
+			t.Fatalf("message %d=%#v", index, message)
+		}
+	}
+	current.mu.Lock()
+	if len(current.wakeQueue) != 1 {
+		current.mu.Unlock()
+		t.Fatalf("wake queue=%#v", current.wakeQueue)
+	}
+	current.running = false
+	current.mu.Unlock()
+	server.startNextWake(current)
+	server.wg.Wait()
+	streamer.mu.Lock()
+	if len(streamer.requests) != 1 || streamer.requests[0].PreviousResponseID != "parent-response" {
+		streamer.mu.Unlock()
+		t.Fatalf("requests=%#v", streamer.requests)
+	}
+	input, _ := json.Marshal(streamer.requests[0].Input)
+	streamer.mu.Unlock()
+	if !strings.Contains(string(input), "check deployment") {
+		t.Fatalf("scheduled input=%s", input)
+	}
+
+	created, err := registry.Execute(context.Background(), "scheduler_create", json.RawMessage(`{"interval":"1h","prompt":"later"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var createdOutput map[string]any
+	if err := json.Unmarshal([]byte(created), &createdOutput); err != nil {
+		t.Fatal(err)
+	}
+	output.Reset()
+	params, _ := json.Marshal(map[string]any{"sessionId": "parent-scheduler", "taskId": createdOutput["id"]})
+	server.handleScheduler(message{ID: json.RawMessage("1"), Method: "x.ai/scheduler/delete", Params: params})
+	var response map[string]any
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	result := response["result"].(map[string]any)["result"].(map[string]any)
+	if result["taskId"] != createdOutput["id"] || result["deleted"] != true {
+		t.Fatalf("delete response=%#v", response)
 	}
 }
 

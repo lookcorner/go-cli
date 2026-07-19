@@ -83,6 +83,28 @@ func (s *Server) QueueTaskWake(sessionID string, snapshot tools.ProcessSnapshot)
 	return true
 }
 
+func (s *Server) QueueScheduledWake(sessionID string, event tools.ScheduledTaskFired) bool {
+	current := s.lookupSession(sessionID)
+	if current == nil || s.closing.Load() {
+		return false
+	}
+	id := "scheduler:" + event.TaskID
+	current.mu.Lock()
+	if current.closed || current.ctx == nil || current.ctx.Err() != nil || s.closing.Load() || current.activeWakeID == id {
+		current.mu.Unlock()
+		return false
+	}
+	for _, wake := range current.wakeQueue {
+		if wake.id == id {
+			current.mu.Unlock()
+			return false
+		}
+	}
+	current.wakeQueue = append(current.wakeQueue, syntheticWake{id: id, prompt: event.Prompt})
+	current.mu.Unlock()
+	return true
+}
+
 func (s *Server) NotifyMonitorEvent(sessionID string, event tools.MonitorEvent) {
 	s.write(map[string]any{
 		"jsonrpc": "2.0", "method": "x.ai/monitor_event",
@@ -114,6 +136,79 @@ func MonitorEventUpdate(event tools.MonitorEvent) map[string]any {
 		"sessionUpdate": "monitor_event", "task_id": event.TaskID,
 		"description": event.Description, "event_text": event.EventText,
 	}
+}
+
+func (s *Server) NotifyScheduledTaskCreated(sessionID string, event tools.ScheduledTaskCreated) {
+	s.write(map[string]any{
+		"jsonrpc": "2.0", "method": "x.ai/scheduled_task_created",
+		"params": map[string]any{"sessionId": sessionID, "update": ScheduledTaskCreatedUpdate(event)},
+	})
+}
+
+func (s *Server) NotifyScheduledTaskFired(sessionID string, event tools.ScheduledTaskFired) {
+	s.write(map[string]any{
+		"jsonrpc": "2.0", "method": "x.ai/scheduled_task_inject_prompt",
+		"params": map[string]any{
+			"sessionId": sessionID, "taskId": event.TaskID, "prompt": event.Prompt,
+			"humanSchedule": event.HumanSchedule, "nextFireAt": event.NextFireAt,
+		},
+	})
+	s.write(map[string]any{
+		"jsonrpc": "2.0", "method": "x.ai/scheduled_task_fired",
+		"params": map[string]any{"sessionId": sessionID, "update": ScheduledTaskFiredUpdate(event)},
+	})
+	if s.QueueScheduledWake(sessionID, event) {
+		if current := s.lookupSession(sessionID); current != nil {
+			s.startNextWake(current)
+		}
+	}
+}
+
+func (s *Server) NotifyScheduledTaskRemoved(sessionID, taskID string) {
+	s.write(map[string]any{
+		"jsonrpc": "2.0", "method": "x.ai/scheduled_task_deleted",
+		"params": map[string]any{"sessionId": sessionID, "update": ScheduledTaskDeletedUpdate(taskID)},
+	})
+}
+
+func ScheduledTaskCreatedUpdate(event tools.ScheduledTaskCreated) map[string]any {
+	return map[string]any{
+		"sessionUpdate": "scheduled_task_created", "task_id": event.TaskID,
+		"prompt": event.Prompt, "human_schedule": event.HumanSchedule, "next_fire_at": event.NextFireAt,
+	}
+}
+
+func ScheduledTaskFiredUpdate(event tools.ScheduledTaskFired) map[string]any {
+	return map[string]any{
+		"sessionUpdate": "scheduled_task_fired", "task_id": event.TaskID,
+		"prompt": event.Prompt, "human_schedule": event.HumanSchedule, "next_fire_at": event.NextFireAt,
+	}
+}
+
+func ScheduledTaskDeletedUpdate(taskID string) map[string]any {
+	return map[string]any{"sessionUpdate": "scheduled_task_deleted", "task_id": taskID}
+}
+
+func (s *Server) handleScheduler(incoming message) {
+	var req struct {
+		SessionID string `json:"sessionId"`
+		TaskID    string `json:"taskId"`
+	}
+	if json.Unmarshal(incoming.Params, &req) != nil || req.SessionID == "" || req.TaskID == "" {
+		s.respondError(incoming.ID, -32602, "sessionId and taskId are required")
+		return
+	}
+	current := s.lookupSession(req.SessionID)
+	if current == nil || current.runner == nil || current.runner.Tools == nil {
+		s.respondError(incoming.ID, -32602, "unknown session")
+		return
+	}
+	deleted, err := current.runner.Tools.DeleteScheduledTask(req.TaskID)
+	if err != nil {
+		s.respond(incoming.ID, map[string]any{"result": nil, "error": err.Error()})
+		return
+	}
+	s.respond(incoming.ID, map[string]any{"result": map[string]any{"taskId": req.TaskID, "deleted": deleted}})
 }
 
 func (s *Server) queueWake(sessionID string, wake syntheticWake) bool {
@@ -193,6 +288,7 @@ func (s *Server) startNextWake(current *session) {
 	}
 	runCtx, cancel := context.WithCancel(current.ctx)
 	current.cancel, current.running = cancel, true
+	current.activeWakeID = wake.id
 	current.activePrompt = current.promptIndex
 	current.promptIndex++
 	current.updated = time.Now().UTC()
@@ -210,7 +306,7 @@ func (s *Server) startNextWake(current *session) {
 		if err == nil {
 			current.previous = turn.ResponseID
 		}
-		current.running, current.activePrompt, current.cancel = false, -1, nil
+		current.running, current.activePrompt, current.cancel, current.activeWakeID = false, -1, nil, ""
 		if pointsErr == nil {
 			current.promptIndex = len(points)
 		}
