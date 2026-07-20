@@ -16,6 +16,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/hooks"
 	"github.com/lookcorner/go-cli/internal/marketplace"
 	"github.com/lookcorner/go-cli/internal/mcp"
+	"github.com/lookcorner/go-cli/internal/memory"
 	"github.com/lookcorner/go-cli/internal/plugin"
 	"github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/skills"
@@ -82,6 +83,8 @@ type Runner struct {
 	ContextWindow           int
 	CompactThresholdPercent int
 	TwoPassCompaction       bool
+	Memory                  *memory.Store
+	MemoryConfig            memory.Config
 	UpdateMCPServers        func(context.Context, []mcp.ServerConfig) error
 	MCPServers              func() []mcp.ServerConfig
 	UpdateSkills            func(context.Context, func(*skills.Settings)) (skills.Settings, error)
@@ -92,6 +95,13 @@ type Runner struct {
 	pendingSummary          string
 	prefireMu               sync.Mutex
 	prefire                 *compactionPrefire
+	memoryMu                sync.Mutex
+	memoryInjected          bool
+	memoryFlushArmed        bool
+	memoryFlushRunning      bool
+	memoryFlushDone         chan struct{}
+	memoryFlushCount        uint64
+	memoryLastFlush         string
 	hookStart               sync.Once
 }
 
@@ -176,6 +186,7 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 	} else {
 		instructions = defaultInstructions + "\n\nAdditional user instructions:\n" + instructions
 	}
+	r.maybeStartMemoryFlush(ctx, previousResponseID)
 	promptTrace, traceable := compactionPromptTrace(prompt, content)
 	if !traceable {
 		r.clearCompactionPrefire()
@@ -204,6 +215,7 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 	if err := r.logPrompt(prompt, content, synthetic); err != nil {
 		return Result{}, fmt.Errorf("persist user prompt: %w", err)
 	}
+	content = r.injectMemoryContext(content, previousResponseID)
 	if r.Skills != nil {
 		if information := r.Skills.ExpandReferences(prompt, r.SessionID); information != "" {
 			switch value := content.(type) {
@@ -550,6 +562,8 @@ func (r *Runner) compact(ctx context.Context, previousResponseID, source string)
 	if r.HookPolicy != nil {
 		r.HookPolicy.BeforeCompact(ctx, source)
 	}
+	r.maybeStartMemoryFlush(ctx, previousResponseID)
+	r.resetMemoryFlushCycle()
 	request := api.ResponseRequest{
 		Model:        r.Model,
 		Instructions: "Create a precise successor-agent handoff summary. Preserve the user's goals, decisions, constraints, modified files, tool results, verification state, unresolved problems, and exact next actions. Do not claim unfinished work is complete.",

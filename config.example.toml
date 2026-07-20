@@ -21,6 +21,19 @@ auto_compact_threshold_percent = 85
 [features]
 # two_pass_compaction = false
 
+[memory]
+# Memory is opt-in. --experimental-memory or GROK_MEMORY=true also enables it.
+enabled = false
+
+[memory.initial_injection]
+enabled = true
+
+[compaction.memory_flush]
+enabled = true
+soft_threshold_tokens = 4000
+# flush_model = "gork-default"
+max_flush_write_chars = 8000
+
 [compaction.pruning]
 enabled = true
 keep_last_n_turns = 3

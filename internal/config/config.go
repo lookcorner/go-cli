@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/lookcorner/go-cli/internal/compat"
+	"github.com/lookcorner/go-cli/internal/memory"
 	"github.com/lookcorner/go-cli/internal/version"
 	"github.com/pelletier/go-toml/v2"
 	"golang.org/x/mod/semver"
@@ -38,6 +39,7 @@ type Config struct {
 	AutoCompactThresholdPercent     int                        `json:"auto_compact_threshold_percent,omitempty"`
 	TwoPassCompaction               bool                       `json:"two_pass_compaction,omitempty"`
 	Pruning                         PruningConfig              `json:"pruning"`
+	Memory                          memory.Config              `json:"memory"`
 	Compat                          compat.Config              `json:"compat"`
 	Skills                          SkillsConfig               `json:"skills,omitempty"`
 	Plugins                         PluginsConfig              `json:"plugins,omitempty"`
@@ -65,6 +67,9 @@ type Config struct {
 	compatConfigured                compat.Config
 	autoWakeConfigured              bool
 	twoPassCompactionConfigured     bool
+	memoryConfigured                bool
+	memoryInjectionConfigured       bool
+	memoryFlushConfigured           bool
 	goalVerifierConfigured          bool
 	goalClassifierMaxConfigured     bool
 	goalPlannerConfigured           bool
@@ -129,6 +134,11 @@ func (c Config) GoalSummaryEnabled(goalEnabled bool) bool {
 		return c.Goal.SummaryEnabled
 	}
 	return goalEnabled
+}
+
+func (c *Config) OverrideMemory(enabled bool) {
+	c.Memory.Enabled = enabled
+	c.memoryConfigured = true
 }
 
 type GoalRoleModel struct {
@@ -271,6 +281,7 @@ type fileConfig struct {
 	Session       sessionConfig              `json:"session,omitempty" toml:"session"`
 	ContextWindow int                        `json:"context_window,omitempty" toml:"context_window"`
 	Compaction    fileCompactionConfig       `json:"compaction,omitempty" toml:"compaction"`
+	Memory        *fileMemoryConfig          `json:"memory,omitempty" toml:"memory"`
 	Compat        fileCompatConfig           `json:"compat,omitempty" toml:"compat"`
 	Skills        SkillsConfig               `json:"skills,omitempty" toml:"skills"`
 	Plugins       PluginsConfig              `json:"plugins,omitempty" toml:"plugins"`
@@ -385,7 +396,24 @@ type sessionConfig struct {
 }
 
 type fileCompactionConfig struct {
-	Pruning filePruningConfig `json:"pruning,omitempty" toml:"pruning"`
+	Pruning     filePruningConfig      `json:"pruning,omitempty" toml:"pruning"`
+	MemoryFlush *fileMemoryFlushConfig `json:"memory_flush,omitempty" toml:"memory_flush"`
+}
+
+type fileMemoryConfig struct {
+	Enabled          *bool                             `json:"enabled,omitempty" toml:"enabled"`
+	InitialInjection *fileMemoryInitialInjectionConfig `json:"initial_injection,omitempty" toml:"initial_injection"`
+}
+
+type fileMemoryInitialInjectionConfig struct {
+	Enabled *bool `json:"enabled,omitempty" toml:"enabled"`
+}
+
+type fileMemoryFlushConfig struct {
+	Enabled             *bool   `json:"enabled,omitempty" toml:"enabled"`
+	SoftThresholdTokens *int    `json:"soft_threshold_tokens,omitempty" toml:"soft_threshold_tokens"`
+	FlushModel          *string `json:"flush_model,omitempty" toml:"flush_model"`
+	MaxFlushWriteChars  *int    `json:"max_flush_write_chars,omitempty" toml:"max_flush_write_chars"`
 }
 
 type filePruningConfig struct {
@@ -425,6 +453,7 @@ func Load(path string) (Config, error) {
 		AskUserQuestion:             AskUserQuestionConfig{TimeoutEnabled: true, TimeoutSeconds: 30 * 60},
 		Goal:                        GoalConfig{VerifierCount: 3, ClassifierMaxRuns: 10, ReverifyAfter: 8},
 		Pruning:                     PruningConfig{Enabled: true, KeepLastNTurns: 3, SoftTrimThreshold: 4000, SoftTrimHead: 1500, SoftTrimTail: 1500, HardClearAgeTurns: 10},
+		Memory:                      memory.DefaultConfig(),
 	}
 	if path == "" {
 		var err error
@@ -596,6 +625,7 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 		cfg.twoPassCompactionConfigured = true
 	}
 	applyPruningConfig(&cfg.Pruning, disk.Compaction.Pruning)
+	applyMemoryConfig(cfg, disk.Memory, disk.Compaction.MemoryFlush)
 	applyCompatConfig(&cfg.Compat, disk.Compat)
 	markCompatConfig(&cfg.compatConfigured, disk.Compat)
 	if disk.Skills.Paths != nil {
@@ -832,6 +862,36 @@ func applyPruningConfig(target *PruningConfig, source filePruningConfig) {
 	}
 }
 
+func applyMemoryConfig(cfg *Config, source *fileMemoryConfig, flush *fileMemoryFlushConfig) {
+	if source != nil {
+		cfg.memoryConfigured = true
+		if source.Enabled != nil {
+			cfg.Memory.Enabled = *source.Enabled
+		}
+		if source.InitialInjection != nil {
+			cfg.memoryInjectionConfigured = true
+			if source.InitialInjection.Enabled != nil {
+				cfg.Memory.InitialInjection = *source.InitialInjection.Enabled
+			}
+		}
+	}
+	if flush != nil {
+		cfg.memoryFlushConfigured = true
+		if flush.Enabled != nil {
+			cfg.Memory.Flush.Enabled = *flush.Enabled
+		}
+		if flush.SoftThresholdTokens != nil {
+			cfg.Memory.Flush.SoftThresholdTokens = *flush.SoftThresholdTokens
+		}
+		if flush.FlushModel != nil {
+			cfg.Memory.Flush.Model = strings.TrimSpace(*flush.FlushModel)
+		}
+		if flush.MaxFlushWriteChars != nil {
+			cfg.Memory.Flush.MaxWriteChars = *flush.MaxFlushWriteChars
+		}
+	}
+}
+
 func applyAskUserQuestionConfig(target *AskUserQuestionConfig, source fileAskUserQuestionConfig) {
 	if source.TimeoutEnabled != nil {
 		target.TimeoutEnabled = *source.TimeoutEnabled
@@ -932,6 +992,14 @@ func applyEnv(cfg *Config) {
 	if value, ok := envBool("GROK_TWO_PASS_COMPACTION"); ok {
 		cfg.TwoPassCompaction = value
 		cfg.twoPassCompactionConfigured = true
+	}
+	if value, ok := envBool("GROK_MEMORY"); ok {
+		cfg.Memory.Enabled = value
+		cfg.memoryConfigured = true
+	}
+	if value, ok := envBool("GROK_MEMORY_FLUSH"); ok {
+		cfg.Memory.Flush.Enabled = value
+		cfg.memoryFlushConfigured = true
 	}
 	if value := os.Getenv("GROK_DEBUG_CONTEXT_WINDOW"); value != "" {
 		if parsed, err := strconv.Atoi(value); err == nil && parsed > 0 {
@@ -1462,6 +1530,9 @@ func (c Config) Validate() error {
 	}
 	if c.Pruning.KeepLastNTurns < 0 || c.Pruning.SoftTrimThreshold < 0 || c.Pruning.SoftTrimHead < 0 || c.Pruning.SoftTrimTail < 0 || c.Pruning.HardClearAgeTurns < 0 {
 		return errors.New("compaction pruning values must not be negative")
+	}
+	if c.Memory.Enabled && c.Memory.Flush.Enabled && (c.Memory.Flush.SoftThresholdTokens < 0 || c.Memory.Flush.MaxWriteChars < 1) {
+		return errors.New("memory flush thresholds must be non-negative and max_flush_write_chars must be positive")
 	}
 	if c.WebFetch.ProxyConfigured {
 		proxy, err := url.Parse(c.WebFetch.ProxyEndpoint)

@@ -185,6 +185,17 @@ local feature value, which overrides authenticated remote settings. The default
 is off. Chat Completions and Anthropic use isolated history clones for both
 summary passes, so speculative prefire never mutates their live conversation.
 
+Cross-session workspace memory is opt-in through `[memory] enabled = true`,
+`GROK_MEMORY=true`, or `--experimental-memory`; `--no-memory` is the highest
+precedence kill switch. When enabled, `[compaction.memory_flush]` defaults to a
+4,000-token headroom and an 8,000-character write limit. Accepted structured
+Markdown is written atomically beneath `$GROK_HOME/memory/<workspace>/sessions`,
+with exact duplicates skipped. A new session receives a bounded
+`<memory-context>` block from workspace/global `MEMORY.md` files and recent
+session flushes on its first fresh turn. Existing response chains skip
+re-injection. This file-backed path intentionally remains useful without the
+still-pending semantic/vector index.
+
 The default model transport is the Responses API. For OpenAI-compatible
 providers that only expose Chat Completions, use `--backend chat_completions`
 or set `GORK_BACKEND=chat_completions`. The adapter preserves local multi-turn

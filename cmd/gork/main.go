@@ -33,6 +33,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/lsp"
 	"github.com/lookcorner/go-cli/internal/marketplace"
 	"github.com/lookcorner/go-cli/internal/mcp"
+	"github.com/lookcorner/go-cli/internal/memory"
 	"github.com/lookcorner/go-cli/internal/plugin"
 	"github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/skills"
@@ -45,27 +46,29 @@ import (
 )
 
 type options struct {
-	configPath  string
-	workspace   string
-	model       string
-	baseURL     string
-	backend     string
-	system      string
-	approval    string
-	sessionDir  string
-	maxSteps    int
-	timeout     time.Duration
-	showVersion bool
-	interactive bool
-	previousID  string
-	resume      string
-	tui         bool
-	goal        bool
-	goalRuns    int
-	acp         bool
-	trust       bool
-	allow       stringListFlag
-	deny        stringListFlag
+	configPath         string
+	workspace          string
+	model              string
+	baseURL            string
+	backend            string
+	system             string
+	approval           string
+	sessionDir         string
+	maxSteps           int
+	timeout            time.Duration
+	showVersion        bool
+	interactive        bool
+	previousID         string
+	resume             string
+	tui                bool
+	goal               bool
+	goalRuns           int
+	acp                bool
+	trust              bool
+	experimentalMemory bool
+	noMemory           bool
+	allow              stringListFlag
+	deny               stringListFlag
 }
 
 type stringListFlag []string
@@ -123,6 +126,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	flags.IntVar(&opts.goalRuns, "goal-runs", 10, "maximum turns in --goal mode")
 	flags.BoolVar(&opts.acp, "acp", false, "serve Agent Client Protocol v1 over stdio")
 	flags.BoolVar(&opts.trust, "trust", false, "trust this workspace's executable project configuration")
+	flags.BoolVar(&opts.experimentalMemory, "experimental-memory", false, "enable cross-session workspace memory")
+	flags.BoolVar(&opts.noMemory, "no-memory", false, "disable cross-session memory")
 	flags.Usage = func() {
 		fmt.Fprintf(stderr, "Usage: gork [flags] [prompt]\n       gork login [--oauth|--device-auth]\n       gork logout\n       gork setup\n       gork plugin <list|install|update|uninstall|marketplace>\n\n")
 		flags.PrintDefaults()
@@ -153,6 +158,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 	if err := prepareManagedPolicy(&cfg, opts.configPath, stderr); err != nil {
 		return err
+	}
+	if opts.noMemory {
+		cfg.OverrideMemory(false)
+	} else if opts.experimentalMemory {
+		cfg.OverrideMemory(true)
 	}
 	if opts.model != "" {
 		cfg.Model = opts.model
@@ -302,6 +312,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		}
 	}
 	defer logger.Close()
+	memoryStore, err := openMemoryStore(cfg, ws.Root(), logger.ID())
+	if err != nil {
+		return err
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -499,8 +513,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		TextOutput: stdout, StatusOutput: stderr,
 		ContextWindow: cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,
 		TwoPassCompaction: cfg.TwoPassCompaction,
-		UpdateMCPServers:  mcpRuntime.Update, MCPServers: mcpRuntime.Configs,
+		Memory:            memoryStore, MemoryConfig: cfg.Memory,
+		UpdateMCPServers: mcpRuntime.Update, MCPServers: mcpRuntime.Configs,
 	}
+	defer waitRunnerMemory(runner)
 	if opts.tui {
 		return tui.Run(ctx, runner, tuiBridge, prompt, opts.previousID, resumedTranscript, ws.Root(), cfg.Model)
 	}
@@ -1097,6 +1113,23 @@ func modelPruningConfig(cfg config.Config) api.PruningConfig {
 	}
 }
 
+func openMemoryStore(cfg config.Config, workspaceRoot, sessionID string) (*memory.Store, error) {
+	if !cfg.Memory.Enabled {
+		return nil, nil
+	}
+	root, err := memory.DefaultRoot()
+	if err != nil {
+		return nil, err
+	}
+	return memory.Open(root, workspaceRoot, sessionID)
+}
+
+func waitRunnerMemory(runner *agent.Runner) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = runner.WaitMemory(ctx)
+}
+
 type sessionPluginState struct {
 	updateMu  sync.Mutex
 	root      string
@@ -1397,6 +1430,12 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			logger, err = session.NewLogger(opts.sessionDir)
 		}
 		if err != nil {
+			_ = registry.Close()
+			return nil, nil, err
+		}
+		memoryStore, err := openMemoryStore(sessionCfg, ws.Root(), logger.ID())
+		if err != nil {
+			_ = logger.Close()
 			_ = registry.Close()
 			return nil, nil, err
 		}
@@ -1730,7 +1769,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			_, err = updatePlugins(actionCtx, update)
 			return outcome, err
 		}
-		return &agent.Runner{
+		runner := &agent.Runner{
 			Client: modelClient, Tools: registry, Skills: catalog, PluginInventory: pluginInventory, Logger: logger,
 			HookCatalog: pluginState.hooks, HookPolicy: pluginState.hookRun,
 			ListSubagents: subagentManager.List, GetSubagent: subagentManager.Output, KillSubagent: subagentManager.Kill,
@@ -1750,12 +1789,17 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			TextOutput: textOutput, StatusOutput: statusOutput,
 			ContextWindow: cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,
 			TwoPassCompaction: sessionCfg.TwoPassCompaction,
-			UpdateMCPServers:  mcpRuntime.Update, MCPServers: mcpRuntime.Configs,
+			Memory:            memoryStore, MemoryConfig: sessionCfg.Memory,
+			UpdateMCPServers: mcpRuntime.Update, MCPServers: mcpRuntime.Configs,
 			UpdateSkills:      updateSkills,
 			UpdatePlugins:     updatePlugins,
 			MarketplaceList:   func() ([]marketplace.ScanResult, error) { return marketplace.List(opts.configPath, ws.Root()) },
 			MarketplaceAction: marketplaceAction,
-		}, closeRuntime, nil
+		}
+		return runner, func() {
+			waitRunnerMemory(runner)
+			closeRuntime()
+		}, nil
 	}}
 	if err := server.Serve(ctx, stdin, stdout); err != nil {
 		fmt.Fprintln(stderr, "[gork] ACP server failed:", err)

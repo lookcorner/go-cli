@@ -193,6 +193,50 @@ func TestTwoPassCompactionPrecedence(t *testing.T) {
 	}
 }
 
+func TestMemoryDefaultsRemoteAndEnvironmentPrecedence(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	cfg, err := Load(filepath.Join(home, "missing.toml"))
+	if err != nil || cfg.Memory.Enabled || !cfg.Memory.InitialInjection || !cfg.Memory.Flush.Enabled || cfg.Memory.Flush.SoftThresholdTokens != 4000 || cfg.Memory.Flush.MaxWriteChars != 8000 {
+		t.Fatalf("defaults=%#v err=%v", cfg.Memory, err)
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{
+		MemoryEnabled: boolPointer(true), MemoryInitialInjectionEnabled: boolPointer(false),
+		FlushEnabled: boolPointer(false), FlushSoftThresholdTokens: intPointer(2000),
+	})
+	if !cfg.Memory.Enabled || cfg.Memory.InitialInjection || cfg.Memory.Flush.Enabled || cfg.Memory.Flush.SoftThresholdTokens != 2000 {
+		t.Fatalf("remote=%#v", cfg.Memory)
+	}
+	path := filepath.Join(home, "config.toml")
+	if err := os.WriteFile(path, []byte("[memory]\n[compaction.memory_flush]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{MemoryEnabled: boolPointer(true), FlushEnabled: boolPointer(false)})
+	if cfg.Memory.Enabled || !cfg.Memory.Flush.Enabled {
+		t.Fatalf("empty local sections did not block remote values: %#v", cfg.Memory)
+	}
+	t.Setenv("GROK_MEMORY", "false")
+	if err := os.WriteFile(path, []byte("[memory]\nenabled = true\n[compaction.memory_flush]\nenabled = true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{MemoryEnabled: boolPointer(true), FlushEnabled: boolPointer(false)})
+	if cfg.Memory.Enabled || !cfg.Memory.Flush.Enabled {
+		t.Fatalf("local/env precedence=%#v", cfg.Memory)
+	}
+	cfg.OverrideMemory(true)
+	if !cfg.Memory.Enabled {
+		t.Fatal("CLI memory override was not applied")
+	}
+}
+
 func TestGoalVerifierCountRemoteAndLocalPrecedence(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("GROK_HOME", home)

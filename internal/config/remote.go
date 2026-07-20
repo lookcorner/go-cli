@@ -16,6 +16,10 @@ type RemoteSettings struct {
 	WebFetchEnabled                 *bool          `json:"web_fetch_enabled"`
 	AutoWakeEnabled                 *bool          `json:"auto_wake_enabled"`
 	TwoPassCompactionEnabled        *bool          `json:"two_pass_compaction_enabled"`
+	MemoryEnabled                   *bool          `json:"memory_enabled"`
+	MemoryInitialInjectionEnabled   *bool          `json:"memory_initial_injection_enabled"`
+	FlushEnabled                    *bool          `json:"flush_enabled"`
+	FlushSoftThresholdTokens        *int           `json:"flush_soft_threshold_tokens"`
 	GoalVerifierCount               *int           `json:"goal_verifier_count"`
 	GoalClassifierMaxRuns           *uint32        `json:"goal_classifier_max_runs"`
 	GoalPlannerEnabled              *bool          `json:"goal_planner_enabled"`
@@ -98,6 +102,20 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 	}
 	if !c.twoPassCompactionConfigured && remote.TwoPassCompactionEnabled != nil {
 		c.TwoPassCompaction = *remote.TwoPassCompactionEnabled
+	}
+	if !c.memoryConfigured && remote.MemoryEnabled != nil {
+		c.Memory.Enabled = *remote.MemoryEnabled
+	}
+	if !c.memoryInjectionConfigured && remote.MemoryInitialInjectionEnabled != nil {
+		c.Memory.InitialInjection = *remote.MemoryInitialInjectionEnabled
+	}
+	if !c.memoryFlushConfigured {
+		if remote.FlushEnabled != nil {
+			c.Memory.Flush.Enabled = *remote.FlushEnabled
+		}
+		if remote.FlushSoftThresholdTokens != nil {
+			c.Memory.Flush.SoftThresholdTokens = max(0, *remote.FlushSoftThresholdTokens)
+		}
 	}
 	if !c.goalVerifierConfigured && remote.GoalVerifierCount != nil {
 		c.Goal.VerifierCount = normalizedGoalVerifierCount(*remote.GoalVerifierCount)

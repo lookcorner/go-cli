@@ -47,6 +47,18 @@ auto_compact_threshold_percent = 70
 keep_last_n_turns = 5
 soft_trim_threshold = 6000
 
+[compaction.memory_flush]
+enabled = true
+soft_threshold_tokens = 3000
+flush_model = "memory-model"
+max_flush_write_chars = 7000
+
+[memory]
+enabled = true
+
+[memory.initial_injection]
+enabled = false
+
 [mcp_servers.fixture]
 command = "fixture-mcp"
 args = ["--stdio"]
@@ -116,6 +128,9 @@ pattern = ".env*"
 	}
 	if cfg.ContextWindow != 200000 || cfg.AutoCompactThresholdPercent != 80 {
 		t.Fatalf("unexpected compaction config: window=%d threshold=%d", cfg.ContextWindow, cfg.AutoCompactThresholdPercent)
+	}
+	if !cfg.Memory.Enabled || cfg.Memory.InitialInjection || !cfg.Memory.Flush.Enabled || cfg.Memory.Flush.SoftThresholdTokens != 3000 || cfg.Memory.Flush.Model != "memory-model" || cfg.Memory.Flush.MaxWriteChars != 7000 {
+		t.Fatalf("unexpected memory config: %#v", cfg.Memory)
 	}
 	if slugs := strings.Join(cfg.ModelSlugs(), ","); slugs != "local,search" {
 		t.Fatalf("model slugs=%q", slugs)
