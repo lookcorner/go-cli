@@ -270,7 +270,10 @@ while excluding dependency, VCS, cache, and build directories. An existing
 `.grok/plan.md` is snapshotted when the goal starts; verifier prompts include
 its current path and a bounded baseline-to-current `PLAN_CHANGES` diff.
 Goal state is atomically persisted as `goal.json` in the same session artifact
-directory. `--goal --resume <session.jsonl>` reactivates an unfinished goal,
+directory. Each Goal receives a persisted UUID v4; live ACP `goal_updated`
+notifications reuse it and report parent/verification round totals, cumulative
+tokens, completed Goal-role tokens, and the active planner/verifier/strategist
+role. `--goal --resume <session.jsonl>` reactivates an unfinished goal,
 preserves its original objective and evidence baselines, and resets the
 per-resume verifier attempt and stall counters. A supplied prompt is treated as
 additional direction; a completed goal requires a new non-empty objective.

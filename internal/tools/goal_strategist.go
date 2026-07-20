@@ -63,16 +63,19 @@ func (r *Registry) RunGoalStrategist(ctx context.Context) string {
 		return ""
 	}
 	started := time.Now()
+	r.goal.setSubagentRole("strategist")
 	r.emitGoalEvent("goal_strategist_fired", map[string]any{
 		"attempt": input.attempt, "consecutive_failures": input.consecutive,
 		"every": max(uint32(1), roles.StrategistEvery), "model_id": effectiveGoalModel(roles, roles.Strategist),
 	})
 	fail := func(reason string) string {
 		r.goal.resolveStrategist("", "", false)
+		r.goal.setSubagentRole("")
 		r.emitGoalEvent("goal_strategist_failed", map[string]any{
 			"reason": reason, "attempt": input.attempt, "consecutive_failures": input.consecutive,
 			"latency_ms": elapsedMilliseconds(started),
 		})
+		r.emitGoalUpdated("strategist_failed")
 		return ""
 	}
 	backend := r.subagents.get()
@@ -110,12 +113,12 @@ Return only a short Markdown note with these headings:
 		Model: roles.Strategist.Model, HarnessType: roles.Strategist.AgentType,
 	}
 	result, err := backend.Start(ctx, request)
-	r.AddGoalTokens(result.TokensUsed)
+	r.AddGoalRoleTokens(result.TokensUsed)
 	if err != nil && roles.Strategist.valid() && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 		r.emitGoalEvent("goal_role_model_fail_open", map[string]any{"role": "strategist", "reason": "spawn_failed"})
 		request.Model, request.HarnessType = "", ""
 		result, err = backend.Start(ctx, request)
-		r.AddGoalTokens(result.TokensUsed)
+		r.AddGoalRoleTokens(result.TokensUsed)
 	}
 	note := truncateGoalStrategy(result.Output)
 	path := filepath.Join(input.artifactDir, "goal-strategy.md")
@@ -130,9 +133,11 @@ Return only a short Markdown note with these headings:
 		return fail("missing_strategy_file")
 	}
 	r.goal.resolveStrategist(path, note, true)
+	r.goal.setSubagentRole("")
 	r.emitGoalEvent("goal_strategist_completed", map[string]any{
 		"attempt": input.attempt, "consecutive_failures": input.consecutive, "latency_ms": elapsedMilliseconds(started),
 	})
+	r.emitGoalUpdated("strategist_completed")
 	return fmt.Sprintf("Strategist recommendation (%s):\n%s", path, note)
 }
 

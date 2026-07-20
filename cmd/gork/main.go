@@ -1949,6 +1949,10 @@ func goalLoop(
 	for run := 1; run <= maxRuns; run++ {
 		fmt.Fprintf(stderr, "[gork] goal run %d/%d\n", run, maxRuns)
 		result, err := runner.RunTurn(ctx, prompt, previousResponseID)
+		var workerErr error
+		if err == nil {
+			workerErr = registry.RecordGoalWorkerRound()
+		}
 		registry.AddGoalTokens(result.TokensUsed)
 		if err != nil {
 			if snapshot, limited := registry.EnforceGoalBudget(); limited {
@@ -1956,6 +1960,9 @@ func goalLoop(
 				return nil
 			}
 			return err
+		}
+		if workerErr != nil {
+			return workerErr
 		}
 		previousResponseID = result.ResponseID
 		if result.Text != "" && !strings.HasSuffix(result.Text, "\n") {

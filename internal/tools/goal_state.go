@@ -14,31 +14,36 @@ import (
 const goalStateVersion = 1
 
 type durableGoalState struct {
-	Version           int             `json:"version"`
-	Objective         string          `json:"objective"`
-	Status            string          `json:"status"`
-	Message           string          `json:"message,omitempty"`
-	VerificationRuns  uint32          `json:"verification_runs,omitempty"`
-	RoundsSinceVerify uint32          `json:"rounds_since_verify,omitempty"`
-	LastVerification  string          `json:"last_verification,omitempty"`
-	StallVerification string          `json:"stall_verification,omitempty"`
-	VerificationStall int             `json:"verification_stall,omitempty"`
-	ConsecutiveReject uint32          `json:"consecutive_not_achieved,omitempty"`
-	StrategistFiredAt uint32          `json:"last_strategist_fired_at,omitempty"`
-	StrategistBonus   uint32          `json:"strategist_cap_bonus,omitempty"`
-	StrategyPath      string          `json:"strategy_path,omitempty"`
-	StrategyNote      string          `json:"strategy_recommendation,omitempty"`
-	BaselineCommit    string          `json:"baseline_commit,omitempty"`
-	CreatedAtUnix     int64           `json:"created_at_unix"`
-	PlanBaselinePath  string          `json:"plan_baseline_path,omitempty"`
-	PlannerPlanPath   string          `json:"plan_file,omitempty"`
-	PlannerCompleted  bool            `json:"planner_completed,omitempty"`
-	SummaryAttempted  bool            `json:"summary_attempted,omitempty"`
-	ClosingSummary    string          `json:"closing_summary,omitempty"`
-	TokenBudget       int64           `json:"token_budget,omitempty"`
-	TokensUsed        int64           `json:"tokens_used,omitempty"`
-	Skeptic0SessionID string          `json:"skeptic0_session_id,omitempty"`
-	SkepticModels     []GoalRoleModel `json:"skeptic_model_assignment,omitempty"`
+	Version                int             `json:"version"`
+	GoalID                 string          `json:"goal_id"`
+	Objective              string          `json:"objective"`
+	Status                 string          `json:"status"`
+	Message                string          `json:"message,omitempty"`
+	VerificationRuns       uint32          `json:"verification_runs,omitempty"`
+	RoundsSinceVerify      uint32          `json:"rounds_since_verify,omitempty"`
+	TotalWorkerRounds      uint32          `json:"total_worker_rounds,omitempty"`
+	TotalVerifyRounds      uint32          `json:"total_verify_rounds,omitempty"`
+	LastVerification       string          `json:"last_verification,omitempty"`
+	StallVerification      string          `json:"stall_verification,omitempty"`
+	VerificationStall      int             `json:"verification_stall,omitempty"`
+	ConsecutiveReject      uint32          `json:"consecutive_not_achieved,omitempty"`
+	StrategistFiredAt      uint32          `json:"last_strategist_fired_at,omitempty"`
+	StrategistBonus        uint32          `json:"strategist_cap_bonus,omitempty"`
+	StrategyPath           string          `json:"strategy_path,omitempty"`
+	StrategyNote           string          `json:"strategy_recommendation,omitempty"`
+	BaselineCommit         string          `json:"baseline_commit,omitempty"`
+	CreatedAtUnix          int64           `json:"created_at_unix"`
+	PlanBaselinePath       string          `json:"plan_baseline_path,omitempty"`
+	PlannerPlanPath        string          `json:"plan_file,omitempty"`
+	PlannerCompleted       bool            `json:"planner_completed,omitempty"`
+	SummaryAttempted       bool            `json:"summary_attempted,omitempty"`
+	ClosingSummary         string          `json:"closing_summary,omitempty"`
+	TokenBudget            int64           `json:"token_budget,omitempty"`
+	TokensUsed             int64           `json:"tokens_used,omitempty"`
+	FinishedSubagentTokens int64           `json:"finished_subagent_tokens,omitempty"`
+	CurrentSubagentRole    string          `json:"current_subagent_role,omitempty"`
+	Skeptic0SessionID      string          `json:"skeptic0_session_id,omitempty"`
+	SkepticModels          []GoalRoleModel `json:"skeptic_model_assignment,omitempty"`
 }
 
 func (s *GoalStore) saveLocked() error {
@@ -46,21 +51,24 @@ func (s *GoalStore) saveLocked() error {
 		return nil
 	}
 	data, err := json.Marshal(durableGoalState{
-		Version: goalStateVersion, Objective: s.objective, Status: s.status, Message: s.message,
+		Version: goalStateVersion, GoalID: s.goalID, Objective: s.objective, Status: s.status, Message: s.message,
 		VerificationRuns: s.verificationRuns, RoundsSinceVerify: s.roundsSinceVerify, LastVerification: s.lastVerification,
+		TotalWorkerRounds: s.totalWorkerRounds, TotalVerifyRounds: s.totalVerifyRounds,
 		StallVerification: s.stallVerification, VerificationStall: s.verificationStall,
 		ConsecutiveReject: s.consecutiveReject, StrategistFiredAt: s.strategistFiredAt,
 		StrategistBonus: s.strategistBonus, StrategyPath: s.strategyPath, StrategyNote: s.strategyNote,
 		BaselineCommit: s.baselineCommit,
 		CreatedAtUnix:  s.createdAtUnix, PlanBaselinePath: s.planBaselinePath,
-		PlannerPlanPath:   s.plannerPlanPath,
-		PlannerCompleted:  s.plannerCompleted,
-		SummaryAttempted:  s.summaryAttempted,
-		ClosingSummary:    s.closingSummary,
-		TokenBudget:       s.tokenBudget,
-		TokensUsed:        s.tokensUsed,
-		Skeptic0SessionID: s.skeptic0SessionID,
-		SkepticModels:     s.skepticModels,
+		PlannerPlanPath:        s.plannerPlanPath,
+		PlannerCompleted:       s.plannerCompleted,
+		SummaryAttempted:       s.summaryAttempted,
+		ClosingSummary:         s.closingSummary,
+		TokenBudget:            s.tokenBudget,
+		TokensUsed:             s.tokensUsed,
+		FinishedSubagentTokens: s.finishedSubagentTokens,
+		CurrentSubagentRole:    s.currentSubagentRole,
+		Skeptic0SessionID:      s.skeptic0SessionID,
+		SkepticModels:          s.skepticModels,
 	})
 	if err != nil {
 		return err
@@ -96,6 +104,14 @@ func (s *GoalStore) loadState() error {
 	if state.Objective == "" {
 		return errors.New("goal state objective is empty")
 	}
+	generatedID := false
+	if state.GoalID == "" || !validGoalSessionID(state.GoalID) {
+		state.GoalID, err = newGoalID()
+		if err != nil {
+			return err
+		}
+		generatedID = true
+	}
 	if !validGoalStatus(state.Status) {
 		state.Status = "paused"
 		state.Message = "goal state used an unknown status and was paused"
@@ -119,6 +135,7 @@ func (s *GoalStore) loadState() error {
 		state.VerificationStall = 0
 	}
 	state.TokenBudget, state.TokensUsed = max(int64(0), state.TokenBudget), max(int64(0), state.TokensUsed)
+	state.FinishedSubagentTokens = max(int64(0), min(state.FinishedSubagentTokens, state.TokensUsed))
 	if state.StrategistBonus != goalStrategistBonus {
 		state.StrategistBonus = 0
 	}
@@ -129,8 +146,9 @@ func (s *GoalStore) loadState() error {
 	if !validGoalSessionID(state.Skeptic0SessionID) {
 		state.Skeptic0SessionID = ""
 	}
-	s.objective, s.status, s.message = state.Objective, state.Status, state.Message
+	s.goalID, s.objective, s.status, s.message = state.GoalID, state.Objective, state.Status, state.Message
 	s.verificationRuns, s.roundsSinceVerify, s.lastVerification = state.VerificationRuns, state.RoundsSinceVerify, state.LastVerification
+	s.totalWorkerRounds, s.totalVerifyRounds = state.TotalWorkerRounds, state.TotalVerifyRounds
 	s.stallVerification, s.verificationStall = state.StallVerification, state.VerificationStall
 	s.consecutiveReject, s.strategistFiredAt = state.ConsecutiveReject, state.StrategistFiredAt
 	s.strategistBonus, s.strategyPath, s.strategyNote = state.StrategistBonus, state.StrategyPath, state.StrategyNote
@@ -139,9 +157,16 @@ func (s *GoalStore) loadState() error {
 	s.plannerPlanPath = state.PlannerPlanPath
 	s.plannerCompleted = state.PlannerCompleted
 	s.summaryAttempted, s.closingSummary = state.SummaryAttempted, state.ClosingSummary
-	s.tokenBudget, s.tokensUsed = state.TokenBudget, state.TokensUsed
+	s.tokenBudget, s.tokensUsed, s.finishedSubagentTokens = state.TokenBudget, state.TokensUsed, state.FinishedSubagentTokens
+	s.currentSubagentRole = strings.TrimSpace(state.CurrentSubagentRole)
+	if s.currentSubagentRole != "planner" && s.currentSubagentRole != "verifier" && s.currentSubagentRole != "strategist" {
+		s.currentSubagentRole = ""
+	}
 	s.skeptic0SessionID = state.Skeptic0SessionID
 	s.skepticModels = validGoalRoleModels(state.SkepticModels)
+	if generatedID {
+		return s.saveLocked()
+	}
 	return nil
 }
 
@@ -158,6 +183,7 @@ func (s *GoalStore) Resume() (string, error) {
 		return "", errors.New("budget-limited goal cannot be resumed")
 	}
 	s.status, s.message = "active", ""
+	s.currentSubagentRole = ""
 	s.verificationRuns, s.verificationStall = 0, 0
 	s.stallVerification = ""
 	s.resetStrategistLocked()

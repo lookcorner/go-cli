@@ -56,10 +56,16 @@ func (r *Registry) emitGoalUpdatedWith(lastEvent string, fields map[string]any) 
 
 func (s *GoalStore) goalUpdatedLocked(lastEvent string) (GoalObserver, GoalEvent) {
 	data := map[string]any{
-		"objective": s.objective, "status": goalWireStatus(s.status, s.message, lastEvent), "phase": goalPhase(s.status),
+		"goal_id": s.goalID, "objective": s.objective, "status": goalWireStatus(s.status, s.message, lastEvent), "phase": goalPhase(s.status),
 		"classifier_max_runs": s.classifierMaxRuns, "last_event": lastEvent,
 		"last_event_timestamp": time.Now().UTC().Format(time.RFC3339Nano),
 		"elapsed_ms":           max(int64(0), time.Now().UnixMilli()-s.createdAtUnix*1000),
+	}
+	data["total_deliverables"], data["completed_deliverables"] = 0, 0
+	data["total_worker_rounds"], data["total_verify_rounds"] = s.totalWorkerRounds, s.totalVerifyRounds
+	data["token_baseline"], data["finished_subagent_tokens"] = int64(0), s.finishedSubagentTokens
+	if s.currentSubagentRole != "" {
+		data["current_subagent_role"] = s.currentSubagentRole
 	}
 	if s.verificationRuns > 0 {
 		data["classifier_runs_attempted"] = s.verificationRuns
@@ -73,6 +79,9 @@ func (s *GoalStore) goalUpdatedLocked(lastEvent string) (GoalObserver, GoalEvent
 	}
 	if s.message != "" {
 		data["message"] = s.message
+	}
+	if s.status == "paused" || s.status == "blocked" {
+		data["pause_message"] = s.message
 	}
 	if s.plannerPlanPath != "" {
 		data["plan_file"] = s.plannerPlanPath

@@ -56,6 +56,10 @@ func TestUpdateGoalLifecycle(t *testing.T) {
 	if err := store.Begin("finish the implementation"); err != nil {
 		t.Fatal(err)
 	}
+	goalID := store.Snapshot().GoalID
+	if len(goalID) != 36 || goalID[8] != '-' || goalID[13] != '-' || goalID[18] != '-' || goalID[23] != '-' || goalID[14] != '4' || !strings.ContainsRune("89ab", rune(goalID[19])) {
+		t.Fatalf("goal id is not UUID v4: %q", goalID)
+	}
 	progress, err := tool.Execute(context.Background(), json.RawMessage(`{"message":"tests are running"}`))
 	if err != nil || !strings.Contains(progress, "Progress recorded") {
 		t.Fatalf("unexpected progress result=%q err=%v", progress, err)

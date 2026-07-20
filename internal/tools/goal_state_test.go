@@ -31,6 +31,7 @@ func TestGoalStatePersistsResumesAndCompletes(t *testing.T) {
 	if err := first.BeginGoal("persist this objective"); err != nil {
 		t.Fatal(err)
 	}
+	goalID := first.GoalSnapshot().GoalID
 	if _, err := (&updateGoalTool{store: first.goal}).Execute(context.Background(), json.RawMessage(`{"completed":true,"message":"candidate"}`)); err != nil {
 		t.Fatal(err)
 	}
@@ -43,6 +44,7 @@ func TestGoalStatePersistsResumesAndCompletes(t *testing.T) {
 	if reminder, err := first.GoalReverifyReminder(8); err != nil || reminder != "" {
 		t.Fatalf("reverify reminder=%q err=%v", reminder, err)
 	}
+	first.AddGoalRoleTokens(25)
 	first.goal.recordSkeptic0Session("skeptic-child", false)
 	first.goal.skepticModelAssignments([]GoalRoleModel{{Model: "skeptic-model", AgentType: "explore"}}, 1, false)
 	strategyPath := filepath.Join(artifactDir, "goal-strategy.md")
@@ -65,7 +67,7 @@ func TestGoalStatePersistsResumesAndCompletes(t *testing.T) {
 	}
 	second := newPersistentGoalRegistry(t, root, artifactDir)
 	snapshot := second.GoalSnapshot()
-	if snapshot.Objective != "persist this objective" || snapshot.Status != "active" || snapshot.Message != "missing proof" || snapshot.VerificationRuns != 1 || snapshot.RoundsSinceVerify != 1 {
+	if snapshot.GoalID != goalID || snapshot.Objective != "persist this objective" || snapshot.Status != "active" || snapshot.Message != "missing proof" || snapshot.VerificationRuns != 1 || snapshot.RoundsSinceVerify != 1 || snapshot.TotalVerifyRounds != 1 || snapshot.TokensUsed != 25 || snapshot.FinishedSubagentTokens != 25 {
 		t.Fatalf("restored snapshot=%#v", snapshot)
 	}
 	if second.goal.skeptic0SessionID != "skeptic-child" || second.goal.lastVerification != "missing proof" || len(second.goal.skepticModels) != 1 || second.goal.skepticModels[0].Model != "skeptic-model" {
@@ -150,8 +152,11 @@ func TestGoalStateUnknownStatusPausesAndBadVersionFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	registry := newPersistentGoalRegistry(t, root, artifactDir)
-	if snapshot := registry.GoalSnapshot(); snapshot.Status != "paused" || !strings.Contains(snapshot.Message, "unknown status") || registry.goal.baselineCommit != "" || registry.goal.planBaselinePath != "" || registry.goal.skeptic0SessionID != "" {
+	if snapshot := registry.GoalSnapshot(); snapshot.GoalID == "" || snapshot.Status != "paused" || !strings.Contains(snapshot.Message, "unknown status") || registry.goal.baselineCommit != "" || registry.goal.planBaselinePath != "" || registry.goal.skeptic0SessionID != "" {
 		t.Fatalf("snapshot=%#v baseline=%q plan=%q skeptic=%q", snapshot, registry.goal.baselineCommit, registry.goal.planBaselinePath, registry.goal.skeptic0SessionID)
+	}
+	if data, err := os.ReadFile(statePath); err != nil || !strings.Contains(string(data), `"goal_id":"`) {
+		t.Fatalf("legacy state did not persist generated goal id: %q err=%v", data, err)
 	}
 	registry.Close()
 	if err := os.WriteFile(statePath, []byte(`{"version":2,"objective":"goal","status":"active"}`), 0o600); err != nil {

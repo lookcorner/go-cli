@@ -391,9 +391,30 @@ func (r *Registry) BeginGoalWithBudget(objective string, tokenBudget int64) erro
 }
 
 func (r *Registry) AddGoalTokens(tokens int) {
-	if r != nil && r.goal != nil && r.goal.addTokens(int64(tokens)) {
+	if r != nil && r.goal != nil && r.goal.addTokens(int64(tokens), false) {
 		r.emitGoalUpdated("tokens_updated")
 	}
+}
+
+func (r *Registry) AddGoalRoleTokens(tokens int) {
+	if r != nil && r.goal != nil && r.goal.addTokens(int64(tokens), true) {
+		r.emitGoalUpdated("tokens_updated")
+	}
+}
+
+func (r *Registry) RecordGoalWorkerRound() error {
+	if r == nil || r.goal == nil {
+		return nil
+	}
+	r.goal.mu.Lock()
+	defer r.goal.mu.Unlock()
+	if r.goal.status != "active" && r.goal.status != "verifying" {
+		return nil
+	}
+	if r.goal.totalWorkerRounds < ^uint32(0) {
+		r.goal.totalWorkerRounds++
+	}
+	return r.goal.saveLocked()
 }
 
 func (r *Registry) EnforceGoalBudget() (GoalSnapshot, bool) {
@@ -408,6 +429,7 @@ func (r *Registry) EnforceGoalBudget() (GoalSnapshot, bool) {
 	}
 	r.goal.status = "budget_limited"
 	r.goal.message = fmt.Sprintf("Goal token budget reached (%d of %d tokens)", r.goal.tokensUsed, r.goal.tokenBudget)
+	r.goal.currentSubagentRole = ""
 	r.goal.skeptic0SessionID, r.goal.skepticModels = "", nil
 	r.goal.resetStrategistLocked()
 	_ = r.goal.saveLocked()
@@ -476,6 +498,7 @@ func (r *Registry) StartGoalVerification(maxRuns uint32) error {
 	r.goal.mu.Unlock()
 	err := r.goal.StartVerification(maxRuns)
 	if err == nil {
+		r.goal.setSubagentRole("verifier")
 		r.emitGoalUpdated("verification_started")
 	} else if r.goal.Snapshot().Status == "paused" {
 		r.emitGoalEvent("goal_classifier_cap_reached", map[string]any{"attempt": r.goal.Snapshot().VerificationRuns})
@@ -493,6 +516,7 @@ func (r *Registry) ResolveGoalVerification(verification GoalVerification, maxRun
 	if err != nil {
 		return err
 	}
+	r.goal.setSubagentRole("")
 	snapshot := r.goal.Snapshot()
 	if snapshot.Status == "paused" {
 		reason := "back_off"

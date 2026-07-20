@@ -68,3 +68,24 @@ func TestGoalReverifyReminderRequiresActiveRefutedGoalAndFloorsThreshold(t *test
 		t.Fatalf("inactive reminder=%q err=%v snapshot=%#v", reminder, err, registry.GoalSnapshot())
 	}
 }
+
+func TestRecordGoalWorkerRoundCountsOnlyLiveGoal(t *testing.T) {
+	registry := &Registry{goal: NewGoalStore()}
+	if err := registry.BeginGoal("goal"); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.RecordGoalWorkerRound(); err != nil {
+		t.Fatal(err)
+	}
+	registry.goal.status = "verifying"
+	if err := registry.RecordGoalWorkerRound(); err != nil {
+		t.Fatal(err)
+	}
+	registry.goal.status = "blocked"
+	if err := registry.RecordGoalWorkerRound(); err != nil {
+		t.Fatal(err)
+	}
+	if got := registry.GoalSnapshot().TotalWorkerRounds; got != 2 {
+		t.Fatalf("worker rounds=%d", got)
+	}
+}

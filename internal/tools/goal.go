@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,15 +15,19 @@ import (
 )
 
 type GoalSnapshot struct {
-	Objective         string
-	Status            string
-	Message           string
-	VerificationRuns  uint32
-	PlanPath          string
-	ClosingSummary    string
-	TokenBudget       int64
-	TokensUsed        int64
-	RoundsSinceVerify uint32
+	GoalID                 string
+	Objective              string
+	Status                 string
+	Message                string
+	VerificationRuns       uint32
+	PlanPath               string
+	ClosingSummary         string
+	TokenBudget            int64
+	TokensUsed             int64
+	RoundsSinceVerify      uint32
+	TotalWorkerRounds      uint32
+	TotalVerifyRounds      uint32
+	FinishedSubagentTokens int64
 }
 
 type GoalRoleModel struct {
@@ -43,36 +48,41 @@ type GoalRoleConfig struct {
 }
 
 type GoalStore struct {
-	mu                sync.Mutex
-	objective         string
-	status            string
-	message           string
-	verificationRuns  uint32
-	roundsSinceVerify uint32
-	lastVerification  string
-	stallVerification string
-	verificationStall int
-	consecutiveReject uint32
-	strategistFiredAt uint32
-	strategistBonus   uint32
-	strategyPath      string
-	strategyNote      string
-	workspaceRoot     string
-	artifactDir       string
-	baselineCommit    string
-	createdAtUnix     int64
-	planBaselinePath  string
-	plannerPlanPath   string
-	plannerCompleted  bool
-	summaryAttempted  bool
-	closingSummary    string
-	observer          GoalObserver
-	classifierMaxRuns uint32
-	tokenBudget       int64
-	tokensUsed        int64
-	statePath         string
-	skeptic0SessionID string
-	skepticModels     []GoalRoleModel
+	mu                     sync.Mutex
+	goalID                 string
+	objective              string
+	status                 string
+	message                string
+	verificationRuns       uint32
+	totalWorkerRounds      uint32
+	totalVerifyRounds      uint32
+	roundsSinceVerify      uint32
+	lastVerification       string
+	stallVerification      string
+	verificationStall      int
+	consecutiveReject      uint32
+	strategistFiredAt      uint32
+	strategistBonus        uint32
+	strategyPath           string
+	strategyNote           string
+	workspaceRoot          string
+	artifactDir            string
+	baselineCommit         string
+	createdAtUnix          int64
+	planBaselinePath       string
+	plannerPlanPath        string
+	plannerCompleted       bool
+	summaryAttempted       bool
+	closingSummary         string
+	observer               GoalObserver
+	classifierMaxRuns      uint32
+	tokenBudget            int64
+	tokensUsed             int64
+	finishedSubagentTokens int64
+	currentSubagentRole    string
+	statePath              string
+	skeptic0SessionID      string
+	skepticModels          []GoalRoleModel
 }
 
 func NewGoalStore() *GoalStore { return &GoalStore{} }
@@ -89,10 +99,16 @@ func (s *GoalStore) BeginWithBudget(objective string, tokenBudget int64) error {
 	if s.status == "active" || s.status == "verifying" {
 		return errors.New("a goal is already active")
 	}
+	goalID, err := newGoalID()
+	if err != nil {
+		return err
+	}
+	s.goalID = goalID
 	s.objective = objective
 	s.status = "active"
 	s.message = ""
-	s.verificationRuns, s.roundsSinceVerify, s.lastVerification, s.verificationStall = 0, 0, "", 0
+	s.verificationRuns, s.roundsSinceVerify, s.totalWorkerRounds, s.totalVerifyRounds = 0, 0, 0, 0
+	s.lastVerification, s.verificationStall = "", 0
 	s.stallVerification = ""
 	s.resetStrategistLocked()
 	s.skeptic0SessionID = ""
@@ -103,7 +119,8 @@ func (s *GoalStore) BeginWithBudget(objective string, tokenBudget int64) error {
 	s.plannerPlanPath = ""
 	s.plannerCompleted = false
 	s.summaryAttempted, s.closingSummary = false, ""
-	s.tokenBudget, s.tokensUsed = max(int64(0), tokenBudget), 0
+	s.tokenBudget, s.tokensUsed, s.finishedSubagentTokens = max(int64(0), tokenBudget), 0, 0
+	s.currentSubagentRole = ""
 	return s.saveLocked()
 }
 
@@ -111,13 +128,16 @@ func (s *GoalStore) Snapshot() GoalSnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return GoalSnapshot{
+		GoalID:    s.goalID,
 		Objective: s.objective, Status: s.status, Message: s.message, VerificationRuns: s.verificationRuns,
 		PlanPath: s.plannerPlanPath, ClosingSummary: s.closingSummary, TokenBudget: s.tokenBudget, TokensUsed: s.tokensUsed,
 		RoundsSinceVerify: s.roundsSinceVerify,
+		TotalWorkerRounds: s.totalWorkerRounds, TotalVerifyRounds: s.totalVerifyRounds,
+		FinishedSubagentTokens: s.finishedSubagentTokens,
 	}
 }
 
-func (s *GoalStore) addTokens(tokens int64) bool {
+func (s *GoalStore) addTokens(tokens int64, subagent bool) bool {
 	if tokens <= 0 {
 		return false
 	}
@@ -131,8 +151,32 @@ func (s *GoalStore) addTokens(tokens int64) bool {
 	} else {
 		s.tokensUsed += tokens
 	}
+	if subagent {
+		if math.MaxInt64-s.finishedSubagentTokens < tokens {
+			s.finishedSubagentTokens = math.MaxInt64
+		} else {
+			s.finishedSubagentTokens += tokens
+		}
+	}
 	_ = s.saveLocked()
 	return true
+}
+
+func (s *GoalStore) setSubagentRole(role string) {
+	s.mu.Lock()
+	s.currentSubagentRole = role
+	_ = s.saveLocked()
+	s.mu.Unlock()
+}
+
+func newGoalID() (string, error) {
+	var value [16]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return "", fmt.Errorf("generate goal id: %w", err)
+	}
+	value[6] = value[6]&0x0f | 0x40
+	value[8] = value[8]&0x3f | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", value[:4], value[4:6], value[6:8], value[8:10], value[10:]), nil
 }
 
 func (s *GoalStore) StartVerification(maxRuns uint32) error {
@@ -147,6 +191,9 @@ func (s *GoalStore) StartVerification(maxRuns uint32) error {
 		return errors.Join(err, s.saveLocked())
 	}
 	s.verificationRuns++
+	if s.totalVerifyRounds < ^uint32(0) {
+		s.totalVerifyRounds++
+	}
 	s.roundsSinceVerify = 0
 	return s.saveLocked()
 }
@@ -160,6 +207,7 @@ func (s *GoalStore) ResolveVerification(achieved bool, message string, maxRuns u
 	s.message = strings.TrimSpace(message)
 	if achieved {
 		s.status = "completed"
+		s.currentSubagentRole = ""
 		s.skeptic0SessionID = ""
 		s.skepticModels = nil
 		s.resetStrategistLocked()

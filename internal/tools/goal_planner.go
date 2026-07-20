@@ -63,6 +63,7 @@ func (r *Registry) RunGoalPlanner(ctx context.Context) (string, error) {
 	roles := r.goalRoleConfig()
 	started := time.Now()
 	fired := func() {
+		r.goal.setSubagentRole("planner")
 		r.emitGoalEvent("goal_planner_fired", map[string]any{
 			"attempt": 1, "max_runs": 1, "model_id": effectiveGoalModel(roles, roles.Planner),
 		})
@@ -70,6 +71,7 @@ func (r *Registry) RunGoalPlanner(ctx context.Context) (string, error) {
 	}
 	fail := func(reason string, runErr error) (string, error) {
 		runErr = r.goal.finishPlanner("", "", runErr)
+		r.goal.setSubagentRole("")
 		r.emitGoalEvent("goal_planner_fail_closed", map[string]any{
 			"reason": reason, "attempt": 1, "latency_ms": elapsedMilliseconds(started),
 		})
@@ -100,12 +102,12 @@ func (r *Registry) RunGoalPlanner(ctx context.Context) (string, error) {
 		Model: roles.Planner.Model, HarnessType: roles.Planner.AgentType,
 	}
 	result, err := backend.Start(ctx, request)
-	r.AddGoalTokens(result.TokensUsed)
+	r.AddGoalRoleTokens(result.TokensUsed)
 	if err != nil && roles.Planner.valid() && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 		r.emitGoalEvent("goal_role_model_fail_open", map[string]any{"role": "planner", "reason": "spawn_failed"})
 		request.Model, request.HarnessType = "", ""
 		result, err = backend.Start(ctx, request)
-		r.AddGoalTokens(result.TokensUsed)
+		r.AddGoalRoleTokens(result.TokensUsed)
 	}
 	plan := strings.TrimSpace(result.Output)
 	if err == nil && (plan == "" || plan == "Done" || len(plan) > goalPlannerMaxBytes) {
@@ -134,6 +136,7 @@ func (r *Registry) RunGoalPlanner(ctx context.Context) (string, error) {
 	if err = r.goal.finishPlanner(planPath, baselinePath, nil); err != nil {
 		return fail("file_write_failed", err)
 	}
+	r.goal.setSubagentRole("")
 	r.emitGoalEvent("goal_planner_completed", map[string]any{"attempt": 1, "latency_ms": elapsedMilliseconds(started)})
 	r.emitGoalUpdated("planning_completed")
 	return planPath, nil

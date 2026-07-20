@@ -95,14 +95,35 @@ func TestGoalTelemetryRecordsLifecycleAndSuccessfulRoles(t *testing.T) {
 		t.Fatalf("updates=%#v", updates)
 	}
 	planning := updates[1].Data
-	if planning["last_event"] != "planning_started" || planning["phase"] != "planning" || planning["planning"] != true {
+	if planning["last_event"] != "planning_started" || planning["phase"] != "planning" || planning["planning"] != true || planning["current_subagent_role"] != "planner" {
 		t.Fatalf("planning update=%#v", planning)
 	}
-	if last := updates[len(updates)-1].Data; last["status"] != "complete" || last["phase"] != "idle" || last["classifier_runs_attempted"] != uint32(1) || last["classifier_max_runs"] != uint32(4) {
+	verifying := false
+	for _, update := range updates {
+		if update.Data["last_event"] == "verification_started" && update.Data["current_subagent_role"] == "verifier" {
+			verifying = true
+		}
+	}
+	if !verifying {
+		t.Fatalf("missing verifier role update: %#v", updates)
+	}
+	if last := updates[len(updates)-1].Data; last["status"] != "complete" || last["phase"] != "idle" || last["classifier_runs_attempted"] != uint32(1) || last["classifier_max_runs"] != uint32(4) || last["total_verify_rounds"] != uint32(1) {
 		t.Fatalf("completed update=%#v", last)
+	} else if _, exists := last["current_subagent_role"]; exists {
+		t.Fatalf("completed update retained role=%#v", last)
 	}
 	if _, exists := updates[0].Data["classifier_runs_attempted"]; exists || updates[0].Data["last_event_timestamp"] == "" {
 		t.Fatalf("created update=%#v", updates[0].Data)
+	}
+	created := updates[0].Data
+	if created["goal_id"] == "" || created["total_worker_rounds"] != uint32(0) || created["total_verify_rounds"] != uint32(0) || created["token_baseline"] != int64(0) || created["finished_subagent_tokens"] != int64(0) {
+		t.Fatalf("created wire fields=%#v", created)
+	}
+	if _, exists := created["current_subagent_role"]; exists {
+		t.Fatalf("empty optional role was serialized: %#v", created)
+	}
+	if _, exists := created["deliverables"]; exists {
+		t.Fatalf("empty optional deliverables were serialized: %#v", created)
 	}
 }
 
@@ -146,14 +167,17 @@ func TestGoalBudgetTelemetryAndRoleTokenAccounting(t *testing.T) {
 	if last := updates[len(updates)-2].Data; last["last_event"] != "tokens_updated" || last["tokens_used"] != int64(65) {
 		t.Fatalf("live token update=%#v", last)
 	}
+	if err := registry.RecordGoalWorkerRound(); err != nil {
+		t.Fatal(err)
+	}
 	registry.AddGoalTokens(40)
 	snapshot, limited := registry.EnforceGoalBudget()
-	if !limited || snapshot.TokensUsed != 105 || snapshot.TokenBudget != 100 {
+	if !limited || snapshot.TokensUsed != 105 || snapshot.TokenBudget != 100 || snapshot.FinishedSubagentTokens != 65 {
 		t.Fatalf("limited=%v snapshot=%#v", limited, snapshot)
 	}
 	updates = recorder.matching("goal_updated")
 	last := updates[len(updates)-1].Data
-	if last["status"] != "budget_limited" || last["last_event"] != "budget_exceeded" || last["token_budget"] != int64(100) || last["tokens_used"] != int64(105) {
+	if last["status"] != "budget_limited" || last["last_event"] != "budget_exceeded" || last["token_budget"] != int64(100) || last["tokens_used"] != int64(105) || last["finished_subagent_tokens"] != int64(65) || last["total_worker_rounds"] != uint32(1) {
 		t.Fatalf("last update=%#v", last)
 	}
 }
