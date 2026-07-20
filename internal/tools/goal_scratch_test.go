@@ -44,6 +44,9 @@ func TestGoalScratchCreatesRestoresAndCleansPrivateDirectory(t *testing.T) {
 	if got, ready := restored.GoalScratch(); got != scratch || !ready {
 		t.Fatalf("restored scratch=%q ready=%v, want %q", got, ready, scratch)
 	}
+	if _, err := restored.ResumeGoal(); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := (&updateGoalTool{store: restored.goal}).Execute(context.Background(), json.RawMessage(`{"completed":true}`)); err != nil {
 		t.Fatal(err)
 	}

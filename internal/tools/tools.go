@@ -448,7 +448,7 @@ func (r *Registry) PauseGoalInfrastructure(runErr error) error {
 		message = "Turn failed: " + message
 	}
 	r.goal.mu.Lock()
-	if r.goal.status != "active" {
+	if r.goal.status != "active" && r.goal.status != "verifying" {
 		r.goal.mu.Unlock()
 		return nil
 	}
@@ -460,6 +460,26 @@ func (r *Registry) PauseGoalInfrastructure(runErr error) error {
 	}
 	r.emitGoalEvent("goal_auto_paused", map[string]any{"reason": "infra"})
 	r.emitGoalUpdated("goal_infra_paused")
+	return nil
+}
+
+func (r *Registry) PauseGoalUser() error {
+	if r == nil || r.goal == nil {
+		return nil
+	}
+	r.goal.mu.Lock()
+	if r.goal.status != "active" && r.goal.status != "verifying" {
+		r.goal.mu.Unlock()
+		return nil
+	}
+	r.goal.status, r.goal.message, r.goal.currentSubagentRole = "user_paused", "", ""
+	err := r.goal.saveLocked()
+	r.goal.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	r.emitGoalEvent("goal_auto_paused", map[string]any{"reason": "user"})
+	r.emitGoalUpdated("goal_user_paused")
 	return nil
 }
 

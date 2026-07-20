@@ -117,6 +117,8 @@ func goalWireStatus(status, message, lastEvent string) string {
 		return "complete"
 	case "budget_limited":
 		return "budget_limited"
+	case "user_paused":
+		return "user_paused"
 	case "paused":
 		if lastEvent == "goal_infra_paused" || strings.HasPrefix(message, "Turn failed:") {
 			return "infra_paused"

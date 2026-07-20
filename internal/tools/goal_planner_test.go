@@ -48,6 +48,12 @@ func TestGoalPlannerPersistsPrivatePlanAndRunsOnce(t *testing.T) {
 
 	restored := newPersistentGoalRegistry(t, root, artifactDir)
 	defer restored.Close()
+	if restored.GoalSnapshot().Status != "user_paused" {
+		t.Fatalf("restored status=%q", restored.GoalSnapshot().Status)
+	}
+	if _, err := restored.ResumeGoal(); err != nil {
+		t.Fatal(err)
+	}
 	restoredBackend := &goalVerifierBackend{}
 	restored.subagents.set(restoredBackend)
 	restored.ConfigureGoalRoles(GoalRoleConfig{PlannerEnabled: true})

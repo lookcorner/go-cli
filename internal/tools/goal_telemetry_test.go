@@ -183,6 +183,39 @@ func TestGoalInfrastructureFailurePausesPersistsAndEmits(t *testing.T) {
 	}
 }
 
+func TestGoalUserPausePersistsAndEmits(t *testing.T) {
+	root, artifactDir := t.TempDir(), filepath.Join(t.TempDir(), "artifacts")
+	registry := newPersistentGoalRegistry(t, root, artifactDir)
+	recorder := &goalEventRecorder{}
+	registry.SetGoalObserver(recorder)
+	if err := registry.BeginGoal("pause on cancel"); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.PauseGoalUser(); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot := registry.GoalSnapshot(); snapshot.Status != "user_paused" || snapshot.Message != "" {
+		t.Fatalf("snapshot=%#v", snapshot)
+	}
+	paused := recorder.matching("goal_auto_paused")
+	updates := recorder.matching("goal_updated")
+	last := updates[len(updates)-1].Data
+	if len(paused) != 1 || paused[0].Data["reason"] != "user" || last["status"] != "user_paused" || last["last_event"] != "goal_user_paused" {
+		t.Fatalf("events=%#v", recorder.events)
+	}
+	if err := registry.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restored := newPersistentGoalRegistry(t, root, artifactDir)
+	defer restored.Close()
+	if snapshot := restored.GoalSnapshot(); snapshot.Status != "user_paused" || snapshot.Message != "" {
+		t.Fatalf("restored snapshot=%#v", snapshot)
+	}
+	if _, err := restored.ResumeGoal(); err != nil || restored.GoalSnapshot().Status != "active" {
+		t.Fatalf("resume snapshot=%#v err=%v", restored.GoalSnapshot(), err)
+	}
+}
+
 func TestGoalBudgetTelemetryAndRoleTokenAccounting(t *testing.T) {
 	registry := &Registry{subagents: &subagentHolder{}, goal: NewGoalStore()}
 	registry.goal.artifactDir = t.TempDir()

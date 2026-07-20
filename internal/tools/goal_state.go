@@ -118,9 +118,14 @@ func (s *GoalStore) loadState() error {
 		}
 		generatedID = true
 	}
-	if !validGoalStatus(state.Status) {
-		state.Status = "paused"
+	normalizedStatus := !validGoalStatus(state.Status)
+	if normalizedStatus {
+		state.Status = "user_paused"
 		state.Message = "goal state used an unknown status and was paused"
+	}
+	restoredInFlight := state.Status == "active" || state.Status == "verifying"
+	if restoredInFlight {
+		state.Status, state.Message, state.CurrentSubagentRole = "user_paused", "", ""
 	}
 	if !validGoalObjectID(state.BaselineCommit) {
 		state.BaselineCommit = ""
@@ -181,7 +186,7 @@ func (s *GoalStore) loadState() error {
 	}
 	s.skeptic0SessionID = state.Skeptic0SessionID
 	s.skepticModels = validGoalRoleModels(state.SkepticModels)
-	if generatedID {
+	if generatedID || normalizedStatus || restoredInFlight {
 		return s.saveLocked()
 	}
 	return nil
@@ -275,7 +280,7 @@ func validGoalAgentType(value string) bool {
 
 func validGoalStatus(status string) bool {
 	switch status {
-	case "active", "verifying", "paused", "blocked", "completed", "budget_limited":
+	case "active", "verifying", "paused", "user_paused", "blocked", "completed", "budget_limited":
 		return true
 	default:
 		return false

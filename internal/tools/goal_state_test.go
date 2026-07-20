@@ -71,7 +71,7 @@ func TestGoalStatePersistsResumesAndCompletes(t *testing.T) {
 	}
 	second := newPersistentGoalRegistry(t, root, artifactDir)
 	snapshot := second.GoalSnapshot()
-	if snapshot.GoalID != goalID || snapshot.Objective != "persist this objective" || snapshot.Status != "active" || snapshot.Message != "missing proof" || snapshot.VerificationRuns != 1 || snapshot.RoundsSinceVerify != 1 || snapshot.TotalVerifyRounds != 1 || snapshot.TokensUsed != 25 || snapshot.FinishedSubagentTokens != 25 || snapshot.LastClassifierVerdict != "not_achieved" || snapshot.LastClassifierDetailsPath != detailsPath {
+	if snapshot.GoalID != goalID || snapshot.Objective != "persist this objective" || snapshot.Status != "user_paused" || snapshot.Message != "" || snapshot.VerificationRuns != 1 || snapshot.RoundsSinceVerify != 1 || snapshot.TotalVerifyRounds != 1 || snapshot.TokensUsed != 25 || snapshot.FinishedSubagentTokens != 25 || snapshot.LastClassifierVerdict != "not_achieved" || snapshot.LastClassifierDetailsPath != detailsPath {
 		t.Fatalf("restored snapshot=%#v", snapshot)
 	}
 	if second.goal.skeptic0SessionID != "skeptic-child" || second.goal.lastVerification != "missing proof" || len(second.goal.skepticModels) != 1 || second.goal.skepticModels[0].Model != "skeptic-model" {
@@ -145,6 +145,25 @@ func TestGoalBudgetPersistsEnforcesAndCannotResume(t *testing.T) {
 	}
 }
 
+func TestGoalVerifyingStateRestoresUserPaused(t *testing.T) {
+	root, artifactDir := t.TempDir(), filepath.Join(t.TempDir(), "artifacts")
+	first := newPersistentGoalRegistry(t, root, artifactDir)
+	if err := first.BeginGoal("pause interrupted verification"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&updateGoalTool{store: first.goal}).Execute(context.Background(), json.RawMessage(`{"completed":true}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restored := newPersistentGoalRegistry(t, root, artifactDir)
+	defer restored.Close()
+	if snapshot := restored.GoalSnapshot(); snapshot.Status != "user_paused" || snapshot.Message != "" {
+		t.Fatalf("restored snapshot=%#v", snapshot)
+	}
+}
+
 func TestGoalVerifierBreadthAnchorPersistsAcrossResume(t *testing.T) {
 	root, artifactDir := t.TempDir(), filepath.Join(t.TempDir(), "artifacts")
 	backend := &goalVerifierBackend{outputs: []string{
@@ -178,6 +197,9 @@ func TestGoalVerifierBreadthAnchorPersistsAcrossResume(t *testing.T) {
 	restored.subagents.set(backend)
 	if restored.goal.firstFinalResponse != "built API, CLI, and tests" {
 		t.Fatalf("restored anchor=%q", restored.goal.firstFinalResponse)
+	}
+	if _, err := restored.ResumeGoal(); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := (&updateGoalTool{store: restored.goal}).Execute(context.Background(), json.RawMessage(`{"completed":true,"message":"added the missing integration proof"}`)); err != nil {
 		t.Fatal(err)
@@ -214,6 +236,9 @@ func TestGoalBlockedStreakIsSessionLocal(t *testing.T) {
 	if restored.goal.blockedStreak != 0 {
 		t.Fatalf("restored streak=%d", restored.goal.blockedStreak)
 	}
+	if _, err := restored.ResumeGoal(); err != nil {
+		t.Fatal(err)
+	}
 	result, err = (&updateGoalTool{store: restored.goal}).Execute(context.Background(), json.RawMessage(`{"blocked_reason":"transient"}`))
 	if err != nil || !strings.Contains(result, "1/3") {
 		t.Fatalf("restored result=%q err=%v", result, err)
@@ -231,7 +256,7 @@ func TestGoalStateUnknownStatusPausesAndBadVersionFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	registry := newPersistentGoalRegistry(t, root, artifactDir)
-	if snapshot := registry.GoalSnapshot(); snapshot.GoalID == "" || snapshot.Status != "paused" || !strings.Contains(snapshot.Message, "unknown status") || registry.goal.baselineCommit != "" || registry.goal.planBaselinePath != "" || registry.goal.skeptic0SessionID != "" {
+	if snapshot := registry.GoalSnapshot(); snapshot.GoalID == "" || snapshot.Status != "user_paused" || !strings.Contains(snapshot.Message, "unknown status") || registry.goal.baselineCommit != "" || registry.goal.planBaselinePath != "" || registry.goal.skeptic0SessionID != "" {
 		t.Fatalf("snapshot=%#v baseline=%q plan=%q skeptic=%q", snapshot, registry.goal.baselineCommit, registry.goal.planBaselinePath, registry.goal.skeptic0SessionID)
 	}
 	if registry.goal.lastClassifierVerdict != "" || registry.goal.lastClassifierDetailsPath != "" {

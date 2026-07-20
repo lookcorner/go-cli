@@ -259,6 +259,10 @@ limited to 4,000 characters and reminder tags plus placeholder braces are
 neutralized. A non-cancellation worker infrastructure error immediately pauses
 the active Goal with its `Turn failed:` reason, persists it for session reload,
 and reports live status as `infra_paused`; resume clears the reason and retries.
+User cancellation similarly persists `user_paused` without an error message.
+On process reload, an interrupted `active` or `verifying` Goal is also restored
+as `user_paused` until an explicit resume, so restart never resumes autonomous
+work implicitly.
 Goal mode is explicit and cannot be combined with the interactive REPL or TUI.
 The panel defaults to three skeptics. `[goal] verifier_count`, remote
 `goal_verifier_count`, and the highest-precedence `GROK_GOAL_VERIFIER_N`

@@ -127,6 +127,26 @@ func TestGoalLoopPausesAfterInfrastructureFailure(t *testing.T) {
 	}
 }
 
+func TestGoalLoopUserCancellationPausesGoal(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	if err := registry.BeginGoal("pause safely on cancel"); err != nil {
+		t.Fatal(err)
+	}
+	runner := &agent.Runner{Client: failingGoalStreamer{err: context.Canceled}, Tools: registry, Model: "test"}
+	err = goalLoop(context.Background(), runner, registry, io.Discard, io.Discard, "work", "", 1, 3, 10, 8)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("goal loop err=%v", err)
+	}
+	if snapshot := registry.GoalSnapshot(); snapshot.Status != "user_paused" || snapshot.Message != "" {
+		t.Fatalf("snapshot=%#v", snapshot)
+	}
+}
+
 func TestAppendGoalNextStep(t *testing.T) {
 	if got := appendGoalNextStep("continue", "run the integration test"); !strings.Contains(got, "Next step:\nrun the integration test") {
 		t.Fatalf("concrete continuation=%q", got)
