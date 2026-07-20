@@ -45,6 +45,7 @@ type Config struct {
 	HTTPTimeout                     time.Duration              `json:"-"`
 	WebSearch                       WebSearchConfig            `json:"web_search,omitempty"`
 	WebFetch                        WebFetchConfig             `json:"web_fetch,omitempty"`
+	AskUserQuestion                 AskUserQuestionConfig      `json:"ask_user_question,omitempty"`
 	AuthProviderCommand             string                     `json:"auth_provider_command,omitempty"`
 	AuthTokenTTL                    time.Duration              `json:"-"`
 	AuthPrincipalType               string                     `json:"auth_principal_type,omitempty"`
@@ -86,6 +87,11 @@ type WebFetchConfig struct {
 	AllowedDomains    []string `json:"allowed_domains,omitempty"`
 	ProxyConfigured   bool     `json:"-"`
 	DomainsConfigured bool     `json:"-"`
+}
+
+type AskUserQuestionConfig struct {
+	TimeoutEnabled bool   `json:"timeout_enabled"`
+	TimeoutSeconds uint64 `json:"timeout_secs"`
 }
 
 type PermissionConfig struct {
@@ -199,7 +205,8 @@ type fileConfig struct {
 	} `json:"-" toml:"models"`
 	ModelEntries map[string]modelConfig `json:"-" toml:"model"`
 	Toolset      struct {
-		WebFetch fileWebFetchConfig `json:"web_fetch,omitempty" toml:"web_fetch"`
+		WebFetch        fileWebFetchConfig        `json:"web_fetch,omitempty" toml:"web_fetch"`
+		AskUserQuestion fileAskUserQuestionConfig `json:"ask_user_question,omitempty" toml:"ask_user_question"`
 	} `json:"toolset,omitempty" toml:"toolset"`
 	Endpoints   fileEndpointsConfig   `json:"endpoints,omitempty" toml:"endpoints"`
 	FolderTrust fileFolderTrustConfig `json:"folder_trust,omitempty" toml:"folder_trust"`
@@ -223,6 +230,9 @@ type requirementsFile struct {
 	Permission    *PermissionConfig       `toml:"permission"`
 	GrokComConfig *requirementsGrokConfig `toml:"grok_com_config"`
 	Auth          *requirementsAuthConfig `toml:"auth"`
+	Toolset       struct {
+		AskUserQuestion *fileAskUserQuestionConfig `toml:"ask_user_question"`
+	} `toml:"toolset"`
 }
 
 type requirementsAuthConfig struct {
@@ -254,6 +264,11 @@ type fileGrokComConfig struct {
 type fileWebFetchConfig struct {
 	ProxyEndpoint  *string  `json:"proxy_endpoint,omitempty" toml:"proxy_endpoint"`
 	AllowedDomains []string `json:"allowed_domains,omitempty" toml:"allowed_domains"`
+}
+
+type fileAskUserQuestionConfig struct {
+	TimeoutEnabled *bool   `json:"timeout_enabled,omitempty" toml:"timeout_enabled"`
+	TimeoutSeconds *uint64 `json:"timeout_secs,omitempty" toml:"timeout_secs"`
 }
 
 type modelConfig struct {
@@ -308,6 +323,7 @@ func Load(path string) (Config, error) {
 		Compat:                      compat.Default(),
 		FolderTrustEnabled:          true,
 		AutoWakeEnabled:             true,
+		AskUserQuestion:             AskUserQuestionConfig{TimeoutEnabled: true, TimeoutSeconds: 30 * 60},
 		Pruning:                     PruningConfig{Enabled: true, KeepLastNTurns: 3, SoftTrimThreshold: 4000, SoftTrimHead: 1500, SoftTrimTail: 1500, HardClearAgeTurns: 10},
 	}
 	if path == "" {
@@ -429,6 +445,7 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 		cfg.WebFetch.AllowedDomains = append([]string(nil), disk.Toolset.WebFetch.AllowedDomains...)
 		cfg.WebFetch.DomainsConfigured = true
 	}
+	applyAskUserQuestionConfig(&cfg.AskUserQuestion, disk.Toolset.AskUserQuestion)
 	if disk.ContextWindow > 0 {
 		cfg.ContextWindow = disk.ContextWindow
 	}
@@ -672,6 +689,22 @@ func applyPruningConfig(target *PruningConfig, source filePruningConfig) {
 	}
 }
 
+func applyAskUserQuestionConfig(target *AskUserQuestionConfig, source fileAskUserQuestionConfig) {
+	if source.TimeoutEnabled != nil {
+		target.TimeoutEnabled = *source.TimeoutEnabled
+	}
+	if source.TimeoutSeconds != nil {
+		target.TimeoutSeconds = normalizedQuestionTimeout(*source.TimeoutSeconds)
+	}
+}
+
+func normalizedQuestionTimeout(seconds uint64) uint64 {
+	if seconds == 0 || seconds > uint64((1<<63-1)/int64(time.Second)) {
+		return 30 * 60
+	}
+	return seconds
+}
+
 func applyEnv(cfg *Config) {
 	if value := firstEnv("GORK_API_KEY", "XAI_API_KEY", "OPENAI_API_KEY"); value != "" {
 		cfg.APIKey = value
@@ -696,6 +729,11 @@ func applyEnv(cfg *Config) {
 	if value := os.Getenv("GORK_WEB_SEARCH_MODEL"); value != "" {
 		cfg.WebSearch.Enabled = true
 		cfg.WebSearch.Model = value
+	}
+	if value := strings.TrimSpace(os.Getenv("GROK_ASK_USER_QUESTION_TIMEOUT_SECS")); value != "" {
+		if seconds, err := strconv.ParseUint(value, 10, 64); err == nil && seconds > 0 && seconds <= uint64((1<<63-1)/int64(time.Second)) {
+			cfg.AskUserQuestion.TimeoutSeconds = seconds
+		}
 	}
 	if !cfg.WebFetch.ProxyConfigured {
 		if value := os.Getenv("GROK_WEB_FETCH_PROXY"); value != "" {
@@ -986,6 +1024,9 @@ func applyRequirementsData(cfg *Config, data []byte, source string, envFailClose
 	}
 	if requirement.Auth != nil && requirement.Auth.PreferredMethod != nil {
 		cfg.PreferredAuthMethod = strings.ToLower(strings.TrimSpace(*requirement.Auth.PreferredMethod))
+	}
+	if requirement.Toolset.AskUserQuestion != nil {
+		applyAskUserQuestionConfig(&cfg.AskUserQuestion, *requirement.Toolset.AskUserQuestion)
 	}
 	if requirement.GrokComConfig == nil {
 		return nil

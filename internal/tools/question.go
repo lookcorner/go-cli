@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -123,9 +122,11 @@ type UserQuestionObserver interface {
 }
 
 type UserQuestions struct {
-	mu       sync.RWMutex
-	observer UserQuestionObserver
-	plan     *PlanMode
+	mu             sync.RWMutex
+	observer       UserQuestionObserver
+	plan           *PlanMode
+	timeoutEnabled bool
+	timeout        time.Duration
 }
 
 func (q *UserQuestions) SetObserver(observer UserQuestionObserver) {
@@ -134,27 +135,36 @@ func (q *UserQuestions) SetObserver(observer UserQuestionObserver) {
 	q.mu.Unlock()
 }
 
+func (q *UserQuestions) Configure(timeoutEnabled bool, timeout time.Duration) {
+	if timeout <= 0 {
+		timeout = 30 * time.Minute
+	}
+	q.mu.Lock()
+	q.timeoutEnabled, q.timeout = timeoutEnabled, timeout
+	q.mu.Unlock()
+}
+
 func (q *UserQuestions) ask(ctx context.Context, request UserQuestionRequest) (UserQuestionResponse, error) {
 	q.mu.RLock()
 	observer := q.observer
+	timeoutEnabled, timeout := q.timeoutEnabled, q.timeout
 	q.mu.RUnlock()
 	if observer == nil {
 		return UserQuestionResponse{Outcome: "questions_sent"}, nil
 	}
-	waitCtx, cancel := context.WithTimeout(ctx, userQuestionTimeout())
+	if !timeoutEnabled {
+		return observer.AskUserQuestion(ctx, request)
+	}
+	if timeout <= 0 {
+		timeout = 30 * time.Minute
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	response, err := observer.AskUserQuestion(waitCtx, request)
 	if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
 		return UserQuestionResponse{Outcome: "cancelled"}, nil
 	}
 	return response, err
-}
-
-func userQuestionTimeout() time.Duration {
-	if seconds, err := strconv.ParseUint(strings.TrimSpace(os.Getenv("GROK_ASK_USER_QUESTION_TIMEOUT_SECS")), 10, 64); err == nil && seconds > 0 && seconds <= uint64((1<<63-1)/int64(time.Second)) {
-		return time.Duration(seconds) * time.Second
-	}
-	return 30 * time.Minute
 }
 
 type askUserQuestionTool struct{ questions *UserQuestions }

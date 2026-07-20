@@ -8,6 +8,10 @@ disable_api_key_auth = true
 [auth]
 preferred_method = "oidc"
 
+[toolset.ask_user_question]
+timeout_enabled = true
+timeout_secs = 1800
+
 [[permission.rules]]
 action = "deny"
 tool = "bash"

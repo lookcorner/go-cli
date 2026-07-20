@@ -221,7 +221,7 @@ func NewRegistry(ws *workspace.Workspace, approver Approver) *Registry {
 	goal := NewGoalStore()
 	scheduler := NewScheduler()
 	plan := NewPlanMode(ws, approver)
-	questions := &UserQuestions{plan: plan}
+	questions := &UserQuestions{plan: plan, timeoutEnabled: true, timeout: 30 * time.Minute}
 	rewind := &mutationCheckpoint{}
 	processes.rewind = rewind
 	readFile := &readFileTool{ws: ws}
@@ -427,6 +427,12 @@ func (r *Registry) SetPlanModeObserver(observer PlanModeObserver) {
 func (r *Registry) SetUserQuestionObserver(observer UserQuestionObserver) {
 	if r != nil && r.questions != nil {
 		r.questions.SetObserver(observer)
+	}
+}
+
+func (r *Registry) ConfigureUserQuestions(timeoutEnabled bool, timeout time.Duration) {
+	if r != nil && r.questions != nil {
+		r.questions.Configure(timeoutEnabled, timeout)
 	}
 }
 

@@ -35,6 +35,11 @@ selector, while REPL, one-shot, and goal-mode terminal runs accept option
 numbers, comma-separated multi-select values, or free text for Other. The REPL
 uses a question-aware input arbiter so pending prompts, scheduled turns,
 permission confirmations, and tool questions cannot read the same line.
+`[toolset.ask_user_question]` accepts `timeout_enabled` and positive
+`timeout_secs` values. Environment seconds override normal config, while
+requirements policy has final precedence. Invalid environment values are
+ignored, and an explicitly configured zero uses the 30-minute default rather
+than disabling the timer.
 
 Workspace instruction and skill discovery respects repository and global Git
 ignore rules through Git's own matching engine. Project instructions load from

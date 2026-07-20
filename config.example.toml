@@ -55,6 +55,10 @@ hard_clear_age_turns = 10
 # Omit allowed_domains to use the built-in documentation-domain list.
 # An explicit empty list blocks every web_fetch request.
 
+[toolset.ask_user_question]
+# timeout_enabled = true
+# timeout_secs = 1800
+
 [skills]
 # paths = ["~/shared-skills", "/absolute/path/to/SKILL.md"]
 # ignore = ["~/shared-skills/experimental"]

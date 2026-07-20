@@ -197,6 +197,66 @@ func TestLoadWebFetchEnvAndExplicitEmptyDomains(t *testing.T) {
 	}
 }
 
+func TestAskUserQuestionConfigPrecedence(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	t.Setenv("GROK_ASK_USER_QUESTION_TIMEOUT_SECS", "7")
+	if err := os.WriteFile(filepath.Join(home, "managed_config.toml"), []byte("[toolset.ask_user_question]\ntimeout_enabled = false\ntimeout_secs = 20\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(home, "config.toml")
+	if err := os.WriteFile(path, []byte("[toolset.ask_user_question]\ntimeout_secs = 12\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "requirements.toml"), []byte("[toolset.ask_user_question]\ntimeout_enabled = true\ntimeout_secs = 3\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.AskUserQuestion.TimeoutEnabled || cfg.AskUserQuestion.TimeoutSeconds != 3 {
+		t.Fatalf("requirements precedence=%#v", cfg.AskUserQuestion)
+	}
+	if err := os.Remove(filepath.Join(home, "requirements.toml")); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AskUserQuestion.TimeoutEnabled || cfg.AskUserQuestion.TimeoutSeconds != 7 {
+		t.Fatalf("environment precedence=%#v", cfg.AskUserQuestion)
+	}
+	t.Setenv("GROK_ASK_USER_QUESTION_TIMEOUT_SECS", "0")
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AskUserQuestion.TimeoutSeconds != 12 {
+		t.Fatalf("file fallback=%#v", cfg.AskUserQuestion)
+	}
+	t.Setenv("GROK_ASK_USER_QUESTION_TIMEOUT_SECS", "18446744073709551615")
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AskUserQuestion.TimeoutSeconds != 12 {
+		t.Fatalf("overflow environment fallback=%#v", cfg.AskUserQuestion)
+	}
+	t.Setenv("GROK_ASK_USER_QUESTION_TIMEOUT_SECS", "")
+	if err := os.WriteFile(path, []byte("[toolset.ask_user_question]\ntimeout_secs = 0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AskUserQuestion.TimeoutSeconds != 30*60 {
+		t.Fatalf("zero timeout=%#v", cfg.AskUserQuestion)
+	}
+}
+
 func TestValidateWebFetchConfig(t *testing.T) {
 	base := Config{
 		APIKey: "key", BaseURL: "https://api.example/v1", Model: "model", Backend: "responses",

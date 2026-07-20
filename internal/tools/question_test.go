@@ -15,6 +15,20 @@ type recordingQuestionObserver struct {
 	response UserQuestionResponse
 }
 
+type deadlineQuestionObserver struct{ hasDeadline bool }
+
+func (o *deadlineQuestionObserver) AskUserQuestion(ctx context.Context, _ UserQuestionRequest) (UserQuestionResponse, error) {
+	_, o.hasDeadline = ctx.Deadline()
+	return UserQuestionResponse{Outcome: "cancelled"}, nil
+}
+
+type blockingQuestionObserver struct{}
+
+func (blockingQuestionObserver) AskUserQuestion(ctx context.Context, _ UserQuestionRequest) (UserQuestionResponse, error) {
+	<-ctx.Done()
+	return UserQuestionResponse{}, ctx.Err()
+}
+
 func (o *recordingQuestionObserver) AskUserQuestion(_ context.Context, request UserQuestionRequest) (UserQuestionResponse, error) {
 	o.request = request
 	return o.response, nil
@@ -87,18 +101,26 @@ func TestAskUserQuestionResultPathsAndFallback(t *testing.T) {
 	}
 }
 
-func TestUserQuestionLegacyMultiSelectAndTimeoutOverride(t *testing.T) {
+func TestUserQuestionLegacyMultiSelectAndTimeoutConfiguration(t *testing.T) {
 	var question UserQuestion
 	if err := json.Unmarshal([]byte(`{"question":"Pick?","multiSelect":true}`), &question); err != nil || !question.MultiSelect {
 		t.Fatalf("question=%#v err=%v", question, err)
 	}
-	t.Setenv("GROK_ASK_USER_QUESTION_TIMEOUT_SECS", "7")
-	if got := userQuestionTimeout(); got != 7*time.Second {
-		t.Fatalf("timeout=%v", got)
+	observer := &deadlineQuestionObserver{}
+	questions := &UserQuestions{observer: observer}
+	questions.Configure(false, 7*time.Second)
+	if _, err := questions.ask(context.Background(), UserQuestionRequest{}); err != nil || observer.hasDeadline {
+		t.Fatalf("disabled timeout deadline=%v err=%v", observer.hasDeadline, err)
 	}
-	t.Setenv("GROK_ASK_USER_QUESTION_TIMEOUT_SECS", "0")
-	if got := userQuestionTimeout(); got != 30*time.Minute {
-		t.Fatalf("fallback timeout=%v", got)
+	questions.Configure(true, 7*time.Second)
+	if _, err := questions.ask(context.Background(), UserQuestionRequest{}); err != nil || !observer.hasDeadline {
+		t.Fatalf("enabled timeout deadline=%v err=%v", observer.hasDeadline, err)
+	}
+	questions.SetObserver(blockingQuestionObserver{})
+	questions.Configure(true, time.Millisecond)
+	response, err := questions.ask(context.Background(), UserQuestionRequest{})
+	if err != nil || response.Outcome != "cancelled" {
+		t.Fatalf("timeout response=%#v err=%v", response, err)
 	}
 }
 
