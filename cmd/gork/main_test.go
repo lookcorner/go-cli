@@ -69,6 +69,30 @@ func TestInteractiveMemoryFlushDoesNotRunNormalTurn(t *testing.T) {
 	}
 }
 
+func TestInteractiveMemoryListDoesNotRunNormalTurn(t *testing.T) {
+	store, err := memory.Open(t.TempDir(), t.TempDir(), "interactive-list")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, _, err := store.Write("user_requested", "## Decision\n\nList explicitly.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := memory.DefaultConfig()
+	config.Enabled = true
+	runner := &agent.Runner{Memory: store, MemoryConfig: config}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	input := newTerminalInput(ctx, bufio.NewReader(strings.NewReader("/memory\n/exit\n")))
+	var stderr bytes.Buffer
+	if err := interactiveLoop(ctx, runner, newScheduledWakeQueue(), input, io.Discard, &stderr, "", "response-1"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stderr.String(), "memory session") || !strings.Contains(stderr.String(), path) {
+		t.Fatalf("stderr=%q", stderr.String())
+	}
+}
+
 func TestSessionObserversPersistOnlyLifecycleEvents(t *testing.T) {
 	logger, err := session.NewLoggerWithID(t.TempDir(), "parent-session")
 	if err != nil {

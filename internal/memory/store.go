@@ -27,6 +27,13 @@ type Store struct {
 	sessionID    string
 }
 
+type FileInfo struct {
+	Path                 string  `json:"path"`
+	Source               string  `json:"source"`
+	SizeBytes            uint64  `json:"size_bytes"`
+	ModifiedEpochSeconds *uint64 `json:"modified_epoch_secs,omitempty"`
+}
+
 func DefaultRoot() (string, error) {
 	if home := strings.TrimSpace(os.Getenv("GROK_HOME")); home != "" {
 		return filepath.Join(home, "memory"), nil
@@ -110,6 +117,36 @@ func (s *Store) Write(trigger, content string) (string, bool, error) {
 	}
 	remove = false
 	return path, true, nil
+}
+
+func (s *Store) List() ([]FileInfo, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := ensureDirectory(s.sessionsDir); err != nil {
+		return nil, err
+	}
+	files := make([]FileInfo, 0)
+	for _, candidate := range []struct {
+		path   string
+		source string
+	}{
+		{filepath.Join(s.root, "MEMORY.md"), "global"},
+		{filepath.Join(s.workspaceDir, "MEMORY.md"), "workspace"},
+	} {
+		if info, ok := memoryFileInfo(candidate.path, candidate.source); ok {
+			files = append(files, info)
+		}
+	}
+	entries, err := sessionEntries(s.sessionsDir)
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range entries {
+		if info, ok := memoryFileInfo(entry.path, "session"); ok {
+			files = append(files, info)
+		}
+	}
+	return files, nil
 }
 
 func (s *Store) Context() (string, error) {
@@ -205,6 +242,19 @@ func readMemoryFile(path string) ([]byte, error) {
 		return nil, errors.New("memory source must be a bounded regular file")
 	}
 	return os.ReadFile(path)
+}
+
+func memoryFileInfo(path, source string) (FileInfo, bool) {
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() > maxMemoryFileBytes {
+		return FileInfo{}, false
+	}
+	var modified *uint64
+	if seconds := info.ModTime().Unix(); seconds > 0 {
+		value := uint64(seconds)
+		modified = &value
+	}
+	return FileInfo{Path: path, Source: source, SizeBytes: uint64(info.Size()), ModifiedEpochSeconds: modified}, true
 }
 
 func ensureDirectory(path string) error {

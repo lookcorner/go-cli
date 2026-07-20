@@ -513,6 +513,7 @@ func (s *Server) handleStaticExtension(incoming message) {
 		commands := []any{map[string]any{"name": "compact", "description": "Compress conversation history to save context window"}}
 		if s.MemoryEnabled {
 			commands = append(commands, map[string]any{"name": "flush", "description": "Save reusable conversation context to workspace memory"})
+			commands = append(commands, map[string]any{"name": "memory", "description": "Browse workspace memory files"})
 		}
 		commands = append(commands, map[string]any{"name": "loop", "description": "Run a prompt on a recurring interval", "argumentHint": "[interval] <prompt>"})
 		s.respond(incoming.ID, map[string]any{"commands": commands})
@@ -1618,6 +1619,10 @@ func (s *Server) handlePrompt(parent context.Context, incoming message) {
 		s.handleMemoryFlush(parent, incoming, current, false)
 		return
 	}
+	if strings.TrimSpace(prompt) == "/memory" {
+		s.handleMemoryFiles(incoming, current)
+		return
+	}
 	if expanded, ok := tools.ExpandLoopCommand(prompt); ok {
 		prompt = expanded
 		content = []api.ContentPart{{Type: "input_text", Text: expanded}}
@@ -1757,6 +1762,28 @@ func (s *Server) handleMemoryFlushExtension(parent context.Context, incoming mes
 		return
 	}
 	s.handleMemoryFlush(parent, incoming, current, true)
+}
+
+func (s *Server) handleMemoryFiles(incoming message, current *session) {
+	current.mu.Lock()
+	if current.closed {
+		current.mu.Unlock()
+		s.respondError(incoming.ID, -32000, "session is closed")
+		return
+	}
+	if current.running {
+		current.mu.Unlock()
+		s.respondError(incoming.ID, -32000, "session already has an active prompt")
+		return
+	}
+	current.mu.Unlock()
+	files, err := current.runner.ListMemory()
+	if err != nil {
+		s.respondError(incoming.ID, -32000, err.Error())
+		return
+	}
+	s.notify(current.id, map[string]any{"sessionUpdate": "memory_files", "files": files})
+	s.respond(incoming.ID, map[string]any{"stopReason": "end_turn"})
 }
 
 func (s *Server) handleMemoryFlush(parent context.Context, incoming message, current *session, extension bool) {

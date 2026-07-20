@@ -11,6 +11,7 @@ import (
 
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/api"
+	"github.com/lookcorner/go-cli/internal/memory"
 	"github.com/lookcorner/go-cli/internal/tools"
 	"github.com/lookcorner/go-cli/internal/workspace"
 )
@@ -322,6 +323,32 @@ func TestMemoryFlushCommandDoesNotEnterTranscript(t *testing.T) {
 	m = updated.(*model)
 	if command == nil || !m.running || m.transcript.Len() != 0 || m.status != "flushing memory" {
 		t.Fatalf("flush command entered normal turn: running=%v status=%q transcript=%q", m.running, m.status, m.transcript.String())
+	}
+}
+
+func TestMemoryListCommandRendersWithoutModelTurn(t *testing.T) {
+	store, err := memory.Open(t.TempDir(), t.TempDir(), "tui-memory")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.Write("user_requested", "## Decision\n\nList this memory."); err != nil {
+		t.Fatal(err)
+	}
+	config := memory.DefaultConfig()
+	config.Enabled = true
+	bridge := NewBridge(context.Background(), tools.PermissionAuto)
+	defer bridge.Close()
+	m := &model{ctx: context.Background(), runner: &agent.Runner{Memory: store, MemoryConfig: config}, bridge: bridge, status: "ready"}
+	m.input = []rune("/memory")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command == nil || !m.running || m.status != "listing memory" {
+		t.Fatalf("memory command started a model turn: running=%v status=%q", m.running, m.status)
+	}
+	updated, _ = m.Update(command())
+	m = updated.(*model)
+	if m.running || m.status != "memory files: 1" || !strings.Contains(m.transcript.String(), "[memory] session") {
+		t.Fatalf("status=%q transcript=%q", m.status, m.transcript.String())
 	}
 }
 

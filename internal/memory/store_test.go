@@ -31,6 +31,9 @@ func TestStoreWritesDeduplicatesAndBuildsBoundedContext(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(store.workspaceDir, "MEMORY.md"), []byte("## Conventions\n\nKeep boundaries clear.\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(store.root, "MEMORY.md"), []byte("## Global\n\nUse concise answers.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if _, written, err := store.Write("pre_compaction", "## Long\n\n"+strings.Repeat("x", maxSnippetChars+100)); err != nil || !written {
 		t.Fatalf("long memory written=%v err=%v", written, err)
 	}
@@ -50,6 +53,13 @@ func TestStoreWritesDeduplicatesAndBuildsBoundedContext(t *testing.T) {
 		if strings.HasPrefix(item.Name(), ".tmp-") {
 			t.Fatalf("atomic write left temporary file %q", item.Name())
 		}
+	}
+	files, err := store.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 4 || files[0].Source != "global" || files[1].Source != "workspace" || files[2].Source != "session" || files[0].Path != filepath.Join(store.root, "MEMORY.md") || files[0].SizeBytes == 0 || files[0].ModifiedEpochSeconds == nil {
+		t.Fatalf("files=%#v", files)
 	}
 }
 
@@ -76,5 +86,9 @@ func TestStoreSeparatesWorkspacesAndRejectsSymlinkSources(t *testing.T) {
 	context, err := first.Context()
 	if err != nil || strings.Contains(context, "secret") {
 		t.Fatalf("symlink content escaped: context=%q err=%v", context, err)
+	}
+	files, err := first.List()
+	if err != nil || len(files) != 0 {
+		t.Fatalf("symlink appeared in list: files=%#v err=%v", files, err)
 	}
 }

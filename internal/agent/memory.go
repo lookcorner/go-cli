@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/lookcorner/go-cli/internal/api"
+	"github.com/lookcorner/go-cli/internal/memory"
 	"github.com/lookcorner/go-cli/internal/session"
 )
 
@@ -16,6 +17,13 @@ const memoryFlushPrompt = `You are a memory assistant. Extract useful informatio
 type MemoryFlushResult struct {
 	Outcome string
 	Path    string
+}
+
+func (r *Runner) ListMemory() ([]memory.FileInfo, error) {
+	if r.Memory == nil || !r.MemoryConfig.Enabled {
+		return nil, errors.New("memory is not enabled for this session")
+	}
+	return r.Memory.List()
 }
 
 func (r *Runner) injectMemoryContext(content any, previousResponseID string) any {

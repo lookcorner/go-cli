@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/lookcorner/go-cli/internal/agent"
+	"github.com/lookcorner/go-cli/internal/memory"
 	"github.com/lookcorner/go-cli/internal/tools"
 )
 
@@ -34,6 +35,10 @@ type compactDoneEvent struct{ err error }
 type memoryFlushDoneEvent struct {
 	result agent.MemoryFlushResult
 	err    error
+}
+type memoryFilesDoneEvent struct {
+	files []memory.FileInfo
+	err   error
 }
 type scheduledFiredEvent struct{ event tools.ScheduledTaskFired }
 type planModeEvent struct{ active bool }
@@ -352,6 +357,20 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if command := m.startScheduled(); command != nil {
 			return m, command
 		}
+	case memoryFilesDoneEvent:
+		m.running = false
+		m.turnCancel = nil
+		if msg.err != nil {
+			m.status = "memory list failed: " + msg.err.Error()
+		} else {
+			m.status = fmt.Sprintf("memory files: %d", len(msg.files))
+			for _, file := range msg.files {
+				fmt.Fprintf(&m.transcript, "\n[memory] %s %d %s\n", file.Source, file.SizeBytes, file.Path)
+			}
+		}
+		if command := m.startScheduled(); command != nil {
+			return m, command
+		}
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
@@ -447,6 +466,10 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if prompt == "/flush" {
 			m.status = "flushing memory"
 			return m, runMemoryFlush(turnCtx, m.runner, m.previousID)
+		}
+		if prompt == "/memory" {
+			m.status = "listing memory"
+			return m, runMemoryFiles(m.runner)
 		}
 		prompt, _ = tools.ExpandLoopCommand(prompt)
 		m.beginTurn(prompt)
@@ -637,6 +660,13 @@ func runMemoryFlush(ctx context.Context, runner *agent.Runner, previousID string
 	return func() tea.Msg {
 		result, err := runner.FlushMemory(ctx, previousID)
 		return memoryFlushDoneEvent{result: result, err: err}
+	}
+}
+
+func runMemoryFiles(runner *agent.Runner) tea.Cmd {
+	return func() tea.Msg {
+		files, err := runner.ListMemory()
+		return memoryFilesDoneEvent{files: files, err: err}
 	}
 }
 

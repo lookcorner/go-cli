@@ -717,7 +717,7 @@ func TestMemoryFlushExtensionAndSlashCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	commands := commandResponse["result"].(map[string]any)["commands"].([]any)
-	if len(commands) != 3 || commands[1].(map[string]any)["name"] != "flush" {
+	if len(commands) != 4 || commands[1].(map[string]any)["name"] != "flush" || commands[2].(map[string]any)["name"] != "memory" {
 		t.Fatalf("memory commands=%#v", commands)
 	}
 	output.Reset()
@@ -774,6 +774,27 @@ func TestMemoryFlushExtensionAndSlashCommand(t *testing.T) {
 	}
 	if !responded {
 		t.Fatalf("slash messages=%#v", messages)
+	}
+
+	output.Reset()
+	params, _ = json.Marshal(map[string]any{"sessionId": "memory-session", "prompt": []any{map[string]any{"type": "text", "text": "/memory"}}})
+	server.handlePrompt(context.Background(), message{ID: json.RawMessage("3"), Method: "session/prompt", Params: params})
+	messages = decodeACPOutput(t, output.Bytes())
+	listed, responded := false, false
+	for _, message := range messages {
+		if result, ok := message["result"].(map[string]any); ok && result["stopReason"] == "end_turn" {
+			responded = true
+		}
+		params, _ := message["params"].(map[string]any)
+		update, _ := params["update"].(map[string]any)
+		files, _ := update["files"].([]any)
+		if update["sessionUpdate"] == "memory_files" && len(files) == 1 {
+			file := files[0].(map[string]any)
+			listed = file["source"] == "session" && file["size_bytes"].(float64) > 0 && file["modified_epoch_secs"].(float64) > 0
+		}
+	}
+	if !listed || !responded {
+		t.Fatalf("memory list messages=%#v", messages)
 	}
 }
 

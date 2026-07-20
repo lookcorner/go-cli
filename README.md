@@ -15,10 +15,12 @@ feature-by-feature status.
 Interactive REPL, full-screen, and ACP sessions accept `/compact` to summarize
 the current completed response chain and continue from a fresh context. When
 workspace memory is enabled, `/flush` saves reusable context without changing
-that response chain. They also accept `/loop [interval] <prompt>`, which expands
-to the reference `scheduler_create` workflow without inventing a default
-interval. ACP advertises the enabled commands through `x.ai/commands/list` and
-also exposes `x.ai/memory/flush`.
+that response chain, while `/memory` lists the safe global, workspace, and
+session Markdown sources without invoking the model. They also accept
+`/loop [interval] <prompt>`, which expands to the reference `scheduler_create`
+workflow without inventing a default interval. ACP advertises the enabled
+commands through `x.ai/commands/list`, emits `memory_files` metadata updates,
+and also exposes `x.ai/memory/flush`.
 
 The model can call `enter_plan_mode` to enter a persisted, read-only planning
 phase. While active, workspace mutations are limited to `.grok/plan.md`; shell,

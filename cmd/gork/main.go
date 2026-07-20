@@ -2305,7 +2305,7 @@ func interactiveLoop(
 			case "/exit", "/quit":
 				return nil
 			case "/help":
-				fmt.Fprintln(stderr, "Commands: /compact, /flush, /loop, /help, /exit. Every other line is sent as a prompt.")
+				fmt.Fprintln(stderr, "Commands: /compact, /flush, /memory, /loop, /help, /exit. Every other line is sent as a prompt.")
 				prompt = ""
 				continue
 			case "/compact":
@@ -2322,6 +2322,19 @@ func interactiveLoop(
 					fmt.Fprintln(stderr, "[gork] memory flush failed:", err)
 				} else {
 					fmt.Fprintln(stderr, "[gork] memory flush:", result.Outcome)
+				}
+				prompt = ""
+				continue
+			case "/memory":
+				files, err := runner.ListMemory()
+				if err != nil {
+					fmt.Fprintln(stderr, "[gork] memory list failed:", err)
+				} else if len(files) == 0 {
+					fmt.Fprintln(stderr, "[gork] memory: no files")
+				} else {
+					for _, file := range files {
+						fmt.Fprintf(stderr, "[gork] memory %s %d %s\n", file.Source, file.SizeBytes, file.Path)
+					}
 				}
 				prompt = ""
 				continue
