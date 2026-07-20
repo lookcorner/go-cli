@@ -30,6 +30,8 @@ type GoalSnapshot struct {
 	FinishedSubagentTokens    int64
 	LastClassifierVerdict     string
 	LastClassifierDetailsPath string
+	ScratchDir                string
+	ScratchReady              bool
 }
 
 type GoalRoleModel struct {
@@ -84,6 +86,8 @@ type GoalStore struct {
 	currentSubagentRole       string
 	lastClassifierVerdict     string
 	lastClassifierDetailsPath string
+	scratchDir                string
+	scratchReady              bool
 	statePath                 string
 	skeptic0SessionID         string
 	skepticModels             []GoalRoleModel
@@ -126,6 +130,7 @@ func (s *GoalStore) BeginWithBudget(objective string, tokenBudget int64) error {
 	s.tokenBudget, s.tokensUsed, s.finishedSubagentTokens = max(int64(0), tokenBudget), 0, 0
 	s.currentSubagentRole = ""
 	s.lastClassifierVerdict, s.lastClassifierDetailsPath = "", ""
+	s.prepareScratchLocked()
 	return s.saveLocked()
 }
 
@@ -140,6 +145,7 @@ func (s *GoalStore) Snapshot() GoalSnapshot {
 		TotalWorkerRounds: s.totalWorkerRounds, TotalVerifyRounds: s.totalVerifyRounds,
 		FinishedSubagentTokens: s.finishedSubagentTokens,
 		LastClassifierVerdict:  s.lastClassifierVerdict, LastClassifierDetailsPath: s.lastClassifierDetailsPath,
+		ScratchDir: s.scratchDir, ScratchReady: s.scratchReady,
 	}
 }
 
@@ -225,6 +231,7 @@ func (s *GoalStore) ResolveVerification(verification GoalVerification, maxRuns u
 		s.skeptic0SessionID = ""
 		s.skepticModels = nil
 		s.resetStrategistLocked()
+		s.cleanupScratchLocked()
 		return s.saveLocked()
 	}
 	s.lastVerification = s.message

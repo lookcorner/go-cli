@@ -118,6 +118,16 @@ func TestAppendGoalVerificationGaps(t *testing.T) {
 	}
 }
 
+func TestAppendGoalScratchReminder(t *testing.T) {
+	if got := appendGoalScratchReminder("continue", "", false); got != "continue" {
+		t.Fatalf("empty scratch changed prompt: %q", got)
+	}
+	got := appendGoalScratchReminder("continue", "/private/session/implementer", true)
+	if !strings.Contains(got, "/private/session/implementer") || !strings.Contains(got, "has been created for you") || !strings.Contains(got, "never shared /tmp") || !strings.Contains(got, "`{SCRATCH}` placeholder") {
+		t.Fatalf("scratch prompt=%q", got)
+	}
+}
+
 func TestAppendGoalReverifyReminder(t *testing.T) {
 	if got := appendGoalReverifyReminder("continue", ""); got != "continue" {
 		t.Fatalf("empty reminder changed prompt: %q", got)

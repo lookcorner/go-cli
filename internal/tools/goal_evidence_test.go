@@ -84,12 +84,16 @@ func TestGoalVerificationCapturesGitEvidenceAndDetails(t *testing.T) {
 		t.Fatalf("verification=%#v", verification)
 	}
 	patchPath := filepath.Join(artifactDir, "goal-classifier-1.patch")
+	scratch, ready := registry.GoalScratch()
+	if !ready {
+		t.Fatal("goal scratch was not ready")
+	}
 	patch, err := os.ReadFile(patchPath)
 	if err != nil || !strings.Contains(string(patch), "+after") {
 		t.Fatalf("patch=%q err=%v", patch, err)
 	}
 	for _, request := range backend.requests {
-		if !strings.Contains(request.Prompt, "CHANGES_FILE: "+patchPath) || !strings.Contains(request.Prompt, "- tracked.txt") || !strings.Contains(request.Prompt, "- new.txt") || !strings.Contains(request.Prompt, "PLAN_FILE: "+planPath) || !strings.Contains(request.Prompt, "New verified step") || strings.Contains(request.Prompt, "session-artifacts/goal-plan-baseline") {
+		if !strings.Contains(request.Prompt, "CHANGES_FILE: "+patchPath) || !strings.Contains(request.Prompt, "- tracked.txt") || !strings.Contains(request.Prompt, "- new.txt") || !strings.Contains(request.Prompt, "PLAN_FILE: "+planPath) || !strings.Contains(request.Prompt, "New verified step") || !strings.Contains(request.Prompt, "IMPLEMENTER_SCRATCH: "+scratch) || strings.Contains(request.Prompt, "session-artifacts/goal-plan-baseline") {
 			t.Fatalf("prompt=%s", request.Prompt)
 		}
 	}

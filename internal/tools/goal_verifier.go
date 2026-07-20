@@ -196,6 +196,14 @@ func goalVerifierPrompt(snapshot GoalSnapshot, evidence goalEvidence) string {
 	if planChanges == "" {
 		planChanges = "(none)"
 	}
+	scratch := snapshot.ScratchDir
+	if scratch == "" {
+		scratch = "(unavailable)"
+	}
+	scratchStatus := "The private scratch directory was unavailable; do not reject completion solely for missing captured output."
+	if snapshot.ScratchReady {
+		scratchStatus = "Audit saved evidence in this directory against the plan's verification steps."
+	}
 	return fmt.Sprintf(`Act as an adversarial completion verifier. Independently inspect the current workspace using read-only tools and test the user's full objective against concrete evidence. Refute completion when any requirement is missing, contradicted, weakly verified, or unverifiable. Do not modify files.
 
 OBJECTIVE:
@@ -211,13 +219,16 @@ PLAN_FILE: %s
 PLAN_CHANGES:
 %s
 
+IMPLEMENTER_SCRATCH: %s
+The plan's literal {SCRATCH} placeholder resolves to this directory. %s
+
 CANDIDATE SUMMARY:
 %s
 
 Return exactly one JSON object and no prose:
 {"verdict":"not_refuted","gaps":""}
 or
-{"verdict":"refuted","gaps":"one concise actionable summary of missing evidence or work"}`, snapshot.Objective, changesPath, changedFiles, planPath, planChanges, snapshot.Message)
+{"verdict":"refuted","gaps":"one concise actionable summary of missing evidence or work"}`, snapshot.Objective, changesPath, changedFiles, planPath, planChanges, scratch, scratchStatus, snapshot.Message)
 }
 
 func parseGoalVerdict(output string) goalVerdict {

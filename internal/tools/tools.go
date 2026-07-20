@@ -432,6 +432,7 @@ func (r *Registry) EnforceGoalBudget() (GoalSnapshot, bool) {
 	r.goal.currentSubagentRole = ""
 	r.goal.skeptic0SessionID, r.goal.skepticModels = "", nil
 	r.goal.resetStrategistLocked()
+	r.goal.cleanupScratchLocked()
 	_ = r.goal.saveLocked()
 	r.goal.mu.Unlock()
 	r.emitGoalUpdated("budget_exceeded")

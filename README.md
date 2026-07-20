@@ -278,6 +278,12 @@ notifications reuse it and report parent/verification round totals, cumulative
 tokens, completed Goal-role tokens, and the active planner/verifier/strategist
 role. They also retain the latest `achieved`/`not_achieved` verdict and its
 validated private details path across resume and terminal completion.
+Each Goal also owns a private `0700` implementer scratch directory beneath the
+session artifact directory. Planner verification paths use the literal
+`{SCRATCH}` placeholder; worker prompts resolve it to the private path and
+read-only skeptics can inspect saved output there. Unfinished restored Goals
+recreate a missing directory, while verified completion and token-budget
+termination remove it. Existing files and symbolic links are rejected.
 `--goal --resume <session.jsonl>` reactivates an unfinished goal,
 preserves its original objective and evidence baselines, and resets the
 per-resume verifier attempt and stall counters. A supplied prompt is treated as

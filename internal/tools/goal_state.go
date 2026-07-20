@@ -173,6 +173,9 @@ func (s *GoalStore) loadState() error {
 		s.currentSubagentRole = ""
 	}
 	s.lastClassifierVerdict, s.lastClassifierDetailsPath = state.LastClassifierVerdict, state.LastClassifierDetailsPath
+	if s.status != "completed" && s.status != "budget_limited" {
+		s.prepareScratchLocked()
+	}
 	s.skeptic0SessionID = state.Skeptic0SessionID
 	s.skepticModels = validGoalRoleModels(state.SkepticModels)
 	if generatedID {
@@ -198,6 +201,7 @@ func (s *GoalStore) Resume() (string, error) {
 	s.verificationRuns, s.verificationStall = 0, 0
 	s.stallVerification = ""
 	s.resetStrategistLocked()
+	s.prepareScratchLocked()
 	return s.objective, s.saveLocked()
 }
 

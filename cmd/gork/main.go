@@ -537,6 +537,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			return nil
 		}
 		prompt = appendGoalPlanReminder(prompt, planPath)
+		scratch, scratchReady := registry.GoalScratch()
+		prompt = appendGoalScratchReminder(prompt, scratch, scratchReady)
 		return goalLoop(ctx, runner, registry, stdout, stderr, prompt, opts.previousID, opts.goalRuns, cfg.Goal.VerifierCount, cfg.Goal.ClassifierMaxRuns, cfg.Goal.ReverifyAfter)
 	}
 	return runHeadless(ctx, runner, scheduledQueue, stdout, stderr, prompt, opts.previousID)
@@ -2009,6 +2011,8 @@ func goalLoop(
 				return nil
 			}
 			prompt = appendGoalPlanReminder(prompt, registry.GoalSnapshot().PlanPath)
+			scratch, scratchReady := registry.GoalScratch()
+			prompt = appendGoalScratchReminder(prompt, scratch, scratchReady)
 			prompt = appendGoalVerificationGaps(prompt, registry.GoalVerificationGaps())
 			prompt = appendGoalNextStep(prompt, registry.GoalNextStep())
 			reminder, err := registry.GoalReverifyReminder(reverifyAfter)
@@ -2035,6 +2039,8 @@ func goalLoop(
 			continuation = "Your previous response ended prematurely while actionable work remains. Continue now: execute the pending tasks, inspect results, and keep working until the goal is independently verifiable. Do not hand work back to the user or stop merely because an agent, command, review, or follow-up is pending."
 		}
 		prompt = appendGoalPlanReminder(continuation, snapshot.PlanPath)
+		scratch, scratchReady := registry.GoalScratch()
+		prompt = appendGoalScratchReminder(prompt, scratch, scratchReady)
 		prompt = appendGoalVerificationGaps(prompt, registry.GoalVerificationGaps())
 		prompt = appendGoalNextStep(prompt, registry.GoalNextStep())
 		reminder, err := registry.GoalReverifyReminder(reverifyAfter)
@@ -2073,6 +2079,17 @@ func appendGoalVerificationGaps(prompt, gaps string) string {
 		return prompt
 	}
 	return prompt + "\n\nVerification REJECTED your last `update_goal(completed: true)` claim. Fix every gap the skeptic panel flagged below - these take priority - before claiming completion again:\n" + gaps
+}
+
+func appendGoalScratchReminder(prompt, scratch string, ready bool) string {
+	if scratch == "" {
+		return prompt
+	}
+	status := "is unavailable; keep transient evidence inside the workspace"
+	if ready {
+		status = "has been created for you"
+	}
+	return prompt + "\n\nSave captured test output and throwaway artifacts in your private scratch directory " + scratch + " (" + status + "), never shared /tmp. The plan's `{SCRATCH}` placeholder resolves to this directory."
 }
 
 func appendGoalReverifyReminder(prompt, reminder string) string {
