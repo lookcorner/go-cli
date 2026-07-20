@@ -8,8 +8,6 @@ import (
 	"sync"
 )
 
-const goalVerifierCount = 3
-
 type GoalVerification struct {
 	Achieved bool
 	Summary  string
@@ -20,15 +18,20 @@ type goalVerdict struct {
 	Gaps    string `json:"gaps"`
 }
 
-func (r *Registry) VerifyGoal(ctx context.Context, snapshot GoalSnapshot) GoalVerification {
+func (r *Registry) VerifyGoal(ctx context.Context, snapshot GoalSnapshot, count int) GoalVerification {
 	backend := r.subagents.get()
 	if backend == nil {
 		return GoalVerification{Achieved: true, Summary: "goal verifier unavailable; completion accepted fail-open"}
 	}
+	if count < 1 {
+		count = 1
+	} else if count > 5 {
+		count = 5
+	}
 	prompt := goalVerifierPrompt(snapshot)
-	verdicts := make(chan goalVerdict, goalVerifierCount)
+	verdicts := make(chan goalVerdict, count)
 	var wait sync.WaitGroup
-	for range goalVerifierCount {
+	for range count {
 		wait.Add(1)
 		go func() {
 			defer wait.Done()
@@ -47,7 +50,7 @@ func (r *Registry) VerifyGoal(ctx context.Context, snapshot GoalSnapshot) GoalVe
 	close(verdicts)
 
 	refuted := 0
-	gaps := make([]string, 0, goalVerifierCount)
+	gaps := make([]string, 0, count)
 	for verdict := range verdicts {
 		if verdict.Verdict != "not_refuted" {
 			refuted++
@@ -56,7 +59,7 @@ func (r *Registry) VerifyGoal(ctx context.Context, snapshot GoalSnapshot) GoalVe
 			}
 		}
 	}
-	if refuted < goalVerifierCount/2+1 {
+	if refuted < count/2+1 {
 		return GoalVerification{Achieved: true, Summary: snapshot.Message}
 	}
 	summary := strings.Join(gaps, "; ")

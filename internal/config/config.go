@@ -46,6 +46,7 @@ type Config struct {
 	WebSearch                       WebSearchConfig            `json:"web_search,omitempty"`
 	WebFetch                        WebFetchConfig             `json:"web_fetch,omitempty"`
 	AskUserQuestion                 AskUserQuestionConfig      `json:"ask_user_question,omitempty"`
+	Goal                            GoalConfig                 `json:"goal"`
 	AuthProviderCommand             string                     `json:"auth_provider_command,omitempty"`
 	AuthTokenTTL                    time.Duration              `json:"-"`
 	AuthPrincipalType               string                     `json:"auth_principal_type,omitempty"`
@@ -62,6 +63,7 @@ type Config struct {
 	ModelProfiles                   map[string]ModelProfile    `json:"-"`
 	compatConfigured                compat.Config
 	autoWakeConfigured              bool
+	goalVerifierConfigured          bool
 }
 
 type ModelProfile struct {
@@ -92,6 +94,10 @@ type WebFetchConfig struct {
 type AskUserQuestionConfig struct {
 	TimeoutEnabled bool   `json:"timeout_enabled"`
 	TimeoutSeconds uint64 `json:"timeout_secs"`
+}
+
+type GoalConfig struct {
+	VerifierCount int `json:"verifier_count"`
 }
 
 type PermissionConfig struct {
@@ -208,6 +214,7 @@ type fileConfig struct {
 		WebFetch        fileWebFetchConfig        `json:"web_fetch,omitempty" toml:"web_fetch"`
 		AskUserQuestion fileAskUserQuestionConfig `json:"ask_user_question,omitempty" toml:"ask_user_question"`
 	} `json:"toolset,omitempty" toml:"toolset"`
+	Goal        fileGoalConfig        `json:"goal,omitempty" toml:"goal"`
 	Endpoints   fileEndpointsConfig   `json:"endpoints,omitempty" toml:"endpoints"`
 	FolderTrust fileFolderTrustConfig `json:"folder_trust,omitempty" toml:"folder_trust"`
 }
@@ -271,6 +278,10 @@ type fileAskUserQuestionConfig struct {
 	TimeoutSeconds *uint64 `json:"timeout_secs,omitempty" toml:"timeout_secs"`
 }
 
+type fileGoalConfig struct {
+	VerifierCount *int `json:"verifier_count,omitempty" toml:"verifier_count"`
+}
+
 type modelConfig struct {
 	Model                       string `toml:"model"`
 	BaseURL                     string `toml:"base_url"`
@@ -324,6 +335,7 @@ func Load(path string) (Config, error) {
 		FolderTrustEnabled:          true,
 		AutoWakeEnabled:             true,
 		AskUserQuestion:             AskUserQuestionConfig{TimeoutEnabled: true, TimeoutSeconds: 30 * 60},
+		Goal:                        GoalConfig{VerifierCount: 3},
 		Pruning:                     PruningConfig{Enabled: true, KeepLastNTurns: 3, SoftTrimThreshold: 4000, SoftTrimHead: 1500, SoftTrimTail: 1500, HardClearAgeTurns: 10},
 	}
 	if path == "" {
@@ -446,6 +458,10 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 		cfg.WebFetch.DomainsConfigured = true
 	}
 	applyAskUserQuestionConfig(&cfg.AskUserQuestion, disk.Toolset.AskUserQuestion)
+	if disk.Goal.VerifierCount != nil {
+		cfg.Goal.VerifierCount = normalizedGoalVerifierCount(*disk.Goal.VerifierCount)
+		cfg.goalVerifierConfigured = true
+	}
 	if disk.ContextWindow > 0 {
 		cfg.ContextWindow = disk.ContextWindow
 	}
@@ -705,6 +721,10 @@ func normalizedQuestionTimeout(seconds uint64) uint64 {
 	return seconds
 }
 
+func normalizedGoalVerifierCount(count int) int {
+	return max(1, min(5, count))
+}
+
 func applyEnv(cfg *Config) {
 	if value := firstEnv("GORK_API_KEY", "XAI_API_KEY", "OPENAI_API_KEY"); value != "" {
 		cfg.APIKey = value
@@ -733,6 +753,12 @@ func applyEnv(cfg *Config) {
 	if value := strings.TrimSpace(os.Getenv("GROK_ASK_USER_QUESTION_TIMEOUT_SECS")); value != "" {
 		if seconds, err := strconv.ParseUint(value, 10, 64); err == nil && seconds > 0 && seconds <= uint64((1<<63-1)/int64(time.Second)) {
 			cfg.AskUserQuestion.TimeoutSeconds = seconds
+		}
+	}
+	if value := strings.TrimSpace(os.Getenv("GROK_GOAL_VERIFIER_N")); value != "" {
+		if count, err := strconv.Atoi(value); err == nil {
+			cfg.Goal.VerifierCount = normalizedGoalVerifierCount(count)
+			cfg.goalVerifierConfigured = true
 		}
 	}
 	if !cfg.WebFetch.ProxyConfigured {

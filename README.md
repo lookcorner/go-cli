@@ -242,7 +242,9 @@ return the goal to the active loop with their concrete gaps; malformed verdicts
 and individual skeptic failures count as refutations, while an unavailable
 verifier backend fails open so an internal harness outage cannot strand the
 user. Goal mode is explicit and cannot be combined with the interactive REPL
-or TUI.
+or TUI. The panel defaults to three skeptics. `[goal] verifier_count`, remote
+`goal_verifier_count`, and the highest-precedence `GROK_GOAL_VERIFIER_N`
+environment variable may select one through five.
 
 Release builds gate repo-controlled MCP/LSP and enabled project-plugin execution
 on folder trust. Interactive CLI startup asks once when executable project

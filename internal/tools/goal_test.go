@@ -94,7 +94,7 @@ func TestGoalVerifierMajorityRefutesAndReturnsGoalToActive(t *testing.T) {
 	if _, err := (&updateGoalTool{store: registry.goal}).Execute(context.Background(), json.RawMessage(`{"completed":true,"message":"done"}`)); err != nil {
 		t.Fatal(err)
 	}
-	verification := registry.VerifyGoal(context.Background(), registry.GoalSnapshot())
+	verification := registry.VerifyGoal(context.Background(), registry.GoalSnapshot(), 3)
 	if verification.Achieved || !strings.Contains(verification.Summary, "missing integration test") || !strings.Contains(verification.Summary, "remote state") {
 		t.Fatalf("verification=%#v", verification)
 	}
@@ -118,7 +118,7 @@ func TestGoalVerifierCountsInfrastructureErrorsAsRefutations(t *testing.T) {
 	}
 	registry := &Registry{subagents: &subagentHolder{}}
 	registry.subagents.set(backend)
-	verification := registry.VerifyGoal(context.Background(), GoalSnapshot{Objective: "goal", Message: "candidate"})
+	verification := registry.VerifyGoal(context.Background(), GoalSnapshot{Objective: "goal", Message: "candidate"}, 3)
 	if verification.Achieved || !strings.Contains(verification.Summary, "offline") {
 		t.Fatalf("verification=%#v", verification)
 	}
@@ -126,9 +126,26 @@ func TestGoalVerifierCountsInfrastructureErrorsAsRefutations(t *testing.T) {
 
 func TestGoalVerifierUnavailableFailsOpen(t *testing.T) {
 	registry := &Registry{subagents: &subagentHolder{}}
-	verification := registry.VerifyGoal(context.Background(), GoalSnapshot{Objective: "goal", Message: "candidate"})
+	verification := registry.VerifyGoal(context.Background(), GoalSnapshot{Objective: "goal", Message: "candidate"}, 3)
 	if !verification.Achieved || !strings.Contains(verification.Summary, "accepted fail-open") {
 		t.Fatalf("verification=%#v", verification)
+	}
+}
+
+func TestGoalVerifierClampsSkepticCount(t *testing.T) {
+	upper := &goalVerifierBackend{outputs: []string{
+		`{"verdict":"not_refuted"}`, `{"verdict":"not_refuted"}`, `{"verdict":"not_refuted"}`,
+		`{"verdict":"not_refuted"}`, `{"verdict":"not_refuted"}`,
+	}}
+	registry := &Registry{subagents: &subagentHolder{}}
+	registry.subagents.set(upper)
+	if verification := registry.VerifyGoal(context.Background(), GoalSnapshot{}, 99); !verification.Achieved || len(upper.requests) != 5 {
+		t.Fatalf("upper verification=%#v requests=%d", verification, len(upper.requests))
+	}
+	lower := &goalVerifierBackend{outputs: []string{`{"verdict":"refuted","gaps":"missing"}`}}
+	registry.subagents.set(lower)
+	if verification := registry.VerifyGoal(context.Background(), GoalSnapshot{}, 0); verification.Achieved || len(lower.requests) != 1 {
+		t.Fatalf("lower verification=%#v requests=%d", verification, len(lower.requests))
 	}
 }
 

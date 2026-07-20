@@ -12,6 +12,7 @@ import (
 
 func boolPointer(value bool) *bool       { return &value }
 func stringPointer(value string) *string { return &value }
+func intPointer(value int) *int          { return &value }
 
 func TestFetchRemoteSettingsRetriesAndAuthenticates(t *testing.T) {
 	attempts := 0
@@ -24,11 +25,11 @@ func TestFetchRemoteSettingsRetriesAndAuthenticates(t *testing.T) {
 			http.Error(writer, "temporary", http.StatusServiceUnavailable)
 			return
 		}
-		_ = json.NewEncoder(writer).Encode(RemoteSettings{WebFetchEnabled: boolPointer(true)})
+		_ = json.NewEncoder(writer).Encode(RemoteSettings{WebFetchEnabled: boolPointer(true), GoalVerifierCount: intPointer(4)})
 	}))
 	defer server.Close()
 	settings := FetchRemoteSettings(context.Background(), server.URL+"/v1", "session-token", server.Client())
-	if settings == nil || settings.WebFetchEnabled == nil || !*settings.WebFetchEnabled || attempts != 2 {
+	if settings == nil || settings.WebFetchEnabled == nil || !*settings.WebFetchEnabled || settings.GoalVerifierCount == nil || *settings.GoalVerifierCount != 4 || attempts != 2 {
 		t.Fatalf("settings=%#v attempts=%d", settings, attempts)
 	}
 }
@@ -65,5 +66,39 @@ func TestAutoWakeDefaultsOnAndRemoteCanDisable(t *testing.T) {
 	cfg.ApplyRemoteSettings(&RemoteSettings{AutoWakeEnabled: boolPointer(false)})
 	if cfg.AutoWakeEnabled {
 		t.Fatal("remote auto wake gate was not applied")
+	}
+}
+
+func TestGoalVerifierCountRemoteAndLocalPrecedence(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	cfg, err := Load(filepath.Join(home, "missing.toml"))
+	if err != nil || cfg.Goal.VerifierCount != 3 {
+		t.Fatalf("default=%#v err=%v", cfg.Goal, err)
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{GoalVerifierCount: intPointer(99)})
+	if cfg.Goal.VerifierCount != 5 {
+		t.Fatalf("remote clamp=%#v", cfg.Goal)
+	}
+	path := filepath.Join(home, "config.toml")
+	if err := os.WriteFile(path, []byte("[goal]\nverifier_count = 4\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{GoalVerifierCount: intPointer(2)})
+	if cfg.Goal.VerifierCount != 4 {
+		t.Fatalf("local precedence=%#v", cfg.Goal)
+	}
+	t.Setenv("GROK_GOAL_VERIFIER_N", "1")
+	cfg, err = Load(filepath.Join(home, "missing.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{GoalVerifierCount: intPointer(5)})
+	if cfg.Goal.VerifierCount != 1 {
+		t.Fatalf("environment precedence=%#v", cfg.Goal)
 	}
 }

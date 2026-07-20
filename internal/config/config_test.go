@@ -257,6 +257,38 @@ func TestAskUserQuestionConfigPrecedence(t *testing.T) {
 	}
 }
 
+func TestGoalVerifierCountConfigPrecedenceAndClamp(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	if err := os.WriteFile(filepath.Join(home, "managed_config.toml"), []byte("[goal]\nverifier_count = 2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(home, "config.toml")
+	if err := os.WriteFile(path, []byte("[goal]\nverifier_count = 4\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GROK_GOAL_VERIFIER_N", "1")
+	cfg, err := Load(path)
+	if err != nil || cfg.Goal.VerifierCount != 1 {
+		t.Fatalf("environment precedence=%#v err=%v", cfg.Goal, err)
+	}
+	t.Setenv("GROK_GOAL_VERIFIER_N", "garbage")
+	cfg, err = Load(path)
+	if err != nil || cfg.Goal.VerifierCount != 4 {
+		t.Fatalf("file fallback=%#v err=%v", cfg.Goal, err)
+	}
+	t.Setenv("GROK_GOAL_VERIFIER_N", "99")
+	cfg, err = Load(path)
+	if err != nil || cfg.Goal.VerifierCount != 5 {
+		t.Fatalf("upper clamp=%#v err=%v", cfg.Goal, err)
+	}
+	t.Setenv("GROK_GOAL_VERIFIER_N", "0")
+	cfg, err = Load(path)
+	if err != nil || cfg.Goal.VerifierCount != 1 {
+		t.Fatalf("lower clamp=%#v err=%v", cfg.Goal, err)
+	}
+}
+
 func TestValidateWebFetchConfig(t *testing.T) {
 	base := Config{
 		APIKey: "key", BaseURL: "https://api.example/v1", Model: "model", Backend: "responses",

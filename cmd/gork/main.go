@@ -501,7 +501,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		if err := registry.BeginGoal(prompt); err != nil {
 			return err
 		}
-		return goalLoop(ctx, runner, registry, stdout, stderr, prompt, opts.previousID, opts.goalRuns)
+		return goalLoop(ctx, runner, registry, stdout, stderr, prompt, opts.previousID, opts.goalRuns, cfg.Goal.VerifierCount)
 	}
 	return runHeadless(ctx, runner, scheduledQueue, stdout, stderr, prompt, opts.previousID)
 }
@@ -1840,6 +1840,7 @@ func goalLoop(
 	objective string,
 	previousResponseID string,
 	maxRuns int,
+	verifierCount int,
 ) error {
 	prompt := objective
 	for run := 1; run <= maxRuns; run++ {
@@ -1856,7 +1857,7 @@ func goalLoop(
 		switch snapshot.Status {
 		case "verifying":
 			fmt.Fprintln(stderr, "[gork] verifying goal completion with independent skeptics")
-			verification := registry.VerifyGoal(ctx, snapshot)
+			verification := registry.VerifyGoal(ctx, snapshot, verifierCount)
 			if err := registry.ResolveGoalVerification(verification); err != nil {
 				return err
 			}

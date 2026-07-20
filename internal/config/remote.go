@@ -15,6 +15,7 @@ type RemoteSettings struct {
 	OfficialMarketplaceAutoRegister *bool    `json:"official_marketplace_auto_register"`
 	WebFetchEnabled                 *bool    `json:"web_fetch_enabled"`
 	AutoWakeEnabled                 *bool    `json:"auto_wake_enabled"`
+	GoalVerifierCount               *int     `json:"goal_verifier_count"`
 	WebFetchProxy                   *string  `json:"web_fetch_proxy"`
 	WebFetchAllowedDomains          []string `json:"web_fetch_allowed_domains"`
 	CursorSkills                    *bool    `json:"cursor_skills_enabled"`
@@ -86,6 +87,9 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 	}
 	if !c.autoWakeConfigured && remote.AutoWakeEnabled != nil {
 		c.AutoWakeEnabled = *remote.AutoWakeEnabled
+	}
+	if !c.goalVerifierConfigured && remote.GoalVerifierCount != nil {
+		c.Goal.VerifierCount = normalizedGoalVerifierCount(*remote.GoalVerifierCount)
 	}
 	if !c.WebFetch.ProxyConfigured && remote.WebFetchProxy != nil {
 		c.WebFetch.ProxyEndpoint = *remote.WebFetchProxy
