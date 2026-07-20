@@ -51,6 +51,114 @@ func TestBridgeApproval(t *testing.T) {
 	}
 }
 
+func TestBridgeQuestionSelectionAndPlanClarification(t *testing.T) {
+	bridge := NewBridge(context.Background(), tools.PermissionAuto)
+	defer bridge.Close()
+	m := &model{ctx: context.Background(), runner: &agent.Runner{}, bridge: bridge, width: 70, height: 18, running: true}
+	request := tools.UserQuestionRequest{ToolCallID: "ask-1", Mode: "plan", Questions: []tools.UserQuestion{
+		{Question: "Which database?", Options: []tools.UserQuestionOption{{Label: "SQLite", Preview: "schema"}}},
+		{Question: "Which region?", Options: []tools.UserQuestionOption{{Label: "Local"}}},
+	}}
+	result := make(chan tools.UserQuestionResponse, 1)
+	go func() {
+		response, _ := bridge.AskUserQuestion(context.Background(), request)
+		result <- response
+	}()
+	var event questionEvent
+	select {
+	case message := <-bridge.events:
+		event = message.(questionEvent)
+	case <-time.After(time.Second):
+		t.Fatal("question event did not arrive")
+	}
+	updated, _ := m.Update(event)
+	m = updated.(*model)
+	if !strings.Contains(m.View().Content, "Which database?") || !strings.Contains(m.View().Content, "SQLite") {
+		t.Fatalf("question view=%q", m.View().Content)
+	}
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: '1', Text: "1"}))
+	m = updated.(*model)
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if m.question == nil || m.question.index != 1 || m.status != "question 2/2" {
+		t.Fatalf("question=%#v status=%q", m.question, m.status)
+	}
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: 'r', Mod: tea.ModCtrl}))
+	m = updated.(*model)
+	select {
+	case response := <-result:
+		if response.Outcome != "chat_about_this" || response.PartialAnswers["Which database?"] != "SQLite" {
+			t.Fatalf("response=%#v", response)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("question did not complete")
+	}
+	if m.question != nil || m.status != "thinking" {
+		t.Fatalf("question=%#v status=%q", m.question, m.status)
+	}
+}
+
+func TestBridgeQuestionAccepted(t *testing.T) {
+	bridge := NewBridge(context.Background(), tools.PermissionAuto)
+	defer bridge.Close()
+	m := &model{ctx: context.Background(), runner: &agent.Runner{}, bridge: bridge, width: 60, height: 16, running: true}
+	result := make(chan tools.UserQuestionResponse, 1)
+	go func() {
+		response, _ := bridge.AskUserQuestion(context.Background(), tools.UserQuestionRequest{Questions: []tools.UserQuestion{{
+			Question: "Deploy where?", Options: []tools.UserQuestionOption{{Label: "Local"}},
+		}}})
+		result <- response
+	}()
+	event := (<-bridge.events).(questionEvent)
+	updated, _ := m.Update(event)
+	m = updated.(*model)
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: '1', Text: "1"}))
+	m = updated.(*model)
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	select {
+	case response := <-result:
+		if response.Outcome != "accepted" || response.Answers["Deploy where?"][0] != "Local" {
+			t.Fatalf("response=%#v", response)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("accepted question did not complete")
+	}
+}
+
+func TestBridgeSerializesBlockingInteractions(t *testing.T) {
+	bridge := NewBridge(context.Background(), tools.PermissionPrompt)
+	defer bridge.Close()
+	questionDone := make(chan error, 1)
+	approvalDone := make(chan error, 1)
+	go func() {
+		_, err := bridge.AskUserQuestion(context.Background(), tools.UserQuestionRequest{Questions: []tools.UserQuestion{{Question: "First?"}}})
+		questionDone <- err
+	}()
+	first := (<-bridge.events).(questionEvent)
+	go func() { approvalDone <- bridge.Approve(context.Background(), "shell", "go test ./...") }()
+	select {
+	case event := <-bridge.events:
+		t.Fatalf("second interaction arrived before first resolved: %#v", event)
+	case <-time.After(25 * time.Millisecond):
+	}
+	first.reply <- tools.UserQuestionResponse{Outcome: "cancelled"}
+	if err := <-questionDone; err != nil {
+		t.Fatal(err)
+	}
+	var approval approvalEvent
+	select {
+	case event := <-bridge.events:
+		approval = event.(approvalEvent)
+	case <-time.After(time.Second):
+		t.Fatal("serialized approval did not arrive")
+	}
+	approval.reply <- true
+	if err := <-approvalDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestModelInputAndView(t *testing.T) {
 	bridge := NewBridge(context.Background(), tools.PermissionAuto)
 	defer bridge.Close()

@@ -52,6 +52,59 @@ type UserQuestionAnnotation struct {
 	Notes   string `json:"notes,omitempty"`
 }
 
+func ParseUserQuestionAnswer(question UserQuestion, value string) ([]string, UserQuestionAnnotation, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, UserQuestionAnnotation{}, errors.New("answer is required")
+	}
+	parts := []string{value}
+	if question.MultiSelect {
+		parts = strings.Split(value, ",")
+	}
+	answers := make([]string, 0, len(parts))
+	seen := make(map[string]bool, len(parts))
+	annotation := UserQuestionAnnotation{}
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		label, preview := "", ""
+		if index, err := strconv.Atoi(part); err == nil {
+			if index < 1 || index > len(question.Options) {
+				return nil, UserQuestionAnnotation{}, fmt.Errorf("option %d is out of range", index)
+			}
+			label, preview = question.Options[index-1].Label, question.Options[index-1].Preview
+		} else {
+			for _, option := range question.Options {
+				if strings.EqualFold(part, option.Label) {
+					label, preview = option.Label, option.Preview
+					break
+				}
+			}
+			if label == "" {
+				label = "Other"
+				if annotation.Notes == "" {
+					annotation.Notes = part
+				} else {
+					annotation.Notes += ", " + part
+				}
+			}
+		}
+		if !seen[label] {
+			answers = append(answers, label)
+			seen[label] = true
+		}
+		if !question.MultiSelect && preview != "" {
+			annotation.Preview = preview
+		}
+	}
+	if len(answers) == 0 {
+		return nil, UserQuestionAnnotation{}, errors.New("answer is required")
+	}
+	return answers, annotation, nil
+}
+
 type UserQuestionRequest struct {
 	ToolCallID string
 	Questions  []UserQuestion

@@ -30,8 +30,11 @@ available in plan mode. ACP sessions send `x.ai/ask_user_question`, advertise
 the pending interaction, wait for accepted, cancelled, clarification, or
 skip-interview responses, and feed the formatted answer back into the same
 tool loop. One questionnaire has a shared 30-minute timeout, overridable with
-`GROK_ASK_USER_QUESTION_TIMEOUT_SECS`; non-ACP sessions use the reference
-fire-and-forget confirmation fallback until a native question UI is available.
+`GROK_ASK_USER_QUESTION_TIMEOUT_SECS`. The TUI renders an in-place option
+selector, while one-shot and goal-mode terminal runs accept option numbers,
+comma-separated multi-select values, or free text for Other. The REPL retains
+the reference fire-and-forget confirmation fallback until its background input
+reader is replaced with a question-aware input arbiter.
 
 Workspace instruction and skill discovery respects repository and global Git
 ignore rules through Git's own matching engine. Project instructions load from

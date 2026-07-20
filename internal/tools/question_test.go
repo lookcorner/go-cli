@@ -101,3 +101,19 @@ func TestUserQuestionLegacyMultiSelectAndTimeoutOverride(t *testing.T) {
 		t.Fatalf("fallback timeout=%v", got)
 	}
 }
+
+func TestParseUserQuestionAnswer(t *testing.T) {
+	question := UserQuestion{Question: "Pick?", Options: []UserQuestionOption{{Label: "Fast", Preview: "fast preview"}, {Label: "Safe"}}}
+	answers, annotation, err := ParseUserQuestionAnswer(question, "1")
+	if err != nil || strings.Join(answers, ",") != "Fast" || annotation.Preview != "fast preview" {
+		t.Fatalf("answers=%#v annotation=%#v err=%v", answers, annotation, err)
+	}
+	question.MultiSelect = true
+	answers, annotation, err = ParseUserQuestionAnswer(question, "2, custom details")
+	if err != nil || strings.Join(answers, ",") != "Safe,Other" || annotation.Notes != "custom details" {
+		t.Fatalf("answers=%#v annotation=%#v err=%v", answers, annotation, err)
+	}
+	if _, _, err := ParseUserQuestionAnswer(question, "9"); err == nil {
+		t.Fatal("out-of-range option was accepted")
+	}
+}

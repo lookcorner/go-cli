@@ -22,6 +22,10 @@ type approvalEvent struct {
 	detail string
 	reply  chan bool
 }
+type questionEvent struct {
+	request tools.UserQuestionRequest
+	reply   chan tools.UserQuestionResponse
+}
 type turnDoneEvent struct {
 	result agent.Result
 	err    error
@@ -30,11 +34,12 @@ type compactDoneEvent struct{ err error }
 type scheduledFiredEvent struct{ event tools.ScheduledTaskFired }
 
 type Bridge struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-	mode   tools.PermissionMode
-	events chan tea.Msg
-	once   sync.Once
+	ctx           context.Context
+	cancel        context.CancelFunc
+	mode          tools.PermissionMode
+	events        chan tea.Msg
+	once          sync.Once
+	interactionMu sync.Mutex
 }
 
 func NewBridge(parent context.Context, mode tools.PermissionMode) *Bridge {
@@ -69,6 +74,27 @@ func (b *Bridge) Approve(ctx context.Context, action, detail string) error {
 	}
 }
 
+func (b *Bridge) AskUserQuestion(ctx context.Context, request tools.UserQuestionRequest) (tools.UserQuestionResponse, error) {
+	b.interactionMu.Lock()
+	defer b.interactionMu.Unlock()
+	reply := make(chan tools.UserQuestionResponse, 1)
+	select {
+	case b.events <- questionEvent{request: request, reply: reply}:
+	case <-ctx.Done():
+		return tools.UserQuestionResponse{}, ctx.Err()
+	case <-b.ctx.Done():
+		return tools.UserQuestionResponse{}, b.ctx.Err()
+	}
+	select {
+	case response := <-reply:
+		return response, nil
+	case <-ctx.Done():
+		return tools.UserQuestionResponse{}, ctx.Err()
+	case <-b.ctx.Done():
+		return tools.UserQuestionResponse{}, b.ctx.Err()
+	}
+}
+
 type promptApprover struct{ bridge *Bridge }
 
 func PromptApprover(bridge *Bridge) tools.Approver { return promptApprover{bridge: bridge} }
@@ -78,6 +104,8 @@ func (a promptApprover) Approve(ctx context.Context, action, detail string) erro
 }
 
 func (b *Bridge) prompt(ctx context.Context, action, detail string) error {
+	b.interactionMu.Lock()
+	defer b.interactionMu.Unlock()
 	reply := make(chan bool, 1)
 	request := approvalEvent{action: action, detail: detail, reply: reply}
 	select {
@@ -134,10 +162,19 @@ type model struct {
 	running    bool
 	status     string
 	approval   *approvalEvent
+	question   *questionState
 	turnCancel context.CancelFunc
 	initial    string
 	scheduled  []tools.ScheduledTaskFired
 	activeTask string
+}
+
+type questionState struct {
+	event       questionEvent
+	index       int
+	answers     map[string][]string
+	annotations map[string]tools.UserQuestionAnnotation
+	partial     map[string]string
 }
 
 func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPrompt, previousID, initialTranscript, workspace, modelName string) error {
@@ -188,6 +225,14 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case approvalEvent:
 		m.approval = &msg
 		m.status = "approval required"
+		return m, waitForBridge(m.bridge)
+	case questionEvent:
+		m.question = &questionState{
+			event: msg, answers: make(map[string][]string, len(msg.request.Questions)),
+			annotations: make(map[string]tools.UserQuestionAnnotation), partial: make(map[string]string, len(msg.request.Questions)),
+		}
+		m.input = nil
+		m.status = fmt.Sprintf("question 1/%d", len(msg.request.Questions))
 		return m, waitForBridge(m.bridge)
 	case turnDoneEvent:
 		m.running = false
@@ -262,6 +307,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+	if m.question != nil {
+		return m.handleQuestionKey(msg)
+	}
 	switch stroke {
 	case "ctrl+c":
 		if m.running && m.turnCancel != nil {
@@ -319,6 +367,63 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.input = append(m.input, []rune(key.Text)...)
 	}
 	return m, nil
+}
+
+func (m *model) handleQuestionKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	key, stroke := msg.Key(), msg.Keystroke()
+	if stroke == "esc" || stroke == "ctrl+c" {
+		m.finishQuestion(tools.UserQuestionResponse{Outcome: "cancelled"})
+		return m, nil
+	}
+	if m.question.event.request.Mode == "plan" {
+		switch stroke {
+		case "ctrl+r":
+			m.finishQuestion(tools.UserQuestionResponse{Outcome: "chat_about_this", PartialAnswers: m.question.partial})
+			return m, nil
+		case "ctrl+s":
+			m.finishQuestion(tools.UserQuestionResponse{Outcome: "skip_interview", PartialAnswers: m.question.partial})
+			return m, nil
+		}
+	}
+	switch key.Code {
+	case tea.KeyEnter:
+		question := m.question.event.request.Questions[m.question.index]
+		answers, annotation, err := tools.ParseUserQuestionAnswer(question, string(m.input))
+		if err != nil {
+			m.status = "invalid answer: " + err.Error()
+			return m, nil
+		}
+		m.question.answers[question.Question] = answers
+		m.question.partial[question.Question] = strings.Join(answers, ", ")
+		if annotation.Preview != "" || annotation.Notes != "" {
+			m.question.annotations[question.Question] = annotation
+		}
+		m.question.index++
+		m.input = nil
+		if m.question.index == len(m.question.event.request.Questions) {
+			m.finishQuestion(tools.UserQuestionResponse{Outcome: "accepted", Answers: m.question.answers, Annotations: m.question.annotations})
+		} else {
+			m.status = fmt.Sprintf("question %d/%d", m.question.index+1, len(m.question.event.request.Questions))
+		}
+	case tea.KeyBackspace:
+		if len(m.input) > 0 {
+			m.input = m.input[:len(m.input)-1]
+		}
+	default:
+		if stroke == "ctrl+u" {
+			m.input = nil
+		} else if key.Text != "" && utf8.ValidString(key.Text) {
+			m.input = append(m.input, []rune(key.Text)...)
+		}
+	}
+	return m, nil
+}
+
+func (m *model) finishQuestion(response tools.UserQuestionResponse) {
+	m.question.event.reply <- response
+	m.question = nil
+	m.input = nil
+	m.status = "thinking"
 }
 
 func (m *model) beginTurn(prompt string) {
@@ -391,6 +496,19 @@ func (m *model) View() tea.View {
 	var footer string
 	if m.approval != nil {
 		footer = fmt.Sprintf("\x1b[1;33mApprove %s?\x1b[0m %s\n\x1b[2m[y] allow  [n/esc] deny\x1b[0m", m.approval.action, truncate(m.approval.detail, width-20))
+	} else if m.question != nil {
+		question := m.question.event.request.Questions[m.question.index]
+		labels := make([]string, 0, len(question.Options))
+		for index, option := range question.Options {
+			labels = append(labels, fmt.Sprintf("[%d] %s", index+1, option.Label))
+		}
+		hint := "Enter answer · Esc cancel"
+		if m.question.event.request.Mode == "plan" {
+			hint += " · Ctrl-R clarify · Ctrl-S skip"
+		}
+		footer = fmt.Sprintf("\x1b[1;33m%s\x1b[0m\n%s\n> %s█\n\x1b[2m%s\x1b[0m",
+			truncate(question.Question, width), truncate(strings.Join(labels, "  ")+"  [Other] type response", width),
+			truncateFromLeft(string(m.input), max(width-2, 1)), truncate(hint, width))
 	} else {
 		input := string(m.input)
 		if m.running {
@@ -408,7 +526,12 @@ func (m *model) View() tea.View {
 	return view
 }
 
-func (m *model) contentHeight() int { return max(m.height-5, 3) }
+func (m *model) contentHeight() int {
+	if m.question != nil {
+		return max(m.height-7, 3)
+	}
+	return max(m.height-5, 3)
+}
 
 func cleanStatus(value string) string {
 	value = strings.TrimSpace(value)

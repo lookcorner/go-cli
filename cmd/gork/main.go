@@ -313,6 +313,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	var approver tools.Approver
 	var askApprover tools.Approver
 	var tuiBridge *tui.Bridge
+	var terminalQuestions *terminalQuestionObserver
 	statusOutput := stderr
 	if opts.tui {
 		tuiBridge = tui.NewBridge(ctx, mode)
@@ -321,8 +322,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		askApprover = tui.PromptApprover(tuiBridge)
 		statusOutput = tuiBridge.StatusWriter()
 	} else {
-		approver = tools.PromptApprover{Mode: mode, Input: inputReader, Output: stderr}
-		askApprover = tools.PromptApprover{Mode: tools.PermissionPrompt, Input: inputReader, Output: stderr}
+		inputMu := &sync.Mutex{}
+		approver = serializedApprover{mu: inputMu, base: tools.PromptApprover{Mode: mode, Input: inputReader, Output: stderr}}
+		askApprover = serializedApprover{mu: inputMu, base: tools.PromptApprover{Mode: tools.PermissionPrompt, Input: inputReader, Output: stderr}}
+		terminalQuestions = &terminalQuestionObserver{input: inputReader, output: stderr, mu: inputMu}
 	}
 	permissionPrompts := &permissionPromptApprover{base: askApprover}
 	askApprover = permissionPrompts
@@ -422,6 +425,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	registry.SetProcessObserver(processObserver)
 	registry.SetSchedulerObserver(processObserver)
 	registry.SetPlanModeObserver(processObserver)
+	if tuiBridge != nil {
+		registry.SetUserQuestionObserver(tuiBridge)
+	} else if !opts.interactive {
+		registry.SetUserQuestionObserver(terminalQuestions)
+	}
 	defer hookRuntime.SessionEnded(context.Background(), "closed")
 	agentCatalog, agentErrors := agents.Discover(agents.Config{
 		WorkspaceRoot: ws.Root(), ProjectTrusted: projectTrusted, Compat: cfg.Compat, Plugins: plugins,
