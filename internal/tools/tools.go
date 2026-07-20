@@ -512,7 +512,7 @@ func (r *Registry) ResolveGoalVerification(verification GoalVerification, maxRun
 	if r.goal == nil {
 		return errors.New("goal store is unavailable")
 	}
-	err := r.goal.ResolveVerification(verification.Achieved, verification.Summary, maxRuns)
+	err := r.goal.ResolveVerification(verification, maxRuns)
 	if err != nil {
 		return err
 	}

@@ -273,7 +273,9 @@ Goal state is atomically persisted as `goal.json` in the same session artifact
 directory. Each Goal receives a persisted UUID v4; live ACP `goal_updated`
 notifications reuse it and report parent/verification round totals, cumulative
 tokens, completed Goal-role tokens, and the active planner/verifier/strategist
-role. `--goal --resume <session.jsonl>` reactivates an unfinished goal,
+role. They also retain the latest `achieved`/`not_achieved` verdict and its
+validated private details path across resume and terminal completion.
+`--goal --resume <session.jsonl>` reactivates an unfinished goal,
 preserves its original objective and evidence baselines, and resets the
 per-resume verifier attempt and stall counters. A supplied prompt is treated as
 additional direction; a completed goal requires a new non-empty objective.

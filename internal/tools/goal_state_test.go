@@ -38,7 +38,11 @@ func TestGoalStatePersistsResumesAndCompletes(t *testing.T) {
 	if err := first.StartGoalVerification(10); err != nil {
 		t.Fatal(err)
 	}
-	if err := first.ResolveGoalVerification(GoalVerification{Summary: "missing proof"}, 10); err != nil {
+	detailsPath := filepath.Join(artifactDir, "goal-classifier-1.md")
+	if err := writeGoalArtifact(detailsPath, []byte("# Details\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.ResolveGoalVerification(GoalVerification{Summary: "missing proof", DetailsPath: detailsPath}, 10); err != nil {
 		t.Fatal(err)
 	}
 	if reminder, err := first.GoalReverifyReminder(8); err != nil || reminder != "" {
@@ -67,7 +71,7 @@ func TestGoalStatePersistsResumesAndCompletes(t *testing.T) {
 	}
 	second := newPersistentGoalRegistry(t, root, artifactDir)
 	snapshot := second.GoalSnapshot()
-	if snapshot.GoalID != goalID || snapshot.Objective != "persist this objective" || snapshot.Status != "active" || snapshot.Message != "missing proof" || snapshot.VerificationRuns != 1 || snapshot.RoundsSinceVerify != 1 || snapshot.TotalVerifyRounds != 1 || snapshot.TokensUsed != 25 || snapshot.FinishedSubagentTokens != 25 {
+	if snapshot.GoalID != goalID || snapshot.Objective != "persist this objective" || snapshot.Status != "active" || snapshot.Message != "missing proof" || snapshot.VerificationRuns != 1 || snapshot.RoundsSinceVerify != 1 || snapshot.TotalVerifyRounds != 1 || snapshot.TokensUsed != 25 || snapshot.FinishedSubagentTokens != 25 || snapshot.LastClassifierVerdict != "not_achieved" || snapshot.LastClassifierDetailsPath != detailsPath {
 		t.Fatalf("restored snapshot=%#v", snapshot)
 	}
 	if second.goal.skeptic0SessionID != "skeptic-child" || second.goal.lastVerification != "missing proof" || len(second.goal.skepticModels) != 1 || second.goal.skepticModels[0].Model != "skeptic-model" {
@@ -102,7 +106,7 @@ func TestGoalStatePersistsResumesAndCompletes(t *testing.T) {
 
 	third := newPersistentGoalRegistry(t, root, artifactDir)
 	defer third.Close()
-	if snapshot = third.GoalSnapshot(); snapshot.Status != "completed" || snapshot.Message != "verified" {
+	if snapshot = third.GoalSnapshot(); snapshot.Status != "completed" || snapshot.Message != "verified" || snapshot.LastClassifierVerdict != "achieved" || snapshot.LastClassifierDetailsPath != detailsPath {
 		t.Fatalf("completed snapshot=%#v", snapshot)
 	}
 	if third.goal.skeptic0SessionID != "" {
@@ -147,13 +151,16 @@ func TestGoalStateUnknownStatusPausesAndBadVersionFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	statePath := filepath.Join(artifactDir, "goal.json")
-	state := `{"version":1,"objective":"goal","status":"future_status","baseline_commit":"not-an-oid","plan_baseline_path":"/tmp/outside","skeptic0_session_id":"../../bad"}`
+	state := `{"version":1,"objective":"goal","status":"future_status","baseline_commit":"not-an-oid","plan_baseline_path":"/tmp/outside","last_classifier_verdict":"future","last_classifier_details_path":"/tmp/outside","skeptic0_session_id":"../../bad"}`
 	if err := os.WriteFile(statePath, []byte(state), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	registry := newPersistentGoalRegistry(t, root, artifactDir)
 	if snapshot := registry.GoalSnapshot(); snapshot.GoalID == "" || snapshot.Status != "paused" || !strings.Contains(snapshot.Message, "unknown status") || registry.goal.baselineCommit != "" || registry.goal.planBaselinePath != "" || registry.goal.skeptic0SessionID != "" {
 		t.Fatalf("snapshot=%#v baseline=%q plan=%q skeptic=%q", snapshot, registry.goal.baselineCommit, registry.goal.planBaselinePath, registry.goal.skeptic0SessionID)
+	}
+	if registry.goal.lastClassifierVerdict != "" || registry.goal.lastClassifierDetailsPath != "" {
+		t.Fatalf("unsafe classifier state survived: verdict=%q path=%q", registry.goal.lastClassifierVerdict, registry.goal.lastClassifierDetailsPath)
 	}
 	if data, err := os.ReadFile(statePath); err != nil || !strings.Contains(string(data), `"goal_id":"`) {
 		t.Fatalf("legacy state did not persist generated goal id: %q err=%v", data, err)

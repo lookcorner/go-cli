@@ -15,19 +15,21 @@ import (
 )
 
 type GoalSnapshot struct {
-	GoalID                 string
-	Objective              string
-	Status                 string
-	Message                string
-	VerificationRuns       uint32
-	PlanPath               string
-	ClosingSummary         string
-	TokenBudget            int64
-	TokensUsed             int64
-	RoundsSinceVerify      uint32
-	TotalWorkerRounds      uint32
-	TotalVerifyRounds      uint32
-	FinishedSubagentTokens int64
+	GoalID                    string
+	Objective                 string
+	Status                    string
+	Message                   string
+	VerificationRuns          uint32
+	PlanPath                  string
+	ClosingSummary            string
+	TokenBudget               int64
+	TokensUsed                int64
+	RoundsSinceVerify         uint32
+	TotalWorkerRounds         uint32
+	TotalVerifyRounds         uint32
+	FinishedSubagentTokens    int64
+	LastClassifierVerdict     string
+	LastClassifierDetailsPath string
 }
 
 type GoalRoleModel struct {
@@ -48,41 +50,43 @@ type GoalRoleConfig struct {
 }
 
 type GoalStore struct {
-	mu                     sync.Mutex
-	goalID                 string
-	objective              string
-	status                 string
-	message                string
-	verificationRuns       uint32
-	totalWorkerRounds      uint32
-	totalVerifyRounds      uint32
-	roundsSinceVerify      uint32
-	lastVerification       string
-	stallVerification      string
-	verificationStall      int
-	consecutiveReject      uint32
-	strategistFiredAt      uint32
-	strategistBonus        uint32
-	strategyPath           string
-	strategyNote           string
-	workspaceRoot          string
-	artifactDir            string
-	baselineCommit         string
-	createdAtUnix          int64
-	planBaselinePath       string
-	plannerPlanPath        string
-	plannerCompleted       bool
-	summaryAttempted       bool
-	closingSummary         string
-	observer               GoalObserver
-	classifierMaxRuns      uint32
-	tokenBudget            int64
-	tokensUsed             int64
-	finishedSubagentTokens int64
-	currentSubagentRole    string
-	statePath              string
-	skeptic0SessionID      string
-	skepticModels          []GoalRoleModel
+	mu                        sync.Mutex
+	goalID                    string
+	objective                 string
+	status                    string
+	message                   string
+	verificationRuns          uint32
+	totalWorkerRounds         uint32
+	totalVerifyRounds         uint32
+	roundsSinceVerify         uint32
+	lastVerification          string
+	stallVerification         string
+	verificationStall         int
+	consecutiveReject         uint32
+	strategistFiredAt         uint32
+	strategistBonus           uint32
+	strategyPath              string
+	strategyNote              string
+	workspaceRoot             string
+	artifactDir               string
+	baselineCommit            string
+	createdAtUnix             int64
+	planBaselinePath          string
+	plannerPlanPath           string
+	plannerCompleted          bool
+	summaryAttempted          bool
+	closingSummary            string
+	observer                  GoalObserver
+	classifierMaxRuns         uint32
+	tokenBudget               int64
+	tokensUsed                int64
+	finishedSubagentTokens    int64
+	currentSubagentRole       string
+	lastClassifierVerdict     string
+	lastClassifierDetailsPath string
+	statePath                 string
+	skeptic0SessionID         string
+	skepticModels             []GoalRoleModel
 }
 
 func NewGoalStore() *GoalStore { return &GoalStore{} }
@@ -121,6 +125,7 @@ func (s *GoalStore) BeginWithBudget(objective string, tokenBudget int64) error {
 	s.summaryAttempted, s.closingSummary = false, ""
 	s.tokenBudget, s.tokensUsed, s.finishedSubagentTokens = max(int64(0), tokenBudget), 0, 0
 	s.currentSubagentRole = ""
+	s.lastClassifierVerdict, s.lastClassifierDetailsPath = "", ""
 	return s.saveLocked()
 }
 
@@ -134,6 +139,7 @@ func (s *GoalStore) Snapshot() GoalSnapshot {
 		RoundsSinceVerify: s.roundsSinceVerify,
 		TotalWorkerRounds: s.totalWorkerRounds, TotalVerifyRounds: s.totalVerifyRounds,
 		FinishedSubagentTokens: s.finishedSubagentTokens,
+		LastClassifierVerdict:  s.lastClassifierVerdict, LastClassifierDetailsPath: s.lastClassifierDetailsPath,
 	}
 }
 
@@ -198,16 +204,24 @@ func (s *GoalStore) StartVerification(maxRuns uint32) error {
 	return s.saveLocked()
 }
 
-func (s *GoalStore) ResolveVerification(achieved bool, message string, maxRuns uint32) error {
+func (s *GoalStore) ResolveVerification(verification GoalVerification, maxRuns uint32) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.status != "verifying" {
 		return errors.New("goal is not awaiting verification")
 	}
-	s.message = strings.TrimSpace(message)
-	if achieved {
+	s.message = strings.TrimSpace(verification.Summary)
+	s.lastClassifierVerdict = "not_achieved"
+	if verification.Achieved {
+		s.lastClassifierVerdict = "achieved"
+	}
+	if verification.DetailsPath != "" && validGoalArtifactPath(s.artifactDir, verification.DetailsPath) {
+		s.lastClassifierDetailsPath = verification.DetailsPath
+	}
+	if verification.Achieved {
 		s.status = "completed"
 		s.currentSubagentRole = ""
+		s.lastVerification = ""
 		s.skeptic0SessionID = ""
 		s.skepticModels = nil
 		s.resetStrategistLocked()

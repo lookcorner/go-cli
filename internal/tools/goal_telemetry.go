@@ -70,6 +70,12 @@ func (s *GoalStore) goalUpdatedLocked(lastEvent string) (GoalObserver, GoalEvent
 	if s.verificationRuns > 0 {
 		data["classifier_runs_attempted"] = s.verificationRuns
 	}
+	if s.lastClassifierVerdict != "" {
+		data["last_classifier_verdict"] = s.lastClassifierVerdict
+	}
+	if s.lastClassifierDetailsPath != "" {
+		data["last_classifier_details_path"] = s.lastClassifierDetailsPath
+	}
 	if s.tokenBudget > 0 {
 		data["token_budget"] = s.tokenBudget
 	}

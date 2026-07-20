@@ -75,7 +75,7 @@ func TestUpdateGoalLifecycle(t *testing.T) {
 	if err := store.StartVerification(10); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.ResolveVerification(true, "verified", 10); err != nil {
+	if err := store.ResolveVerification(GoalVerification{Achieved: true, Summary: "verified"}, 10); err != nil {
 		t.Fatal(err)
 	}
 	snapshot = store.Snapshot()
@@ -150,7 +150,7 @@ func TestGoalVerificationPausesAtCapAndOnRepeatedGaps(t *testing.T) {
 		if err := store.StartVerification(1); err != nil {
 			t.Fatal(err)
 		}
-		if err := store.ResolveVerification(false, "missing proof", 1); err != nil {
+		if err := store.ResolveVerification(GoalVerification{Summary: "missing proof"}, 1); err != nil {
 			t.Fatal(err)
 		}
 		snapshot := store.Snapshot()
@@ -168,7 +168,7 @@ func TestGoalVerificationPausesAtCapAndOnRepeatedGaps(t *testing.T) {
 			if err := store.StartVerification(10); err != nil {
 				t.Fatal(err)
 			}
-			if err := store.ResolveVerification(false, "same gap", 10); err != nil {
+			if err := store.ResolveVerification(GoalVerification{Summary: "same gap"}, 10); err != nil {
 				t.Fatal(err)
 			}
 		}

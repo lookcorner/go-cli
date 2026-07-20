@@ -14,36 +14,38 @@ import (
 const goalStateVersion = 1
 
 type durableGoalState struct {
-	Version                int             `json:"version"`
-	GoalID                 string          `json:"goal_id"`
-	Objective              string          `json:"objective"`
-	Status                 string          `json:"status"`
-	Message                string          `json:"message,omitempty"`
-	VerificationRuns       uint32          `json:"verification_runs,omitempty"`
-	RoundsSinceVerify      uint32          `json:"rounds_since_verify,omitempty"`
-	TotalWorkerRounds      uint32          `json:"total_worker_rounds,omitempty"`
-	TotalVerifyRounds      uint32          `json:"total_verify_rounds,omitempty"`
-	LastVerification       string          `json:"last_verification,omitempty"`
-	StallVerification      string          `json:"stall_verification,omitempty"`
-	VerificationStall      int             `json:"verification_stall,omitempty"`
-	ConsecutiveReject      uint32          `json:"consecutive_not_achieved,omitempty"`
-	StrategistFiredAt      uint32          `json:"last_strategist_fired_at,omitempty"`
-	StrategistBonus        uint32          `json:"strategist_cap_bonus,omitempty"`
-	StrategyPath           string          `json:"strategy_path,omitempty"`
-	StrategyNote           string          `json:"strategy_recommendation,omitempty"`
-	BaselineCommit         string          `json:"baseline_commit,omitempty"`
-	CreatedAtUnix          int64           `json:"created_at_unix"`
-	PlanBaselinePath       string          `json:"plan_baseline_path,omitempty"`
-	PlannerPlanPath        string          `json:"plan_file,omitempty"`
-	PlannerCompleted       bool            `json:"planner_completed,omitempty"`
-	SummaryAttempted       bool            `json:"summary_attempted,omitempty"`
-	ClosingSummary         string          `json:"closing_summary,omitempty"`
-	TokenBudget            int64           `json:"token_budget,omitempty"`
-	TokensUsed             int64           `json:"tokens_used,omitempty"`
-	FinishedSubagentTokens int64           `json:"finished_subagent_tokens,omitempty"`
-	CurrentSubagentRole    string          `json:"current_subagent_role,omitempty"`
-	Skeptic0SessionID      string          `json:"skeptic0_session_id,omitempty"`
-	SkepticModels          []GoalRoleModel `json:"skeptic_model_assignment,omitempty"`
+	Version                   int             `json:"version"`
+	GoalID                    string          `json:"goal_id"`
+	Objective                 string          `json:"objective"`
+	Status                    string          `json:"status"`
+	Message                   string          `json:"message,omitempty"`
+	VerificationRuns          uint32          `json:"verification_runs,omitempty"`
+	RoundsSinceVerify         uint32          `json:"rounds_since_verify,omitempty"`
+	TotalWorkerRounds         uint32          `json:"total_worker_rounds,omitempty"`
+	TotalVerifyRounds         uint32          `json:"total_verify_rounds,omitempty"`
+	LastVerification          string          `json:"last_verification,omitempty"`
+	StallVerification         string          `json:"stall_verification,omitempty"`
+	VerificationStall         int             `json:"verification_stall,omitempty"`
+	ConsecutiveReject         uint32          `json:"consecutive_not_achieved,omitempty"`
+	StrategistFiredAt         uint32          `json:"last_strategist_fired_at,omitempty"`
+	StrategistBonus           uint32          `json:"strategist_cap_bonus,omitempty"`
+	StrategyPath              string          `json:"strategy_path,omitempty"`
+	StrategyNote              string          `json:"strategy_recommendation,omitempty"`
+	BaselineCommit            string          `json:"baseline_commit,omitempty"`
+	CreatedAtUnix             int64           `json:"created_at_unix"`
+	PlanBaselinePath          string          `json:"plan_baseline_path,omitempty"`
+	PlannerPlanPath           string          `json:"plan_file,omitempty"`
+	PlannerCompleted          bool            `json:"planner_completed,omitempty"`
+	SummaryAttempted          bool            `json:"summary_attempted,omitempty"`
+	ClosingSummary            string          `json:"closing_summary,omitempty"`
+	TokenBudget               int64           `json:"token_budget,omitempty"`
+	TokensUsed                int64           `json:"tokens_used,omitempty"`
+	FinishedSubagentTokens    int64           `json:"finished_subagent_tokens,omitempty"`
+	CurrentSubagentRole       string          `json:"current_subagent_role,omitempty"`
+	LastClassifierVerdict     string          `json:"last_classifier_verdict,omitempty"`
+	LastClassifierDetailsPath string          `json:"last_classifier_details_path,omitempty"`
+	Skeptic0SessionID         string          `json:"skeptic0_session_id,omitempty"`
+	SkepticModels             []GoalRoleModel `json:"skeptic_model_assignment,omitempty"`
 }
 
 func (s *GoalStore) saveLocked() error {
@@ -59,16 +61,18 @@ func (s *GoalStore) saveLocked() error {
 		StrategistBonus: s.strategistBonus, StrategyPath: s.strategyPath, StrategyNote: s.strategyNote,
 		BaselineCommit: s.baselineCommit,
 		CreatedAtUnix:  s.createdAtUnix, PlanBaselinePath: s.planBaselinePath,
-		PlannerPlanPath:        s.plannerPlanPath,
-		PlannerCompleted:       s.plannerCompleted,
-		SummaryAttempted:       s.summaryAttempted,
-		ClosingSummary:         s.closingSummary,
-		TokenBudget:            s.tokenBudget,
-		TokensUsed:             s.tokensUsed,
-		FinishedSubagentTokens: s.finishedSubagentTokens,
-		CurrentSubagentRole:    s.currentSubagentRole,
-		Skeptic0SessionID:      s.skeptic0SessionID,
-		SkepticModels:          s.skepticModels,
+		PlannerPlanPath:           s.plannerPlanPath,
+		PlannerCompleted:          s.plannerCompleted,
+		SummaryAttempted:          s.summaryAttempted,
+		ClosingSummary:            s.closingSummary,
+		TokenBudget:               s.tokenBudget,
+		TokensUsed:                s.tokensUsed,
+		FinishedSubagentTokens:    s.finishedSubagentTokens,
+		CurrentSubagentRole:       s.currentSubagentRole,
+		LastClassifierVerdict:     s.lastClassifierVerdict,
+		LastClassifierDetailsPath: s.lastClassifierDetailsPath,
+		Skeptic0SessionID:         s.skeptic0SessionID,
+		SkepticModels:             s.skepticModels,
 	})
 	if err != nil {
 		return err
@@ -128,6 +132,12 @@ func (s *GoalStore) loadState() error {
 	if !validGoalArtifactPath(s.artifactDir, state.StrategyPath) {
 		state.StrategyPath, state.StrategyNote = "", ""
 	}
+	if !validGoalArtifactPath(s.artifactDir, state.LastClassifierDetailsPath) {
+		state.LastClassifierDetailsPath = ""
+	}
+	if state.LastClassifierVerdict != "achieved" && state.LastClassifierVerdict != "not_achieved" {
+		state.LastClassifierVerdict = ""
+	}
 	if state.CreatedAtUnix <= 0 {
 		state.CreatedAtUnix = time.Now().Unix()
 	}
@@ -162,6 +172,7 @@ func (s *GoalStore) loadState() error {
 	if s.currentSubagentRole != "planner" && s.currentSubagentRole != "verifier" && s.currentSubagentRole != "strategist" {
 		s.currentSubagentRole = ""
 	}
+	s.lastClassifierVerdict, s.lastClassifierDetailsPath = state.LastClassifierVerdict, state.LastClassifierDetailsPath
 	s.skeptic0SessionID = state.Skeptic0SessionID
 	s.skepticModels = validGoalRoleModels(state.SkepticModels)
 	if generatedID {

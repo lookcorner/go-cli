@@ -107,7 +107,7 @@ func TestGoalTelemetryRecordsLifecycleAndSuccessfulRoles(t *testing.T) {
 	if !verifying {
 		t.Fatalf("missing verifier role update: %#v", updates)
 	}
-	if last := updates[len(updates)-1].Data; last["status"] != "complete" || last["phase"] != "idle" || last["classifier_runs_attempted"] != uint32(1) || last["classifier_max_runs"] != uint32(4) || last["total_verify_rounds"] != uint32(1) {
+	if last := updates[len(updates)-1].Data; last["status"] != "complete" || last["phase"] != "idle" || last["classifier_runs_attempted"] != uint32(1) || last["classifier_max_runs"] != uint32(4) || last["total_verify_rounds"] != uint32(1) || last["last_classifier_verdict"] != "achieved" || last["last_classifier_details_path"] != verification.DetailsPath {
 		t.Fatalf("completed update=%#v", last)
 	} else if _, exists := last["current_subagent_role"]; exists {
 		t.Fatalf("completed update retained role=%#v", last)
