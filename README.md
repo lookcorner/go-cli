@@ -247,7 +247,11 @@ or TUI. The panel defaults to three skeptics. `[goal] verifier_count`, remote
 environment variable may select one through five. `[goal] classifier_max_runs`,
 remote `goal_classifier_max_runs`, and `GROK_GOAL_CLASSIFIER_MAX` set the
 verification-attempt cap (default 10, minimum 1). Repeating the same gaps twice
-pauses early instead of continuing a no-progress loop.
+pauses early instead of continuing a no-progress loop. Goal creation records a
+best-effort Git `HEAD` baseline. Each verification writes a bounded cumulative
+patch and ordered skeptic-details Markdown under the private session artifact
+directory; the prompt links that patch and lists tracked plus untracked paths
+so read-only skeptics can corroborate the candidate against live files.
 
 Release builds gate repo-controlled MCP/LSP and enabled project-plugin execution
 on folder trust. Interactive CLI startup asks once when executable project

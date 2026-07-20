@@ -26,6 +26,9 @@ type GoalStore struct {
 	verificationRuns  uint32
 	lastVerification  string
 	verificationStall int
+	workspaceRoot     string
+	artifactDir       string
+	baselineCommit    string
 }
 
 func NewGoalStore() *GoalStore { return &GoalStore{} }
@@ -44,6 +47,7 @@ func (s *GoalStore) Begin(objective string) error {
 	s.status = "active"
 	s.message = ""
 	s.verificationRuns, s.lastVerification, s.verificationStall = 0, "", 0
+	s.baselineCommit = captureGoalBaseline(s.workspaceRoot)
 	return nil
 }
 

@@ -219,6 +219,7 @@ func NewRegistry(ws *workspace.Workspace, approver Approver) *Registry {
 	subagents := &subagentHolder{}
 	todos := newTodoStore()
 	goal := NewGoalStore()
+	goal.workspaceRoot = ws.Root()
 	scheduler := NewScheduler()
 	plan := NewPlanMode(ws, approver)
 	questions := &UserQuestions{plan: plan, timeoutEnabled: true, timeout: 30 * time.Minute}
@@ -430,6 +431,19 @@ func (r *Registry) ConfigurePlanMode(artifactDir string) error {
 		return errors.New("plan mode unavailable")
 	}
 	return r.plan.Configure(artifactDir)
+}
+
+func (r *Registry) ConfigureGoalVerification(artifactDir string) error {
+	if r == nil || r.goal == nil {
+		return errors.New("goal store is unavailable")
+	}
+	if err := r.goal.ConfigureEvidence(artifactDir); err != nil {
+		return err
+	}
+	if r.readFile != nil {
+		r.readFile.artifactRoot = artifactDir
+	}
+	return nil
 }
 
 func (r *Registry) SetPlanModeObserver(observer PlanModeObserver) {

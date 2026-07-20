@@ -361,6 +361,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		_ = registry.Close()
 		return err
 	}
+	if err := registry.ConfigureGoalVerification(artifactDir); err != nil {
+		_ = registry.Close()
+		return err
+	}
 	if search, enabled := cfg.WebSearchEndpoint(); enabled {
 		if err := registry.Register(tools.NewWebSearchTool(search.BaseURL, search.APIKey, search.Model, &http.Client{Timeout: cfg.HTTPTimeout})); err != nil {
 			return err
@@ -1350,6 +1354,11 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			_ = registry.Close()
 			return nil, nil, err
 		}
+		if err := registry.ConfigureGoalVerification(artifactDir); err != nil {
+			_ = logger.Close()
+			_ = registry.Close()
+			return nil, nil, err
+		}
 		registry.SetWebFetchEnabled(cfg.WebFetch.Enabled)
 		if sessionConfig.ResumePath == "" {
 			model := cfg.Model
@@ -1864,6 +1873,9 @@ func goalLoop(
 			verification := registry.VerifyGoal(ctx, snapshot, verifierCount)
 			if err := registry.ResolveGoalVerification(verification, classifierMaxRuns); err != nil {
 				return err
+			}
+			if verification.DetailsPath != "" {
+				fmt.Fprintln(stderr, "[gork] goal verification details:", verification.DetailsPath)
 			}
 			if current := registry.GoalSnapshot(); current.Status == "paused" {
 				return errors.New("goal verification paused: " + current.Message)

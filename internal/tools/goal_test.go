@@ -214,4 +214,8 @@ func TestParseGoalVerdictIsStrict(t *testing.T) {
 			t.Fatalf("parse %q=%#v", test.output, got)
 		}
 	}
+	large := `{"verdict":"refuted","gaps":"` + strings.Repeat("x", goalVerifierGapMaxBytes+100) + `"}`
+	if verdict := parseGoalVerdict(large); len(verdict.Gaps) > goalVerifierGapMaxBytes+len("... (truncated)") || !strings.HasSuffix(verdict.Gaps, "... (truncated)") {
+		t.Fatalf("large verdict gap length=%d", len(verdict.Gaps))
+	}
 }
