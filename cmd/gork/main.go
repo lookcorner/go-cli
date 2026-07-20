@@ -227,14 +227,15 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 
 	inputReader := bufio.NewReader(stdin)
 	prompt := strings.TrimSpace(strings.Join(flags.Args(), " "))
-	if prompt == "" && !opts.interactive && !opts.tui {
+	resumingGoal := opts.goal && opts.resume != ""
+	if prompt == "" && !opts.interactive && !opts.tui && !resumingGoal {
 		data, err := io.ReadAll(io.LimitReader(inputReader, 4<<20))
 		if err != nil {
 			return fmt.Errorf("read prompt: %w", err)
 		}
 		prompt = strings.TrimSpace(string(data))
 	}
-	if prompt == "" && !opts.interactive && !opts.tui {
+	if prompt == "" && !opts.interactive && !opts.tui && !resumingGoal {
 		flags.Usage()
 		return errors.New("prompt is required as arguments or stdin")
 	}
@@ -502,7 +503,18 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return interactiveLoop(ctx, runner, scheduledQueue, terminalLines, stdout, stderr, prompt, opts.previousID)
 	}
 	if opts.goal {
-		if err := registry.BeginGoal(prompt); err != nil {
+		snapshot := registry.GoalSnapshot()
+		if opts.resume != "" && snapshot.Objective != "" && snapshot.Status != "completed" {
+			objective, err := registry.ResumeGoal()
+			if err != nil {
+				return err
+			}
+			if prompt == "" {
+				prompt = "Continue working toward the active goal:\n" + objective + "\nVerify the remaining work before claiming completion."
+			} else {
+				prompt = "Continue working toward the active goal:\n" + objective + "\n\nAdditional user direction:\n" + prompt
+			}
+		} else if err := registry.BeginGoal(prompt); err != nil {
 			return err
 		}
 		return goalLoop(ctx, runner, registry, stdout, stderr, prompt, opts.previousID, opts.goalRuns, cfg.Goal.VerifierCount, cfg.Goal.ClassifierMaxRuns)

@@ -36,8 +36,9 @@ func (s *GoalStore) ConfigureEvidence(artifactDir string) error {
 	}
 	s.mu.Lock()
 	s.artifactDir = artifactDir
+	s.statePath = filepath.Join(artifactDir, "goal.json")
 	s.mu.Unlock()
-	return nil
+	return s.loadState()
 }
 
 func captureGoalBaseline(root string) string {

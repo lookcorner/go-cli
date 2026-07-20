@@ -379,6 +379,13 @@ func (r *Registry) BeginGoal(objective string) error {
 	return r.goal.Begin(objective)
 }
 
+func (r *Registry) ResumeGoal() (string, error) {
+	if r.goal == nil {
+		return "", errors.New("goal store is unavailable")
+	}
+	return r.goal.Resume()
+}
+
 func (r *Registry) GoalSnapshot() GoalSnapshot {
 	if r.goal == nil {
 		return GoalSnapshot{}

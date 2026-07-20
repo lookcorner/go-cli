@@ -256,6 +256,11 @@ Git baseline exists, a bounded modification-time walk synthesizes the patch
 while excluding dependency, VCS, cache, and build directories. An existing
 `.grok/plan.md` is snapshotted when the goal starts; verifier prompts include
 its current path and a bounded baseline-to-current `PLAN_CHANGES` diff.
+Goal state is atomically persisted as `goal.json` in the same session artifact
+directory. `--goal --resume <session.jsonl>` reactivates an unfinished goal,
+preserves its original objective and evidence baselines, and resets the
+per-resume verifier attempt and stall counters. A supplied prompt is treated as
+additional direction; a completed goal requires a new non-empty objective.
 
 Release builds gate repo-controlled MCP/LSP and enabled project-plugin execution
 on folder trust. Interactive CLI startup asks once when executable project

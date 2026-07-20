@@ -792,3 +792,16 @@ func TestPluginMarketplaceCLIAutoRegistersOfficialSource(t *testing.T) {
 		t.Fatalf("listed=%#v output=%q err=%v", listed, stdout.String(), err)
 	}
 }
+
+func TestGoalResumeDoesNotRequireNewPrompt(t *testing.T) {
+	t.Setenv("GORK_API_KEY", "test-key")
+	t.Setenv("GORK_MODEL", "test-model")
+	home := t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	t.Setenv("HOME", home)
+	missing := filepath.Join(t.TempDir(), "missing.jsonl")
+	err := run([]string{"--goal", "--resume", missing, "--config", filepath.Join(home, "missing.toml"), "--workspace", t.TempDir()}, strings.NewReader(""), io.Discard, io.Discard)
+	if err == nil || strings.Contains(err.Error(), "prompt is required") {
+		t.Fatalf("resume err=%v", err)
+	}
+}

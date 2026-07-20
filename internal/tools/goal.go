@@ -32,6 +32,7 @@ type GoalStore struct {
 	baselineCommit    string
 	createdAtUnix     int64
 	planBaselinePath  string
+	statePath         string
 }
 
 func NewGoalStore() *GoalStore { return &GoalStore{} }
@@ -43,7 +44,7 @@ func (s *GoalStore) Begin(objective string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.status == "active" {
+	if s.status == "active" || s.status == "verifying" {
 		return errors.New("a goal is already active")
 	}
 	s.objective = objective
@@ -53,7 +54,7 @@ func (s *GoalStore) Begin(objective string) error {
 	s.createdAtUnix = time.Now().Unix()
 	s.baselineCommit = captureGoalBaseline(s.workspaceRoot)
 	s.planBaselinePath = captureGoalPlanBaseline(s.workspaceRoot, s.artifactDir)
-	return nil
+	return s.saveLocked()
 }
 
 func (s *GoalStore) Snapshot() GoalSnapshot {
@@ -71,10 +72,11 @@ func (s *GoalStore) StartVerification(maxRuns uint32) error {
 	maxRuns = max(uint32(1), maxRuns)
 	if s.verificationRuns >= maxRuns {
 		s.status = "paused"
-		return fmt.Errorf("goal verification paused after %d attempts", s.verificationRuns)
+		err := fmt.Errorf("goal verification paused after %d attempts", s.verificationRuns)
+		return errors.Join(err, s.saveLocked())
 	}
 	s.verificationRuns++
-	return nil
+	return s.saveLocked()
 }
 
 func (s *GoalStore) ResolveVerification(achieved bool, message string, maxRuns uint32) error {
@@ -86,7 +88,7 @@ func (s *GoalStore) ResolveVerification(achieved bool, message string, maxRuns u
 	s.message = strings.TrimSpace(message)
 	if achieved {
 		s.status = "completed"
-		return nil
+		return s.saveLocked()
 	}
 	if s.message == s.lastVerification {
 		s.verificationStall++
@@ -102,7 +104,7 @@ func (s *GoalStore) ResolveVerification(achieved bool, message string, maxRuns u
 	} else {
 		s.status = "active"
 	}
-	return nil
+	return s.saveLocked()
 }
 
 type updateGoalTool struct{ store *GoalStore }
@@ -142,6 +144,9 @@ func (t *updateGoalTool) Execute(_ context.Context, raw json.RawMessage) (string
 	if blocked := strings.TrimSpace(args.BlockedReason); blocked != "" {
 		t.store.status = "blocked"
 		t.store.message = blocked
+		if err := t.store.saveLocked(); err != nil {
+			return "", err
+		}
 		return "success: true\nsummary: Goal marked blocked: " + blocked, nil
 	}
 	if args.Completed != nil && *args.Completed {
@@ -151,8 +156,14 @@ func (t *updateGoalTool) Execute(_ context.Context, raw json.RawMessage) (string
 		if summary == "" {
 			summary = "Goal completion requested"
 		}
+		if err := t.store.saveLocked(); err != nil {
+			return "", err
+		}
 		return "success: true\nsummary: Awaiting independent verification: " + summary, nil
 	}
 	t.store.message = strings.TrimSpace(args.Message)
+	if err := t.store.saveLocked(); err != nil {
+		return "", err
+	}
 	return "success: true\nsummary: Progress recorded: " + t.store.message, nil
 }
