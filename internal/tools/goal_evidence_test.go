@@ -52,7 +52,17 @@ func TestGoalVerificationCapturesGitEvidenceAndDetails(t *testing.T) {
 		`{"verdict":"not_refuted"}`, `{"verdict":"not_refuted"}`, `{"verdict":"not_refuted"}`,
 	}}
 	registry.subagents.set(backend)
+	planPath := filepath.Join(registry.goal.workspaceRoot, ".grok", "plan.md")
+	if err := os.MkdirAll(filepath.Dir(planPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(planPath, []byte("# Plan\n\n1. Old step.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := registry.BeginGoal("finish the feature"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(planPath, []byte("# Plan\n\n1. New verified step.\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(tracked, []byte("after\n"), 0o600); err != nil {
@@ -79,7 +89,7 @@ func TestGoalVerificationCapturesGitEvidenceAndDetails(t *testing.T) {
 		t.Fatalf("patch=%q err=%v", patch, err)
 	}
 	for _, request := range backend.requests {
-		if !strings.Contains(request.Prompt, "CHANGES_FILE: "+patchPath) || !strings.Contains(request.Prompt, "- tracked.txt") || !strings.Contains(request.Prompt, "- new.txt") {
+		if !strings.Contains(request.Prompt, "CHANGES_FILE: "+patchPath) || !strings.Contains(request.Prompt, "- tracked.txt") || !strings.Contains(request.Prompt, "- new.txt") || !strings.Contains(request.Prompt, "PLAN_FILE: "+planPath) || !strings.Contains(request.Prompt, "New verified step") || strings.Contains(request.Prompt, "session-artifacts/goal-plan-baseline") {
 			t.Fatalf("prompt=%s", request.Prompt)
 		}
 	}
@@ -87,7 +97,7 @@ func TestGoalVerificationCapturesGitEvidenceAndDetails(t *testing.T) {
 	if err != nil || !strings.Contains(string(details), "Skeptic 1: not_refuted") {
 		t.Fatalf("details=%q err=%v", details, err)
 	}
-	for _, path := range []string{patchPath, verification.DetailsPath} {
+	for _, path := range []string{patchPath, verification.DetailsPath, filepath.Join(artifactDir, "goal-plan-baseline.md")} {
 		info, err := os.Stat(path)
 		if err != nil {
 			t.Fatalf("artifact %s: %v", path, err)
@@ -95,6 +105,9 @@ func TestGoalVerificationCapturesGitEvidenceAndDetails(t *testing.T) {
 		if info.Mode().Perm() != 0o600 {
 			t.Fatalf("artifact %s mode=%v", path, info.Mode().Perm())
 		}
+	}
+	if leftovers, err := filepath.Glob(filepath.Join(artifactDir, ".goal-plan-current-*")); err != nil || len(leftovers) != 0 {
+		t.Fatalf("temporary plan snapshots=%v err=%v", leftovers, err)
 	}
 	if _, err := registry.Execute(context.Background(), "read_file", json.RawMessage(`{"target_file":"`+patchPath+`"}`)); err != nil {
 		t.Fatalf("read evidence artifact: %v", err)
@@ -136,6 +149,16 @@ func TestGoalVerificationFallsBackToBoundedWorkspaceWalk(t *testing.T) {
 	if err := os.Chtimes(newPath, newTime, newTime); err != nil {
 		t.Fatal(err)
 	}
+	planPath := filepath.Join(registry.goal.workspaceRoot, ".grok", "plan.md")
+	if err := os.MkdirAll(filepath.Dir(planPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(planPath, []byte("# New plan\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(planPath, newTime, newTime); err != nil {
+		t.Fatal(err)
+	}
 	ignoredDir := filepath.Join(root, "node_modules")
 	if err := os.Mkdir(ignoredDir, 0o700); err != nil {
 		t.Fatal(err)
@@ -163,7 +186,7 @@ func TestGoalVerificationFallsBackToBoundedWorkspaceWalk(t *testing.T) {
 		t.Fatalf("patch=%q err=%v", patch, err)
 	}
 	for _, request := range backend.requests {
-		if !strings.Contains(request.Prompt, "- new.txt") || strings.Contains(request.Prompt, "old.txt") || strings.Contains(request.Prompt, "ignored.js") {
+		if !strings.Contains(request.Prompt, "- new.txt") || !strings.Contains(request.Prompt, "PLAN_FILE: "+planPath) || !strings.Contains(request.Prompt, "PLAN_CHANGES:\n(none)") || strings.Contains(request.Prompt, "old.txt") || strings.Contains(request.Prompt, "ignored.js") {
 			t.Fatalf("prompt=%s", request.Prompt)
 		}
 	}

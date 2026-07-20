@@ -23,6 +23,8 @@ const (
 type goalEvidence struct {
 	changesPath  string
 	changedFiles []string
+	planPath     string
+	planChanges  string
 }
 
 func (s *GoalStore) ConfigureEvidence(artifactDir string) error {
@@ -53,21 +55,105 @@ func captureGoalBaseline(root string) string {
 	return strings.TrimSpace(string(output))
 }
 
+func captureGoalPlanBaseline(root, artifactDir string) string {
+	if root == "" || artifactDir == "" {
+		return ""
+	}
+	path := filepath.Join(root, filepath.FromSlash(planFile))
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return ""
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	data, readErr := io.ReadAll(io.LimitReader(file, 1<<20+1))
+	_ = file.Close()
+	if readErr != nil || len(data) > 1<<20 {
+		return ""
+	}
+	baseline := filepath.Join(artifactDir, "goal-plan-baseline.md")
+	if writeGoalArtifact(baseline, data) != nil {
+		return ""
+	}
+	return baseline
+}
+
 func (s *GoalStore) captureEvidence(ctx context.Context, attempt uint32) goalEvidence {
 	s.mu.Lock()
-	root, artifactDir, baseline, createdAt := s.workspaceRoot, s.artifactDir, s.baselineCommit, s.createdAtUnix
+	root, artifactDir, baseline, createdAt, planBaseline := s.workspaceRoot, s.artifactDir, s.baselineCommit, s.createdAtUnix, s.planBaselinePath
 	s.mu.Unlock()
 	if root == "" || artifactDir == "" {
 		return goalEvidence{}
 	}
 	runCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
+	evidence := goalEvidence{}
 	if baseline != "" {
-		if evidence, ok := captureGoalGitEvidence(runCtx, root, artifactDir, baseline, attempt); ok {
-			return evidence
+		if captured, ok := captureGoalGitEvidence(runCtx, root, artifactDir, baseline, attempt); ok {
+			evidence = captured
 		}
 	}
-	return captureGoalWalkEvidence(root, artifactDir, createdAt, attempt)
+	if evidence.changesPath == "" && len(evidence.changedFiles) == 0 {
+		evidence = captureGoalWalkEvidence(root, artifactDir, createdAt, attempt)
+	}
+	evidence.planPath, evidence.planChanges = captureGoalPlanChanges(runCtx, root, planBaseline)
+	return evidence
+}
+
+func captureGoalPlanChanges(ctx context.Context, root, baselinePath string) (string, string) {
+	currentPath := filepath.Join(root, filepath.FromSlash(planFile))
+	info, err := os.Lstat(currentPath)
+	if err != nil || !info.Mode().IsRegular() {
+		return "", ""
+	}
+	if baselinePath == "" {
+		return currentPath, ""
+	}
+	current, err := os.Open(currentPath)
+	if err != nil {
+		return currentPath, ""
+	}
+	data, readErr := io.ReadAll(io.LimitReader(current, 1<<20+1))
+	_ = current.Close()
+	if readErr != nil || len(data) > 1<<20 {
+		return currentPath, ""
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(baselinePath), ".goal-plan-current-*.md")
+	if err != nil {
+		return currentPath, ""
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(0o600); err == nil {
+		_, err = temporary.Write(data)
+	}
+	if closeErr := temporary.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return currentPath, ""
+	}
+	baselineName, currentName := filepath.Base(baselinePath), filepath.Base(temporaryPath)
+	var diff cappedBuffer
+	command := exec.CommandContext(ctx, "git", "diff", "--no-index", "--no-prefix", baselineName, currentName)
+	command.Dir, command.Stdout, command.Stderr = filepath.Dir(baselinePath), &diff, &diff
+	err = command.Run()
+	if err == nil {
+		return currentPath, ""
+	}
+	var exitError *exec.ExitError
+	if !errors.As(err, &exitError) || exitError.ExitCode() != 1 || len(diff.data) == 0 {
+		return currentPath, ""
+	}
+	changes := string(diff.data)
+	changes = strings.ReplaceAll(changes, baselineName, "plan.baseline.md")
+	changes = strings.ReplaceAll(changes, currentName, "plan.md")
+	if diff.truncated {
+		changes += "\n... (plan diff truncated) ...\n"
+	}
+	return currentPath, changes
 }
 
 func captureGoalGitEvidence(ctx context.Context, root, artifactDir, baseline string, attempt uint32) (goalEvidence, bool) {

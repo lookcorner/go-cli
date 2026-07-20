@@ -101,6 +101,14 @@ func goalVerifierPrompt(snapshot GoalSnapshot, evidence goalEvidence) string {
 		}
 		changedFiles = strings.Join(lines, "\n")
 	}
+	planPath := evidence.planPath
+	if planPath == "" {
+		planPath = "(unavailable)"
+	}
+	planChanges := evidence.planChanges
+	if planChanges == "" {
+		planChanges = "(none)"
+	}
 	return fmt.Sprintf(`Act as an adversarial completion verifier. Independently inspect the current workspace using read-only tools and test the user's full objective against concrete evidence. Refute completion when any requirement is missing, contradicted, weakly verified, or unverifiable. Do not modify files.
 
 OBJECTIVE:
@@ -111,13 +119,18 @@ CHANGES_FILE: %s
 CHANGED_FILES:
 %s
 
+PLAN_FILE: %s
+
+PLAN_CHANGES:
+%s
+
 CANDIDATE SUMMARY:
 %s
 
 Return exactly one JSON object and no prose:
 {"verdict":"not_refuted","gaps":""}
 or
-{"verdict":"refuted","gaps":"one concise actionable summary of missing evidence or work"}`, snapshot.Objective, changesPath, changedFiles, snapshot.Message)
+{"verdict":"refuted","gaps":"one concise actionable summary of missing evidence or work"}`, snapshot.Objective, changesPath, changedFiles, planPath, planChanges, snapshot.Message)
 }
 
 func parseGoalVerdict(output string) goalVerdict {

@@ -31,6 +31,7 @@ type GoalStore struct {
 	artifactDir       string
 	baselineCommit    string
 	createdAtUnix     int64
+	planBaselinePath  string
 }
 
 func NewGoalStore() *GoalStore { return &GoalStore{} }
@@ -51,6 +52,7 @@ func (s *GoalStore) Begin(objective string) error {
 	s.verificationRuns, s.lastVerification, s.verificationStall = 0, "", 0
 	s.createdAtUnix = time.Now().Unix()
 	s.baselineCommit = captureGoalBaseline(s.workspaceRoot)
+	s.planBaselinePath = captureGoalPlanBaseline(s.workspaceRoot, s.artifactDir)
 	return nil
 }
 

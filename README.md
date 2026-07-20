@@ -253,7 +253,9 @@ patch and ordered skeptic-details Markdown under the private session artifact
 directory; the prompt links that patch and lists tracked plus untracked paths
 so read-only skeptics can corroborate the candidate against live files. If no
 Git baseline exists, a bounded modification-time walk synthesizes the patch
-while excluding dependency, VCS, cache, and build directories.
+while excluding dependency, VCS, cache, and build directories. An existing
+`.grok/plan.md` is snapshotted when the goal starts; verifier prompts include
+its current path and a bounded baseline-to-current `PLAN_CHANGES` diff.
 
 Release builds gate repo-controlled MCP/LSP and enabled project-plugin execution
 on folder trust. Interactive CLI startup asks once when executable project
