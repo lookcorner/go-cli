@@ -148,6 +148,9 @@ func (c *MessagesClient) StreamResponse(ctx context.Context, request ResponseReq
 	if request.MaxOutputTokens > 0 {
 		payload["max_tokens"] = request.MaxOutputTokens
 	}
+	if request.Temperature != nil {
+		payload["temperature"] = *request.Temperature
+	}
 	if len(definitions) > 0 {
 		payload["tools"] = definitions
 		payload["tool_choice"] = map[string]any{"type": "auto"}

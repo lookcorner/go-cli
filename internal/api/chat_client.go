@@ -159,6 +159,9 @@ func (c *ChatClient) StreamResponse(ctx context.Context, request ResponseRequest
 	if request.MaxOutputTokens > 0 {
 		payload["max_completion_tokens"] = request.MaxOutputTokens
 	}
+	if request.Temperature != nil {
+		payload["temperature"] = *request.Temperature
+	}
 	if request.Reasoning != nil {
 		payload["reasoning_effort"] = request.Reasoning.Effort
 	}

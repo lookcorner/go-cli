@@ -706,6 +706,7 @@ func TestMemoryFlushExtensionAndSlashCommand(t *testing.T) {
 	streamer := &fixtureStreamer{results: []api.StreamResult{
 		{ResponseID: "flush-one", Text: "## Decision\n\nPersist useful context."},
 		{ResponseID: "flush-two", Text: "NO_REPLY"},
+		{ResponseID: "rewrite-one", Text: "## Deployment\n\n- Run release checks."},
 	}}
 	runner := &agent.Runner{Client: streamer, Model: "test", Memory: store, MemoryConfig: config}
 	current := &session{id: "memory-session", cwd: cwd, runner: runner, previous: "response-1", activePrompt: -1, close: func() {}}
@@ -732,7 +733,7 @@ func TestMemoryFlushExtensionAndSlashCommand(t *testing.T) {
 	}
 	server.MemoryEnabled = true
 	output.Reset()
-	server.handleMemoryFlushExtension(context.Background(), message{
+	server.handleMemoryExtension(context.Background(), message{
 		ID: json.RawMessage("1"), Method: "x.ai/memory/flush", Params: json.RawMessage(`{"session_id":"memory-session"}`),
 	})
 	server.wg.Wait()
@@ -795,6 +796,41 @@ func TestMemoryFlushExtensionAndSlashCommand(t *testing.T) {
 	}
 	if !listed || !responded {
 		t.Fatalf("memory list messages=%#v", messages)
+	}
+
+	output.Reset()
+	server.handleMemoryExtension(context.Background(), message{
+		ID: json.RawMessage("4"), Method: "x.ai/memory/rewrite",
+		Params: json.RawMessage(`{"sessionId":"memory-session","rawText":"run release checks","contextSummary":"deployment workflow"}`),
+	})
+	server.wg.Wait()
+	messages = decodeACPOutput(t, output.Bytes())
+	if len(messages) != 1 || messages[0]["result"].(map[string]any)["rewritten"] != "## Deployment\n\n- Run release checks." {
+		t.Fatalf("rewrite messages=%#v", messages)
+	}
+	streamer.mu.Lock()
+	rewriteRequest := streamer.requests[len(streamer.requests)-1]
+	streamer.mu.Unlock()
+	if rewriteRequest.Model != "grok-build" || rewriteRequest.PreviousResponseID != "" || rewriteRequest.Temperature == nil || *rewriteRequest.Temperature != 0.3 {
+		t.Fatalf("rewrite request=%#v", rewriteRequest)
+	}
+	current.mu.Lock()
+	previous = current.previous
+	current.mu.Unlock()
+	if previous != "response-1" {
+		t.Fatalf("rewrite changed response chain to %q", previous)
+	}
+
+	output.Reset()
+	oversize, _ := json.Marshal(map[string]any{"sessionId": "memory-session", "rawText": strings.Repeat("x", (32<<10)+1), "contextSummary": ""})
+	server.handleMemoryExtension(context.Background(), message{ID: json.RawMessage("5"), Method: "x.ai/memory/rewrite", Params: oversize})
+	server.wg.Wait()
+	messages = decodeACPOutput(t, output.Bytes())
+	current.mu.Lock()
+	running, runDone, cancel := current.running, current.runDone, current.cancel
+	current.mu.Unlock()
+	if len(messages) != 1 || messages[0]["error"] == nil || running || runDone != nil || cancel != nil {
+		t.Fatalf("oversize messages=%#v running=%v runDone=%v cancel=%v", messages, running, runDone, cancel)
 	}
 }
 

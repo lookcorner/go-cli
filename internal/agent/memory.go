@@ -14,6 +14,17 @@ import (
 
 const memoryFlushPrompt = `You are a memory assistant. Extract useful information from this conversation that would help in future sessions with this user. Write concise markdown with # or ## headers covering substantive decisions and rationale, technical context, debugging techniques, and problems with their solutions. Omit empty sections, user environment preferences, and ephemeral progress. Respond with NO_REPLY when nothing genuinely reusable was learned.`
 
+const memoryRewritePrompt = `You are a memory note formatter. Rewrite the user's note into well-structured markdown suitable for a persistent MEMORY.md file. The note should be:
+- Concise but complete
+- Start with a descriptive ## heading
+- Include enough context to be useful months later
+- Reference specific files, decisions, or patterns when relevant
+- Use bullet points for multiple items
+- Do NOT include timestamps or session IDs
+- Do NOT add information that is not present in the original note
+
+Return ONLY the formatted markdown, no explanations.`
+
 type MemoryFlushResult struct {
 	Outcome string
 	Path    string
@@ -24,6 +35,30 @@ func (r *Runner) ListMemory() ([]memory.FileInfo, error) {
 		return nil, errors.New("memory is not enabled for this session")
 	}
 	return r.Memory.List()
+}
+
+func (r *Runner) RewriteMemoryNote(ctx context.Context, rawText, contextSummary string) (string, error) {
+	const maxInputBytes = 32 << 10
+	combined := len(rawText) + len(contextSummary)
+	if combined > maxInputBytes {
+		return "", fmt.Errorf("memory note input too large (%d bytes, max %d)", combined, maxInputBytes)
+	}
+	if r.Client == nil {
+		return "", errors.New("model client is unavailable")
+	}
+	temperature := 0.3
+	result, err := r.compactionStreamer(false).StreamResponse(ctx, api.ResponseRequest{
+		Model: "grok-build", Instructions: memoryRewritePrompt,
+		Input:           []api.InputItem{{Type: "message", Role: "user", Content: "Session context:\n" + contextSummary + "\n\nRewrite this note as a memory entry:\n\n" + rawText}},
+		MaxOutputTokens: 1024, Temperature: &temperature, Stream: true,
+	}, nil)
+	if err != nil {
+		return "", fmt.Errorf("rewrite inference failed: %w", err)
+	}
+	if result.Text == "" {
+		return "", errors.New("LLM returned empty response")
+	}
+	return result.Text, nil
 }
 
 func (r *Runner) injectMemoryContext(content any, previousResponseID string) any {

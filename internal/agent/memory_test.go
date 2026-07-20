@@ -22,6 +22,23 @@ type memoryFlushStreamer struct {
 	flushOnce sync.Once
 }
 
+type memoryRewriteStreamer struct {
+	request        api.ResponseRequest
+	includeHistory *bool
+	result         api.StreamResult
+	err            error
+}
+
+func (s *memoryRewriteStreamer) CloneForCompaction(includeHistory bool) api.Streamer {
+	s.includeHistory = &includeHistory
+	return s
+}
+
+func (s *memoryRewriteStreamer) StreamResponse(_ context.Context, request api.ResponseRequest, _ func(string)) (api.StreamResult, error) {
+	s.request = request
+	return s.result, s.err
+}
+
 func (s *memoryFlushStreamer) StreamResponse(_ context.Context, request api.ResponseRequest, _ func(string)) (api.StreamResult, error) {
 	s.mu.Lock()
 	s.requests = append(s.requests, request)
@@ -177,6 +194,31 @@ func TestRunnerManualMemoryFlushUsesSharedLifecycle(t *testing.T) {
 	runner.memoryFlushRunning = false
 	if _, err := runner.FlushMemory(context.Background(), ""); err == nil || !strings.Contains(err.Error(), "no completed response") {
 		t.Fatalf("empty history err=%v", err)
+	}
+}
+
+func TestRunnerRewritesMemoryNoteWithIsolatedBoundedRequest(t *testing.T) {
+	streamer := &memoryRewriteStreamer{result: api.StreamResult{Text: "## Deployment\n\n- Run the release checks."}}
+	runner := Runner{Client: streamer, Model: "session-model"}
+	rewritten, err := runner.RewriteMemoryNote(context.Background(), "run release checks", "deployment workflow")
+	if err != nil || rewritten != streamer.result.Text {
+		t.Fatalf("rewritten=%q err=%v", rewritten, err)
+	}
+	request := streamer.request
+	input, _ := request.Input[0].Content.(string)
+	if streamer.includeHistory == nil || *streamer.includeHistory || request.Model != "grok-build" || request.MaxOutputTokens != 1024 || request.Temperature == nil || *request.Temperature != 0.3 || request.PreviousResponseID != "" || len(request.Tools) != 0 || !strings.Contains(request.Instructions, "memory note formatter") || !strings.Contains(input, "deployment workflow") || !strings.HasSuffix(input, "run release checks") {
+		t.Fatalf("includeHistory=%v request=%#v", streamer.includeHistory, request)
+	}
+	before := streamer.request
+	if _, err := runner.RewriteMemoryNote(context.Background(), strings.Repeat("x", (32<<10)+1), ""); err == nil || !strings.Contains(err.Error(), "input too large") {
+		t.Fatalf("oversize err=%v", err)
+	}
+	if streamer.request.Input[0].Content != before.Input[0].Content {
+		t.Fatal("oversize rewrite reached the model")
+	}
+	streamer.result.Text = ""
+	if _, err := runner.RewriteMemoryNote(context.Background(), "note", "context"); err == nil || !strings.Contains(err.Error(), "empty response") {
+		t.Fatalf("empty err=%v", err)
 	}
 }
 

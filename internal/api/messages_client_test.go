@@ -95,9 +95,11 @@ func TestMessagesClientCarriesToolHistory(t *testing.T) {
 	})}
 
 	client := NewMessagesClient("https://example.invalid/v1", "key", httpClient)
+	temperature := 0.3
 	first, err := client.StreamResponse(context.Background(), ResponseRequest{
 		Model: "model", Instructions: "system", Stream: true,
-		Input: []InputItem{{Type: "message", Role: "user", Content: "inspect"}},
+		Temperature: &temperature,
+		Input:       []InputItem{{Type: "message", Role: "user", Content: "inspect"}},
 	}, nil)
 	if err != nil || len(first.ToolCalls) != 1 {
 		t.Fatalf("first response=%#v err=%v", first, err)
@@ -111,6 +113,9 @@ func TestMessagesClientCarriesToolHistory(t *testing.T) {
 	}
 	if len(requests) != 2 {
 		t.Fatalf("expected two requests, got %d", len(requests))
+	}
+	if requests[0]["temperature"] != 0.3 {
+		t.Fatalf("temperature missing: %#v", requests[0])
 	}
 	messages := requests[1]["messages"].([]any)
 	if len(messages) != 3 {

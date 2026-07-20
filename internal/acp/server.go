@@ -248,8 +248,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleMCP(ctx, incoming)
 		case "x.ai/commands/list", "x.ai/workspaces/list":
 			s.handleStaticExtension(incoming)
-		case "x.ai/memory/flush":
-			s.handleMemoryFlushExtension(ctx, incoming)
+		case "x.ai/memory/flush", "x.ai/memory/rewrite":
+			s.handleMemoryExtension(ctx, incoming)
 		case "x.ai/skills/list", "x.ai/skills/config", "x.ai/skills/add", "x.ai/skills/remove", "x.ai/skills/reset", "x.ai/skills/toggle":
 			s.handleSkills(ctx, incoming)
 		case "x.ai/plugins/list", "x.ai/plugins/action":
@@ -1743,7 +1743,11 @@ func (s *Server) handleCompactPrompt(parent context.Context, incoming message, c
 	}()
 }
 
-func (s *Server) handleMemoryFlushExtension(parent context.Context, incoming message) {
+func (s *Server) handleMemoryExtension(parent context.Context, incoming message) {
+	if incoming.Method == "x.ai/memory/rewrite" {
+		s.handleMemoryRewriteExtension(parent, incoming)
+		return
+	}
 	var params struct {
 		SessionID      string `json:"session_id"`
 		SessionIDCamel string `json:"sessionId"`
@@ -1762,6 +1766,54 @@ func (s *Server) handleMemoryFlushExtension(parent context.Context, incoming mes
 		return
 	}
 	s.handleMemoryFlush(parent, incoming, current, true)
+}
+
+func (s *Server) handleMemoryRewriteExtension(parent context.Context, incoming message) {
+	var params struct {
+		SessionID      string  `json:"sessionId"`
+		RawText        *string `json:"rawText"`
+		ContextSummary *string `json:"contextSummary"`
+	}
+	if json.Unmarshal(incoming.Params, &params) != nil || params.SessionID == "" || params.RawText == nil || params.ContextSummary == nil {
+		s.respondError(incoming.ID, -32602, "sessionId, rawText and contextSummary are required")
+		return
+	}
+	current := s.lookupSession(params.SessionID)
+	if current == nil {
+		s.respondError(incoming.ID, -32602, "unknown session")
+		return
+	}
+	current.mu.Lock()
+	if current.closed {
+		current.mu.Unlock()
+		s.respondError(incoming.ID, -32000, "session is closed")
+		return
+	}
+	if current.running {
+		current.mu.Unlock()
+		s.respondError(incoming.ID, -32000, "session already has an active prompt")
+		return
+	}
+	runCtx, cancel := context.WithCancel(parent)
+	runDone := make(chan struct{})
+	current.cancel, current.running, current.runDone, current.updated = cancel, true, runDone, time.Now().UTC()
+	current.mu.Unlock()
+	rawText, contextSummary := *params.RawText, *params.ContextSummary
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		rewritten, err := current.runner.RewriteMemoryNote(runCtx, rawText, contextSummary)
+		current.mu.Lock()
+		current.cancel, current.running, current.runDone, current.updated = nil, false, nil, time.Now().UTC()
+		close(runDone)
+		current.mu.Unlock()
+		if err != nil {
+			s.respondError(incoming.ID, -32000, err.Error())
+		} else {
+			s.respond(incoming.ID, map[string]any{"rewritten": rewritten})
+		}
+		s.startNextWake(current)
+	}()
 }
 
 func (s *Server) handleMemoryFiles(incoming message, current *session) {

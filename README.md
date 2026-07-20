@@ -20,7 +20,8 @@ session Markdown sources without invoking the model. They also accept
 `/loop [interval] <prompt>`, which expands to the reference `scheduler_create`
 workflow without inventing a default interval. ACP advertises the enabled
 commands through `x.ai/commands/list`, emits `memory_files` metadata updates,
-and also exposes `x.ai/memory/flush`.
+and exposes `x.ai/memory/flush` plus the bounded, history-isolated
+`x.ai/memory/rewrite` note formatter.
 
 The model can call `enter_plan_mode` to enter a persisted, read-only planning
 phase. While active, workspace mutations are limited to `.grok/plan.md`; shell,

@@ -88,9 +88,11 @@ func TestChatClientCarriesToolHistory(t *testing.T) {
 	})}
 
 	client := NewChatClient("https://example.invalid/v1", "key", httpClient)
+	temperature := 0.3
 	first, err := client.StreamResponse(context.Background(), ResponseRequest{
 		Model: "model", Instructions: "system", Stream: true, Reasoning: &ReasoningConfig{Effort: "high"},
-		Input: []InputItem{{Type: "message", Role: "user", Content: "inspect"}},
+		Temperature: &temperature,
+		Input:       []InputItem{{Type: "message", Role: "user", Content: "inspect"}},
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -113,6 +115,9 @@ func TestChatClientCarriesToolHistory(t *testing.T) {
 	}
 	if requests[0]["reasoning_effort"] != "high" {
 		t.Fatalf("reasoning effort missing: %#v", requests[0])
+	}
+	if requests[0]["temperature"] != 0.3 {
+		t.Fatalf("temperature missing: %#v", requests[0])
 	}
 	messages, ok := requests[1]["messages"].([]any)
 	if !ok || len(messages) != 4 {
