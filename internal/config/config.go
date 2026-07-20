@@ -414,6 +414,7 @@ type fileMemoryFlushConfig struct {
 	SoftThresholdTokens *int    `json:"soft_threshold_tokens,omitempty" toml:"soft_threshold_tokens"`
 	FlushModel          *string `json:"flush_model,omitempty" toml:"flush_model"`
 	MaxFlushWriteChars  *int    `json:"max_flush_write_chars,omitempty" toml:"max_flush_write_chars"`
+	IdleTimeoutSeconds  *uint64 `json:"idle_timeout_secs,omitempty" toml:"idle_timeout_secs"`
 }
 
 type filePruningConfig struct {
@@ -888,6 +889,10 @@ func applyMemoryConfig(cfg *Config, source *fileMemoryConfig, flush *fileMemoryF
 		}
 		if flush.MaxFlushWriteChars != nil {
 			cfg.Memory.Flush.MaxWriteChars = *flush.MaxFlushWriteChars
+		}
+		if flush.IdleTimeoutSeconds != nil {
+			value := *flush.IdleTimeoutSeconds
+			cfg.Memory.Flush.IdleTimeoutSeconds = &value
 		}
 	}
 }
@@ -1533,6 +1538,9 @@ func (c Config) Validate() error {
 	}
 	if c.Memory.Enabled && c.Memory.Flush.Enabled && (c.Memory.Flush.SoftThresholdTokens < 0 || c.Memory.Flush.MaxWriteChars < 1) {
 		return errors.New("memory flush thresholds must be non-negative and max_flush_write_chars must be positive")
+	}
+	if timeout := c.Memory.Flush.IdleTimeoutSeconds; timeout != nil && *timeout > uint64((1<<63-1)/int64(time.Second)) {
+		return errors.New("memory flush idle_timeout_secs is too large")
 	}
 	if c.WebFetch.ProxyConfigured {
 		proxy, err := url.Parse(c.WebFetch.ProxyEndpoint)

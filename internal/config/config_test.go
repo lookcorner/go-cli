@@ -52,6 +52,7 @@ enabled = true
 soft_threshold_tokens = 3000
 flush_model = "memory-model"
 max_flush_write_chars = 7000
+idle_timeout_secs = 300
 
 [memory]
 enabled = true
@@ -129,7 +130,7 @@ pattern = ".env*"
 	if cfg.ContextWindow != 200000 || cfg.AutoCompactThresholdPercent != 80 {
 		t.Fatalf("unexpected compaction config: window=%d threshold=%d", cfg.ContextWindow, cfg.AutoCompactThresholdPercent)
 	}
-	if !cfg.Memory.Enabled || cfg.Memory.InitialInjection || !cfg.Memory.Flush.Enabled || cfg.Memory.Flush.SoftThresholdTokens != 3000 || cfg.Memory.Flush.Model != "memory-model" || cfg.Memory.Flush.MaxWriteChars != 7000 {
+	if !cfg.Memory.Enabled || cfg.Memory.InitialInjection || !cfg.Memory.Flush.Enabled || cfg.Memory.Flush.SoftThresholdTokens != 3000 || cfg.Memory.Flush.Model != "memory-model" || cfg.Memory.Flush.MaxWriteChars != 7000 || cfg.Memory.Flush.IdleTimeoutSeconds == nil || *cfg.Memory.Flush.IdleTimeoutSeconds != 300 {
 		t.Fatalf("unexpected memory config: %#v", cfg.Memory)
 	}
 	if slugs := strings.Join(cfg.ModelSlugs(), ","); slugs != "local,search" {

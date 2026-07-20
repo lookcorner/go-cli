@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/lookcorner/go-cli/internal/api"
 )
@@ -76,6 +77,11 @@ func (r *Runner) shouldFlushMemory(previousResponseID string) bool {
 }
 
 func (r *Runner) FlushMemory(ctx context.Context, previousResponseID string) (MemoryFlushResult, error) {
+	r.cancelMemoryIdleFlush()
+	return r.flushMemory(ctx, previousResponseID, "user_requested")
+}
+
+func (r *Runner) flushMemory(ctx context.Context, previousResponseID, trigger string) (MemoryFlushResult, error) {
 	if r.Client == nil {
 		return MemoryFlushResult{}, errors.New("model client is unavailable")
 	}
@@ -94,7 +100,62 @@ func (r *Runner) FlushMemory(ctx context.Context, previousResponseID string) (Me
 	r.memoryFlushDone = make(chan struct{})
 	previous, count := r.memoryLastFlush, r.memoryFlushCount
 	r.memoryMu.Unlock()
-	return r.runMemoryFlush(ctx, r.compactionStreamer(true), previousResponseID, previous, count, "user_requested")
+	return r.runMemoryFlush(ctx, r.compactionStreamer(true), previousResponseID, previous, count, trigger)
+}
+
+func (r *Runner) cancelMemoryIdleFlush() {
+	r.memoryMu.Lock()
+	cancel := r.memoryIdleCancel
+	r.memoryIdleCancel = nil
+	r.memoryMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (r *Runner) scheduleMemoryIdleFlush(ctx context.Context, previousResponseID string) {
+	seconds := r.MemoryConfig.Flush.IdleTimeoutSeconds
+	if seconds == nil || r.Memory == nil || !r.MemoryConfig.Enabled || !r.MemoryConfig.Flush.Enabled || previousResponseID == "" || *seconds > uint64((1<<63-1)/int64(time.Second)) {
+		return
+	}
+	timerCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	r.memoryMu.Lock()
+	previousCancel := r.memoryIdleCancel
+	r.memoryIdleCancel, r.memoryIdleDone = cancel, done
+	r.memoryMu.Unlock()
+	if previousCancel != nil {
+		previousCancel()
+	}
+	go func() {
+		defer func() {
+			r.memoryMu.Lock()
+			if r.memoryIdleDone == done {
+				r.memoryIdleCancel, r.memoryIdleDone = nil, nil
+			}
+			close(done)
+			r.memoryMu.Unlock()
+		}()
+		timer := time.NewTimer(time.Duration(*seconds) * time.Second)
+		defer timer.Stop()
+		select {
+		case <-timerCtx.Done():
+			return
+		case <-timer.C:
+		}
+		r.memoryMu.Lock()
+		current := r.memoryIdleDone == done
+		if current {
+			r.memoryIdleCancel = nil
+		}
+		r.memoryMu.Unlock()
+		if !current {
+			return
+		}
+		if _, err := r.flushMemory(timerCtx, previousResponseID, "interval"); err != nil {
+			r.log("memory_idle_flush_skipped", map[string]any{"error": err.Error()})
+		}
+	}()
 }
 
 func (r *Runner) runMemoryFlush(ctx context.Context, streamer ResponseStreamer, previousResponseID, previous string, count uint64, trigger string) (MemoryFlushResult, error) {
@@ -157,8 +218,22 @@ func (r *Runner) runMemoryFlush(ctx context.Context, streamer ResponseStreamer, 
 
 func (r *Runner) WaitMemory(ctx context.Context) error {
 	r.memoryMu.Lock()
-	done := r.memoryFlushDone
+	cancel, idleDone := r.memoryIdleCancel, r.memoryIdleDone
+	r.memoryIdleCancel = nil
 	r.memoryMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if err := waitMemoryTask(ctx, idleDone); err != nil {
+		return err
+	}
+	r.memoryMu.Lock()
+	flushDone := r.memoryFlushDone
+	r.memoryMu.Unlock()
+	return waitMemoryTask(ctx, flushDone)
+}
+
+func waitMemoryTask(ctx context.Context, done <-chan struct{}) error {
 	if done == nil {
 		return nil
 	}

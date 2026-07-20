@@ -102,6 +102,8 @@ type Runner struct {
 	memoryFlushDone         chan struct{}
 	memoryFlushCount        uint64
 	memoryLastFlush         string
+	memoryIdleCancel        context.CancelFunc
+	memoryIdleDone          chan struct{}
 	hookStart               sync.Once
 }
 
@@ -166,6 +168,7 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 	if strings.TrimSpace(prompt) == "" {
 		return Result{}, errors.New("prompt must not be empty")
 	}
+	r.cancelMemoryIdleFlush()
 	if r.HookPolicy != nil {
 		r.hookStart.Do(func() { r.HookPolicy.SessionStarted(ctx) })
 		r.HookPolicy.UserPromptSubmitted(ctx, prompt)
@@ -311,6 +314,7 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 		}
 
 		if len(streamed.ToolCalls) == 0 {
+			r.scheduleMemoryIdleFlush(ctx, final.ResponseID)
 			return final, nil
 		}
 		if streamed.ResponseID == "" {

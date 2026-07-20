@@ -33,6 +33,7 @@ enabled = true
 soft_threshold_tokens = 4000
 # flush_model = "gork-default"
 max_flush_write_chars = 8000
+# idle_timeout_secs = 300
 
 [compaction.pruning]
 enabled = true

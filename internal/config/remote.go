@@ -20,6 +20,7 @@ type RemoteSettings struct {
 	MemoryInitialInjectionEnabled   *bool          `json:"memory_initial_injection_enabled"`
 	FlushEnabled                    *bool          `json:"flush_enabled"`
 	FlushSoftThresholdTokens        *int           `json:"flush_soft_threshold_tokens"`
+	FlushIdleTimeoutSeconds         *uint64        `json:"flush_idle_timeout_secs"`
 	GoalVerifierCount               *int           `json:"goal_verifier_count"`
 	GoalClassifierMaxRuns           *uint32        `json:"goal_classifier_max_runs"`
 	GoalPlannerEnabled              *bool          `json:"goal_planner_enabled"`
@@ -115,6 +116,10 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 		}
 		if remote.FlushSoftThresholdTokens != nil {
 			c.Memory.Flush.SoftThresholdTokens = max(0, *remote.FlushSoftThresholdTokens)
+		}
+		if remote.FlushIdleTimeoutSeconds != nil {
+			value := *remote.FlushIdleTimeoutSeconds
+			c.Memory.Flush.IdleTimeoutSeconds = &value
 		}
 	}
 	if !c.goalVerifierConfigured && remote.GoalVerifierCount != nil {

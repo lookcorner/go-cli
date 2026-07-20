@@ -178,3 +178,66 @@ func TestRunnerManualMemoryFlushUsesSharedLifecycle(t *testing.T) {
 		t.Fatalf("empty history err=%v", err)
 	}
 }
+
+func TestRunnerIdleMemoryFlushTriggersAndStopsWithSession(t *testing.T) {
+	root, workspaceRoot := t.TempDir(), t.TempDir()
+	store, err := memory.Open(root, workspaceRoot, "idle")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws, err := workspace.Open(workspaceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zero := uint64(0)
+	config := memory.DefaultConfig()
+	config.Enabled = true
+	config.Flush.IdleTimeoutSeconds = &zero
+	streamer := &memoryFlushStreamer{flushDone: make(chan struct{})}
+	runner := Runner{
+		Client: streamer, Tools: tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto}),
+		Model: "test", Memory: store, MemoryConfig: config,
+	}
+	defer runner.Tools.Close()
+	if _, err := runner.RunTurn(context.Background(), "remember after idle", ""); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-streamer.flushDone:
+	case <-time.After(time.Second):
+		t.Fatal("idle memory flush did not start")
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := runner.WaitMemory(waitCtx); err != nil {
+		t.Fatal(err)
+	}
+	requests := streamer.snapshot()
+	if len(requests) != 2 || requests[1].PreviousResponseID != "old" || !strings.Contains(requests[1].Instructions, "memory assistant") {
+		t.Fatalf("requests=%#v", requests)
+	}
+	value, err := store.Context()
+	if err != nil || !strings.Contains(value, "interval-idle") {
+		t.Fatalf("memory=%q err=%v", value, err)
+	}
+
+	long := uint64(60)
+	config.Flush.IdleTimeoutSeconds = &long
+	stoppedStreamer := &memoryFlushStreamer{flushDone: make(chan struct{})}
+	stopped := Runner{
+		Client: stoppedStreamer, Tools: tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto}),
+		Model: "test", Memory: store, MemoryConfig: config,
+	}
+	defer stopped.Tools.Close()
+	if _, err := stopped.RunTurn(context.Background(), "do not wait a minute", ""); err != nil {
+		t.Fatal(err)
+	}
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), time.Second)
+	defer stopCancel()
+	if err := stopped.WaitMemory(stopCtx); err != nil {
+		t.Fatal(err)
+	}
+	if requests := stoppedStreamer.snapshot(); len(requests) != 1 {
+		t.Fatalf("shutdown allowed pending idle flush: %#v", requests)
+	}
+}

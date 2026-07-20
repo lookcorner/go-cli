@@ -14,6 +14,7 @@ func boolPointer(value bool) *bool       { return &value }
 func stringPointer(value string) *string { return &value }
 func intPointer(value int) *int          { return &value }
 func uint32Pointer(value uint32) *uint32 { return &value }
+func uint64Pointer(value uint64) *uint64 { return &value }
 
 func TestFetchRemoteSettingsRetriesAndAuthenticates(t *testing.T) {
 	attempts := 0
@@ -197,14 +198,14 @@ func TestMemoryDefaultsRemoteAndEnvironmentPrecedence(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("GROK_HOME", home)
 	cfg, err := Load(filepath.Join(home, "missing.toml"))
-	if err != nil || cfg.Memory.Enabled || !cfg.Memory.InitialInjection || !cfg.Memory.Flush.Enabled || cfg.Memory.Flush.SoftThresholdTokens != 4000 || cfg.Memory.Flush.MaxWriteChars != 8000 {
+	if err != nil || cfg.Memory.Enabled || !cfg.Memory.InitialInjection || !cfg.Memory.Flush.Enabled || cfg.Memory.Flush.SoftThresholdTokens != 4000 || cfg.Memory.Flush.MaxWriteChars != 8000 || cfg.Memory.Flush.IdleTimeoutSeconds != nil {
 		t.Fatalf("defaults=%#v err=%v", cfg.Memory, err)
 	}
 	cfg.ApplyRemoteSettings(&RemoteSettings{
 		MemoryEnabled: boolPointer(true), MemoryInitialInjectionEnabled: boolPointer(false),
-		FlushEnabled: boolPointer(false), FlushSoftThresholdTokens: intPointer(2000),
+		FlushEnabled: boolPointer(false), FlushSoftThresholdTokens: intPointer(2000), FlushIdleTimeoutSeconds: uint64Pointer(120),
 	})
-	if !cfg.Memory.Enabled || cfg.Memory.InitialInjection || cfg.Memory.Flush.Enabled || cfg.Memory.Flush.SoftThresholdTokens != 2000 {
+	if !cfg.Memory.Enabled || cfg.Memory.InitialInjection || cfg.Memory.Flush.Enabled || cfg.Memory.Flush.SoftThresholdTokens != 2000 || cfg.Memory.Flush.IdleTimeoutSeconds == nil || *cfg.Memory.Flush.IdleTimeoutSeconds != 120 {
 		t.Fatalf("remote=%#v", cfg.Memory)
 	}
 	path := filepath.Join(home, "config.toml")
@@ -215,8 +216,8 @@ func TestMemoryDefaultsRemoteAndEnvironmentPrecedence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.ApplyRemoteSettings(&RemoteSettings{MemoryEnabled: boolPointer(true), FlushEnabled: boolPointer(false)})
-	if cfg.Memory.Enabled || !cfg.Memory.Flush.Enabled {
+	cfg.ApplyRemoteSettings(&RemoteSettings{MemoryEnabled: boolPointer(true), FlushEnabled: boolPointer(false), FlushIdleTimeoutSeconds: uint64Pointer(120)})
+	if cfg.Memory.Enabled || !cfg.Memory.Flush.Enabled || cfg.Memory.Flush.IdleTimeoutSeconds != nil {
 		t.Fatalf("empty local sections did not block remote values: %#v", cfg.Memory)
 	}
 	t.Setenv("GROK_MEMORY", "false")
@@ -227,8 +228,8 @@ func TestMemoryDefaultsRemoteAndEnvironmentPrecedence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.ApplyRemoteSettings(&RemoteSettings{MemoryEnabled: boolPointer(true), FlushEnabled: boolPointer(false)})
-	if cfg.Memory.Enabled || !cfg.Memory.Flush.Enabled {
+	cfg.ApplyRemoteSettings(&RemoteSettings{MemoryEnabled: boolPointer(true), FlushEnabled: boolPointer(false), FlushIdleTimeoutSeconds: uint64Pointer(120)})
+	if cfg.Memory.Enabled || !cfg.Memory.Flush.Enabled || cfg.Memory.Flush.IdleTimeoutSeconds != nil {
 		t.Fatalf("local/env precedence=%#v", cfg.Memory)
 	}
 	cfg.OverrideMemory(true)
