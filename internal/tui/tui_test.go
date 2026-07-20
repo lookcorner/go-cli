@@ -313,6 +313,18 @@ func TestCompactCommandDoesNotEnterTranscript(t *testing.T) {
 	}
 }
 
+func TestMemoryFlushCommandDoesNotEnterTranscript(t *testing.T) {
+	bridge := NewBridge(context.Background(), tools.PermissionAuto)
+	defer bridge.Close()
+	m := &model{ctx: context.Background(), runner: &agent.Runner{}, bridge: bridge, previousID: "response-1", status: "ready"}
+	m.input = []rune("/flush")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command == nil || !m.running || m.transcript.Len() != 0 || m.status != "flushing memory" {
+		t.Fatalf("flush command entered normal turn: running=%v status=%q transcript=%q", m.running, m.status, m.transcript.String())
+	}
+}
+
 func TestScheduledEventWaitsForTurnAndContinuesResponseChain(t *testing.T) {
 	ws, err := workspace.Open(t.TempDir())
 	if err != nil {

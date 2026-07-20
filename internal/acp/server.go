@@ -59,6 +59,7 @@ type Factory func(context.Context, SessionConfig, tools.Approver, io.Writer, io.
 type Server struct {
 	Factory         Factory
 	SessionDir      string
+	MemoryEnabled   bool
 	input           io.Reader
 	output          io.Writer
 	writeMu         sync.Mutex
@@ -246,6 +247,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleMCP(ctx, incoming)
 		case "x.ai/commands/list", "x.ai/workspaces/list":
 			s.handleStaticExtension(incoming)
+		case "x.ai/memory/flush":
+			s.handleMemoryFlushExtension(ctx, incoming)
 		case "x.ai/skills/list", "x.ai/skills/config", "x.ai/skills/add", "x.ai/skills/remove", "x.ai/skills/reset", "x.ai/skills/toggle":
 			s.handleSkills(ctx, incoming)
 		case "x.ai/plugins/list", "x.ai/plugins/action":
@@ -506,10 +509,12 @@ func (s *Server) handleSessionSummaries(incoming message) {
 func (s *Server) handleStaticExtension(incoming message) {
 	switch incoming.Method {
 	case "x.ai/commands/list":
-		s.respond(incoming.ID, map[string]any{"commands": []any{
-			map[string]any{"name": "compact", "description": "Compress conversation history to save context window"},
-			map[string]any{"name": "loop", "description": "Run a prompt on a recurring interval", "argumentHint": "[interval] <prompt>"},
-		}})
+		commands := []any{map[string]any{"name": "compact", "description": "Compress conversation history to save context window"}}
+		if s.MemoryEnabled {
+			commands = append(commands, map[string]any{"name": "flush", "description": "Save reusable conversation context to workspace memory"})
+		}
+		commands = append(commands, map[string]any{"name": "loop", "description": "Run a prompt on a recurring interval", "argumentHint": "[interval] <prompt>"})
+		s.respond(incoming.ID, map[string]any{"commands": commands})
 	case "x.ai/workspaces/list":
 		var req struct {
 			PageSize  *int   `json:"pageSize"`
@@ -1607,6 +1612,10 @@ func (s *Server) handlePrompt(parent context.Context, incoming message) {
 		s.handleCompactPrompt(parent, incoming, current)
 		return
 	}
+	if strings.TrimSpace(prompt) == "/flush" {
+		s.handleMemoryFlush(parent, incoming, current, false)
+		return
+	}
 	if expanded, ok := tools.ExpandLoopCommand(prompt); ok {
 		prompt = expanded
 		content = []api.ContentPart{{Type: "input_text", Text: expanded}}
@@ -1704,6 +1713,76 @@ func (s *Server) handleCompactPrompt(parent context.Context, incoming message, c
 		current.mu.Unlock()
 		if err == nil || stopReason == "cancelled" {
 			s.respond(incoming.ID, map[string]any{"stopReason": stopReason})
+		}
+		s.startNextWake(current)
+	}()
+}
+
+func (s *Server) handleMemoryFlushExtension(parent context.Context, incoming message) {
+	var params struct {
+		SessionID      string `json:"session_id"`
+		SessionIDCamel string `json:"sessionId"`
+	}
+	if json.Unmarshal(incoming.Params, &params) != nil {
+		s.respondError(incoming.ID, -32602, "invalid memory flush parameters")
+		return
+	}
+	sessionID := params.SessionID
+	if sessionID == "" {
+		sessionID = params.SessionIDCamel
+	}
+	current := s.lookupSession(sessionID)
+	if current == nil {
+		s.respondError(incoming.ID, -32602, "unknown session")
+		return
+	}
+	s.handleMemoryFlush(parent, incoming, current, true)
+}
+
+func (s *Server) handleMemoryFlush(parent context.Context, incoming message, current *session, extension bool) {
+	current.mu.Lock()
+	if current.running {
+		current.mu.Unlock()
+		s.respondError(incoming.ID, -32000, "session already has an active prompt")
+		return
+	}
+	if current.previous == "" {
+		current.mu.Unlock()
+		s.respondError(incoming.ID, -32000, "no completed response is available to flush")
+		return
+	}
+	runCtx, cancel := context.WithCancel(parent)
+	previous := current.previous
+	current.cancel, current.running, current.updated = cancel, true, time.Now().UTC()
+	current.mu.Unlock()
+	s.notify(current.id, map[string]any{"sessionUpdate": "memory_flush_started"})
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		result, err := current.runner.FlushMemory(runCtx, previous)
+		stopReason := "end_turn"
+		if errors.Is(runCtx.Err(), context.Canceled) {
+			stopReason = "cancelled"
+		} else if err != nil {
+			s.respondError(incoming.ID, -32000, err.Error())
+		}
+		current.mu.Lock()
+		current.running, current.cancel, current.updated = false, nil, time.Now().UTC()
+		current.mu.Unlock()
+		update := map[string]any{"sessionUpdate": "memory_flush_completed", "result": result.Outcome}
+		if result.Path != "" {
+			update["path"] = result.Path
+		}
+		if err != nil {
+			update["result"] = "error: " + err.Error()
+		}
+		s.notify(current.id, update)
+		if err == nil || stopReason == "cancelled" {
+			if extension {
+				s.respond(incoming.ID, map[string]any{})
+			} else {
+				s.respond(incoming.ID, map[string]any{"stopReason": stopReason})
+			}
 		}
 		s.startNextWake(current)
 	}()

@@ -1351,7 +1351,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 	dynamicPlugins := clonePluginsConfig(cfg.Plugins)
 	pluginStates := make(map[*sessionPluginState]bool)
 	var server *acp.Server
-	server = &acp.Server{SessionDir: opts.sessionDir, Factory: func(
+	server = &acp.Server{SessionDir: opts.sessionDir, MemoryEnabled: cfg.Memory.Enabled, Factory: func(
 		sessionCtx context.Context,
 		sessionConfig acp.SessionConfig,
 		protocolApprover tools.Approver,
@@ -2304,7 +2304,7 @@ func interactiveLoop(
 			case "/exit", "/quit":
 				return nil
 			case "/help":
-				fmt.Fprintln(stderr, "Commands: /compact, /loop, /help, /exit. Every other line is sent as a prompt.")
+				fmt.Fprintln(stderr, "Commands: /compact, /flush, /loop, /help, /exit. Every other line is sent as a prompt.")
 				prompt = ""
 				continue
 			case "/compact":
@@ -2312,6 +2312,15 @@ func interactiveLoop(
 					fmt.Fprintln(stderr, "[gork] compact failed:", err)
 				} else {
 					previousResponseID = ""
+				}
+				prompt = ""
+				continue
+			case "/flush":
+				result, err := runner.FlushMemory(ctx, previousResponseID)
+				if err != nil {
+					fmt.Fprintln(stderr, "[gork] memory flush failed:", err)
+				} else {
+					fmt.Fprintln(stderr, "[gork] memory flush:", result.Outcome)
 				}
 				prompt = ""
 				continue

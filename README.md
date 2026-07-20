@@ -13,10 +13,12 @@ local JSONL session records. See [COMPATIBILITY.md](COMPATIBILITY.md) for the
 feature-by-feature status.
 
 Interactive REPL, full-screen, and ACP sessions accept `/compact` to summarize
-the current completed response chain and continue from a fresh context. They
-also accept `/loop [interval] <prompt>`, which expands to the reference
-`scheduler_create` workflow without inventing a default interval. ACP advertises
-both commands through `x.ai/commands/list`.
+the current completed response chain and continue from a fresh context. When
+workspace memory is enabled, `/flush` saves reusable context without changing
+that response chain. They also accept `/loop [interval] <prompt>`, which expands
+to the reference `scheduler_create` workflow without inventing a default
+interval. ACP advertises the enabled commands through `x.ai/commands/list` and
+also exposes `x.ai/memory/flush`.
 
 The model can call `enter_plan_mode` to enter a persisted, read-only planning
 phase. While active, workspace mutations are limited to `.grok/plan.md`; shell,
@@ -193,8 +195,9 @@ Markdown is written atomically beneath `$GROK_HOME/memory/<workspace>/sessions`,
 with exact duplicates skipped. A new session receives a bounded
 `<memory-context>` block from workspace/global `MEMORY.md` files and recent
 session flushes on its first fresh turn. Existing response chains skip
-re-injection. This file-backed path intentionally remains useful without the
-still-pending semantic/vector index.
+re-injection. `/flush` triggers the same quality-gated write path explicitly.
+This file-backed path intentionally remains useful without the still-pending
+semantic/vector index.
 
 The default model transport is the Responses API. For OpenAI-compatible
 providers that only expose Chat Completions, use `--backend chat_completions`

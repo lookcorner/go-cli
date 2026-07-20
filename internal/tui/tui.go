@@ -31,6 +31,10 @@ type turnDoneEvent struct {
 	err    error
 }
 type compactDoneEvent struct{ err error }
+type memoryFlushDoneEvent struct {
+	result agent.MemoryFlushResult
+	err    error
+}
 type scheduledFiredEvent struct{ event tools.ScheduledTaskFired }
 type planModeEvent struct{ active bool }
 type planReviewEvent struct {
@@ -337,6 +341,17 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if command := m.startScheduled(); command != nil {
 			return m, command
 		}
+	case memoryFlushDoneEvent:
+		m.running = false
+		m.turnCancel = nil
+		if msg.err != nil {
+			m.status = "memory flush failed: " + msg.err.Error()
+		} else {
+			m.status = "memory flush: " + msg.result.Outcome
+		}
+		if command := m.startScheduled(); command != nil {
+			return m, command
+		}
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
@@ -428,6 +443,10 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if prompt == "/compact" {
 			m.status = "compacting context"
 			return m, runCompact(turnCtx, m.runner, m.previousID)
+		}
+		if prompt == "/flush" {
+			m.status = "flushing memory"
+			return m, runMemoryFlush(turnCtx, m.runner, m.previousID)
 		}
 		prompt, _ = tools.ExpandLoopCommand(prompt)
 		m.beginTurn(prompt)
@@ -611,6 +630,13 @@ func runCompact(ctx context.Context, runner *agent.Runner, previousID string) te
 	return func() tea.Msg {
 		_, err := runner.Compact(ctx, previousID)
 		return compactDoneEvent{err: err}
+	}
+}
+
+func runMemoryFlush(ctx context.Context, runner *agent.Runner, previousID string) tea.Cmd {
+	return func() tea.Msg {
+		result, err := runner.FlushMemory(ctx, previousID)
+		return memoryFlushDoneEvent{result: result, err: err}
 	}
 }
 

@@ -22,6 +22,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/config"
 	"github.com/lookcorner/go-cli/internal/marketplace"
 	"github.com/lookcorner/go-cli/internal/mcp"
+	"github.com/lookcorner/go-cli/internal/memory"
 	"github.com/lookcorner/go-cli/internal/plugin"
 	"github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/subagent"
@@ -34,10 +35,38 @@ type samplingStreamer struct {
 	request api.ResponseRequest
 }
 
+type memoryCommandStreamer struct{ request api.ResponseRequest }
+
+func (s *memoryCommandStreamer) StreamResponse(_ context.Context, request api.ResponseRequest, _ func(string)) (api.StreamResult, error) {
+	s.request = request
+	return api.StreamResult{Text: "## Decision\n\nFlush explicitly."}, nil
+}
+
 type failingGoalStreamer struct{ err error }
 
 func (s failingGoalStreamer) StreamResponse(context.Context, api.ResponseRequest, func(string)) (api.StreamResult, error) {
 	return api.StreamResult{}, s.err
+}
+
+func TestInteractiveMemoryFlushDoesNotRunNormalTurn(t *testing.T) {
+	store, err := memory.Open(t.TempDir(), t.TempDir(), "interactive")
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := memory.DefaultConfig()
+	config.Enabled = true
+	streamer := &memoryCommandStreamer{}
+	runner := &agent.Runner{Client: streamer, Model: "test", Memory: store, MemoryConfig: config}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	input := newTerminalInput(ctx, bufio.NewReader(strings.NewReader("/flush\n/exit\n")))
+	var stderr bytes.Buffer
+	if err := interactiveLoop(ctx, runner, newScheduledWakeQueue(), input, io.Discard, &stderr, "", "response-1"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(streamer.request.Instructions, "memory assistant") || !strings.Contains(stderr.String(), "memory flush: written") {
+		t.Fatalf("request=%#v stderr=%q", streamer.request, stderr.String())
+	}
 }
 
 func TestSessionObserversPersistOnlyLifecycleEvents(t *testing.T) {

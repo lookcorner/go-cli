@@ -2,12 +2,18 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/lookcorner/go-cli/internal/api"
 )
 
 const memoryFlushPrompt = `You are a memory assistant. Extract useful information from this conversation that would help in future sessions with this user. Write concise markdown with # or ## headers covering substantive decisions and rationale, technical context, debugging techniques, and problems with their solutions. Omit empty sections, user environment preferences, and ephemeral progress. Respond with NO_REPLY when nothing genuinely reusable was learned.`
+
+type MemoryFlushResult struct {
+	Outcome string
+	Path    string
+}
 
 func (r *Runner) injectMemoryContext(content any, previousResponseID string) any {
 	r.memoryMu.Lock()
@@ -54,7 +60,9 @@ func (r *Runner) maybeStartMemoryFlush(ctx context.Context, previousResponseID s
 	count := r.memoryFlushCount
 	r.memoryMu.Unlock()
 	streamer := r.compactionStreamer(true)
-	go r.runMemoryFlush(ctx, streamer, previousResponseID, previous, count)
+	go func() {
+		_, _ = r.runMemoryFlush(ctx, streamer, previousResponseID, previous, count, "pre_compaction")
+	}()
 }
 
 func (r *Runner) shouldFlushMemory(previousResponseID string) bool {
@@ -67,7 +75,29 @@ func (r *Runner) shouldFlushMemory(previousResponseID string) bool {
 	return int64(r.lastInputTokens)*100 >= max(int64(0), flushAt)
 }
 
-func (r *Runner) runMemoryFlush(ctx context.Context, streamer ResponseStreamer, previousResponseID, previous string, count uint64) {
+func (r *Runner) FlushMemory(ctx context.Context, previousResponseID string) (MemoryFlushResult, error) {
+	if r.Client == nil {
+		return MemoryFlushResult{}, errors.New("model client is unavailable")
+	}
+	if r.Memory == nil || !r.MemoryConfig.Enabled || !r.MemoryConfig.Flush.Enabled {
+		return MemoryFlushResult{}, errors.New("memory is not enabled for this session")
+	}
+	if previousResponseID == "" {
+		return MemoryFlushResult{}, errors.New("no completed response is available to flush")
+	}
+	r.memoryMu.Lock()
+	if r.memoryFlushRunning {
+		r.memoryMu.Unlock()
+		return MemoryFlushResult{}, errors.New("another memory flush is already in progress")
+	}
+	r.memoryFlushArmed, r.memoryFlushRunning = true, true
+	r.memoryFlushDone = make(chan struct{})
+	previous, count := r.memoryLastFlush, r.memoryFlushCount
+	r.memoryMu.Unlock()
+	return r.runMemoryFlush(ctx, r.compactionStreamer(true), previousResponseID, previous, count, "user_requested")
+}
+
+func (r *Runner) runMemoryFlush(ctx context.Context, streamer ResponseStreamer, previousResponseID, previous string, count uint64, trigger string) (MemoryFlushResult, error) {
 	prompt := memoryFlushPrompt
 	if count > 0 && strings.TrimSpace(previous) != "" {
 		prompt += "\n\nExtract only information that is new since this previous flush:\n\n" + previous
@@ -76,7 +106,7 @@ func (r *Runner) runMemoryFlush(ctx context.Context, streamer ResponseStreamer, 
 	if model == "" {
 		model = r.Model
 	}
-	r.log("memory_flush_started", map[string]any{"trigger": "pre_compaction", "model": model})
+	r.log("memory_flush_started", map[string]any{"trigger": trigger, "model": model})
 	result, err := streamer.StreamResponse(ctx, api.ResponseRequest{
 		Model: model, Instructions: prompt,
 		Input:              []api.InputItem{{Type: "message", Role: "user", Content: "Now write the memory summary as described in the system prompt."}},
@@ -87,7 +117,7 @@ func (r *Runner) runMemoryFlush(ctx context.Context, streamer ResponseStreamer, 
 		accepted, outcome = processMemoryFlushResponse(result.Text, r.MemoryConfig.Flush.MaxWriteChars)
 		if outcome == "accepted" {
 			var written bool
-			path, written, err = r.Memory.Write("pre_compaction", accepted)
+			path, written, err = r.Memory.Write(trigger, accepted)
 			switch {
 			case err != nil:
 				outcome = "error"
@@ -105,7 +135,7 @@ func (r *Runner) runMemoryFlush(ctx context.Context, streamer ResponseStreamer, 
 		r.memoryLastFlush = accepted
 	}
 	r.memoryMu.Unlock()
-	data := map[string]any{"trigger": "pre_compaction", "outcome": outcome}
+	data := map[string]any{"trigger": trigger, "outcome": outcome}
 	if path != "" {
 		data["path"] = path
 	}
@@ -122,6 +152,7 @@ func (r *Runner) runMemoryFlush(ctx context.Context, streamer ResponseStreamer, 
 		close(done)
 	}
 	r.memoryMu.Unlock()
+	return MemoryFlushResult{Outcome: outcome, Path: path}, err
 }
 
 func (r *Runner) WaitMemory(ctx context.Context) error {

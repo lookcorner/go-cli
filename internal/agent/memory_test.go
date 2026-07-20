@@ -144,3 +144,37 @@ func TestProcessMemoryFlushResponseQualityControls(t *testing.T) {
 		t.Fatalf("content=%q chars=%d outcome=%q", content, len([]rune(content)), outcome)
 	}
 }
+
+func TestRunnerManualMemoryFlushUsesSharedLifecycle(t *testing.T) {
+	root, workspaceRoot := t.TempDir(), t.TempDir()
+	store, err := memory.Open(root, workspaceRoot, "manual")
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := memory.DefaultConfig()
+	config.Enabled = true
+	streamer := &fakeStreamer{results: []api.StreamResult{
+		{ResponseID: "flush-one", Text: "## Decision\n\nUse explicit flush."},
+		{ResponseID: "flush-two", Text: "NO_REPLY"},
+	}}
+	runner := Runner{Client: streamer, Model: "test", Memory: store, MemoryConfig: config}
+	result, err := runner.FlushMemory(context.Background(), "current")
+	if err != nil || result.Outcome != "written" || result.Path == "" {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	result, err = runner.FlushMemory(context.Background(), "current")
+	if err != nil || result.Outcome != "nothing_to_store" {
+		t.Fatalf("delta result=%#v err=%v", result, err)
+	}
+	if len(streamer.requests) != 2 || streamer.requests[0].PreviousResponseID != "current" || !strings.Contains(streamer.requests[1].Instructions, "previous flush") {
+		t.Fatalf("requests=%#v", streamer.requests)
+	}
+	runner.memoryFlushRunning = true
+	if _, err := runner.FlushMemory(context.Background(), "current"); err == nil || !strings.Contains(err.Error(), "already in progress") {
+		t.Fatalf("concurrent err=%v", err)
+	}
+	runner.memoryFlushRunning = false
+	if _, err := runner.FlushMemory(context.Background(), ""); err == nil || !strings.Contains(err.Error(), "no completed response") {
+		t.Fatalf("empty history err=%v", err)
+	}
+}

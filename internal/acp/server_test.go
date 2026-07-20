@@ -21,6 +21,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/hooks"
 	"github.com/lookcorner/go-cli/internal/marketplace"
 	mcppkg "github.com/lookcorner/go-cli/internal/mcp"
+	"github.com/lookcorner/go-cli/internal/memory"
 	"github.com/lookcorner/go-cli/internal/plugin"
 	sessionlog "github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/skills"
@@ -692,6 +693,104 @@ func TestStaticExtensionsAndCompactCommand(t *testing.T) {
 	if len(requests) != 1 || requests[0].PreviousResponseID != "response-1" || !strings.Contains(requests[0].Instructions, "handoff summary") {
 		t.Fatalf("unexpected compact request: %#v", requests)
 	}
+}
+
+func TestMemoryFlushExtensionAndSlashCommand(t *testing.T) {
+	root, cwd := t.TempDir(), t.TempDir()
+	store, err := memory.Open(root, cwd, "memory-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := memory.DefaultConfig()
+	config.Enabled = true
+	streamer := &fixtureStreamer{results: []api.StreamResult{
+		{ResponseID: "flush-one", Text: "## Decision\n\nPersist useful context."},
+		{ResponseID: "flush-two", Text: "NO_REPLY"},
+	}}
+	runner := &agent.Runner{Client: streamer, Model: "test", Memory: store, MemoryConfig: config}
+	current := &session{id: "memory-session", cwd: cwd, runner: runner, previous: "response-1", activePrompt: -1, close: func() {}}
+	var output bytes.Buffer
+	server := &Server{output: &output, MemoryEnabled: true, sessions: map[string]*session{"memory-session": current}}
+	server.handleStaticExtension(message{ID: json.RawMessage("0"), Method: "x.ai/commands/list", Params: json.RawMessage(`{}`)})
+	var commandResponse map[string]any
+	if err := json.NewDecoder(&output).Decode(&commandResponse); err != nil {
+		t.Fatal(err)
+	}
+	commands := commandResponse["result"].(map[string]any)["commands"].([]any)
+	if len(commands) != 3 || commands[1].(map[string]any)["name"] != "flush" {
+		t.Fatalf("memory commands=%#v", commands)
+	}
+	output.Reset()
+	server.MemoryEnabled = false
+	server.handleStaticExtension(message{ID: json.RawMessage("0"), Method: "x.ai/commands/list", Params: json.RawMessage(`{}`)})
+	if err := json.NewDecoder(&output).Decode(&commandResponse); err != nil {
+		t.Fatal(err)
+	}
+	commands = commandResponse["result"].(map[string]any)["commands"].([]any)
+	if len(commands) != 2 {
+		t.Fatalf("disabled memory commands=%#v", commands)
+	}
+	server.MemoryEnabled = true
+	output.Reset()
+	server.handleMemoryFlushExtension(context.Background(), message{
+		ID: json.RawMessage("1"), Method: "x.ai/memory/flush", Params: json.RawMessage(`{"session_id":"memory-session"}`),
+	})
+	server.wg.Wait()
+	messages := decodeACPOutput(t, output.Bytes())
+	started, completed, responded := false, false, false
+	for _, message := range messages {
+		if message["id"] != nil {
+			responded = message["error"] == nil
+			continue
+		}
+		params, _ := message["params"].(map[string]any)
+		update, _ := params["update"].(map[string]any)
+		started = started || update["sessionUpdate"] == "memory_flush_started"
+		completed = completed || update["sessionUpdate"] == "memory_flush_completed" && update["result"] == "written"
+	}
+	if !started || !completed || !responded {
+		t.Fatalf("messages=%#v", messages)
+	}
+	if value, err := store.Context(); err != nil || !strings.Contains(value, "Persist useful context") {
+		t.Fatalf("memory=%q err=%v", value, err)
+	}
+	current.mu.Lock()
+	previous := current.previous
+	current.mu.Unlock()
+	if previous != "response-1" {
+		t.Fatalf("flush changed response chain to %q", previous)
+	}
+
+	output.Reset()
+	params, _ := json.Marshal(map[string]any{"sessionId": "memory-session", "prompt": []any{map[string]any{"type": "text", "text": "/flush"}}})
+	server.handlePrompt(context.Background(), message{ID: json.RawMessage("2"), Method: "session/prompt", Params: params})
+	server.wg.Wait()
+	messages = decodeACPOutput(t, output.Bytes())
+	responded = false
+	for _, message := range messages {
+		if result, ok := message["result"].(map[string]any); ok && result["stopReason"] == "end_turn" {
+			responded = true
+		}
+	}
+	if !responded {
+		t.Fatalf("slash messages=%#v", messages)
+	}
+}
+
+func decodeACPOutput(t *testing.T, data []byte) []map[string]any {
+	t.Helper()
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	var messages []map[string]any
+	for {
+		var message map[string]any
+		if err := decoder.Decode(&message); errors.Is(err, io.EOF) {
+			break
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		messages = append(messages, message)
+	}
+	return messages
 }
 
 func TestLoopCommandExpandsBeforeModelTurn(t *testing.T) {
