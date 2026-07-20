@@ -245,9 +245,12 @@ Goal-role model usage reaches the limit:
 ./gork --goal --workspace . "implement and verify the feature --budget 500000"
 ```
 
-Progress-only `update_goal` calls keep the goal active. A completion claim
-starts three independent, read-only `general-purpose` skeptics. Two refutations
-return the goal to the active loop with their concrete gaps; malformed verdicts
+Progress-only `update_goal` calls keep the goal active. A `blocked_reason` is
+accepted only after three reports in the same process; the first two keep the
+Goal active and ask the worker to retry. Completion, Goal creation, and resume
+reset this in-memory streak, while message-only progress does not. A completion
+claim starts three independent, read-only `general-purpose` skeptics. Two
+refutations return the goal to the active loop with their concrete gaps; malformed verdicts
 and individual skeptic failures count as refutations, while an unavailable
 verifier backend fails open so an internal harness outage cannot strand the
 user. The newest rejection gaps are persisted and repeated in every continuation

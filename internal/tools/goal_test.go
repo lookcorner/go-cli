@@ -87,16 +87,52 @@ func TestUpdateGoalLifecycle(t *testing.T) {
 	}
 }
 
-func TestUpdateGoalRejectsConflictingTerminalStates(t *testing.T) {
+func TestUpdateGoalBlocksAfterThreeAttempts(t *testing.T) {
 	store := NewGoalStore()
 	if err := store.Begin("goal"); err != nil {
 		t.Fatal(err)
 	}
 	tool := &updateGoalTool{store: store}
-	if _, err := tool.Execute(context.Background(), json.RawMessage(
-		`{"completed":true,"blocked_reason":"also blocked"}`,
-	)); err == nil {
-		t.Fatal("expected conflicting state rejection")
+	for attempt := 1; attempt < 3; attempt++ {
+		result, err := tool.Execute(context.Background(), json.RawMessage(`{"blocked_reason":"service unavailable"}`))
+		if err != nil || !strings.Contains(result, fmt.Sprintf("Blocked attempt %d/3", attempt)) {
+			t.Fatalf("attempt %d result=%q err=%v", attempt, result, err)
+		}
+		if snapshot := store.Snapshot(); snapshot.Status != "active" {
+			t.Fatalf("attempt %d snapshot=%#v", attempt, snapshot)
+		}
+	}
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"blocked_reason":"service unavailable","message":"three retries failed"}`))
+	if err != nil || !strings.Contains(result, "Goal blocked") {
+		t.Fatalf("third result=%q err=%v", result, err)
+	}
+	if snapshot := store.Snapshot(); snapshot.Status != "blocked" || snapshot.Message != "service unavailable\nthree retries failed" {
+		t.Fatalf("blocked snapshot=%#v", snapshot)
+	}
+}
+
+func TestUpdateGoalBlockedTakesPrecedenceAndCompletionResetsStreak(t *testing.T) {
+	store := NewGoalStore()
+	if err := store.Begin("goal"); err != nil {
+		t.Fatal(err)
+	}
+	tool := &updateGoalTool{store: store}
+	store.blockedStreak = 2
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"completed":true,"blocked_reason":"still blocked"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot := store.Snapshot(); snapshot.Status != "blocked" {
+		t.Fatalf("blocked did not take precedence: %#v", snapshot)
+	}
+	if _, err := store.Resume(); err != nil {
+		t.Fatal(err)
+	}
+	store.blockedStreak = 2
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"completed":true}`)); err != nil {
+		t.Fatal(err)
+	}
+	if store.blockedStreak != 0 || store.Snapshot().Status != "verifying" {
+		t.Fatalf("completion streak=%d snapshot=%#v", store.blockedStreak, store.Snapshot())
 	}
 }
 

@@ -87,6 +87,7 @@ type GoalStore struct {
 	lastClassifierVerdict     string
 	lastClassifierDetailsPath string
 	firstFinalResponse        string
+	blockedStreak             uint32
 	scratchDir                string
 	scratchReady              bool
 	statePath                 string
@@ -132,6 +133,7 @@ func (s *GoalStore) BeginWithBudget(objective string, tokenBudget int64) error {
 	s.currentSubagentRole = ""
 	s.lastClassifierVerdict, s.lastClassifierDetailsPath = "", ""
 	s.firstFinalResponse = ""
+	s.blockedStreak = 0
 	s.prepareScratchLocked()
 	return s.saveLocked()
 }
@@ -274,7 +276,7 @@ type updateGoalTool struct{ store *GoalStore }
 func (t *updateGoalTool) Definition() api.ToolDefinition {
 	return api.ToolDefinition{
 		Type: "function", Name: "update_goal",
-		Description: "Report progress on the active goal. Mark completed only when fully achieved, or set blocked_reason only when genuinely stuck.",
+		Description: "Report progress on the active goal. Mark completed only when fully achieved, or set blocked_reason only when genuinely stuck. Three consecutive blocked reports are required to stop the goal.",
 		Parameters: objectSchema(map[string]any{
 			"completed":      map[string]any{"type": "boolean"},
 			"message":        map[string]any{"type": "string"},
@@ -292,9 +294,6 @@ func (t *updateGoalTool) Execute(_ context.Context, raw json.RawMessage) (string
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return "", fmt.Errorf("decode update_goal arguments: %w", err)
 	}
-	if args.Completed != nil && *args.Completed && strings.TrimSpace(args.BlockedReason) != "" {
-		return "", errors.New("completed and blocked_reason are mutually exclusive")
-	}
 	if args.Completed == nil && strings.TrimSpace(args.Message) == "" && strings.TrimSpace(args.BlockedReason) == "" {
 		return "", errors.New("provide completed, message, or blocked_reason")
 	}
@@ -304,15 +303,25 @@ func (t *updateGoalTool) Execute(_ context.Context, raw json.RawMessage) (string
 		return "", errors.New("goal harness is not active; start gork with --goal before calling update_goal")
 	}
 	if blocked := strings.TrimSpace(args.BlockedReason); blocked != "" {
+		if t.store.blockedStreak < 3 {
+			t.store.blockedStreak++
+		}
+		if t.store.blockedStreak < 3 {
+			return fmt.Sprintf("success: true\nsummary: Blocked attempt %d/3 recorded. Continue retrying or refining the approach.", t.store.blockedStreak), nil
+		}
 		t.store.status = "blocked"
 		t.store.message = blocked
+		if detail := strings.TrimSpace(args.Message); detail != "" {
+			t.store.message += "\n" + detail
+		}
 		if err := t.store.saveLocked(); err != nil {
 			return "", err
 		}
 		t.store.emitGoalUpdatedLocked("goal_blocked")
-		return "success: true\nsummary: Goal marked blocked: " + blocked, nil
+		return "success: true\nsummary: Goal blocked: " + blocked + ".", nil
 	}
 	if args.Completed != nil && *args.Completed {
+		t.store.blockedStreak = 0
 		t.store.status = "verifying"
 		t.store.message = strings.TrimSpace(args.Message)
 		summary := t.store.message

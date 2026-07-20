@@ -203,6 +203,7 @@ func (s *GoalStore) Resume() (string, error) {
 	s.currentSubagentRole = ""
 	s.verificationRuns, s.verificationStall = 0, 0
 	s.stallVerification = ""
+	s.blockedStreak = 0
 	s.resetStrategistLocked()
 	s.prepareScratchLocked()
 	return s.objective, s.saveLocked()

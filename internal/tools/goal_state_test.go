@@ -196,6 +196,30 @@ func TestGoalVerifierBreadthAnchorPersistsAcrossResume(t *testing.T) {
 	}
 }
 
+func TestGoalBlockedStreakIsSessionLocal(t *testing.T) {
+	root, artifactDir := t.TempDir(), filepath.Join(t.TempDir(), "artifacts")
+	first := newPersistentGoalRegistry(t, root, artifactDir)
+	if err := first.BeginGoal("retry before blocking"); err != nil {
+		t.Fatal(err)
+	}
+	result, err := (&updateGoalTool{store: first.goal}).Execute(context.Background(), json.RawMessage(`{"blocked_reason":"transient"}`))
+	if err != nil || !strings.Contains(result, "1/3") {
+		t.Fatalf("result=%q err=%v", result, err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restored := newPersistentGoalRegistry(t, root, artifactDir)
+	defer restored.Close()
+	if restored.goal.blockedStreak != 0 {
+		t.Fatalf("restored streak=%d", restored.goal.blockedStreak)
+	}
+	result, err = (&updateGoalTool{store: restored.goal}).Execute(context.Background(), json.RawMessage(`{"blocked_reason":"transient"}`))
+	if err != nil || !strings.Contains(result, "1/3") {
+		t.Fatalf("restored result=%q err=%v", result, err)
+	}
+}
+
 func TestGoalStateUnknownStatusPausesAndBadVersionFails(t *testing.T) {
 	root, artifactDir := t.TempDir(), filepath.Join(t.TempDir(), "artifacts")
 	if err := os.Mkdir(artifactDir, 0o700); err != nil {
