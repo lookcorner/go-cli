@@ -55,7 +55,10 @@ func TestUpdateGoalLifecycle(t *testing.T) {
 	if snapshot.Status != "verifying" || snapshot.Message != "all checks passed" {
 		t.Fatalf("unexpected snapshot: %#v", snapshot)
 	}
-	if err := store.ResolveVerification(true, "verified"); err != nil {
+	if err := store.StartVerification(10); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ResolveVerification(true, "verified", 10); err != nil {
 		t.Fatal(err)
 	}
 	snapshot = store.Snapshot()
@@ -94,11 +97,14 @@ func TestGoalVerifierMajorityRefutesAndReturnsGoalToActive(t *testing.T) {
 	if _, err := (&updateGoalTool{store: registry.goal}).Execute(context.Background(), json.RawMessage(`{"completed":true,"message":"done"}`)); err != nil {
 		t.Fatal(err)
 	}
+	if err := registry.StartGoalVerification(10); err != nil {
+		t.Fatal(err)
+	}
 	verification := registry.VerifyGoal(context.Background(), registry.GoalSnapshot(), 3)
-	if verification.Achieved || !strings.Contains(verification.Summary, "missing integration test") || !strings.Contains(verification.Summary, "remote state") {
+	if verification.Achieved || verification.Summary != "missing integration test; remote state was not checked" {
 		t.Fatalf("verification=%#v", verification)
 	}
-	if err := registry.ResolveGoalVerification(verification); err != nil {
+	if err := registry.ResolveGoalVerification(verification, 10); err != nil {
 		t.Fatal(err)
 	}
 	if snapshot := registry.GoalSnapshot(); snapshot.Status != "active" || snapshot.Message != verification.Summary {
@@ -109,6 +115,51 @@ func TestGoalVerifierMajorityRefutesAndReturnsGoalToActive(t *testing.T) {
 			t.Fatalf("request=%#v", request)
 		}
 	}
+}
+
+func TestGoalVerificationPausesAtCapAndOnRepeatedGaps(t *testing.T) {
+	complete := func(t *testing.T, store *GoalStore) {
+		t.Helper()
+		if _, err := (&updateGoalTool{store: store}).Execute(context.Background(), json.RawMessage(`{"completed":true}`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Run("cap", func(t *testing.T) {
+		store := NewGoalStore()
+		if err := store.Begin("goal"); err != nil {
+			t.Fatal(err)
+		}
+		complete(t, store)
+		if err := store.StartVerification(1); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.ResolveVerification(false, "missing proof", 1); err != nil {
+			t.Fatal(err)
+		}
+		snapshot := store.Snapshot()
+		if snapshot.Status != "paused" || snapshot.VerificationRuns != 1 || !strings.Contains(snapshot.Message, "run cap") {
+			t.Fatalf("snapshot=%#v", snapshot)
+		}
+	})
+	t.Run("no progress", func(t *testing.T) {
+		store := NewGoalStore()
+		if err := store.Begin("goal"); err != nil {
+			t.Fatal(err)
+		}
+		for attempt := 0; attempt < 2; attempt++ {
+			complete(t, store)
+			if err := store.StartVerification(10); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.ResolveVerification(false, "same gap", 10); err != nil {
+				t.Fatal(err)
+			}
+		}
+		snapshot := store.Snapshot()
+		if snapshot.Status != "paused" || snapshot.VerificationRuns != 2 || !strings.Contains(snapshot.Message, "no progress") {
+			t.Fatalf("snapshot=%#v", snapshot)
+		}
+	})
 }
 
 func TestGoalVerifierCountsInfrastructureErrorsAsRefutations(t *testing.T) {

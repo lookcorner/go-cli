@@ -501,7 +501,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		if err := registry.BeginGoal(prompt); err != nil {
 			return err
 		}
-		return goalLoop(ctx, runner, registry, stdout, stderr, prompt, opts.previousID, opts.goalRuns, cfg.Goal.VerifierCount)
+		return goalLoop(ctx, runner, registry, stdout, stderr, prompt, opts.previousID, opts.goalRuns, cfg.Goal.VerifierCount, cfg.Goal.ClassifierMaxRuns)
 	}
 	return runHeadless(ctx, runner, scheduledQueue, stdout, stderr, prompt, opts.previousID)
 }
@@ -1841,6 +1841,7 @@ func goalLoop(
 	previousResponseID string,
 	maxRuns int,
 	verifierCount int,
+	classifierMaxRuns uint32,
 ) error {
 	prompt := objective
 	for run := 1; run <= maxRuns; run++ {
@@ -1857,9 +1858,15 @@ func goalLoop(
 		switch snapshot.Status {
 		case "verifying":
 			fmt.Fprintln(stderr, "[gork] verifying goal completion with independent skeptics")
-			verification := registry.VerifyGoal(ctx, snapshot, verifierCount)
-			if err := registry.ResolveGoalVerification(verification); err != nil {
+			if err := registry.StartGoalVerification(classifierMaxRuns); err != nil {
 				return err
+			}
+			verification := registry.VerifyGoal(ctx, snapshot, verifierCount)
+			if err := registry.ResolveGoalVerification(verification, classifierMaxRuns); err != nil {
+				return err
+			}
+			if current := registry.GoalSnapshot(); current.Status == "paused" {
+				return errors.New("goal verification paused: " + current.Message)
 			}
 			if verification.Achieved {
 				fmt.Fprintln(stderr, "[gork] goal completed:", verification.Summary)

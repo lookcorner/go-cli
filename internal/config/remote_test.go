@@ -13,6 +13,7 @@ import (
 func boolPointer(value bool) *bool       { return &value }
 func stringPointer(value string) *string { return &value }
 func intPointer(value int) *int          { return &value }
+func uint32Pointer(value uint32) *uint32 { return &value }
 
 func TestFetchRemoteSettingsRetriesAndAuthenticates(t *testing.T) {
 	attempts := 0
@@ -25,12 +26,37 @@ func TestFetchRemoteSettingsRetriesAndAuthenticates(t *testing.T) {
 			http.Error(writer, "temporary", http.StatusServiceUnavailable)
 			return
 		}
-		_ = json.NewEncoder(writer).Encode(RemoteSettings{WebFetchEnabled: boolPointer(true), GoalVerifierCount: intPointer(4)})
+		_ = json.NewEncoder(writer).Encode(RemoteSettings{WebFetchEnabled: boolPointer(true), GoalVerifierCount: intPointer(4), GoalClassifierMaxRuns: uint32Pointer(7)})
 	}))
 	defer server.Close()
 	settings := FetchRemoteSettings(context.Background(), server.URL+"/v1", "session-token", server.Client())
-	if settings == nil || settings.WebFetchEnabled == nil || !*settings.WebFetchEnabled || settings.GoalVerifierCount == nil || *settings.GoalVerifierCount != 4 || attempts != 2 {
+	if settings == nil || settings.WebFetchEnabled == nil || !*settings.WebFetchEnabled || settings.GoalVerifierCount == nil || *settings.GoalVerifierCount != 4 || settings.GoalClassifierMaxRuns == nil || *settings.GoalClassifierMaxRuns != 7 || attempts != 2 {
 		t.Fatalf("settings=%#v attempts=%d", settings, attempts)
+	}
+}
+
+func TestGoalClassifierMaxRunsRemoteAndLocalPrecedence(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	cfg, err := Load(filepath.Join(home, "missing.toml"))
+	if err != nil || cfg.Goal.ClassifierMaxRuns != 10 {
+		t.Fatalf("default=%#v err=%v", cfg.Goal, err)
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{GoalClassifierMaxRuns: uint32Pointer(0)})
+	if cfg.Goal.ClassifierMaxRuns != 1 {
+		t.Fatalf("remote floor=%#v", cfg.Goal)
+	}
+	path := filepath.Join(home, "config.toml")
+	if err := os.WriteFile(path, []byte("[goal]\nclassifier_max_runs = 6\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{GoalClassifierMaxRuns: uint32Pointer(8)})
+	if cfg.Goal.ClassifierMaxRuns != 6 {
+		t.Fatalf("local precedence=%#v", cfg.Goal)
 	}
 }
 

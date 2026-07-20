@@ -64,6 +64,7 @@ type Config struct {
 	compatConfigured                compat.Config
 	autoWakeConfigured              bool
 	goalVerifierConfigured          bool
+	goalClassifierMaxConfigured     bool
 }
 
 type ModelProfile struct {
@@ -97,7 +98,8 @@ type AskUserQuestionConfig struct {
 }
 
 type GoalConfig struct {
-	VerifierCount int `json:"verifier_count"`
+	VerifierCount     int    `json:"verifier_count"`
+	ClassifierMaxRuns uint32 `json:"classifier_max_runs"`
 }
 
 type PermissionConfig struct {
@@ -279,7 +281,8 @@ type fileAskUserQuestionConfig struct {
 }
 
 type fileGoalConfig struct {
-	VerifierCount *int `json:"verifier_count,omitempty" toml:"verifier_count"`
+	VerifierCount     *int    `json:"verifier_count,omitempty" toml:"verifier_count"`
+	ClassifierMaxRuns *uint32 `json:"classifier_max_runs,omitempty" toml:"classifier_max_runs"`
 }
 
 type modelConfig struct {
@@ -335,7 +338,7 @@ func Load(path string) (Config, error) {
 		FolderTrustEnabled:          true,
 		AutoWakeEnabled:             true,
 		AskUserQuestion:             AskUserQuestionConfig{TimeoutEnabled: true, TimeoutSeconds: 30 * 60},
-		Goal:                        GoalConfig{VerifierCount: 3},
+		Goal:                        GoalConfig{VerifierCount: 3, ClassifierMaxRuns: 10},
 		Pruning:                     PruningConfig{Enabled: true, KeepLastNTurns: 3, SoftTrimThreshold: 4000, SoftTrimHead: 1500, SoftTrimTail: 1500, HardClearAgeTurns: 10},
 	}
 	if path == "" {
@@ -461,6 +464,10 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	if disk.Goal.VerifierCount != nil {
 		cfg.Goal.VerifierCount = normalizedGoalVerifierCount(*disk.Goal.VerifierCount)
 		cfg.goalVerifierConfigured = true
+	}
+	if disk.Goal.ClassifierMaxRuns != nil {
+		cfg.Goal.ClassifierMaxRuns = max(uint32(1), *disk.Goal.ClassifierMaxRuns)
+		cfg.goalClassifierMaxConfigured = true
 	}
 	if disk.ContextWindow > 0 {
 		cfg.ContextWindow = disk.ContextWindow
@@ -759,6 +766,12 @@ func applyEnv(cfg *Config) {
 		if count, err := strconv.Atoi(value); err == nil {
 			cfg.Goal.VerifierCount = normalizedGoalVerifierCount(count)
 			cfg.goalVerifierConfigured = true
+		}
+	}
+	if value := strings.TrimSpace(os.Getenv("GROK_GOAL_CLASSIFIER_MAX")); value != "" {
+		if count, err := strconv.ParseUint(value, 10, 32); err == nil {
+			cfg.Goal.ClassifierMaxRuns = max(uint32(1), uint32(count))
+			cfg.goalClassifierMaxConfigured = true
 		}
 	}
 	if !cfg.WebFetch.ProxyConfigured {

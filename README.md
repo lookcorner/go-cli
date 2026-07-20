@@ -244,7 +244,10 @@ verifier backend fails open so an internal harness outage cannot strand the
 user. Goal mode is explicit and cannot be combined with the interactive REPL
 or TUI. The panel defaults to three skeptics. `[goal] verifier_count`, remote
 `goal_verifier_count`, and the highest-precedence `GROK_GOAL_VERIFIER_N`
-environment variable may select one through five.
+environment variable may select one through five. `[goal] classifier_max_runs`,
+remote `goal_classifier_max_runs`, and `GROK_GOAL_CLASSIFIER_MAX` set the
+verification-attempt cap (default 10, minimum 1). Repeating the same gaps twice
+pauses early instead of continuing a no-progress loop.
 
 Release builds gate repo-controlled MCP/LSP and enabled project-plugin execution
 on folder trust. Interactive CLI startup asks once when executable project

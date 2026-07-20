@@ -289,6 +289,37 @@ func TestGoalVerifierCountConfigPrecedenceAndClamp(t *testing.T) {
 	}
 }
 
+func TestGoalClassifierMaxRunsConfigPrecedenceAndFloor(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	path := filepath.Join(home, "config.toml")
+	if err := os.WriteFile(path, []byte("[goal]\nclassifier_max_runs = 6\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GROK_GOAL_CLASSIFIER_MAX", "999")
+	cfg, err := Load(path)
+	if err != nil || cfg.Goal.ClassifierMaxRuns != 999 {
+		t.Fatalf("environment precedence=%#v err=%v", cfg.Goal, err)
+	}
+	t.Setenv("GROK_GOAL_CLASSIFIER_MAX", "garbage")
+	cfg, err = Load(path)
+	if err != nil || cfg.Goal.ClassifierMaxRuns != 6 {
+		t.Fatalf("file fallback=%#v err=%v", cfg.Goal, err)
+	}
+	t.Setenv("GROK_GOAL_CLASSIFIER_MAX", "0")
+	cfg, err = Load(path)
+	if err != nil || cfg.Goal.ClassifierMaxRuns != 1 {
+		t.Fatalf("floor=%#v err=%v", cfg.Goal, err)
+	}
+	t.Setenv("GROK_GOAL_CLASSIFIER_MAX", "")
+	if err := os.WriteFile(path, []byte("[goal]\nclassifier_max_runs = -1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("negative classifier_max_runs was accepted")
+	}
+}
+
 func TestValidateWebFetchConfig(t *testing.T) {
 	base := Config{
 		APIKey: "key", BaseURL: "https://api.example/v1", Model: "model", Backend: "responses",

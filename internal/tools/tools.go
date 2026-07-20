@@ -385,11 +385,18 @@ func (r *Registry) GoalSnapshot() GoalSnapshot {
 	return r.goal.Snapshot()
 }
 
-func (r *Registry) ResolveGoalVerification(verification GoalVerification) error {
+func (r *Registry) StartGoalVerification(maxRuns uint32) error {
 	if r.goal == nil {
 		return errors.New("goal store is unavailable")
 	}
-	return r.goal.ResolveVerification(verification.Achieved, verification.Summary)
+	return r.goal.StartVerification(maxRuns)
+}
+
+func (r *Registry) ResolveGoalVerification(verification GoalVerification, maxRuns uint32) error {
+	if r.goal == nil {
+		return errors.New("goal store is unavailable")
+	}
+	return r.goal.ResolveVerification(verification.Achieved, verification.Summary, maxRuns)
 }
 
 func (r *Registry) BackgroundTasks() []ProcessSnapshot {

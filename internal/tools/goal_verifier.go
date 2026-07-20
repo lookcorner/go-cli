@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -62,6 +63,7 @@ func (r *Registry) VerifyGoal(ctx context.Context, snapshot GoalSnapshot, count 
 	if refuted < count/2+1 {
 		return GoalVerification{Achieved: true, Summary: snapshot.Message}
 	}
+	sort.Strings(gaps)
 	summary := strings.Join(gaps, "; ")
 	if summary == "" {
 		summary = "independent verification could not confirm that every requirement is complete"

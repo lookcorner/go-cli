@@ -12,16 +12,20 @@ import (
 )
 
 type GoalSnapshot struct {
-	Objective string
-	Status    string
-	Message   string
+	Objective        string
+	Status           string
+	Message          string
+	VerificationRuns uint32
 }
 
 type GoalStore struct {
-	mu        sync.Mutex
-	objective string
-	status    string
-	message   string
+	mu                sync.Mutex
+	objective         string
+	status            string
+	message           string
+	verificationRuns  uint32
+	lastVerification  string
+	verificationStall int
 }
 
 func NewGoalStore() *GoalStore { return &GoalStore{} }
@@ -39,16 +43,32 @@ func (s *GoalStore) Begin(objective string) error {
 	s.objective = objective
 	s.status = "active"
 	s.message = ""
+	s.verificationRuns, s.lastVerification, s.verificationStall = 0, "", 0
 	return nil
 }
 
 func (s *GoalStore) Snapshot() GoalSnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return GoalSnapshot{Objective: s.objective, Status: s.status, Message: s.message}
+	return GoalSnapshot{Objective: s.objective, Status: s.status, Message: s.message, VerificationRuns: s.verificationRuns}
 }
 
-func (s *GoalStore) ResolveVerification(achieved bool, message string) error {
+func (s *GoalStore) StartVerification(maxRuns uint32) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.status != "verifying" {
+		return errors.New("goal is not awaiting verification")
+	}
+	maxRuns = max(uint32(1), maxRuns)
+	if s.verificationRuns >= maxRuns {
+		s.status = "paused"
+		return fmt.Errorf("goal verification paused after %d attempts", s.verificationRuns)
+	}
+	s.verificationRuns++
+	return nil
+}
+
+func (s *GoalStore) ResolveVerification(achieved bool, message string, maxRuns uint32) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.status != "verifying" {
@@ -57,6 +77,19 @@ func (s *GoalStore) ResolveVerification(achieved bool, message string) error {
 	s.message = strings.TrimSpace(message)
 	if achieved {
 		s.status = "completed"
+		return nil
+	}
+	if s.message == s.lastVerification {
+		s.verificationStall++
+	} else {
+		s.lastVerification, s.verificationStall = s.message, 1
+	}
+	if s.verificationRuns >= max(uint32(1), maxRuns) {
+		s.status = "paused"
+		s.message = fmt.Sprintf("verification run cap reached after %d attempts: %s", s.verificationRuns, s.message)
+	} else if s.verificationStall >= 2 {
+		s.status = "paused"
+		s.message = "verification found no progress across two attempts: " + s.message
 	} else {
 		s.status = "active"
 	}

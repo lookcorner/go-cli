@@ -61,6 +61,7 @@ hard_clear_age_turns = 10
 
 [goal]
 # verifier_count = 3 # Clamped to 1..5; GROK_GOAL_VERIFIER_N has precedence.
+# classifier_max_runs = 10 # Minimum 1; GROK_GOAL_CLASSIFIER_MAX has precedence.
 
 [skills]
 # paths = ["~/shared-skills", "/absolute/path/to/SKILL.md"]

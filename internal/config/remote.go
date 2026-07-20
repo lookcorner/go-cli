@@ -16,6 +16,7 @@ type RemoteSettings struct {
 	WebFetchEnabled                 *bool    `json:"web_fetch_enabled"`
 	AutoWakeEnabled                 *bool    `json:"auto_wake_enabled"`
 	GoalVerifierCount               *int     `json:"goal_verifier_count"`
+	GoalClassifierMaxRuns           *uint32  `json:"goal_classifier_max_runs"`
 	WebFetchProxy                   *string  `json:"web_fetch_proxy"`
 	WebFetchAllowedDomains          []string `json:"web_fetch_allowed_domains"`
 	CursorSkills                    *bool    `json:"cursor_skills_enabled"`
@@ -90,6 +91,9 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 	}
 	if !c.goalVerifierConfigured && remote.GoalVerifierCount != nil {
 		c.Goal.VerifierCount = normalizedGoalVerifierCount(*remote.GoalVerifierCount)
+	}
+	if !c.goalClassifierMaxConfigured && remote.GoalClassifierMaxRuns != nil {
+		c.Goal.ClassifierMaxRuns = max(uint32(1), *remote.GoalClassifierMaxRuns)
 	}
 	if !c.WebFetch.ProxyConfigured && remote.WebFetchProxy != nil {
 		c.WebFetch.ProxyEndpoint = *remote.WebFetchProxy
