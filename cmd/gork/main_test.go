@@ -108,6 +108,15 @@ func TestAppendGoalNextStep(t *testing.T) {
 	}
 }
 
+func TestAppendGoalReverifyReminder(t *testing.T) {
+	if got := appendGoalReverifyReminder("continue", ""); got != "continue" {
+		t.Fatalf("empty reminder changed prompt: %q", got)
+	}
+	if got := appendGoalReverifyReminder("continue", "re-verify now"); got != "continue\n\nre-verify now" {
+		t.Fatalf("reminder prompt=%q", got)
+	}
+}
+
 func TestSessionMCPRuntimeMergesAndRestoresConfiguration(t *testing.T) {
 	disabled := false
 	runtime := &sessionMCPRuntime{base: config.Config{MCPServers: map[string]config.MCPServerConfig{

@@ -537,7 +537,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			return nil
 		}
 		prompt = appendGoalPlanReminder(prompt, planPath)
-		return goalLoop(ctx, runner, registry, stdout, stderr, prompt, opts.previousID, opts.goalRuns, cfg.Goal.VerifierCount, cfg.Goal.ClassifierMaxRuns)
+		return goalLoop(ctx, runner, registry, stdout, stderr, prompt, opts.previousID, opts.goalRuns, cfg.Goal.VerifierCount, cfg.Goal.ClassifierMaxRuns, cfg.Goal.ReverifyAfter)
 	}
 	return runHeadless(ctx, runner, scheduledQueue, stdout, stderr, prompt, opts.previousID)
 }
@@ -1943,6 +1943,7 @@ func goalLoop(
 	maxRuns int,
 	verifierCount int,
 	classifierMaxRuns uint32,
+	reverifyAfter uint32,
 ) error {
 	prompt := objective
 	for run := 1; run <= maxRuns; run++ {
@@ -2002,6 +2003,11 @@ func goalLoop(
 			}
 			prompt = appendGoalPlanReminder(prompt, registry.GoalSnapshot().PlanPath)
 			prompt = appendGoalNextStep(prompt, registry.GoalNextStep())
+			reminder, err := registry.GoalReverifyReminder(reverifyAfter)
+			if err != nil {
+				return err
+			}
+			prompt = appendGoalReverifyReminder(prompt, reminder)
 			continue
 		case "completed":
 			fmt.Fprintln(stderr, "[gork] goal completed:", snapshot.Message)
@@ -2022,6 +2028,11 @@ func goalLoop(
 		}
 		prompt = appendGoalPlanReminder(continuation, snapshot.PlanPath)
 		prompt = appendGoalNextStep(prompt, registry.GoalNextStep())
+		reminder, err := registry.GoalReverifyReminder(reverifyAfter)
+		if err != nil {
+			return err
+		}
+		prompt = appendGoalReverifyReminder(prompt, reminder)
 	}
 	return fmt.Errorf("goal remains active after %d runs", maxRuns)
 }
@@ -2046,6 +2057,13 @@ func appendGoalNextStep(prompt, step string) string {
 		step = "Check your `todo_write` list for next steps."
 	}
 	return prompt + "\n\nGoal NOT complete - continue working. Next step:\n" + step
+}
+
+func appendGoalReverifyReminder(prompt, reminder string) string {
+	if reminder == "" {
+		return prompt
+	}
+	return prompt + "\n\n" + reminder
 }
 
 func startLSPServers(

@@ -14,14 +14,15 @@ import (
 )
 
 type GoalSnapshot struct {
-	Objective        string
-	Status           string
-	Message          string
-	VerificationRuns uint32
-	PlanPath         string
-	ClosingSummary   string
-	TokenBudget      int64
-	TokensUsed       int64
+	Objective         string
+	Status            string
+	Message           string
+	VerificationRuns  uint32
+	PlanPath          string
+	ClosingSummary    string
+	TokenBudget       int64
+	TokensUsed        int64
+	RoundsSinceVerify uint32
 }
 
 type GoalRoleModel struct {
@@ -47,6 +48,7 @@ type GoalStore struct {
 	status            string
 	message           string
 	verificationRuns  uint32
+	roundsSinceVerify uint32
 	lastVerification  string
 	stallVerification string
 	verificationStall int
@@ -90,7 +92,7 @@ func (s *GoalStore) BeginWithBudget(objective string, tokenBudget int64) error {
 	s.objective = objective
 	s.status = "active"
 	s.message = ""
-	s.verificationRuns, s.lastVerification, s.verificationStall = 0, "", 0
+	s.verificationRuns, s.roundsSinceVerify, s.lastVerification, s.verificationStall = 0, 0, "", 0
 	s.stallVerification = ""
 	s.resetStrategistLocked()
 	s.skeptic0SessionID = ""
@@ -111,6 +113,7 @@ func (s *GoalStore) Snapshot() GoalSnapshot {
 	return GoalSnapshot{
 		Objective: s.objective, Status: s.status, Message: s.message, VerificationRuns: s.verificationRuns,
 		PlanPath: s.plannerPlanPath, ClosingSummary: s.closingSummary, TokenBudget: s.tokenBudget, TokensUsed: s.tokensUsed,
+		RoundsSinceVerify: s.roundsSinceVerify,
 	}
 }
 
@@ -144,6 +147,7 @@ func (s *GoalStore) StartVerification(maxRuns uint32) error {
 		return errors.Join(err, s.saveLocked())
 	}
 	s.verificationRuns++
+	s.roundsSinceVerify = 0
 	return s.saveLocked()
 }
 

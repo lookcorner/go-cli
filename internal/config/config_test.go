@@ -320,6 +320,45 @@ func TestGoalClassifierMaxRunsConfigPrecedenceAndFloor(t *testing.T) {
 	}
 }
 
+func TestGoalReverifyAfterConfigPrecedenceAndFloor(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	path := filepath.Join(home, "config.toml")
+	if err := os.WriteFile(path, []byte("[goal]\nreverify_after = 6\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GROK_GOAL_REVERIFY_AFTER", "3")
+	cfg, err := Load(path)
+	if err != nil || cfg.Goal.ReverifyAfter != 3 {
+		t.Fatalf("environment precedence=%#v err=%v", cfg.Goal, err)
+	}
+	t.Setenv("GROK_GOAL_REVERIFY_AFTER", "garbage")
+	cfg, err = Load(path)
+	if err != nil || cfg.Goal.ReverifyAfter != 6 {
+		t.Fatalf("file fallback=%#v err=%v", cfg.Goal, err)
+	}
+	t.Setenv("GROK_GOAL_REVERIFY_AFTER", "0")
+	cfg, err = Load(path)
+	if err != nil || cfg.Goal.ReverifyAfter != 1 {
+		t.Fatalf("environment floor=%#v err=%v", cfg.Goal, err)
+	}
+	t.Setenv("GROK_GOAL_REVERIFY_AFTER", "")
+	if err := os.WriteFile(path, []byte("[goal]\nreverify_after = 0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(path)
+	if err != nil || cfg.Goal.ReverifyAfter != 1 {
+		t.Fatalf("file floor=%#v err=%v", cfg.Goal, err)
+	}
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(path)
+	if err != nil || cfg.Goal.ReverifyAfter != 8 {
+		t.Fatalf("default=%#v err=%v", cfg.Goal, err)
+	}
+}
+
 func TestGoalStrategistAndRoleModelConfig(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("GROK_HOME", home)

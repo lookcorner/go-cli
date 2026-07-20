@@ -40,6 +40,9 @@ func TestGoalStatePersistsResumesAndCompletes(t *testing.T) {
 	if err := first.ResolveGoalVerification(GoalVerification{Summary: "missing proof"}, 10); err != nil {
 		t.Fatal(err)
 	}
+	if reminder, err := first.GoalReverifyReminder(8); err != nil || reminder != "" {
+		t.Fatalf("reverify reminder=%q err=%v", reminder, err)
+	}
 	first.goal.recordSkeptic0Session("skeptic-child", false)
 	first.goal.skepticModelAssignments([]GoalRoleModel{{Model: "skeptic-model", AgentType: "explore"}}, 1, false)
 	strategyPath := filepath.Join(artifactDir, "goal-strategy.md")
@@ -62,7 +65,7 @@ func TestGoalStatePersistsResumesAndCompletes(t *testing.T) {
 	}
 	second := newPersistentGoalRegistry(t, root, artifactDir)
 	snapshot := second.GoalSnapshot()
-	if snapshot.Objective != "persist this objective" || snapshot.Status != "active" || snapshot.Message != "missing proof" || snapshot.VerificationRuns != 1 {
+	if snapshot.Objective != "persist this objective" || snapshot.Status != "active" || snapshot.Message != "missing proof" || snapshot.VerificationRuns != 1 || snapshot.RoundsSinceVerify != 1 {
 		t.Fatalf("restored snapshot=%#v", snapshot)
 	}
 	if second.goal.skeptic0SessionID != "skeptic-child" || second.goal.lastVerification != "missing proof" || len(second.goal.skepticModels) != 1 || second.goal.skepticModels[0].Model != "skeptic-model" {

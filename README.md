@@ -256,7 +256,11 @@ or TUI. The panel defaults to three skeptics. `[goal] verifier_count`, remote
 environment variable may select one through five. `[goal] classifier_max_runs`,
 remote `goal_classifier_max_runs`, and `GROK_GOAL_CLASSIFIER_MAX` set the
 verification-attempt cap (default 10, minimum 1). Repeating the same gaps twice
-pauses early instead of continuing a no-progress loop. Goal creation records a
+pauses early instead of continuing a no-progress loop. After a refutation,
+`[goal] reverify_after` or `GROK_GOAL_REVERIFY_AFTER` controls when continued
+worker rounds explicitly demand another completion claim (default 8, minimum
+1); at three times that threshold the reminder escalates. The counter persists
+with the Goal and resets whenever verification starts. Goal creation records a
 best-effort Git `HEAD` baseline. Each verification writes a bounded cumulative
 patch and ordered skeptic-details Markdown under the private session artifact
 directory; the prompt links that patch and lists tracked plus untracked paths

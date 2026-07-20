@@ -19,6 +19,7 @@ type durableGoalState struct {
 	Status            string          `json:"status"`
 	Message           string          `json:"message,omitempty"`
 	VerificationRuns  uint32          `json:"verification_runs,omitempty"`
+	RoundsSinceVerify uint32          `json:"rounds_since_verify,omitempty"`
 	LastVerification  string          `json:"last_verification,omitempty"`
 	StallVerification string          `json:"stall_verification,omitempty"`
 	VerificationStall int             `json:"verification_stall,omitempty"`
@@ -46,7 +47,7 @@ func (s *GoalStore) saveLocked() error {
 	}
 	data, err := json.Marshal(durableGoalState{
 		Version: goalStateVersion, Objective: s.objective, Status: s.status, Message: s.message,
-		VerificationRuns: s.verificationRuns, LastVerification: s.lastVerification,
+		VerificationRuns: s.verificationRuns, RoundsSinceVerify: s.roundsSinceVerify, LastVerification: s.lastVerification,
 		StallVerification: s.stallVerification, VerificationStall: s.verificationStall,
 		ConsecutiveReject: s.consecutiveReject, StrategistFiredAt: s.strategistFiredAt,
 		StrategistBonus: s.strategistBonus, StrategyPath: s.strategyPath, StrategyNote: s.strategyNote,
@@ -129,7 +130,7 @@ func (s *GoalStore) loadState() error {
 		state.Skeptic0SessionID = ""
 	}
 	s.objective, s.status, s.message = state.Objective, state.Status, state.Message
-	s.verificationRuns, s.lastVerification = state.VerificationRuns, state.LastVerification
+	s.verificationRuns, s.roundsSinceVerify, s.lastVerification = state.VerificationRuns, state.RoundsSinceVerify, state.LastVerification
 	s.stallVerification, s.verificationStall = state.StallVerification, state.VerificationStall
 	s.consecutiveReject, s.strategistFiredAt = state.ConsecutiveReject, state.StrategistFiredAt
 	s.strategistBonus, s.strategyPath, s.strategyNote = state.StrategistBonus, state.StrategyPath, state.StrategyNote

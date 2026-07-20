@@ -105,6 +105,7 @@ type AskUserQuestionConfig struct {
 type GoalConfig struct {
 	VerifierCount       int             `json:"verifier_count"`
 	ClassifierMaxRuns   uint32          `json:"classifier_max_runs"`
+	ReverifyAfter       uint32          `json:"reverify_after"`
 	PlannerEnabled      bool            `json:"planner_enabled,omitempty"`
 	SummaryEnabled      bool            `json:"summary_enabled,omitempty"`
 	StrategistEvery     uint32          `json:"strategist_every,omitempty"`
@@ -356,6 +357,7 @@ type fileAskUserQuestionConfig struct {
 type fileGoalConfig struct {
 	VerifierCount       *int            `json:"verifier_count,omitempty" toml:"verifier_count"`
 	ClassifierMaxRuns   *uint32         `json:"classifier_max_runs,omitempty" toml:"classifier_max_runs"`
+	ReverifyAfter       *uint32         `json:"reverify_after,omitempty" toml:"reverify_after"`
 	PlannerEnabled      *bool           `json:"planner_enabled,omitempty" toml:"planner_enabled"`
 	SummaryEnabled      *bool           `json:"summary_enabled,omitempty" toml:"summary_enabled"`
 	StrategistEvery     *uint32         `json:"strategist_every,omitempty" toml:"strategist_every"`
@@ -418,7 +420,7 @@ func Load(path string) (Config, error) {
 		FolderTrustEnabled:          true,
 		AutoWakeEnabled:             true,
 		AskUserQuestion:             AskUserQuestionConfig{TimeoutEnabled: true, TimeoutSeconds: 30 * 60},
-		Goal:                        GoalConfig{VerifierCount: 3, ClassifierMaxRuns: 10},
+		Goal:                        GoalConfig{VerifierCount: 3, ClassifierMaxRuns: 10, ReverifyAfter: 8},
 		Pruning:                     PruningConfig{Enabled: true, KeepLastNTurns: 3, SoftTrimThreshold: 4000, SoftTrimHead: 1500, SoftTrimTail: 1500, HardClearAgeTurns: 10},
 	}
 	if path == "" {
@@ -548,6 +550,9 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	if disk.Goal.ClassifierMaxRuns != nil {
 		cfg.Goal.ClassifierMaxRuns = max(uint32(1), *disk.Goal.ClassifierMaxRuns)
 		cfg.goalClassifierMaxConfigured = true
+	}
+	if disk.Goal.ReverifyAfter != nil {
+		cfg.Goal.ReverifyAfter = max(uint32(1), *disk.Goal.ReverifyAfter)
 	}
 	if disk.Goal.PlannerEnabled != nil {
 		cfg.Goal.PlannerEnabled = *disk.Goal.PlannerEnabled
@@ -880,6 +885,11 @@ func applyEnv(cfg *Config) {
 		if count, err := strconv.ParseUint(value, 10, 32); err == nil {
 			cfg.Goal.ClassifierMaxRuns = max(uint32(1), uint32(count))
 			cfg.goalClassifierMaxConfigured = true
+		}
+	}
+	if value := strings.TrimSpace(os.Getenv("GROK_GOAL_REVERIFY_AFTER")); value != "" {
+		if count, err := strconv.ParseUint(value, 10, 32); err == nil {
+			cfg.Goal.ReverifyAfter = max(uint32(1), uint32(count))
 		}
 	}
 	if value, ok := envBool("GROK_GOAL_PLANNER"); ok {
