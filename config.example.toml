@@ -31,6 +31,14 @@ enabled = true
 [memory.session]
 save_on_end = true
 
+[memory.index]
+max_chunk_chars = 1600
+chunk_overlap_chars = 320
+
+[memory.search]
+max_results = 6
+min_score = 0.35
+
 [compaction.memory_flush]
 enabled = true
 soft_threshold_tokens = 4000

@@ -63,6 +63,14 @@ enabled = false
 [memory.session]
 save_on_end = false
 
+[memory.index]
+max_chunk_chars = 1200
+chunk_overlap_chars = 200
+
+[memory.search]
+max_results = 4
+min_score = 0.5
+
 [mcp_servers.fixture]
 command = "fixture-mcp"
 args = ["--stdio"]
@@ -133,7 +141,7 @@ pattern = ".env*"
 	if cfg.ContextWindow != 200000 || cfg.AutoCompactThresholdPercent != 80 {
 		t.Fatalf("unexpected compaction config: window=%d threshold=%d", cfg.ContextWindow, cfg.AutoCompactThresholdPercent)
 	}
-	if !cfg.Memory.Enabled || cfg.Memory.InitialInjection || cfg.Memory.SaveOnEnd || !cfg.Memory.Flush.Enabled || cfg.Memory.Flush.SoftThresholdTokens != 3000 || cfg.Memory.Flush.Model != "memory-model" || cfg.Memory.Flush.MaxWriteChars != 7000 || cfg.Memory.Flush.IdleTimeoutSeconds == nil || *cfg.Memory.Flush.IdleTimeoutSeconds != 300 {
+	if !cfg.Memory.Enabled || cfg.Memory.InitialInjection || cfg.Memory.SaveOnEnd || !cfg.Memory.Flush.Enabled || cfg.Memory.Flush.SoftThresholdTokens != 3000 || cfg.Memory.Flush.Model != "memory-model" || cfg.Memory.Flush.MaxWriteChars != 7000 || cfg.Memory.Flush.IdleTimeoutSeconds == nil || *cfg.Memory.Flush.IdleTimeoutSeconds != 300 || cfg.Memory.Index.MaxChunkChars != 1200 || cfg.Memory.Index.ChunkOverlapChars != 200 || cfg.Memory.Search.MaxResults != 4 || cfg.Memory.Search.MinScore != 0.5 {
 		t.Fatalf("unexpected memory config: %#v", cfg.Memory)
 	}
 	if slugs := strings.Join(cfg.ModelSlugs(), ","); slugs != "local,search" {

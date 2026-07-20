@@ -358,6 +358,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return err
 	}
 	registry := tools.NewRegistry(ws, approver)
+	if err := tools.RegisterMemoryTools(registry, memoryStore, cfg.Memory); err != nil {
+		_ = registry.Close()
+		return err
+	}
 	registry.ConfigureGoalRoles(goalRoleConfig(cfg, opts.goal))
 	registry.ConfigureUserQuestions(cfg.AskUserQuestion.TimeoutEnabled, time.Duration(cfg.AskUserQuestion.TimeoutSeconds)*time.Second)
 	artifactDir, err := session.ArtifactDir(logger.Path())
@@ -1435,6 +1439,11 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		}
 		memoryStore, err := openMemoryStore(sessionCfg, ws.Root(), logger.ID())
 		if err != nil {
+			_ = logger.Close()
+			_ = registry.Close()
+			return nil, nil, err
+		}
+		if err := tools.RegisterMemoryTools(registry, memoryStore, sessionCfg.Memory); err != nil {
 			_ = logger.Close()
 			_ = registry.Close()
 			return nil, nil, err

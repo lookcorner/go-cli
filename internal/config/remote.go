@@ -18,6 +18,8 @@ type RemoteSettings struct {
 	TwoPassCompactionEnabled        *bool          `json:"two_pass_compaction_enabled"`
 	MemoryEnabled                   *bool          `json:"memory_enabled"`
 	MemoryInitialInjectionEnabled   *bool          `json:"memory_initial_injection_enabled"`
+	MemorySearchMaxResults          *int           `json:"memory_search_max_results"`
+	MemorySearchMinScore            *float64       `json:"memory_search_min_score"`
 	FlushEnabled                    *bool          `json:"flush_enabled"`
 	FlushSoftThresholdTokens        *int           `json:"flush_soft_threshold_tokens"`
 	FlushIdleTimeoutSeconds         *uint64        `json:"flush_idle_timeout_secs"`
@@ -109,6 +111,14 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 	}
 	if !c.memoryInjectionConfigured && remote.MemoryInitialInjectionEnabled != nil {
 		c.Memory.InitialInjection = *remote.MemoryInitialInjectionEnabled
+	}
+	if !c.memorySearchConfigured {
+		if remote.MemorySearchMaxResults != nil {
+			c.Memory.Search.MaxResults = max(1, *remote.MemorySearchMaxResults)
+		}
+		if remote.MemorySearchMinScore != nil {
+			c.Memory.Search.MinScore = min(1, max(0, *remote.MemorySearchMinScore))
+		}
 	}
 	if !c.memoryFlushConfigured {
 		if remote.FlushEnabled != nil {

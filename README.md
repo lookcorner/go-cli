@@ -204,7 +204,10 @@ remained idle, while session shutdown cancels pending timers. By default,
 `[memory.session] save_on_end = true` also records a zero-latency metadata
 summary for sessions with at least three real prompts and 50 prompt bytes;
 synthetic continuation prompts are excluded. This file-backed path
-intentionally remains useful without the still-pending semantic/vector index.
+also exposes `memory_search` and `memory_get` to the model. Search chunks
+Markdown by headings and bounded overlap, ranks token matches, and decays old
+session notes while treating global and workspace notes as evergreen. It is a
+deterministic text-only backend; semantic/vector retrieval remains pending.
 
 The default model transport is the Responses API. For OpenAI-compatible
 providers that only expose Chat Completions, use `--backend chat_completions`

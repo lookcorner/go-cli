@@ -70,6 +70,7 @@ type Config struct {
 	memoryConfigured                bool
 	memoryInjectionConfigured       bool
 	memoryFlushConfigured           bool
+	memorySearchConfigured          bool
 	goalVerifierConfigured          bool
 	goalClassifierMaxConfigured     bool
 	goalPlannerConfigured           bool
@@ -404,6 +405,18 @@ type fileMemoryConfig struct {
 	Enabled          *bool                             `json:"enabled,omitempty" toml:"enabled"`
 	InitialInjection *fileMemoryInitialInjectionConfig `json:"initial_injection,omitempty" toml:"initial_injection"`
 	Session          *fileMemorySessionConfig          `json:"session,omitempty" toml:"session"`
+	Index            *fileMemoryIndexConfig            `json:"index,omitempty" toml:"index"`
+	Search           *fileMemorySearchConfig           `json:"search,omitempty" toml:"search"`
+}
+
+type fileMemoryIndexConfig struct {
+	MaxChunkChars     *int `json:"max_chunk_chars,omitempty" toml:"max_chunk_chars"`
+	ChunkOverlapChars *int `json:"chunk_overlap_chars,omitempty" toml:"chunk_overlap_chars"`
+}
+
+type fileMemorySearchConfig struct {
+	MaxResults *int     `json:"max_results,omitempty" toml:"max_results"`
+	MinScore   *float64 `json:"min_score,omitempty" toml:"min_score"`
 }
 
 type fileMemoryInitialInjectionConfig struct {
@@ -882,6 +895,23 @@ func applyMemoryConfig(cfg *Config, source *fileMemoryConfig, flush *fileMemoryF
 		}
 		if source.Session != nil && source.Session.SaveOnEnd != nil {
 			cfg.Memory.SaveOnEnd = *source.Session.SaveOnEnd
+		}
+		if source.Index != nil {
+			if source.Index.MaxChunkChars != nil {
+				cfg.Memory.Index.MaxChunkChars = *source.Index.MaxChunkChars
+			}
+			if source.Index.ChunkOverlapChars != nil {
+				cfg.Memory.Index.ChunkOverlapChars = *source.Index.ChunkOverlapChars
+			}
+		}
+		if source.Search != nil {
+			cfg.memorySearchConfigured = true
+			if source.Search.MaxResults != nil {
+				cfg.Memory.Search.MaxResults = *source.Search.MaxResults
+			}
+			if source.Search.MinScore != nil {
+				cfg.Memory.Search.MinScore = *source.Search.MinScore
+			}
 		}
 	}
 	if flush != nil {
@@ -1549,6 +1579,12 @@ func (c Config) Validate() error {
 	}
 	if timeout := c.Memory.Flush.IdleTimeoutSeconds; timeout != nil && *timeout > uint64((1<<63-1)/int64(time.Second)) {
 		return errors.New("memory flush idle_timeout_secs is too large")
+	}
+	if c.Memory.Enabled && (c.Memory.Index.MaxChunkChars < 1 || c.Memory.Index.ChunkOverlapChars < 0 || c.Memory.Index.ChunkOverlapChars >= c.Memory.Index.MaxChunkChars) {
+		return errors.New("memory index chunk sizes are invalid")
+	}
+	if c.Memory.Enabled && (c.Memory.Search.MaxResults < 1 || c.Memory.Search.MinScore < 0 || c.Memory.Search.MinScore > 1) {
+		return errors.New("memory search max_results must be positive and min_score must be between 0 and 1")
 	}
 	if c.WebFetch.ProxyConfigured {
 		proxy, err := url.Parse(c.WebFetch.ProxyEndpoint)

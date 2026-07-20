@@ -204,8 +204,9 @@ func TestMemoryDefaultsRemoteAndEnvironmentPrecedence(t *testing.T) {
 	cfg.ApplyRemoteSettings(&RemoteSettings{
 		MemoryEnabled: boolPointer(true), MemoryInitialInjectionEnabled: boolPointer(false),
 		FlushEnabled: boolPointer(false), FlushSoftThresholdTokens: intPointer(2000), FlushIdleTimeoutSeconds: uint64Pointer(120),
+		MemorySearchMaxResults: intPointer(9), MemorySearchMinScore: float64Pointer(0.6),
 	})
-	if !cfg.Memory.Enabled || cfg.Memory.InitialInjection || cfg.Memory.Flush.Enabled || cfg.Memory.Flush.SoftThresholdTokens != 2000 || cfg.Memory.Flush.IdleTimeoutSeconds == nil || *cfg.Memory.Flush.IdleTimeoutSeconds != 120 {
+	if !cfg.Memory.Enabled || cfg.Memory.InitialInjection || cfg.Memory.Flush.Enabled || cfg.Memory.Flush.SoftThresholdTokens != 2000 || cfg.Memory.Flush.IdleTimeoutSeconds == nil || *cfg.Memory.Flush.IdleTimeoutSeconds != 120 || cfg.Memory.Search.MaxResults != 9 || cfg.Memory.Search.MinScore != 0.6 {
 		t.Fatalf("remote=%#v", cfg.Memory)
 	}
 	path := filepath.Join(home, "config.toml")
@@ -237,6 +238,8 @@ func TestMemoryDefaultsRemoteAndEnvironmentPrecedence(t *testing.T) {
 		t.Fatal("CLI memory override was not applied")
 	}
 }
+
+func float64Pointer(value float64) *float64 { return &value }
 
 func TestGoalVerifierCountRemoteAndLocalPrecedence(t *testing.T) {
 	home := t.TempDir()

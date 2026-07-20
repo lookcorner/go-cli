@@ -1,10 +1,22 @@
 package memory
 
 type Config struct {
-	Enabled          bool        `json:"enabled"`
-	InitialInjection bool        `json:"initial_injection"`
-	SaveOnEnd        bool        `json:"save_on_end"`
-	Flush            FlushConfig `json:"flush"`
+	Enabled          bool         `json:"enabled"`
+	InitialInjection bool         `json:"initial_injection"`
+	SaveOnEnd        bool         `json:"save_on_end"`
+	Flush            FlushConfig  `json:"flush"`
+	Index            IndexConfig  `json:"index"`
+	Search           SearchConfig `json:"search"`
+}
+
+type IndexConfig struct {
+	MaxChunkChars     int `json:"max_chunk_chars"`
+	ChunkOverlapChars int `json:"chunk_overlap_chars"`
+}
+
+type SearchConfig struct {
+	MaxResults int     `json:"max_results"`
+	MinScore   float64 `json:"min_score"`
 }
 
 type FlushConfig struct {
@@ -20,5 +32,7 @@ func DefaultConfig() Config {
 		InitialInjection: true,
 		SaveOnEnd:        true,
 		Flush:            FlushConfig{Enabled: true, SoftThresholdTokens: 4000, MaxWriteChars: 8000},
+		Index:            IndexConfig{MaxChunkChars: 1600, ChunkOverlapChars: 320},
+		Search:           SearchConfig{MaxResults: 6, MinScore: 0.35},
 	}
 }
