@@ -43,12 +43,26 @@ func firstGoalPlanStep(path string) string {
 		return ""
 	}
 	step = capGoalStep(step)
-	return strings.NewReplacer(
-		"</system-reminder>", "<\u200b/system-reminder>",
-		"<system-reminder>", "<\u200bsystem-reminder>",
-		"</goal-state>", "<\u200b/goal-state>",
-		"<goal-state>", "<\u200bgoal-state>",
-	).Replace(step)
+	return sanitizeGoalDirective(step, 0)
+}
+
+var goalDirectiveSanitizer = strings.NewReplacer(
+	"</system-reminder>", "<\u200b/system-reminder>",
+	"<system-reminder>", "<\u200bsystem-reminder>",
+	"</goal-state>", "<\u200b/goal-state>",
+	"<goal-state>", "<\u200bgoal-state>",
+	"{", "{\u200b", "}", "\u200b}",
+)
+
+func sanitizeGoalDirective(value string, maxChars int) string {
+	value = strings.TrimSpace(value)
+	if maxChars > 0 {
+		runes := []rune(value)
+		if len(runes) > maxChars {
+			value = string(runes[:maxChars]) + "\u2026"
+		}
+	}
+	return goalDirectiveSanitizer.Replace(value)
 }
 
 func firstUncheckedGoalItem(body string) string {

@@ -250,7 +250,10 @@ starts three independent, read-only `general-purpose` skeptics. Two refutations
 return the goal to the active loop with their concrete gaps; malformed verdicts
 and individual skeptic failures count as refutations, while an unavailable
 verifier backend fails open so an internal harness outage cannot strand the
-user. Goal mode is explicit and cannot be combined with the interactive REPL
+user. The newest rejection gaps are persisted and repeated in every continuation
+until a later achieved verdict clears them. Before prompt insertion they are
+limited to 4,000 characters and reminder tags plus placeholder braces are
+neutralized. Goal mode is explicit and cannot be combined with the interactive REPL
 or TUI. The panel defaults to three skeptics. `[goal] verifier_count`, remote
 `goal_verifier_count`, and the highest-precedence `GROK_GOAL_VERIFIER_N`
 environment variable may select one through five. `[goal] classifier_max_runs`,

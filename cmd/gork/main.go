@@ -1999,7 +1999,7 @@ func goalLoop(
 				fmt.Fprintf(stderr, "[gork] Goal token budget reached (%d of %d tokens) - goal stopped.\n", current.TokensUsed, current.TokenBudget)
 				return nil
 			}
-			prompt = "Independent goal verification found remaining work: " + verification.Summary + "\nContinue working toward the full objective. Do not claim completion again until the gaps are resolved and verified."
+			prompt = "Continue working toward the full objective. Do not claim completion again until every verifier gap is resolved."
 			if strategy := registry.RunGoalStrategist(ctx); strategy != "" {
 				fmt.Fprintln(stderr, "[gork] goal strategist produced a structural recommendation")
 				prompt += "\n\n" + strategy
@@ -2009,6 +2009,7 @@ func goalLoop(
 				return nil
 			}
 			prompt = appendGoalPlanReminder(prompt, registry.GoalSnapshot().PlanPath)
+			prompt = appendGoalVerificationGaps(prompt, registry.GoalVerificationGaps())
 			prompt = appendGoalNextStep(prompt, registry.GoalNextStep())
 			reminder, err := registry.GoalReverifyReminder(reverifyAfter)
 			if err != nil {
@@ -2034,6 +2035,7 @@ func goalLoop(
 			continuation = "Your previous response ended prematurely while actionable work remains. Continue now: execute the pending tasks, inspect results, and keep working until the goal is independently verifiable. Do not hand work back to the user or stop merely because an agent, command, review, or follow-up is pending."
 		}
 		prompt = appendGoalPlanReminder(continuation, snapshot.PlanPath)
+		prompt = appendGoalVerificationGaps(prompt, registry.GoalVerificationGaps())
 		prompt = appendGoalNextStep(prompt, registry.GoalNextStep())
 		reminder, err := registry.GoalReverifyReminder(reverifyAfter)
 		if err != nil {
@@ -2064,6 +2066,13 @@ func appendGoalNextStep(prompt, step string) string {
 		step = "Check your `todo_write` list for next steps."
 	}
 	return prompt + "\n\nGoal NOT complete - continue working. Next step:\n" + step
+}
+
+func appendGoalVerificationGaps(prompt, gaps string) string {
+	if gaps == "" {
+		return prompt
+	}
+	return prompt + "\n\nVerification REJECTED your last `update_goal(completed: true)` claim. Fix every gap the skeptic panel flagged below - these take priority - before claiming completion again:\n" + gaps
 }
 
 func appendGoalReverifyReminder(prompt, reminder string) string {

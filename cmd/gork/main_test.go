@@ -108,6 +108,16 @@ func TestAppendGoalNextStep(t *testing.T) {
 	}
 }
 
+func TestAppendGoalVerificationGaps(t *testing.T) {
+	if got := appendGoalVerificationGaps("continue", ""); got != "continue" {
+		t.Fatalf("empty gaps changed prompt: %q", got)
+	}
+	got := appendGoalVerificationGaps("continue", "- test still fails")
+	if !strings.Contains(got, "Verification REJECTED") || !strings.Contains(got, "- test still fails") {
+		t.Fatalf("gaps prompt=%q", got)
+	}
+}
+
 func TestAppendGoalReverifyReminder(t *testing.T) {
 	if got := appendGoalReverifyReminder("continue", ""); got != "continue" {
 		t.Fatalf("empty reminder changed prompt: %q", got)
