@@ -126,6 +126,115 @@ func TestBridgeQuestionAccepted(t *testing.T) {
 	}
 }
 
+func TestBridgePlanModeReviewRequestsChanges(t *testing.T) {
+	bridge := NewBridge(context.Background(), tools.PermissionAuto)
+	defer bridge.Close()
+	m := &model{ctx: context.Background(), runner: &agent.Runner{}, bridge: bridge, width: 72, height: 18, status: "ready"}
+	bridge.PlanModeEntered(tools.PlanModeEvent{})
+	updated, _ := m.Update(<-bridge.events)
+	m = updated.(*model)
+	if !m.planMode || !strings.Contains(m.View().Content, " PLAN ") {
+		t.Fatalf("plan header=%q", m.View().Content)
+	}
+
+	result := make(chan tools.PlanModeDecision, 1)
+	go func() {
+		decision, _ := bridge.ApprovePlanModeExit(context.Background(), tools.PlanModeEvent{PlanContent: "# Plan\n\n1. Extract core"})
+		result <- decision
+	}()
+	updated, _ = m.Update(<-bridge.events)
+	m = updated.(*model)
+	view := m.View().Content
+	if !strings.Contains(view, "Extract core") || !strings.Contains(view, "Plan review") {
+		t.Fatalf("review view=%q", view)
+	}
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: 'r', Text: "r"}))
+	m = updated.(*model)
+	for _, char := range "split I/O first" {
+		updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: char, Text: string(char)}))
+		m = updated.(*model)
+	}
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	select {
+	case decision := <-result:
+		if decision.Outcome != "cancelled" || decision.Feedback != "split I/O first" {
+			t.Fatalf("decision=%#v", decision)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("plan review did not complete")
+	}
+	if !m.planMode || m.planReview != nil {
+		t.Fatalf("planMode=%v review=%#v", m.planMode, m.planReview)
+	}
+	bridge.PlanModeExited(tools.PlanModeEvent{})
+	updated, _ = m.Update(<-bridge.events)
+	m = updated.(*model)
+	if m.planMode || strings.Contains(m.View().Content, " PLAN ") {
+		t.Fatalf("default header=%q", m.View().Content)
+	}
+}
+
+func TestPlanReviewTerminalOutcomes(t *testing.T) {
+	tests := []struct {
+		key     tea.Key
+		outcome string
+	}{
+		{tea.Key{Code: 'y', Text: "y"}, "approved"},
+		{tea.Key{Code: 'a', Text: "a"}, "abandoned"},
+		{tea.Key{Code: tea.KeyEscape}, "cancelled"},
+	}
+	for _, test := range tests {
+		t.Run(test.outcome, func(t *testing.T) {
+			reply := make(chan tools.PlanModeDecision, 1)
+			m := &model{planMode: true, planReview: &planReviewState{event: planReviewEvent{reply: reply}}}
+			updated, _ := m.Update(tea.KeyPressMsg(test.key))
+			m = updated.(*model)
+			if decision := <-reply; decision.Outcome != test.outcome || m.planReview != nil {
+				t.Fatalf("decision=%#v review=%#v", decision, m.planReview)
+			}
+		})
+	}
+}
+
+func TestShiftTabTogglesPersistedPlanMode(t *testing.T) {
+	root := t.TempDir()
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	if err := registry.ConfigurePlanMode(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	m := &model{runner: &agent.Runner{Tools: registry}, width: 60, height: 16, status: "ready"}
+	key := tea.KeyPressMsg(tea.Key{Code: tea.KeyTab, Mod: tea.ModShift})
+	updated, _ := m.Update(key)
+	m = updated.(*model)
+	if !m.planMode || !registry.PlanModeActive() || !strings.Contains(m.View().Content, " PLAN ") {
+		t.Fatalf("enabled planMode=%v active=%v view=%q", m.planMode, registry.PlanModeActive(), m.View().Content)
+	}
+	updated, _ = m.Update(key)
+	m = updated.(*model)
+	if m.planMode || registry.PlanModeActive() {
+		t.Fatalf("disabled planMode=%v active=%v", m.planMode, registry.PlanModeActive())
+	}
+}
+
+func TestPlanModeFooterFitsNarrowViewport(t *testing.T) {
+	m := &model{
+		planMode: true, width: 20, height: 10, status: "review implementation plan",
+		planReview: &planReviewState{event: planReviewEvent{event: tools.PlanModeEvent{PlanContent: "plan"}, reply: make(chan tools.PlanModeDecision, 1)}},
+	}
+	lines := strings.Split(m.View().Content, "\n")
+	for _, line := range lines[len(lines)-2:] {
+		if width := len([]rune(stripUIANSI(line))); width > 20 {
+			t.Fatalf("footer width=%d line=%q", width, line)
+		}
+	}
+}
+
 func TestBridgeSerializesBlockingInteractions(t *testing.T) {
 	bridge := NewBridge(context.Background(), tools.PermissionPrompt)
 	defer bridge.Close()

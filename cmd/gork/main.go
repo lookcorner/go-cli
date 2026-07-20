@@ -1200,11 +1200,19 @@ func (o *sessionProcessObserver) PlanModeEntered(event tools.PlanModeEvent) {
 	if o.server != nil {
 		o.server.NotifyPlanModeChanged(o.sessionID, "plan")
 	}
+	if observer, ok := o.planApprover.(interface{ PlanModeEntered(tools.PlanModeEvent) }); ok {
+		observer.PlanModeEntered(event)
+	}
 }
 
 func (o *sessionProcessObserver) ApprovePlanModeExit(ctx context.Context, event tools.PlanModeEvent) (tools.PlanModeDecision, error) {
 	if o.server != nil {
 		return o.server.RequestPlanModeExit(ctx, o.sessionID, event)
+	}
+	if reviewer, ok := o.planApprover.(interface {
+		ApprovePlanModeExit(context.Context, tools.PlanModeEvent) (tools.PlanModeDecision, error)
+	}); ok {
+		return reviewer.ApprovePlanModeExit(ctx, event)
 	}
 	if o.planApprover != nil {
 		if err := o.planApprover.Approve(ctx, "exit plan mode", event.PlanContent); err != nil {
@@ -1220,6 +1228,9 @@ func (o *sessionProcessObserver) PlanModeExited(event tools.PlanModeEvent) {
 	}
 	if o.server != nil {
 		o.server.NotifyPlanModeChanged(o.sessionID, "default")
+	}
+	if observer, ok := o.planApprover.(interface{ PlanModeExited(tools.PlanModeEvent) }); ok {
+		observer.PlanModeExited(event)
 	}
 }
 

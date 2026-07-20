@@ -805,3 +805,27 @@ func TestGoalResumeDoesNotRequireNewPrompt(t *testing.T) {
 		t.Fatalf("resume err=%v", err)
 	}
 }
+
+type planUIApprover struct {
+	entered, exited int
+	decision        tools.PlanModeDecision
+}
+
+func (*planUIApprover) Approve(context.Context, string, string) error { return nil }
+func (p *planUIApprover) PlanModeEntered(tools.PlanModeEvent)         { p.entered++ }
+func (p *planUIApprover) PlanModeExited(tools.PlanModeEvent)          { p.exited++ }
+func (p *planUIApprover) ApprovePlanModeExit(context.Context, tools.PlanModeEvent) (tools.PlanModeDecision, error) {
+	return p.decision, nil
+}
+
+func TestSessionProcessObserverDelegatesDedicatedPlanUI(t *testing.T) {
+	reviewer := &planUIApprover{decision: tools.PlanModeDecision{Outcome: "cancelled", Feedback: "add rollback"}}
+	observer := &sessionProcessObserver{planApprover: reviewer}
+	event := tools.PlanModeEvent{PlanContent: "# Plan"}
+	observer.PlanModeEntered(event)
+	decision, err := observer.ApprovePlanModeExit(context.Background(), event)
+	observer.PlanModeExited(event)
+	if err != nil || decision != reviewer.decision || reviewer.entered != 1 || reviewer.exited != 1 {
+		t.Fatalf("decision=%#v entered=%d exited=%d err=%v", decision, reviewer.entered, reviewer.exited, err)
+	}
+}

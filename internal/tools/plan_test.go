@@ -122,6 +122,9 @@ func TestRegistryEnforcesPlanModeWriteGate(t *testing.T) {
 	if _, err := registry.Execute(context.Background(), "enter_plan_mode", json.RawMessage(`{}`)); err != nil {
 		t.Fatalf("enter plan mode: %v", err)
 	}
+	if !registry.PlanModeActive() {
+		t.Fatal("registry did not expose active plan mode")
+	}
 	if _, err := registry.Execute(context.Background(), "write_file", json.RawMessage(`{"path":"main.go","content":"package main"}`)); err == nil {
 		t.Fatal("registry allowed an ordinary workspace edit in plan mode")
 	}

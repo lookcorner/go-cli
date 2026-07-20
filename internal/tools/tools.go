@@ -504,6 +504,10 @@ func (r *Registry) SetPlanMode(active bool) error {
 	return r.plan.SetActive(active)
 }
 
+func (r *Registry) PlanModeActive() bool {
+	return r != nil && r.plan != nil && r.plan.Active()
+}
+
 func (r *Registry) ModeInstructions() string {
 	if r == nil || r.plan == nil {
 		return ""

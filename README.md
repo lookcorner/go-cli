@@ -224,9 +224,11 @@ The TUI streams model output as it arrives, renders headings, emphasis, links,
 lists, quotes, and inline or fenced code, and keeps a scrollable transcript.
 It supports Unicode input, displays tool status, cancels the current turn with
 Ctrl-C, and presents write/Shell/MCP approval prompts inside the alternate
-screen. Page Up/Page Down scroll, Ctrl-Q exits, and an optional prompt argument
-starts the first turn immediately. When providers report usage, the status line
-shows input tokens, context window and percentage.
+screen. Shift-Tab toggles persisted Plan mode and shows a visible mode badge.
+Plan exits open a dedicated full-plan review with approve, revision-feedback,
+and abandon outcomes. Page Up/Page Down scroll, Ctrl-Q exits, and an optional
+prompt argument starts the first turn immediately. When providers report usage,
+the status line shows input tokens, context window and percentage.
 
 Use `--goal` for bounded autonomous continuation. The runtime keeps starting
 new turns until the model calls `update_goal` with `completed=true` or a genuine

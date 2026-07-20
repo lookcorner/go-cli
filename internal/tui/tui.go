@@ -32,6 +32,11 @@ type turnDoneEvent struct {
 }
 type compactDoneEvent struct{ err error }
 type scheduledFiredEvent struct{ event tools.ScheduledTaskFired }
+type planModeEvent struct{ active bool }
+type planReviewEvent struct {
+	event tools.PlanModeEvent
+	reply chan tools.PlanModeDecision
+}
 
 type Bridge struct {
 	ctx           context.Context
@@ -54,6 +59,37 @@ func (b *Bridge) ScheduledTaskRemoved(string)                     {}
 func (b *Bridge) ScheduledTaskFired(event tools.ScheduledTaskFired) {
 	select {
 	case b.events <- scheduledFiredEvent{event: event}:
+	case <-b.ctx.Done():
+	}
+}
+
+func (b *Bridge) PlanModeEntered(tools.PlanModeEvent) { b.send(planModeEvent{active: true}) }
+func (b *Bridge) PlanModeExited(tools.PlanModeEvent)  { b.send(planModeEvent{}) }
+
+func (b *Bridge) ApprovePlanModeExit(ctx context.Context, event tools.PlanModeEvent) (tools.PlanModeDecision, error) {
+	b.interactionMu.Lock()
+	defer b.interactionMu.Unlock()
+	reply := make(chan tools.PlanModeDecision, 1)
+	select {
+	case b.events <- planReviewEvent{event: event, reply: reply}:
+	case <-ctx.Done():
+		return tools.PlanModeDecision{}, ctx.Err()
+	case <-b.ctx.Done():
+		return tools.PlanModeDecision{}, b.ctx.Err()
+	}
+	select {
+	case decision := <-reply:
+		return decision, nil
+	case <-ctx.Done():
+		return tools.PlanModeDecision{}, ctx.Err()
+	case <-b.ctx.Done():
+		return tools.PlanModeDecision{}, b.ctx.Err()
+	}
+}
+
+func (b *Bridge) send(message tea.Msg) {
+	select {
+	case b.events <- message:
 	case <-b.ctx.Done():
 	}
 }
@@ -163,10 +199,17 @@ type model struct {
 	status     string
 	approval   *approvalEvent
 	question   *questionState
+	planMode   bool
+	planReview *planReviewState
 	turnCancel context.CancelFunc
 	initial    string
 	scheduled  []tools.ScheduledTaskFired
 	activeTask string
+}
+
+type planReviewState struct {
+	event   planReviewEvent
+	editing bool
 }
 
 type questionState struct {
@@ -185,6 +228,9 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		ctx: ctx, runner: runner, bridge: bridge, workspace: workspace,
 		modelName: modelName, previousID: previousID, width: 80, height: 24,
 		status: "ready", initial: strings.TrimSpace(initialPrompt),
+	}
+	if runner.Tools != nil {
+		m.planMode = runner.Tools.PlanModeActive()
 	}
 	m.transcript.WriteString(strings.TrimSpace(initialTranscript))
 	program := tea.NewProgram(m, tea.WithContext(ctx))
@@ -233,6 +279,18 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.input = nil
 		m.status = fmt.Sprintf("question 1/%d", len(msg.request.Questions))
+		return m, waitForBridge(m.bridge)
+	case planModeEvent:
+		m.planMode = msg.active
+		if !msg.active {
+			m.planReview = nil
+		}
+		return m, waitForBridge(m.bridge)
+	case planReviewEvent:
+		m.planMode = true
+		m.planReview = &planReviewState{event: msg}
+		m.input = nil
+		m.status = "review implementation plan"
 		return m, waitForBridge(m.bridge)
 	case turnDoneEvent:
 		m.running = false
@@ -307,6 +365,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+	if m.planReview != nil {
+		return m.handlePlanReviewKey(msg)
+	}
 	if m.question != nil {
 		return m.handleQuestionKey(msg)
 	}
@@ -334,6 +395,24 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.running {
+		return m, nil
+	}
+	if stroke == "shift+tab" {
+		if m.runner.Tools == nil {
+			m.status = "plan mode unavailable"
+			return m, nil
+		}
+		next := !m.planMode
+		if err := m.runner.Tools.SetPlanMode(next); err != nil {
+			m.status = "plan mode failed: " + err.Error()
+			return m, nil
+		}
+		m.planMode = next
+		if next {
+			m.status = "plan mode"
+		} else {
+			m.status = "ready"
+		}
 		return m, nil
 	}
 	switch key.Code {
@@ -367,6 +446,60 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.input = append(m.input, []rune(key.Text)...)
 	}
 	return m, nil
+}
+
+func (m *model) handlePlanReviewKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	key, stroke := msg.Key(), msg.Keystroke()
+	if !m.planReview.editing {
+		switch strings.ToLower(key.Text) {
+		case "y":
+			m.finishPlanReview(tools.PlanModeDecision{Outcome: "approved"})
+		case "r":
+			m.planReview.editing = true
+			m.input = nil
+			m.status = "request plan changes"
+		case "a":
+			m.finishPlanReview(tools.PlanModeDecision{Outcome: "abandoned"})
+		default:
+			if stroke == "esc" || stroke == "ctrl+c" {
+				m.finishPlanReview(tools.PlanModeDecision{Outcome: "cancelled"})
+			}
+		}
+		return m, nil
+	}
+	if stroke == "esc" {
+		m.planReview.editing = false
+		m.input = nil
+		m.status = "review implementation plan"
+		return m, nil
+	}
+	switch key.Code {
+	case tea.KeyEnter:
+		feedback := strings.TrimSpace(string(m.input))
+		if feedback == "" {
+			m.status = "plan feedback is required"
+			return m, nil
+		}
+		m.finishPlanReview(tools.PlanModeDecision{Outcome: "cancelled", Feedback: feedback})
+	case tea.KeyBackspace:
+		if len(m.input) > 0 {
+			m.input = m.input[:len(m.input)-1]
+		}
+	default:
+		if stroke == "ctrl+u" {
+			m.input = nil
+		} else if key.Text != "" && utf8.ValidString(key.Text) {
+			m.input = append(m.input, []rune(key.Text)...)
+		}
+	}
+	return m, nil
+}
+
+func (m *model) finishPlanReview(decision tools.PlanModeDecision) {
+	m.planReview.event.reply <- decision
+	m.planReview = nil
+	m.input = nil
+	m.status = "thinking"
 }
 
 func (m *model) handleQuestionKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -483,9 +616,17 @@ func runCompact(ctx context.Context, runner *agent.Runner, previousID string) te
 
 func (m *model) View() tea.View {
 	width := max(m.width, 20)
-	header := fmt.Sprintf("\x1b[1m Gork Go\x1b[0m  \x1b[2m%s · %s\x1b[0m", truncate(m.modelName, 24), truncate(m.workspace, max(width-45, 10)))
+	mode := ""
+	if m.planMode {
+		mode = "  \x1b[30;43m PLAN \x1b[0m"
+	}
+	header := fmt.Sprintf("\x1b[1m Gork Go\x1b[0m%s  \x1b[2m%s · %s\x1b[0m", mode, truncate(m.modelName, 24), truncate(m.workspace, max(width-45, 10)))
 	header = padRight(truncateANSIUnsafe(header, width), width)
-	contentLines := renderMarkdown(m.transcript.String(), width)
+	content := m.transcript.String()
+	if m.planReview != nil {
+		content = "# Review implementation plan\n\n" + m.planReview.event.event.PlanContent
+	}
+	contentLines := renderMarkdown(content, width)
 	visible := sliceFromBottom(contentLines, m.contentHeight(), m.scroll)
 	body := strings.Join(visible, "\n")
 	for len(visible) < m.contentHeight() {
@@ -494,7 +635,13 @@ func (m *model) View() tea.View {
 	}
 
 	var footer string
-	if m.approval != nil {
+	if m.planReview != nil {
+		if m.planReview.editing {
+			footer = fmt.Sprintf("\x1b[1;33m%s\x1b[0m\n> %s█\n\x1b[2m%s\x1b[0m", truncate("Request plan changes", width), truncateFromLeft(string(m.input), max(width-2, 1)), truncate("Enter send · Esc back · Ctrl-U clear", width))
+		} else {
+			footer = "\x1b[1;33mPlan review\x1b[0m\n\x1b[2m" + truncate("[Y] approve · [R] request changes · [A] abandon · Esc keep planning", width) + "\x1b[0m"
+		}
+	} else if m.approval != nil {
 		footer = fmt.Sprintf("\x1b[1;33mApprove %s?\x1b[0m %s\n\x1b[2m[y] allow  [n/esc] deny\x1b[0m", m.approval.action, truncate(m.approval.detail, width-20))
 	} else if m.question != nil {
 		question := m.question.event.request.Questions[m.question.index]
@@ -518,7 +665,7 @@ func (m *model) View() tea.View {
 		if !m.running {
 			prompt += "█"
 		}
-		footer = truncateFromLeft(prompt, width) + "\n\x1b[2mEnter send · PgUp/PgDn scroll · Ctrl-C cancel/quit · Ctrl-Q quit\x1b[0m"
+		footer = truncateFromLeft(prompt, width) + "\n\x1b[2m" + truncate("Enter send · Shift-Tab mode · PgUp/PgDn scroll · Ctrl-C cancel/quit · Ctrl-Q quit", width) + "\x1b[0m"
 	}
 	status := "\x1b[2m" + truncate(m.status, width) + "\x1b[0m"
 	view := tea.NewView(header + "\n" + body + status + "\n" + footer)
@@ -527,7 +674,7 @@ func (m *model) View() tea.View {
 }
 
 func (m *model) contentHeight() int {
-	if m.question != nil {
+	if m.question != nil || m.planReview != nil {
 		return max(m.height-7, 3)
 	}
 	return max(m.height-5, 3)
@@ -580,19 +727,21 @@ func truncateFromLeft(value string, width int) string {
 }
 
 func truncateANSIUnsafe(value string, width int) string {
-	// Header escape sequences are constant; leave them intact when it fits and
-	// fall back to the unstyled visible approximation on very narrow terminals.
-	if len([]rune(value)) <= width+20 {
+	plain := stripUIANSI(value)
+	if len([]rune(plain)) <= width {
 		return value
 	}
-	plain := strings.NewReplacer("\x1b[1m", "", "\x1b[0m", "", "\x1b[2m", "").Replace(value)
 	return truncate(plain, width)
 }
 
 func padRight(value string, width int) string {
-	plain := strings.NewReplacer("\x1b[1m", "", "\x1b[0m", "", "\x1b[2m", "").Replace(value)
+	plain := stripUIANSI(value)
 	if missing := width - len([]rune(plain)); missing > 0 {
 		return value + strings.Repeat(" ", missing)
 	}
 	return value
+}
+
+func stripUIANSI(value string) string {
+	return strings.NewReplacer("\x1b[1m", "", "\x1b[0m", "", "\x1b[2m", "", "\x1b[30;43m", "").Replace(value)
 }
