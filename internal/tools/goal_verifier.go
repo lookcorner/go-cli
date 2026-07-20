@@ -3,10 +3,12 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 const goalVerifierGapMaxBytes = 16 << 10
@@ -22,24 +24,39 @@ type goalVerdict struct {
 	Index   int    `json:"-"`
 	Verdict string `json:"verdict"`
 	Gaps    string `json:"gaps"`
+	Latency int64  `json:"-"`
 }
 
 func (r *Registry) VerifyGoal(ctx context.Context, snapshot GoalSnapshot, count int) GoalVerification {
-	backend := r.subagents.get()
-	if backend == nil {
-		return GoalVerification{Achieved: true, Summary: "goal verifier unavailable; completion accepted fail-open"}
-	}
 	if count < 1 {
 		count = 1
 	} else if count > 5 {
 		count = 5
+	}
+	started := time.Now()
+	roles := r.goalRoleConfig()
+	maxRuns := uint32(1)
+	if r.goal != nil {
+		r.goal.mu.Lock()
+		maxRuns = max(uint32(1), r.goal.classifierMaxRuns)
+		r.goal.mu.Unlock()
+	}
+	r.emitGoalEvent("goal_classifier_fired", map[string]any{
+		"attempt": snapshot.VerificationRuns, "max_runs": maxRuns,
+		"model_id": roles.CurrentModel,
+	})
+	backend := r.subagents.get()
+	if backend == nil {
+		r.emitGoalEvent("goal_classifier_fail_open", map[string]any{
+			"reason": "sampler_error", "attempt": snapshot.VerificationRuns, "latency_ms": elapsedMilliseconds(started),
+		})
+		return GoalVerification{Achieved: true, Summary: "goal verifier unavailable; completion accepted fail-open"}
 	}
 	evidence := goalEvidence{}
 	if r.goal != nil {
 		evidence = r.goal.captureEvidence(ctx, snapshot.VerificationRuns)
 	}
 	prompt := goalVerifierPrompt(snapshot, evidence)
-	roles := r.goalRoleConfig()
 	assignments := make([]GoalRoleModel, count)
 	if r.goal != nil {
 		assignments = r.goal.skepticModelAssignments(roles.Skeptics, count, roles.UseCurrentModelOnly)
@@ -50,21 +67,26 @@ func (r *Registry) VerifyGoal(ctx context.Context, snapshot GoalSnapshot, count 
 	}
 	verdicts := make(chan goalVerdict, count)
 	run := func(index int, requestPrompt, resumeFrom string, role GoalRoleModel, roleFallback bool) (goalVerdict, string, error) {
+		started := time.Now()
 		request := SubagentRequest{
 			Prompt: requestPrompt, Description: "goal achievement skeptic", Type: "general-purpose",
 			Background: false, BackgroundSet: true, CapabilityMode: "read-only", ResumeFrom: resumeFrom,
 			Model: role.Model, HarnessType: role.AgentType,
 		}
 		result, err := backend.Start(ctx, request)
-		if err != nil && roleFallback && role.valid() {
+		if err != nil && roleFallback && role.valid() && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			r.emitGoalEvent("goal_role_model_fail_open", map[string]any{
+				"role": "skeptic", "skeptic_idx": index, "reason": "spawn_failed",
+			})
 			request.Model, request.HarnessType = "", ""
 			result, err = backend.Start(ctx, request)
 		}
 		if err != nil {
-			return goalVerdict{Index: index, Verdict: "refuted", Gaps: "goal verifier could not run: " + err.Error()}, "", err
+			return goalVerdict{Index: index, Verdict: "refuted", Gaps: "goal verifier could not run: " + err.Error(), Latency: elapsedMilliseconds(started)}, "", err
 		}
 		verdict := parseGoalVerdict(result.Output)
 		verdict.Index = index
+		verdict.Latency = elapsedMilliseconds(started)
 		return verdict, result.ID, nil
 	}
 	start := 0
@@ -110,11 +132,28 @@ func (r *Registry) VerifyGoal(ctx context.Context, snapshot GoalSnapshot, count 
 		}
 	}
 	sort.Slice(all, func(i, j int) bool { return all[i].Index < all[j].Index })
+	for _, verdict := range all {
+		r.emitGoalEvent("goal_verifier_skeptic_verdict", map[string]any{
+			"attempt": snapshot.VerificationRuns, "skeptic_idx": verdict.Index,
+			"refuted": verdict.Verdict != "not_refuted", "confidence": "unknown", "latency_ms": verdict.Latency,
+		})
+	}
+	achieved := refuted < count/2+1
+	r.emitGoalEvent("goal_verifier_aggregate_verdict", map[string]any{
+		"attempt": snapshot.VerificationRuns, "refuted_count": refuted, "total": count, "achieved": achieved,
+	})
+	verdictName := "not_achieved"
+	if achieved {
+		verdictName = "achieved"
+	}
+	r.emitGoalEvent("goal_classifier_verdict", map[string]any{
+		"verdict": verdictName, "attempt": snapshot.VerificationRuns, "latency_ms": elapsedMilliseconds(started),
+	})
 	detailsPath := ""
 	if r.goal != nil {
 		detailsPath = r.goal.writeVerificationDetails(snapshot.VerificationRuns, all)
 	}
-	if refuted < count/2+1 {
+	if achieved {
 		return GoalVerification{Achieved: true, Verified: true, Summary: snapshot.Message, DetailsPath: detailsPath}
 	}
 	sort.Strings(gaps)

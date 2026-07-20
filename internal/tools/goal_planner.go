@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const (
@@ -60,20 +61,37 @@ func (r *Registry) RunGoalPlanner(ctx context.Context) (string, error) {
 		return "", errors.New("goal store is unavailable")
 	}
 	roles := r.goalRoleConfig()
+	started := time.Now()
+	fired := func() {
+		r.emitGoalEvent("goal_planner_fired", map[string]any{
+			"attempt": 1, "max_runs": 1, "model_id": effectiveGoalModel(roles, roles.Planner),
+		})
+		r.emitGoalUpdatedWith("planning_started", map[string]any{"phase": "planning", "planning": true})
+	}
+	fail := func(reason string, runErr error) (string, error) {
+		runErr = r.goal.finishPlanner("", "", runErr)
+		r.emitGoalEvent("goal_planner_fail_closed", map[string]any{
+			"reason": reason, "attempt": 1, "latency_ms": elapsedMilliseconds(started),
+		})
+		r.emitGoalEvent("goal_auto_paused", map[string]any{"reason": "user"})
+		r.emitGoalUpdated("planning_failed")
+		return "", runErr
+	}
 	input, existing, run, err := r.goal.plannerInput(roles.PlannerEnabled)
 	if err != nil {
 		if r.goal.Snapshot().Status == "active" {
-			err = r.goal.finishPlanner("", "", err)
+			fired()
+			return fail("file_write_failed", err)
 		}
 		return "", err
 	}
 	if !run {
 		return existing, err
 	}
+	fired()
 	backend := r.subagents.get()
 	if backend == nil {
-		err = errors.New("goal planner subagent is unavailable")
-		return "", r.goal.finishPlanner("", "", err)
+		return fail("transport", errors.New("goal planner subagent is unavailable"))
 	}
 	prompt := goalPlannerPrompt(input.objective)
 	request := SubagentRequest{
@@ -83,15 +101,20 @@ func (r *Registry) RunGoalPlanner(ctx context.Context) (string, error) {
 	}
 	result, err := backend.Start(ctx, request)
 	if err != nil && roles.Planner.valid() && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+		r.emitGoalEvent("goal_role_model_fail_open", map[string]any{"role": "planner", "reason": "spawn_failed"})
 		request.Model, request.HarnessType = "", ""
 		result, err = backend.Start(ctx, request)
 	}
 	plan := strings.TrimSpace(result.Output)
 	if err == nil && (plan == "" || plan == "Done" || len(plan) > goalPlannerMaxBytes) {
-		err = errors.New("goal planner returned no valid plan")
+		return fail("missing_plan_file", errors.New("goal planner returned no valid plan"))
 	}
 	if err != nil {
-		return "", r.goal.finishPlanner("", "", err)
+		reason := "runtime"
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			reason = "aborted"
+		}
+		return fail(reason, err)
 	}
 	plan += "\n"
 	planPath := filepath.Join(input.artifactDir, "goal-plan.md")
@@ -104,11 +127,13 @@ func (r *Registry) RunGoalPlanner(ctx context.Context) (string, error) {
 		err = writeGoalArtifact(planPath, []byte(plan))
 	}
 	if err != nil {
-		return "", r.goal.finishPlanner("", "", fmt.Errorf("write goal plan: %w", err))
+		return fail("file_write_failed", fmt.Errorf("write goal plan: %w", err))
 	}
 	if err = r.goal.finishPlanner(planPath, baselinePath, nil); err != nil {
-		return "", err
+		return fail("file_write_failed", err)
 	}
+	r.emitGoalEvent("goal_planner_completed", map[string]any{"attempt": 1, "latency_ms": elapsedMilliseconds(started)})
+	r.emitGoalUpdated("planning_completed")
 	return planPath, nil
 }
 

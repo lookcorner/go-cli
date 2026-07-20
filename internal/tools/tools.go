@@ -377,14 +377,22 @@ func (r *Registry) BeginGoal(objective string) error {
 	if r.goal == nil {
 		return errors.New("goal store is unavailable")
 	}
-	return r.goal.Begin(objective)
+	err := r.goal.Begin(objective)
+	if err == nil {
+		r.emitGoalUpdated("goal_created")
+	}
+	return err
 }
 
 func (r *Registry) ResumeGoal() (string, error) {
 	if r.goal == nil {
 		return "", errors.New("goal store is unavailable")
 	}
-	return r.goal.Resume()
+	objective, err := r.goal.Resume()
+	if err == nil {
+		r.emitGoalUpdated("goal_resumed")
+	}
+	return objective, err
 }
 
 func (r *Registry) ConfigureGoalRoles(config GoalRoleConfig) {
@@ -401,6 +409,11 @@ func (r *Registry) ConfigureGoalRoles(config GoalRoleConfig) {
 	r.mu.Lock()
 	r.goalRoles = config
 	r.mu.Unlock()
+	if r.goal != nil {
+		r.goal.mu.Lock()
+		r.goal.classifierMaxRuns = max(uint32(1), config.ClassifierMaxRuns)
+		r.goal.mu.Unlock()
+	}
 }
 
 func (m GoalRoleModel) valid() bool {
@@ -426,14 +439,44 @@ func (r *Registry) StartGoalVerification(maxRuns uint32) error {
 	if r.goal == nil {
 		return errors.New("goal store is unavailable")
 	}
-	return r.goal.StartVerification(maxRuns)
+	r.goal.mu.Lock()
+	r.goal.classifierMaxRuns = max(uint32(1), maxRuns)
+	r.goal.mu.Unlock()
+	err := r.goal.StartVerification(maxRuns)
+	if err == nil {
+		r.emitGoalUpdated("verification_started")
+	} else if r.goal.Snapshot().Status == "paused" {
+		r.emitGoalEvent("goal_classifier_cap_reached", map[string]any{"attempt": r.goal.Snapshot().VerificationRuns})
+		r.emitGoalEvent("goal_auto_paused", map[string]any{"reason": "back_off"})
+		r.emitGoalUpdated("goal_paused")
+	}
+	return err
 }
 
 func (r *Registry) ResolveGoalVerification(verification GoalVerification, maxRuns uint32) error {
 	if r.goal == nil {
 		return errors.New("goal store is unavailable")
 	}
-	return r.goal.ResolveVerification(verification.Achieved, verification.Summary, maxRuns)
+	err := r.goal.ResolveVerification(verification.Achieved, verification.Summary, maxRuns)
+	if err != nil {
+		return err
+	}
+	snapshot := r.goal.Snapshot()
+	if snapshot.Status == "paused" {
+		reason := "back_off"
+		if strings.Contains(snapshot.Message, "no progress") {
+			reason = "no_progress"
+		} else if strings.Contains(snapshot.Message, "run cap") {
+			r.emitGoalEvent("goal_classifier_cap_reached", map[string]any{"attempt": snapshot.VerificationRuns})
+		}
+		r.emitGoalEvent("goal_auto_paused", map[string]any{"reason": reason})
+		r.emitGoalUpdated("goal_paused")
+	} else if snapshot.Status == "completed" {
+		r.emitGoalUpdated("goal_completed")
+	} else {
+		r.emitGoalUpdated("verification_refuted")
+	}
+	return nil
 }
 
 func (r *Registry) BackgroundTasks() []ProcessSnapshot {

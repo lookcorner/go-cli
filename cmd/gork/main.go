@@ -370,6 +370,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		_ = registry.Close()
 		return err
 	}
+	registry.SetGoalObserver(&sessionGoalObserver{logger: logger})
 	if search, enabled := cfg.WebSearchEndpoint(); enabled {
 		if err := registry.Register(tools.NewWebSearchTool(search.BaseURL, search.APIKey, search.Model, &http.Client{Timeout: cfg.HTTPTimeout})); err != nil {
 			return err
@@ -1115,6 +1116,21 @@ type sessionSubagentObserver struct {
 	logger    *session.Logger
 }
 
+type sessionGoalObserver struct {
+	server    *acp.Server
+	sessionID string
+	logger    *session.Logger
+}
+
+func (o *sessionGoalObserver) GoalEvent(event tools.GoalEvent) {
+	if o != nil && o.logger != nil {
+		_ = o.logger.Append(event.Kind, event.Data)
+	}
+	if o != nil && o.server != nil {
+		o.server.NotifyGoalEvent(o.sessionID, event)
+	}
+}
+
 type permissionPromptApprover struct {
 	base   tools.Approver
 	mu     sync.RWMutex
@@ -1338,7 +1354,11 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		}
 		registry := tools.NewRegistry(ws, approver)
 		registry.ConfigureUserQuestions(sessionCfg.AskUserQuestion.TimeoutEnabled, time.Duration(sessionCfg.AskUserQuestion.TimeoutSeconds)*time.Second)
-		registry.ConfigureGoalRoles(goalRoleConfig(sessionCfg, true))
+		goalCfg := sessionCfg
+		if sessionConfig.Model != "" {
+			goalCfg.Model = sessionConfig.Model
+		}
+		registry.ConfigureGoalRoles(goalRoleConfig(goalCfg, true))
 		if search, enabled := cfg.WebSearchEndpoint(); enabled {
 			if err := registry.Register(tools.NewWebSearchTool(search.BaseURL, search.APIKey, search.Model, &http.Client{Timeout: cfg.HTTPTimeout})); err != nil {
 				_ = registry.Close()
@@ -1392,6 +1412,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			_ = registry.Close()
 			return nil, nil, err
 		}
+		registry.SetGoalObserver(&sessionGoalObserver{server: server, sessionID: logger.ID(), logger: logger})
 		registry.SetWebFetchEnabled(cfg.WebFetch.Enabled)
 		if sessionConfig.ResumePath == "" {
 			model := cfg.Model
@@ -1732,6 +1753,7 @@ func goalRoleConfig(cfg config.Config, goalEnabled bool) tools.GoalRoleConfig {
 		return tools.GoalRoleModel{Model: model.Model, AgentType: model.AgentType}
 	}
 	result := tools.GoalRoleConfig{
+		CurrentModel: cfg.Model, ClassifierMaxRuns: cfg.Goal.ClassifierMaxRuns,
 		PlannerEnabled: cfg.GoalPlannerEnabled(goalEnabled), StrategistEvery: cfg.GoalStrategistEvery(),
 		SummaryEnabled: cfg.GoalSummaryEnabled(goalEnabled), UseCurrentModelOnly: cfg.Goal.UseCurrentModelOnly,
 	}
@@ -1930,6 +1952,7 @@ func goalLoop(
 			if err := registry.StartGoalVerification(classifierMaxRuns); err != nil {
 				return err
 			}
+			snapshot = registry.GoalSnapshot()
 			verification := registry.VerifyGoal(ctx, snapshot, verifierCount)
 			if err := registry.ResolveGoalVerification(verification, classifierMaxRuns); err != nil {
 				return err

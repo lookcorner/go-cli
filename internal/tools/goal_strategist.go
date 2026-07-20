@@ -2,10 +2,12 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const (
@@ -17,6 +19,7 @@ const (
 type goalStrategistInput struct {
 	objective, gaps, workspaceRoot, artifactDir string
 	consecutive                                 uint32
+	attempt                                     uint32
 }
 
 func (s *GoalStore) claimStrategist(every uint32) (goalStrategistInput, bool) {
@@ -35,7 +38,7 @@ func (s *GoalStore) claimStrategist(every uint32) (goalStrategistInput, bool) {
 	}
 	return goalStrategistInput{
 		objective: s.objective, gaps: s.lastVerification, workspaceRoot: s.workspaceRoot,
-		artifactDir: s.artifactDir, consecutive: s.consecutiveReject,
+		artifactDir: s.artifactDir, consecutive: s.consecutiveReject, attempt: s.verificationRuns,
 	}, true
 }
 
@@ -59,10 +62,25 @@ func (r *Registry) RunGoalStrategist(ctx context.Context) string {
 	if !ok {
 		return ""
 	}
-	backend := r.subagents.get()
-	if backend == nil || input.artifactDir == "" {
+	started := time.Now()
+	r.emitGoalEvent("goal_strategist_fired", map[string]any{
+		"attempt": input.attempt, "consecutive_failures": input.consecutive,
+		"every": max(uint32(1), roles.StrategistEvery), "model_id": effectiveGoalModel(roles, roles.Strategist),
+	})
+	fail := func(reason string) string {
 		r.goal.resolveStrategist("", "", false)
+		r.emitGoalEvent("goal_strategist_failed", map[string]any{
+			"reason": reason, "attempt": input.attempt, "consecutive_failures": input.consecutive,
+			"latency_ms": elapsedMilliseconds(started),
+		})
 		return ""
+	}
+	backend := r.subagents.get()
+	if backend == nil {
+		return fail("transport")
+	}
+	if input.artifactDir == "" {
+		return fail("missing_strategy_file")
 	}
 	planPath := ""
 	if input.workspaceRoot != "" {
@@ -92,17 +110,27 @@ Return only a short Markdown note with these headings:
 		Model: roles.Strategist.Model, HarnessType: roles.Strategist.AgentType,
 	}
 	result, err := backend.Start(ctx, request)
-	if err != nil && roles.Strategist.valid() {
+	if err != nil && roles.Strategist.valid() && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+		r.emitGoalEvent("goal_role_model_fail_open", map[string]any{"role": "strategist", "reason": "spawn_failed"})
 		request.Model, request.HarnessType = "", ""
 		result, err = backend.Start(ctx, request)
 	}
 	note := truncateGoalStrategy(result.Output)
 	path := filepath.Join(input.artifactDir, "goal-strategy.md")
-	if err != nil || note == "" || writeGoalArtifact(path, []byte(note+"\n")) != nil {
-		r.goal.resolveStrategist("", "", false)
-		return ""
+	if err != nil {
+		reason := "runtime"
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			reason = "aborted"
+		}
+		return fail(reason)
+	}
+	if note == "" || writeGoalArtifact(path, []byte(note+"\n")) != nil {
+		return fail("missing_strategy_file")
 	}
 	r.goal.resolveStrategist(path, note, true)
+	r.emitGoalEvent("goal_strategist_completed", map[string]any{
+		"attempt": input.attempt, "consecutive_failures": input.consecutive, "latency_ms": elapsedMilliseconds(started),
+	})
 	return fmt.Sprintf("Strategist recommendation (%s):\n%s", path, note)
 }
 

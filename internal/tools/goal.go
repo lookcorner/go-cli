@@ -27,6 +27,8 @@ type GoalRoleModel struct {
 }
 
 type GoalRoleConfig struct {
+	CurrentModel        string
+	ClassifierMaxRuns   uint32
 	PlannerEnabled      bool
 	SummaryEnabled      bool
 	StrategistEvery     uint32
@@ -59,6 +61,8 @@ type GoalStore struct {
 	plannerCompleted  bool
 	summaryAttempted  bool
 	closingSummary    string
+	observer          GoalObserver
+	classifierMaxRuns uint32
 	statePath         string
 	skeptic0SessionID string
 	skepticModels     []GoalRoleModel
@@ -201,6 +205,7 @@ func (t *updateGoalTool) Execute(_ context.Context, raw json.RawMessage) (string
 		if err := t.store.saveLocked(); err != nil {
 			return "", err
 		}
+		t.store.emitGoalUpdatedLocked("goal_blocked")
 		return "success: true\nsummary: Goal marked blocked: " + blocked, nil
 	}
 	if args.Completed != nil && *args.Completed {
@@ -213,11 +218,13 @@ func (t *updateGoalTool) Execute(_ context.Context, raw json.RawMessage) (string
 		if err := t.store.saveLocked(); err != nil {
 			return "", err
 		}
+		t.store.emitGoalUpdatedLocked("completion_requested")
 		return "success: true\nsummary: Awaiting independent verification: " + summary, nil
 	}
 	t.store.message = strings.TrimSpace(args.Message)
 	if err := t.store.saveLocked(); err != nil {
 		return "", err
 	}
+	t.store.emitGoalUpdatedLocked("progress_recorded")
 	return "success: true\nsummary: Progress recorded: " + t.store.message, nil
 }

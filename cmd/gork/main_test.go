@@ -52,6 +52,7 @@ func TestSessionObserversPersistOnlyLifecycleEvents(t *testing.T) {
 	processObserver.ScheduledTaskCreated(tools.ScheduledTaskCreated{TaskID: "loop-1", Prompt: "check", HumanSchedule: "every 1 minute"})
 	processObserver.ScheduledTaskFired(tools.ScheduledTaskFired{TaskID: "loop-1", Prompt: "check", HumanSchedule: "every 1 minute"})
 	processObserver.ScheduledTaskRemoved("loop-1")
+	(&sessionGoalObserver{logger: logger}).GoalEvent(tools.GoalEvent{Kind: "goal_planner_fired", Data: map[string]any{"attempt": 1}})
 	if event, ok := scheduled.Take(); !ok || event.TaskID != "loop-1" {
 		t.Fatalf("scheduled observer event=%#v ok=%v", event, ok)
 	} else {
@@ -66,7 +67,7 @@ func TestSessionObserversPersistOnlyLifecycleEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	log := string(data)
-	if strings.Count(log, `"kind":"subagent_spawned"`) != 1 || strings.Count(log, `"kind":"subagent_finished"`) != 1 || strings.Count(log, `"kind":"task_backgrounded"`) != 1 || strings.Count(log, `"kind":"task_completed"`) != 1 || strings.Count(log, `"kind":"scheduled_task_created"`) != 1 || strings.Count(log, `"kind":"scheduled_task_deleted"`) != 1 || strings.Contains(log, "subagent_progress") || strings.Contains(log, "watch build") || strings.Contains(log, "scheduled_task_fired") {
+	if strings.Count(log, `"kind":"subagent_spawned"`) != 1 || strings.Count(log, `"kind":"subagent_finished"`) != 1 || strings.Count(log, `"kind":"task_backgrounded"`) != 1 || strings.Count(log, `"kind":"task_completed"`) != 1 || strings.Count(log, `"kind":"scheduled_task_created"`) != 1 || strings.Count(log, `"kind":"scheduled_task_deleted"`) != 1 || strings.Count(log, `"kind":"goal_planner_fired"`) != 1 || strings.Contains(log, "subagent_progress") || strings.Contains(log, "watch build") || strings.Contains(log, "scheduled_task_fired") {
 		t.Fatalf("log=%s", log)
 	}
 }

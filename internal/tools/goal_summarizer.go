@@ -2,15 +2,18 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const goalSummaryMaxChars = 1200
 
 type goalSummaryInput struct {
 	objective, workspaceRoot, planPath, detailsPath string
+	attempt                                         uint32
 }
 
 func (s *GoalStore) claimSummarizer(enabled, verified bool, detailsPath string) (goalSummaryInput, bool) {
@@ -30,7 +33,7 @@ func (s *GoalStore) claimSummarizer(enabled, verified bool, detailsPath string) 
 	}
 	return goalSummaryInput{
 		objective: s.objective, workspaceRoot: s.workspaceRoot, planPath: planPath,
-		detailsPath: detailsPath,
+		detailsPath: detailsPath, attempt: s.verificationRuns,
 	}, true
 }
 
@@ -45,30 +48,47 @@ func (r *Registry) RunGoalSummarizer(ctx context.Context, verification GoalVerif
 	if r.goal == nil {
 		return ""
 	}
+	roles := r.goalRoleConfig()
 	input, ok := r.goal.claimSummarizer(
-		r.goalRoleConfig().SummaryEnabled,
+		roles.SummaryEnabled,
 		verification.Achieved && verification.Verified,
 		verification.DetailsPath,
 	)
 	if !ok {
 		return ""
 	}
+	started := time.Now()
+	r.emitGoalEvent("goal_summarizer_fired", map[string]any{
+		"attempt": input.attempt, "model_id": roles.CurrentModel,
+	})
+	fail := func(reason string) string {
+		r.emitGoalEvent("goal_summarizer_fail_open", map[string]any{
+			"reason": reason, "attempt": input.attempt, "latency_ms": elapsedMilliseconds(started),
+		})
+		return ""
+	}
 	backend := r.subagents.get()
 	if backend == nil {
-		return ""
+		return fail("transport")
 	}
 	result, err := backend.Start(ctx, SubagentRequest{
 		Prompt: goalSummarizerPrompt(input), Description: "goal summarizer", Type: "general-purpose",
 		Background: false, BackgroundSet: true, CapabilityMode: "read-only", CWD: input.workspaceRoot,
 	})
 	if err != nil {
-		return ""
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return fail("aborted")
+		}
+		return fail("runtime")
 	}
 	summary := truncateGoalSummary(result.Output)
 	if summary == "" {
-		return ""
+		return fail("empty_summary")
 	}
 	r.goal.finishSummarizer(summary)
+	r.emitGoalEvent("goal_summarizer_completed", map[string]any{
+		"attempt": input.attempt, "latency_ms": elapsedMilliseconds(started),
+	})
 	return summary
 }
 
