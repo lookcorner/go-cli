@@ -159,7 +159,7 @@ func goalPlannerPrompt(objective string) string {
 ## Implementation approach
 ## Task checklist
 
-Keep acceptance criteria independently checkable and verification steps executable against shipped behavior. Include at least one non-goal. Preserve every explicit requirement from the objective.
+Keep acceptance criteria independently checkable and verification steps executable against shipped behavior. Include at least one non-goal. Under Task checklist, write 3-8 ordered ` + "`- [ ]`" + ` steps, each concrete and completable in one turn, ending with testing or evidence. Do not put checkboxes in other sections. Preserve every explicit requirement from the objective.
 
 OBJECTIVE:
 ` + objective

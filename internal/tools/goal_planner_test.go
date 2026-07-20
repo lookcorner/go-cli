@@ -31,6 +31,9 @@ func TestGoalPlannerPersistsPrivatePlanAndRunsOnce(t *testing.T) {
 	if request.Model != "planner-model" || request.HarnessType != "plan" || request.Type != "general-purpose" || request.CapabilityMode != "execute" || request.CWD != registry.goal.workspaceRoot {
 		t.Fatalf("request=%#v", request)
 	}
+	if !strings.Contains(request.Prompt, "3-8 ordered `- [ ]` steps") || !strings.Contains(request.Prompt, "Do not put checkboxes in other sections") {
+		t.Fatalf("planner prompt lacks next-step contract:\n%s", request.Prompt)
+	}
 	for _, target := range []string{path, registry.goal.planBaselinePath} {
 		data, readErr := os.ReadFile(target)
 		info, statErr := os.Stat(target)

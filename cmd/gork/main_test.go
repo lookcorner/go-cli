@@ -99,6 +99,15 @@ func TestParseGoalBudget(t *testing.T) {
 	}
 }
 
+func TestAppendGoalNextStep(t *testing.T) {
+	if got := appendGoalNextStep("continue", "run the integration test"); !strings.Contains(got, "Next step:\nrun the integration test") {
+		t.Fatalf("concrete continuation=%q", got)
+	}
+	if got := appendGoalNextStep("continue", ""); !strings.Contains(got, "Check your `todo_write` list for next steps.") {
+		t.Fatalf("fallback continuation=%q", got)
+	}
+}
+
 func TestSessionMCPRuntimeMergesAndRestoresConfiguration(t *testing.T) {
 	disabled := false
 	runtime := &sessionMCPRuntime{base: config.Config{MCPServers: map[string]config.MCPServerConfig{

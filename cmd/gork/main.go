@@ -2001,6 +2001,7 @@ func goalLoop(
 				return nil
 			}
 			prompt = appendGoalPlanReminder(prompt, registry.GoalSnapshot().PlanPath)
+			prompt = appendGoalNextStep(prompt, registry.GoalNextStep())
 			continue
 		case "completed":
 			fmt.Fprintln(stderr, "[gork] goal completed:", snapshot.Message)
@@ -2020,6 +2021,7 @@ func goalLoop(
 			continuation = "Your previous response ended prematurely while actionable work remains. Continue now: execute the pending tasks, inspect results, and keep working until the goal is independently verifiable. Do not hand work back to the user or stop merely because an agent, command, review, or follow-up is pending."
 		}
 		prompt = appendGoalPlanReminder(continuation, snapshot.PlanPath)
+		prompt = appendGoalNextStep(prompt, registry.GoalNextStep())
 	}
 	return fmt.Errorf("goal remains active after %d runs", maxRuns)
 }
@@ -2037,6 +2039,13 @@ func parseGoalBudget(objective string) (string, int64) {
 		return trimmed, 0
 	}
 	return strings.TrimSpace(match[1]), budget
+}
+
+func appendGoalNextStep(prompt, step string) string {
+	if step == "" {
+		step = "Check your `todo_write` list for next steps."
+	}
+	return prompt + "\n\nGoal NOT complete - continue working. Next step:\n" + step
 }
 
 func startLSPServers(

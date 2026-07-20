@@ -270,6 +270,10 @@ directory. `--goal --resume <session.jsonl>` reactivates an unfinished goal,
 preserves its original objective and evidence baselines, and resets the
 per-resume verifier attempt and stall counters. A supplied prompt is treated as
 additional direction; a completed goal requires a new non-empty objective.
+Each continuation reads at most 8 KiB of the private plan and inlines the first
+unchecked item from `## Task checklist` as the next concrete step. Completed
+checkboxes and items under `Non-goals` or `Deviations` are ignored; unsafe frame
+tags and overlong model-authored items are neutralized before prompt insertion.
 For panels with multiple skeptics, skeptic 0 resumes across verification rounds
 to re-check its prior gaps against current files; a failed resume falls back to
 a fresh read-only skeptic, while single-skeptic panels always start fresh.
