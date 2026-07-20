@@ -28,6 +28,9 @@ enabled = false
 [memory.initial_injection]
 enabled = true
 
+[memory.session]
+save_on_end = true
+
 [compaction.memory_flush]
 enabled = true
 soft_threshold_tokens = 4000

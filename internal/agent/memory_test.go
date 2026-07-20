@@ -9,6 +9,7 @@ import (
 
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/memory"
+	"github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/tools"
 	"github.com/lookcorner/go-cli/internal/workspace"
 )
@@ -239,5 +240,97 @@ func TestRunnerIdleMemoryFlushTriggersAndStopsWithSession(t *testing.T) {
 	}
 	if requests := stoppedStreamer.snapshot(); len(requests) != 1 {
 		t.Fatalf("shutdown allowed pending idle flush: %#v", requests)
+	}
+}
+
+func TestRunnerSavesQualifiedSessionMemoryOnClose(t *testing.T) {
+	root, workspaceRoot := t.TempDir(), t.TempDir()
+	store, err := memory.Open(root, workspaceRoot, "session-end")
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger, err := session.NewLoggerWithID(t.TempDir(), "session-end")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logger.Close()
+	for _, event := range []struct {
+		kind string
+		data map[string]any
+	}{
+		{"user_prompt", map[string]any{"text": "internal continuation", "synthetic": true}},
+		{"user_prompt", map[string]any{"text": "Investigate authentication callback failures"}},
+		{"model_response", map[string]any{"response_id": "one", "text": "checked", "tool_call_count": 0}},
+		{"user_prompt", map[string]any{"text": "Preserve the existing API compatibility tests"}},
+		{"model_response", map[string]any{"response_id": "two", "text": "preserved", "tool_call_count": 0}},
+		{"tool_result", map[string]any{"name": "bash", "output": "ok"}},
+	} {
+		if err := logger.Append(event.kind, event.data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ws, err := workspace.Open(workspaceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := memory.DefaultConfig()
+	config.Enabled = true
+	runner := Runner{
+		Client: &fakeStreamer{results: []api.StreamResult{{ResponseID: "three", Text: "done"}}},
+		Tools:  tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto}), Logger: logger,
+		Model: "test", Memory: store, MemoryConfig: config, SessionPath: logger.Path(),
+	}
+	defer runner.Tools.Close()
+	if _, err := runner.RunTurn(context.Background(), "Document the final deployment verification", "two"); err != nil {
+		t.Fatal(err)
+	}
+	closeCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := runner.CloseMemory(closeCtx); err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.CloseMemory(closeCtx); err != nil {
+		t.Fatal(err)
+	}
+	value, err := store.Context()
+	if err != nil || !strings.Contains(value, "3 user, 3 assistant, 1 tool results") || !strings.Contains(value, "Investigate authentication callback failures") || strings.Contains(value, "internal continuation") || strings.Count(value, "## Session Summary") != 1 {
+		t.Fatalf("memory=%q err=%v", value, err)
+	}
+}
+
+func TestRunnerSkipsSessionMemoryWhenDisabledOrTooShort(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		saveOnEnd bool
+		prompts   []string
+	}{
+		{name: "disabled", saveOnEnd: false, prompts: []string{"A sufficiently long first prompt", "A sufficiently long second prompt", "A sufficiently long third prompt"}},
+		{name: "too short", saveOnEnd: true, prompts: []string{"one", "two", "three"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, err := memory.Open(t.TempDir(), t.TempDir(), test.name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			logger, err := session.NewLoggerWithID(t.TempDir(), "skip-session")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer logger.Close()
+			for _, prompt := range test.prompts {
+				if err := logger.Append("user_prompt", map[string]any{"text": prompt}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			config := memory.DefaultConfig()
+			config.Enabled, config.SaveOnEnd = true, test.saveOnEnd
+			runner := Runner{Memory: store, MemoryConfig: config, SessionPath: logger.Path()}
+			if err := runner.CloseMemory(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if value, err := store.Context(); err != nil || value != "" {
+				t.Fatalf("memory=%q err=%v", value, err)
+			}
+		})
 	}
 }

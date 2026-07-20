@@ -97,6 +97,7 @@ type session struct {
 	previous     string
 	cancel       context.CancelFunc
 	running      bool
+	runDone      chan struct{}
 	promptIndex  int
 	activePrompt int
 	rewind       *workspace.RewindStore
@@ -1565,6 +1566,7 @@ func (s *Server) startSession(ctx context.Context, id string, sessionConfig Sess
 		mcpServers: append([]MCPServer(nil), sessionConfig.MCPServers...),
 	}
 	runner.SessionID = id
+	runner.SessionPath = sessionPath
 	runner.ToolObserver = &sessionToolObserver{server: s, sessionID: id}
 	runner.Tools.SetRewindStore(rewind, func() int {
 		created.mu.Lock()
@@ -1621,14 +1623,21 @@ func (s *Server) handlePrompt(parent context.Context, incoming message) {
 		content = []api.ContentPart{{Type: "input_text", Text: expanded}}
 	}
 	current.mu.Lock()
+	if current.closed {
+		current.mu.Unlock()
+		s.respondError(incoming.ID, -32000, "session is closed")
+		return
+	}
 	if current.running {
 		current.mu.Unlock()
 		s.respondError(incoming.ID, -32000, "session already has an active prompt")
 		return
 	}
 	runCtx, cancel := context.WithCancel(parent)
+	runDone := make(chan struct{})
 	current.cancel = cancel
 	current.running = true
+	current.runDone = runDone
 	current.activePrompt = current.promptIndex
 	current.promptIndex++
 	if current.title == "" {
@@ -1661,12 +1670,14 @@ func (s *Server) handlePrompt(parent context.Context, incoming message) {
 			current.previous = result.ResponseID
 		}
 		current.running = false
+		current.runDone = nil
 		current.activePrompt = -1
 		if pointsErr == nil {
 			current.promptIndex = len(points)
 		}
 		current.cancel = nil
 		current.updated = time.Now().UTC()
+		close(runDone)
 		current.mu.Unlock()
 		if err == nil || stopReason == "cancelled" {
 			s.respond(incoming.ID, map[string]any{"stopReason": stopReason})
@@ -1677,6 +1688,11 @@ func (s *Server) handlePrompt(parent context.Context, incoming message) {
 
 func (s *Server) handleCompactPrompt(parent context.Context, incoming message, current *session) {
 	current.mu.Lock()
+	if current.closed {
+		current.mu.Unlock()
+		s.respondError(incoming.ID, -32000, "session is closed")
+		return
+	}
 	if current.running {
 		current.mu.Unlock()
 		s.respondError(incoming.ID, -32000, "session already has an active prompt")
@@ -1688,9 +1704,11 @@ func (s *Server) handleCompactPrompt(parent context.Context, incoming message, c
 		return
 	}
 	runCtx, cancel := context.WithCancel(parent)
+	runDone := make(chan struct{})
 	previous := current.previous
 	current.cancel = cancel
 	current.running = true
+	current.runDone = runDone
 	current.updated = time.Now().UTC()
 	current.mu.Unlock()
 	s.wg.Add(1)
@@ -1708,8 +1726,10 @@ func (s *Server) handleCompactPrompt(parent context.Context, incoming message, c
 			current.previous = ""
 		}
 		current.running = false
+		current.runDone = nil
 		current.cancel = nil
 		current.updated = time.Now().UTC()
+		close(runDone)
 		current.mu.Unlock()
 		if err == nil || stopReason == "cancelled" {
 			s.respond(incoming.ID, map[string]any{"stopReason": stopReason})
@@ -1741,6 +1761,11 @@ func (s *Server) handleMemoryFlushExtension(parent context.Context, incoming mes
 
 func (s *Server) handleMemoryFlush(parent context.Context, incoming message, current *session, extension bool) {
 	current.mu.Lock()
+	if current.closed {
+		current.mu.Unlock()
+		s.respondError(incoming.ID, -32000, "session is closed")
+		return
+	}
 	if current.running {
 		current.mu.Unlock()
 		s.respondError(incoming.ID, -32000, "session already has an active prompt")
@@ -1752,8 +1777,9 @@ func (s *Server) handleMemoryFlush(parent context.Context, incoming message, cur
 		return
 	}
 	runCtx, cancel := context.WithCancel(parent)
+	runDone := make(chan struct{})
 	previous := current.previous
-	current.cancel, current.running, current.updated = cancel, true, time.Now().UTC()
+	current.cancel, current.running, current.runDone, current.updated = cancel, true, runDone, time.Now().UTC()
 	current.mu.Unlock()
 	s.notify(current.id, map[string]any{"sessionUpdate": "memory_flush_started"})
 	s.wg.Add(1)
@@ -1767,7 +1793,8 @@ func (s *Server) handleMemoryFlush(parent context.Context, incoming message, cur
 			s.respondError(incoming.ID, -32000, err.Error())
 		}
 		current.mu.Lock()
-		current.running, current.cancel, current.updated = false, nil, time.Now().UTC()
+		current.running, current.cancel, current.runDone, current.updated = false, nil, nil, time.Now().UTC()
+		close(runDone)
 		current.mu.Unlock()
 		update := map[string]any{"sessionUpdate": "memory_flush_completed", "result": result.Outcome}
 		if result.Path != "" {
@@ -2049,7 +2076,11 @@ func (s *Server) closeSession(id string) bool {
 	if current.cancel != nil {
 		current.cancel()
 	}
+	runDone := current.runDone
 	current.mu.Unlock()
+	if runDone != nil {
+		<-runDone
+	}
 	if current.close != nil {
 		current.close()
 	}
@@ -2393,7 +2424,11 @@ func (s *Server) closeAll() {
 		if current.cancel != nil {
 			current.cancel()
 		}
+		runDone := current.runDone
 		current.mu.Unlock()
+		if runDone != nil {
+			<-runDone
+		}
 		current.close()
 	}
 }

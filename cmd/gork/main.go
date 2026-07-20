@@ -508,8 +508,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		HookCatalog: hookCatalog, HookPolicy: hookRuntime,
 		ListSubagents: subagents.List, GetSubagent: subagents.Output, KillSubagent: subagents.Kill,
 		ListTasks: registry.BackgroundTasks, KillTask: registry.KillBackgroundTask,
-		SessionID: logger.ID(),
-		Model:     cfg.Model, Instructions: cfg.SystemPrompt, MaxSteps: cfg.MaxSteps,
+		SessionID: logger.ID(), SessionPath: logger.Path(),
+		Model: cfg.Model, Instructions: cfg.SystemPrompt, MaxSteps: cfg.MaxSteps,
 		TextOutput: stdout, StatusOutput: stderr,
 		ContextWindow: cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,
 		TwoPassCompaction: cfg.TwoPassCompaction,
@@ -1127,7 +1127,7 @@ func openMemoryStore(cfg config.Config, workspaceRoot, sessionID string) (*memor
 func waitRunnerMemory(runner *agent.Runner) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_ = runner.WaitMemory(ctx)
+	_ = runner.CloseMemory(ctx)
 }
 
 type sessionPluginState struct {
@@ -1795,6 +1795,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			UpdatePlugins:     updatePlugins,
 			MarketplaceList:   func() ([]marketplace.ScanResult, error) { return marketplace.List(opts.configPath, ws.Root()) },
 			MarketplaceAction: marketplaceAction,
+			SessionPath:       logger.Path(),
 		}
 		return runner, func() {
 			waitRunnerMemory(runner)

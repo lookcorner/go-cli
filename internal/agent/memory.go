@@ -3,10 +3,12 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/lookcorner/go-cli/internal/api"
+	"github.com/lookcorner/go-cli/internal/session"
 )
 
 const memoryFlushPrompt = `You are a memory assistant. Extract useful information from this conversation that would help in future sessions with this user. Write concise markdown with # or ## headers covering substantive decisions and rationale, technical context, debugging techniques, and problems with their solutions. Omit empty sections, user environment preferences, and ephemeral progress. Respond with NO_REPLY when nothing genuinely reusable was learned.`
@@ -231,6 +233,85 @@ func (r *Runner) WaitMemory(ctx context.Context) error {
 	flushDone := r.memoryFlushDone
 	r.memoryMu.Unlock()
 	return waitMemoryTask(ctx, flushDone)
+}
+
+func (r *Runner) CloseMemory(ctx context.Context) error {
+	if err := r.WaitMemory(ctx); err != nil {
+		return err
+	}
+	return r.saveSessionMemory()
+}
+
+func (r *Runner) saveSessionMemory() error {
+	if r.Memory == nil || !r.MemoryConfig.Enabled || !r.MemoryConfig.SaveOnEnd || strings.TrimSpace(r.SessionPath) == "" {
+		return nil
+	}
+	r.memoryMu.Lock()
+	if r.memorySessionSaved {
+		r.memoryMu.Unlock()
+		return nil
+	}
+	r.memorySessionSaved = true
+	r.memoryMu.Unlock()
+	events, err := session.Events(r.SessionPath, "user_prompt", "model_response", "tool_result")
+	if err != nil {
+		r.log("memory_session_end", map[string]any{"outcome": "error", "error": err.Error()})
+		return err
+	}
+	queries := make([]string, 0, 5)
+	totalBytes, userCount, assistantCount, toolCount := 0, 0, 0, 0
+	for _, event := range events {
+		switch event.Kind {
+		case "user_prompt":
+			data, _ := event.Data.(map[string]any)
+			text, _ := data["text"].(string)
+			synthetic, _ := data["synthetic"].(bool)
+			text = strings.TrimSpace(text)
+			if synthetic || text == "" || text == "__auto_continue__" {
+				continue
+			}
+			userCount++
+			totalBytes += len(text)
+			if len(queries) < 5 {
+				queries = append(queries, text)
+			}
+		case "model_response":
+			assistantCount++
+		case "tool_result":
+			toolCount++
+		}
+	}
+	if userCount < 3 || totalBytes < 50 {
+		r.log("memory_session_end", map[string]any{"outcome": "skipped", "user_messages": userCount, "query_bytes": totalBytes})
+		return nil
+	}
+	var summary strings.Builder
+	summary.WriteString("## Session Summary\n\n")
+	fmt.Fprintf(&summary, "- **Messages:** %d user, %d assistant, %d tool results\n", userCount, assistantCount, toolCount)
+	fmt.Fprintf(&summary, "- **Date:** %s\n\n## Topics Discussed\n\n", time.Now().UTC().Format("2006-01-02 15:04 UTC"))
+	for index, query := range queries {
+		runes := []rune(query)
+		if len(runes) > 100 {
+			runes = runes[:100]
+		}
+		fmt.Fprintf(&summary, "%d. %s\n", index+1, string(runes))
+	}
+	path, written, err := r.Memory.Write("session_end", summary.String())
+	outcome := "duplicate"
+	if err != nil {
+		outcome = "error"
+	} else if written {
+		outcome = "written"
+	}
+	data := map[string]any{"outcome": outcome, "user_messages": userCount, "query_bytes": totalBytes}
+	if path != "" {
+		data["path"] = path
+	}
+	if err != nil {
+		data["error"] = err.Error()
+	}
+	r.log("memory_session_end", data)
+	return err
 }
 
 func waitMemoryTask(ctx context.Context, done <-chan struct{}) error {

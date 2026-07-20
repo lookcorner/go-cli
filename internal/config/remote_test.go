@@ -198,7 +198,7 @@ func TestMemoryDefaultsRemoteAndEnvironmentPrecedence(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("GROK_HOME", home)
 	cfg, err := Load(filepath.Join(home, "missing.toml"))
-	if err != nil || cfg.Memory.Enabled || !cfg.Memory.InitialInjection || !cfg.Memory.Flush.Enabled || cfg.Memory.Flush.SoftThresholdTokens != 4000 || cfg.Memory.Flush.MaxWriteChars != 8000 || cfg.Memory.Flush.IdleTimeoutSeconds != nil {
+	if err != nil || cfg.Memory.Enabled || !cfg.Memory.InitialInjection || !cfg.Memory.SaveOnEnd || !cfg.Memory.Flush.Enabled || cfg.Memory.Flush.SoftThresholdTokens != 4000 || cfg.Memory.Flush.MaxWriteChars != 8000 || cfg.Memory.Flush.IdleTimeoutSeconds != nil {
 		t.Fatalf("defaults=%#v err=%v", cfg.Memory, err)
 	}
 	cfg.ApplyRemoteSettings(&RemoteSettings{

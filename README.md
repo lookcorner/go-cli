@@ -197,9 +197,11 @@ with exact duplicates skipped. A new session receives a bounded
 session flushes on its first fresh turn. Existing response chains skip
 re-injection. `/flush` triggers the same quality-gated write path explicitly;
 optional `idle_timeout_secs` triggers it after a completed conversation has
-remained idle, while session shutdown cancels pending timers. This file-backed
-path intentionally remains useful without the still-pending semantic/vector
-index.
+remained idle, while session shutdown cancels pending timers. By default,
+`[memory.session] save_on_end = true` also records a zero-latency metadata
+summary for sessions with at least three real prompts and 50 prompt bytes;
+synthetic continuation prompts are excluded. This file-backed path
+intentionally remains useful without the still-pending semantic/vector index.
 
 The default model transport is the Responses API. For OpenAI-compatible
 providers that only expose Chat Completions, use `--backend chat_completions`

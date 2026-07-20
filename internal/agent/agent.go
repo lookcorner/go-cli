@@ -71,6 +71,7 @@ type Runner struct {
 	KillTask                func(context.Context, string) (string, error)
 	Logger                  EventLogger
 	SessionID               string
+	SessionPath             string
 	Model                   string
 	ReasoningEffort         string
 	Instructions            string
@@ -104,6 +105,7 @@ type Runner struct {
 	memoryLastFlush         string
 	memoryIdleCancel        context.CancelFunc
 	memoryIdleDone          chan struct{}
+	memorySessionSaved      bool
 	hookStart               sync.Once
 }
 

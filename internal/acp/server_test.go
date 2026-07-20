@@ -1747,12 +1747,50 @@ func TestStartSessionAssignsRunnerSessionID(t *testing.T) {
 	if created.runner.SessionID != "session-123" {
 		t.Fatalf("runner session ID=%q", created.runner.SessionID)
 	}
+	if created.runner.SessionPath != filepath.Join(server.SessionDir, "session-123.jsonl") {
+		t.Fatalf("runner session path=%q", created.runner.SessionPath)
+	}
 	created.close()
 	closed = true
 	statePath := filepath.Join(server.SessionDir, "artifacts", "session-123", "hunks.json")
 	if info, err := os.Stat(statePath); err != nil || !info.Mode().IsRegular() {
 		t.Fatalf("session hunk state was not persisted: %v", err)
 	}
+}
+
+func TestCloseSessionWaitsForCancelledRun(t *testing.T) {
+	root := t.TempDir()
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	streamer := &blockingStreamer{started: make(chan struct{})}
+	closed := make(chan struct{})
+	current := &session{
+		id: "closing", cwd: root, activePrompt: -1,
+		runner: &agent.Runner{Client: streamer, Tools: registry, Model: "test"},
+		close:  func() { close(closed) },
+	}
+	var output bytes.Buffer
+	server := &Server{output: &output, sessions: map[string]*session{"closing": current}}
+	params, _ := json.Marshal(map[string]any{"sessionId": "closing", "prompt": []any{map[string]any{"type": "text", "text": "wait"}}})
+	server.handlePrompt(context.Background(), message{ID: json.RawMessage("1"), Method: "session/prompt", Params: params})
+	select {
+	case <-streamer.started:
+	case <-time.After(time.Second):
+		t.Fatal("prompt did not start")
+	}
+	if !server.closeSession("closing") {
+		t.Fatal("active session was not closed")
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("session resources were not closed after the cancelled run completed")
+	}
+	server.wg.Wait()
 }
 
 func (f *blockingStreamer) StreamResponse(ctx context.Context, _ api.ResponseRequest, _ func(string)) (api.StreamResult, error) {

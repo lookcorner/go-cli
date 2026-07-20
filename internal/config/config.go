@@ -403,10 +403,15 @@ type fileCompactionConfig struct {
 type fileMemoryConfig struct {
 	Enabled          *bool                             `json:"enabled,omitempty" toml:"enabled"`
 	InitialInjection *fileMemoryInitialInjectionConfig `json:"initial_injection,omitempty" toml:"initial_injection"`
+	Session          *fileMemorySessionConfig          `json:"session,omitempty" toml:"session"`
 }
 
 type fileMemoryInitialInjectionConfig struct {
 	Enabled *bool `json:"enabled,omitempty" toml:"enabled"`
+}
+
+type fileMemorySessionConfig struct {
+	SaveOnEnd *bool `json:"save_on_end,omitempty" toml:"save_on_end"`
 }
 
 type fileMemoryFlushConfig struct {
@@ -874,6 +879,9 @@ func applyMemoryConfig(cfg *Config, source *fileMemoryConfig, flush *fileMemoryF
 			if source.InitialInjection.Enabled != nil {
 				cfg.Memory.InitialInjection = *source.InitialInjection.Enabled
 			}
+		}
+		if source.Session != nil && source.Session.SaveOnEnd != nil {
+			cfg.Memory.SaveOnEnd = *source.Session.SaveOnEnd
 		}
 	}
 	if flush != nil {
