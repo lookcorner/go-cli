@@ -24,6 +24,7 @@ type durableGoalState struct {
 	BaselineCommit    string `json:"baseline_commit,omitempty"`
 	CreatedAtUnix     int64  `json:"created_at_unix"`
 	PlanBaselinePath  string `json:"plan_baseline_path,omitempty"`
+	Skeptic0SessionID string `json:"skeptic0_session_id,omitempty"`
 }
 
 func (s *GoalStore) saveLocked() error {
@@ -35,6 +36,7 @@ func (s *GoalStore) saveLocked() error {
 		VerificationRuns: s.verificationRuns, LastVerification: s.lastVerification,
 		VerificationStall: s.verificationStall, BaselineCommit: s.baselineCommit,
 		CreatedAtUnix: s.createdAtUnix, PlanBaselinePath: s.planBaselinePath,
+		Skeptic0SessionID: s.skeptic0SessionID,
 	})
 	if err != nil {
 		return err
@@ -86,10 +88,14 @@ func (s *GoalStore) loadState() error {
 	if state.VerificationStall < 0 {
 		state.VerificationStall = 0
 	}
+	if !validGoalSessionID(state.Skeptic0SessionID) {
+		state.Skeptic0SessionID = ""
+	}
 	s.objective, s.status, s.message = state.Objective, state.Status, state.Message
 	s.verificationRuns, s.lastVerification = state.VerificationRuns, state.LastVerification
 	s.verificationStall, s.baselineCommit = state.VerificationStall, state.BaselineCommit
 	s.createdAtUnix, s.planBaselinePath = state.CreatedAtUnix, state.PlanBaselinePath
+	s.skeptic0SessionID = state.Skeptic0SessionID
 	return nil
 }
 
@@ -103,8 +109,23 @@ func (s *GoalStore) Resume() (string, error) {
 		return "", errors.New("completed goal cannot be resumed")
 	}
 	s.status, s.message = "active", ""
-	s.verificationRuns, s.lastVerification, s.verificationStall = 0, "", 0
+	s.verificationRuns, s.verificationStall = 0, 0
 	return s.objective, s.saveLocked()
+}
+
+func (s *GoalStore) skepticResumeState() (string, string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.skeptic0SessionID, s.lastVerification
+}
+
+func (s *GoalStore) recordSkeptic0Session(id string, clear bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if clear || id != "" {
+		s.skeptic0SessionID = id
+		_ = s.saveLocked()
+	}
 }
 
 func validGoalStatus(status string) bool {
@@ -125,6 +146,22 @@ func validGoalObjectID(value string) bool {
 	}
 	_, err := hex.DecodeString(value)
 	return err == nil
+}
+
+func validGoalSessionID(value string) bool {
+	if value == "" {
+		return true
+	}
+	if len(value) > 128 {
+		return false
+	}
+	for index, char := range value {
+		alphanumeric := (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9')
+		if !alphanumeric && (index == 0 || char != '.' && char != '-' && char != '_') {
+			return false
+		}
+	}
+	return true
 }
 
 func validGoalArtifactPath(root, path string) bool {

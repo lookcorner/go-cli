@@ -34,26 +34,49 @@ func (r *Registry) VerifyGoal(ctx context.Context, snapshot GoalSnapshot, count 
 		count = 5
 	}
 	evidence := goalEvidence{}
+	priorSkeptic, priorGaps := "", ""
 	if r.goal != nil {
 		evidence = r.goal.captureEvidence(ctx, snapshot.VerificationRuns)
+		priorSkeptic, priorGaps = r.goal.skepticResumeState()
 	}
 	prompt := goalVerifierPrompt(snapshot, evidence)
 	verdicts := make(chan goalVerdict, count)
+	run := func(index int, requestPrompt, resumeFrom string) (goalVerdict, string, error) {
+		result, err := backend.Start(ctx, SubagentRequest{
+			Prompt: requestPrompt, Description: "goal achievement skeptic", Type: "general-purpose",
+			Background: false, BackgroundSet: true, CapabilityMode: "read-only", ResumeFrom: resumeFrom,
+		})
+		if err != nil {
+			return goalVerdict{Index: index, Verdict: "refuted", Gaps: "goal verifier could not run: " + err.Error()}, "", err
+		}
+		verdict := parseGoalVerdict(result.Output)
+		verdict.Index = index
+		return verdict, result.ID, nil
+	}
+	start := 0
+	if count > 1 {
+		requestPrompt := prompt
+		if priorSkeptic != "" {
+			requestPrompt = goalVerifierResumePrompt(snapshot, evidence, priorGaps)
+		}
+		verdict, sessionID, err := run(0, requestPrompt, priorSkeptic)
+		if err != nil && priorSkeptic != "" {
+			verdict, sessionID, _ = run(0, prompt, "")
+		}
+		verdicts <- verdict
+		if r.goal != nil {
+			r.goal.recordSkeptic0Session(sessionID, false)
+		}
+		start = 1
+	} else if r.goal != nil {
+		r.goal.recordSkeptic0Session("", true)
+	}
 	var wait sync.WaitGroup
-	for index := range count {
+	for index := start; index < count; index++ {
 		wait.Add(1)
 		go func() {
 			defer wait.Done()
-			result, err := backend.Start(ctx, SubagentRequest{
-				Prompt: prompt, Description: "goal achievement skeptic", Type: "general-purpose",
-				Background: false, BackgroundSet: true, CapabilityMode: "read-only",
-			})
-			if err != nil {
-				verdicts <- goalVerdict{Index: index, Verdict: "refuted", Gaps: "goal verifier could not run: " + err.Error()}
-				return
-			}
-			verdict := parseGoalVerdict(result.Output)
-			verdict.Index = index
+			verdict, _, _ := run(index, prompt, "")
 			verdicts <- verdict
 		}()
 	}
@@ -86,6 +109,15 @@ func (r *Registry) VerifyGoal(ctx context.Context, snapshot GoalSnapshot, count 
 		summary = "independent verification could not confirm that every requirement is complete"
 	}
 	return GoalVerification{Summary: summary, DetailsPath: detailsPath}
+}
+
+func goalVerifierResumePrompt(snapshot GoalSnapshot, evidence goalEvidence, priorGaps string) string {
+	prompt := goalVerifierPrompt(snapshot, evidence)
+	resume := `You are resuming the same skeptic role from the previous verification round. Re-read the current changed files because prior tool results may be stale. Re-check every prior gap against current evidence and reject any regression or unresolved requirement.
+
+PRIOR GAPS:
+` + strings.TrimSpace(priorGaps) + "\n\n"
+	return strings.Replace(prompt, "Return exactly one JSON object", resume+"Return exactly one JSON object", 1)
 }
 
 func goalVerifierPrompt(snapshot GoalSnapshot, evidence goalEvidence) string {

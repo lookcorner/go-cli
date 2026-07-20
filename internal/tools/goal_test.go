@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -26,7 +27,7 @@ func (b *goalVerifierBackend) Start(_ context.Context, request SubagentRequest) 
 	if index < len(b.errors) && b.errors[index] != nil {
 		return SubagentResult{}, b.errors[index]
 	}
-	return SubagentResult{Status: "completed", Output: b.outputs[index]}, nil
+	return SubagentResult{ID: fmt.Sprintf("skeptic-%d", index+1), Status: "completed", Output: b.outputs[index]}, nil
 }
 func (*goalVerifierBackend) Has(string) bool { return false }
 func (*goalVerifierBackend) Output(context.Context, string, time.Duration) (SubagentResult, error) {
@@ -197,6 +198,92 @@ func TestGoalVerifierClampsSkepticCount(t *testing.T) {
 	registry.subagents.set(lower)
 	if verification := registry.VerifyGoal(context.Background(), GoalSnapshot{}, 0); verification.Achieved || len(lower.requests) != 1 {
 		t.Fatalf("lower verification=%#v requests=%d", verification, len(lower.requests))
+	}
+}
+
+func TestGoalVerifierResumesSkepticZeroAcrossRounds(t *testing.T) {
+	backend := &goalVerifierBackend{outputs: []string{
+		`{"verdict":"refuted","gaps":"missing proof"}`,
+		`{"verdict":"not_refuted"}`,
+		`{"verdict":"refuted","gaps":"missing proof"}`,
+		`{"verdict":"not_refuted"}`,
+		`{"verdict":"not_refuted"}`,
+		`{"verdict":"not_refuted"}`,
+	}}
+	registry := &Registry{subagents: &subagentHolder{}, goal: NewGoalStore()}
+	registry.subagents.set(backend)
+	if err := registry.BeginGoal("goal"); err != nil {
+		t.Fatal(err)
+	}
+	complete := func() {
+		if _, err := (&updateGoalTool{store: registry.goal}).Execute(context.Background(), json.RawMessage(`{"completed":true}`)); err != nil {
+			t.Fatal(err)
+		}
+		if err := registry.StartGoalVerification(10); err != nil {
+			t.Fatal(err)
+		}
+	}
+	complete()
+	first := registry.VerifyGoal(context.Background(), registry.GoalSnapshot(), 3)
+	if first.Achieved {
+		t.Fatalf("first verification=%#v", first)
+	}
+	if err := registry.ResolveGoalVerification(first, 10); err != nil {
+		t.Fatal(err)
+	}
+	complete()
+	second := registry.VerifyGoal(context.Background(), registry.GoalSnapshot(), 3)
+	if !second.Achieved {
+		t.Fatalf("second verification=%#v", second)
+	}
+
+	backend.mu.Lock()
+	requests := append([]SubagentRequest(nil), backend.requests...)
+	backend.mu.Unlock()
+	if len(requests) != 6 || requests[3].ResumeFrom != "skeptic-1" {
+		t.Fatalf("requests=%#v", requests)
+	}
+	if !strings.Contains(requests[3].Prompt, "PRIOR GAPS:\nmissing proof") || !strings.Contains(requests[3].Prompt, "prior tool results may be stale") {
+		t.Fatalf("resume prompt=%q", requests[3].Prompt)
+	}
+	if registry.goal.skeptic0SessionID != "skeptic-4" {
+		t.Fatalf("skeptic0 session=%q", registry.goal.skeptic0SessionID)
+	}
+}
+
+func TestGoalVerifierResumeFailureFallsBackCold(t *testing.T) {
+	backend := &goalVerifierBackend{
+		outputs: []string{"", `{"verdict":"not_refuted"}`, `{"verdict":"not_refuted"}`, `{"verdict":"not_refuted"}`},
+		errors:  []error{errors.New("stale session")},
+	}
+	registry := &Registry{subagents: &subagentHolder{}, goal: NewGoalStore()}
+	registry.subagents.set(backend)
+	registry.goal.skeptic0SessionID = "prior-child"
+	verification := registry.VerifyGoal(context.Background(), GoalSnapshot{Objective: "goal", VerificationRuns: 2}, 3)
+	if !verification.Achieved {
+		t.Fatalf("verification=%#v", verification)
+	}
+	backend.mu.Lock()
+	requests := append([]SubagentRequest(nil), backend.requests...)
+	backend.mu.Unlock()
+	if len(requests) != 4 || requests[0].ResumeFrom != "prior-child" || requests[1].ResumeFrom != "" {
+		t.Fatalf("requests=%#v", requests)
+	}
+	if strings.Contains(requests[1].Prompt, "prior tool results may be stale") {
+		t.Fatalf("cold fallback reused resume prompt: %q", requests[1].Prompt)
+	}
+}
+
+func TestGoalVerifierSingleSkepticNeverResumes(t *testing.T) {
+	backend := &goalVerifierBackend{outputs: []string{`{"verdict":"not_refuted"}`}}
+	registry := &Registry{subagents: &subagentHolder{}, goal: NewGoalStore()}
+	registry.subagents.set(backend)
+	registry.goal.skeptic0SessionID = "prior-child"
+	if verification := registry.VerifyGoal(context.Background(), GoalSnapshot{Objective: "goal"}, 1); !verification.Achieved {
+		t.Fatalf("verification=%#v", verification)
+	}
+	if backend.requests[0].ResumeFrom != "" || registry.goal.skeptic0SessionID != "" {
+		t.Fatalf("request=%#v session=%q", backend.requests[0], registry.goal.skeptic0SessionID)
 	}
 }
 

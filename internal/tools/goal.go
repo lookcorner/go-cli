@@ -33,6 +33,7 @@ type GoalStore struct {
 	createdAtUnix     int64
 	planBaselinePath  string
 	statePath         string
+	skeptic0SessionID string
 }
 
 func NewGoalStore() *GoalStore { return &GoalStore{} }
@@ -51,6 +52,7 @@ func (s *GoalStore) Begin(objective string) error {
 	s.status = "active"
 	s.message = ""
 	s.verificationRuns, s.lastVerification, s.verificationStall = 0, "", 0
+	s.skeptic0SessionID = ""
 	s.createdAtUnix = time.Now().Unix()
 	s.baselineCommit = captureGoalBaseline(s.workspaceRoot)
 	s.planBaselinePath = captureGoalPlanBaseline(s.workspaceRoot, s.artifactDir)
@@ -88,6 +90,7 @@ func (s *GoalStore) ResolveVerification(achieved bool, message string, maxRuns u
 	s.message = strings.TrimSpace(message)
 	if achieved {
 		s.status = "completed"
+		s.skeptic0SessionID = ""
 		return s.saveLocked()
 	}
 	if s.message == s.lastVerification {

@@ -40,6 +40,7 @@ func TestGoalStatePersistsResumesAndCompletes(t *testing.T) {
 	if err := first.ResolveGoalVerification(GoalVerification{Summary: "missing proof"}, 10); err != nil {
 		t.Fatal(err)
 	}
+	first.goal.recordSkeptic0Session("skeptic-child", false)
 	first.Close()
 
 	statePath := filepath.Join(artifactDir, "goal.json")
@@ -55,12 +56,18 @@ func TestGoalStatePersistsResumesAndCompletes(t *testing.T) {
 	if snapshot.Objective != "persist this objective" || snapshot.Status != "active" || snapshot.Message != "missing proof" || snapshot.VerificationRuns != 1 {
 		t.Fatalf("restored snapshot=%#v", snapshot)
 	}
+	if second.goal.skeptic0SessionID != "skeptic-child" || second.goal.lastVerification != "missing proof" {
+		t.Fatalf("restored skeptic=%q gap=%q", second.goal.skeptic0SessionID, second.goal.lastVerification)
+	}
 	objective, err := second.ResumeGoal()
 	if err != nil || objective != "persist this objective" {
 		t.Fatalf("resume objective=%q err=%v", objective, err)
 	}
 	if snapshot = second.GoalSnapshot(); snapshot.Status != "active" || snapshot.Message != "" || snapshot.VerificationRuns != 0 {
 		t.Fatalf("resumed snapshot=%#v", snapshot)
+	}
+	if second.goal.skeptic0SessionID != "skeptic-child" || second.goal.lastVerification != "missing proof" {
+		t.Fatalf("resumed skeptic=%q gap=%q", second.goal.skeptic0SessionID, second.goal.lastVerification)
 	}
 	if _, err := (&updateGoalTool{store: second.goal}).Execute(context.Background(), json.RawMessage(`{"completed":true}`)); err != nil {
 		t.Fatal(err)
@@ -78,6 +85,9 @@ func TestGoalStatePersistsResumesAndCompletes(t *testing.T) {
 	if snapshot = third.GoalSnapshot(); snapshot.Status != "completed" || snapshot.Message != "verified" {
 		t.Fatalf("completed snapshot=%#v", snapshot)
 	}
+	if third.goal.skeptic0SessionID != "" {
+		t.Fatalf("completed skeptic session=%q", third.goal.skeptic0SessionID)
+	}
 	if _, err := third.ResumeGoal(); err == nil || !strings.Contains(err.Error(), "completed") {
 		t.Fatalf("completed resume err=%v", err)
 	}
@@ -89,13 +99,13 @@ func TestGoalStateUnknownStatusPausesAndBadVersionFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	statePath := filepath.Join(artifactDir, "goal.json")
-	state := `{"version":1,"objective":"goal","status":"future_status","baseline_commit":"not-an-oid","plan_baseline_path":"/tmp/outside"}`
+	state := `{"version":1,"objective":"goal","status":"future_status","baseline_commit":"not-an-oid","plan_baseline_path":"/tmp/outside","skeptic0_session_id":"../../bad"}`
 	if err := os.WriteFile(statePath, []byte(state), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	registry := newPersistentGoalRegistry(t, root, artifactDir)
-	if snapshot := registry.GoalSnapshot(); snapshot.Status != "paused" || !strings.Contains(snapshot.Message, "unknown status") || registry.goal.baselineCommit != "" || registry.goal.planBaselinePath != "" {
-		t.Fatalf("snapshot=%#v baseline=%q plan=%q", snapshot, registry.goal.baselineCommit, registry.goal.planBaselinePath)
+	if snapshot := registry.GoalSnapshot(); snapshot.Status != "paused" || !strings.Contains(snapshot.Message, "unknown status") || registry.goal.baselineCommit != "" || registry.goal.planBaselinePath != "" || registry.goal.skeptic0SessionID != "" {
+		t.Fatalf("snapshot=%#v baseline=%q plan=%q skeptic=%q", snapshot, registry.goal.baselineCommit, registry.goal.planBaselinePath, registry.goal.skeptic0SessionID)
 	}
 	registry.Close()
 	if err := os.WriteFile(statePath, []byte(`{"version":2,"objective":"goal","status":"active"}`), 0o600); err != nil {

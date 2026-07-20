@@ -261,6 +261,9 @@ directory. `--goal --resume <session.jsonl>` reactivates an unfinished goal,
 preserves its original objective and evidence baselines, and resets the
 per-resume verifier attempt and stall counters. A supplied prompt is treated as
 additional direction; a completed goal requires a new non-empty objective.
+For panels with multiple skeptics, skeptic 0 resumes across verification rounds
+to re-check its prior gaps against current files; a failed resume falls back to
+a fresh read-only skeptic, while single-skeptic panels always start fresh.
 
 Release builds gate repo-controlled MCP/LSP and enabled project-plugin execution
 on folder trust. Interactive CLI startup asks once when executable project
