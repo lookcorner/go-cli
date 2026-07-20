@@ -62,6 +62,13 @@ hard_clear_age_turns = 10
 [goal]
 # verifier_count = 3 # Clamped to 1..5; GROK_GOAL_VERIFIER_N has precedence.
 # classifier_max_runs = 10 # Minimum 1; GROK_GOAL_CLASSIFIER_MAX has precedence.
+# strategist_every = 5 # Defaults to max(1, classifier_max_runs / 2).
+# use_current_model_only = false # GROK_GOAL_USE_CURRENT_MODEL_ONLY has precedence.
+# strategist_model = { model = "reasoning", agent_type = "general-purpose" }
+# skeptic_models = [
+#   { model = "fast", agent_type = "explore" },
+#   { model = "reasoning", agent_type = "general-purpose" },
+# ]
 
 [skills]
 # paths = ["~/shared-skills", "/absolute/path/to/SKILL.md"]

@@ -60,6 +60,67 @@ func TestGoalClassifierMaxRunsRemoteAndLocalPrecedence(t *testing.T) {
 	}
 }
 
+func TestGoalRoleModelsRemoteToleranceAndPrecedence(t *testing.T) {
+	var remote RemoteSettings
+	data := []byte(`{
+		"goal_strategist_every": 4,
+		"goal_strategist_model": {"model":"strategy","agent_type":"cursor"},
+		"goal_skeptic_models": [
+			{"model":"first","agent_type":"general-purpose"},
+			{"model":"broken"},
+			42,
+			{"model":"second","agent_type":"plan"}
+		]
+	}`)
+	if err := json.Unmarshal(data, &remote); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(filepath.Join(t.TempDir(), "missing.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ApplyRemoteSettings(&remote)
+	if cfg.GoalStrategistEvery() != 4 || cfg.Goal.StrategistModel == nil || cfg.Goal.StrategistModel.Model != "strategy" || len(cfg.Goal.SkepticModels) != 2 || cfg.Goal.SkepticModels[1].Model != "second" {
+		t.Fatalf("remote goal config=%#v", cfg.Goal)
+	}
+
+	home := t.TempDir()
+	path := filepath.Join(home, "config.toml")
+	local := `[goal]
+strategist_every = 2
+strategist_model = { model = "local", agent_type = "general-purpose" }
+skeptic_models = [{ model = "local-skeptic", agent_type = "general-purpose" }]
+`
+	if err := os.WriteFile(path, []byte(local), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ApplyRemoteSettings(&remote)
+	if cfg.GoalStrategistEvery() != 2 || cfg.Goal.StrategistModel.Model != "local" || len(cfg.Goal.SkepticModels) != 1 || cfg.Goal.SkepticModels[0].Model != "local-skeptic" {
+		t.Fatalf("local precedence=%#v", cfg.Goal)
+	}
+}
+
+func TestGoalRoleModelsMalformedRemoteFieldsDoNotFailSettings(t *testing.T) {
+	for _, data := range []string{
+		`{"goal_strategist_model":"bad","goal_skeptic_models":{},"web_fetch_enabled":true}`,
+		`{"goal_strategist_model":{"model":1,"agent_type":[]},"goal_skeptic_models":"bad","web_fetch_enabled":true}`,
+	} {
+		var settings RemoteSettings
+		if err := json.Unmarshal([]byte(data), &settings); err != nil || settings.WebFetchEnabled == nil || !*settings.WebFetchEnabled {
+			t.Fatalf("settings=%#v err=%v", settings, err)
+		}
+		cfg := Config{}
+		cfg.ApplyRemoteSettings(&settings)
+		if cfg.Goal.StrategistModel != nil || len(cfg.Goal.SkepticModels) != 0 {
+			t.Fatalf("malformed roles survived: %#v", cfg.Goal)
+		}
+	}
+}
+
 func TestApplyRemoteSettingsUsesLocalAndEnvironmentPrecedence(t *testing.T) {
 	home := t.TempDir()
 	path := filepath.Join(home, "config.toml")

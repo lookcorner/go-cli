@@ -342,6 +342,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return err
 	}
 	registry := tools.NewRegistry(ws, approver)
+	registry.ConfigureGoalRoles(goalRoleConfig(cfg))
 	registry.ConfigureUserQuestions(cfg.AskUserQuestion.TimeoutEnabled, time.Duration(cfg.AskUserQuestion.TimeoutSeconds)*time.Second)
 	artifactDir, err := session.ArtifactDir(logger.Path())
 	if err != nil {
@@ -1321,6 +1322,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		}
 		registry := tools.NewRegistry(ws, approver)
 		registry.ConfigureUserQuestions(sessionCfg.AskUserQuestion.TimeoutEnabled, time.Duration(sessionCfg.AskUserQuestion.TimeoutSeconds)*time.Second)
+		registry.ConfigureGoalRoles(goalRoleConfig(sessionCfg))
 		if search, enabled := cfg.WebSearchEndpoint(); enabled {
 			if err := registry.Register(tools.NewWebSearchTool(search.BaseURL, search.APIKey, search.Model, &http.Client{Timeout: cfg.HTTPTimeout})); err != nil {
 				_ = registry.Close()
@@ -1709,6 +1711,22 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 	return nil
 }
 
+func goalRoleConfig(cfg config.Config) tools.GoalRoleConfig {
+	convert := func(model config.GoalRoleModel) tools.GoalRoleModel {
+		return tools.GoalRoleModel{Model: model.Model, AgentType: model.AgentType}
+	}
+	result := tools.GoalRoleConfig{
+		StrategistEvery: cfg.GoalStrategistEvery(), UseCurrentModelOnly: cfg.Goal.UseCurrentModelOnly,
+	}
+	if cfg.Goal.StrategistModel != nil {
+		result.Strategist = convert(*cfg.Goal.StrategistModel)
+	}
+	for _, model := range cfg.Goal.SkepticModels {
+		result.Skeptics = append(result.Skeptics, convert(model))
+	}
+	return result
+}
+
 func applyMarketplacePlugins(settings *plugin.Settings, action string, outcome marketplace.Outcome) {
 	removed := outcome.RemovedPlugins
 	if action == "uninstall" || action == "remove_source" {
@@ -1901,6 +1919,10 @@ func goalLoop(
 			}
 			fmt.Fprintln(stderr, "[gork] goal completion refuted:", verification.Summary)
 			prompt = "Independent goal verification found remaining work: " + verification.Summary + "\nContinue working toward the full objective. Do not claim completion again until the gaps are resolved and verified."
+			if strategy := registry.RunGoalStrategist(ctx); strategy != "" {
+				fmt.Fprintln(stderr, "[gork] goal strategist produced a structural recommendation")
+				prompt += "\n\n" + strategy
+			}
 			continue
 		case "completed":
 			fmt.Fprintln(stderr, "[gork] goal completed:", snapshot.Message)

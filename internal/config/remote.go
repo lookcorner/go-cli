@@ -12,23 +12,26 @@ import (
 )
 
 type RemoteSettings struct {
-	OfficialMarketplaceAutoRegister *bool    `json:"official_marketplace_auto_register"`
-	WebFetchEnabled                 *bool    `json:"web_fetch_enabled"`
-	AutoWakeEnabled                 *bool    `json:"auto_wake_enabled"`
-	GoalVerifierCount               *int     `json:"goal_verifier_count"`
-	GoalClassifierMaxRuns           *uint32  `json:"goal_classifier_max_runs"`
-	WebFetchProxy                   *string  `json:"web_fetch_proxy"`
-	WebFetchAllowedDomains          []string `json:"web_fetch_allowed_domains"`
-	CursorSkills                    *bool    `json:"cursor_skills_enabled"`
-	CursorRules                     *bool    `json:"cursor_rules_enabled"`
-	CursorAgents                    *bool    `json:"cursor_agents_enabled"`
-	CursorMCPs                      *bool    `json:"cursor_mcps_enabled"`
-	CursorHooks                     *bool    `json:"cursor_hooks_enabled"`
-	ClaudeSkills                    *bool    `json:"claude_skills_enabled"`
-	ClaudeRules                     *bool    `json:"claude_rules_enabled"`
-	ClaudeAgents                    *bool    `json:"claude_agents_enabled"`
-	ClaudeMCPs                      *bool    `json:"claude_mcps_enabled"`
-	ClaudeHooks                     *bool    `json:"claude_hooks_enabled"`
+	OfficialMarketplaceAutoRegister *bool          `json:"official_marketplace_auto_register"`
+	WebFetchEnabled                 *bool          `json:"web_fetch_enabled"`
+	AutoWakeEnabled                 *bool          `json:"auto_wake_enabled"`
+	GoalVerifierCount               *int           `json:"goal_verifier_count"`
+	GoalClassifierMaxRuns           *uint32        `json:"goal_classifier_max_runs"`
+	GoalStrategistEvery             *uint32        `json:"goal_strategist_every"`
+	GoalStrategistModel             *GoalRoleModel `json:"goal_strategist_model"`
+	GoalSkepticModels               goalRoleModels `json:"goal_skeptic_models"`
+	WebFetchProxy                   *string        `json:"web_fetch_proxy"`
+	WebFetchAllowedDomains          []string       `json:"web_fetch_allowed_domains"`
+	CursorSkills                    *bool          `json:"cursor_skills_enabled"`
+	CursorRules                     *bool          `json:"cursor_rules_enabled"`
+	CursorAgents                    *bool          `json:"cursor_agents_enabled"`
+	CursorMCPs                      *bool          `json:"cursor_mcps_enabled"`
+	CursorHooks                     *bool          `json:"cursor_hooks_enabled"`
+	ClaudeSkills                    *bool          `json:"claude_skills_enabled"`
+	ClaudeRules                     *bool          `json:"claude_rules_enabled"`
+	ClaudeAgents                    *bool          `json:"claude_agents_enabled"`
+	ClaudeMCPs                      *bool          `json:"claude_mcps_enabled"`
+	ClaudeHooks                     *bool          `json:"claude_hooks_enabled"`
 }
 
 func FetchRemoteSettings(ctx context.Context, baseURL, token string, client *http.Client) *RemoteSettings {
@@ -95,6 +98,17 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 	if !c.goalClassifierMaxConfigured && remote.GoalClassifierMaxRuns != nil {
 		c.Goal.ClassifierMaxRuns = max(uint32(1), *remote.GoalClassifierMaxRuns)
 	}
+	if !c.goalStrategistEveryConfigured && remote.GoalStrategistEvery != nil {
+		c.Goal.StrategistEvery = max(uint32(1), *remote.GoalStrategistEvery)
+	}
+	if c.Goal.StrategistModel == nil && remote.GoalStrategistModel != nil && remote.GoalStrategistModel.valid() {
+		model := *remote.GoalStrategistModel
+		model.Model, model.AgentType = strings.TrimSpace(model.Model), strings.TrimSpace(model.AgentType)
+		c.Goal.StrategistModel = &model
+	}
+	if len(c.Goal.SkepticModels) == 0 {
+		c.Goal.SkepticModels = normalizeGoalRoleModels(remote.GoalSkepticModels)
+	}
 	if !c.WebFetch.ProxyConfigured && remote.WebFetchProxy != nil {
 		c.WebFetch.ProxyEndpoint = *remote.WebFetchProxy
 	}
@@ -104,6 +118,22 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 	}
 	applyRemoteVendor(&c.Compat.Cursor, c.compatConfigured.Cursor, "CURSOR", remote.CursorSkills, remote.CursorRules, remote.CursorAgents, remote.CursorMCPs, remote.CursorHooks)
 	applyRemoteVendor(&c.Compat.Claude, c.compatConfigured.Claude, "CLAUDE", remote.ClaudeSkills, remote.ClaudeRules, remote.ClaudeAgents, remote.ClaudeMCPs, remote.ClaudeHooks)
+}
+
+type goalRoleModels []GoalRoleModel
+
+func (m *goalRoleModels) UnmarshalJSON(data []byte) error {
+	var raw []json.RawMessage
+	if json.Unmarshal(data, &raw) != nil {
+		return nil
+	}
+	for _, item := range raw {
+		var model GoalRoleModel
+		if json.Unmarshal(item, &model) == nil && model.valid() {
+			*m = append(*m, model)
+		}
+	}
+	return nil
 }
 
 func applyRemoteVendor(target *compat.Vendor, configured compat.Vendor, vendor string, values ...*bool) {

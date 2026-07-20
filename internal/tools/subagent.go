@@ -24,6 +24,7 @@ type SubagentRequest struct {
 	CWD             string
 	Model           string
 	ReasoningEffort string
+	HarnessType     string
 }
 
 type SubagentResult struct {

@@ -14,17 +14,24 @@ import (
 const goalStateVersion = 1
 
 type durableGoalState struct {
-	Version           int    `json:"version"`
-	Objective         string `json:"objective"`
-	Status            string `json:"status"`
-	Message           string `json:"message,omitempty"`
-	VerificationRuns  uint32 `json:"verification_runs,omitempty"`
-	LastVerification  string `json:"last_verification,omitempty"`
-	VerificationStall int    `json:"verification_stall,omitempty"`
-	BaselineCommit    string `json:"baseline_commit,omitempty"`
-	CreatedAtUnix     int64  `json:"created_at_unix"`
-	PlanBaselinePath  string `json:"plan_baseline_path,omitempty"`
-	Skeptic0SessionID string `json:"skeptic0_session_id,omitempty"`
+	Version           int             `json:"version"`
+	Objective         string          `json:"objective"`
+	Status            string          `json:"status"`
+	Message           string          `json:"message,omitempty"`
+	VerificationRuns  uint32          `json:"verification_runs,omitempty"`
+	LastVerification  string          `json:"last_verification,omitempty"`
+	StallVerification string          `json:"stall_verification,omitempty"`
+	VerificationStall int             `json:"verification_stall,omitempty"`
+	ConsecutiveReject uint32          `json:"consecutive_not_achieved,omitempty"`
+	StrategistFiredAt uint32          `json:"last_strategist_fired_at,omitempty"`
+	StrategistBonus   uint32          `json:"strategist_cap_bonus,omitempty"`
+	StrategyPath      string          `json:"strategy_path,omitempty"`
+	StrategyNote      string          `json:"strategy_recommendation,omitempty"`
+	BaselineCommit    string          `json:"baseline_commit,omitempty"`
+	CreatedAtUnix     int64           `json:"created_at_unix"`
+	PlanBaselinePath  string          `json:"plan_baseline_path,omitempty"`
+	Skeptic0SessionID string          `json:"skeptic0_session_id,omitempty"`
+	SkepticModels     []GoalRoleModel `json:"skeptic_model_assignment,omitempty"`
 }
 
 func (s *GoalStore) saveLocked() error {
@@ -34,9 +41,13 @@ func (s *GoalStore) saveLocked() error {
 	data, err := json.Marshal(durableGoalState{
 		Version: goalStateVersion, Objective: s.objective, Status: s.status, Message: s.message,
 		VerificationRuns: s.verificationRuns, LastVerification: s.lastVerification,
-		VerificationStall: s.verificationStall, BaselineCommit: s.baselineCommit,
-		CreatedAtUnix: s.createdAtUnix, PlanBaselinePath: s.planBaselinePath,
+		StallVerification: s.stallVerification, VerificationStall: s.verificationStall,
+		ConsecutiveReject: s.consecutiveReject, StrategistFiredAt: s.strategistFiredAt,
+		StrategistBonus: s.strategistBonus, StrategyPath: s.strategyPath, StrategyNote: s.strategyNote,
+		BaselineCommit: s.baselineCommit,
+		CreatedAtUnix:  s.createdAtUnix, PlanBaselinePath: s.planBaselinePath,
 		Skeptic0SessionID: s.skeptic0SessionID,
+		SkepticModels:     s.skepticModels,
 	})
 	if err != nil {
 		return err
@@ -82,20 +93,30 @@ func (s *GoalStore) loadState() error {
 	if !validGoalArtifactPath(s.artifactDir, state.PlanBaselinePath) {
 		state.PlanBaselinePath = ""
 	}
+	if !validGoalArtifactPath(s.artifactDir, state.StrategyPath) {
+		state.StrategyPath, state.StrategyNote = "", ""
+	}
 	if state.CreatedAtUnix <= 0 {
 		state.CreatedAtUnix = time.Now().Unix()
 	}
 	if state.VerificationStall < 0 {
 		state.VerificationStall = 0
 	}
+	if state.StrategistBonus != goalStrategistBonus {
+		state.StrategistBonus = 0
+	}
 	if !validGoalSessionID(state.Skeptic0SessionID) {
 		state.Skeptic0SessionID = ""
 	}
 	s.objective, s.status, s.message = state.Objective, state.Status, state.Message
 	s.verificationRuns, s.lastVerification = state.VerificationRuns, state.LastVerification
-	s.verificationStall, s.baselineCommit = state.VerificationStall, state.BaselineCommit
+	s.stallVerification, s.verificationStall = state.StallVerification, state.VerificationStall
+	s.consecutiveReject, s.strategistFiredAt = state.ConsecutiveReject, state.StrategistFiredAt
+	s.strategistBonus, s.strategyPath, s.strategyNote = state.StrategistBonus, state.StrategyPath, state.StrategyNote
+	s.baselineCommit = state.BaselineCommit
 	s.createdAtUnix, s.planBaselinePath = state.CreatedAtUnix, state.PlanBaselinePath
 	s.skeptic0SessionID = state.Skeptic0SessionID
+	s.skepticModels = validGoalRoleModels(state.SkepticModels)
 	return nil
 }
 
@@ -110,6 +131,8 @@ func (s *GoalStore) Resume() (string, error) {
 	}
 	s.status, s.message = "active", ""
 	s.verificationRuns, s.verificationStall = 0, 0
+	s.stallVerification = ""
+	s.resetStrategistLocked()
 	return s.objective, s.saveLocked()
 }
 
@@ -126,6 +149,55 @@ func (s *GoalStore) recordSkeptic0Session(id string, clear bool) {
 		s.skeptic0SessionID = id
 		_ = s.saveLocked()
 	}
+}
+
+func (s *GoalStore) skepticModelAssignments(pool []GoalRoleModel, count int, useCurrentOnly bool) []GoalRoleModel {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	changed := false
+	if useCurrentOnly && len(s.skepticModels) > 0 {
+		s.skepticModels = nil
+		changed = true
+	}
+	if useCurrentOnly && s.skeptic0SessionID != "" {
+		s.skeptic0SessionID = ""
+		changed = true
+	}
+	if !useCurrentOnly && len(pool) > 0 {
+		for len(s.skepticModels) < count {
+			s.skepticModels = append(s.skepticModels, pool[len(s.skepticModels)%len(pool)])
+			changed = true
+		}
+	}
+	if changed {
+		_ = s.saveLocked()
+	}
+	result := make([]GoalRoleModel, count)
+	copy(result, s.skepticModels)
+	return result
+}
+
+func validGoalRoleModels(models []GoalRoleModel) []GoalRoleModel {
+	result := make([]GoalRoleModel, 0, len(models))
+	for _, model := range models {
+		model.Model, model.AgentType = strings.TrimSpace(model.Model), strings.TrimSpace(model.AgentType)
+		if model.Model != "" && validGoalAgentType(model.AgentType) {
+			result = append(result, model)
+		}
+	}
+	return result
+}
+
+func validGoalAgentType(value string) bool {
+	if value == "" || len(value) > 128 {
+		return false
+	}
+	for _, char := range value {
+		if char < ' ' || char == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 func validGoalStatus(status string) bool {

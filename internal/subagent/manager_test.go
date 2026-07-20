@@ -1035,9 +1035,15 @@ func TestPersistedSubagentLoadsAndResumesAfterRestart(t *testing.T) {
 	}
 	first, err := firstManager.Start(context.Background(), tools.SubagentRequest{
 		Prompt: "first prompt", Description: "persist", Type: "general-purpose", BackgroundSet: true,
+		HarnessType: "explore", CapabilityMode: "read-only",
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(sessionDir, "subagents", "parent-session", first.ID, "meta.json"))
+	var meta persistedTask
+	if err != nil || json.Unmarshal(data, &meta) != nil || meta.HarnessType != "explore" || meta.CapabilityMode != "read-only" {
+		t.Fatalf("meta=%#v data=%q err=%v", meta, data, err)
 	}
 	firstManager.Close()
 
@@ -1061,8 +1067,13 @@ func TestPersistedSubagentLoadsAndResumesAfterRestart(t *testing.T) {
 	if err != nil || resumed.Status != "completed" || resumed.Output != "second done" {
 		t.Fatalf("resumed=%#v err=%v", resumed, err)
 	}
-	if len(secondClient.requests) != 1 || secondClient.requests[0].PreviousResponseID != "first-response" {
+	if len(secondClient.requests) != 1 || secondClient.requests[0].PreviousResponseID != "first-response" || !strings.Contains(secondClient.requests[0].Instructions, "Explore the codebase") {
 		t.Fatalf("requests=%#v", secondClient.requests)
+	}
+	for _, definition := range secondClient.requests[0].Tools {
+		if definition.Name == "write_file" || definition.Name == "shell" || definition.Name == "task" {
+			t.Fatalf("restored read-only harness received %q", definition.Name)
+		}
 	}
 	thirdManager, err := New(Config{
 		Context: context.Background(), Catalog: catalog, Tools: registry, WorkspaceRoot: root,

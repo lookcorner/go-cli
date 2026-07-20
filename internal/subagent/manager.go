@@ -122,6 +122,7 @@ type task struct {
 	progress     agent.Progress
 	model        string
 	capability   string
+	harnessType  string
 	resumedFrom  string
 	mcpResource  *mcpResource
 	logger       *session.Logger
@@ -183,6 +184,8 @@ type persistedTask struct {
 	WorktreePath   string     `json:"worktree_path,omitempty"`
 	SnapshotRef    string     `json:"snapshot_ref,omitempty"`
 	EffectiveModel string     `json:"effective_model_id,omitempty"`
+	HarnessType    string     `json:"harness_agent_type,omitempty"`
+	CapabilityMode string     `json:"capability_mode,omitempty"`
 }
 
 const orphanedTaskError = "interrupted by process restart"
@@ -257,11 +260,23 @@ func (m *Manager) Start(ctx context.Context, request tools.SubagentRequest) (too
 	if definition.PermissionMode == "bypassPermissions" {
 		return tools.SubagentResult{}, errors.New("subagent permissionMode bypassPermissions is not enabled")
 	}
-	effort := first(request.ReasoningEffort, definition.Effort)
+	runtimeDefinition := definition
+	if request.HarnessType != "" {
+		m.mu.RLock()
+		runtimeDefinition, ok = m.catalog.ByName(request.HarnessType)
+		m.mu.RUnlock()
+		if !ok {
+			return tools.SubagentResult{}, fmt.Errorf("unknown harness agent_type %q", request.HarnessType)
+		}
+		if runtimeDefinition.PermissionMode == "bypassPermissions" {
+			return tools.SubagentResult{}, errors.New("harness agent_type bypassPermissions is not enabled")
+		}
+	}
+	effort := first(request.ReasoningEffort, runtimeDefinition.Effort)
 	if !validEffort(effort) {
 		return tools.SubagentResult{}, fmt.Errorf("invalid subagent reasoning_effort %q", effort)
 	}
-	isolation := first(request.Isolation, definition.Isolation)
+	isolation := first(request.Isolation, runtimeDefinition.Isolation)
 	if isolation != "" && isolation != "none" && isolation != "worktree" {
 		return tools.SubagentResult{}, fmt.Errorf("invalid subagent isolation %q", isolation)
 	}
@@ -297,18 +312,18 @@ func (m *Manager) Start(ctx context.Context, request tools.SubagentRequest) (too
 			return tools.SubagentResult{}, fmt.Errorf("unknown Task.model slug %q; valid model slugs: %s; omit model to inherit the parent model", request.Model, valid)
 		}
 		model = resolved
-	} else if definition.Model != "" {
-		if resolved, ok := m.resolve(definition.Model); ok {
+	} else if runtimeDefinition.Model != "" {
+		if resolved, ok := m.resolve(runtimeDefinition.Model); ok {
 			model = resolved
 		} else if m.resolveModel == nil {
-			model.Model = definition.Model
+			model.Model = runtimeDefinition.Model
 		}
 	}
 	capability := request.CapabilityMode
 	if capability == "" && (request.Type == "explore" || request.Type == "plan") {
 		capability = "read-only"
 	}
-	runner, hookRuntime, ownedMCPResource, err := m.buildRuntime(childRoot, childRegistry, definition, model, effort, id, request.Type, capability)
+	runner, hookRuntime, ownedMCPResource, err := m.buildRuntime(childRoot, childRegistry, runtimeDefinition, model, effort, id, request.Type, capability)
 	if err != nil {
 		return tools.SubagentResult{}, err
 	}
@@ -319,7 +334,7 @@ func (m *Manager) Start(ctx context.Context, request tools.SubagentRequest) (too
 			}
 		}()
 	}
-	current := &task{id: id, typeName: request.Type, description: request.Description, prompt: request.Prompt, started: time.Now(), done: make(chan struct{}), runner: runner, hookRuntime: hookRuntime, cwd: childRoot, ownedTools: childRegistry, worktreePath: worktreePath, model: model.Model, capability: capability, mcpResource: ownedMCPResource}
+	current := &task{id: id, typeName: request.Type, description: request.Description, prompt: request.Prompt, started: time.Now(), done: make(chan struct{}), runner: runner, hookRuntime: hookRuntime, cwd: childRoot, ownedTools: childRegistry, worktreePath: worktreePath, model: model.Model, capability: capability, harnessType: request.HarnessType, mcpResource: ownedMCPResource}
 	if err := m.startPersistence(current, request.Prompt, ""); err != nil {
 		return tools.SubagentResult{}, err
 	}
@@ -449,7 +464,7 @@ func (m *Manager) resume(ctx context.Context, request tools.SubagentRequest, def
 	if hookRuntime != nil {
 		runner.HookPolicy = hookRuntime
 	}
-	current := &task{id: id, typeName: request.Type, description: request.Description, prompt: request.Prompt, started: time.Now(), done: make(chan struct{}), runner: runner, responseID: previous.responseID, hookRuntime: hookRuntime, cwd: previous.cwd, ownedTools: previous.ownedTools, worktreePath: previous.worktreePath, model: runner.Model, capability: previous.capability, resumedFrom: previous.id, mcpResource: previous.mcpResource}
+	current := &task{id: id, typeName: request.Type, description: request.Description, prompt: request.Prompt, started: time.Now(), done: make(chan struct{}), runner: runner, responseID: previous.responseID, hookRuntime: hookRuntime, cwd: previous.cwd, ownedTools: previous.ownedTools, worktreePath: previous.worktreePath, model: runner.Model, capability: previous.capability, harnessType: previous.harnessType, resumedFrom: previous.id, mcpResource: previous.mcpResource}
 	if err := m.startPersistence(current, request.Prompt, previous.id); err != nil {
 		previous.mu.Lock()
 		previous.resumed = false
@@ -480,9 +495,27 @@ func (m *Manager) restoreTaskRuntime(previous *task, definition agents.Definitio
 		}
 		return err
 	}
-	capability := ""
-	if previous.typeName == "explore" || previous.typeName == "plan" {
+	capability := previous.capability
+	if capability == "" && (previous.typeName == "explore" || previous.typeName == "plan") {
 		capability = "read-only"
+	}
+	if previous.harnessType != "" {
+		m.mu.RLock()
+		override, ok := m.catalog.ByName(previous.harnessType)
+		m.mu.RUnlock()
+		if !ok {
+			if childRegistry != nil {
+				_ = childRegistry.Close()
+			}
+			return fmt.Errorf("persisted harness agent_type %q is unavailable", previous.harnessType)
+		}
+		if override.PermissionMode == "bypassPermissions" {
+			if childRegistry != nil {
+				_ = childRegistry.Close()
+			}
+			return errors.New("persisted harness agent_type bypassPermissions is not enabled")
+		}
+		definition = override
 	}
 	runner, hookRuntime, resource, err := m.buildRuntime(root, childRegistry, definition, model, definition.Effort, previous.id, previous.typeName, capability)
 	if err != nil {
@@ -624,6 +657,7 @@ func (m *Manager) startPersistence(current *task, prompt, resumedFrom string) er
 		Type: current.typeName, Description: current.description, Prompt: prompt, Status: "running",
 		StartedAt: current.started.UTC(), ResumedFrom: resumedFrom, ChildCWD: current.cwd,
 		WorktreePath: current.worktreePath, EffectiveModel: current.model,
+		HarnessType: current.harnessType, CapabilityMode: current.capability,
 	}); err != nil {
 		_ = logger.Close()
 		_ = os.Remove(logger.Path())
@@ -642,6 +676,8 @@ func (m *Manager) finishPersistence(current *task, result tools.SubagentResult) 
 			ToolCalls: result.ToolCalls, Turns: result.Turns, ResumedFrom: current.resumedFrom,
 			ChildCWD: current.cwd, WorktreePath: current.worktreePath, SnapshotRef: current.snapshotRef,
 			EffectiveModel: current.model,
+			HarnessType:    current.harnessType,
+			CapabilityMode: current.capability,
 		}
 		if result.Status != "completed" {
 			record.Error = result.Output
@@ -732,6 +768,7 @@ func (m *Manager) loadPersistedTasks() []tools.SubagentResult {
 			id: record.SubagentID, typeName: record.Type, description: record.Description, prompt: record.Prompt,
 			started: record.StartedAt, done: make(chan struct{}), result: result, cwd: record.ChildCWD,
 			worktreePath: record.WorktreePath, snapshotRef: record.SnapshotRef, model: record.EffectiveModel,
+			harnessType: record.HarnessType, capability: record.CapabilityMode,
 			resumedFrom: record.ResumedFrom, metaPath: path, terminal: true,
 		}
 		close(current.done)

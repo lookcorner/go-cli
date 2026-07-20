@@ -16,6 +16,7 @@ type goalVerifierBackend struct {
 	outputs  []string
 	errors   []error
 	requests []SubagentRequest
+	onStart  func(int, SubagentRequest)
 }
 
 func (b *goalVerifierBackend) Description() string { return "goal verifier fixture" }
@@ -24,6 +25,9 @@ func (b *goalVerifierBackend) Start(_ context.Context, request SubagentRequest) 
 	defer b.mu.Unlock()
 	index := len(b.requests)
 	b.requests = append(b.requests, request)
+	if b.onStart != nil {
+		b.onStart(index, request)
+	}
 	if index < len(b.errors) && b.errors[index] != nil {
 		return SubagentResult{}, b.errors[index]
 	}
@@ -284,6 +288,71 @@ func TestGoalVerifierSingleSkepticNeverResumes(t *testing.T) {
 	}
 	if backend.requests[0].ResumeFrom != "" || registry.goal.skeptic0SessionID != "" {
 		t.Fatalf("request=%#v session=%q", backend.requests[0], registry.goal.skeptic0SessionID)
+	}
+}
+
+func TestGoalVerifierFreezesRoleModelPoolAndHonorsKillSwitch(t *testing.T) {
+	outputs := make([]string, 9)
+	for index := range outputs {
+		outputs[index] = `{"verdict":"not_refuted"}`
+	}
+	backend := &goalVerifierBackend{outputs: outputs}
+	registry := &Registry{subagents: &subagentHolder{}, goal: NewGoalStore()}
+	registry.subagents.set(backend)
+	registry.ConfigureGoalRoles(GoalRoleConfig{Skeptics: []GoalRoleModel{
+		{Model: "model-a", AgentType: "plugin:explore"},
+		{Model: "model-b", AgentType: "plan"},
+	}})
+	if first := registry.VerifyGoal(context.Background(), GoalSnapshot{Objective: "goal", VerificationRuns: 1}, 3); !first.Achieved {
+		t.Fatalf("first=%#v", first)
+	}
+	registry.ConfigureGoalRoles(GoalRoleConfig{Skeptics: []GoalRoleModel{{Model: "new", AgentType: "general-purpose"}}})
+	if second := registry.VerifyGoal(context.Background(), GoalSnapshot{Objective: "goal", VerificationRuns: 2}, 3); !second.Achieved {
+		t.Fatalf("second=%#v", second)
+	}
+	backend.mu.Lock()
+	requests := append([]SubagentRequest(nil), backend.requests...)
+	backend.mu.Unlock()
+	if len(requests) != 6 || requests[0].Model != "model-a" || requests[0].HarnessType != "plugin:explore" || requests[3].ResumeFrom != "skeptic-1" || requests[3].Model != "model-a" || requests[3].HarnessType != "plugin:explore" {
+		t.Fatalf("requests=%#v", requests)
+	}
+	for start := 0; start < 6; start += 3 {
+		counts := map[string]int{}
+		for _, request := range requests[start : start+3] {
+			counts[request.Model]++
+		}
+		if counts["model-a"] != 2 || counts["model-b"] != 1 {
+			t.Fatalf("round %d models=%v", start/3+1, counts)
+		}
+	}
+
+	registry.ConfigureGoalRoles(GoalRoleConfig{UseCurrentModelOnly: true, Skeptics: []GoalRoleModel{{Model: "ignored", AgentType: "explore"}}})
+	if third := registry.VerifyGoal(context.Background(), GoalSnapshot{Objective: "goal", VerificationRuns: 3}, 3); !third.Achieved {
+		t.Fatalf("third=%#v", third)
+	}
+	if len(registry.goal.skepticModels) != 0 {
+		t.Fatalf("kill switch retained assignments=%#v", registry.goal.skepticModels)
+	}
+	for _, request := range backend.requests[6:] {
+		if request.Model != "" || request.HarnessType != "" {
+			t.Fatalf("kill switch request=%#v", request)
+		}
+	}
+}
+
+func TestGoalVerifierExplicitRoleFailureFallsBackCurrent(t *testing.T) {
+	backend := &goalVerifierBackend{
+		outputs: []string{"", `{"verdict":"not_refuted"}`},
+		errors:  []error{errors.New("role unavailable")},
+	}
+	registry := &Registry{subagents: &subagentHolder{}, goal: NewGoalStore()}
+	registry.subagents.set(backend)
+	registry.ConfigureGoalRoles(GoalRoleConfig{Skeptics: []GoalRoleModel{{Model: "role-model", AgentType: "cursor"}}})
+	if verification := registry.VerifyGoal(context.Background(), GoalSnapshot{Objective: "goal"}, 1); !verification.Achieved {
+		t.Fatalf("verification=%#v", verification)
+	}
+	if len(backend.requests) != 2 || backend.requests[0].Model != "role-model" || backend.requests[0].HarnessType != "cursor" || backend.requests[1].Model != "" || backend.requests[1].HarnessType != "" {
+		t.Fatalf("requests=%#v", backend.requests)
 	}
 }
 

@@ -19,6 +19,18 @@ type GoalSnapshot struct {
 	VerificationRuns uint32
 }
 
+type GoalRoleModel struct {
+	Model     string `json:"model"`
+	AgentType string `json:"agent_type"`
+}
+
+type GoalRoleConfig struct {
+	StrategistEvery     uint32
+	UseCurrentModelOnly bool
+	Strategist          GoalRoleModel
+	Skeptics            []GoalRoleModel
+}
+
 type GoalStore struct {
 	mu                sync.Mutex
 	objective         string
@@ -26,7 +38,13 @@ type GoalStore struct {
 	message           string
 	verificationRuns  uint32
 	lastVerification  string
+	stallVerification string
 	verificationStall int
+	consecutiveReject uint32
+	strategistFiredAt uint32
+	strategistBonus   uint32
+	strategyPath      string
+	strategyNote      string
 	workspaceRoot     string
 	artifactDir       string
 	baselineCommit    string
@@ -34,6 +52,7 @@ type GoalStore struct {
 	planBaselinePath  string
 	statePath         string
 	skeptic0SessionID string
+	skepticModels     []GoalRoleModel
 }
 
 func NewGoalStore() *GoalStore { return &GoalStore{} }
@@ -52,7 +71,10 @@ func (s *GoalStore) Begin(objective string) error {
 	s.status = "active"
 	s.message = ""
 	s.verificationRuns, s.lastVerification, s.verificationStall = 0, "", 0
+	s.stallVerification = ""
+	s.resetStrategistLocked()
 	s.skeptic0SessionID = ""
+	s.skepticModels = nil
 	s.createdAtUnix = time.Now().Unix()
 	s.baselineCommit = captureGoalBaseline(s.workspaceRoot)
 	s.planBaselinePath = captureGoalPlanBaseline(s.workspaceRoot, s.artifactDir)
@@ -71,8 +93,7 @@ func (s *GoalStore) StartVerification(maxRuns uint32) error {
 	if s.status != "verifying" {
 		return errors.New("goal is not awaiting verification")
 	}
-	maxRuns = max(uint32(1), maxRuns)
-	if s.verificationRuns >= maxRuns {
+	if s.verificationRuns >= goalClassifierLimit(maxRuns, s.strategistBonus) {
 		s.status = "paused"
 		err := fmt.Errorf("goal verification paused after %d attempts", s.verificationRuns)
 		return errors.Join(err, s.saveLocked())
@@ -91,23 +112,41 @@ func (s *GoalStore) ResolveVerification(achieved bool, message string, maxRuns u
 	if achieved {
 		s.status = "completed"
 		s.skeptic0SessionID = ""
+		s.skepticModels = nil
+		s.resetStrategistLocked()
 		return s.saveLocked()
 	}
-	if s.message == s.lastVerification {
+	s.lastVerification = s.message
+	s.consecutiveReject++
+	if s.message == s.stallVerification {
 		s.verificationStall++
 	} else {
-		s.lastVerification, s.verificationStall = s.message, 1
+		s.stallVerification, s.verificationStall = s.message, 1
 	}
-	if s.verificationRuns >= max(uint32(1), maxRuns) {
+	stallLimit := 2 + int(s.strategistBonus)
+	if s.verificationRuns >= goalClassifierLimit(maxRuns, s.strategistBonus) {
 		s.status = "paused"
 		s.message = fmt.Sprintf("verification run cap reached after %d attempts: %s", s.verificationRuns, s.message)
-	} else if s.verificationStall >= 2 {
+	} else if s.verificationStall >= stallLimit {
 		s.status = "paused"
-		s.message = "verification found no progress across two attempts: " + s.message
+		s.message = fmt.Sprintf("verification found no progress across %d attempts: %s", stallLimit, s.message)
 	} else {
 		s.status = "active"
 	}
 	return s.saveLocked()
+}
+
+func goalClassifierLimit(base, bonus uint32) uint32 {
+	base = max(uint32(1), base)
+	if ^uint32(0)-base < bonus {
+		return ^uint32(0)
+	}
+	return base + bonus
+}
+
+func (s *GoalStore) resetStrategistLocked() {
+	s.consecutiveReject, s.strategistFiredAt, s.strategistBonus = 0, 0, 0
+	s.strategyPath, s.strategyNote = "", ""
 }
 
 type updateGoalTool struct{ store *GoalStore }

@@ -264,6 +264,15 @@ additional direction; a completed goal requires a new non-empty objective.
 For panels with multiple skeptics, skeptic 0 resumes across verification rounds
 to re-check its prior gaps against current files; a failed resume falls back to
 a fresh read-only skeptic, while single-skeptic panels always start fresh.
+`[goal].skeptic_models` assigns model/profile and agent harness pairs round-robin;
+the per-index assignment is frozen in `goal.json` so resumed skeptics keep the
+same runtime. `[goal].strategist_model` selects a best-effort diagnostic role
+that runs every `[goal].strategist_every` consecutive refutations (default half
+the classifier cap), writes a private structural recommendation, and grants
+three bounded retry rounds with a relaxed no-progress window. Strategist errors
+fail open and revoke that bonus. `GROK_GOAL_STRATEGIST_EVERY` overrides the
+cadence, while `GROK_GOAL_USE_CURRENT_MODEL_ONLY=true` immediately clears role
+pins and inherited skeptic sessions.
 
 Release builds gate repo-controlled MCP/LSP and enabled project-plugin execution
 on folder trust. Interactive CLI startup asks once when executable project

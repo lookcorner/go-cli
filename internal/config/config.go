@@ -65,6 +65,7 @@ type Config struct {
 	autoWakeConfigured              bool
 	goalVerifierConfigured          bool
 	goalClassifierMaxConfigured     bool
+	goalStrategistEveryConfigured   bool
 }
 
 type ModelProfile struct {
@@ -98,8 +99,59 @@ type AskUserQuestionConfig struct {
 }
 
 type GoalConfig struct {
-	VerifierCount     int    `json:"verifier_count"`
-	ClassifierMaxRuns uint32 `json:"classifier_max_runs"`
+	VerifierCount       int             `json:"verifier_count"`
+	ClassifierMaxRuns   uint32          `json:"classifier_max_runs"`
+	StrategistEvery     uint32          `json:"strategist_every,omitempty"`
+	UseCurrentModelOnly bool            `json:"use_current_model_only,omitempty"`
+	StrategistModel     *GoalRoleModel  `json:"strategist_model,omitempty"`
+	SkepticModels       []GoalRoleModel `json:"skeptic_models,omitempty"`
+}
+
+type GoalRoleModel struct {
+	Model     string `json:"model" toml:"model"`
+	AgentType string `json:"agent_type" toml:"agent_type"`
+}
+
+func (m *GoalRoleModel) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	if json.Unmarshal(data, &raw) == nil {
+		_ = json.Unmarshal(raw["model"], &m.Model)
+		_ = json.Unmarshal(raw["agent_type"], &m.AgentType)
+	}
+	return nil
+}
+
+func (m *GoalRoleModel) UnmarshalTOML(data []byte) error {
+	var raw struct {
+		Model     string `toml:"model"`
+		AgentType string `toml:"agent_type"`
+	}
+	if toml.Unmarshal(data, &raw) == nil {
+		m.Model, m.AgentType = raw.Model, raw.AgentType
+	}
+	return nil
+}
+
+func (m GoalRoleModel) valid() bool {
+	return strings.TrimSpace(m.Model) != "" && strings.TrimSpace(m.AgentType) != ""
+}
+
+func normalizeGoalRoleModels(models []GoalRoleModel) []GoalRoleModel {
+	result := make([]GoalRoleModel, 0, len(models))
+	for _, model := range models {
+		model.Model, model.AgentType = strings.TrimSpace(model.Model), strings.TrimSpace(model.AgentType)
+		if model.valid() {
+			result = append(result, model)
+		}
+	}
+	return result
+}
+
+func (c Config) GoalStrategistEvery() uint32 {
+	if c.Goal.StrategistEvery > 0 {
+		return c.Goal.StrategistEvery
+	}
+	return max(uint32(1), c.Goal.ClassifierMaxRuns/2)
 }
 
 type PermissionConfig struct {
@@ -281,8 +333,12 @@ type fileAskUserQuestionConfig struct {
 }
 
 type fileGoalConfig struct {
-	VerifierCount     *int    `json:"verifier_count,omitempty" toml:"verifier_count"`
-	ClassifierMaxRuns *uint32 `json:"classifier_max_runs,omitempty" toml:"classifier_max_runs"`
+	VerifierCount       *int            `json:"verifier_count,omitempty" toml:"verifier_count"`
+	ClassifierMaxRuns   *uint32         `json:"classifier_max_runs,omitempty" toml:"classifier_max_runs"`
+	StrategistEvery     *uint32         `json:"strategist_every,omitempty" toml:"strategist_every"`
+	UseCurrentModelOnly *bool           `json:"use_current_model_only,omitempty" toml:"use_current_model_only"`
+	StrategistModel     *GoalRoleModel  `json:"strategist_model,omitempty" toml:"strategist_model"`
+	SkepticModels       []GoalRoleModel `json:"skeptic_models,omitempty" toml:"skeptic_models"`
 }
 
 type modelConfig struct {
@@ -469,6 +525,19 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 		cfg.Goal.ClassifierMaxRuns = max(uint32(1), *disk.Goal.ClassifierMaxRuns)
 		cfg.goalClassifierMaxConfigured = true
 	}
+	if disk.Goal.StrategistEvery != nil {
+		cfg.Goal.StrategistEvery = max(uint32(1), *disk.Goal.StrategistEvery)
+		cfg.goalStrategistEveryConfigured = true
+	}
+	if disk.Goal.UseCurrentModelOnly != nil {
+		cfg.Goal.UseCurrentModelOnly = *disk.Goal.UseCurrentModelOnly
+	}
+	if disk.Goal.StrategistModel != nil && disk.Goal.StrategistModel.valid() {
+		model := *disk.Goal.StrategistModel
+		model.Model, model.AgentType = strings.TrimSpace(model.Model), strings.TrimSpace(model.AgentType)
+		cfg.Goal.StrategistModel = &model
+	}
+	cfg.Goal.SkepticModels = normalizeGoalRoleModels(disk.Goal.SkepticModels)
 	if disk.ContextWindow > 0 {
 		cfg.ContextWindow = disk.ContextWindow
 	}
@@ -773,6 +842,15 @@ func applyEnv(cfg *Config) {
 			cfg.Goal.ClassifierMaxRuns = max(uint32(1), uint32(count))
 			cfg.goalClassifierMaxConfigured = true
 		}
+	}
+	if value := strings.TrimSpace(os.Getenv("GROK_GOAL_STRATEGIST_EVERY")); value != "" {
+		if count, err := strconv.ParseUint(value, 10, 32); err == nil {
+			cfg.Goal.StrategistEvery = max(uint32(1), uint32(count))
+			cfg.goalStrategistEveryConfigured = true
+		}
+	}
+	if value, ok := envBool("GROK_GOAL_USE_CURRENT_MODEL_ONLY"); ok {
+		cfg.Goal.UseCurrentModelOnly = value
 	}
 	if !cfg.WebFetch.ProxyConfigured {
 		if value := os.Getenv("GROK_WEB_FETCH_PROXY"); value != "" {

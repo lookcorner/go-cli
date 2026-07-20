@@ -320,6 +320,53 @@ func TestGoalClassifierMaxRunsConfigPrecedenceAndFloor(t *testing.T) {
 	}
 }
 
+func TestGoalStrategistAndRoleModelConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	path := filepath.Join(home, "config.toml")
+	body := `[goal]
+classifier_max_runs = 8
+strategist_every = 3
+strategist_model = { model = "strategy", agent_type = "cursor" }
+
+[[goal.skeptic_models]]
+model = "skeptic-a"
+agent_type = "general-purpose"
+
+[[goal.skeptic_models]]
+agent_type = "missing-model"
+
+[[goal.skeptic_models]]
+model = "skeptic-b"
+agent_type = "plan"
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.GoalStrategistEvery() != 3 || cfg.Goal.StrategistModel == nil || cfg.Goal.StrategistModel.Model != "strategy" || len(cfg.Goal.SkepticModels) != 2 || cfg.Goal.SkepticModels[1].Model != "skeptic-b" {
+		t.Fatalf("goal config=%#v", cfg.Goal)
+	}
+	t.Setenv("GROK_GOAL_STRATEGIST_EVERY", "0")
+	t.Setenv("GROK_GOAL_USE_CURRENT_MODEL_ONLY", "true")
+	cfg, err = Load(path)
+	if err != nil || cfg.GoalStrategistEvery() != 1 || !cfg.Goal.UseCurrentModelOnly {
+		t.Fatalf("environment config=%#v err=%v", cfg.Goal, err)
+	}
+
+	t.Setenv("GROK_GOAL_STRATEGIST_EVERY", "")
+	if err := os.WriteFile(path, []byte("[goal]\nclassifier_max_runs = 7\nstrategist_model = { agent_type = \"cursor\" }\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(path)
+	if err != nil || cfg.GoalStrategistEvery() != 3 || cfg.Goal.StrategistModel != nil {
+		t.Fatalf("tolerant/default config=%#v err=%v", cfg.Goal, err)
+	}
+}
+
 func TestValidateWebFetchConfig(t *testing.T) {
 	base := Config{
 		APIKey: "key", BaseURL: "https://api.example/v1", Model: "model", Backend: "responses",

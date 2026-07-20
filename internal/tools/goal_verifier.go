@@ -34,18 +34,31 @@ func (r *Registry) VerifyGoal(ctx context.Context, snapshot GoalSnapshot, count 
 		count = 5
 	}
 	evidence := goalEvidence{}
-	priorSkeptic, priorGaps := "", ""
 	if r.goal != nil {
 		evidence = r.goal.captureEvidence(ctx, snapshot.VerificationRuns)
-		priorSkeptic, priorGaps = r.goal.skepticResumeState()
 	}
 	prompt := goalVerifierPrompt(snapshot, evidence)
+	roles := r.goalRoleConfig()
+	assignments := make([]GoalRoleModel, count)
+	if r.goal != nil {
+		assignments = r.goal.skepticModelAssignments(roles.Skeptics, count, roles.UseCurrentModelOnly)
+	}
+	priorSkeptic, priorGaps := "", ""
+	if r.goal != nil {
+		priorSkeptic, priorGaps = r.goal.skepticResumeState()
+	}
 	verdicts := make(chan goalVerdict, count)
-	run := func(index int, requestPrompt, resumeFrom string) (goalVerdict, string, error) {
-		result, err := backend.Start(ctx, SubagentRequest{
+	run := func(index int, requestPrompt, resumeFrom string, role GoalRoleModel, roleFallback bool) (goalVerdict, string, error) {
+		request := SubagentRequest{
 			Prompt: requestPrompt, Description: "goal achievement skeptic", Type: "general-purpose",
 			Background: false, BackgroundSet: true, CapabilityMode: "read-only", ResumeFrom: resumeFrom,
-		})
+			Model: role.Model, HarnessType: role.AgentType,
+		}
+		result, err := backend.Start(ctx, request)
+		if err != nil && roleFallback && role.valid() {
+			request.Model, request.HarnessType = "", ""
+			result, err = backend.Start(ctx, request)
+		}
 		if err != nil {
 			return goalVerdict{Index: index, Verdict: "refuted", Gaps: "goal verifier could not run: " + err.Error()}, "", err
 		}
@@ -59,9 +72,9 @@ func (r *Registry) VerifyGoal(ctx context.Context, snapshot GoalSnapshot, count 
 		if priorSkeptic != "" {
 			requestPrompt = goalVerifierResumePrompt(snapshot, evidence, priorGaps)
 		}
-		verdict, sessionID, err := run(0, requestPrompt, priorSkeptic)
+		verdict, sessionID, err := run(0, requestPrompt, priorSkeptic, assignments[0], false)
 		if err != nil && priorSkeptic != "" {
-			verdict, sessionID, _ = run(0, prompt, "")
+			verdict, sessionID, _ = run(0, prompt, "", assignments[0], true)
 		}
 		verdicts <- verdict
 		if r.goal != nil {
@@ -76,7 +89,7 @@ func (r *Registry) VerifyGoal(ctx context.Context, snapshot GoalSnapshot, count 
 		wait.Add(1)
 		go func() {
 			defer wait.Done()
-			verdict, _, _ := run(index, prompt, "")
+			verdict, _, _ := run(index, prompt, "", assignments[index], true)
 			verdicts <- verdict
 		}()
 	}

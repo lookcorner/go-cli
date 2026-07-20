@@ -135,6 +135,7 @@ type Registry struct {
 	readFile      *readFileTool
 	webFetch      *webFetchTool
 	subagents     *subagentHolder
+	goalRoles     GoalRoleConfig
 }
 
 type mutationCheckpoint struct {
@@ -384,6 +385,31 @@ func (r *Registry) ResumeGoal() (string, error) {
 		return "", errors.New("goal store is unavailable")
 	}
 	return r.goal.Resume()
+}
+
+func (r *Registry) ConfigureGoalRoles(config GoalRoleConfig) {
+	config.Skeptics = validGoalRoleModels(config.Skeptics)
+	if !config.Strategist.valid() {
+		config.Strategist = GoalRoleModel{}
+	}
+	if config.UseCurrentModelOnly {
+		config.Strategist, config.Skeptics = GoalRoleModel{}, nil
+	}
+	r.mu.Lock()
+	r.goalRoles = config
+	r.mu.Unlock()
+}
+
+func (m GoalRoleModel) valid() bool {
+	return strings.TrimSpace(m.Model) != "" && validGoalAgentType(strings.TrimSpace(m.AgentType))
+}
+
+func (r *Registry) goalRoleConfig() GoalRoleConfig {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	config := r.goalRoles
+	config.Skeptics = append([]GoalRoleModel(nil), config.Skeptics...)
+	return config
 }
 
 func (r *Registry) GoalSnapshot() GoalSnapshot {
@@ -682,7 +708,7 @@ func capabilityAllows(capability, name string) bool {
 	case "read-write", "readwrite":
 		return name != "shell" && name != "run_terminal_cmd" && name != "monitor" && name != "start_command" && name != "kill_command"
 	case "execute":
-		return name != "write_file" && name != "edit_file" && name != "search_replace"
+		return name != "write_file" && name != "edit_file" && name != "search_replace" && !strings.HasPrefix(name, "scheduler_")
 	default:
 		return true
 	}

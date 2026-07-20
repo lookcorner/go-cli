@@ -41,6 +41,15 @@ func TestGoalStatePersistsResumesAndCompletes(t *testing.T) {
 		t.Fatal(err)
 	}
 	first.goal.recordSkeptic0Session("skeptic-child", false)
+	first.goal.skepticModelAssignments([]GoalRoleModel{{Model: "skeptic-model", AgentType: "explore"}}, 1, false)
+	strategyPath := filepath.Join(artifactDir, "goal-strategy.md")
+	if err := writeGoalArtifact(strategyPath, []byte("# Strategy\n")); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := first.goal.claimStrategist(1); !ok {
+		t.Fatal("strategist was not claimed")
+	}
+	first.goal.resolveStrategist(strategyPath, "# Strategy", true)
 	first.Close()
 
 	statePath := filepath.Join(artifactDir, "goal.json")
@@ -56,8 +65,11 @@ func TestGoalStatePersistsResumesAndCompletes(t *testing.T) {
 	if snapshot.Objective != "persist this objective" || snapshot.Status != "active" || snapshot.Message != "missing proof" || snapshot.VerificationRuns != 1 {
 		t.Fatalf("restored snapshot=%#v", snapshot)
 	}
-	if second.goal.skeptic0SessionID != "skeptic-child" || second.goal.lastVerification != "missing proof" {
-		t.Fatalf("restored skeptic=%q gap=%q", second.goal.skeptic0SessionID, second.goal.lastVerification)
+	if second.goal.skeptic0SessionID != "skeptic-child" || second.goal.lastVerification != "missing proof" || len(second.goal.skepticModels) != 1 || second.goal.skepticModels[0].Model != "skeptic-model" {
+		t.Fatalf("restored skeptic=%q gap=%q models=%#v", second.goal.skeptic0SessionID, second.goal.lastVerification, second.goal.skepticModels)
+	}
+	if second.goal.consecutiveReject != 1 || second.goal.strategistFiredAt != 1 || second.goal.strategistBonus != goalStrategistBonus || second.goal.strategyPath != strategyPath || second.goal.strategyNote != "# Strategy" {
+		t.Fatalf("restored strategist rejects=%d fired=%d bonus=%d path=%q note=%q", second.goal.consecutiveReject, second.goal.strategistFiredAt, second.goal.strategistBonus, second.goal.strategyPath, second.goal.strategyNote)
 	}
 	objective, err := second.ResumeGoal()
 	if err != nil || objective != "persist this objective" {
@@ -68,6 +80,9 @@ func TestGoalStatePersistsResumesAndCompletes(t *testing.T) {
 	}
 	if second.goal.skeptic0SessionID != "skeptic-child" || second.goal.lastVerification != "missing proof" {
 		t.Fatalf("resumed skeptic=%q gap=%q", second.goal.skeptic0SessionID, second.goal.lastVerification)
+	}
+	if second.goal.consecutiveReject != 0 || second.goal.strategistBonus != 0 || second.goal.strategyPath != "" || second.goal.strategyNote != "" {
+		t.Fatalf("resumed strategist rejects=%d bonus=%d path=%q note=%q", second.goal.consecutiveReject, second.goal.strategistBonus, second.goal.strategyPath, second.goal.strategyNote)
 	}
 	if _, err := (&updateGoalTool{store: second.goal}).Execute(context.Background(), json.RawMessage(`{"completed":true}`)); err != nil {
 		t.Fatal(err)
@@ -87,6 +102,9 @@ func TestGoalStatePersistsResumesAndCompletes(t *testing.T) {
 	}
 	if third.goal.skeptic0SessionID != "" {
 		t.Fatalf("completed skeptic session=%q", third.goal.skeptic0SessionID)
+	}
+	if len(third.goal.skepticModels) != 0 {
+		t.Fatalf("completed skeptic models=%#v", third.goal.skepticModels)
 	}
 	if _, err := third.ResumeGoal(); err == nil || !strings.Contains(err.Error(), "completed") {
 		t.Fatalf("completed resume err=%v", err)
