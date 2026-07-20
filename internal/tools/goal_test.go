@@ -200,6 +200,43 @@ func TestGoalVerifierUnavailableFailsOpen(t *testing.T) {
 	}
 }
 
+func TestGoalVerifierUnavailableDoesNotFreezeBreadthAnchor(t *testing.T) {
+	registry := &Registry{subagents: &subagentHolder{}, goal: NewGoalStore()}
+	if err := registry.BeginGoal("goal"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&updateGoalTool{store: registry.goal}).Execute(context.Background(), json.RawMessage(`{"completed":true,"message":"candidate"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.StartGoalVerification(10); err != nil {
+		t.Fatal(err)
+	}
+	registry.VerifyGoal(context.Background(), registry.GoalSnapshot(), 3)
+	if registry.goal.firstFinalResponse != "" {
+		t.Fatalf("fail-open froze anchor=%q", registry.goal.firstFinalResponse)
+	}
+}
+
+func TestComposeGoalVerifierFinalResponsePreservesBreadthAndDelta(t *testing.T) {
+	full := "Built A, B, and C; all tests pass."
+	if got, persist := composeGoalVerifierFinalResponse("", full); got != full || persist != full {
+		t.Fatalf("first got=%q persist=%q", got, persist)
+	}
+	if got, persist := composeGoalVerifierFinalResponse(full, "fixed B proof"); got != full+"\n\n## Changes this round\nfixed B proof" || persist != "" {
+		t.Fatalf("delta got=%q persist=%q", got, persist)
+	}
+	for _, current := range []string{"", "  " + full + "  "} {
+		if got, persist := composeGoalVerifierFinalResponse(full, current); got != full || persist != "" {
+			t.Fatalf("repeat got=%q persist=%q", got, persist)
+		}
+	}
+	unicode := strings.Repeat("é", goalFirstFinalResponseMaxRunes+2)
+	_, persist := composeGoalVerifierFinalResponse("", unicode)
+	if len([]rune(persist)) != goalFirstFinalResponseMaxRunes || !strings.HasSuffix(persist, "é") {
+		t.Fatalf("persisted rune count=%d", len([]rune(persist)))
+	}
+}
+
 func TestGoalVerifierClampsSkepticCount(t *testing.T) {
 	upper := &goalVerifierBackend{outputs: []string{
 		`{"verdict":"not_refuted"}`, `{"verdict":"not_refuted"}`, `{"verdict":"not_refuted"}`,

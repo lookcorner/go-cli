@@ -86,6 +86,7 @@ type GoalStore struct {
 	currentSubagentRole       string
 	lastClassifierVerdict     string
 	lastClassifierDetailsPath string
+	firstFinalResponse        string
 	scratchDir                string
 	scratchReady              bool
 	statePath                 string
@@ -130,6 +131,7 @@ func (s *GoalStore) BeginWithBudget(objective string, tokenBudget int64) error {
 	s.tokenBudget, s.tokensUsed, s.finishedSubagentTokens = max(int64(0), tokenBudget), 0, 0
 	s.currentSubagentRole = ""
 	s.lastClassifierVerdict, s.lastClassifierDetailsPath = "", ""
+	s.firstFinalResponse = ""
 	s.prepareScratchLocked()
 	return s.saveLocked()
 }

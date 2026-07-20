@@ -284,6 +284,10 @@ session artifact directory. Planner verification paths use the literal
 read-only skeptics can inspect saved output there. Unfinished restored Goals
 recreate a missing directory, while verified completion and token-budget
 termination remove it. Existing files and symbolic links are rejected.
+After the first verifier panel runs, its full candidate summary is persisted as
+a 4,096-character breadth anchor. Later panels receive that original summary
+plus the current round's change note, including after resume, so narrow fixes
+cannot hide unverified parts of the original delivery.
 `--goal --resume <session.jsonl>` reactivates an unfinished goal,
 preserves its original objective and evidence baselines, and resets the
 per-resume verifier attempt and stall counters. A supplied prompt is treated as

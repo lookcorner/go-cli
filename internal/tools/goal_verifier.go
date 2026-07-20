@@ -11,7 +11,10 @@ import (
 	"time"
 )
 
-const goalVerifierGapMaxBytes = 16 << 10
+const (
+	goalVerifierGapMaxBytes        = 16 << 10
+	goalFirstFinalResponseMaxRunes = 4096
+)
 
 type GoalVerification struct {
 	Achieved    bool
@@ -56,7 +59,13 @@ func (r *Registry) VerifyGoal(ctx context.Context, snapshot GoalSnapshot, count 
 	if r.goal != nil {
 		evidence = r.goal.captureEvidence(ctx, snapshot.VerificationRuns)
 	}
-	prompt := goalVerifierPrompt(snapshot, evidence)
+	promptSnapshot := snapshot
+	anchor := ""
+	if r.goal != nil {
+		anchor = r.goal.finalResponseAnchor()
+	}
+	promptSnapshot.Message, anchor = composeGoalVerifierFinalResponse(anchor, snapshot.Message)
+	prompt := goalVerifierPrompt(promptSnapshot, evidence)
 	assignments := make([]GoalRoleModel, count)
 	if r.goal != nil {
 		assignments = r.goal.skepticModelAssignments(roles.Skeptics, count, roles.UseCurrentModelOnly)
@@ -95,7 +104,7 @@ func (r *Registry) VerifyGoal(ctx context.Context, snapshot GoalSnapshot, count 
 	if count > 1 {
 		requestPrompt := prompt
 		if priorSkeptic != "" {
-			requestPrompt = goalVerifierResumePrompt(snapshot, evidence, priorGaps)
+			requestPrompt = goalVerifierResumePrompt(promptSnapshot, evidence, priorGaps)
 		}
 		verdict, sessionID, err := run(0, requestPrompt, priorSkeptic, assignments[0], false)
 		if err != nil && priorSkeptic != "" {
@@ -120,6 +129,9 @@ func (r *Registry) VerifyGoal(ctx context.Context, snapshot GoalSnapshot, count 
 	}
 	wait.Wait()
 	close(verdicts)
+	if r.goal != nil {
+		r.goal.recordFirstFinalResponse(anchor)
+	}
 
 	refuted := 0
 	gaps := make([]string, 0, count)
@@ -164,6 +176,46 @@ func (r *Registry) VerifyGoal(ctx context.Context, snapshot GoalSnapshot, count 
 		summary = "independent verification could not confirm that every requirement is complete"
 	}
 	return GoalVerification{Summary: summary, DetailsPath: detailsPath}
+}
+
+func composeGoalVerifierFinalResponse(first, current string) (string, string) {
+	if first == "" {
+		if strings.TrimSpace(current) == "" {
+			return current, ""
+		}
+		return current, truncateGoalFirstFinalResponse(current)
+	}
+	note := strings.TrimSpace(current)
+	if note == "" || note == strings.TrimSpace(first) {
+		return first, ""
+	}
+	return first + "\n\n## Changes this round\n" + note, ""
+}
+
+func truncateGoalFirstFinalResponse(value string) string {
+	runes := []rune(value)
+	if len(runes) > goalFirstFinalResponseMaxRunes {
+		return string(runes[:goalFirstFinalResponseMaxRunes])
+	}
+	return value
+}
+
+func (s *GoalStore) finalResponseAnchor() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.firstFinalResponse
+}
+
+func (s *GoalStore) recordFirstFinalResponse(value string) {
+	if value == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.status == "verifying" && s.firstFinalResponse == "" {
+		s.firstFinalResponse = truncateGoalFirstFinalResponse(value)
+		_ = s.saveLocked()
+	}
 }
 
 func goalVerifierResumePrompt(snapshot GoalSnapshot, evidence goalEvidence, priorGaps string) string {

@@ -145,6 +145,57 @@ func TestGoalBudgetPersistsEnforcesAndCannotResume(t *testing.T) {
 	}
 }
 
+func TestGoalVerifierBreadthAnchorPersistsAcrossResume(t *testing.T) {
+	root, artifactDir := t.TempDir(), filepath.Join(t.TempDir(), "artifacts")
+	backend := &goalVerifierBackend{outputs: []string{
+		`{"verdict":"refuted","gaps":"missing proof"}`,
+		`{"verdict":"not_refuted"}`,
+	}}
+	first := newPersistentGoalRegistry(t, root, artifactDir)
+	first.subagents.set(backend)
+	if err := first.BeginGoal("deliver the whole feature"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&updateGoalTool{store: first.goal}).Execute(context.Background(), json.RawMessage(`{"completed":true,"message":"built API, CLI, and tests"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.StartGoalVerification(10); err != nil {
+		t.Fatal(err)
+	}
+	verification := first.VerifyGoal(context.Background(), first.GoalSnapshot(), 1)
+	if verification.Achieved || first.goal.firstFinalResponse != "built API, CLI, and tests" {
+		t.Fatalf("verification=%#v anchor=%q", verification, first.goal.firstFinalResponse)
+	}
+	if err := first.ResolveGoalVerification(verification, 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	restored := newPersistentGoalRegistry(t, root, artifactDir)
+	defer restored.Close()
+	restored.subagents.set(backend)
+	if restored.goal.firstFinalResponse != "built API, CLI, and tests" {
+		t.Fatalf("restored anchor=%q", restored.goal.firstFinalResponse)
+	}
+	if _, err := (&updateGoalTool{store: restored.goal}).Execute(context.Background(), json.RawMessage(`{"completed":true,"message":"added the missing integration proof"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := restored.StartGoalVerification(10); err != nil {
+		t.Fatal(err)
+	}
+	if verification = restored.VerifyGoal(context.Background(), restored.GoalSnapshot(), 1); !verification.Achieved {
+		t.Fatalf("verification=%#v", verification)
+	}
+	backend.mu.Lock()
+	requests := append([]SubagentRequest(nil), backend.requests...)
+	backend.mu.Unlock()
+	if len(requests) != 2 || !strings.Contains(requests[1].Prompt, "CANDIDATE SUMMARY:\nbuilt API, CLI, and tests\n\n## Changes this round\nadded the missing integration proof") {
+		t.Fatalf("requests=%#v", requests)
+	}
+}
+
 func TestGoalStateUnknownStatusPausesAndBadVersionFails(t *testing.T) {
 	root, artifactDir := t.TempDir(), filepath.Join(t.TempDir(), "artifacts")
 	if err := os.Mkdir(artifactDir, 0o700); err != nil {

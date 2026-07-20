@@ -44,6 +44,7 @@ type durableGoalState struct {
 	CurrentSubagentRole       string          `json:"current_subagent_role,omitempty"`
 	LastClassifierVerdict     string          `json:"last_classifier_verdict,omitempty"`
 	LastClassifierDetailsPath string          `json:"last_classifier_details_path,omitempty"`
+	FirstFinalResponse        string          `json:"first_final_response,omitempty"`
 	Skeptic0SessionID         string          `json:"skeptic0_session_id,omitempty"`
 	SkepticModels             []GoalRoleModel `json:"skeptic_model_assignment,omitempty"`
 }
@@ -71,6 +72,7 @@ func (s *GoalStore) saveLocked() error {
 		CurrentSubagentRole:       s.currentSubagentRole,
 		LastClassifierVerdict:     s.lastClassifierVerdict,
 		LastClassifierDetailsPath: s.lastClassifierDetailsPath,
+		FirstFinalResponse:        s.firstFinalResponse,
 		Skeptic0SessionID:         s.skeptic0SessionID,
 		SkepticModels:             s.skepticModels,
 	})
@@ -173,6 +175,7 @@ func (s *GoalStore) loadState() error {
 		s.currentSubagentRole = ""
 	}
 	s.lastClassifierVerdict, s.lastClassifierDetailsPath = state.LastClassifierVerdict, state.LastClassifierDetailsPath
+	s.firstFinalResponse = truncateGoalFirstFinalResponse(state.FirstFinalResponse)
 	if s.status != "completed" && s.status != "budget_limited" {
 		s.prepareScratchLocked()
 	}
