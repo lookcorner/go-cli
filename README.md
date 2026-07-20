@@ -208,6 +208,10 @@ also exposes `memory_search` and `memory_get` to the model. Search chunks
 Markdown by headings and bounded overlap, ranks token matches, and decays old
 session notes while treating global and workspace notes as evergreen. It is a
 deterministic text-only backend; semantic/vector retrieval remains pending.
+During an active REPL, TUI, or ACP session, `/memory off` (or `/mem off`)
+removes both retrieval tools and pauses all writes without deleting files;
+`/memory on` lazily reopens the same workspace store and restores the tools.
+This toggle is session-scoped and does not rewrite `config.toml`.
 
 The default model transport is the Responses API. For OpenAI-compatible
 providers that only expose Chat Completions, use `--backend chat_completions`

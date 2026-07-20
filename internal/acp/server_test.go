@@ -703,12 +703,21 @@ func TestMemoryFlushExtensionAndSlashCommand(t *testing.T) {
 	}
 	config := memory.DefaultConfig()
 	config.Enabled = true
+	ws, err := workspace.Open(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	if err := tools.RegisterMemoryTools(registry, store, config); err != nil {
+		t.Fatal(err)
+	}
 	streamer := &fixtureStreamer{results: []api.StreamResult{
 		{ResponseID: "flush-one", Text: "## Decision\n\nPersist useful context."},
 		{ResponseID: "flush-two", Text: "NO_REPLY"},
 		{ResponseID: "rewrite-one", Text: "## Deployment\n\n- Run release checks."},
 	}}
-	runner := &agent.Runner{Client: streamer, Model: "test", Memory: store, MemoryConfig: config}
+	runner := &agent.Runner{Client: streamer, Model: "test", Tools: registry, Memory: store, MemoryConfig: config, OpenMemory: func() (*memory.Store, error) { return memory.Open(root, cwd, "memory-session") }}
 	current := &session{id: "memory-session", cwd: cwd, runner: runner, previous: "response-1", activePrompt: -1, close: func() {}}
 	var output bytes.Buffer
 	server := &Server{output: &output, MemoryEnabled: true, sessions: map[string]*session{"memory-session": current}}
@@ -796,6 +805,30 @@ func TestMemoryFlushExtensionAndSlashCommand(t *testing.T) {
 	}
 	if !listed || !responded {
 		t.Fatalf("memory list messages=%#v", messages)
+	}
+
+	for _, toggle := range []struct {
+		prompt, text string
+		enabled      bool
+	}{{"/mem off", "Memory disabled for this session.", false}, {"/memory enable", "Memory enabled for this session.", true}} {
+		output.Reset()
+		params, _ = json.Marshal(map[string]any{"sessionId": "memory-session", "prompt": []any{map[string]any{"type": "text", "text": toggle.prompt}}})
+		server.handlePrompt(context.Background(), message{ID: json.RawMessage(`"toggle"`), Method: "session/prompt", Params: params})
+		server.wg.Wait()
+		messages = decodeACPOutput(t, output.Bytes())
+		textSeen, responseSeen := false, false
+		for _, message := range messages {
+			if result, ok := message["result"].(map[string]any); ok && result["stopReason"] == "end_turn" {
+				responseSeen = true
+			}
+			params, _ := message["params"].(map[string]any)
+			update, _ := params["update"].(map[string]any)
+			content, _ := update["content"].(map[string]any)
+			textSeen = textSeen || content["text"] == toggle.text
+		}
+		if !textSeen || !responseSeen || runner.MemoryConfig.Enabled != toggle.enabled || registry.HasTool("memory_search") != toggle.enabled || registry.HasTool("memory_get") != toggle.enabled {
+			t.Fatalf("toggle=%#v messages=%#v enabled=%v", toggle, messages, runner.MemoryConfig.Enabled)
+		}
 	}
 
 	output.Reset()

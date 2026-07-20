@@ -86,6 +86,7 @@ type Runner struct {
 	TwoPassCompaction       bool
 	Memory                  *memory.Store
 	MemoryConfig            memory.Config
+	OpenMemory              func() (*memory.Store, error)
 	UpdateMCPServers        func(context.Context, []mcp.ServerConfig) error
 	MCPServers              func() []mcp.ServerConfig
 	UpdateSkills            func(context.Context, func(*skills.Settings)) (skills.Settings, error)

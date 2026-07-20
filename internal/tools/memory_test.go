@@ -52,6 +52,41 @@ func TestMemoryToolsRegisterOnlyWhenEnabledAndFormatResults(t *testing.T) {
 	}
 }
 
+func TestMemoryToolsToggleAtomicallyAndParseCommands(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := memory.Open(t.TempDir(), ws.Root(), "toggle")
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry(ws, PromptApprover{Mode: PermissionAuto})
+	defer registry.Close()
+	cfg := memory.DefaultConfig()
+	cfg.Enabled = true
+	if err := SetMemoryTools(registry, store, cfg, true); err != nil {
+		t.Fatal(err)
+	}
+	if !registry.HasTool("memory_search") || !registry.HasTool("memory_get") {
+		t.Fatal("memory tools missing after enable")
+	}
+	if err := SetMemoryTools(registry, nil, cfg, false); err != nil {
+		t.Fatal(err)
+	}
+	if registry.HasTool("memory_search") || registry.HasTool("memory_get") {
+		t.Fatal("memory tools survived disable")
+	}
+	for input, want := range map[string]string{"/memory": "browse", "/mem status": "browse", "/memory ON": "enable", "/mem disable": "disable"} {
+		if got, ok := ParseMemoryCommand(input); !ok || got != want {
+			t.Fatalf("ParseMemoryCommand(%q)=%q,%v", input, got, ok)
+		}
+	}
+	if _, ok := ParseMemoryCommand("remember memory"); ok {
+		t.Fatal("non-command parsed as memory command")
+	}
+}
+
 func storeRootFromList(t *testing.T, store *memory.Store) string {
 	t.Helper()
 	path, _, err := store.Write("probe", "temporary probe")

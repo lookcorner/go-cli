@@ -10,6 +10,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/memory"
 	"github.com/lookcorner/go-cli/internal/session"
+	"github.com/lookcorner/go-cli/internal/tools"
 )
 
 const memoryFlushPrompt = `You are a memory assistant. Extract useful information from this conversation that would help in future sessions with this user. Write concise markdown with # or ## headers covering substantive decisions and rationale, technical context, debugging techniques, and problems with their solutions. Omit empty sections, user environment preferences, and ephemeral progress. Respond with NO_REPLY when nothing genuinely reusable was learned.`
@@ -30,11 +31,61 @@ type MemoryFlushResult struct {
 	Path    string
 }
 
+func (r *Runner) SetMemoryEnabled(ctx context.Context, enabled bool) (string, error) {
+	if err := r.WaitMemory(ctx); err != nil {
+		return "", err
+	}
+	r.memoryMu.Lock()
+	current := r.Memory != nil && r.MemoryConfig.Enabled
+	open := r.OpenMemory
+	cfg := r.MemoryConfig
+	r.memoryMu.Unlock()
+	if current == enabled {
+		state := "disabled"
+		if enabled {
+			state = "enabled"
+		}
+		return "Memory is already " + state + ".", nil
+	}
+	if enabled {
+		if open == nil {
+			return "Memory cannot be enabled (not configured for this session).", nil
+		}
+		store, err := open()
+		if err != nil {
+			return "", err
+		}
+		cfg.Enabled = true
+		if err := tools.SetMemoryTools(r.Tools, store, cfg, true); err != nil {
+			return "", err
+		}
+		r.memoryMu.Lock()
+		r.Memory, r.MemoryConfig = store, cfg
+		r.memoryMu.Unlock()
+		return "Memory enabled for this session.", nil
+	}
+	if err := tools.SetMemoryTools(r.Tools, nil, cfg, false); err != nil {
+		return "", err
+	}
+	r.memoryMu.Lock()
+	cfg.Enabled = false
+	r.Memory, r.MemoryConfig = nil, cfg
+	r.memoryMu.Unlock()
+	return "Memory disabled for this session.", nil
+}
+
 func (r *Runner) ListMemory() ([]memory.FileInfo, error) {
-	if r.Memory == nil || !r.MemoryConfig.Enabled {
+	store, cfg := r.memoryState()
+	if store == nil || !cfg.Enabled {
 		return nil, errors.New("memory is not enabled for this session")
 	}
-	return r.Memory.List()
+	return store.List()
+}
+
+func (r *Runner) memoryState() (*memory.Store, memory.Config) {
+	r.memoryMu.Lock()
+	defer r.memoryMu.Unlock()
+	return r.Memory, r.MemoryConfig
 }
 
 func (r *Runner) RewriteMemoryNote(ctx context.Context, rawText, contextSummary string) (string, error) {
@@ -62,18 +113,19 @@ func (r *Runner) RewriteMemoryNote(ctx context.Context, rawText, contextSummary 
 }
 
 func (r *Runner) injectMemoryContext(content any, previousResponseID string) any {
+	store, cfg := r.memoryState()
 	r.memoryMu.Lock()
 	if r.memoryInjected {
 		r.memoryMu.Unlock()
 		return content
 	}
 	r.memoryInjected = true
-	enabled := previousResponseID == "" && r.Memory != nil && r.MemoryConfig.Enabled && r.MemoryConfig.InitialInjection
+	enabled := previousResponseID == "" && store != nil && cfg.Enabled && cfg.InitialInjection
 	r.memoryMu.Unlock()
 	if !enabled {
 		return content
 	}
-	value, err := r.Memory.Context()
+	value, err := store.Context()
 	if err != nil || value == "" {
 		if err != nil {
 			r.log("memory_context_error", map[string]any{"error": err.Error()})
@@ -112,8 +164,9 @@ func (r *Runner) maybeStartMemoryFlush(ctx context.Context, previousResponseID s
 }
 
 func (r *Runner) shouldFlushMemory(previousResponseID string) bool {
-	config := r.MemoryConfig.Flush
-	if r.Memory == nil || !r.MemoryConfig.Enabled || !config.Enabled || previousResponseID == "" || r.ContextWindow <= 0 || r.lastInputTokens <= 0 {
+	store, memoryConfig := r.memoryState()
+	config := memoryConfig.Flush
+	if store == nil || !memoryConfig.Enabled || !config.Enabled || previousResponseID == "" || r.ContextWindow <= 0 || r.lastInputTokens <= 0 {
 		return false
 	}
 	compactAt := int64(r.ContextWindow) * int64(r.CompactThresholdPercent)
@@ -130,7 +183,8 @@ func (r *Runner) flushMemory(ctx context.Context, previousResponseID, trigger st
 	if r.Client == nil {
 		return MemoryFlushResult{}, errors.New("model client is unavailable")
 	}
-	if r.Memory == nil || !r.MemoryConfig.Enabled || !r.MemoryConfig.Flush.Enabled {
+	store, memoryConfig := r.memoryState()
+	if store == nil || !memoryConfig.Enabled || !memoryConfig.Flush.Enabled {
 		return MemoryFlushResult{}, errors.New("memory is not enabled for this session")
 	}
 	if previousResponseID == "" {
@@ -159,8 +213,9 @@ func (r *Runner) cancelMemoryIdleFlush() {
 }
 
 func (r *Runner) scheduleMemoryIdleFlush(ctx context.Context, previousResponseID string) {
-	seconds := r.MemoryConfig.Flush.IdleTimeoutSeconds
-	if seconds == nil || r.Memory == nil || !r.MemoryConfig.Enabled || !r.MemoryConfig.Flush.Enabled || previousResponseID == "" || *seconds > uint64((1<<63-1)/int64(time.Second)) {
+	store, memoryConfig := r.memoryState()
+	seconds := memoryConfig.Flush.IdleTimeoutSeconds
+	if seconds == nil || store == nil || !memoryConfig.Enabled || !memoryConfig.Flush.Enabled || previousResponseID == "" || *seconds > uint64((1<<63-1)/int64(time.Second)) {
 		return
 	}
 	timerCtx, cancel := context.WithCancel(ctx)
@@ -204,11 +259,12 @@ func (r *Runner) scheduleMemoryIdleFlush(ctx context.Context, previousResponseID
 }
 
 func (r *Runner) runMemoryFlush(ctx context.Context, streamer ResponseStreamer, previousResponseID, previous string, count uint64, trigger string) (MemoryFlushResult, error) {
+	store, memoryConfig := r.memoryState()
 	prompt := memoryFlushPrompt
 	if count > 0 && strings.TrimSpace(previous) != "" {
 		prompt += "\n\nExtract only information that is new since this previous flush:\n\n" + previous
 	}
-	model := strings.TrimSpace(r.MemoryConfig.Flush.Model)
+	model := strings.TrimSpace(memoryConfig.Flush.Model)
 	if model == "" {
 		model = r.Model
 	}
@@ -220,10 +276,10 @@ func (r *Runner) runMemoryFlush(ctx context.Context, streamer ResponseStreamer, 
 	}, nil)
 	outcome, path, accepted := "error", "", ""
 	if err == nil {
-		accepted, outcome = processMemoryFlushResponse(result.Text, r.MemoryConfig.Flush.MaxWriteChars)
+		accepted, outcome = processMemoryFlushResponse(result.Text, memoryConfig.Flush.MaxWriteChars)
 		if outcome == "accepted" {
 			var written bool
-			path, written, err = r.Memory.Write(trigger, accepted)
+			path, written, err = store.Write(trigger, accepted)
 			switch {
 			case err != nil:
 				outcome = "error"
@@ -286,7 +342,8 @@ func (r *Runner) CloseMemory(ctx context.Context) error {
 }
 
 func (r *Runner) saveSessionMemory() error {
-	if r.Memory == nil || !r.MemoryConfig.Enabled || !r.MemoryConfig.SaveOnEnd || strings.TrimSpace(r.SessionPath) == "" {
+	store, config := r.memoryState()
+	if store == nil || !config.Enabled || !config.SaveOnEnd || strings.TrimSpace(r.SessionPath) == "" {
 		return nil
 	}
 	r.memoryMu.Lock()
@@ -339,7 +396,7 @@ func (r *Runner) saveSessionMemory() error {
 		}
 		fmt.Fprintf(&summary, "%d. %s\n", index+1, string(runes))
 	}
-	path, written, err := r.Memory.Write("session_end", summary.String())
+	path, written, err := store.Write("session_end", summary.String())
 	outcome := "duplicate"
 	if err != nil {
 		outcome = "error"

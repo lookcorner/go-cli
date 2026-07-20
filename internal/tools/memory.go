@@ -12,13 +12,38 @@ import (
 )
 
 func RegisterMemoryTools(registry *Registry, store *memory.Store, cfg memory.Config) error {
-	if registry == nil || store == nil || !cfg.Enabled {
+	return SetMemoryTools(registry, store, cfg, store != nil && cfg.Enabled)
+}
+
+func SetMemoryTools(registry *Registry, store *memory.Store, cfg memory.Config, enabled bool) error {
+	if registry == nil {
 		return nil
 	}
-	if err := registry.Register(&memorySearchTool{store: store, index: cfg.Index, search: cfg.Search}); err != nil {
-		return err
+	var replacements []Tool
+	if enabled {
+		if store == nil {
+			return fmt.Errorf("memory store is required")
+		}
+		replacements = []Tool{&memorySearchTool{store: store, index: cfg.Index, search: cfg.Search}, &memoryGetTool{store: store}}
 	}
-	return registry.Register(&memoryGetTool{store: store})
+	_, err := registry.Replace([]string{"memory_search", "memory_get"}, replacements)
+	return err
+}
+
+func ParseMemoryCommand(prompt string) (string, bool) {
+	fields := strings.Fields(strings.TrimSpace(prompt))
+	if len(fields) == 0 || (fields[0] != "/memory" && fields[0] != "/mem") {
+		return "", false
+	}
+	if len(fields) == 2 {
+		switch strings.ToLower(fields[1]) {
+		case "on", "enable":
+			return "enable", true
+		case "off", "disable":
+			return "disable", true
+		}
+	}
+	return "browse", true
 }
 
 type memorySearchTool struct {

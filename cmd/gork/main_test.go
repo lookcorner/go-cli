@@ -93,6 +93,27 @@ func TestInteractiveMemoryListDoesNotRunNormalTurn(t *testing.T) {
 	}
 }
 
+func TestInteractiveMemoryToggleIsSessionScoped(t *testing.T) {
+	root, cwd := t.TempDir(), t.TempDir()
+	store, err := memory.Open(root, cwd, "interactive-toggle")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := memory.DefaultConfig()
+	cfg.Enabled = true
+	runner := &agent.Runner{Memory: store, MemoryConfig: cfg, OpenMemory: func() (*memory.Store, error) { return memory.Open(root, cwd, "interactive-toggle") }}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	input := newTerminalInput(ctx, bufio.NewReader(strings.NewReader("/mem off\n/memory on\n/exit\n")))
+	var stderr bytes.Buffer
+	if err := interactiveLoop(ctx, runner, newScheduledWakeQueue(), input, io.Discard, &stderr, "", "response-1"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stderr.String(), "Memory disabled for this session.") || !strings.Contains(stderr.String(), "Memory enabled for this session.") || runner.Memory == nil || !runner.MemoryConfig.Enabled {
+		t.Fatalf("stderr=%q enabled=%v", stderr.String(), runner.MemoryConfig.Enabled)
+	}
+}
+
 func TestSessionObserversPersistOnlyLifecycleEvents(t *testing.T) {
 	logger, err := session.NewLoggerWithID(t.TempDir(), "parent-session")
 	if err != nil {

@@ -40,6 +40,10 @@ type memoryFilesDoneEvent struct {
 	files []memory.FileInfo
 	err   error
 }
+type memoryToggleDoneEvent struct {
+	message string
+	err     error
+}
 type scheduledFiredEvent struct{ event tools.ScheduledTaskFired }
 type planModeEvent struct{ active bool }
 type planReviewEvent struct {
@@ -371,6 +375,17 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if command := m.startScheduled(); command != nil {
 			return m, command
 		}
+	case memoryToggleDoneEvent:
+		m.running = false
+		m.turnCancel = nil
+		if msg.err != nil {
+			m.status = "memory toggle failed: " + msg.err.Error()
+		} else {
+			m.status = msg.message
+		}
+		if command := m.startScheduled(); command != nil {
+			return m, command
+		}
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
@@ -459,6 +474,14 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.running = true
 		turnCtx, cancel := context.WithCancel(m.ctx)
 		m.turnCancel = cancel
+		if action, ok := tools.ParseMemoryCommand(prompt); ok {
+			if action == "browse" {
+				m.status = "listing memory"
+				return m, runMemoryFiles(m.runner)
+			}
+			m.status = "updating memory"
+			return m, runMemoryToggle(turnCtx, m.runner, action == "enable")
+		}
 		if prompt == "/compact" {
 			m.status = "compacting context"
 			return m, runCompact(turnCtx, m.runner, m.previousID)
@@ -466,10 +489,6 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if prompt == "/flush" {
 			m.status = "flushing memory"
 			return m, runMemoryFlush(turnCtx, m.runner, m.previousID)
-		}
-		if prompt == "/memory" {
-			m.status = "listing memory"
-			return m, runMemoryFiles(m.runner)
 		}
 		prompt, _ = tools.ExpandLoopCommand(prompt)
 		m.beginTurn(prompt)
@@ -667,6 +686,13 @@ func runMemoryFiles(runner *agent.Runner) tea.Cmd {
 	return func() tea.Msg {
 		files, err := runner.ListMemory()
 		return memoryFilesDoneEvent{files: files, err: err}
+	}
+}
+
+func runMemoryToggle(ctx context.Context, runner *agent.Runner, enabled bool) tea.Cmd {
+	return func() tea.Msg {
+		message, err := runner.SetMemoryEnabled(ctx, enabled)
+		return memoryToggleDoneEvent{message: message, err: err}
 	}
 }
 

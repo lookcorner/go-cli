@@ -518,6 +518,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		ContextWindow: cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,
 		TwoPassCompaction: cfg.TwoPassCompaction,
 		Memory:            memoryStore, MemoryConfig: cfg.Memory,
+		OpenMemory:       memoryStoreOpener(cfg.Memory.Enabled, ws.Root(), logger.ID()),
 		UpdateMCPServers: mcpRuntime.Update, MCPServers: mcpRuntime.Configs,
 	}
 	defer waitRunnerMemory(runner)
@@ -1121,11 +1122,22 @@ func openMemoryStore(cfg config.Config, workspaceRoot, sessionID string) (*memor
 	if !cfg.Memory.Enabled {
 		return nil, nil
 	}
+	return newMemoryStore(workspaceRoot, sessionID)
+}
+
+func newMemoryStore(workspaceRoot, sessionID string) (*memory.Store, error) {
 	root, err := memory.DefaultRoot()
 	if err != nil {
 		return nil, err
 	}
 	return memory.Open(root, workspaceRoot, sessionID)
+}
+
+func memoryStoreOpener(configured bool, workspaceRoot, sessionID string) func() (*memory.Store, error) {
+	if !configured {
+		return nil
+	}
+	return func() (*memory.Store, error) { return newMemoryStore(workspaceRoot, sessionID) }
 }
 
 func waitRunnerMemory(runner *agent.Runner) {
@@ -1799,6 +1811,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			ContextWindow: cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,
 			TwoPassCompaction: sessionCfg.TwoPassCompaction,
 			Memory:            memoryStore, MemoryConfig: sessionCfg.Memory,
+			OpenMemory:       memoryStoreOpener(sessionCfg.Memory.Enabled, ws.Root(), logger.ID()),
 			UpdateMCPServers: mcpRuntime.Update, MCPServers: mcpRuntime.Configs,
 			UpdateSkills:      updateSkills,
 			UpdatePlugins:     updatePlugins,
@@ -2308,13 +2321,37 @@ func interactiveLoop(
 			}
 		}
 		if scheduledID == "" {
+			if action, ok := tools.ParseMemoryCommand(prompt); ok {
+				switch action {
+				case "enable", "disable":
+					message, err := runner.SetMemoryEnabled(ctx, action == "enable")
+					if err != nil {
+						fmt.Fprintln(stderr, "[gork] memory toggle failed:", err)
+					} else {
+						fmt.Fprintln(stderr, "[gork]", message)
+					}
+				case "browse":
+					files, err := runner.ListMemory()
+					if err != nil {
+						fmt.Fprintln(stderr, "[gork] memory list failed:", err)
+					} else if len(files) == 0 {
+						fmt.Fprintln(stderr, "[gork] memory: no files")
+					} else {
+						for _, file := range files {
+							fmt.Fprintf(stderr, "[gork] memory %s %d %s\n", file.Source, file.SizeBytes, file.Path)
+						}
+					}
+				}
+				prompt = ""
+				continue
+			}
 			switch prompt {
 			case "":
 				continue
 			case "/exit", "/quit":
 				return nil
 			case "/help":
-				fmt.Fprintln(stderr, "Commands: /compact, /flush, /memory, /loop, /help, /exit. Every other line is sent as a prompt.")
+				fmt.Fprintln(stderr, "Commands: /compact, /flush, /memory [on|off], /loop, /help, /exit. Every other line is sent as a prompt.")
 				prompt = ""
 				continue
 			case "/compact":
@@ -2331,19 +2368,6 @@ func interactiveLoop(
 					fmt.Fprintln(stderr, "[gork] memory flush failed:", err)
 				} else {
 					fmt.Fprintln(stderr, "[gork] memory flush:", result.Outcome)
-				}
-				prompt = ""
-				continue
-			case "/memory":
-				files, err := runner.ListMemory()
-				if err != nil {
-					fmt.Fprintln(stderr, "[gork] memory list failed:", err)
-				} else if len(files) == 0 {
-					fmt.Fprintln(stderr, "[gork] memory: no files")
-				} else {
-					for _, file := range files {
-						fmt.Fprintf(stderr, "[gork] memory %s %d %s\n", file.Source, file.SizeBytes, file.Path)
-					}
 				}
 				prompt = ""
 				continue

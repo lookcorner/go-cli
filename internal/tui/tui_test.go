@@ -352,6 +352,30 @@ func TestMemoryListCommandRendersWithoutModelTurn(t *testing.T) {
 	}
 }
 
+func TestMemoryToggleCommandDoesNotEnterModelTurn(t *testing.T) {
+	store, err := memory.Open(t.TempDir(), t.TempDir(), "tui-toggle")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := memory.DefaultConfig()
+	cfg.Enabled = true
+	bridge := NewBridge(context.Background(), tools.PermissionAuto)
+	defer bridge.Close()
+	runner := &agent.Runner{Memory: store, MemoryConfig: cfg}
+	m := &model{ctx: context.Background(), runner: runner, bridge: bridge, status: "ready"}
+	m.input = []rune("/mem off")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command == nil || !m.running || m.status != "updating memory" || m.transcript.Len() != 0 {
+		t.Fatalf("toggle entered model turn: running=%v status=%q", m.running, m.status)
+	}
+	updated, _ = m.Update(command())
+	m = updated.(*model)
+	if m.running || m.status != "Memory disabled for this session." || runner.Memory != nil {
+		t.Fatalf("toggle result status=%q memory=%v", m.status, runner.Memory)
+	}
+}
+
 func TestScheduledEventWaitsForTurnAndContinuesResponseChain(t *testing.T) {
 	ws, err := workspace.Open(t.TempDir())
 	if err != nil {

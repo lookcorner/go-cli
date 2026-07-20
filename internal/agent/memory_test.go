@@ -29,6 +29,48 @@ type memoryRewriteStreamer struct {
 	err            error
 }
 
+func TestRunnerTogglesMemoryAndToolsForSession(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	store, err := memory.Open(root, ws.Root(), "toggle")
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	cfg := memory.DefaultConfig()
+	cfg.Enabled = true
+	if err := tools.RegisterMemoryTools(registry, store, cfg); err != nil {
+		t.Fatal(err)
+	}
+	opened := 0
+	runner := Runner{Tools: registry, Memory: store, MemoryConfig: cfg, OpenMemory: func() (*memory.Store, error) {
+		opened++
+		return memory.Open(root, ws.Root(), "toggle")
+	}}
+	message, err := runner.SetMemoryEnabled(context.Background(), false)
+	if err != nil || message != "Memory disabled for this session." || runner.Memory != nil || runner.MemoryConfig.Enabled || registry.HasTool("memory_search") || registry.HasTool("memory_get") {
+		t.Fatalf("disable message=%q err=%v runner=%#v", message, err, runner.MemoryConfig)
+	}
+	if _, err := runner.ListMemory(); err == nil {
+		t.Fatal("disabled memory remained readable")
+	}
+	message, err = runner.SetMemoryEnabled(context.Background(), true)
+	if err != nil || message != "Memory enabled for this session." || opened != 1 || runner.Memory == nil || !runner.MemoryConfig.Enabled || !registry.HasTool("memory_search") || !registry.HasTool("memory_get") {
+		t.Fatalf("enable message=%q opened=%d err=%v", message, opened, err)
+	}
+	if message, err = runner.SetMemoryEnabled(context.Background(), true); err != nil || message != "Memory is already enabled." || opened != 1 {
+		t.Fatalf("idempotent message=%q opened=%d err=%v", message, opened, err)
+	}
+	unconfigured := Runner{MemoryConfig: memory.DefaultConfig()}
+	if message, err = unconfigured.SetMemoryEnabled(context.Background(), true); err != nil || message != "Memory cannot be enabled (not configured for this session)." || unconfigured.Memory != nil || unconfigured.MemoryConfig.Enabled {
+		t.Fatalf("unconfigured message=%q err=%v", message, err)
+	}
+}
+
 func (s *memoryRewriteStreamer) CloneForCompaction(includeHistory bool) api.Streamer {
 	s.includeHistory = &includeHistory
 	return s
