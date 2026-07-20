@@ -71,6 +71,18 @@ func NewChatClient(baseURL, apiKey string, httpClient *http.Client) *ChatClient 
 	return &ChatClient{baseURL: strings.TrimRight(baseURL, "/"), apiKey: apiKey, http: httpClient, pruning: DefaultPruningConfig()}
 }
 
+func (c *ChatClient) CloneForCompaction(includeHistory bool) Streamer {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	clone := &ChatClient{
+		baseURL: c.baseURL, apiKey: c.apiKey, tokenProvider: c.tokenProvider, http: c.http, pruning: c.pruning,
+	}
+	if includeHistory {
+		clone.history = append([]chatMessage(nil), c.history...)
+	}
+	return clone
+}
+
 func (c *ChatClient) ResetHistory(summary string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

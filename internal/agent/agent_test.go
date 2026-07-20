@@ -82,6 +82,31 @@ type statefulFakeStreamer struct{ *fakeStreamer }
 
 func (*statefulFakeStreamer) ResetHistory(string) {}
 
+type cloneablePrefireStreamer struct {
+	*prefireStreamer
+	clones []bool
+	resets int
+}
+
+func (f *cloneablePrefireStreamer) CloneForCompaction(includeHistory bool) api.Streamer {
+	f.mu.Lock()
+	f.clones = append(f.clones, includeHistory)
+	f.mu.Unlock()
+	return f.prefireStreamer
+}
+
+func (f *cloneablePrefireStreamer) ResetHistory(string) {
+	f.mu.Lock()
+	f.resets++
+	f.mu.Unlock()
+}
+
+func (f *cloneablePrefireStreamer) state() ([]bool, int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]bool(nil), f.clones...), f.resets
+}
+
 type recordingToolObserver struct {
 	results []tools.ExecutionResult
 }
@@ -549,53 +574,67 @@ func TestRunnerCompactsAtUsageThresholdAndStartsFreshChain(t *testing.T) {
 }
 
 func TestRunnerTwoPassPrefireMergesOnlyRecentTail(t *testing.T) {
-	ws, err := workspace.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	streamer := newPrefireStreamer()
-	runner := Runner{
-		Client: streamer, Tools: tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto}),
-		Model: "test-model", ContextWindow: 1000, CompactThresholdPercent: 85, TwoPassCompaction: true,
-	}
-	defer runner.Tools.Close()
-	if _, err := runner.RunTurn(context.Background(), "first", ""); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := runner.RunTurn(context.Background(), "continue", "old-response"); err != nil {
-		t.Fatal(err)
-	}
-	result, err := runner.RunTurn(context.Background(), "next", "tail-response")
-	if err != nil || result.ResponseID != "fresh-response" {
-		t.Fatalf("result=%#v err=%v", result, err)
-	}
-	var pass1, pass2 *api.ResponseRequest
-	requests := streamer.snapshot()
-	for index := range requests {
-		request := requests[index]
-		content, _ := request.Input[0].Content.(string)
-		if strings.Contains(request.Instructions, "first-stage conversation summary") {
-			copy := request
-			pass1 = &copy
+	run := func(t *testing.T, client ResponseStreamer, streamer *prefireStreamer) {
+		ws, err := workspace.Open(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
 		}
-		if strings.Contains(content, "final pass of hierarchical compaction") {
-			copy := request
-			pass2 = &copy
+		runner := Runner{
+			Client: client, Tools: tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto}),
+			Model: "test-model", ContextWindow: 1000, CompactThresholdPercent: 85, TwoPassCompaction: true,
+		}
+		defer runner.Tools.Close()
+		if _, err := runner.RunTurn(context.Background(), "first", ""); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := runner.RunTurn(context.Background(), "continue", "old-response"); err != nil {
+			t.Fatal(err)
+		}
+		result, err := runner.RunTurn(context.Background(), "next", "tail-response")
+		if err != nil || result.ResponseID != "fresh-response" {
+			t.Fatalf("result=%#v err=%v", result, err)
+		}
+		var pass1, pass2 *api.ResponseRequest
+		requests := streamer.snapshot()
+		for index := range requests {
+			request := requests[index]
+			content, _ := request.Input[0].Content.(string)
+			if strings.Contains(request.Instructions, "first-stage conversation summary") {
+				copy := request
+				pass1 = &copy
+			}
+			if strings.Contains(content, "final pass of hierarchical compaction") {
+				copy := request
+				pass2 = &copy
+			}
+		}
+		if pass1 == nil || pass1.PreviousResponseID != "old-response" {
+			t.Fatalf("prefire request=%#v", pass1)
+		}
+		if pass2 == nil || pass2.PreviousResponseID != "" {
+			t.Fatalf("pass2 request=%#v", pass2)
+		}
+		content, _ := pass2.Input[0].Content.(string)
+		if !strings.Contains(content, "Prefix decisions and constraints.") || !strings.Contains(content, "User: continue") || !strings.Contains(content, "Assistant: tail answer") {
+			t.Fatalf("pass2 lost prefix or tail: %q", content)
 		}
 	}
-	if pass1 == nil || pass1.PreviousResponseID != "old-response" {
-		t.Fatalf("prefire request=%#v", pass1)
-	}
-	if pass2 == nil || pass2.PreviousResponseID != "" {
-		t.Fatalf("pass2 request=%#v", pass2)
-	}
-	content, _ := pass2.Input[0].Content.(string)
-	if !strings.Contains(content, "Prefix decisions and constraints.") || !strings.Contains(content, "User: continue") || !strings.Contains(content, "Assistant: tail answer") {
-		t.Fatalf("pass2 lost prefix or tail: %q", content)
-	}
+	t.Run("responses", func(t *testing.T) {
+		streamer := newPrefireStreamer()
+		run(t, streamer, streamer)
+	})
+	t.Run("stateful clone", func(t *testing.T) {
+		streamer := newPrefireStreamer()
+		client := &cloneablePrefireStreamer{prefireStreamer: streamer}
+		run(t, client, streamer)
+		clones, resets := client.state()
+		if len(clones) != 2 || !clones[0] || clones[1] || resets != 1 {
+			t.Fatalf("clones=%v resets=%d", clones, resets)
+		}
+	})
 }
 
-func TestRunnerTwoPassFailureFallsBackAndStatefulClientsSkipPrefire(t *testing.T) {
+func TestRunnerTwoPassFailureFallsBackAndUnsupportedStatefulClientsSkipPrefire(t *testing.T) {
 	ws, err := workspace.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -665,7 +704,7 @@ func TestRunnerTwoPassFailureFallsBackAndStatefulClientsSkipPrefire(t *testing.T
 		runner := Runner{Client: streamer, Model: "test"}
 		prefire := &compactionPrefire{done: make(chan struct{}), model: "test"}
 		runner.prefire = prefire
-		runner.runCompactionPrefire(context.Background(), prefire, "old")
+		runner.runCompactionPrefire(context.Background(), streamer, prefire, "old")
 		if got := len([]rune(prefire.note)); got != compactionPrefireMaxChars {
 			t.Fatalf("prefire note chars=%d", got)
 		}

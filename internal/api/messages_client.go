@@ -63,6 +63,21 @@ func NewMessagesClient(baseURL, apiKey string, httpClient *http.Client) *Message
 	return &MessagesClient{baseURL: strings.TrimRight(baseURL, "/"), apiKey: apiKey, http: httpClient, pruning: DefaultPruningConfig()}
 }
 
+func (c *MessagesClient) CloneForCompaction(includeHistory bool) Streamer {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	clone := &MessagesClient{
+		baseURL: c.baseURL, apiKey: c.apiKey, tokenProvider: c.tokenProvider, http: c.http, pruning: c.pruning,
+	}
+	if includeHistory {
+		clone.history = make([]messagesMessage, len(c.history))
+		for index, message := range c.history {
+			clone.history[index] = messagesMessage{Role: message.Role, Content: append([]messagesBlock(nil), message.Content...)}
+		}
+	}
+	return clone
+}
+
 func (c *MessagesClient) ResetHistory(summary string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

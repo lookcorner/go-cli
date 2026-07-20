@@ -35,3 +35,21 @@ func TestLocalBackendsRebuildVisibleHistoryAfterRewind(t *testing.T) {
 		t.Fatalf("messages rewind lost image content: %#v", anthropic.history[2])
 	}
 }
+
+func TestLocalBackendCompactionClonesIsolateHistory(t *testing.T) {
+	chat := &ChatClient{baseURL: "https://chat.example", apiKey: "key", history: []chatMessage{{Role: "user", Content: "original"}}}
+	chatWithHistory := chat.CloneForCompaction(true).(*ChatClient)
+	chatWithoutHistory := chat.CloneForCompaction(false).(*ChatClient)
+	chatWithHistory.history[0].Content = "changed"
+	if chat.history[0].Content != "original" || len(chatWithoutHistory.history) != 0 || chatWithHistory.baseURL != chat.baseURL {
+		t.Fatalf("chat clones leaked history: source=%#v with=%#v without=%#v", chat.history, chatWithHistory.history, chatWithoutHistory.history)
+	}
+
+	messages := &MessagesClient{history: []messagesMessage{{Role: "user", Content: []messagesBlock{{Type: "text", Text: "original"}}}}}
+	messagesWithHistory := messages.CloneForCompaction(true).(*MessagesClient)
+	messagesWithoutHistory := messages.CloneForCompaction(false).(*MessagesClient)
+	messagesWithHistory.history[0].Content[0].Text = "changed"
+	if messages.history[0].Content[0].Text != "original" || len(messagesWithoutHistory.history) != 0 {
+		t.Fatalf("messages clones leaked history: source=%#v with=%#v without=%#v", messages.history, messagesWithHistory.history, messagesWithoutHistory.history)
+	}
+}

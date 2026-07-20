@@ -26,9 +26,7 @@ const defaultInstructions = `You are Gork Go, an autonomous coding agent working
 
 Inspect relevant files before making changes. Prefer small, focused edits. Use tools to verify your work. Never claim a command, edit, or test succeeded unless its tool result confirms it. All file tools are confined to the workspace; do not try to bypass that boundary. Destructive or system-affecting shell commands require explicit user approval. When the task is complete, summarize the outcome and verification concisely.`
 
-type ResponseStreamer interface {
-	StreamResponse(context.Context, api.ResponseRequest, func(string)) (api.StreamResult, error)
-}
+type ResponseStreamer = api.Streamer
 
 type EventLogger interface {
 	Append(kind string, data any) error
@@ -399,7 +397,9 @@ func (r *Runner) shouldPrefire(previousResponseID string) bool {
 		return false
 	}
 	if _, stateful := r.Client.(HistoryResetter); stateful {
-		return false
+		if _, cloneable := r.Client.(api.CompactionCloner); !cloneable {
+			return false
+		}
 	}
 	threshold := r.ContextWindow * r.CompactThresholdPercent / 100
 	start := r.ContextWindow * max(0, r.CompactThresholdPercent-10) / 100
@@ -428,18 +428,19 @@ func (r *Runner) prefireForTurn(ctx context.Context, previousResponseID string) 
 	}
 	r.prefire = prefire
 	r.prefireMu.Unlock()
-	go r.runCompactionPrefire(context.WithoutCancel(ctx), prefire, previousResponseID)
+	streamer := r.compactionStreamer(true)
+	go r.runCompactionPrefire(context.WithoutCancel(ctx), streamer, prefire, previousResponseID)
 	return prefire
 }
 
-func (r *Runner) runCompactionPrefire(ctx context.Context, prefire *compactionPrefire, previousResponseID string) {
+func (r *Runner) runCompactionPrefire(ctx context.Context, streamer ResponseStreamer, prefire *compactionPrefire, previousResponseID string) {
 	request := api.ResponseRequest{
 		Model:              prefire.model,
 		Instructions:       "Create a precise first-stage conversation summary for later hierarchical compaction. Preserve goals, constraints, decisions, code changes, tool results, verification state, unresolved problems, and exact next actions.",
 		Input:              []api.InputItem{{Type: "message", Role: "user", Content: "Summarize the conversation prefix. Return only the self-contained handoff note."}},
 		PreviousResponseID: previousResponseID, Stream: true,
 	}
-	result, err := r.Client.StreamResponse(ctx, request, nil)
+	result, err := streamer.StreamResponse(ctx, request, nil)
 	note := strings.TrimSpace(result.Text)
 	if runes := []rune(note); len(runes) > compactionPrefireMaxChars {
 		note = string(runes[:compactionPrefireMaxChars])
@@ -531,6 +532,13 @@ func (r *Runner) clearCompactionPrefire() {
 	r.prefireMu.Unlock()
 }
 
+func (r *Runner) compactionStreamer(includeHistory bool) ResponseStreamer {
+	if cloner, ok := r.Client.(api.CompactionCloner); ok {
+		return cloner.CloneForCompaction(includeHistory)
+	}
+	return r.Client
+}
+
 func (r *Runner) Compact(ctx context.Context, previousResponseID string) (string, error) {
 	return r.compact(ctx, previousResponseID, "manual")
 }
@@ -559,7 +567,11 @@ func (r *Runner) compact(ctx context.Context, previousResponseID, source string)
 		request.PreviousResponseID = ""
 		request.Input[0].Content = "This is the final pass of hierarchical compaction. Merge the entire prior summary with the recent conversation into one self-contained successor-agent handoff.\n\n<summary_content>\n" + note + "\n</summary_content>\n\n<recent_conversation>\n" + tail + "\n</recent_conversation>"
 	}
-	result, err := r.Client.StreamResponse(ctx, request, nil)
+	streamer := r.Client
+	if twoPass {
+		streamer = r.compactionStreamer(false)
+	}
+	result, err := streamer.StreamResponse(ctx, request, nil)
 	usedTwoPass := twoPass
 	if (err != nil || strings.TrimSpace(result.Text) == "") && twoPass {
 		r.log("compaction_prefire", map[string]any{"outcome": "pass2_failed"})

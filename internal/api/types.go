@@ -1,6 +1,17 @@
 package api
 
-import "encoding/json"
+import (
+	"context"
+	"encoding/json"
+)
+
+type Streamer interface {
+	StreamResponse(context.Context, ResponseRequest, func(string)) (StreamResult, error)
+}
+
+type CompactionCloner interface {
+	CloneForCompaction(includeHistory bool) Streamer
+}
 
 type ToolDefinition struct {
 	Type        string         `json:"type"`
