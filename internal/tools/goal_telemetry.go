@@ -64,6 +64,10 @@ func (s *GoalStore) goalUpdatedLocked(lastEvent string) (GoalObserver, GoalEvent
 	if s.verificationRuns > 0 {
 		data["classifier_runs_attempted"] = s.verificationRuns
 	}
+	if s.tokenBudget > 0 {
+		data["token_budget"] = s.tokenBudget
+	}
+	data["tokens_used"] = s.tokensUsed
 	if s.status == "verifying" {
 		data["verifying_completion"] = true
 	}
@@ -96,6 +100,8 @@ func goalWireStatus(status, message, lastEvent string) string {
 	switch status {
 	case "completed":
 		return "complete"
+	case "budget_limited":
+		return "budget_limited"
 	case "paused":
 		if lastEvent == "planning_failed" {
 			return "user_paused"

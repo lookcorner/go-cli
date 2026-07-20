@@ -24,6 +24,20 @@ type todoStore struct {
 
 func newTodoStore() *todoStore { return &todoStore{} }
 
+func (s *todoStore) hasPending() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, item := range s.items {
+		if item.status == "pending" || item.status == "in_progress" {
+			return true
+		}
+	}
+	return false
+}
+
 type todoWriteTool struct{ store *todoStore }
 
 func (t *todoWriteTool) Definition() api.ToolDefinition {

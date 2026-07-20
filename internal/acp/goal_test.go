@@ -16,7 +16,8 @@ func TestNotifyGoalEventSendsRealtimeGoalUpdateOnly(t *testing.T) {
 		t.Fatalf("trace-only event was sent: %s", output.String())
 	}
 	server.NotifyGoalEvent("session-1", tools.GoalEvent{Kind: "goal_updated", Data: map[string]any{
-		"status": "complete", "phase": "idle", "classifier_runs_attempted": 2,
+		"status": "budget_limited", "phase": "idle", "classifier_runs_attempted": 2,
+		"token_budget": int64(100), "tokens_used": int64(105), "last_event": "budget_exceeded",
 	}})
 	var message map[string]any
 	if err := json.Unmarshal([]byte(output.String()), &message); err != nil {
@@ -27,7 +28,7 @@ func TestNotifyGoalEventSendsRealtimeGoalUpdateOnly(t *testing.T) {
 	}
 	params := message["params"].(map[string]any)
 	update := params["update"].(map[string]any)
-	if params["sessionId"] != "session-1" || update["sessionUpdate"] != "goal_updated" || update["status"] != "complete" || update["classifier_runs_attempted"] != float64(2) {
+	if params["sessionId"] != "session-1" || update["sessionUpdate"] != "goal_updated" || update["status"] != "budget_limited" || update["classifier_runs_attempted"] != float64(2) || update["token_budget"] != float64(100) || update["tokens_used"] != float64(105) || update["last_event"] != "budget_exceeded" {
 		t.Fatalf("message=%#v", message)
 	}
 }

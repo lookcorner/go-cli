@@ -129,6 +129,7 @@ type Registry struct {
 	ownsScheduler bool
 	plan          *PlanMode
 	questions     *UserQuestions
+	todos         *todoStore
 	readPolicy    Approver
 	hunks         *HunkTracker
 	rewind        *mutationCheckpoint
@@ -262,6 +263,7 @@ func NewRegistry(ws *workspace.Workspace, approver Approver) *Registry {
 		tools: make(map[string]Tool, len(items)), approver: approver, processes: processes, goal: goal,
 		hunks: NewHunkTracker(ws), rewind: rewind, readFile: readFile, webFetch: webFetch,
 		subagents: subagents, scheduler: scheduler, ownsScheduler: true, plan: plan, questions: questions,
+		todos: todos,
 	}
 	for _, item := range items {
 		registry.tools[item.Definition().Name] = item
@@ -374,14 +376,44 @@ func (r *Registry) SetRewindStore(store *workspace.RewindStore, promptIndex func
 }
 
 func (r *Registry) BeginGoal(objective string) error {
+	return r.BeginGoalWithBudget(objective, 0)
+}
+
+func (r *Registry) BeginGoalWithBudget(objective string, tokenBudget int64) error {
 	if r.goal == nil {
 		return errors.New("goal store is unavailable")
 	}
-	err := r.goal.Begin(objective)
+	err := r.goal.BeginWithBudget(objective, tokenBudget)
 	if err == nil {
 		r.emitGoalUpdated("goal_created")
 	}
 	return err
+}
+
+func (r *Registry) AddGoalTokens(tokens int) {
+	if r != nil && r.goal != nil && r.goal.addTokens(int64(tokens)) {
+		r.emitGoalUpdated("tokens_updated")
+	}
+}
+
+func (r *Registry) EnforceGoalBudget() (GoalSnapshot, bool) {
+	if r == nil || r.goal == nil {
+		return GoalSnapshot{}, false
+	}
+	r.goal.mu.Lock()
+	if r.goal.tokenBudget <= 0 || r.goal.tokensUsed < r.goal.tokenBudget || r.goal.status != "active" {
+		snapshot := GoalSnapshot{TokenBudget: r.goal.tokenBudget, TokensUsed: r.goal.tokensUsed, Status: r.goal.status}
+		r.goal.mu.Unlock()
+		return snapshot, false
+	}
+	r.goal.status = "budget_limited"
+	r.goal.message = fmt.Sprintf("Goal token budget reached (%d of %d tokens)", r.goal.tokensUsed, r.goal.tokenBudget)
+	r.goal.skeptic0SessionID, r.goal.skepticModels = "", nil
+	r.goal.resetStrategistLocked()
+	_ = r.goal.saveLocked()
+	r.goal.mu.Unlock()
+	r.emitGoalUpdated("budget_exceeded")
+	return r.goal.Snapshot(), true
 }
 
 func (r *Registry) ResumeGoal() (string, error) {

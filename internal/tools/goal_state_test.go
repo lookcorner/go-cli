@@ -111,6 +111,31 @@ func TestGoalStatePersistsResumesAndCompletes(t *testing.T) {
 	}
 }
 
+func TestGoalBudgetPersistsEnforcesAndCannotResume(t *testing.T) {
+	root, artifactDir := t.TempDir(), filepath.Join(t.TempDir(), "artifacts")
+	registry := newPersistentGoalRegistry(t, root, artifactDir)
+	if err := registry.BeginGoalWithBudget("bounded work", 100); err != nil {
+		t.Fatal(err)
+	}
+	registry.AddGoalTokens(60)
+	registry.AddGoalTokens(50)
+	if snapshot, limited := registry.EnforceGoalBudget(); !limited || snapshot.Status != "budget_limited" || snapshot.TokenBudget != 100 || snapshot.TokensUsed != 110 {
+		t.Fatalf("limited=%v snapshot=%#v", limited, snapshot)
+	}
+	if err := registry.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	restored := newPersistentGoalRegistry(t, root, artifactDir)
+	defer restored.Close()
+	if snapshot := restored.GoalSnapshot(); snapshot.Status != "budget_limited" || snapshot.TokenBudget != 100 || snapshot.TokensUsed != 110 {
+		t.Fatalf("restored snapshot=%#v", snapshot)
+	}
+	if _, err := restored.ResumeGoal(); err == nil || !strings.Contains(err.Error(), "budget-limited") {
+		t.Fatalf("resume err=%v", err)
+	}
+}
+
 func TestGoalStateUnknownStatusPausesAndBadVersionFails(t *testing.T) {
 	root, artifactDir := t.TempDir(), filepath.Join(t.TempDir(), "artifacts")
 	if err := os.Mkdir(artifactDir, 0o700); err != nil {

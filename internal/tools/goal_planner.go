@@ -100,10 +100,12 @@ func (r *Registry) RunGoalPlanner(ctx context.Context) (string, error) {
 		Model: roles.Planner.Model, HarnessType: roles.Planner.AgentType,
 	}
 	result, err := backend.Start(ctx, request)
+	r.AddGoalTokens(result.TokensUsed)
 	if err != nil && roles.Planner.valid() && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 		r.emitGoalEvent("goal_role_model_fail_open", map[string]any{"role": "planner", "reason": "spawn_failed"})
 		request.Model, request.HarnessType = "", ""
 		result, err = backend.Start(ctx, request)
+		r.AddGoalTokens(result.TokensUsed)
 	}
 	plan := strings.TrimSpace(result.Output)
 	if err == nil && (plan == "" || plan == "Done" || len(plan) > goalPlannerMaxBytes) {

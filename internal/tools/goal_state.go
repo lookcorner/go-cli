@@ -34,6 +34,8 @@ type durableGoalState struct {
 	PlannerCompleted  bool            `json:"planner_completed,omitempty"`
 	SummaryAttempted  bool            `json:"summary_attempted,omitempty"`
 	ClosingSummary    string          `json:"closing_summary,omitempty"`
+	TokenBudget       int64           `json:"token_budget,omitempty"`
+	TokensUsed        int64           `json:"tokens_used,omitempty"`
 	Skeptic0SessionID string          `json:"skeptic0_session_id,omitempty"`
 	SkepticModels     []GoalRoleModel `json:"skeptic_model_assignment,omitempty"`
 }
@@ -54,6 +56,8 @@ func (s *GoalStore) saveLocked() error {
 		PlannerCompleted:  s.plannerCompleted,
 		SummaryAttempted:  s.summaryAttempted,
 		ClosingSummary:    s.closingSummary,
+		TokenBudget:       s.tokenBudget,
+		TokensUsed:        s.tokensUsed,
 		Skeptic0SessionID: s.skeptic0SessionID,
 		SkepticModels:     s.skepticModels,
 	})
@@ -113,6 +117,7 @@ func (s *GoalStore) loadState() error {
 	if state.VerificationStall < 0 {
 		state.VerificationStall = 0
 	}
+	state.TokenBudget, state.TokensUsed = max(int64(0), state.TokenBudget), max(int64(0), state.TokensUsed)
 	if state.StrategistBonus != goalStrategistBonus {
 		state.StrategistBonus = 0
 	}
@@ -133,6 +138,7 @@ func (s *GoalStore) loadState() error {
 	s.plannerPlanPath = state.PlannerPlanPath
 	s.plannerCompleted = state.PlannerCompleted
 	s.summaryAttempted, s.closingSummary = state.SummaryAttempted, state.ClosingSummary
+	s.tokenBudget, s.tokensUsed = state.TokenBudget, state.TokensUsed
 	s.skeptic0SessionID = state.Skeptic0SessionID
 	s.skepticModels = validGoalRoleModels(state.SkepticModels)
 	return nil
@@ -146,6 +152,9 @@ func (s *GoalStore) Resume() (string, error) {
 	}
 	if s.status == "completed" {
 		return "", errors.New("completed goal cannot be resumed")
+	}
+	if s.status == "budget_limited" {
+		return "", errors.New("budget-limited goal cannot be resumed")
 	}
 	s.status, s.message = "active", ""
 	s.verificationRuns, s.verificationStall = 0, 0
@@ -220,7 +229,7 @@ func validGoalAgentType(value string) bool {
 
 func validGoalStatus(status string) bool {
 	switch status {
-	case "active", "verifying", "paused", "blocked", "completed":
+	case "active", "verifying", "paused", "blocked", "completed", "budget_limited":
 		return true
 	default:
 		return false

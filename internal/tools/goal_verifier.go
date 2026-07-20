@@ -74,12 +74,14 @@ func (r *Registry) VerifyGoal(ctx context.Context, snapshot GoalSnapshot, count 
 			Model: role.Model, HarnessType: role.AgentType,
 		}
 		result, err := backend.Start(ctx, request)
+		r.AddGoalTokens(result.TokensUsed)
 		if err != nil && roleFallback && role.valid() && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			r.emitGoalEvent("goal_role_model_fail_open", map[string]any{
 				"role": "skeptic", "skeptic_idx": index, "reason": "spawn_failed",
 			})
 			request.Model, request.HarnessType = "", ""
 			result, err = backend.Start(ctx, request)
+			r.AddGoalTokens(result.TokensUsed)
 		}
 		if err != nil {
 			return goalVerdict{Index: index, Verdict: "refuted", Gaps: "goal verifier could not run: " + err.Error(), Latency: elapsedMilliseconds(started)}, "", err

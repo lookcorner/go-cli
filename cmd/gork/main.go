@@ -14,8 +14,10 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -519,12 +521,20 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			} else {
 				prompt = "Continue working toward the active goal:\n" + objective + "\n\nAdditional user direction:\n" + prompt
 			}
-		} else if err := registry.BeginGoal(prompt); err != nil {
-			return err
+		} else {
+			var budget int64
+			prompt, budget = parseGoalBudget(prompt)
+			if err := registry.BeginGoalWithBudget(prompt, budget); err != nil {
+				return err
+			}
 		}
 		planPath, err := registry.RunGoalPlanner(ctx)
 		if err != nil {
 			return fmt.Errorf("goal planning paused: %w", err)
+		}
+		if snapshot, limited := registry.EnforceGoalBudget(); limited {
+			fmt.Fprintf(stderr, "[gork] Goal token budget reached (%d of %d tokens) - goal stopped.\n", snapshot.TokensUsed, snapshot.TokenBudget)
+			return nil
 		}
 		prompt = appendGoalPlanReminder(prompt, planPath)
 		return goalLoop(ctx, runner, registry, stdout, stderr, prompt, opts.previousID, opts.goalRuns, cfg.Goal.VerifierCount, cfg.Goal.ClassifierMaxRuns)
@@ -1938,7 +1948,12 @@ func goalLoop(
 	for run := 1; run <= maxRuns; run++ {
 		fmt.Fprintf(stderr, "[gork] goal run %d/%d\n", run, maxRuns)
 		result, err := runner.RunTurn(ctx, prompt, previousResponseID)
+		registry.AddGoalTokens(result.TokensUsed)
 		if err != nil {
+			if snapshot, limited := registry.EnforceGoalBudget(); limited {
+				fmt.Fprintf(stderr, "[gork] Goal token budget reached (%d of %d tokens) - goal stopped.\n", snapshot.TokensUsed, snapshot.TokenBudget)
+				return nil
+			}
 			return err
 		}
 		previousResponseID = result.ResponseID
@@ -1972,10 +1987,18 @@ func goalLoop(
 				return nil
 			}
 			fmt.Fprintln(stderr, "[gork] goal completion refuted:", verification.Summary)
+			if current, limited := registry.EnforceGoalBudget(); limited {
+				fmt.Fprintf(stderr, "[gork] Goal token budget reached (%d of %d tokens) - goal stopped.\n", current.TokensUsed, current.TokenBudget)
+				return nil
+			}
 			prompt = "Independent goal verification found remaining work: " + verification.Summary + "\nContinue working toward the full objective. Do not claim completion again until the gaps are resolved and verified."
 			if strategy := registry.RunGoalStrategist(ctx); strategy != "" {
 				fmt.Fprintln(stderr, "[gork] goal strategist produced a structural recommendation")
 				prompt += "\n\n" + strategy
+			}
+			if current, limited := registry.EnforceGoalBudget(); limited {
+				fmt.Fprintf(stderr, "[gork] Goal token budget reached (%d of %d tokens) - goal stopped.\n", current.TokensUsed, current.TokenBudget)
+				return nil
 			}
 			prompt = appendGoalPlanReminder(prompt, registry.GoalSnapshot().PlanPath)
 			continue
@@ -1984,10 +2007,36 @@ func goalLoop(
 			return nil
 		case "blocked":
 			return fmt.Errorf("goal blocked: %s", snapshot.Message)
+		case "budget_limited":
+			fmt.Fprintf(stderr, "[gork] Goal token budget reached (%d of %d tokens) - goal stopped.\n", snapshot.TokensUsed, snapshot.TokenBudget)
+			return nil
 		}
-		prompt = appendGoalPlanReminder("Continue working toward the active goal. Verify the remaining work, then call update_goal with progress, completed=true only when fully achieved, or blocked_reason only if genuinely stuck.", snapshot.PlanPath)
+		if current, limited := registry.EnforceGoalBudget(); limited {
+			fmt.Fprintf(stderr, "[gork] Goal token budget reached (%d of %d tokens) - goal stopped.\n", current.TokensUsed, current.TokenBudget)
+			return nil
+		}
+		continuation := "Continue working toward the active goal. Verify the remaining work, then call update_goal with progress, completed=true only when fully achieved, or blocked_reason only if genuinely stuck."
+		if pattern := registry.DetectGoalPrematureStop(result.Text); pattern != "" {
+			continuation = "Your previous response ended prematurely while actionable work remains. Continue now: execute the pending tasks, inspect results, and keep working until the goal is independently verifiable. Do not hand work back to the user or stop merely because an agent, command, review, or follow-up is pending."
+		}
+		prompt = appendGoalPlanReminder(continuation, snapshot.PlanPath)
 	}
 	return fmt.Errorf("goal remains active after %d runs", maxRuns)
+}
+
+var trailingGoalBudget = regexp.MustCompile(`(?s)^(.*\S)\s+--budget\s+([0-9]+)\s*$`)
+
+func parseGoalBudget(objective string) (string, int64) {
+	trimmed := strings.TrimSpace(objective)
+	match := trailingGoalBudget.FindStringSubmatch(trimmed)
+	if match == nil {
+		return trimmed, 0
+	}
+	budget, err := strconv.ParseInt(match[2], 10, 64)
+	if err != nil || budget <= 0 {
+		return trimmed, 0
+	}
+	return strings.TrimSpace(match[1]), budget
 }
 
 func startLSPServers(

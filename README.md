@@ -238,6 +238,13 @@ new turns until the model calls `update_goal` with `completed=true` or a genuine
 ./gork --goal --goal-runs 8 --workspace . "implement and verify the feature"
 ```
 
+Add a positive trailing token budget to stop an unfinished goal once parent and
+Goal-role model usage reaches the limit:
+
+```sh
+./gork --goal --workspace . "implement and verify the feature --budget 500000"
+```
+
 Progress-only `update_goal` calls keep the goal active. A completion claim
 starts three independent, read-only `general-purpose` skeptics. Two refutations
 return the goal to the active loop with their concrete gaps; malformed verdicts

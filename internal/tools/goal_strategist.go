@@ -110,10 +110,12 @@ Return only a short Markdown note with these headings:
 		Model: roles.Strategist.Model, HarnessType: roles.Strategist.AgentType,
 	}
 	result, err := backend.Start(ctx, request)
+	r.AddGoalTokens(result.TokensUsed)
 	if err != nil && roles.Strategist.valid() && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 		r.emitGoalEvent("goal_role_model_fail_open", map[string]any{"role": "strategist", "reason": "spawn_failed"})
 		request.Model, request.HarnessType = "", ""
 		result, err = backend.Start(ctx, request)
+		r.AddGoalTokens(result.TokensUsed)
 	}
 	note := truncateGoalStrategy(result.Output)
 	path := filepath.Join(input.artifactDir, "goal-strategy.md")

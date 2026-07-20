@@ -72,6 +72,33 @@ func TestSessionObserversPersistOnlyLifecycleEvents(t *testing.T) {
 	}
 }
 
+func TestParseGoalBudget(t *testing.T) {
+	valid := map[string]struct {
+		objective string
+		budget    int64
+	}{
+		"do x --budget 1":      {"do x", 1},
+		"do x --budget   77":   {"do x", 77},
+		"do x \t --budget 500": {"do x", 500},
+	}
+	for input, want := range valid {
+		objective, budget := parseGoalBudget(input)
+		if objective != want.objective || budget != want.budget {
+			t.Errorf("parseGoalBudget(%q)=(%q,%d), want (%q,%d)", input, objective, budget, want.objective, want.budget)
+		}
+	}
+	invalid := []string{
+		"implement X --budget abc", "implement X --budget", "implement X --budget 0",
+		"implement X --budget -5", "implement X --budget +5", "implement X --budget 99999999999999999999",
+		"implement X --budget5", "tune my-fund--budget 100", "fix the --budget flag parsing bug", "--budget 500000",
+	}
+	for _, input := range invalid {
+		if objective, budget := parseGoalBudget(input); objective != input || budget != 0 {
+			t.Errorf("parseGoalBudget(%q)=(%q,%d), want verbatim objective", input, objective, budget)
+		}
+	}
+}
+
 func TestSessionMCPRuntimeMergesAndRestoresConfiguration(t *testing.T) {
 	disabled := false
 	runtime := &sessionMCPRuntime{base: config.Config{MCPServers: map[string]config.MCPServerConfig{

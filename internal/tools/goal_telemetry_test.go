@@ -129,6 +129,35 @@ func TestGoalTelemetryRecordsClassifierCap(t *testing.T) {
 	}
 }
 
+func TestGoalBudgetTelemetryAndRoleTokenAccounting(t *testing.T) {
+	registry := &Registry{subagents: &subagentHolder{}, goal: NewGoalStore()}
+	registry.goal.artifactDir = t.TempDir()
+	recorder := &goalEventRecorder{}
+	registry.SetGoalObserver(recorder)
+	registry.ConfigureGoalRoles(GoalRoleConfig{PlannerEnabled: true})
+	registry.subagents.set(&goalVerifierBackend{outputs: []string{testGoalPlan}, tokens: []int{65}})
+	if err := registry.BeginGoalWithBudget("bounded goal", 100); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.RunGoalPlanner(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	updates := recorder.matching("goal_updated")
+	if last := updates[len(updates)-2].Data; last["last_event"] != "tokens_updated" || last["tokens_used"] != int64(65) {
+		t.Fatalf("live token update=%#v", last)
+	}
+	registry.AddGoalTokens(40)
+	snapshot, limited := registry.EnforceGoalBudget()
+	if !limited || snapshot.TokensUsed != 105 || snapshot.TokenBudget != 100 {
+		t.Fatalf("limited=%v snapshot=%#v", limited, snapshot)
+	}
+	updates = recorder.matching("goal_updated")
+	last := updates[len(updates)-1].Data
+	if last["status"] != "budget_limited" || last["last_event"] != "budget_exceeded" || last["token_budget"] != int64(100) || last["tokens_used"] != int64(105) {
+		t.Fatalf("last update=%#v", last)
+	}
+}
+
 func TestGoalTelemetryRecordsRoleFailures(t *testing.T) {
 	t.Run("planner fallback then fail closed", func(t *testing.T) {
 		registry := &Registry{subagents: &subagentHolder{}, goal: NewGoalStore()}

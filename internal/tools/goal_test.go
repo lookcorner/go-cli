@@ -15,6 +15,7 @@ type goalVerifierBackend struct {
 	mu       sync.Mutex
 	outputs  []string
 	errors   []error
+	tokens   []int
 	requests []SubagentRequest
 	onStart  func(int, SubagentRequest)
 }
@@ -28,10 +29,17 @@ func (b *goalVerifierBackend) Start(_ context.Context, request SubagentRequest) 
 	if b.onStart != nil {
 		b.onStart(index, request)
 	}
-	if index < len(b.errors) && b.errors[index] != nil {
-		return SubagentResult{}, b.errors[index]
+	result := SubagentResult{ID: fmt.Sprintf("skeptic-%d", index+1), Status: "completed"}
+	if index < len(b.outputs) {
+		result.Output = b.outputs[index]
 	}
-	return SubagentResult{ID: fmt.Sprintf("skeptic-%d", index+1), Status: "completed", Output: b.outputs[index]}, nil
+	if index < len(b.tokens) {
+		result.TokensUsed = b.tokens[index]
+	}
+	if index < len(b.errors) && b.errors[index] != nil {
+		return result, b.errors[index]
+	}
+	return result, nil
 }
 func (*goalVerifierBackend) Has(string) bool { return false }
 func (*goalVerifierBackend) Output(context.Context, string, time.Duration) (SubagentResult, error) {

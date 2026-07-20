@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,8 @@ type GoalSnapshot struct {
 	VerificationRuns uint32
 	PlanPath         string
 	ClosingSummary   string
+	TokenBudget      int64
+	TokensUsed       int64
 }
 
 type GoalRoleModel struct {
@@ -63,6 +66,8 @@ type GoalStore struct {
 	closingSummary    string
 	observer          GoalObserver
 	classifierMaxRuns uint32
+	tokenBudget       int64
+	tokensUsed        int64
 	statePath         string
 	skeptic0SessionID string
 	skepticModels     []GoalRoleModel
@@ -70,7 +75,9 @@ type GoalStore struct {
 
 func NewGoalStore() *GoalStore { return &GoalStore{} }
 
-func (s *GoalStore) Begin(objective string) error {
+func (s *GoalStore) Begin(objective string) error { return s.BeginWithBudget(objective, 0) }
+
+func (s *GoalStore) BeginWithBudget(objective string, tokenBudget int64) error {
 	objective = strings.TrimSpace(objective)
 	if objective == "" {
 		return errors.New("goal objective must not be empty")
@@ -94,13 +101,35 @@ func (s *GoalStore) Begin(objective string) error {
 	s.plannerPlanPath = ""
 	s.plannerCompleted = false
 	s.summaryAttempted, s.closingSummary = false, ""
+	s.tokenBudget, s.tokensUsed = max(int64(0), tokenBudget), 0
 	return s.saveLocked()
 }
 
 func (s *GoalStore) Snapshot() GoalSnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return GoalSnapshot{Objective: s.objective, Status: s.status, Message: s.message, VerificationRuns: s.verificationRuns, PlanPath: s.plannerPlanPath, ClosingSummary: s.closingSummary}
+	return GoalSnapshot{
+		Objective: s.objective, Status: s.status, Message: s.message, VerificationRuns: s.verificationRuns,
+		PlanPath: s.plannerPlanPath, ClosingSummary: s.closingSummary, TokenBudget: s.tokenBudget, TokensUsed: s.tokensUsed,
+	}
+}
+
+func (s *GoalStore) addTokens(tokens int64) bool {
+	if tokens <= 0 {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.status != "active" && s.status != "verifying" && s.status != "paused" {
+		return false
+	}
+	if math.MaxInt64-s.tokensUsed < tokens {
+		s.tokensUsed = math.MaxInt64
+	} else {
+		s.tokensUsed += tokens
+	}
+	_ = s.saveLocked()
+	return true
 }
 
 func (s *GoalStore) StartVerification(maxRuns uint32) error {
