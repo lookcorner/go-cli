@@ -139,7 +139,7 @@ func TestInteractiveRunsScheduleWhileWaitingForInput(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- interactiveLoop(ctx, runner, queue, bufio.NewReader(reader), io.Discard, io.Discard, "", "parent-response")
+		done <- interactiveLoop(ctx, runner, queue, newTerminalInput(ctx, bufio.NewReader(reader)), io.Discard, io.Discard, "", "parent-response")
 	}()
 	select {
 	case <-streamer.called:

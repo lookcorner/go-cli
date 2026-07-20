@@ -313,7 +313,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	var approver tools.Approver
 	var askApprover tools.Approver
 	var tuiBridge *tui.Bridge
-	var terminalQuestions *terminalQuestionObserver
+	var terminalLines *terminalInput
+	var terminalPrompts *terminalPrompter
 	statusOutput := stderr
 	if opts.tui {
 		tuiBridge = tui.NewBridge(ctx, mode)
@@ -322,10 +323,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		askApprover = tui.PromptApprover(tuiBridge)
 		statusOutput = tuiBridge.StatusWriter()
 	} else {
-		inputMu := &sync.Mutex{}
-		approver = serializedApprover{mu: inputMu, base: tools.PromptApprover{Mode: mode, Input: inputReader, Output: stderr}}
-		askApprover = serializedApprover{mu: inputMu, base: tools.PromptApprover{Mode: tools.PermissionPrompt, Input: inputReader, Output: stderr}}
-		terminalQuestions = &terminalQuestionObserver{input: inputReader, output: stderr, mu: inputMu}
+		terminalLines = newTerminalInput(ctx, inputReader)
+		terminalPrompts = &terminalPrompter{input: terminalLines, output: stderr}
+		approver = tools.PromptApprover{Mode: mode}
+		askApprover = terminalPrompts
 	}
 	permissionPrompts := &permissionPromptApprover{base: askApprover}
 	askApprover = permissionPrompts
@@ -427,8 +428,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	registry.SetPlanModeObserver(processObserver)
 	if tuiBridge != nil {
 		registry.SetUserQuestionObserver(tuiBridge)
-	} else if !opts.interactive {
-		registry.SetUserQuestionObserver(terminalQuestions)
+	} else {
+		registry.SetUserQuestionObserver(terminalPrompts)
 	}
 	defer hookRuntime.SessionEnded(context.Background(), "closed")
 	agentCatalog, agentErrors := agents.Discover(agents.Config{
@@ -493,7 +494,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		if resumedTranscript != "" {
 			fmt.Fprintln(stdout, resumedTranscript)
 		}
-		return interactiveLoop(ctx, runner, scheduledQueue, inputReader, stdout, stderr, prompt, opts.previousID)
+		return interactiveLoop(ctx, runner, scheduledQueue, terminalLines, stdout, stderr, prompt, opts.previousID)
 	}
 	if opts.goal {
 		if err := registry.BeginGoal(prompt); err != nil {
@@ -1953,43 +1954,30 @@ func interactiveLoop(
 	ctx context.Context,
 	runner *agent.Runner,
 	scheduled *scheduledWakeQueue,
-	input *bufio.Reader,
+	input *terminalInput,
 	stdout io.Writer,
 	stderr io.Writer,
 	initialPrompt string,
 	previousResponseID string,
 ) error {
 	fmt.Fprintln(stderr, "[gork] interactive mode; /exit to quit, /help for commands")
-	type readResult struct {
-		line string
-		err  error
-	}
-	lines := make(chan readResult, 1)
-	go func() {
-		for {
-			line, err := input.ReadString('\n')
-			select {
-			case lines <- readResult{line: line, err: err}:
-			case <-ctx.Done():
-				return
-			}
-			if err != nil {
-				return
-			}
-		}
-	}()
 	prompt := strings.TrimSpace(initialPrompt)
 	inputClosed := false
 	promptShown := false
+	var promptRead <-chan terminalReadResult
 	for {
 		scheduledID := ""
 		if prompt == "" {
 			if inputClosed {
 				return nil
 			}
-			var read readResult
+			if promptRead == nil {
+				promptRead = input.request(ctx, false)
+			}
+			var read terminalReadResult
 			select {
-			case read = <-lines:
+			case read = <-promptRead:
+				promptRead = nil
 			default:
 				if event, ok := scheduled.Take(); ok {
 					prompt, scheduledID = event.Prompt, event.TaskID
@@ -2002,7 +1990,8 @@ func interactiveLoop(
 					promptShown = true
 				}
 				select {
-				case read = <-lines:
+				case read = <-promptRead:
+					promptRead = nil
 				case <-scheduled.Notify():
 					continue
 				case <-ctx.Done():

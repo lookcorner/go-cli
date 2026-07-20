@@ -31,10 +31,10 @@ the pending interaction, wait for accepted, cancelled, clarification, or
 skip-interview responses, and feed the formatted answer back into the same
 tool loop. One questionnaire has a shared 30-minute timeout, overridable with
 `GROK_ASK_USER_QUESTION_TIMEOUT_SECS`. The TUI renders an in-place option
-selector, while one-shot and goal-mode terminal runs accept option numbers,
-comma-separated multi-select values, or free text for Other. The REPL retains
-the reference fire-and-forget confirmation fallback until its background input
-reader is replaced with a question-aware input arbiter.
+selector, while REPL, one-shot, and goal-mode terminal runs accept option
+numbers, comma-separated multi-select values, or free text for Other. The REPL
+uses a question-aware input arbiter so pending prompts, scheduled turns,
+permission confirmations, and tool questions cannot read the same line.
 
 Workspace instruction and skill discovery respects repository and global Git
 ignore rules through Git's own matching engine. Project instructions load from
