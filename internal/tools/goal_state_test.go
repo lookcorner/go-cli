@@ -279,3 +279,45 @@ func TestGoalStateUnknownStatusPausesAndBadVersionFails(t *testing.T) {
 		t.Fatalf("bad version err=%v", err)
 	}
 }
+
+func TestGoalLegacyPausedStateMigratesToExplicitReason(t *testing.T) {
+	tests := map[string]struct {
+		message string
+		status  string
+	}{
+		"planner":     {goalPlannerFailure, "user_paused"},
+		"backoff":     {"verification run cap reached", "back_off_paused"},
+		"no progress": {"verification found no progress", "no_progress_paused"},
+		"infra":       {"Turn failed: upstream unavailable", "infra_paused"},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			artifactDir := filepath.Join(t.TempDir(), "artifacts")
+			if err := os.Mkdir(artifactDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			data, err := json.Marshal(durableGoalState{
+				Version: goalStateVersion, GoalID: "123e4567-e89b-42d3-a456-426614174000",
+				Objective: "goal", Status: "paused", Message: test.message,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			statePath := filepath.Join(artifactDir, "goal.json")
+			if err := os.WriteFile(statePath, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			registry := newPersistentGoalRegistry(t, t.TempDir(), artifactDir)
+			if snapshot := registry.GoalSnapshot(); snapshot.Status != test.status {
+				t.Fatalf("snapshot=%#v", snapshot)
+			}
+			if err := registry.Close(); err != nil {
+				t.Fatal(err)
+			}
+			persisted, err := os.ReadFile(statePath)
+			if err != nil || !strings.Contains(string(persisted), `"status":"`+test.status+`"`) {
+				t.Fatalf("persisted=%s err=%v", persisted, err)
+			}
+		})
+	}
+}

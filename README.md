@@ -263,6 +263,9 @@ User cancellation similarly persists `user_paused` without an error message.
 On process reload, an interrupted `active` or `verifying` Goal is also restored
 as `user_paused` until an explicit resume, so restart never resumes autonomous
 work implicitly.
+Verification caps and repeated identical gaps persist distinct
+`back_off_paused` and `no_progress_paused` states. Legacy `paused` snapshots
+are migrated once from their existing reason and written back explicitly.
 Goal mode is explicit and cannot be combined with the interactive REPL or TUI.
 The panel defaults to three skeptics. `[goal] verifier_count`, remote
 `goal_verifier_count`, and the highest-precedence `GROK_GOAL_VERIFIER_N`

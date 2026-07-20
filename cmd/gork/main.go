@@ -1988,7 +1988,7 @@ func goalLoop(
 			if verification.DetailsPath != "" {
 				fmt.Fprintln(stderr, "[gork] goal verification details:", verification.DetailsPath)
 			}
-			if current := registry.GoalSnapshot(); current.Status == "paused" {
+			if current := registry.GoalSnapshot(); current.Status == "back_off_paused" || current.Status == "no_progress_paused" {
 				return errors.New("goal verification paused: " + current.Message)
 			}
 			if verification.Achieved {

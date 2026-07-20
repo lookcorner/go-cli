@@ -103,7 +103,7 @@ func TestGoalStrategistBonusExtendsCapAndStallWindow(t *testing.T) {
 		t.Fatalf("relaxed stall status=%q count=%d err=%v", store.status, store.verificationStall, err)
 	}
 	store.status = "verifying"
-	if err := store.ResolveVerification(GoalVerification{Summary: "same"}, 10); err != nil || store.status != "paused" || store.verificationStall != 5 {
+	if err := store.ResolveVerification(GoalVerification{Summary: "same"}, 10); err != nil || store.status != "no_progress_paused" || store.verificationStall != 5 {
 		t.Fatalf("bounded stall status=%q count=%d err=%v", store.status, store.verificationStall, err)
 	}
 }

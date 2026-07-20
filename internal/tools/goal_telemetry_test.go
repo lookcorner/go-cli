@@ -161,7 +161,7 @@ func TestGoalInfrastructureFailurePausesPersistsAndEmits(t *testing.T) {
 	if err := registry.PauseGoalInfrastructure(errors.New("upstream unavailable")); err != nil {
 		t.Fatal(err)
 	}
-	if snapshot := registry.GoalSnapshot(); snapshot.Status != "paused" || snapshot.Message != "Turn failed: upstream unavailable" {
+	if snapshot := registry.GoalSnapshot(); snapshot.Status != "infra_paused" || snapshot.Message != "Turn failed: upstream unavailable" {
 		t.Fatalf("snapshot=%#v", snapshot)
 	}
 	paused := recorder.matching("goal_auto_paused")
@@ -175,10 +175,10 @@ func TestGoalInfrastructureFailurePausesPersistsAndEmits(t *testing.T) {
 	}
 	restored := newPersistentGoalRegistry(t, root, artifactDir)
 	defer restored.Close()
-	if snapshot := restored.GoalSnapshot(); snapshot.Status != "paused" || snapshot.Message != "Turn failed: upstream unavailable" {
+	if snapshot := restored.GoalSnapshot(); snapshot.Status != "infra_paused" || snapshot.Message != "Turn failed: upstream unavailable" {
 		t.Fatalf("restored snapshot=%#v", snapshot)
 	}
-	if status := goalWireStatus("paused", restored.GoalSnapshot().Message, "goal_loaded"); status != "infra_paused" {
+	if status := goalWireStatus(restored.GoalSnapshot().Status, restored.GoalSnapshot().Message, "goal_loaded"); status != "infra_paused" {
 		t.Fatalf("restored wire status=%q", status)
 	}
 }

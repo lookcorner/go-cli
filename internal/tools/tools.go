@@ -452,7 +452,7 @@ func (r *Registry) PauseGoalInfrastructure(runErr error) error {
 		r.goal.mu.Unlock()
 		return nil
 	}
-	r.goal.status, r.goal.message, r.goal.currentSubagentRole = "paused", message, ""
+	r.goal.status, r.goal.message, r.goal.currentSubagentRole = "infra_paused", message, ""
 	err := r.goal.saveLocked()
 	r.goal.mu.Unlock()
 	if err != nil {
@@ -545,7 +545,7 @@ func (r *Registry) StartGoalVerification(maxRuns uint32) error {
 	if err == nil {
 		r.goal.setSubagentRole("verifier")
 		r.emitGoalUpdated("verification_started")
-	} else if r.goal.Snapshot().Status == "paused" {
+	} else if r.goal.Snapshot().Status == "back_off_paused" {
 		r.emitGoalEvent("goal_classifier_cap_reached", map[string]any{"attempt": r.goal.Snapshot().VerificationRuns})
 		r.emitGoalEvent("goal_auto_paused", map[string]any{"reason": "back_off"})
 		r.emitGoalUpdated("goal_paused")
@@ -563,11 +563,11 @@ func (r *Registry) ResolveGoalVerification(verification GoalVerification, maxRun
 	}
 	r.goal.setSubagentRole("")
 	snapshot := r.goal.Snapshot()
-	if snapshot.Status == "paused" {
+	if goalIsPaused(snapshot.Status) {
 		reason := "back_off"
-		if strings.Contains(snapshot.Message, "no progress") {
+		if snapshot.Status == "no_progress_paused" {
 			reason = "no_progress"
-		} else if strings.Contains(snapshot.Message, "run cap") {
+		} else if snapshot.Status == "back_off_paused" && strings.Contains(snapshot.Message, "run cap") {
 			r.emitGoalEvent("goal_classifier_cap_reached", map[string]any{"attempt": snapshot.VerificationRuns})
 		}
 		r.emitGoalEvent("goal_auto_paused", map[string]any{"reason": reason})

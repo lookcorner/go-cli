@@ -86,7 +86,7 @@ func (s *GoalStore) goalUpdatedLocked(lastEvent string) (GoalObserver, GoalEvent
 	if s.message != "" {
 		data["message"] = s.message
 	}
-	if s.status == "paused" || s.status == "blocked" {
+	if s.status == "infra_paused" || s.status == "blocked" {
 		data["pause_message"] = s.message
 	}
 	if s.plannerPlanPath != "" {
@@ -119,6 +119,8 @@ func goalWireStatus(status, message, lastEvent string) string {
 		return "budget_limited"
 	case "user_paused":
 		return "user_paused"
+	case "back_off_paused", "no_progress_paused", "infra_paused":
+		return status
 	case "paused":
 		if lastEvent == "goal_infra_paused" || strings.HasPrefix(message, "Turn failed:") {
 			return "infra_paused"

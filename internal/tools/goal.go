@@ -159,7 +159,7 @@ func (s *GoalStore) addTokens(tokens int64, subagent bool) bool {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.status != "active" && s.status != "verifying" && s.status != "paused" {
+	if s.status != "active" && s.status != "verifying" && !goalIsPaused(s.status) {
 		return false
 	}
 	if math.MaxInt64-s.tokensUsed < tokens {
@@ -202,7 +202,7 @@ func (s *GoalStore) StartVerification(maxRuns uint32) error {
 		return errors.New("goal is not awaiting verification")
 	}
 	if s.verificationRuns >= goalClassifierLimit(maxRuns, s.strategistBonus) {
-		s.status = "paused"
+		s.status = "back_off_paused"
 		err := fmt.Errorf("goal verification paused after %d attempts", s.verificationRuns)
 		return errors.Join(err, s.saveLocked())
 	}
@@ -247,10 +247,10 @@ func (s *GoalStore) ResolveVerification(verification GoalVerification, maxRuns u
 	}
 	stallLimit := 2 + int(s.strategistBonus)
 	if s.verificationRuns >= goalClassifierLimit(maxRuns, s.strategistBonus) {
-		s.status = "paused"
+		s.status = "back_off_paused"
 		s.message = fmt.Sprintf("verification run cap reached after %d attempts: %s", s.verificationRuns, s.message)
 	} else if s.verificationStall >= stallLimit {
-		s.status = "paused"
+		s.status = "no_progress_paused"
 		s.message = fmt.Sprintf("verification found no progress across %d attempts: %s", stallLimit, s.message)
 	} else {
 		s.status = "active"

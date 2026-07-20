@@ -122,7 +122,7 @@ func TestGoalLoopPausesAfterInfrastructureFailure(t *testing.T) {
 	if !errors.Is(err, failure) {
 		t.Fatalf("goal loop err=%v", err)
 	}
-	if snapshot := registry.GoalSnapshot(); snapshot.Status != "paused" || snapshot.Message != "Turn failed: upstream unavailable" {
+	if snapshot := registry.GoalSnapshot(); snapshot.Status != "infra_paused" || snapshot.Message != "Turn failed: upstream unavailable" {
 		t.Fatalf("snapshot=%#v", snapshot)
 	}
 }

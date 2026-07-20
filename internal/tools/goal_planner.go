@@ -45,12 +45,12 @@ func (s *GoalStore) finishPlanner(planPath, baselinePath string, runErr error) e
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if runErr != nil {
-		s.status, s.message = "paused", goalPlannerFailure
+		s.status, s.message = "user_paused", goalPlannerFailure
 		return errors.Join(runErr, s.saveLocked())
 	}
 	s.plannerPlanPath, s.planBaselinePath, s.plannerCompleted = planPath, baselinePath, true
 	if err := s.saveLocked(); err != nil {
-		s.status, s.message = "paused", goalPlannerFailure
+		s.status, s.message = "user_paused", goalPlannerFailure
 		return errors.Join(err, s.saveLocked())
 	}
 	return nil

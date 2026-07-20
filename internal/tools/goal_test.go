@@ -190,7 +190,7 @@ func TestGoalVerificationPausesAtCapAndOnRepeatedGaps(t *testing.T) {
 			t.Fatal(err)
 		}
 		snapshot := store.Snapshot()
-		if snapshot.Status != "paused" || snapshot.VerificationRuns != 1 || !strings.Contains(snapshot.Message, "run cap") {
+		if snapshot.Status != "back_off_paused" || snapshot.VerificationRuns != 1 || !strings.Contains(snapshot.Message, "run cap") {
 			t.Fatalf("snapshot=%#v", snapshot)
 		}
 	})
@@ -209,7 +209,7 @@ func TestGoalVerificationPausesAtCapAndOnRepeatedGaps(t *testing.T) {
 			}
 		}
 		snapshot := store.Snapshot()
-		if snapshot.Status != "paused" || snapshot.VerificationRuns != 2 || !strings.Contains(snapshot.Message, "no progress") {
+		if snapshot.Status != "no_progress_paused" || snapshot.VerificationRuns != 2 || !strings.Contains(snapshot.Message, "no progress") {
 			t.Fatalf("snapshot=%#v", snapshot)
 		}
 	})

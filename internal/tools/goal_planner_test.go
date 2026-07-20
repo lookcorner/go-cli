@@ -129,7 +129,7 @@ func TestGoalPlannerRetriesRoleAndFailClosedResumeRetries(t *testing.T) {
 		if _, err := registry.RunGoalPlanner(context.Background()); !errors.Is(err, context.Canceled) || len(backend.requests) != 1 {
 			t.Fatalf("err=%v requests=%d", err, len(backend.requests))
 		}
-		if snapshot := registry.GoalSnapshot(); snapshot.Status != "paused" {
+		if snapshot := registry.GoalSnapshot(); snapshot.Status != "user_paused" {
 			t.Fatalf("snapshot=%#v", snapshot)
 		}
 	})
@@ -146,7 +146,7 @@ func TestGoalPlannerRetriesRoleAndFailClosedResumeRetries(t *testing.T) {
 		if _, err := registry.RunGoalPlanner(context.Background()); err == nil {
 			t.Fatal("planner failure was accepted")
 		}
-		if snapshot := registry.GoalSnapshot(); snapshot.Status != "paused" || snapshot.Message != goalPlannerFailure {
+		if snapshot := registry.GoalSnapshot(); snapshot.Status != "user_paused" || snapshot.Message != goalPlannerFailure {
 			t.Fatalf("failed snapshot=%#v", snapshot)
 		}
 		if _, err := registry.ResumeGoal(); err != nil {
@@ -201,7 +201,7 @@ func TestGoalPlannerMissingArtifactDirectoryFailsClosed(t *testing.T) {
 	if _, err := registry.RunGoalPlanner(context.Background()); err == nil {
 		t.Fatal("missing artifact directory was accepted")
 	}
-	if snapshot := registry.GoalSnapshot(); snapshot.Status != "paused" || snapshot.Message != goalPlannerFailure {
+	if snapshot := registry.GoalSnapshot(); snapshot.Status != "user_paused" || snapshot.Message != goalPlannerFailure {
 		t.Fatalf("snapshot=%#v", snapshot)
 	}
 }

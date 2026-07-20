@@ -118,8 +118,20 @@ func (s *GoalStore) loadState() error {
 		}
 		generatedID = true
 	}
-	normalizedStatus := !validGoalStatus(state.Status)
+	normalizedStatus := state.Status == "paused"
 	if normalizedStatus {
+		switch {
+		case strings.HasPrefix(state.Message, "Turn failed:"):
+			state.Status = "infra_paused"
+		case strings.Contains(state.Message, "no progress"):
+			state.Status = "no_progress_paused"
+		case state.Message == goalPlannerFailure:
+			state.Status = "user_paused"
+		default:
+			state.Status = "back_off_paused"
+		}
+	} else if !validGoalStatus(state.Status) {
+		normalizedStatus = true
 		state.Status = "user_paused"
 		state.Message = "goal state used an unknown status and was paused"
 	}
@@ -280,7 +292,16 @@ func validGoalAgentType(value string) bool {
 
 func validGoalStatus(status string) bool {
 	switch status {
-	case "active", "verifying", "paused", "user_paused", "blocked", "completed", "budget_limited":
+	case "active", "verifying", "user_paused", "back_off_paused", "no_progress_paused", "infra_paused", "blocked", "completed", "budget_limited":
+		return true
+	default:
+		return false
+	}
+}
+
+func goalIsPaused(status string) bool {
+	switch status {
+	case "user_paused", "back_off_paused", "no_progress_paused", "infra_paused":
 		return true
 	default:
 		return false
