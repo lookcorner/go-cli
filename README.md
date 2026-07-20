@@ -256,8 +256,11 @@ verifier backend fails open so an internal harness outage cannot strand the
 user. The newest rejection gaps are persisted and repeated in every continuation
 until a later achieved verdict clears them. Before prompt insertion they are
 limited to 4,000 characters and reminder tags plus placeholder braces are
-neutralized. Goal mode is explicit and cannot be combined with the interactive REPL
-or TUI. The panel defaults to three skeptics. `[goal] verifier_count`, remote
+neutralized. A non-cancellation worker infrastructure error immediately pauses
+the active Goal with its `Turn failed:` reason, persists it for session reload,
+and reports live status as `infra_paused`; resume clears the reason and retries.
+Goal mode is explicit and cannot be combined with the interactive REPL or TUI.
+The panel defaults to three skeptics. `[goal] verifier_count`, remote
 `goal_verifier_count`, and the highest-precedence `GROK_GOAL_VERIFIER_N`
 environment variable may select one through five. `[goal] classifier_max_runs`,
 remote `goal_classifier_max_runs`, and `GROK_GOAL_CLASSIFIER_MAX` set the

@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/auth"
 	"github.com/lookcorner/go-cli/internal/compat"
@@ -31,6 +32,12 @@ import (
 
 type samplingStreamer struct {
 	request api.ResponseRequest
+}
+
+type failingGoalStreamer struct{ err error }
+
+func (s failingGoalStreamer) StreamResponse(context.Context, api.ResponseRequest, func(string)) (api.StreamResult, error) {
+	return api.StreamResult{}, s.err
 }
 
 func TestSessionObserversPersistOnlyLifecycleEvents(t *testing.T) {
@@ -96,6 +103,27 @@ func TestParseGoalBudget(t *testing.T) {
 		if objective, budget := parseGoalBudget(input); objective != input || budget != 0 {
 			t.Errorf("parseGoalBudget(%q)=(%q,%d), want verbatim objective", input, objective, budget)
 		}
+	}
+}
+
+func TestGoalLoopPausesAfterInfrastructureFailure(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	if err := registry.BeginGoal("keep state after failure"); err != nil {
+		t.Fatal(err)
+	}
+	failure := errors.New("upstream unavailable")
+	runner := &agent.Runner{Client: failingGoalStreamer{err: failure}, Tools: registry, Model: "test"}
+	err = goalLoop(context.Background(), runner, registry, io.Discard, io.Discard, "work", "", 1, 3, 10, 8)
+	if !errors.Is(err, failure) {
+		t.Fatalf("goal loop err=%v", err)
+	}
+	if snapshot := registry.GoalSnapshot(); snapshot.Status != "paused" || snapshot.Message != "Turn failed: upstream unavailable" {
+		t.Fatalf("snapshot=%#v", snapshot)
 	}
 }
 

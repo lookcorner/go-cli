@@ -1961,7 +1961,7 @@ func goalLoop(
 				fmt.Fprintf(stderr, "[gork] Goal token budget reached (%d of %d tokens) - goal stopped.\n", snapshot.TokensUsed, snapshot.TokenBudget)
 				return nil
 			}
-			return err
+			return errors.Join(err, registry.PauseGoalInfrastructure(err))
 		}
 		if workerErr != nil {
 			return workerErr

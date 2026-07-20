@@ -150,6 +150,39 @@ func TestGoalTelemetryRecordsClassifierCap(t *testing.T) {
 	}
 }
 
+func TestGoalInfrastructureFailurePausesPersistsAndEmits(t *testing.T) {
+	root, artifactDir := t.TempDir(), filepath.Join(t.TempDir(), "artifacts")
+	registry := newPersistentGoalRegistry(t, root, artifactDir)
+	recorder := &goalEventRecorder{}
+	registry.SetGoalObserver(recorder)
+	if err := registry.BeginGoal("survive infrastructure failure"); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.PauseGoalInfrastructure(errors.New("upstream unavailable")); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot := registry.GoalSnapshot(); snapshot.Status != "paused" || snapshot.Message != "Turn failed: upstream unavailable" {
+		t.Fatalf("snapshot=%#v", snapshot)
+	}
+	paused := recorder.matching("goal_auto_paused")
+	updates := recorder.matching("goal_updated")
+	last := updates[len(updates)-1].Data
+	if len(paused) != 1 || paused[0].Data["reason"] != "infra" || last["status"] != "infra_paused" || last["last_event"] != "goal_infra_paused" {
+		t.Fatalf("events=%#v", recorder.events)
+	}
+	if err := registry.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restored := newPersistentGoalRegistry(t, root, artifactDir)
+	defer restored.Close()
+	if snapshot := restored.GoalSnapshot(); snapshot.Status != "paused" || snapshot.Message != "Turn failed: upstream unavailable" {
+		t.Fatalf("restored snapshot=%#v", snapshot)
+	}
+	if status := goalWireStatus("paused", restored.GoalSnapshot().Message, "goal_loaded"); status != "infra_paused" {
+		t.Fatalf("restored wire status=%q", status)
+	}
+}
+
 func TestGoalBudgetTelemetryAndRoleTokenAccounting(t *testing.T) {
 	registry := &Registry{subagents: &subagentHolder{}, goal: NewGoalStore()}
 	registry.goal.artifactDir = t.TempDir()

@@ -439,6 +439,30 @@ func (r *Registry) EnforceGoalBudget() (GoalSnapshot, bool) {
 	return r.goal.Snapshot(), true
 }
 
+func (r *Registry) PauseGoalInfrastructure(runErr error) error {
+	if r == nil || r.goal == nil || runErr == nil || errors.Is(runErr, context.Canceled) {
+		return nil
+	}
+	message := strings.TrimSpace(runErr.Error())
+	if !strings.HasPrefix(message, "Turn failed:") {
+		message = "Turn failed: " + message
+	}
+	r.goal.mu.Lock()
+	if r.goal.status != "active" {
+		r.goal.mu.Unlock()
+		return nil
+	}
+	r.goal.status, r.goal.message, r.goal.currentSubagentRole = "paused", message, ""
+	err := r.goal.saveLocked()
+	r.goal.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	r.emitGoalEvent("goal_auto_paused", map[string]any{"reason": "infra"})
+	r.emitGoalUpdated("goal_infra_paused")
+	return nil
+}
+
 func (r *Registry) ResumeGoal() (string, error) {
 	if r.goal == nil {
 		return "", errors.New("goal store is unavailable")
