@@ -175,6 +175,15 @@ the compaction. Chat Completions and Anthropic histories are reset only after a
 summary succeeds. `[compaction.pruning]` supports the compatible old-tool-result
 soft/hard pruning fields shown in `config.example.toml`.
 
+Responses sessions may opt into reference-compatible two-pass compaction with
+`[features] two_pass_compaction = true` or `GROK_TWO_PASS_COMPACTION=true`.
+Ten percentage points before the auto-compact threshold, Gork Go starts a
+background prefix summary. At the threshold it merges that note with the
+bounded recent text/tool tail; failed, stale, or multimodal prefire state falls
+back to the existing single-pass path. Environment configuration overrides the
+local feature value, which overrides authenticated remote settings. The default
+is off. Stateful Chat Completions and Anthropic prefire remain disabled.
+
 The default model transport is the Responses API. For OpenAI-compatible
 providers that only expose Chat Completions, use `--backend chat_completions`
 or set `GORK_BACKEND=chat_completions`. The adapter preserves local multi-turn

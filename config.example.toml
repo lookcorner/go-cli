@@ -18,6 +18,9 @@ auto_compact_threshold_percent = 85
 [session]
 auto_compact_threshold_percent = 85
 
+[features]
+# two_pass_compaction = false
+
 [compaction.pruning]
 enabled = true
 keep_last_n_turns = 3

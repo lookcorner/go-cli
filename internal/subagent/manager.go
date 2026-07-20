@@ -55,6 +55,7 @@ type Config struct {
 	ParentModel             string
 	ContextWindow           int
 	CompactThresholdPercent int
+	TwoPassCompaction       bool
 	ResolveModel            func(string) (ModelRuntime, bool)
 	AvailableModels         []string
 	Skills                  *skills.Catalog
@@ -82,6 +83,7 @@ type Manager struct {
 	parentModel             string
 	contextWindow           int
 	compactThresholdPercent int
+	twoPassCompaction       bool
 	resolveModel            func(string) (ModelRuntime, bool)
 	availableModels         []string
 	skills                  *skills.Catalog
@@ -214,7 +216,8 @@ func New(config Config) (*Manager, error) {
 		ctx: ctx, cancel: cancel, catalog: config.Catalog, tools: config.Tools,
 		workspaceRoot: config.WorkspaceRoot, parentModel: config.ParentModel,
 		contextWindow: config.ContextWindow, compactThresholdPercent: config.CompactThresholdPercent,
-		resolveModel: config.ResolveModel, availableModels: append([]string(nil), config.AvailableModels...),
+		twoPassCompaction: config.TwoPassCompaction,
+		resolveModel:      config.ResolveModel, availableModels: append([]string(nil), config.AvailableModels...),
 		skills: config.Skills, skillConfig: config.SkillConfig,
 		newClient: config.NewClient, observer: config.Observer, hooks: config.Hooks, worktrees: config.Worktrees,
 		progressInterval: config.ProgressInterval, parentMCPServers: append([]mcp.ServerConfig(nil), config.ParentMCPServers...),
@@ -403,7 +406,7 @@ func (m *Manager) buildRuntime(root string, childRegistry *tools.Registry, defin
 	runner := &agent.Runner{
 		Client: client, Tools: view, Model: model.Model, ReasoningEffort: effort, Instructions: instructions,
 		SessionID: id, MaxSteps: definition.MaxTurns, ContextWindow: model.ContextWindow,
-		CompactThresholdPercent: model.CompactThresholdPercent, Skills: childSkills,
+		CompactThresholdPercent: model.CompactThresholdPercent, TwoPassCompaction: m.twoPassCompaction, Skills: childSkills,
 	}
 	var hookRuntime *hooks.Runtime
 	if catalog := m.childHooks(definition, root); catalog != nil {
@@ -459,7 +462,8 @@ func (m *Manager) resume(ctx context.Context, request tools.SubagentRequest, def
 		ReasoningEffort: first(request.ReasoningEffort, definition.Effort, previous.runner.ReasoningEffort),
 		Instructions:    previous.runner.Instructions, SessionID: id, MaxSteps: previous.runner.MaxSteps,
 		ContextWindow: previous.runner.ContextWindow, CompactThresholdPercent: previous.runner.CompactThresholdPercent,
-		Skills: previous.runner.Skills,
+		TwoPassCompaction: previous.runner.TwoPassCompaction,
+		Skills:            previous.runner.Skills,
 	}
 	if hookRuntime != nil {
 		runner.HookPolicy = hookRuntime

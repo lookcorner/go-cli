@@ -156,6 +156,43 @@ func TestAutoWakeDefaultsOnAndRemoteCanDisable(t *testing.T) {
 	}
 }
 
+func TestTwoPassCompactionPrecedence(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	cfg, err := Load(filepath.Join(home, "missing.toml"))
+	if err != nil || cfg.TwoPassCompaction {
+		t.Fatalf("default=%v err=%v", cfg.TwoPassCompaction, err)
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{TwoPassCompactionEnabled: boolPointer(true)})
+	if !cfg.TwoPassCompaction {
+		t.Fatal("remote feature flag was not applied")
+	}
+	path := filepath.Join(home, "config.toml")
+	if err := os.WriteFile(path, []byte("[features]\ntwo_pass_compaction = false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{TwoPassCompactionEnabled: boolPointer(true)})
+	if cfg.TwoPassCompaction {
+		t.Fatal("remote setting overrode local feature config")
+	}
+	t.Setenv("GROK_TWO_PASS_COMPACTION", "false")
+	if err := os.WriteFile(path, []byte("[features]\ntwo_pass_compaction = true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{TwoPassCompactionEnabled: boolPointer(true)})
+	if cfg.TwoPassCompaction {
+		t.Fatal("environment kill switch did not win")
+	}
+}
+
 func TestGoalVerifierCountRemoteAndLocalPrecedence(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("GROK_HOME", home)

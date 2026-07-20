@@ -15,6 +15,7 @@ type RemoteSettings struct {
 	OfficialMarketplaceAutoRegister *bool          `json:"official_marketplace_auto_register"`
 	WebFetchEnabled                 *bool          `json:"web_fetch_enabled"`
 	AutoWakeEnabled                 *bool          `json:"auto_wake_enabled"`
+	TwoPassCompactionEnabled        *bool          `json:"two_pass_compaction_enabled"`
 	GoalVerifierCount               *int           `json:"goal_verifier_count"`
 	GoalClassifierMaxRuns           *uint32        `json:"goal_classifier_max_runs"`
 	GoalPlannerEnabled              *bool          `json:"goal_planner_enabled"`
@@ -94,6 +95,9 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 	}
 	if !c.autoWakeConfigured && remote.AutoWakeEnabled != nil {
 		c.AutoWakeEnabled = *remote.AutoWakeEnabled
+	}
+	if !c.twoPassCompactionConfigured && remote.TwoPassCompactionEnabled != nil {
+		c.TwoPassCompaction = *remote.TwoPassCompactionEnabled
 	}
 	if !c.goalVerifierConfigured && remote.GoalVerifierCount != nil {
 		c.Goal.VerifierCount = normalizedGoalVerifierCount(*remote.GoalVerifierCount)

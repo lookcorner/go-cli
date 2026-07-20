@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/hooks"
@@ -82,6 +83,7 @@ type Runner struct {
 	Progress                func(Progress)
 	ContextWindow           int
 	CompactThresholdPercent int
+	TwoPassCompaction       bool
 	UpdateMCPServers        func(context.Context, []mcp.ServerConfig) error
 	MCPServers              func() []mcp.ServerConfig
 	UpdateSkills            func(context.Context, func(*skills.Settings)) (skills.Settings, error)
@@ -90,8 +92,24 @@ type Runner struct {
 	MarketplaceAction       func(context.Context, marketplace.Action) (marketplace.Outcome, error)
 	lastInputTokens         int
 	pendingSummary          string
+	prefireMu               sync.Mutex
+	prefire                 *compactionPrefire
 	hookStart               sync.Once
 }
+
+type compactionPrefire struct {
+	done           chan struct{}
+	model          string
+	inputTokens    int
+	lastResponseID string
+	note           string
+	tail           strings.Builder
+}
+
+const (
+	compactionPrefireMaxChars = 12_000
+	compactionTailMaxBytes    = 128 << 10
+)
 
 type Result struct {
 	ResponseID    string
@@ -160,6 +178,11 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 	} else {
 		instructions = defaultInstructions + "\n\nAdditional user instructions:\n" + instructions
 	}
+	promptTrace, traceable := compactionPromptTrace(prompt, content)
+	if !traceable {
+		r.clearCompactionPrefire()
+	}
+	var prefire *compactionPrefire
 	if r.shouldCompact(previousResponseID) {
 		_, err := r.compact(ctx, previousResponseID, "auto")
 		if err != nil {
@@ -167,6 +190,18 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 		} else {
 			previousResponseID = ""
 		}
+	} else if traceable {
+		prefire = r.prefireForTurn(ctx, previousResponseID)
+	}
+	var compactTrace strings.Builder
+	if prefire != nil {
+		appendCompactTrace(&compactTrace, "User: "+promptTrace+"\n")
+		defer func() {
+			if runErr != nil {
+				appendCompactTrace(&compactTrace, "Turn error: "+runErr.Error()+"\n")
+			}
+			r.appendPrefireTail(prefire, compactTrace.String(), final.ResponseID)
+		}()
 	}
 	if err := r.logPrompt(prompt, content, synthetic); err != nil {
 		return Result{}, fmt.Errorf("persist user prompt: %w", err)
@@ -261,6 +296,9 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 			"step": step, "response_id": streamed.ResponseID,
 			"text": streamed.Text, "tool_call_count": len(streamed.ToolCalls), "usage": streamed.Usage,
 		})
+		if prefire != nil && streamed.Text != "" {
+			appendCompactTrace(&compactTrace, "Assistant: "+streamed.Text+"\n")
+		}
 
 		if len(streamed.ToolCalls) == 0 {
 			return final, nil
@@ -285,6 +323,9 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 				"step": step, "call_id": call.CallID, "name": call.Name,
 				"arguments": json.RawMessage(call.Arguments),
 			})
+			if prefire != nil {
+				appendCompactTrace(&compactTrace, fmt.Sprintf("Tool call %s: %s\n", call.Name, call.Arguments))
+			}
 			if r.ToolObserver != nil {
 				r.ToolObserver.ToolStarted(call)
 			}
@@ -313,6 +354,9 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 				"step": step, "call_id": call.CallID, "name": call.Name,
 				"output": output, "failed": toolErr != nil, "image_count": len(toolResult.Images),
 			})
+			if prefire != nil {
+				appendCompactTrace(&compactTrace, "Tool result: "+output+"\n")
+			}
 			input = append(input, api.InputItem{
 				Type: "function_call_output", CallID: call.CallID, Output: output,
 			})
@@ -350,6 +394,143 @@ func (r *Runner) shouldCompact(previousResponseID string) bool {
 	return r.lastInputTokens >= threshold
 }
 
+func (r *Runner) shouldPrefire(previousResponseID string) bool {
+	if !r.TwoPassCompaction || previousResponseID == "" || r.ContextWindow <= 0 || r.lastInputTokens <= 0 {
+		return false
+	}
+	if _, stateful := r.Client.(HistoryResetter); stateful {
+		return false
+	}
+	threshold := r.ContextWindow * r.CompactThresholdPercent / 100
+	start := r.ContextWindow * max(0, r.CompactThresholdPercent-10) / 100
+	return r.lastInputTokens >= start && r.lastInputTokens < threshold
+}
+
+func (r *Runner) prefireForTurn(ctx context.Context, previousResponseID string) *compactionPrefire {
+	r.prefireMu.Lock()
+	if r.prefire != nil {
+		prefire := r.prefire
+		r.prefireMu.Unlock()
+		return prefire
+	}
+	r.prefireMu.Unlock()
+	if !r.shouldPrefire(previousResponseID) {
+		return nil
+	}
+	r.prefireMu.Lock()
+	if r.prefire != nil {
+		prefire := r.prefire
+		r.prefireMu.Unlock()
+		return prefire
+	}
+	prefire := &compactionPrefire{
+		done: make(chan struct{}), model: r.Model, inputTokens: r.lastInputTokens, lastResponseID: previousResponseID,
+	}
+	r.prefire = prefire
+	r.prefireMu.Unlock()
+	go r.runCompactionPrefire(context.WithoutCancel(ctx), prefire, previousResponseID)
+	return prefire
+}
+
+func (r *Runner) runCompactionPrefire(ctx context.Context, prefire *compactionPrefire, previousResponseID string) {
+	request := api.ResponseRequest{
+		Model:              prefire.model,
+		Instructions:       "Create a precise first-stage conversation summary for later hierarchical compaction. Preserve goals, constraints, decisions, code changes, tool results, verification state, unresolved problems, and exact next actions.",
+		Input:              []api.InputItem{{Type: "message", Role: "user", Content: "Summarize the conversation prefix. Return only the self-contained handoff note."}},
+		PreviousResponseID: previousResponseID, Stream: true,
+	}
+	result, err := r.Client.StreamResponse(ctx, request, nil)
+	note := strings.TrimSpace(result.Text)
+	if runes := []rune(note); len(runes) > compactionPrefireMaxChars {
+		note = string(runes[:compactionPrefireMaxChars])
+	}
+	r.prefireMu.Lock()
+	if r.prefire == prefire && err == nil {
+		prefire.note = note
+	}
+	close(prefire.done)
+	r.prefireMu.Unlock()
+	outcome := "cached"
+	if err != nil {
+		outcome = "sample_failed"
+	} else if note == "" {
+		outcome = "empty_note"
+	}
+	r.log("compaction_prefire", map[string]any{"outcome": outcome, "input_tokens": prefire.inputTokens})
+}
+
+func (r *Runner) appendPrefireTail(prefire *compactionPrefire, value, responseID string) {
+	r.prefireMu.Lock()
+	defer r.prefireMu.Unlock()
+	if r.prefire != prefire {
+		return
+	}
+	appendCompactTrace(&prefire.tail, value)
+	if responseID != "" {
+		prefire.lastResponseID = responseID
+	}
+}
+
+func compactionPromptTrace(prompt string, content any) (string, bool) {
+	value, ok := content.([]api.ContentPart)
+	if !ok {
+		return prompt, true
+	}
+	var text strings.Builder
+	for _, part := range value {
+		if part.Type != "input_text" {
+			return "", false
+		}
+		text.WriteString(part.Text)
+		text.WriteByte('\n')
+	}
+	return strings.TrimSpace(text.String()), true
+}
+
+func appendCompactTrace(target *strings.Builder, value string) {
+	remaining := compactionTailMaxBytes - target.Len()
+	if remaining <= 0 || value == "" {
+		return
+	}
+	if len(value) > remaining {
+		value = value[:remaining]
+		for value != "" && !utf8.ValidString(value) {
+			value = value[:len(value)-1]
+		}
+	}
+	target.WriteString(value)
+}
+
+func (r *Runner) takeCompactionPrefire(ctx context.Context, previousResponseID string) (string, string, bool, error) {
+	r.prefireMu.Lock()
+	prefire := r.prefire
+	r.prefireMu.Unlock()
+	if prefire == nil {
+		return "", "", false, nil
+	}
+	select {
+	case <-ctx.Done():
+		return "", "", false, ctx.Err()
+	case <-prefire.done:
+	}
+	r.prefireMu.Lock()
+	defer r.prefireMu.Unlock()
+	if r.prefire != prefire {
+		return "", "", false, nil
+	}
+	r.prefire = nil
+	if prefire.model != r.Model || prefire.lastResponseID != previousResponseID || strings.TrimSpace(prefire.note) == "" {
+		return "", "", false, nil
+	}
+	return prefire.note, strings.Clone(prefire.tail.String()), true, nil
+}
+
+func (r *Runner) clearCompactionPrefire() {
+	r.prefireMu.Lock()
+	r.prefire = nil
+	r.prefireMu.Unlock()
+}
+
 func (r *Runner) Compact(ctx context.Context, previousResponseID string) (string, error) {
 	return r.compact(ctx, previousResponseID, "manual")
 }
@@ -370,7 +551,23 @@ func (r *Runner) compact(ctx context.Context, previousResponseID, source string)
 		}},
 		PreviousResponseID: previousResponseID, Stream: true,
 	}
+	note, tail, twoPass, err := r.takeCompactionPrefire(ctx, previousResponseID)
+	if err != nil {
+		return "", err
+	}
+	if twoPass {
+		request.PreviousResponseID = ""
+		request.Input[0].Content = "This is the final pass of hierarchical compaction. Merge the entire prior summary with the recent conversation into one self-contained successor-agent handoff.\n\n<summary_content>\n" + note + "\n</summary_content>\n\n<recent_conversation>\n" + tail + "\n</recent_conversation>"
+	}
 	result, err := r.Client.StreamResponse(ctx, request, nil)
+	usedTwoPass := twoPass
+	if (err != nil || strings.TrimSpace(result.Text) == "") && twoPass {
+		r.log("compaction_prefire", map[string]any{"outcome": "pass2_failed"})
+		request.PreviousResponseID = previousResponseID
+		request.Input[0].Content = "Summarize the conversation so a fresh agent context can continue without losing important implementation state."
+		result, err = r.Client.StreamResponse(ctx, request, nil)
+		usedTwoPass = false
+	}
 	if err != nil {
 		return "", err
 	}
@@ -383,7 +580,7 @@ func (r *Runner) compact(ctx context.Context, previousResponseID, source string)
 	if resetter, ok := r.Client.(HistoryResetter); ok {
 		resetter.ResetHistory(summary)
 	}
-	r.log("context_compacted", map[string]any{"summary": summary})
+	r.log("context_compacted", map[string]any{"summary": summary, "two_pass": usedTwoPass})
 	r.status("context compacted")
 	if r.HookPolicy != nil {
 		r.HookPolicy.AfterCompact(ctx, source)
@@ -394,6 +591,7 @@ func (r *Runner) compact(ctx context.Context, previousResponseID, source string)
 func (r *Runner) RewindHistory(messages []session.Message) {
 	r.lastInputTokens = 0
 	r.pendingSummary = ""
+	r.clearCompactionPrefire()
 	if rewinder, ok := r.Client.(HistoryRewinder); ok {
 		rewinder.RewindHistory(messages)
 	}

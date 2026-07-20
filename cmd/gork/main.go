@@ -462,7 +462,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	subagents, err := subagent.New(subagent.Config{
 		Context: ctx, Catalog: agentCatalog, Tools: registry, WorkspaceRoot: ws.Root(), ParentModel: cfg.Model,
 		ContextWindow: cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,
-		ResolveModel: resolveSubagentModel, AvailableModels: cfg.ModelSlugs(), Skills: skillCatalog,
+		TwoPassCompaction: cfg.TwoPassCompaction,
+		ResolveModel:      resolveSubagentModel, AvailableModels: cfg.ModelSlugs(), Skills: skillCatalog,
 		SkillConfig: workspaceSkillsConfig(cfg, plugins), Worktrees: worktreeManager,
 		Observer:   &sessionSubagentObserver{sessionID: logger.ID(), logger: logger},
 		SessionDir: filepath.Dir(logger.Path()), ParentSessionID: logger.ID(),
@@ -497,7 +498,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		Model:     cfg.Model, Instructions: cfg.SystemPrompt, MaxSteps: cfg.MaxSteps,
 		TextOutput: stdout, StatusOutput: stderr,
 		ContextWindow: cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,
-		UpdateMCPServers: mcpRuntime.Update, MCPServers: mcpRuntime.Configs,
+		TwoPassCompaction: cfg.TwoPassCompaction,
+		UpdateMCPServers:  mcpRuntime.Update, MCPServers: mcpRuntime.Configs,
 	}
 	if opts.tui {
 		return tui.Run(ctx, runner, tuiBridge, prompt, opts.previousID, resumedTranscript, ws.Root(), cfg.Model)
@@ -1522,7 +1524,8 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		subagentManager, err = subagent.New(subagent.Config{
 			Context: sessionCtx, Catalog: agentCatalog, Tools: registry, WorkspaceRoot: ws.Root(), ParentModel: sessionCfg.Model,
 			ContextWindow: sessionCfg.ContextWindow, CompactThresholdPercent: sessionCfg.AutoCompactThresholdPercent,
-			ResolveModel: resolveSubagentModel, AvailableModels: sessionCfg.ModelSlugs(), Skills: catalog,
+			TwoPassCompaction: sessionCfg.TwoPassCompaction,
+			ResolveModel:      resolveSubagentModel, AvailableModels: sessionCfg.ModelSlugs(), Skills: catalog,
 			SkillConfig: workspaceSkillsConfig(sessionCfg, plugins), Worktrees: server.WorktreeManager(),
 			Observer:   &sessionSubagentObserver{server: server, sessionID: logger.ID(), logger: logger},
 			SessionDir: filepath.Dir(logger.Path()), ParentSessionID: logger.ID(),
@@ -1746,7 +1749,8 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			Model: sessionCfg.Model, Instructions: instructions, MaxSteps: cfg.MaxSteps,
 			TextOutput: textOutput, StatusOutput: statusOutput,
 			ContextWindow: cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,
-			UpdateMCPServers: mcpRuntime.Update, MCPServers: mcpRuntime.Configs,
+			TwoPassCompaction: sessionCfg.TwoPassCompaction,
+			UpdateMCPServers:  mcpRuntime.Update, MCPServers: mcpRuntime.Configs,
 			UpdateSkills:      updateSkills,
 			UpdatePlugins:     updatePlugins,
 			MarketplaceList:   func() ([]marketplace.ScanResult, error) { return marketplace.List(opts.configPath, ws.Root()) },

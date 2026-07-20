@@ -36,6 +36,7 @@ type Config struct {
 	Permission                      PermissionConfig           `json:"permission,omitempty"`
 	ContextWindow                   int                        `json:"context_window,omitempty"`
 	AutoCompactThresholdPercent     int                        `json:"auto_compact_threshold_percent,omitempty"`
+	TwoPassCompaction               bool                       `json:"two_pass_compaction,omitempty"`
 	Pruning                         PruningConfig              `json:"pruning"`
 	Compat                          compat.Config              `json:"compat"`
 	Skills                          SkillsConfig               `json:"skills,omitempty"`
@@ -63,6 +64,7 @@ type Config struct {
 	ModelProfiles                   map[string]ModelProfile    `json:"-"`
 	compatConfigured                compat.Config
 	autoWakeConfigured              bool
+	twoPassCompactionConfigured     bool
 	goalVerifierConfigured          bool
 	goalClassifierMaxConfigured     bool
 	goalPlannerConfigured           bool
@@ -274,8 +276,9 @@ type fileConfig struct {
 	Plugins       PluginsConfig              `json:"plugins,omitempty" toml:"plugins"`
 	Marketplace   MarketplaceConfig          `json:"marketplace,omitempty" toml:"marketplace"`
 	Features      struct {
-		WebFetch *bool `json:"web_fetch,omitempty" toml:"web_fetch"`
-		AutoWake *bool `json:"auto_wake,omitempty" toml:"auto_wake"`
+		WebFetch          *bool `json:"web_fetch,omitempty" toml:"web_fetch"`
+		AutoWake          *bool `json:"auto_wake,omitempty" toml:"auto_wake"`
+		TwoPassCompaction *bool `json:"two_pass_compaction,omitempty" toml:"two_pass_compaction"`
 	} `json:"features,omitempty" toml:"features"`
 	AuthProviderCommand string            `json:"auth_provider_command,omitempty" toml:"auth_provider_command"`
 	AuthTokenTTL        int64             `json:"auth_token_ttl,omitempty" toml:"auth_token_ttl"`
@@ -587,6 +590,10 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.Session.AutoCompactThresholdPercent != nil {
 		cfg.AutoCompactThresholdPercent = *disk.Session.AutoCompactThresholdPercent
+	}
+	if disk.Features.TwoPassCompaction != nil {
+		cfg.TwoPassCompaction = *disk.Features.TwoPassCompaction
+		cfg.twoPassCompactionConfigured = true
 	}
 	applyPruningConfig(&cfg.Pruning, disk.Compaction.Pruning)
 	applyCompatConfig(&cfg.Compat, disk.Compat)
@@ -921,6 +928,10 @@ func applyEnv(cfg *Config) {
 		if parsed, err := strconv.Atoi(value); err == nil && parsed >= 0 && parsed <= 100 {
 			cfg.AutoCompactThresholdPercent = parsed
 		}
+	}
+	if value, ok := envBool("GROK_TWO_PASS_COMPACTION"); ok {
+		cfg.TwoPassCompaction = value
+		cfg.twoPassCompactionConfigured = true
 	}
 	if value := os.Getenv("GROK_DEBUG_CONTEXT_WINDOW"); value != "" {
 		if parsed, err := strconv.Atoi(value); err == nil && parsed > 0 {

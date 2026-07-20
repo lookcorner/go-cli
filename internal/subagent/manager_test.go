@@ -125,7 +125,7 @@ func TestTaskToolRunsFilteredSubagentAndResumes(t *testing.T) {
 	observer := &recordingObserver{}
 	manager, err := New(Config{
 		Context: context.Background(), Catalog: catalog, Tools: registry, WorkspaceRoot: root, ParentModel: "parent",
-		ContextWindow: 256000, CompactThresholdPercent: 80,
+		ContextWindow: 256000, CompactThresholdPercent: 80, TwoPassCompaction: true,
 		ResolveModel: func(model string) (ModelRuntime, bool) {
 			return ModelRuntime{Profile: model, Model: model, ContextWindow: 256000, CompactThresholdPercent: 80}, model == "parent"
 		}, AvailableModels: []string{"parent"},
@@ -162,8 +162,8 @@ func TestTaskToolRunsFilteredSubagentAndResumes(t *testing.T) {
 	}
 	for _, id := range []string{first.ID, second.ID} {
 		runner := manager.tasks[id].runner
-		if runner.ContextWindow != 256000 || runner.CompactThresholdPercent != 80 {
-			t.Fatalf("task %s context=%d threshold=%d", id, runner.ContextWindow, runner.CompactThresholdPercent)
+		if runner.ContextWindow != 256000 || runner.CompactThresholdPercent != 80 || !runner.TwoPassCompaction {
+			t.Fatalf("task %s context=%d threshold=%d two_pass=%v", id, runner.ContextWindow, runner.CompactThresholdPercent, runner.TwoPassCompaction)
 		}
 	}
 	observer.mu.Lock()

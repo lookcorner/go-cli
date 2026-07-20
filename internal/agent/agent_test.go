@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,6 +25,62 @@ type fakeStreamer struct {
 	requests []api.ResponseRequest
 	results  []api.StreamResult
 }
+
+type prefireStreamer struct {
+	mu             sync.Mutex
+	requests       []api.ResponseRequest
+	prefireStarted chan struct{}
+	releasePrefire chan struct{}
+	startedOnce    sync.Once
+	releaseOnce    sync.Once
+}
+
+func newPrefireStreamer() *prefireStreamer {
+	return &prefireStreamer{prefireStarted: make(chan struct{}), releasePrefire: make(chan struct{})}
+}
+
+func (f *prefireStreamer) StreamResponse(ctx context.Context, request api.ResponseRequest, _ func(string)) (api.StreamResult, error) {
+	f.mu.Lock()
+	f.requests = append(f.requests, request)
+	f.mu.Unlock()
+	content, _ := request.Input[0].Content.(string)
+	switch {
+	case strings.Contains(request.Instructions, "first-stage conversation summary"):
+		f.startedOnce.Do(func() { close(f.prefireStarted) })
+		select {
+		case <-ctx.Done():
+			return api.StreamResult{}, ctx.Err()
+		case <-f.releasePrefire:
+			return api.StreamResult{ResponseID: "prefire", Text: "Prefix decisions and constraints."}, nil
+		}
+	case content == "first":
+		return api.StreamResult{ResponseID: "old-response", Text: "first answer", Usage: api.Usage{InputTokens: 750}}, nil
+	case content == "continue":
+		select {
+		case <-ctx.Done():
+			return api.StreamResult{}, ctx.Err()
+		case <-f.prefireStarted:
+			f.releaseOnce.Do(func() { close(f.releasePrefire) })
+			return api.StreamResult{ResponseID: "tail-response", Text: "tail answer", Usage: api.Usage{InputTokens: 860}}, nil
+		}
+	case strings.Contains(content, "final pass of hierarchical compaction"):
+		return api.StreamResult{ResponseID: "summary-response", Text: "Merged prefix and tail."}, nil
+	case strings.Contains(content, "Previous conversation summary:"):
+		return api.StreamResult{ResponseID: "fresh-response", Text: "continued", Usage: api.Usage{InputTokens: 100}}, nil
+	default:
+		return api.StreamResult{}, fmt.Errorf("unexpected request content %q", content)
+	}
+}
+
+func (f *prefireStreamer) snapshot() []api.ResponseRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]api.ResponseRequest(nil), f.requests...)
+}
+
+type statefulFakeStreamer struct{ *fakeStreamer }
+
+func (*statefulFakeStreamer) ResetHistory(string) {}
 
 type recordingToolObserver struct {
 	results []tools.ExecutionResult
@@ -488,6 +546,130 @@ func TestRunnerCompactsAtUsageThresholdAndStartsFreshChain(t *testing.T) {
 	if streamer.requests[2].PreviousResponseID != "" || !strings.Contains(streamer.requests[2].Input[0].Content.(string), "Preserve the implementation state") {
 		t.Fatalf("fresh chain did not receive summary: %#v", streamer.requests[2])
 	}
+}
+
+func TestRunnerTwoPassPrefireMergesOnlyRecentTail(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamer := newPrefireStreamer()
+	runner := Runner{
+		Client: streamer, Tools: tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto}),
+		Model: "test-model", ContextWindow: 1000, CompactThresholdPercent: 85, TwoPassCompaction: true,
+	}
+	defer runner.Tools.Close()
+	if _, err := runner.RunTurn(context.Background(), "first", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.RunTurn(context.Background(), "continue", "old-response"); err != nil {
+		t.Fatal(err)
+	}
+	result, err := runner.RunTurn(context.Background(), "next", "tail-response")
+	if err != nil || result.ResponseID != "fresh-response" {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	var pass1, pass2 *api.ResponseRequest
+	requests := streamer.snapshot()
+	for index := range requests {
+		request := requests[index]
+		content, _ := request.Input[0].Content.(string)
+		if strings.Contains(request.Instructions, "first-stage conversation summary") {
+			copy := request
+			pass1 = &copy
+		}
+		if strings.Contains(content, "final pass of hierarchical compaction") {
+			copy := request
+			pass2 = &copy
+		}
+	}
+	if pass1 == nil || pass1.PreviousResponseID != "old-response" {
+		t.Fatalf("prefire request=%#v", pass1)
+	}
+	if pass2 == nil || pass2.PreviousResponseID != "" {
+		t.Fatalf("pass2 request=%#v", pass2)
+	}
+	content, _ := pass2.Input[0].Content.(string)
+	if !strings.Contains(content, "Prefix decisions and constraints.") || !strings.Contains(content, "User: continue") || !strings.Contains(content, "Assistant: tail answer") {
+		t.Fatalf("pass2 lost prefix or tail: %q", content)
+	}
+}
+
+func TestRunnerTwoPassFailureFallsBackAndStatefulClientsSkipPrefire(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Run("pass2 fallback", func(t *testing.T) {
+		streamer := &fakeStreamer{results: []api.StreamResult{{ResponseID: "bad", Text: ""}, {ResponseID: "summary", Text: "single pass summary"}}}
+		runner := Runner{Client: streamer, Tools: tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto}), Model: "test"}
+		defer runner.Tools.Close()
+		done := make(chan struct{})
+		close(done)
+		runner.prefire = &compactionPrefire{done: done, model: "test", lastResponseID: "current", note: "cached prefix"}
+		if summary, err := runner.Compact(context.Background(), "current"); err != nil || summary != "single pass summary" {
+			t.Fatalf("summary=%q err=%v", summary, err)
+		}
+		if len(streamer.requests) != 2 || streamer.requests[0].PreviousResponseID != "" || streamer.requests[1].PreviousResponseID != "current" {
+			t.Fatalf("requests=%#v", streamer.requests)
+		}
+	})
+	t.Run("stateful client", func(t *testing.T) {
+		streamer := &statefulFakeStreamer{fakeStreamer: &fakeStreamer{results: []api.StreamResult{{ResponseID: "next", Text: "done"}}}}
+		runner := Runner{
+			Client: streamer, Tools: tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto}), Model: "test",
+			ContextWindow: 1000, CompactThresholdPercent: 85, TwoPassCompaction: true, lastInputTokens: 750,
+		}
+		defer runner.Tools.Close()
+		if _, err := runner.RunTurn(context.Background(), "continue", "old"); err != nil {
+			t.Fatal(err)
+		}
+		if len(streamer.requests) != 1 || runner.prefire != nil {
+			t.Fatalf("stateful client prefired: requests=%d prefire=%#v", len(streamer.requests), runner.prefire)
+		}
+	})
+	t.Run("multimodal tail", func(t *testing.T) {
+		streamer := &fakeStreamer{results: []api.StreamResult{{ResponseID: "next", Text: "done"}}}
+		runner := Runner{
+			Client: streamer, Tools: tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto}), Model: "test",
+			ContextWindow: 1000, CompactThresholdPercent: 85, TwoPassCompaction: true, lastInputTokens: 750,
+		}
+		defer runner.Tools.Close()
+		done := make(chan struct{})
+		close(done)
+		runner.prefire = &compactionPrefire{done: done, model: "test", lastResponseID: "old", note: "cached prefix"}
+		parts := []api.ContentPart{{Type: "input_text", Text: "inspect"}, {Type: "input_image", ImageURL: "data:image/png;base64,AA=="}}
+		if _, err := runner.RunTurnParts(context.Background(), "inspect image", parts, "old"); err != nil {
+			t.Fatal(err)
+		}
+		if runner.prefire != nil || len(streamer.requests) != 1 {
+			t.Fatalf("multimodal tail reused prefire: prefire=%#v requests=%d", runner.prefire, len(streamer.requests))
+		}
+	})
+	t.Run("stale response chain", func(t *testing.T) {
+		streamer := &fakeStreamer{results: []api.StreamResult{{ResponseID: "summary", Text: "single pass"}}}
+		runner := Runner{Client: streamer, Tools: tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto}), Model: "test"}
+		defer runner.Tools.Close()
+		done := make(chan struct{})
+		close(done)
+		runner.prefire = &compactionPrefire{done: done, model: "test", lastResponseID: "other", note: "stale prefix"}
+		if _, err := runner.Compact(context.Background(), "current"); err != nil {
+			t.Fatal(err)
+		}
+		if len(streamer.requests) != 1 || streamer.requests[0].PreviousResponseID != "current" {
+			t.Fatalf("stale prefire was used: %#v", streamer.requests)
+		}
+	})
+	t.Run("bounded prefire note", func(t *testing.T) {
+		streamer := &fakeStreamer{results: []api.StreamResult{{ResponseID: "prefire", Text: strings.Repeat("界", compactionPrefireMaxChars+10)}}}
+		runner := Runner{Client: streamer, Model: "test"}
+		prefire := &compactionPrefire{done: make(chan struct{}), model: "test"}
+		runner.prefire = prefire
+		runner.runCompactionPrefire(context.Background(), prefire, "old")
+		if got := len([]rune(prefire.note)); got != compactionPrefireMaxChars {
+			t.Fatalf("prefire note chars=%d", got)
+		}
+	})
 }
 
 func TestRunnerManualCompactQueuesSummaryForNextTurn(t *testing.T) {
