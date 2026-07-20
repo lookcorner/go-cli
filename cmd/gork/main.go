@@ -1733,7 +1733,7 @@ func goalRoleConfig(cfg config.Config, goalEnabled bool) tools.GoalRoleConfig {
 	}
 	result := tools.GoalRoleConfig{
 		PlannerEnabled: cfg.GoalPlannerEnabled(goalEnabled), StrategistEvery: cfg.GoalStrategistEvery(),
-		UseCurrentModelOnly: cfg.Goal.UseCurrentModelOnly,
+		SummaryEnabled: cfg.GoalSummaryEnabled(goalEnabled), UseCurrentModelOnly: cfg.Goal.UseCurrentModelOnly,
 	}
 	if cfg.Goal.PlannerModel != nil {
 		result.Planner = convert(*cfg.Goal.PlannerModel)
@@ -1942,6 +1942,10 @@ func goalLoop(
 			}
 			if verification.Achieved {
 				fmt.Fprintln(stderr, "[gork] goal completed:", verification.Summary)
+				if summary := registry.RunGoalSummarizer(ctx, verification); summary != "" {
+					fmt.Fprintln(stdout)
+					fmt.Fprintln(stdout, summary)
+				}
 				return nil
 			}
 			fmt.Fprintln(stderr, "[gork] goal completion refuted:", verification.Summary)

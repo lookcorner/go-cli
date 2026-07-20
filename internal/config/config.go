@@ -67,6 +67,8 @@ type Config struct {
 	goalClassifierMaxConfigured     bool
 	goalPlannerConfigured           bool
 	goalPlannerResolved             bool
+	goalSummaryConfigured           bool
+	goalSummaryResolved             bool
 	goalStrategistEveryConfigured   bool
 }
 
@@ -104,6 +106,7 @@ type GoalConfig struct {
 	VerifierCount       int             `json:"verifier_count"`
 	ClassifierMaxRuns   uint32          `json:"classifier_max_runs"`
 	PlannerEnabled      bool            `json:"planner_enabled,omitempty"`
+	SummaryEnabled      bool            `json:"summary_enabled,omitempty"`
 	StrategistEvery     uint32          `json:"strategist_every,omitempty"`
 	UseCurrentModelOnly bool            `json:"use_current_model_only,omitempty"`
 	PlannerModel        *GoalRoleModel  `json:"planner_model,omitempty"`
@@ -114,6 +117,13 @@ type GoalConfig struct {
 func (c Config) GoalPlannerEnabled(goalEnabled bool) bool {
 	if c.goalPlannerResolved {
 		return c.Goal.PlannerEnabled
+	}
+	return goalEnabled
+}
+
+func (c Config) GoalSummaryEnabled(goalEnabled bool) bool {
+	if c.goalSummaryResolved {
+		return c.Goal.SummaryEnabled
 	}
 	return goalEnabled
 }
@@ -347,6 +357,7 @@ type fileGoalConfig struct {
 	VerifierCount       *int            `json:"verifier_count,omitempty" toml:"verifier_count"`
 	ClassifierMaxRuns   *uint32         `json:"classifier_max_runs,omitempty" toml:"classifier_max_runs"`
 	PlannerEnabled      *bool           `json:"planner_enabled,omitempty" toml:"planner_enabled"`
+	SummaryEnabled      *bool           `json:"summary_enabled,omitempty" toml:"summary_enabled"`
 	StrategistEvery     *uint32         `json:"strategist_every,omitempty" toml:"strategist_every"`
 	UseCurrentModelOnly *bool           `json:"use_current_model_only,omitempty" toml:"use_current_model_only"`
 	PlannerModel        *GoalRoleModel  `json:"planner_model,omitempty" toml:"planner_model"`
@@ -542,6 +553,11 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 		cfg.Goal.PlannerEnabled = *disk.Goal.PlannerEnabled
 		cfg.goalPlannerConfigured = true
 		cfg.goalPlannerResolved = true
+	}
+	if disk.Goal.SummaryEnabled != nil {
+		cfg.Goal.SummaryEnabled = *disk.Goal.SummaryEnabled
+		cfg.goalSummaryConfigured = true
+		cfg.goalSummaryResolved = true
 	}
 	if disk.Goal.StrategistEvery != nil {
 		cfg.Goal.StrategistEvery = max(uint32(1), *disk.Goal.StrategistEvery)
@@ -870,6 +886,11 @@ func applyEnv(cfg *Config) {
 		cfg.Goal.PlannerEnabled = value
 		cfg.goalPlannerConfigured = true
 		cfg.goalPlannerResolved = true
+	}
+	if value, ok := envBool("GROK_GOAL_SUMMARY"); ok {
+		cfg.Goal.SummaryEnabled = value
+		cfg.goalSummaryConfigured = true
+		cfg.goalSummaryResolved = true
 	}
 	if value := strings.TrimSpace(os.Getenv("GROK_GOAL_STRATEGIST_EVERY")); value != "" {
 		if count, err := strconv.ParseUint(value, 10, 32); err == nil {

@@ -19,6 +19,7 @@ type RemoteSettings struct {
 	GoalClassifierMaxRuns           *uint32        `json:"goal_classifier_max_runs"`
 	GoalPlannerEnabled              *bool          `json:"goal_planner_enabled"`
 	GoalPlannerModel                *GoalRoleModel `json:"goal_planner_model"`
+	GoalSummaryEnabled              *bool          `json:"goal_summary_enabled"`
 	GoalStrategistEvery             *uint32        `json:"goal_strategist_every"`
 	GoalStrategistModel             *GoalRoleModel `json:"goal_strategist_model"`
 	GoalSkepticModels               goalRoleModels `json:"goal_skeptic_models"`
@@ -103,6 +104,10 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 	if !c.goalPlannerConfigured && remote.GoalPlannerEnabled != nil {
 		c.Goal.PlannerEnabled = *remote.GoalPlannerEnabled
 		c.goalPlannerResolved = true
+	}
+	if !c.goalSummaryConfigured && remote.GoalSummaryEnabled != nil {
+		c.Goal.SummaryEnabled = *remote.GoalSummaryEnabled
+		c.goalSummaryResolved = true
 	}
 	if !c.goalStrategistEveryConfigured && remote.GoalStrategistEvery != nil {
 		c.Goal.StrategistEvery = max(uint32(1), *remote.GoalStrategistEvery)

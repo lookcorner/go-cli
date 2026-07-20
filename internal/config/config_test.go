@@ -416,6 +416,46 @@ func TestGoalPlannerConfigPrecedenceAndDefault(t *testing.T) {
 	}
 }
 
+func TestGoalSummaryConfigPrecedenceAndDefault(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	missing := filepath.Join(home, "missing.toml")
+	cfg, err := Load(missing)
+	if err != nil || cfg.GoalSummaryEnabled(false) || !cfg.GoalSummaryEnabled(true) {
+		t.Fatalf("default config=%#v err=%v", cfg.Goal, err)
+	}
+	path := filepath.Join(home, "config.toml")
+	if err := os.WriteFile(path, []byte("[goal]\nsummary_enabled = false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(path)
+	if err != nil || cfg.GoalSummaryEnabled(true) {
+		t.Fatalf("local config=%#v err=%v", cfg.Goal, err)
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{GoalSummaryEnabled: boolPointer(true)})
+	if cfg.GoalSummaryEnabled(true) {
+		t.Fatalf("remote replaced local=%#v", cfg.Goal)
+	}
+	t.Setenv("GROK_GOAL_SUMMARY", "true")
+	cfg, err = Load(path)
+	if err != nil || !cfg.GoalSummaryEnabled(false) {
+		t.Fatalf("environment config=%#v err=%v", cfg.Goal, err)
+	}
+	t.Setenv("GROK_GOAL_SUMMARY", "")
+	cfg, err = Load(missing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{GoalSummaryEnabled: boolPointer(false)})
+	if cfg.GoalSummaryEnabled(true) {
+		t.Fatalf("remote config=%#v", cfg.Goal)
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{GoalSummaryEnabled: boolPointer(true)})
+	if !cfg.GoalSummaryEnabled(false) {
+		t.Fatalf("remote refresh was ignored=%#v", cfg.Goal)
+	}
+}
+
 func TestValidateWebFetchConfig(t *testing.T) {
 	base := Config{
 		APIKey: "key", BaseURL: "https://api.example/v1", Model: "model", Backend: "responses",

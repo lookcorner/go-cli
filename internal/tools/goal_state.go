@@ -32,6 +32,8 @@ type durableGoalState struct {
 	PlanBaselinePath  string          `json:"plan_baseline_path,omitempty"`
 	PlannerPlanPath   string          `json:"plan_file,omitempty"`
 	PlannerCompleted  bool            `json:"planner_completed,omitempty"`
+	SummaryAttempted  bool            `json:"summary_attempted,omitempty"`
+	ClosingSummary    string          `json:"closing_summary,omitempty"`
 	Skeptic0SessionID string          `json:"skeptic0_session_id,omitempty"`
 	SkepticModels     []GoalRoleModel `json:"skeptic_model_assignment,omitempty"`
 }
@@ -50,6 +52,8 @@ func (s *GoalStore) saveLocked() error {
 		CreatedAtUnix:  s.createdAtUnix, PlanBaselinePath: s.planBaselinePath,
 		PlannerPlanPath:   s.plannerPlanPath,
 		PlannerCompleted:  s.plannerCompleted,
+		SummaryAttempted:  s.summaryAttempted,
+		ClosingSummary:    s.closingSummary,
 		Skeptic0SessionID: s.skeptic0SessionID,
 		SkepticModels:     s.skepticModels,
 	})
@@ -112,6 +116,10 @@ func (s *GoalStore) loadState() error {
 	if state.StrategistBonus != goalStrategistBonus {
 		state.StrategistBonus = 0
 	}
+	state.ClosingSummary = truncateGoalSummary(state.ClosingSummary)
+	if state.ClosingSummary != "" {
+		state.SummaryAttempted = true
+	}
 	if !validGoalSessionID(state.Skeptic0SessionID) {
 		state.Skeptic0SessionID = ""
 	}
@@ -124,6 +132,7 @@ func (s *GoalStore) loadState() error {
 	s.createdAtUnix, s.planBaselinePath = state.CreatedAtUnix, state.PlanBaselinePath
 	s.plannerPlanPath = state.PlannerPlanPath
 	s.plannerCompleted = state.PlannerCompleted
+	s.summaryAttempted, s.closingSummary = state.SummaryAttempted, state.ClosingSummary
 	s.skeptic0SessionID = state.Skeptic0SessionID
 	s.skepticModels = validGoalRoleModels(state.SkepticModels)
 	return nil

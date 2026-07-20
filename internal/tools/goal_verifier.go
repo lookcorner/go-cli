@@ -13,6 +13,7 @@ const goalVerifierGapMaxBytes = 16 << 10
 
 type GoalVerification struct {
 	Achieved    bool
+	Verified    bool
 	Summary     string
 	DetailsPath string
 }
@@ -114,7 +115,7 @@ func (r *Registry) VerifyGoal(ctx context.Context, snapshot GoalSnapshot, count 
 		detailsPath = r.goal.writeVerificationDetails(snapshot.VerificationRuns, all)
 	}
 	if refuted < count/2+1 {
-		return GoalVerification{Achieved: true, Summary: snapshot.Message, DetailsPath: detailsPath}
+		return GoalVerification{Achieved: true, Verified: true, Summary: snapshot.Message, DetailsPath: detailsPath}
 	}
 	sort.Strings(gaps)
 	summary := strings.Join(gaps, "; ")

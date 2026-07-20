@@ -183,7 +183,7 @@ func TestGoalVerifierCountsInfrastructureErrorsAsRefutations(t *testing.T) {
 func TestGoalVerifierUnavailableFailsOpen(t *testing.T) {
 	registry := &Registry{subagents: &subagentHolder{}}
 	verification := registry.VerifyGoal(context.Background(), GoalSnapshot{Objective: "goal", Message: "candidate"}, 3)
-	if !verification.Achieved || !strings.Contains(verification.Summary, "accepted fail-open") {
+	if !verification.Achieved || verification.Verified || !strings.Contains(verification.Summary, "accepted fail-open") {
 		t.Fatalf("verification=%#v", verification)
 	}
 }
@@ -195,7 +195,7 @@ func TestGoalVerifierClampsSkepticCount(t *testing.T) {
 	}}
 	registry := &Registry{subagents: &subagentHolder{}}
 	registry.subagents.set(upper)
-	if verification := registry.VerifyGoal(context.Background(), GoalSnapshot{}, 99); !verification.Achieved || len(upper.requests) != 5 {
+	if verification := registry.VerifyGoal(context.Background(), GoalSnapshot{}, 99); !verification.Achieved || !verification.Verified || len(upper.requests) != 5 {
 		t.Fatalf("upper verification=%#v requests=%d", verification, len(upper.requests))
 	}
 	lower := &goalVerifierBackend{outputs: []string{`{"verdict":"refuted","gaps":"missing"}`}}

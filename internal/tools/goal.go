@@ -18,6 +18,7 @@ type GoalSnapshot struct {
 	Message          string
 	VerificationRuns uint32
 	PlanPath         string
+	ClosingSummary   string
 }
 
 type GoalRoleModel struct {
@@ -27,6 +28,7 @@ type GoalRoleModel struct {
 
 type GoalRoleConfig struct {
 	PlannerEnabled      bool
+	SummaryEnabled      bool
 	StrategistEvery     uint32
 	UseCurrentModelOnly bool
 	Planner             GoalRoleModel
@@ -55,6 +57,8 @@ type GoalStore struct {
 	planBaselinePath  string
 	plannerPlanPath   string
 	plannerCompleted  bool
+	summaryAttempted  bool
+	closingSummary    string
 	statePath         string
 	skeptic0SessionID string
 	skepticModels     []GoalRoleModel
@@ -85,13 +89,14 @@ func (s *GoalStore) Begin(objective string) error {
 	s.planBaselinePath = captureGoalPlanBaseline(s.workspaceRoot, s.artifactDir)
 	s.plannerPlanPath = ""
 	s.plannerCompleted = false
+	s.summaryAttempted, s.closingSummary = false, ""
 	return s.saveLocked()
 }
 
 func (s *GoalStore) Snapshot() GoalSnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return GoalSnapshot{Objective: s.objective, Status: s.status, Message: s.message, VerificationRuns: s.verificationRuns, PlanPath: s.plannerPlanPath}
+	return GoalSnapshot{Objective: s.objective, Status: s.status, Message: s.message, VerificationRuns: s.verificationRuns, PlanPath: s.plannerPlanPath, ClosingSummary: s.closingSummary}
 }
 
 func (s *GoalStore) StartVerification(maxRuns uint32) error {
