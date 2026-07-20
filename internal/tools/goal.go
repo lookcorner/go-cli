@@ -48,6 +48,21 @@ func (s *GoalStore) Snapshot() GoalSnapshot {
 	return GoalSnapshot{Objective: s.objective, Status: s.status, Message: s.message}
 }
 
+func (s *GoalStore) ResolveVerification(achieved bool, message string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.status != "verifying" {
+		return errors.New("goal is not awaiting verification")
+	}
+	s.message = strings.TrimSpace(message)
+	if achieved {
+		s.status = "completed"
+	} else {
+		s.status = "active"
+	}
+	return nil
+}
+
 type updateGoalTool struct{ store *GoalStore }
 
 func (t *updateGoalTool) Definition() api.ToolDefinition {
@@ -88,13 +103,13 @@ func (t *updateGoalTool) Execute(_ context.Context, raw json.RawMessage) (string
 		return "success: true\nsummary: Goal marked blocked: " + blocked, nil
 	}
 	if args.Completed != nil && *args.Completed {
-		t.store.status = "completed"
+		t.store.status = "verifying"
 		t.store.message = strings.TrimSpace(args.Message)
 		summary := t.store.message
 		if summary == "" {
-			summary = "Goal completed"
+			summary = "Goal completion requested"
 		}
-		return "success: true\nsummary: " + summary, nil
+		return "success: true\nsummary: Awaiting independent verification: " + summary, nil
 	}
 	t.store.message = strings.TrimSpace(args.Message)
 	return "success: true\nsummary: Progress recorded: " + t.store.message, nil

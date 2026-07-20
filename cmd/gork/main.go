@@ -1854,6 +1854,19 @@ func goalLoop(
 		}
 		snapshot := registry.GoalSnapshot()
 		switch snapshot.Status {
+		case "verifying":
+			fmt.Fprintln(stderr, "[gork] verifying goal completion with independent skeptics")
+			verification := registry.VerifyGoal(ctx, snapshot)
+			if err := registry.ResolveGoalVerification(verification); err != nil {
+				return err
+			}
+			if verification.Achieved {
+				fmt.Fprintln(stderr, "[gork] goal completed:", verification.Summary)
+				return nil
+			}
+			fmt.Fprintln(stderr, "[gork] goal completion refuted:", verification.Summary)
+			prompt = "Independent goal verification found remaining work: " + verification.Summary + "\nContinue working toward the full objective. Do not claim completion again until the gaps are resolved and verified."
+			continue
 		case "completed":
 			fmt.Fprintln(stderr, "[gork] goal completed:", snapshot.Message)
 			return nil

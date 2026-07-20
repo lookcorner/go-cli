@@ -385,6 +385,13 @@ func (r *Registry) GoalSnapshot() GoalSnapshot {
 	return r.goal.Snapshot()
 }
 
+func (r *Registry) ResolveGoalVerification(verification GoalVerification) error {
+	if r.goal == nil {
+		return errors.New("goal store is unavailable")
+	}
+	return r.goal.ResolveVerification(verification.Achieved, verification.Summary)
+}
+
 func (r *Registry) BackgroundTasks() []ProcessSnapshot {
 	if r == nil || r.processes == nil {
 		return nil

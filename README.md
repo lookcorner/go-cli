@@ -236,8 +236,13 @@ new turns until the model calls `update_goal` with `completed=true` or a genuine
 ./gork --goal --goal-runs 8 --workspace . "implement and verify the feature"
 ```
 
-Progress-only `update_goal` calls keep the goal active. Goal mode is explicit
-and cannot be combined with the interactive REPL or TUI.
+Progress-only `update_goal` calls keep the goal active. A completion claim
+starts three independent, read-only `general-purpose` skeptics. Two refutations
+return the goal to the active loop with their concrete gaps; malformed verdicts
+and individual skeptic failures count as refutations, while an unavailable
+verifier backend fails open so an internal harness outage cannot strand the
+user. Goal mode is explicit and cannot be combined with the interactive REPL
+or TUI.
 
 Release builds gate repo-controlled MCP/LSP and enabled project-plugin execution
 on folder trust. Interactive CLI startup asks once when executable project
