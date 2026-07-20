@@ -367,6 +367,55 @@ agent_type = "plan"
 	}
 }
 
+func TestGoalPlannerConfigPrecedenceAndDefault(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	missing := filepath.Join(home, "missing.toml")
+	cfg, err := Load(missing)
+	if err != nil || cfg.GoalPlannerEnabled(false) || !cfg.GoalPlannerEnabled(true) {
+		t.Fatalf("default config=%#v err=%v", cfg.Goal, err)
+	}
+
+	path := filepath.Join(home, "config.toml")
+	if err := os.WriteFile(path, []byte("[goal]\nplanner_enabled = false\nplanner_model = { model = \"local-plan\", agent_type = \"plan\" }\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(path)
+	if err != nil || cfg.GoalPlannerEnabled(true) || cfg.Goal.PlannerModel == nil || cfg.Goal.PlannerModel.Model != "local-plan" {
+		t.Fatalf("local config=%#v err=%v", cfg.Goal, err)
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{
+		GoalPlannerEnabled: boolPointer(true),
+		GoalPlannerModel:   &GoalRoleModel{Model: "remote-plan", AgentType: "general-purpose"},
+	})
+	if cfg.GoalPlannerEnabled(true) || cfg.Goal.PlannerModel.Model != "local-plan" {
+		t.Fatalf("remote replaced local=%#v", cfg.Goal)
+	}
+
+	t.Setenv("GROK_GOAL_PLANNER", "true")
+	cfg, err = Load(path)
+	if err != nil || !cfg.GoalPlannerEnabled(false) {
+		t.Fatalf("environment config=%#v err=%v", cfg.Goal, err)
+	}
+
+	t.Setenv("GROK_GOAL_PLANNER", "")
+	cfg, err = Load(missing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{
+		GoalPlannerEnabled: boolPointer(false),
+		GoalPlannerModel:   &GoalRoleModel{Model: "remote-plan", AgentType: "general-purpose"},
+	})
+	if cfg.GoalPlannerEnabled(true) || cfg.Goal.PlannerModel == nil || cfg.Goal.PlannerModel.Model != "remote-plan" {
+		t.Fatalf("remote config=%#v", cfg.Goal)
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{GoalPlannerEnabled: boolPointer(true)})
+	if !cfg.GoalPlannerEnabled(false) {
+		t.Fatalf("remote refresh was ignored: %#v", cfg.Goal)
+	}
+}
+
 func TestValidateWebFetchConfig(t *testing.T) {
 	base := Config{
 		APIKey: "key", BaseURL: "https://api.example/v1", Model: "model", Backend: "responses",

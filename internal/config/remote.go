@@ -17,6 +17,8 @@ type RemoteSettings struct {
 	AutoWakeEnabled                 *bool          `json:"auto_wake_enabled"`
 	GoalVerifierCount               *int           `json:"goal_verifier_count"`
 	GoalClassifierMaxRuns           *uint32        `json:"goal_classifier_max_runs"`
+	GoalPlannerEnabled              *bool          `json:"goal_planner_enabled"`
+	GoalPlannerModel                *GoalRoleModel `json:"goal_planner_model"`
 	GoalStrategistEvery             *uint32        `json:"goal_strategist_every"`
 	GoalStrategistModel             *GoalRoleModel `json:"goal_strategist_model"`
 	GoalSkepticModels               goalRoleModels `json:"goal_skeptic_models"`
@@ -98,6 +100,10 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 	if !c.goalClassifierMaxConfigured && remote.GoalClassifierMaxRuns != nil {
 		c.Goal.ClassifierMaxRuns = max(uint32(1), *remote.GoalClassifierMaxRuns)
 	}
+	if !c.goalPlannerConfigured && remote.GoalPlannerEnabled != nil {
+		c.Goal.PlannerEnabled = *remote.GoalPlannerEnabled
+		c.goalPlannerResolved = true
+	}
 	if !c.goalStrategistEveryConfigured && remote.GoalStrategistEvery != nil {
 		c.Goal.StrategistEvery = max(uint32(1), *remote.GoalStrategistEvery)
 	}
@@ -105,6 +111,11 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 		model := *remote.GoalStrategistModel
 		model.Model, model.AgentType = strings.TrimSpace(model.Model), strings.TrimSpace(model.AgentType)
 		c.Goal.StrategistModel = &model
+	}
+	if c.Goal.PlannerModel == nil && remote.GoalPlannerModel != nil && remote.GoalPlannerModel.valid() {
+		model := *remote.GoalPlannerModel
+		model.Model, model.AgentType = strings.TrimSpace(model.Model), strings.TrimSpace(model.AgentType)
+		c.Goal.PlannerModel = &model
 	}
 	if len(c.Goal.SkepticModels) == 0 {
 		c.Goal.SkepticModels = normalizeGoalRoleModels(remote.GoalSkepticModels)

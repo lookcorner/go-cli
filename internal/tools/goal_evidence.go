@@ -83,7 +83,7 @@ func captureGoalPlanBaseline(root, artifactDir string) string {
 
 func (s *GoalStore) captureEvidence(ctx context.Context, attempt uint32) goalEvidence {
 	s.mu.Lock()
-	root, artifactDir, baseline, createdAt, planBaseline := s.workspaceRoot, s.artifactDir, s.baselineCommit, s.createdAtUnix, s.planBaselinePath
+	root, artifactDir, baseline, createdAt, planBaseline, plannerPlan := s.workspaceRoot, s.artifactDir, s.baselineCommit, s.createdAtUnix, s.planBaselinePath, s.plannerPlanPath
 	s.mu.Unlock()
 	if root == "" || artifactDir == "" {
 		return goalEvidence{}
@@ -99,12 +99,14 @@ func (s *GoalStore) captureEvidence(ctx context.Context, attempt uint32) goalEvi
 	if evidence.changesPath == "" && len(evidence.changedFiles) == 0 {
 		evidence = captureGoalWalkEvidence(root, artifactDir, createdAt, attempt)
 	}
-	evidence.planPath, evidence.planChanges = captureGoalPlanChanges(runCtx, root, planBaseline)
+	evidence.planPath, evidence.planChanges = captureGoalPlanChanges(runCtx, root, plannerPlan, planBaseline)
 	return evidence
 }
 
-func captureGoalPlanChanges(ctx context.Context, root, baselinePath string) (string, string) {
-	currentPath := filepath.Join(root, filepath.FromSlash(planFile))
+func captureGoalPlanChanges(ctx context.Context, root, currentPath, baselinePath string) (string, string) {
+	if currentPath == "" {
+		currentPath = filepath.Join(root, filepath.FromSlash(planFile))
+	}
 	info, err := os.Lstat(currentPath)
 	if err != nil || !info.Mode().IsRegular() {
 		return "", ""

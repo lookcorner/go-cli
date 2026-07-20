@@ -30,6 +30,8 @@ type durableGoalState struct {
 	BaselineCommit    string          `json:"baseline_commit,omitempty"`
 	CreatedAtUnix     int64           `json:"created_at_unix"`
 	PlanBaselinePath  string          `json:"plan_baseline_path,omitempty"`
+	PlannerPlanPath   string          `json:"plan_file,omitempty"`
+	PlannerCompleted  bool            `json:"planner_completed,omitempty"`
 	Skeptic0SessionID string          `json:"skeptic0_session_id,omitempty"`
 	SkepticModels     []GoalRoleModel `json:"skeptic_model_assignment,omitempty"`
 }
@@ -46,6 +48,8 @@ func (s *GoalStore) saveLocked() error {
 		StrategistBonus: s.strategistBonus, StrategyPath: s.strategyPath, StrategyNote: s.strategyNote,
 		BaselineCommit: s.baselineCommit,
 		CreatedAtUnix:  s.createdAtUnix, PlanBaselinePath: s.planBaselinePath,
+		PlannerPlanPath:   s.plannerPlanPath,
+		PlannerCompleted:  s.plannerCompleted,
 		Skeptic0SessionID: s.skeptic0SessionID,
 		SkepticModels:     s.skepticModels,
 	})
@@ -93,6 +97,9 @@ func (s *GoalStore) loadState() error {
 	if !validGoalArtifactPath(s.artifactDir, state.PlanBaselinePath) {
 		state.PlanBaselinePath = ""
 	}
+	if !validGoalArtifactPath(s.artifactDir, state.PlannerPlanPath) {
+		state.PlannerPlanPath = ""
+	}
 	if !validGoalArtifactPath(s.artifactDir, state.StrategyPath) {
 		state.StrategyPath, state.StrategyNote = "", ""
 	}
@@ -115,6 +122,8 @@ func (s *GoalStore) loadState() error {
 	s.strategistBonus, s.strategyPath, s.strategyNote = state.StrategistBonus, state.StrategyPath, state.StrategyNote
 	s.baselineCommit = state.BaselineCommit
 	s.createdAtUnix, s.planBaselinePath = state.CreatedAtUnix, state.PlanBaselinePath
+	s.plannerPlanPath = state.PlannerPlanPath
+	s.plannerCompleted = state.PlannerCompleted
 	s.skeptic0SessionID = state.Skeptic0SessionID
 	s.skepticModels = validGoalRoleModels(state.SkepticModels)
 	return nil

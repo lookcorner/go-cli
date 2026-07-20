@@ -65,6 +65,8 @@ type Config struct {
 	autoWakeConfigured              bool
 	goalVerifierConfigured          bool
 	goalClassifierMaxConfigured     bool
+	goalPlannerConfigured           bool
+	goalPlannerResolved             bool
 	goalStrategistEveryConfigured   bool
 }
 
@@ -101,10 +103,19 @@ type AskUserQuestionConfig struct {
 type GoalConfig struct {
 	VerifierCount       int             `json:"verifier_count"`
 	ClassifierMaxRuns   uint32          `json:"classifier_max_runs"`
+	PlannerEnabled      bool            `json:"planner_enabled,omitempty"`
 	StrategistEvery     uint32          `json:"strategist_every,omitempty"`
 	UseCurrentModelOnly bool            `json:"use_current_model_only,omitempty"`
+	PlannerModel        *GoalRoleModel  `json:"planner_model,omitempty"`
 	StrategistModel     *GoalRoleModel  `json:"strategist_model,omitempty"`
 	SkepticModels       []GoalRoleModel `json:"skeptic_models,omitempty"`
+}
+
+func (c Config) GoalPlannerEnabled(goalEnabled bool) bool {
+	if c.goalPlannerResolved {
+		return c.Goal.PlannerEnabled
+	}
+	return goalEnabled
 }
 
 type GoalRoleModel struct {
@@ -335,8 +346,10 @@ type fileAskUserQuestionConfig struct {
 type fileGoalConfig struct {
 	VerifierCount       *int            `json:"verifier_count,omitempty" toml:"verifier_count"`
 	ClassifierMaxRuns   *uint32         `json:"classifier_max_runs,omitempty" toml:"classifier_max_runs"`
+	PlannerEnabled      *bool           `json:"planner_enabled,omitempty" toml:"planner_enabled"`
 	StrategistEvery     *uint32         `json:"strategist_every,omitempty" toml:"strategist_every"`
 	UseCurrentModelOnly *bool           `json:"use_current_model_only,omitempty" toml:"use_current_model_only"`
+	PlannerModel        *GoalRoleModel  `json:"planner_model,omitempty" toml:"planner_model"`
 	StrategistModel     *GoalRoleModel  `json:"strategist_model,omitempty" toml:"strategist_model"`
 	SkepticModels       []GoalRoleModel `json:"skeptic_models,omitempty" toml:"skeptic_models"`
 }
@@ -525,12 +538,22 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 		cfg.Goal.ClassifierMaxRuns = max(uint32(1), *disk.Goal.ClassifierMaxRuns)
 		cfg.goalClassifierMaxConfigured = true
 	}
+	if disk.Goal.PlannerEnabled != nil {
+		cfg.Goal.PlannerEnabled = *disk.Goal.PlannerEnabled
+		cfg.goalPlannerConfigured = true
+		cfg.goalPlannerResolved = true
+	}
 	if disk.Goal.StrategistEvery != nil {
 		cfg.Goal.StrategistEvery = max(uint32(1), *disk.Goal.StrategistEvery)
 		cfg.goalStrategistEveryConfigured = true
 	}
 	if disk.Goal.UseCurrentModelOnly != nil {
 		cfg.Goal.UseCurrentModelOnly = *disk.Goal.UseCurrentModelOnly
+	}
+	if disk.Goal.PlannerModel != nil && disk.Goal.PlannerModel.valid() {
+		model := *disk.Goal.PlannerModel
+		model.Model, model.AgentType = strings.TrimSpace(model.Model), strings.TrimSpace(model.AgentType)
+		cfg.Goal.PlannerModel = &model
 	}
 	if disk.Goal.StrategistModel != nil && disk.Goal.StrategistModel.valid() {
 		model := *disk.Goal.StrategistModel
@@ -842,6 +865,11 @@ func applyEnv(cfg *Config) {
 			cfg.Goal.ClassifierMaxRuns = max(uint32(1), uint32(count))
 			cfg.goalClassifierMaxConfigured = true
 		}
+	}
+	if value, ok := envBool("GROK_GOAL_PLANNER"); ok {
+		cfg.Goal.PlannerEnabled = value
+		cfg.goalPlannerConfigured = true
+		cfg.goalPlannerResolved = true
 	}
 	if value := strings.TrimSpace(os.Getenv("GROK_GOAL_STRATEGIST_EVERY")); value != "" {
 		if count, err := strconv.ParseUint(value, 10, 32); err == nil {

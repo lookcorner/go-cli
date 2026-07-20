@@ -342,7 +342,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return err
 	}
 	registry := tools.NewRegistry(ws, approver)
-	registry.ConfigureGoalRoles(goalRoleConfig(cfg))
+	registry.ConfigureGoalRoles(goalRoleConfig(cfg, opts.goal))
 	registry.ConfigureUserQuestions(cfg.AskUserQuestion.TimeoutEnabled, time.Duration(cfg.AskUserQuestion.TimeoutSeconds)*time.Second)
 	artifactDir, err := session.ArtifactDir(logger.Path())
 	if err != nil {
@@ -521,6 +521,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		} else if err := registry.BeginGoal(prompt); err != nil {
 			return err
 		}
+		planPath, err := registry.RunGoalPlanner(ctx)
+		if err != nil {
+			return fmt.Errorf("goal planning paused: %w", err)
+		}
+		prompt = appendGoalPlanReminder(prompt, planPath)
 		return goalLoop(ctx, runner, registry, stdout, stderr, prompt, opts.previousID, opts.goalRuns, cfg.Goal.VerifierCount, cfg.Goal.ClassifierMaxRuns)
 	}
 	return runHeadless(ctx, runner, scheduledQueue, stdout, stderr, prompt, opts.previousID)
@@ -1333,7 +1338,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		}
 		registry := tools.NewRegistry(ws, approver)
 		registry.ConfigureUserQuestions(sessionCfg.AskUserQuestion.TimeoutEnabled, time.Duration(sessionCfg.AskUserQuestion.TimeoutSeconds)*time.Second)
-		registry.ConfigureGoalRoles(goalRoleConfig(sessionCfg))
+		registry.ConfigureGoalRoles(goalRoleConfig(sessionCfg, true))
 		if search, enabled := cfg.WebSearchEndpoint(); enabled {
 			if err := registry.Register(tools.NewWebSearchTool(search.BaseURL, search.APIKey, search.Model, &http.Client{Timeout: cfg.HTTPTimeout})); err != nil {
 				_ = registry.Close()
@@ -1722,12 +1727,16 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 	return nil
 }
 
-func goalRoleConfig(cfg config.Config) tools.GoalRoleConfig {
+func goalRoleConfig(cfg config.Config, goalEnabled bool) tools.GoalRoleConfig {
 	convert := func(model config.GoalRoleModel) tools.GoalRoleModel {
 		return tools.GoalRoleModel{Model: model.Model, AgentType: model.AgentType}
 	}
 	result := tools.GoalRoleConfig{
-		StrategistEvery: cfg.GoalStrategistEvery(), UseCurrentModelOnly: cfg.Goal.UseCurrentModelOnly,
+		PlannerEnabled: cfg.GoalPlannerEnabled(goalEnabled), StrategistEvery: cfg.GoalStrategistEvery(),
+		UseCurrentModelOnly: cfg.Goal.UseCurrentModelOnly,
+	}
+	if cfg.Goal.PlannerModel != nil {
+		result.Planner = convert(*cfg.Goal.PlannerModel)
 	}
 	if cfg.Goal.StrategistModel != nil {
 		result.Strategist = convert(*cfg.Goal.StrategistModel)
@@ -1736,6 +1745,13 @@ func goalRoleConfig(cfg config.Config) tools.GoalRoleConfig {
 		result.Skeptics = append(result.Skeptics, convert(model))
 	}
 	return result
+}
+
+func appendGoalPlanReminder(prompt, path string) string {
+	if path == "" {
+		return prompt
+	}
+	return prompt + "\n\nThe goal plan is the verification contract. Read it before acting and keep the implementation aligned with it:\n" + path
 }
 
 func applyMarketplacePlugins(settings *plugin.Settings, action string, outcome marketplace.Outcome) {
@@ -1934,6 +1950,7 @@ func goalLoop(
 				fmt.Fprintln(stderr, "[gork] goal strategist produced a structural recommendation")
 				prompt += "\n\n" + strategy
 			}
+			prompt = appendGoalPlanReminder(prompt, registry.GoalSnapshot().PlanPath)
 			continue
 		case "completed":
 			fmt.Fprintln(stderr, "[gork] goal completed:", snapshot.Message)
@@ -1941,7 +1958,7 @@ func goalLoop(
 		case "blocked":
 			return fmt.Errorf("goal blocked: %s", snapshot.Message)
 		}
-		prompt = "Continue working toward the active goal. Verify the remaining work, then call update_goal with progress, completed=true only when fully achieved, or blocked_reason only if genuinely stuck."
+		prompt = appendGoalPlanReminder("Continue working toward the active goal. Verify the remaining work, then call update_goal with progress, completed=true only when fully achieved, or blocked_reason only if genuinely stuck.", snapshot.PlanPath)
 	}
 	return fmt.Errorf("goal remains active after %d runs", maxRuns)
 }

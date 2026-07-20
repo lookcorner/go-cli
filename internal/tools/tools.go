@@ -389,11 +389,14 @@ func (r *Registry) ResumeGoal() (string, error) {
 
 func (r *Registry) ConfigureGoalRoles(config GoalRoleConfig) {
 	config.Skeptics = validGoalRoleModels(config.Skeptics)
+	if !config.Planner.valid() {
+		config.Planner = GoalRoleModel{}
+	}
 	if !config.Strategist.valid() {
 		config.Strategist = GoalRoleModel{}
 	}
 	if config.UseCurrentModelOnly {
-		config.Strategist, config.Skeptics = GoalRoleModel{}, nil
+		config.Planner, config.Strategist, config.Skeptics = GoalRoleModel{}, GoalRoleModel{}, nil
 	}
 	r.mu.Lock()
 	r.goalRoles = config
