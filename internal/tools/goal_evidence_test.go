@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lookcorner/go-cli/internal/workspace"
 )
@@ -97,5 +98,76 @@ func TestGoalVerificationCapturesGitEvidenceAndDetails(t *testing.T) {
 	}
 	if _, err := registry.Execute(context.Background(), "read_file", json.RawMessage(`{"target_file":"`+patchPath+`"}`)); err != nil {
 		t.Fatalf("read evidence artifact: %v", err)
+	}
+}
+
+func TestGoalVerificationFallsBackToBoundedWorkspaceWalk(t *testing.T) {
+	root := t.TempDir()
+	oldPath := filepath.Join(root, "old.txt")
+	if err := os.WriteFile(oldPath, []byte("old\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldTime := time.Now().Add(-2 * time.Second)
+	if err := os.Chtimes(oldPath, oldTime, oldTime); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry(ws, PromptApprover{Mode: PermissionAuto})
+	defer registry.Close()
+	artifactDir := filepath.Join(t.TempDir(), "session-artifacts")
+	if err := registry.ConfigureGoalVerification(artifactDir); err != nil {
+		t.Fatal(err)
+	}
+	backend := &goalVerifierBackend{outputs: []string{
+		`{"verdict":"not_refuted"}`, `{"verdict":"not_refuted"}`, `{"verdict":"not_refuted"}`,
+	}}
+	registry.subagents.set(backend)
+	if err := registry.BeginGoal("finish a non-git workspace"); err != nil {
+		t.Fatal(err)
+	}
+	newTime := time.Unix(registry.goal.createdAtUnix+1, 0)
+	newPath := filepath.Join(root, "new.txt")
+	if err := os.WriteFile(newPath, []byte("fresh\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(newPath, newTime, newTime); err != nil {
+		t.Fatal(err)
+	}
+	ignoredDir := filepath.Join(root, "node_modules")
+	if err := os.Mkdir(ignoredDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ignoredPath := filepath.Join(ignoredDir, "ignored.js")
+	if err := os.WriteFile(ignoredPath, []byte("ignored\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(ignoredPath, newTime, newTime); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&updateGoalTool{store: registry.goal}).Execute(context.Background(), json.RawMessage(`{"completed":true}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.StartGoalVerification(10); err != nil {
+		t.Fatal(err)
+	}
+	verification := registry.VerifyGoal(context.Background(), registry.GoalSnapshot(), 3)
+	if !verification.Achieved {
+		t.Fatalf("verification=%#v", verification)
+	}
+	patchPath := filepath.Join(artifactDir, "goal-classifier-1.patch")
+	patch, err := os.ReadFile(patchPath)
+	if err != nil || !strings.Contains(string(patch), "+fresh") || strings.Contains(string(patch), "old.txt") || strings.Contains(string(patch), "ignored.js") {
+		t.Fatalf("patch=%q err=%v", patch, err)
+	}
+	for _, request := range backend.requests {
+		if !strings.Contains(request.Prompt, "- new.txt") || strings.Contains(request.Prompt, "old.txt") || strings.Contains(request.Prompt, "ignored.js") {
+			t.Fatalf("prompt=%s", request.Prompt)
+		}
+	}
+	if sanitized := sanitizeGoalEvidencePath("line\nbreak"); strings.ContainsRune(sanitized, '\n') {
+		t.Fatalf("unsanitized path=%q", sanitized)
 	}
 }

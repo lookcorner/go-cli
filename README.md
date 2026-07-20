@@ -251,7 +251,9 @@ pauses early instead of continuing a no-progress loop. Goal creation records a
 best-effort Git `HEAD` baseline. Each verification writes a bounded cumulative
 patch and ordered skeptic-details Markdown under the private session artifact
 directory; the prompt links that patch and lists tracked plus untracked paths
-so read-only skeptics can corroborate the candidate against live files.
+so read-only skeptics can corroborate the candidate against live files. If no
+Git baseline exists, a bounded modification-time walk synthesizes the patch
+while excluding dependency, VCS, cache, and build directories.
 
 Release builds gate repo-controlled MCP/LSP and enabled project-plugin execution
 on folder trust. Interactive CLI startup asks once when executable project

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/lookcorner/go-cli/internal/api"
 )
@@ -29,6 +30,7 @@ type GoalStore struct {
 	workspaceRoot     string
 	artifactDir       string
 	baselineCommit    string
+	createdAtUnix     int64
 }
 
 func NewGoalStore() *GoalStore { return &GoalStore{} }
@@ -47,6 +49,7 @@ func (s *GoalStore) Begin(objective string) error {
 	s.status = "active"
 	s.message = ""
 	s.verificationRuns, s.lastVerification, s.verificationStall = 0, "", 0
+	s.createdAtUnix = time.Now().Unix()
 	s.baselineCommit = captureGoalBaseline(s.workspaceRoot)
 	return nil
 }
