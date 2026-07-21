@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
@@ -16,7 +18,10 @@ import (
 	"github.com/lookcorner/go-cli/internal/tools"
 )
 
-const mouseWheelScrollLines = 3
+const (
+	mouseWheelScrollLines     = 3
+	questionDoubleClickWindow = 500 * time.Millisecond
+)
 
 type textEvent struct{ text string }
 type statusEvent struct{ text string }
@@ -61,7 +66,10 @@ type memoryDreamDoneEvent struct {
 type scheduledFiredEvent struct{ event tools.ScheduledTaskFired }
 type wakeCancelledEvent struct{ id string }
 type mouseScrollEvent struct{ lines int }
-type mouseClickEvent struct{ action string }
+type mouseClickEvent struct {
+	action string
+	option int
+}
 type planModeEvent struct{ active bool }
 type planReviewEvent struct {
 	event tools.PlanModeEvent
@@ -252,6 +260,10 @@ type model struct {
 	initial       string
 	scheduled     []tools.ScheduledTaskFired
 	activeTask    string
+	questionClick struct {
+		option int
+		at     time.Time
+	}
 }
 
 type planReviewState struct {
@@ -356,6 +368,18 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 					m.finishPlanReview(tools.PlanModeDecision{Outcome: "abandoned"})
 				}
 			}
+		case "question_option":
+			if m.question != nil {
+				now := time.Now()
+				double := msg.option == m.questionClick.option && !m.questionClick.at.IsZero() && now.Sub(m.questionClick.at) < questionDoubleClickWindow
+				m.selectQuestionOption(msg.option, !double)
+				if double {
+					m.questionClick.at = time.Time{}
+					m.submitQuestion()
+				} else {
+					m.questionClick.option, m.questionClick.at = msg.option, now
+				}
+			}
 		}
 		return m, nil
 	case statusEvent:
@@ -370,6 +394,7 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			event: msg, answers: make(map[string][]string, len(msg.request.Questions)),
 			annotations: make(map[string]tools.UserQuestionAnnotation), partial: make(map[string]string, len(msg.request.Questions)),
 		}
+		m.questionClick.at = time.Time{}
 		m.clearInput()
 		m.status = fmt.Sprintf("question 1/%d", len(msg.request.Questions))
 		return m, waitForBridge(m.bridge)
@@ -739,33 +764,68 @@ func (m *model) handleQuestionKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	switch key.Code {
 	case tea.KeyEnter:
-		question := m.question.event.request.Questions[m.question.index]
-		answers, annotation, err := tools.ParseUserQuestionAnswer(question, string(m.input))
-		if err != nil {
-			m.status = "invalid answer: " + err.Error()
-			return m, nil
-		}
-		m.question.answers[question.Question] = answers
-		m.question.partial[question.Question] = strings.Join(answers, ", ")
-		if annotation.Preview != "" || annotation.Notes != "" {
-			m.question.annotations[question.Question] = annotation
-		}
-		m.question.index++
-		m.clearInput()
-		if m.question.index == len(m.question.event.request.Questions) {
-			m.finishQuestion(tools.UserQuestionResponse{Outcome: "accepted", Answers: m.question.answers, Annotations: m.question.annotations})
-		} else {
-			m.status = fmt.Sprintf("question %d/%d", m.question.index+1, len(m.question.event.request.Questions))
-		}
+		m.submitQuestion()
 	default:
 		m.editInput(msg)
 	}
 	return m, nil
 }
 
+func (m *model) selectQuestionOption(index int, toggle bool) {
+	question := m.question.event.request.Questions[m.question.index]
+	if index < 0 || index >= len(question.Options) {
+		return
+	}
+	value := strconv.Itoa(index + 1)
+	parts := strings.Split(string(m.input), ",")
+	selected := false
+	kept := parts[:0]
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == value || strings.EqualFold(part, question.Options[index].Label) {
+			selected = true
+			continue
+		}
+		if part != "" {
+			kept = append(kept, part)
+		}
+	}
+	if !question.MultiSelect {
+		kept = kept[:0]
+	}
+	if !selected || !toggle {
+		kept = append(kept, value)
+	}
+	m.input = []rune(strings.Join(kept, ", "))
+	m.cursor = len(m.input)
+}
+
+func (m *model) submitQuestion() {
+	question := m.question.event.request.Questions[m.question.index]
+	answers, annotation, err := tools.ParseUserQuestionAnswer(question, string(m.input))
+	if err != nil {
+		m.status = "invalid answer: " + err.Error()
+		return
+	}
+	m.question.answers[question.Question] = answers
+	m.question.partial[question.Question] = strings.Join(answers, ", ")
+	if annotation.Preview != "" || annotation.Notes != "" {
+		m.question.annotations[question.Question] = annotation
+	}
+	m.question.index++
+	m.questionClick.at = time.Time{}
+	m.clearInput()
+	if m.question.index == len(m.question.event.request.Questions) {
+		m.finishQuestion(tools.UserQuestionResponse{Outcome: "accepted", Answers: m.question.answers, Annotations: m.question.annotations})
+	} else {
+		m.status = fmt.Sprintf("question %d/%d", m.question.index+1, len(m.question.event.request.Questions))
+	}
+}
+
 func (m *model) finishQuestion(response tools.UserQuestionResponse) {
 	m.question.event.reply <- response
 	m.question = nil
+	m.questionClick.at = time.Time{}
 	m.clearInput()
 	m.status = "thinking"
 }
@@ -996,8 +1056,8 @@ func (m *model) View() tea.View {
 			if mouse.Button != tea.MouseLeft || mouse.Y < contentHeight+3 {
 				return nil
 			}
-			if action := m.footerClickAction(mouse.X, width); action != "" {
-				return func() tea.Msg { return mouseClickEvent{action: action} }
+			if event, ok := m.footerClick(mouse.X, mouse.Y, width); ok {
+				return func() tea.Msg { return event }
 			}
 		}
 		return nil
@@ -1005,12 +1065,15 @@ func (m *model) View() tea.View {
 	return view
 }
 
-func (m *model) footerClickAction(x, width int) string {
+func (m *model) footerClick(x, y, width int) (mouseClickEvent, bool) {
+	if y != m.contentHeight()+3 {
+		return mouseClickEvent{}, false
+	}
 	if m.approval != nil {
 		line := "[y] allow  [n/esc] deny"
 		for _, item := range []struct{ label, action string }{{"[y] allow", "approve"}, {"[n/esc] deny", "deny"}} {
 			if renderedLabelContains(line, item.label, x, width) {
-				return item.action
+				return mouseClickEvent{action: item.action}, true
 			}
 		}
 	}
@@ -1018,11 +1081,22 @@ func (m *model) footerClickAction(x, width int) string {
 		line := "[Y] approve · [R] request changes · [A] abandon"
 		for _, item := range []struct{ label, action string }{{"[Y] approve", "plan_approve"}, {"[R] request changes", "plan_revise"}, {"[A] abandon", "plan_abandon"}} {
 			if renderedLabelContains(line, item.label, x, width) {
-				return item.action
+				return mouseClickEvent{action: item.action}, true
 			}
 		}
 	}
-	return ""
+	if m.question != nil {
+		question := m.question.event.request.Questions[m.question.index]
+		labels := make([]string, 0, len(question.Options))
+		for index, option := range question.Options {
+			label := fmt.Sprintf("[%d] %s", index+1, option.Label)
+			labels = append(labels, label)
+			if renderedLabelContains(strings.Join(labels, "  "), label, x, width) {
+				return mouseClickEvent{action: "question_option", option: index}, true
+			}
+		}
+	}
+	return mouseClickEvent{}, false
 }
 
 func renderedLabelContains(line, label string, x, width int) bool {

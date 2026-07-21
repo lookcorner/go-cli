@@ -475,6 +475,58 @@ func TestMouseClickAnswersPlanReview(t *testing.T) {
 	}
 }
 
+func TestMouseClickSelectsAndDoubleClicksQuestionOptions(t *testing.T) {
+	reply := make(chan tools.UserQuestionResponse, 1)
+	m := &model{width: 60, height: 16, question: &questionState{
+		event: questionEvent{request: tools.UserQuestionRequest{Questions: []tools.UserQuestion{{
+			Question: "Deploy where?", Options: []tools.UserQuestionOption{{Label: "Local"}, {Label: "Cloud"}},
+		}}}, reply: reply},
+		answers: make(map[string][]string), annotations: make(map[string]tools.UserQuestionAnnotation), partial: make(map[string]string),
+	}}
+	click := func(x int) {
+		command := m.View().OnMouse(tea.MouseClickMsg(tea.Mouse{X: x, Y: m.contentHeight() + 3, Button: tea.MouseLeft}))
+		if command == nil {
+			t.Fatal("question option click was ignored")
+		}
+		updated, _ := m.Update(command())
+		m = updated.(*model)
+	}
+	click(12)
+	if got := string(m.input); got != "2" {
+		t.Fatalf("input=%q", got)
+	}
+	click(12)
+	select {
+	case response := <-reply:
+		if response.Outcome != "accepted" || response.Answers["Deploy where?"][0] != "Cloud" {
+			t.Fatalf("response=%#v", response)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("double-clicked question did not complete")
+	}
+}
+
+func TestMouseClickTogglesMultiSelectQuestionOptions(t *testing.T) {
+	m := &model{width: 60, height: 16, question: &questionState{event: questionEvent{request: tools.UserQuestionRequest{Questions: []tools.UserQuestion{{
+		Question: "Targets?", MultiSelect: true, Options: []tools.UserQuestionOption{{Label: "API"}, {Label: "UI"}},
+	}}}}}}
+	for _, x := range []int{1, 9} {
+		command := m.View().OnMouse(tea.MouseClickMsg(tea.Mouse{X: x, Y: m.contentHeight() + 3, Button: tea.MouseLeft}))
+		updated, _ := m.Update(command())
+		m = updated.(*model)
+	}
+	if got := string(m.input); got != "1, 2" {
+		t.Fatalf("input=%q", got)
+	}
+	m.questionClick.at = time.Now().Add(-questionDoubleClickWindow)
+	command := m.View().OnMouse(tea.MouseClickMsg(tea.Mouse{X: 1, Y: m.contentHeight() + 3, Button: tea.MouseLeft}))
+	updated, _ := m.Update(command())
+	m = updated.(*model)
+	if got := string(m.input); got != "2" {
+		t.Fatalf("toggled input=%q", got)
+	}
+}
+
 func TestMouseClickIgnoresFooterGapsAndClippedActions(t *testing.T) {
 	m := &model{width: 60, height: 16, approval: &approvalEvent{reply: make(chan bool, 1)}}
 	view := m.View()
@@ -491,6 +543,18 @@ func TestMouseClickIgnoresFooterGapsAndClippedActions(t *testing.T) {
 	view = m.View()
 	if command := view.OnMouse(tea.MouseClickMsg(tea.Mouse{X: 16, Y: m.contentHeight() + 3, Button: tea.MouseLeft})); command != nil {
 		t.Fatal("clipped plan action was clickable")
+	}
+	m.planReview = nil
+	m.width = 20
+	m.question = &questionState{event: questionEvent{request: tools.UserQuestionRequest{Questions: []tools.UserQuestion{{
+		Question: "Pick?", Options: []tools.UserQuestionOption{{Label: "Visible"}, {Label: "Clipped option"}},
+	}}}}}
+	view = m.View()
+	if command := view.OnMouse(tea.MouseClickMsg(tea.Mouse{X: 15, Y: m.contentHeight() + 3, Button: tea.MouseLeft})); command != nil {
+		t.Fatal("clipped question option was clickable")
+	}
+	if command := view.OnMouse(tea.MouseClickMsg(tea.Mouse{X: 1, Y: m.contentHeight() + 2, Button: tea.MouseLeft})); command != nil {
+		t.Fatal("question title was clickable")
 	}
 }
 
