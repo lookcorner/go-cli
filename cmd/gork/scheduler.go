@@ -23,18 +23,50 @@ func newScheduledWakeQueue() *scheduledWakeQueue {
 }
 
 func (q *scheduledWakeQueue) ScheduledTaskCreated(event tools.ScheduledTaskCreated) {
+	q.TrackWake(event.TaskID)
+}
+
+func (q *scheduledWakeQueue) TrackWake(id string) {
 	q.mu.Lock()
-	q.tasks[event.TaskID] = true
+	q.tasks[id] = true
 	q.mu.Unlock()
 	q.signal()
 }
 
 func (q *scheduledWakeQueue) ScheduledTaskFired(event tools.ScheduledTaskFired) {
+	q.queueWake(event, false)
+}
+
+func (q *scheduledWakeQueue) QueueWake(id, prompt string) bool {
+	return q.queueWake(tools.ScheduledTaskFired{TaskID: id, Prompt: prompt}, true)
+}
+
+func (q *scheduledWakeQueue) queueWake(event tools.ScheduledTaskFired, completed bool) bool {
 	q.mu.Lock()
-	if q.active != event.TaskID && !q.queued[event.TaskID] {
+	if completed {
+		delete(q.tasks, event.TaskID)
+	}
+	queued := q.active != event.TaskID && !q.queued[event.TaskID]
+	if queued {
 		q.queued[event.TaskID] = true
 		q.pending = append(q.pending, event)
 	}
+	q.mu.Unlock()
+	q.signal()
+	return queued
+}
+
+func (q *scheduledWakeQueue) CancelWake(id string) {
+	q.mu.Lock()
+	delete(q.tasks, id)
+	delete(q.queued, id)
+	kept := q.pending[:0]
+	for _, event := range q.pending {
+		if event.TaskID != id {
+			kept = append(kept, event)
+		}
+	}
+	q.pending = kept
 	q.mu.Unlock()
 	q.signal()
 }

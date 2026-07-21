@@ -536,6 +536,17 @@ func TestScheduledEventWaitsForTurnAndContinuesResponseChain(t *testing.T) {
 	}
 }
 
+func TestWakeCancellationRemovesPendingSyntheticTurn(t *testing.T) {
+	bridge := NewBridge(context.Background(), tools.PermissionAuto)
+	defer bridge.Close()
+	m := &model{ctx: context.Background(), bridge: bridge, scheduled: []tools.ScheduledTaskFired{{TaskID: "keep"}, {TaskID: "cancel"}}}
+	updated, _ := m.Update(wakeCancelledEvent{id: "cancel"})
+	m = updated.(*model)
+	if len(m.scheduled) != 1 || m.scheduled[0].TaskID != "keep" {
+		t.Fatalf("scheduled=%#v", m.scheduled)
+	}
+}
+
 func TestRenderMarkdownStylesAndWrapsVisibleText(t *testing.T) {
 	lines := renderMarkdown("# Heading\n\n- **bold** and `code`\n> quoted\n[docs](https://example.com)\n```go\n你好abc\n```", 6)
 	rendered := strings.Join(lines, "\n")

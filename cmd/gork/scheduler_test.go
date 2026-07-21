@@ -40,12 +40,12 @@ func (s *scheduledStreamer) StreamResponse(_ context.Context, request api.Respon
 
 func TestScheduledWakeQueueTracksTasksAndDeduplicates(t *testing.T) {
 	queue := newScheduledWakeQueue()
-	created := tools.ScheduledTaskCreated{TaskID: "loop-1", Prompt: "check"}
+	created := tools.ScheduledTaskCreated{TaskID: "loop-1", Prompt: "check", HumanSchedule: "every minute"}
 	queue.ScheduledTaskCreated(created)
 	queue.ScheduledTaskFired(created)
 	queue.ScheduledTaskFired(created)
 	event, ok := queue.Take()
-	if !ok || event.TaskID != "loop-1" || !queue.ShouldWait() {
+	if !ok || event.TaskID != "loop-1" || event.HumanSchedule != "every minute" || !queue.ShouldWait() {
 		t.Fatalf("event=%#v ok=%v wait=%v", event, ok, queue.ShouldWait())
 	}
 	if _, duplicate := queue.Take(); duplicate {
@@ -55,10 +55,40 @@ func TestScheduledWakeQueueTracksTasksAndDeduplicates(t *testing.T) {
 	if _, duplicate := queue.Take(); duplicate {
 		t.Fatal("active task was queued again")
 	}
-	queue.ScheduledTaskRemoved("loop-1")
 	queue.Done("loop-1")
+	if !queue.ShouldWait() {
+		t.Fatal("recurring scheduler task stopped being tracked after firing")
+	}
+	queue.ScheduledTaskRemoved("loop-1")
 	if queue.ShouldWait() {
 		t.Fatal("removed and completed task kept queue alive")
+	}
+}
+
+func TestLocalWakeQueueTracksQueuesAndCancelsBackgroundWork(t *testing.T) {
+	queue := newScheduledWakeQueue()
+	queue.TrackWake("task-1")
+	if !queue.ShouldWait() {
+		t.Fatal("running task did not keep headless queue alive")
+	}
+	if !queue.QueueWake("task-1", "task finished") || queue.QueueWake("task-1", "duplicate") {
+		t.Fatal("completion wake was not queued exactly once")
+	}
+	queue.CancelWake("task-1")
+	if queue.ShouldWait() {
+		t.Fatal("cancelled completion remained queued")
+	}
+	queue.TrackWake("task-2")
+	if !queue.QueueWake("task-2", "second finished") {
+		t.Fatal("second completion was not queued")
+	}
+	event, ok := queue.Take()
+	if !ok || event.TaskID != "task-2" || event.Prompt != "second finished" {
+		t.Fatalf("event=%#v ok=%v", event, ok)
+	}
+	queue.Done(event.TaskID)
+	if queue.ShouldWait() {
+		t.Fatal("completed wake kept queue alive")
 	}
 }
 
@@ -116,6 +146,35 @@ func TestRunHeadlessExecutesSchedulerCreateFireImmediately(t *testing.T) {
 	}
 	input, _ := json.Marshal(streamer.requests[2].Input)
 	if !bytes.Contains(input, []byte("check deploy")) || queue.ShouldWait() {
+		t.Fatalf("input=%s wait=%v", input, queue.ShouldWait())
+	}
+}
+
+func TestRunHeadlessAutoWakesForBackgroundProcessCompletion(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	queue := newScheduledWakeQueue()
+	registry.SetProcessObserver(&sessionProcessObserver{autoWake: true, wake: queue})
+	streamer := &scheduledStreamer{results: []api.StreamResult{
+		{ResponseID: "tool-response", ToolCalls: []api.ToolCall{{CallID: "call-1", Name: "run_terminal_cmd", Arguments: json.RawMessage(`{"command":"sleep 0.05; printf done","description":"finish later","is_background":true}`)}}},
+		{ResponseID: "user-response", Text: "backgrounded"},
+		{ResponseID: "wake-response", Text: "handled"},
+	}}
+	runner := &agent.Runner{Client: streamer, Tools: registry, Model: "test"}
+	if err := runHeadless(context.Background(), runner, queue, io.Discard, io.Discard, "start work", ""); err != nil {
+		t.Fatal(err)
+	}
+	streamer.mu.Lock()
+	defer streamer.mu.Unlock()
+	if len(streamer.requests) != 3 || streamer.requests[2].PreviousResponseID != "user-response" {
+		t.Fatalf("requests=%#v", streamer.requests)
+	}
+	input, _ := json.Marshal(streamer.requests[2].Input)
+	if !bytes.Contains(input, []byte("Background task")) || !bytes.Contains(input, []byte("get_task_output")) || queue.ShouldWait() {
 		t.Fatalf("input=%s wait=%v", input, queue.ShouldWait())
 	}
 }

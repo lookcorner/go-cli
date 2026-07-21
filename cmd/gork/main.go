@@ -454,13 +454,16 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	})
 	var scheduledQueue *scheduledWakeQueue
 	var schedulerObserver tools.SchedulerObserver
+	var wakeSink localWakeSink
 	if tuiBridge != nil {
 		schedulerObserver = tuiBridge
+		wakeSink = tuiBridge
 	} else {
 		scheduledQueue = newScheduledWakeQueue()
 		schedulerObserver = scheduledQueue
+		wakeSink = scheduledQueue
 	}
-	processObserver := &sessionProcessObserver{sessionID: logger.ID(), logger: logger, hooks: hookRuntime, scheduler: schedulerObserver, planApprover: askApprover}
+	processObserver := &sessionProcessObserver{sessionID: logger.ID(), logger: logger, hooks: hookRuntime, autoWake: cfg.AutoWakeEnabled, scheduler: schedulerObserver, wake: wakeSink, planApprover: askApprover}
 	registry.SetProcessObserver(processObserver)
 	registry.SetSchedulerObserver(processObserver)
 	registry.SetPlanModeObserver(processObserver)
@@ -490,8 +493,16 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		TwoPassCompaction: cfg.TwoPassCompaction,
 		ResolveModel:      resolveSubagentModel, AvailableModels: cfg.ModelSlugs(), Skills: skillCatalog,
 		SkillConfig: workspaceSkillsConfig(cfg, plugins), Worktrees: worktreeManager,
-		Observer:   &sessionSubagentObserver{sessionID: logger.ID(), logger: logger},
+		Observer:   &sessionSubagentObserver{sessionID: logger.ID(), logger: logger, autoWake: cfg.AutoWakeEnabled, wake: wakeSink},
 		SessionDir: filepath.Dir(logger.Path()), ParentSessionID: logger.ID(),
+		AutoWake: func(result tools.SubagentResult) bool {
+			return cfg.AutoWakeEnabled && wakeSink != nil && wakeSink.QueueWake(result.ID, formatLocalSubagentWake(result))
+		},
+		CancelWake: func(id string) {
+			if wakeSink != nil {
+				wakeSink.CancelWake(id)
+			}
+		},
 		ParentMCPServers: mcpRuntime.Configs(),
 		StartMCPServers: func(childCtx context.Context, root string, childTools *tools.Registry, servers []mcp.ServerConfig) (func(), error) {
 			return startSubagentMCPServers(childCtx, cfg, root, childTools, approver, tokenProvider, statusOutput, servers)
@@ -1288,6 +1299,7 @@ type sessionProcessObserver struct {
 	hooks        *hooks.Runtime
 	autoWake     bool
 	scheduler    tools.SchedulerObserver
+	wake         localWakeSink
 	planApprover tools.Approver
 }
 
@@ -1295,6 +1307,14 @@ type sessionSubagentObserver struct {
 	server    *acp.Server
 	sessionID string
 	logger    *session.Logger
+	autoWake  bool
+	wake      localWakeSink
+}
+
+type localWakeSink interface {
+	TrackWake(string)
+	QueueWake(string, string) bool
+	CancelWake(string)
 }
 
 type sessionGoalObserver struct {
@@ -1341,10 +1361,22 @@ func (o *sessionProcessObserver) TaskBackgrounded(event tools.ProcessBackgrounde
 	if o.server != nil {
 		o.server.NotifyTaskBackgrounded(o.sessionID, event)
 	}
+	if o.server == nil && o.autoWake && o.wake != nil {
+		o.wake.TrackWake(event.TaskID)
+	}
 }
 
 func (o *sessionProcessObserver) TaskCompleted(snapshot tools.ProcessSnapshot) {
-	willWake := o.server != nil && o.autoWake && !snapshot.BlockWaited && !snapshot.ExplicitlyKilled && o.server.QueueTaskWake(o.sessionID, snapshot)
+	willWake := false
+	if o.server != nil {
+		willWake = o.autoWake && !snapshot.BlockWaited && !snapshot.ExplicitlyKilled && o.server.QueueTaskWake(o.sessionID, snapshot)
+	} else if o.wake != nil {
+		if o.autoWake && !snapshot.BlockWaited && !snapshot.ExplicitlyKilled {
+			willWake = o.wake.QueueWake(snapshot.TaskID, formatLocalTaskWake(snapshot))
+		} else {
+			o.wake.CancelWake(snapshot.TaskID)
+		}
+	}
 	if o.logger != nil {
 		_ = o.logger.Append("task_completed", acp.TaskCompletedUpdate(snapshot, willWake))
 	}
@@ -1446,6 +1478,8 @@ func (o *sessionProcessObserver) AskUserQuestion(ctx context.Context, request to
 func (o *sessionProcessObserver) TaskConsumed(taskID string) {
 	if o.server != nil {
 		o.server.CancelTaskWake(o.sessionID, taskID)
+	} else if o.wake != nil {
+		o.wake.CancelWake(taskID)
 	}
 }
 
@@ -1455,6 +1489,9 @@ func (o *sessionSubagentObserver) SubagentStarted(_ context.Context, event subag
 	}
 	if o.server != nil {
 		o.server.NotifySubagentStarted(o.sessionID, event)
+	}
+	if o.server == nil && o.autoWake && event.Background && o.wake != nil {
+		o.wake.TrackWake(event.ID)
 	}
 }
 
@@ -1470,7 +1507,25 @@ func (o *sessionSubagentObserver) SubagentEnded(_ context.Context, result tools.
 	}
 	if o.server != nil {
 		o.server.NotifySubagentEnded(o.sessionID, result)
+	} else if !result.WillWake && o.wake != nil {
+		o.wake.CancelWake(result.ID)
 	}
+}
+
+func formatLocalSubagentWake(result tools.SubagentResult) string {
+	status := "successfully"
+	if result.Status != "completed" {
+		status = "with failure"
+	}
+	return fmt.Sprintf("<system-reminder>\nBackground subagent %q (%s: %q) completed %s.\nDuration: %.1fs | Tool calls: %d | Turns: %d\nUse get_task_output with task_ids [%q] to retrieve the full result.\n</system-reminder>", result.ID, result.Type, result.Description, status, float64(result.DurationMS)/1000, result.ToolCalls, result.Turns, result.ID)
+}
+
+func formatLocalTaskWake(snapshot tools.ProcessSnapshot) string {
+	status := "successfully"
+	if snapshot.ExitCode == nil || *snapshot.ExitCode != 0 {
+		status = "with failure"
+	}
+	return fmt.Sprintf("<system-reminder>\nBackground task %q completed %s.\nCommand: %s\nUse get_task_output with task_ids [%q] to retrieve the full output.\n</system-reminder>", snapshot.TaskID, status, snapshot.Command, snapshot.TaskID)
 }
 
 func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []string, tokenProvider api.TokenProvider, stdin io.Reader, stdout, stderr io.Writer) error {

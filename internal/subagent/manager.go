@@ -40,6 +40,7 @@ type Started struct {
 	Model          string
 	CapabilityMode string
 	ResumedFrom    string
+	Background     bool
 }
 
 type ModelRuntime struct {
@@ -590,7 +591,7 @@ func (m *Manager) launch(caller context.Context, current *task, prompt string, b
 	if m.observer != nil {
 		m.observer.SubagentStarted(runCtx, Started{
 			ID: current.id, Type: current.typeName, Description: current.description,
-			Model: current.model, CapabilityMode: current.capability, ResumedFrom: current.resumedFrom,
+			Model: current.model, CapabilityMode: current.capability, ResumedFrom: current.resumedFrom, Background: background,
 		})
 	}
 	if current.hookRuntime != nil {

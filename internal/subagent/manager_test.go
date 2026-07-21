@@ -77,6 +77,7 @@ func (c *sequenceClient) requestCount() int {
 type recordingObserver struct {
 	mu       sync.Mutex
 	events   []string
+	started  []Started
 	progress []tools.SubagentResult
 	ended    []tools.SubagentResult
 }
@@ -95,6 +96,7 @@ func (t fixtureMCPTool) MCPServerName() string                                  
 func (o *recordingObserver) SubagentStarted(_ context.Context, event Started) {
 	o.mu.Lock()
 	o.events = append(o.events, "start:"+event.ID+":"+event.Type)
+	o.started = append(o.started, event)
 	o.mu.Unlock()
 }
 
@@ -881,8 +883,8 @@ func TestRunningSubagentReportsLiveMetrics(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	observer.mu.Lock()
-	if len(observer.progress) == 0 || observer.progress[0].TokensUsed != 25 || observer.progress[0].ContextUsage != 25 {
-		t.Fatalf("progress=%#v", observer.progress)
+	if len(observer.started) != 1 || !observer.started[0].Background || len(observer.progress) == 0 || observer.progress[0].TokensUsed != 25 || observer.progress[0].ContextUsage != 25 {
+		t.Fatalf("started=%#v progress=%#v", observer.started, observer.progress)
 	}
 	observer.mu.Unlock()
 	if _, err := manager.Kill(context.Background(), started.ID); err != nil {

@@ -57,6 +57,7 @@ type memoryDreamDoneEvent struct {
 	err    error
 }
 type scheduledFiredEvent struct{ event tools.ScheduledTaskFired }
+type wakeCancelledEvent struct{ id string }
 type planModeEvent struct{ active bool }
 type planReviewEvent struct {
 	event tools.PlanModeEvent
@@ -87,6 +88,19 @@ func (b *Bridge) ScheduledTaskFired(event tools.ScheduledTaskFired) {
 	case <-b.ctx.Done():
 	}
 }
+
+func (b *Bridge) TrackWake(string) {}
+
+func (b *Bridge) QueueWake(id, prompt string) bool {
+	select {
+	case b.events <- scheduledFiredEvent{event: tools.ScheduledTaskFired{TaskID: id, Prompt: prompt}}:
+		return true
+	case <-b.ctx.Done():
+		return false
+	}
+}
+
+func (b *Bridge) CancelWake(id string) { b.send(wakeCancelledEvent{id: id}) }
 
 func (b *Bridge) PlanModeEntered(tools.PlanModeEvent) { b.send(planModeEvent{active: true}) }
 func (b *Bridge) PlanModeExited(tools.PlanModeEvent)  { b.send(planModeEvent{}) }
@@ -360,6 +374,15 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if command := m.startScheduled(); command != nil {
 			return m, tea.Batch(waitForBridge(m.bridge), command)
 		}
+		return m, waitForBridge(m.bridge)
+	case wakeCancelledEvent:
+		kept := m.scheduled[:0]
+		for _, event := range m.scheduled {
+			if event.TaskID != msg.id {
+				kept = append(kept, event)
+			}
+		}
+		m.scheduled = kept
 		return m, waitForBridge(m.bridge)
 	case compactDoneEvent:
 		m.running = false

@@ -326,6 +326,60 @@ func TestSessionObserversPersistOnlyLifecycleEvents(t *testing.T) {
 	}
 }
 
+func TestLocalObserversTrackQueueAndCancelAutoWakes(t *testing.T) {
+	queue := newScheduledWakeQueue()
+	processes := &sessionProcessObserver{autoWake: true, wake: queue}
+	processes.TaskBackgrounded(tools.ProcessBackgrounded{TaskID: "task-1", Command: "build"})
+	if !queue.ShouldWait() {
+		t.Fatal("background process was not tracked")
+	}
+	exitCode := 0
+	processes.TaskCompleted(tools.ProcessSnapshot{TaskID: "task-1", Command: "build", ExitCode: &exitCode, Completed: true})
+	event, ok := queue.Take()
+	if !ok || !strings.Contains(event.Prompt, "completed successfully") || !strings.Contains(event.Prompt, "get_task_output") {
+		t.Fatalf("process wake=%#v ok=%v", event, ok)
+	}
+	queue.Done(event.TaskID)
+
+	processes.TaskBackgrounded(tools.ProcessBackgrounded{TaskID: "task-2", Command: "wait"})
+	processes.TaskCompleted(tools.ProcessSnapshot{TaskID: "task-2", Command: "wait", ExitCode: &exitCode, BlockWaited: true, Completed: true})
+	if _, ok := queue.Take(); ok || queue.ShouldWait() {
+		t.Fatal("block-waited process queued an automatic wake")
+	}
+
+	subagents := &sessionSubagentObserver{autoWake: true, wake: queue}
+	subagents.SubagentStarted(context.Background(), subagent.Started{ID: "child-1", Type: "explore", Description: "inspect", Background: true})
+	if !queue.ShouldWait() {
+		t.Fatal("background subagent was not tracked")
+	}
+	result := tools.SubagentResult{ID: "child-1", Type: "explore", Description: "inspect", Status: "completed", WillWake: queue.QueueWake("child-1", formatLocalSubagentWake(tools.SubagentResult{ID: "child-1", Type: "explore", Description: "inspect", Status: "completed"}))}
+	subagents.SubagentEnded(context.Background(), result)
+	event, ok = queue.Take()
+	if !ok || !strings.Contains(event.Prompt, "Background subagent") {
+		t.Fatalf("subagent wake=%#v ok=%v", event, ok)
+	}
+	queue.Done(event.TaskID)
+	subagents.SubagentStarted(context.Background(), subagent.Started{ID: "child-2", Background: true})
+	subagents.SubagentEnded(context.Background(), tools.SubagentResult{ID: "child-2", Status: "cancelled"})
+	if queue.ShouldWait() {
+		t.Fatal("cancelled subagent remained tracked")
+	}
+}
+
+func TestLocalObserversIgnoreBackgroundWorkWhenAutoWakeDisabled(t *testing.T) {
+	queue := newScheduledWakeQueue()
+	processes := &sessionProcessObserver{wake: queue}
+	processes.TaskBackgrounded(tools.ProcessBackgrounded{TaskID: "task-1"})
+	exitCode := 0
+	processes.TaskCompleted(tools.ProcessSnapshot{TaskID: "task-1", ExitCode: &exitCode, Completed: true})
+	subagents := &sessionSubagentObserver{wake: queue}
+	subagents.SubagentStarted(context.Background(), subagent.Started{ID: "child-1", Background: true})
+	subagents.SubagentEnded(context.Background(), tools.SubagentResult{ID: "child-1", Status: "completed"})
+	if _, ok := queue.Take(); ok || queue.ShouldWait() {
+		t.Fatal("disabled auto-wake retained or queued background work")
+	}
+}
+
 func TestParseGoalBudget(t *testing.T) {
 	valid := map[string]struct {
 		objective string
