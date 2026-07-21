@@ -47,6 +47,54 @@ func DefaultRoot() (string, error) {
 	return filepath.Join(home, ".grok", "memory"), nil
 }
 
+func WorkspacePath(root, workspace string) (string, error) {
+	absWorkspace, err := filepath.Abs(filepath.Clean(workspace))
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256([]byte(absWorkspace))
+	return filepath.Join(filepath.Clean(root), hex.EncodeToString(digest[:8])), nil
+}
+
+func GlobalPath(root string) string { return filepath.Join(filepath.Clean(root), "MEMORY.md") }
+
+func ClearWorkspace(root, workspace string) (bool, error) {
+	path, err := WorkspacePath(root, workspace)
+	if err != nil {
+		return false, err
+	}
+	return removeMemoryPath(path, true)
+}
+
+func ClearGlobal(root string) (bool, error) { return removeMemoryPath(GlobalPath(root), false) }
+
+func removeMemoryPath(path string, directory bool) (bool, error) {
+	parent, err := os.Lstat(filepath.Dir(path))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if parent.Mode()&os.ModeSymlink != 0 || !parent.IsDir() {
+		return false, errors.New("memory root has an unsafe file type")
+	}
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || directory != info.IsDir() {
+		return false, errors.New("memory path has an unsafe file type")
+	}
+	if directory {
+		return true, os.RemoveAll(path)
+	}
+	return true, os.Remove(path)
+}
+
 func AppendGlobal(root, content string) (string, error) {
 	content = normalizeMemoryContent(content)
 	if content == "" {
@@ -111,12 +159,10 @@ func Open(root, workspace, sessionID string) (*Store, error) {
 	if root == "." || workspace == "." || strings.TrimSpace(sessionID) == "" {
 		return nil, errors.New("memory root, workspace, and session ID are required")
 	}
-	absWorkspace, err := filepath.Abs(workspace)
+	workspaceDir, err := WorkspacePath(root, workspace)
 	if err != nil {
 		return nil, err
 	}
-	digest := sha256.Sum256([]byte(absWorkspace))
-	workspaceDir := filepath.Join(root, hex.EncodeToString(digest[:8]))
 	store := &Store{
 		root: root, workspaceDir: workspaceDir, sessionsDir: filepath.Join(workspaceDir, "sessions"),
 		sessionID: safeName(sessionID),

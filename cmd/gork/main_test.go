@@ -69,6 +69,87 @@ func TestInteractiveMemoryFlushDoesNotRunNormalTurn(t *testing.T) {
 	}
 }
 
+func TestMemoryClearCommandScopesConfirmationAndValidation(t *testing.T) {
+	home, cwd := t.TempDir(), t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	root := filepath.Join(home, "memory")
+	store, err := memory.Open(root, cwd, "clear-command")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.Write("manual", "workspace note"); err != nil {
+		t.Fatal(err)
+	}
+	global, err := memory.AppendGlobal(root, "global note")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if err := runMemory([]string{"clear"}, cwd, strings.NewReader("n\n"), &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	workspacePath, _ := memory.WorkspacePath(root, cwd)
+	if !strings.Contains(stdout.String(), "Cancelled.") {
+		t.Fatalf("stdout=%q", stdout.String())
+	}
+	if _, err := os.Stat(workspacePath); err != nil {
+		t.Fatalf("cancel removed workspace memory: %v", err)
+	}
+	stdout.Reset()
+	if err := runMemory([]string{"clear", "--all", "-y"}, cwd, strings.NewReader(""), &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(stdout.String(), "Cleared:") != 2 || !strings.Contains(stdout.String(), "Memory cleared.") {
+		t.Fatalf("stdout=%q", stdout.String())
+	}
+	for _, path := range []string{workspacePath, global} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("path still exists %s: %v", path, err)
+		}
+	}
+	stdout.Reset()
+	if err := runMemory([]string{"clear", "--global", "--yes"}, cwd, strings.NewReader(""), &stdout, &stderr); err != nil || !strings.Contains(stdout.String(), "Nothing to clear") {
+		t.Fatalf("stdout=%q err=%v", stdout.String(), err)
+	}
+	if err := runMemory([]string{"clear", "--workspace", "--global"}, cwd, strings.NewReader(""), io.Discard, io.Discard); err == nil {
+		t.Fatal("conflicting scopes were accepted")
+	}
+
+	store, err = memory.Open(root, cwd, "partial-clear")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.Write("manual", "another workspace note"); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(outside, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, memory.GlobalPath(root)); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if err := runMemory([]string{"clear", "--all", "--yes"}, cwd, strings.NewReader(""), &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "Memory partially cleared. Errors:") || !strings.Contains(stderr.String(), "global MEMORY.md") {
+		t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	if data, err := os.ReadFile(outside); err != nil || string(data) != "keep" {
+		t.Fatalf("outside=%q err=%v", data, err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if err := runMemory([]string{"clear", "--global", "--yes"}, cwd, strings.NewReader(""), &stdout, &stderr); err == nil {
+		t.Fatal("failed-only clear returned success")
+	}
+	if !strings.Contains(stderr.String(), "Failed to clear memory:") {
+		t.Fatalf("stderr=%q", stderr.String())
+	}
+}
+
 func TestInteractiveMemoryListDoesNotRunNormalTurn(t *testing.T) {
 	store, err := memory.Open(t.TempDir(), t.TempDir(), "interactive-list")
 	if err != nil {

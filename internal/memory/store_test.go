@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -146,5 +147,69 @@ func TestAppendGlobalNormalizesAndRejectsSymlink(t *testing.T) {
 	}
 	if data, err := os.ReadFile(outside); err != nil || string(data) != "secret" {
 		t.Fatalf("outside=%q err=%v", data, err)
+	}
+}
+
+func TestClearMemoryScopesAndRejectsSymlinks(t *testing.T) {
+	root, workspace := t.TempDir(), t.TempDir()
+	store, err := Open(root, workspace, "clear")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.Write("manual", "workspace note"); err != nil {
+		t.Fatal(err)
+	}
+	global, err := AppendGlobal(root, "global note")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleared, err := ClearWorkspace(root, workspace); err != nil || !cleared {
+		t.Fatalf("cleared=%v err=%v", cleared, err)
+	}
+	if _, err := os.Stat(store.workspaceDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("workspace still exists: %v", err)
+	}
+	if _, err := os.Stat(global); err != nil {
+		t.Fatalf("global memory was removed: %v", err)
+	}
+	if cleared, err := ClearWorkspace(root, workspace); err != nil || cleared {
+		t.Fatalf("second clear=%v err=%v", cleared, err)
+	}
+	if cleared, err := ClearGlobal(root); err != nil || !cleared {
+		t.Fatalf("global clear=%v err=%v", cleared, err)
+	}
+
+	outside := t.TempDir()
+	workspacePath, err := WorkspacePath(root, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, workspacePath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ClearWorkspace(root, workspace); err == nil {
+		t.Fatal("workspace symlink was cleared")
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Fatalf("symlink target changed: %v", err)
+	}
+
+	outsideRoot := t.TempDir()
+	outsideWorkspace, err := WorkspacePath(outsideRoot, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(outsideWorkspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	linkedRoot := filepath.Join(t.TempDir(), "memory")
+	if err := os.Symlink(outsideRoot, linkedRoot); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ClearWorkspace(linkedRoot, workspace); err == nil {
+		t.Fatal("symlink memory root was followed")
+	}
+	if _, err := os.Stat(outsideWorkspace); err != nil {
+		t.Fatalf("linked root target changed: %v", err)
 	}
 }

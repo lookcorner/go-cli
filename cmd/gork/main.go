@@ -102,6 +102,13 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if len(args) > 0 && args[0] == "plugin" {
 		return runPlugin(args[1:], stdout, stderr)
 	}
+	if len(args) > 0 && args[0] == "memory" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		return runMemory(args[1:], cwd, stdin, stdout, stderr)
+	}
 	var opts options
 	flags := flag.NewFlagSet("gork", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -129,7 +136,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	flags.BoolVar(&opts.experimentalMemory, "experimental-memory", false, "enable cross-session workspace memory")
 	flags.BoolVar(&opts.noMemory, "no-memory", false, "disable cross-session memory")
 	flags.Usage = func() {
-		fmt.Fprintf(stderr, "Usage: gork [flags] [prompt]\n       gork login [--oauth|--device-auth]\n       gork logout\n       gork setup\n       gork plugin <list|install|update|uninstall|marketplace>\n\n")
+		fmt.Fprintf(stderr, "Usage: gork [flags] [prompt]\n       gork login [--oauth|--device-auth]\n       gork logout\n       gork setup\n       gork plugin <list|install|update|uninstall|marketplace>\n       gork memory clear [--workspace|--global|--all] [-y|--yes]\n\n")
 		flags.PrintDefaults()
 	}
 	if err := flags.Parse(args); err != nil {
@@ -565,6 +572,112 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return goalLoop(ctx, runner, registry, stdout, stderr, prompt, opts.previousID, opts.goalRuns, cfg.Goal.VerifierCount, cfg.Goal.ClassifierMaxRuns, cfg.Goal.ReverifyAfter)
 	}
 	return runHeadless(ctx, runner, scheduledQueue, stdout, stderr, prompt, opts.previousID)
+}
+
+func runMemory(args []string, cwd string, stdin io.Reader, stdout, stderr io.Writer) error {
+	if len(args) == 0 || args[0] != "clear" {
+		return errors.New("usage: gork memory clear [--workspace|--global|--all] [-y|--yes]")
+	}
+	flags := flag.NewFlagSet("gork memory clear", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	var workspaceScope, globalScope, allScope, yes, shortYes bool
+	flags.BoolVar(&workspaceScope, "workspace", false, "clear workspace-scoped memory")
+	flags.BoolVar(&globalScope, "global", false, "clear global MEMORY.md")
+	flags.BoolVar(&allScope, "all", false, "clear workspace and global memory")
+	flags.BoolVar(&yes, "yes", false, "skip confirmation")
+	flags.BoolVar(&shortYes, "y", false, "skip confirmation")
+	if err := flags.Parse(args[1:]); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || boolCount(workspaceScope, globalScope, allScope) > 1 {
+		return errors.New("memory clear accepts one scope: --workspace, --global, or --all")
+	}
+	root, err := memory.DefaultRoot()
+	if err != nil {
+		return err
+	}
+	workspacePath, err := memory.WorkspacePath(root, cwd)
+	if err != nil {
+		return err
+	}
+	type target struct {
+		label string
+		path  string
+		clear func() (bool, error)
+	}
+	targets := []target{{"workspace memory", workspacePath, func() (bool, error) { return memory.ClearWorkspace(root, cwd) }}}
+	if globalScope {
+		targets = []target{{"global MEMORY.md", memory.GlobalPath(root), func() (bool, error) { return memory.ClearGlobal(root) }}}
+	} else if allScope {
+		targets = append(targets, target{"global MEMORY.md", memory.GlobalPath(root), func() (bool, error) { return memory.ClearGlobal(root) }})
+	}
+	existing := make([]target, 0, len(targets))
+	for _, item := range targets {
+		if _, statErr := os.Lstat(item.path); statErr == nil {
+			existing = append(existing, item)
+		} else if !errors.Is(statErr, os.ErrNotExist) {
+			return statErr
+		}
+	}
+	if len(existing) == 0 {
+		fmt.Fprintln(stdout, "Nothing to clear — no memory files found.")
+		return nil
+	}
+	fmt.Fprintln(stdout, "The following will be deleted:")
+	for _, item := range existing {
+		fmt.Fprintf(stdout, "  %s: %s\n", item.label, item.path)
+	}
+	if !yes && !shortYes {
+		fmt.Fprint(stdout, "\nAre you sure? [y/N] ")
+		answer, readErr := bufio.NewReader(stdin).ReadString('\n')
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			return readErr
+		}
+		answer = strings.ToLower(strings.TrimSpace(answer))
+		if answer != "y" && answer != "yes" {
+			fmt.Fprintln(stdout, "Cancelled.")
+			return nil
+		}
+	}
+	cleared := false
+	var failures []string
+	for _, item := range targets {
+		removed, clearErr := item.clear()
+		if clearErr != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", item.label, clearErr))
+			continue
+		}
+		if removed {
+			cleared = true
+			fmt.Fprintln(stdout, "  Cleared:", item.label)
+		}
+	}
+	if len(failures) == 0 {
+		fmt.Fprintln(stdout, "Memory cleared.")
+		return nil
+	}
+	if cleared {
+		fmt.Fprintln(stdout, "Memory partially cleared. Errors:")
+	} else {
+		fmt.Fprintln(stderr, "Failed to clear memory:")
+	}
+	for _, failure := range failures {
+		fmt.Fprintln(stderr, " ", failure)
+	}
+	if !cleared {
+		return errors.New("clear failed")
+	}
+	return nil
+}
+
+func boolCount(values ...bool) int {
+	count := 0
+	for _, value := range values {
+		if value {
+			count++
+		}
+	}
+	return count
 }
 
 func runLogin(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
