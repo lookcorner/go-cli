@@ -43,6 +43,8 @@ type promptRecord struct {
 	index     int
 }
 
+const MaxPromptHistoryEntries = 10_000
+
 func PromptHistory(dir, cwd, sessionID string, newestFirst bool) ([]string, error) {
 	if strings.TrimSpace(cwd) == "" {
 		return nil, errors.New("cwd is required")
@@ -84,7 +86,7 @@ func PromptHistory(dir, cwd, sessionID string, newestFirst bool) ([]string, erro
 	for _, record := range records {
 		if record.text != "" && (len(prompts) == 0 || prompts[len(prompts)-1] != record.text) {
 			prompts = append(prompts, record.text)
-			if len(prompts) == 10_000 {
+			if len(prompts) == MaxPromptHistoryEntries {
 				break
 			}
 		}

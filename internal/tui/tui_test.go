@@ -14,6 +14,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/memory"
+	"github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/tools"
 	"github.com/lookcorner/go-cli/internal/workspace"
 )
@@ -336,6 +337,86 @@ func TestInputEditingSupportsCursorNavigation(t *testing.T) {
 	press(tea.Key{Code: 'u', Mod: tea.ModCtrl})
 	if len(m.input) != 0 || m.cursor != 0 {
 		t.Fatalf("ctrl-u input=%q cursor=%d", m.input, m.cursor)
+	}
+}
+
+func TestPromptHistoryBrowsesNewestFirstAndClosesPastNewest(t *testing.T) {
+	m := &model{history: []string{"third", "second", "first"}, historyIndex: -1}
+	press := func(code rune) {
+		updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: code}))
+		m = updated.(*model)
+	}
+	press(tea.KeyUp)
+	if got := string(m.input); got != "third" || !m.historyActive {
+		t.Fatalf("newest input=%q active=%v", got, m.historyActive)
+	}
+	press(tea.KeyUp)
+	press(tea.KeyUp)
+	press(tea.KeyUp)
+	if got := string(m.input); got != "first" {
+		t.Fatalf("oldest input=%q", got)
+	}
+	press(tea.KeyDown)
+	press(tea.KeyDown)
+	if got := string(m.input); got != "third" {
+		t.Fatalf("newest again input=%q", got)
+	}
+	press(tea.KeyDown)
+	if got := string(m.input); got != "" || m.historyActive || m.historyIndex != -1 {
+		t.Fatalf("closed input=%q active=%v index=%d", got, m.historyActive, m.historyIndex)
+	}
+	press(tea.KeyDown)
+	if got := string(m.input); got != "" || m.historyActive {
+		t.Fatalf("down opened history input=%q active=%v", got, m.historyActive)
+	}
+	press(tea.KeyUp)
+	press(tea.KeyEsc)
+	if got := string(m.input); got != "" || m.historyActive {
+		t.Fatalf("escape input=%q active=%v", got, m.historyActive)
+	}
+}
+
+func TestPromptHistoryDraftDoesNotOpenAndTypingDetaches(t *testing.T) {
+	m := &model{history: []string{"remembered"}, historyIndex: -1, input: []rune("draft"), cursor: 5}
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
+	m = updated.(*model)
+	if got := string(m.input); got != "draft" || m.historyActive {
+		t.Fatalf("draft input=%q active=%v", got, m.historyActive)
+	}
+	m.clearInput()
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
+	m = updated.(*model)
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: '!', Text: "!"}))
+	m = updated.(*model)
+	if got := string(m.input); got != "remembered!" || m.historyActive {
+		t.Fatalf("edited input=%q active=%v", got, m.historyActive)
+	}
+}
+
+func TestPromptHistoryLoadsWorkspaceSessionsAndDeduplicates(t *testing.T) {
+	dir, workspace := t.TempDir(), t.TempDir()
+	logger, err := session.NewLoggerWithID(dir, "history-tui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = logger.Append("session_metadata", map[string]any{"cwd": workspace})
+	_ = logger.Append("user_prompt", map[string]any{"text": "  repeat  "})
+	_ = logger.Append("user_prompt", map[string]any{"text": "older"})
+	_ = logger.Append("user_prompt", map[string]any{"text": "repeat"})
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	history := loadPromptHistory(&agent.Runner{SessionPath: logger.Path()}, workspace)
+	if got := strings.Join(history, "|"); got != "repeat|older" {
+		t.Fatalf("history=%q", got)
+	}
+}
+
+func TestRememberPromptMovesDuplicatesToNewest(t *testing.T) {
+	m := &model{history: []string{"new", "  duplicate  ", "old"}, historyIndex: 1, historyActive: true}
+	m.rememberPrompt("duplicate")
+	if got := strings.Join(m.history, "|"); got != "duplicate|new|old" || m.historyActive || m.historyIndex != -1 {
+		t.Fatalf("history=%q active=%v index=%d", got, m.historyActive, m.historyIndex)
 	}
 }
 

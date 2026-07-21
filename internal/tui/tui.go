@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/memory"
+	"github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/tools"
 )
 
@@ -244,6 +246,9 @@ type model struct {
 	transcript    strings.Builder
 	input         []rune
 	cursor        int
+	history       []string
+	historyIndex  int
+	historyActive bool
 	width         int
 	height        int
 	scroll        int
@@ -294,7 +299,8 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 	m := &model{
 		ctx: ctx, runner: runner, bridge: bridge, workspace: workspace,
 		modelName: modelName, previousID: previousID, width: 80, height: 24,
-		status: "ready", initial: strings.TrimSpace(initialPrompt),
+		status: "ready", initial: strings.TrimSpace(initialPrompt), historyIndex: -1,
+		history: loadPromptHistory(runner, workspace),
 	}
 	if runner.Tools != nil {
 		m.planMode = runner.Tools.PlanModeActive()
@@ -316,6 +322,7 @@ func (m *model) Init() tea.Cmd {
 	prompt := m.initial
 	m.initial = ""
 	prompt, _ = tools.ExpandLoopCommand(prompt)
+	m.rememberPrompt(prompt)
 	turnCtx, cancel := context.WithCancel(m.ctx)
 	m.turnCancel = cancel
 	m.running = true
@@ -594,6 +601,25 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.running {
 		return m, nil
 	}
+	if !m.rememberInput {
+		switch key.Code {
+		case tea.KeyUp:
+			m.browseHistory(-1)
+			return m, nil
+		case tea.KeyDown:
+			m.browseHistory(1)
+			return m, nil
+		case tea.KeyEsc:
+			if m.historyActive {
+				m.closeHistory()
+				return m, nil
+			}
+		}
+	}
+	if m.historyActive {
+		m.historyActive = false
+		m.historyIndex = -1
+	}
 	if stroke == "shift+tab" {
 		if m.runner.Tools == nil {
 			m.status = "plan mode unavailable"
@@ -655,11 +681,79 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, runMemoryDream(turnCtx, m.runner)
 		}
 		prompt, _ = tools.ExpandLoopCommand(prompt)
+		m.rememberPrompt(prompt)
 		m.beginTurn(prompt)
 		return m, runTurn(turnCtx, m.runner, prompt, m.previousID)
 	}
 	m.editInput(msg)
 	return m, nil
+}
+
+func loadPromptHistory(runner *agent.Runner, workspace string) []string {
+	if runner == nil || strings.TrimSpace(runner.SessionPath) == "" {
+		return nil
+	}
+	items, err := session.PromptHistory(filepath.Dir(runner.SessionPath), workspace, "", true)
+	if err != nil {
+		return nil
+	}
+	return dedupePromptHistory(items)
+}
+
+func dedupePromptHistory(items []string) []string {
+	result := make([]string, 0, len(items))
+	seen := make(map[string]bool, len(items))
+	for _, item := range items {
+		key := strings.TrimSpace(item)
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		result = append(result, item)
+	}
+	return result
+}
+
+func (m *model) rememberPrompt(prompt string) {
+	key := strings.TrimSpace(prompt)
+	if key == "" {
+		return
+	}
+	history := make([]string, 1, min(len(m.history)+1, session.MaxPromptHistoryEntries))
+	history[0] = prompt
+	for _, item := range m.history {
+		if strings.TrimSpace(item) != key && len(history) < cap(history) {
+			history = append(history, item)
+		}
+	}
+	m.history = history
+	m.historyActive = false
+	m.historyIndex = -1
+}
+
+func (m *model) browseHistory(direction int) {
+	if !m.historyActive {
+		if direction > 0 || len(m.input) > 0 || len(m.history) == 0 {
+			return
+		}
+		m.historyActive = true
+		m.historyIndex = 0
+	} else if direction < 0 {
+		m.historyIndex = min(m.historyIndex+1, len(m.history)-1)
+	} else if m.historyIndex == 0 {
+		m.closeHistory()
+		return
+	} else {
+		m.historyIndex--
+	}
+	m.input = []rune(m.history[m.historyIndex])
+	m.cursor = len(m.input)
+}
+
+func (m *model) closeHistory() {
+	m.historyActive = false
+	m.historyIndex = -1
+	m.clearInput()
 }
 
 func (m *model) startRememberReview(raw string) (tea.Model, tea.Cmd) {
