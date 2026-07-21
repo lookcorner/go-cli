@@ -212,6 +212,11 @@ During an active REPL, TUI, or ACP session, `/memory off` (or `/mem off`)
 removes both retrieval tools and pauses all writes without deleting files;
 `/memory on` lazily reopens the same workspace store and restores the tools.
 This toggle is session-scoped and does not rewrite `config.toml`.
+`/remember [text]` is available even when retrieval is disabled. It opens a
+review before writing: the raw note is always available, a session-isolated
+rewrite can be selected when model inference succeeds, and cancel leaves disk
+unchanged. Confirmed notes are normalized and appended to the global
+`$GROK_HOME/memory/MEMORY.md`, with symlink and size checks.
 
 The default model transport is the Responses API. For OpenAI-compatible
 providers that only expose Chat Completions, use `--backend chat_completions`

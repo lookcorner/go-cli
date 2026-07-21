@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"errors"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -261,6 +263,43 @@ func TestRunnerRewritesMemoryNoteWithIsolatedBoundedRequest(t *testing.T) {
 	streamer.result.Text = ""
 	if _, err := runner.RewriteMemoryNote(context.Background(), "note", "context"); err == nil || !strings.Contains(err.Error(), "empty response") {
 		t.Fatalf("empty err=%v", err)
+	}
+}
+
+func TestRunnerEnhancesAndSavesGlobalMemoryWhileRetrievalDisabled(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	logger, err := session.NewLoggerWithID(t.TempDir(), "remember")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logger.Close()
+	if err := logger.Append("session_metadata", map[string]any{"cwd": "/workspace/project", "headCommit": "abc123"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.AppendPrompt("deploy through the release pipeline", nil); err != nil {
+		t.Fatal(err)
+	}
+	streamer := &memoryRewriteStreamer{result: api.StreamResult{Text: "## Deployment\n\n- Run release checks."}}
+	runner := Runner{Client: streamer, SessionPath: logger.Path(), MemoryConfig: memory.DefaultConfig()}
+	if enhanced := runner.EnhanceMemoryNote(context.Background(), "run checks"); enhanced != streamer.result.Text {
+		t.Fatalf("enhanced=%q", enhanced)
+	}
+	input, _ := streamer.request.Input[0].Content.(string)
+	if !strings.Contains(input, "deploy through the release pipeline") || !strings.Contains(input, "/workspace/project") || !strings.Contains(input, "abc123") {
+		t.Fatalf("rewrite input=%q", input)
+	}
+	path, err := runner.SaveMemoryNote("always open the pull request")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != "## always open the pull request" || runner.Memory != nil || runner.MemoryConfig.Enabled {
+		t.Fatalf("data=%q config=%#v err=%v", data, runner.MemoryConfig, err)
+	}
+	streamer.err = errors.New("offline")
+	if enhanced := runner.EnhanceMemoryNote(context.Background(), "raw fallback"); enhanced != "" {
+		t.Fatalf("failed rewrite=%q", enhanced)
 	}
 }
 

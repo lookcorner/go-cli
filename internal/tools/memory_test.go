@@ -85,6 +85,14 @@ func TestMemoryToolsToggleAtomicallyAndParseCommands(t *testing.T) {
 	if _, ok := ParseMemoryCommand("remember memory"); ok {
 		t.Fatal("non-command parsed as memory command")
 	}
+	for input, want := range map[string]string{"/remember": "", "/remember deploy through eu-west": "deploy through eu-west"} {
+		if got, ok := ParseRememberCommand(input); !ok || got != want {
+			t.Fatalf("ParseRememberCommand(%q)=%q,%v", input, got, ok)
+		}
+	}
+	if _, ok := ParseRememberCommand("/remembered value"); ok {
+		t.Fatal("remember prefix collision")
+	}
 }
 
 func storeRootFromList(t *testing.T, store *memory.Store) string {

@@ -19,6 +19,8 @@ const (
 	maxSnippetChars    = 500
 )
 
+var globalAppendMu sync.Mutex
+
 type Store struct {
 	mu           sync.Mutex
 	root         string
@@ -43,6 +45,65 @@ func DefaultRoot() (string, error) {
 		return "", err
 	}
 	return filepath.Join(home, ".grok", "memory"), nil
+}
+
+func AppendGlobal(root, content string) (string, error) {
+	content = normalizeMemoryContent(content)
+	if content == "" {
+		return "", errors.New("memory note is empty")
+	}
+	globalAppendMu.Lock()
+	defer globalAppendMu.Unlock()
+	if err := ensureDirectory(root); err != nil {
+		return "", err
+	}
+	path := filepath.Join(root, "MEMORY.md")
+	if info, err := os.Lstat(path); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() > maxMemoryFileBytes {
+			return "", errors.New("global memory must be a bounded regular file")
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	prefix := ""
+	info, statErr := file.Stat()
+	if statErr != nil {
+		return "", statErr
+	}
+	if info.Size() > 0 {
+		prefix = "\n\n"
+	}
+	if info.Size()+int64(len(prefix)+len(content)) > maxMemoryFileBytes {
+		return "", errors.New("global memory would exceed the file size limit")
+	}
+	if _, err := file.WriteString(prefix + content); err != nil {
+		return "", err
+	}
+	if err := file.Sync(); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func normalizeMemoryContent(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.HasPrefix(value, "#") {
+		return value
+	}
+	first, rest, found := strings.Cut(value, "\n")
+	if !found {
+		return "## " + value
+	}
+	first, rest = strings.TrimSpace(first), strings.TrimSpace(rest)
+	if len(first) <= 80 {
+		return "## " + first + "\n\n" + rest
+	}
+	return "## Note\n\n" + value
 }
 
 func Open(root, workspace, sessionID string) (*Store, error) {

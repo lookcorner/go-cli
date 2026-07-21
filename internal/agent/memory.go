@@ -112,6 +112,75 @@ func (r *Runner) RewriteMemoryNote(ctx context.Context, rawText, contextSummary 
 	return result.Text, nil
 }
 
+func (r *Runner) EnhanceMemoryNote(ctx context.Context, rawText string) string {
+	result, err := r.RewriteMemoryNote(ctx, rawText, r.memoryNoteContext())
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(result)
+}
+
+func (r *Runner) SaveMemoryNote(content string) (string, error) {
+	root, err := memory.DefaultRoot()
+	if err != nil {
+		return "", err
+	}
+	return memory.AppendGlobal(root, content)
+}
+
+func (r *Runner) memoryNoteContext() string {
+	if strings.TrimSpace(r.SessionPath) == "" {
+		return ""
+	}
+	events, err := session.Events(r.SessionPath, "session_metadata", "user_prompt")
+	if err != nil {
+		return ""
+	}
+	prompts := make([]string, 0, 5)
+	cwd, head := "", ""
+	for _, event := range events {
+		if event.Kind != "session_metadata" {
+			continue
+		}
+		data, _ := event.Data.(map[string]any)
+		cwd, _ = data["cwd"].(string)
+		head, _ = data["headCommit"].(string)
+	}
+	for index := len(events) - 1; index >= 0 && len(prompts) < 5; index-- {
+		data, _ := events[index].Data.(map[string]any)
+		text, _ := data["text"].(string)
+		if synthetic, _ := data["synthetic"].(bool); synthetic {
+			continue
+		}
+		text = strings.TrimSpace(text)
+		if text == "" {
+			continue
+		}
+		runes := []rune(text)
+		if len(runes) > 200 {
+			text = string(runes[:200]) + "..."
+		}
+		prompts = append(prompts, text)
+	}
+	if len(prompts) == 0 && cwd == "" && head == "" {
+		return ""
+	}
+	var output strings.Builder
+	if cwd != "" {
+		output.WriteString("Workspace: " + cwd + "\n")
+	}
+	if head != "" {
+		output.WriteString("HEAD: " + head + "\n")
+	}
+	if len(prompts) > 0 {
+		output.WriteString("Recent user prompts:\n")
+		for index := len(prompts) - 1; index >= 0; index-- {
+			output.WriteString("- " + prompts[index] + "\n")
+		}
+	}
+	return strings.TrimSpace(output.String())
+}
+
 func (r *Runner) injectMemoryContext(content any, previousResponseID string) any {
 	store, cfg := r.memoryState()
 	r.memoryMu.Lock()

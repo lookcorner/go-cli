@@ -92,3 +92,59 @@ func TestStoreSeparatesWorkspacesAndRejectsSymlinkSources(t *testing.T) {
 		t.Fatalf("symlink appeared in list: files=%#v err=%v", files, err)
 	}
 }
+
+func TestAppendGlobalNormalizesAndRejectsSymlink(t *testing.T) {
+	root := t.TempDir()
+	path, err := AppendGlobal(root, "prefer tabs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AppendGlobal(root, "Release Process\nRun checks before deploy."); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AppendGlobal(root, "## Existing\n\nKeep this structure."); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "## prefer tabs\n\n## Release Process\n\nRun checks before deploy.\n\n## Existing\n\nKeep this structure."
+	if string(data) != want {
+		t.Fatalf("global memory=%q", data)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode=%v", info.Mode().Perm())
+	}
+	if _, err := AppendGlobal(root, "   "); err == nil {
+		t.Fatal("empty note was accepted")
+	}
+	fullRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(fullRoot, "MEMORY.md"), []byte(strings.Repeat("x", maxMemoryFileBytes)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AppendGlobal(fullRoot, "one more note"); err == nil {
+		t.Fatal("oversized global memory was accepted")
+	}
+
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(outside, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AppendGlobal(root, "escape"); err == nil {
+		t.Fatal("symlink global memory was accepted")
+	}
+	if data, err := os.ReadFile(outside); err != nil || string(data) != "secret" {
+		t.Fatalf("outside=%q err=%v", data, err)
+	}
+}

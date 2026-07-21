@@ -114,6 +114,30 @@ func TestInteractiveMemoryToggleIsSessionScoped(t *testing.T) {
 	}
 }
 
+func TestInteractiveRememberReviewsAndSavesEnhancedGlobalNote(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	streamer := &memoryCommandStreamer{}
+	runner := &agent.Runner{Client: streamer, MemoryConfig: memory.DefaultConfig()}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	input := newTerminalInput(ctx, bufio.NewReader(strings.NewReader("/remember run release checks\ne\n/exit\n")))
+	var stderr bytes.Buffer
+	if err := interactiveLoop(ctx, runner, newScheduledWakeQueue(), input, io.Discard, &stderr, "", "response-1"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(home, "memory", "MEMORY.md"))
+	if err != nil || string(data) != "## Decision\n\nFlush explicitly." {
+		t.Fatalf("memory=%q err=%v", data, err)
+	}
+	if !strings.Contains(stderr.String(), "Memory note (raw)") || !strings.Contains(stderr.String(), "Memory note (enhanced)") || !strings.Contains(stderr.String(), "Memory saved to") {
+		t.Fatalf("stderr=%q", stderr.String())
+	}
+	if streamer.request.PreviousResponseID != "" || !strings.Contains(streamer.request.Instructions, "memory note formatter") {
+		t.Fatalf("request=%#v", streamer.request)
+	}
+}
+
 func TestSessionObserversPersistOnlyLifecycleEvents(t *testing.T) {
 	logger, err := session.NewLoggerWithID(t.TempDir(), "parent-session")
 	if err != nil {

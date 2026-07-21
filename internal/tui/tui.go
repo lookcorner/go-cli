@@ -44,6 +44,14 @@ type memoryToggleDoneEvent struct {
 	message string
 	err     error
 }
+type memoryNoteEnhancedEvent struct {
+	nonce uint64
+	text  string
+}
+type memoryNoteSavedEvent struct {
+	path string
+	err  error
+}
 type scheduledFiredEvent struct{ event tools.ScheduledTaskFired }
 type planModeEvent struct{ active bool }
 type planReviewEvent struct {
@@ -197,32 +205,43 @@ func (w bridgeWriter) Write(data []byte) (int, error) {
 }
 
 type model struct {
-	ctx        context.Context
-	runner     *agent.Runner
-	bridge     *Bridge
-	workspace  string
-	modelName  string
-	previousID string
-	transcript strings.Builder
-	input      []rune
-	width      int
-	height     int
-	scroll     int
-	running    bool
-	status     string
-	approval   *approvalEvent
-	question   *questionState
-	planMode   bool
-	planReview *planReviewState
-	turnCancel context.CancelFunc
-	initial    string
-	scheduled  []tools.ScheduledTaskFired
-	activeTask string
+	ctx           context.Context
+	runner        *agent.Runner
+	bridge        *Bridge
+	workspace     string
+	modelName     string
+	previousID    string
+	transcript    strings.Builder
+	input         []rune
+	width         int
+	height        int
+	scroll        int
+	running       bool
+	status        string
+	approval      *approvalEvent
+	question      *questionState
+	planMode      bool
+	planReview    *planReviewState
+	remember      *rememberReviewState
+	rememberInput bool
+	rememberNonce uint64
+	turnCancel    context.CancelFunc
+	initial       string
+	scheduled     []tools.ScheduledTaskFired
+	activeTask    string
 }
 
 type planReviewState struct {
 	event   planReviewEvent
 	editing bool
+}
+
+type rememberReviewState struct {
+	raw          string
+	enhanced     string
+	enhanceDone  bool
+	showEnhanced bool
+	nonce        uint64
 }
 
 type questionState struct {
@@ -386,6 +405,21 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if command := m.startScheduled(); command != nil {
 			return m, command
 		}
+	case memoryNoteEnhancedEvent:
+		if m.remember != nil && m.remember.nonce == msg.nonce {
+			m.remember.enhanced = msg.text
+			m.remember.enhanceDone = true
+			m.status = "memory note ready"
+		}
+	case memoryNoteSavedEvent:
+		m.running = false
+		m.turnCancel = nil
+		if msg.err != nil {
+			m.status = "memory note save failed: " + msg.err.Error()
+		} else {
+			m.status = "memory saved"
+			fmt.Fprintf(&m.transcript, "\n[memory] Memory saved to %s\n", msg.path)
+		}
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
@@ -417,6 +451,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.planReview != nil {
 		return m.handlePlanReviewKey(msg)
 	}
+	if m.remember != nil {
+		return m.handleRememberReviewKey(msg)
+	}
 	if m.question != nil {
 		return m.handleQuestionKey(msg)
 	}
@@ -441,6 +478,12 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.scroll < 0 {
 			m.scroll = 0
 		}
+		return m, nil
+	}
+	if m.rememberInput && key.Code == tea.KeyEsc {
+		m.rememberInput = false
+		m.input = nil
+		m.status = "memory note cancelled"
 		return m, nil
 	}
 	if m.running {
@@ -471,6 +514,18 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.input = nil
+		if m.rememberInput {
+			m.rememberInput = false
+			return m.startRememberReview(prompt)
+		}
+		if note, ok := tools.ParseRememberCommand(prompt); ok {
+			if note == "" {
+				m.rememberInput = true
+				m.status = "remember mode"
+				return m, nil
+			}
+			return m.startRememberReview(note)
+		}
 		m.running = true
 		turnCtx, cancel := context.WithCancel(m.ctx)
 		m.turnCancel = cancel
@@ -505,6 +560,44 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if key.Text != "" && utf8.ValidString(key.Text) {
 		m.input = append(m.input, []rune(key.Text)...)
+	}
+	return m, nil
+}
+
+func (m *model) startRememberReview(raw string) (tea.Model, tea.Cmd) {
+	m.rememberNonce++
+	nonce := m.rememberNonce
+	m.remember = &rememberReviewState{raw: raw, nonce: nonce}
+	m.scroll = 0
+	m.status = "enhancing memory note"
+	return m, runMemoryNoteEnhance(m.ctx, m.runner, raw, nonce)
+}
+
+func (m *model) handleRememberReviewKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	key := msg.Key()
+	stroke := msg.Keystroke()
+	switch {
+	case key.Code == tea.KeyEsc:
+		m.remember = nil
+		m.status = "memory note cancelled"
+	case key.Code == tea.KeyTab:
+		if m.remember.enhanced != "" {
+			m.remember.showEnhanced = !m.remember.showEnhanced
+			m.scroll = 0
+		}
+	case stroke == "up" || stroke == "pgup":
+		m.scroll += max(m.contentHeight()/2, 1)
+	case stroke == "down" || stroke == "pgdown":
+		m.scroll = max(0, m.scroll-max(m.contentHeight()/2, 1))
+	case key.Code == tea.KeyEnter || strings.EqualFold(key.Text, "y"):
+		content := m.remember.raw
+		if m.remember.showEnhanced && m.remember.enhanced != "" {
+			content = m.remember.enhanced
+		}
+		m.remember = nil
+		m.running = true
+		m.status = "saving memory note"
+		return m, runMemoryNoteSave(m.runner, content)
 	}
 	return m, nil
 }
@@ -696,6 +789,19 @@ func runMemoryToggle(ctx context.Context, runner *agent.Runner, enabled bool) te
 	}
 }
 
+func runMemoryNoteEnhance(ctx context.Context, runner *agent.Runner, raw string, nonce uint64) tea.Cmd {
+	return func() tea.Msg {
+		return memoryNoteEnhancedEvent{nonce: nonce, text: runner.EnhanceMemoryNote(ctx, raw)}
+	}
+}
+
+func runMemoryNoteSave(runner *agent.Runner, content string) tea.Cmd {
+	return func() tea.Msg {
+		path, err := runner.SaveMemoryNote(content)
+		return memoryNoteSavedEvent{path: path, err: err}
+	}
+}
+
 func (m *model) View() tea.View {
 	width := max(m.width, 20)
 	mode := ""
@@ -707,6 +813,12 @@ func (m *model) View() tea.View {
 	content := m.transcript.String()
 	if m.planReview != nil {
 		content = "# Review implementation plan\n\n" + m.planReview.event.event.PlanContent
+	} else if m.remember != nil {
+		label, note := "Raw", m.remember.raw
+		if m.remember.showEnhanced && m.remember.enhanced != "" {
+			label, note = "Enhanced", m.remember.enhanced
+		}
+		content = "# Memory Note\n\n**" + label + "**\n\n" + note
 	}
 	contentLines := renderMarkdown(content, width)
 	visible := sliceFromBottom(contentLines, m.contentHeight(), m.scroll)
@@ -717,7 +829,16 @@ func (m *model) View() tea.View {
 	}
 
 	var footer string
-	if m.planReview != nil {
+	if m.remember != nil {
+		tab := "enhancing..."
+		if m.remember.enhanceDone {
+			tab = "raw only"
+		}
+		if m.remember.enhanced != "" {
+			tab = "Tab raw/enhanced"
+		}
+		footer = "\x1b[1;32mMemory note review\x1b[0m\n\x1b[2m" + truncate("Enter/Y save · "+tab+" · Esc cancel", width) + "\x1b[0m"
+	} else if m.planReview != nil {
 		if m.planReview.editing {
 			footer = fmt.Sprintf("\x1b[1;33m%s\x1b[0m\n> %s█\n\x1b[2m%s\x1b[0m", truncate("Request plan changes", width), truncateFromLeft(string(m.input), max(width-2, 1)), truncate("Enter send · Esc back · Ctrl-U clear", width))
 		} else {
@@ -738,6 +859,8 @@ func (m *model) View() tea.View {
 		footer = fmt.Sprintf("\x1b[1;33m%s\x1b[0m\n%s\n> %s█\n\x1b[2m%s\x1b[0m",
 			truncate(question.Question, width), truncate(strings.Join(labels, "  ")+"  [Other] type response", width),
 			truncateFromLeft(string(m.input), max(width-2, 1)), truncate(hint, width))
+	} else if m.rememberInput {
+		footer = "\x1b[1;32m# Save a memory note\x1b[0m\n> " + truncateFromLeft(string(m.input), max(width-2, 1)) + "█\n\x1b[2mEnter review · Esc cancel\x1b[0m"
 	} else {
 		input := string(m.input)
 		if m.running {
@@ -756,7 +879,7 @@ func (m *model) View() tea.View {
 }
 
 func (m *model) contentHeight() int {
-	if m.question != nil || m.planReview != nil {
+	if m.question != nil || m.planReview != nil || m.remember != nil || m.rememberInput {
 		return max(m.height-7, 3)
 	}
 	return max(m.height-5, 3)

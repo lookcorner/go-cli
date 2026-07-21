@@ -2272,6 +2272,7 @@ func interactiveLoop(
 ) error {
 	fmt.Fprintln(stderr, "[gork] interactive mode; /exit to quit, /help for commands")
 	prompt := strings.TrimSpace(initialPrompt)
+	rememberMode := false
 	inputClosed := false
 	promptShown := false
 	var promptRead <-chan terminalReadResult
@@ -2321,6 +2322,28 @@ func interactiveLoop(
 			}
 		}
 		if scheduledID == "" {
+			if rememberMode {
+				if prompt == "" {
+					fmt.Fprintln(stderr, "[gork] Please provide a memory note.")
+					continue
+				}
+				rememberMode = false
+				if err := reviewMemoryNoteTerminal(ctx, runner, input, stderr, prompt); err != nil {
+					fmt.Fprintln(stderr, "[gork] memory note failed:", err)
+				}
+				prompt = ""
+				continue
+			}
+			if note, ok := tools.ParseRememberCommand(prompt); ok {
+				if note == "" {
+					rememberMode = true
+					fmt.Fprintln(stderr, "[gork] Enter a memory note.")
+				} else if err := reviewMemoryNoteTerminal(ctx, runner, input, stderr, note); err != nil {
+					fmt.Fprintln(stderr, "[gork] memory note failed:", err)
+				}
+				prompt = ""
+				continue
+			}
 			if action, ok := tools.ParseMemoryCommand(prompt); ok {
 				switch action {
 				case "enable", "disable":
@@ -2351,7 +2374,7 @@ func interactiveLoop(
 			case "/exit", "/quit":
 				return nil
 			case "/help":
-				fmt.Fprintln(stderr, "Commands: /compact, /flush, /memory [on|off], /loop, /help, /exit. Every other line is sent as a prompt.")
+				fmt.Fprintln(stderr, "Commands: /compact, /flush, /remember [text], /memory [on|off], /loop, /help, /exit. Every other line is sent as a prompt.")
 				prompt = ""
 				continue
 			case "/compact":
@@ -2398,6 +2421,53 @@ func interactiveLoop(
 			return nil
 		}
 	}
+}
+
+func reviewMemoryNoteTerminal(ctx context.Context, runner *agent.Runner, input *terminalInput, output io.Writer, raw string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return errors.New("memory note is empty")
+	}
+	enhanced := runner.EnhanceMemoryNote(ctx, raw)
+	fmt.Fprintf(output, "\nMemory note (raw):\n%s\n", raw)
+	if enhanced != "" && enhanced != raw {
+		fmt.Fprintf(output, "\nMemory note (enhanced):\n%s\n", enhanced)
+	}
+	fmt.Fprint(output, "\nSave [y/raw], enhanced [e], or cancel [N]? ")
+	read := input.request(ctx, true)
+	var result terminalReadResult
+	select {
+	case result = <-read:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	if result.err != nil && !errors.Is(result.err, io.EOF) {
+		return result.err
+	}
+	if errors.Is(result.err, io.EOF) && strings.TrimSpace(result.line) == "" {
+		fmt.Fprintln(output, "[gork] memory note cancelled")
+		return nil
+	}
+	choice := strings.ToLower(strings.TrimSpace(result.line))
+	content := raw
+	switch choice {
+	case "", "y", "yes", "r", "raw":
+	case "e", "enhanced":
+		if enhanced == "" {
+			fmt.Fprintln(output, "[gork] enhanced note unavailable; cancelled")
+			return nil
+		}
+		content = enhanced
+	default:
+		fmt.Fprintln(output, "[gork] memory note cancelled")
+		return nil
+	}
+	path, err := runner.SaveMemoryNote(content)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(output, "[gork] Memory saved to", path)
+	return nil
 }
 
 func runHeadless(ctx context.Context, runner *agent.Runner, scheduled *scheduledWakeQueue, stdout, stderr io.Writer, prompt, previousResponseID string) error {

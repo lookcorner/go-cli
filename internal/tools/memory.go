@@ -46,6 +46,17 @@ func ParseMemoryCommand(prompt string) (string, bool) {
 	return "browse", true
 }
 
+func ParseRememberCommand(prompt string) (string, bool) {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "/remember" {
+		return "", true
+	}
+	if strings.HasPrefix(prompt, "/remember ") {
+		return strings.TrimSpace(strings.TrimPrefix(prompt, "/remember")), true
+	}
+	return "", false
+}
+
 type memorySearchTool struct {
 	store  *memory.Store
 	index  memory.IndexConfig

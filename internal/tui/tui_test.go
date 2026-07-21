@@ -3,6 +3,8 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +20,12 @@ import (
 
 type scheduledTUIStreamer struct {
 	request api.ResponseRequest
+}
+
+type rememberTUIStreamer struct{}
+
+func (rememberTUIStreamer) StreamResponse(_ context.Context, _ api.ResponseRequest, _ func(string)) (api.StreamResult, error) {
+	return api.StreamResult{Text: "## Deployment\n\n- Run enhanced checks."}, nil
 }
 
 func (s *scheduledTUIStreamer) StreamResponse(_ context.Context, request api.ResponseRequest, _ func(string)) (api.StreamResult, error) {
@@ -373,6 +381,73 @@ func TestMemoryToggleCommandDoesNotEnterModelTurn(t *testing.T) {
 	m = updated.(*model)
 	if m.running || m.status != "Memory disabled for this session." || runner.Memory != nil {
 		t.Fatalf("toggle result status=%q memory=%v", m.status, runner.Memory)
+	}
+}
+
+func TestRememberReviewSelectsEnhancedAndSavesWhileMemoryDisabled(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	bridge := NewBridge(context.Background(), tools.PermissionAuto)
+	defer bridge.Close()
+	runner := &agent.Runner{Client: rememberTUIStreamer{}, MemoryConfig: memory.DefaultConfig()}
+	m := &model{ctx: context.Background(), runner: runner, bridge: bridge, status: "ready"}
+	m.input = []rune("/remember run release checks")
+	updated, enhance := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if enhance == nil || m.running || m.remember == nil || m.remember.raw != "run release checks" || m.status != "enhancing memory note" {
+		t.Fatalf("review=%#v running=%v status=%q", m.remember, m.running, m.status)
+	}
+	updated, _ = m.Update(memoryNoteEnhancedEvent{nonce: m.remember.nonce + 1, text: "stale"})
+	m = updated.(*model)
+	if m.remember.enhanced != "" {
+		t.Fatal("stale rewrite populated review")
+	}
+	updated, _ = m.Update(enhance())
+	m = updated.(*model)
+	if m.remember.enhanced == "" || m.status != "memory note ready" {
+		t.Fatalf("review=%#v status=%q", m.remember, m.status)
+	}
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	m = updated.(*model)
+	if !m.remember.showEnhanced {
+		t.Fatal("Tab did not select enhanced note")
+	}
+	updated, save := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if save == nil || !m.running || m.remember != nil {
+		t.Fatalf("save=%v running=%v review=%#v", save, m.running, m.remember)
+	}
+	updated, _ = m.Update(save())
+	m = updated.(*model)
+	data, err := os.ReadFile(filepath.Join(home, "memory", "MEMORY.md"))
+	if err != nil || string(data) != "## Deployment\n\n- Run enhanced checks." || m.running || m.status != "memory saved" {
+		t.Fatalf("data=%q running=%v status=%q err=%v", data, m.running, m.status, err)
+	}
+	if !strings.Contains(m.transcript.String(), "Memory saved to") {
+		t.Fatalf("transcript=%q", m.transcript.String())
+	}
+}
+
+func TestRememberWithoutTextEntersInputMode(t *testing.T) {
+	bridge := NewBridge(context.Background(), tools.PermissionAuto)
+	defer bridge.Close()
+	m := &model{ctx: context.Background(), runner: &agent.Runner{}, bridge: bridge, status: "ready"}
+	m.input = []rune("/remember")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || !m.rememberInput || m.status != "remember mode" {
+		t.Fatalf("command=%v mode=%v status=%q", command, m.rememberInput, m.status)
+	}
+	m.input = []rune("raw note")
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command == nil || m.rememberInput || m.remember == nil || m.remember.raw != "raw note" {
+		t.Fatalf("command=%v mode=%v review=%#v", command, m.rememberInput, m.remember)
+	}
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
+	m = updated.(*model)
+	if m.remember != nil || m.status != "memory note cancelled" {
+		t.Fatalf("review=%#v status=%q", m.remember, m.status)
 	}
 }
 
