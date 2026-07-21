@@ -217,6 +217,12 @@ review before writing: the raw note is always available, a session-isolated
 rewrite can be selected when model inference succeeds, and cancel leaves disk
 unchanged. Confirmed notes are normalized and appended to the global
 `$GROK_HOME/memory/MEMORY.md`, with symlink and size checks.
+`/dream` consolidates eligible session logs into the workspace `MEMORY.md`
+through an isolated model call. A PID/mtime lock coordinates processes, output
+must contain Markdown headings, and logs are deleted only after a successful
+write and only when at least five minutes old. `[memory.dream]` defaults to a
+session-end check after 4 hours and 3 eligible logs; optional
+`check_interval_secs` adds checks while the session is idle.
 
 The default model transport is the Responses API. For OpenAI-compatible
 providers that only expose Chat Completions, use `--backend chat_completions`

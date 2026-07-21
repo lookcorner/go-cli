@@ -138,6 +138,40 @@ func TestInteractiveRememberReviewsAndSavesEnhancedGlobalNote(t *testing.T) {
 	}
 }
 
+func TestInteractiveDreamConsolidatesWithoutNormalTurn(t *testing.T) {
+	root, cwd := t.TempDir(), t.TempDir()
+	prior, err := memory.Open(root, cwd, "prior")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, _, err := prior.Write("session_end", "## Decision\n\nKeep this knowledge.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-10 * time.Minute)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+	store, err := memory.Open(root, cwd, "current")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := memory.DefaultConfig()
+	cfg.Enabled = true
+	streamer := &memoryCommandStreamer{}
+	runner := &agent.Runner{Client: streamer, Model: "test", Memory: store, MemoryConfig: cfg}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	input := newTerminalInput(ctx, bufio.NewReader(strings.NewReader("/dream\n/exit\n")))
+	var stderr bytes.Buffer
+	if err := interactiveLoop(ctx, runner, newScheduledWakeQueue(), input, io.Discard, &stderr, "", "response-1"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stderr.String(), "memory dream: written") || !strings.Contains(streamer.request.Instructions, "reflective pass") || streamer.request.PreviousResponseID != "" {
+		t.Fatalf("stderr=%q request=%#v", stderr.String(), streamer.request)
+	}
+}
+
 func TestSessionObserversPersistOnlyLifecycleEvents(t *testing.T) {
 	logger, err := session.NewLoggerWithID(t.TempDir(), "parent-session")
 	if err != nil {

@@ -39,6 +39,13 @@ chunk_overlap_chars = 320
 max_results = 6
 min_score = 0.35
 
+[memory.dream]
+enabled = true
+min_hours = 4
+min_sessions = 3
+stale_lock_secs = 3600
+# check_interval_secs = 600
+
 [compaction.memory_flush]
 enabled = true
 soft_threshold_tokens = 4000

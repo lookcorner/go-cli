@@ -26,9 +26,121 @@ const memoryRewritePrompt = `You are a memory note formatter. Rewrite the user's
 
 Return ONLY the formatted markdown, no explanations.`
 
+const memoryDreamPrompt = `You are performing a dream - a reflective pass over memory files. Synthesize recent session logs into durable, well-organized memories so future sessions orient quickly.
+
+Merge related information, resolve contradictions in favor of recent facts, convert relative dates to absolute dates, and discard greetings, tool noise, message counts, current-state sections, next steps, and preferences already captured globally. Preserve decisions, rationale, architecture, preferences, and problem/solution pairs.
+
+Respond with a single markdown document using ## topic headers. Each topic must be self-contained. Respond with NO_REPLY when nothing is worth persisting.`
+
 type MemoryFlushResult struct {
 	Outcome string
 	Path    string
+}
+
+func (r *Runner) DreamMemory(ctx context.Context, manual bool) (memory.DreamResult, error) {
+	if manual {
+		r.cancelMemoryDreamCheck()
+		r.memoryMu.Lock()
+		checkDone := r.memoryDreamCheckDone
+		r.memoryMu.Unlock()
+		if err := waitMemoryTask(ctx, checkDone); err != nil {
+			return memory.DreamResult{}, err
+		}
+	}
+	r.memoryMu.Lock()
+	if r.memoryDreamRunning {
+		r.memoryMu.Unlock()
+		return memory.DreamResult{Outcome: "lock_held"}, nil
+	}
+	done := make(chan struct{})
+	r.memoryDreamRunning, r.memoryDreamDone = true, done
+	r.memoryMu.Unlock()
+	defer func() {
+		r.memoryMu.Lock()
+		r.memoryDreamRunning = false
+		if r.memoryDreamDone == done {
+			r.memoryDreamDone = nil
+		}
+		close(done)
+		r.memoryMu.Unlock()
+	}()
+	store, cfg := r.memoryState()
+	if store == nil || !cfg.Enabled {
+		return memory.DreamResult{}, errors.New("memory is not enabled for this session")
+	}
+	if r.Client == nil {
+		return memory.DreamResult{}, errors.New("model client is unavailable")
+	}
+	input, skipped, err := store.PrepareDream(cfg.Dream, manual)
+	if err != nil || skipped.Outcome != "" {
+		return skipped, err
+	}
+	r.log("memory_dream_started", map[string]any{"manual": manual, "sessions": input.Eligible})
+	result, err := r.compactionStreamer(false).StreamResponse(ctx, api.ResponseRequest{
+		Model: r.Model, Instructions: memoryDreamPrompt,
+		Input: []api.InputItem{{Type: "message", Role: "user", Content: input.Content}}, Stream: true,
+	}, nil)
+	if err != nil {
+		r.log("memory_dream_completed", map[string]any{"outcome": "failed", "error": err.Error()})
+		return memory.DreamResult{Outcome: "failed", Eligible: input.Eligible}, fmt.Errorf("dream inference failed: %w", err)
+	}
+	committed, err := store.CommitDream(result.Text, input, cfg.Dream.StaleLockSeconds)
+	data := map[string]any{"outcome": committed.Outcome, "eligible": committed.Eligible, "cleaned": committed.Cleaned}
+	if committed.Path != "" {
+		data["path"] = committed.Path
+	}
+	if err != nil {
+		data["error"] = err.Error()
+	}
+	r.log("memory_dream_completed", data)
+	return committed, err
+}
+
+func (r *Runner) cancelMemoryDreamCheck() {
+	r.memoryMu.Lock()
+	cancel := r.memoryDreamCheckCancel
+	r.memoryDreamCheckCancel = nil
+	r.memoryMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (r *Runner) scheduleMemoryDreamCheck(ctx context.Context) {
+	store, cfg := r.memoryState()
+	seconds := cfg.Dream.CheckIntervalSeconds
+	if store == nil || !cfg.Enabled || !cfg.Dream.Enabled || seconds == nil || *seconds == 0 || *seconds > uint64((1<<63-1)/int64(time.Second)) {
+		return
+	}
+	timerCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	r.memoryMu.Lock()
+	previous := r.memoryDreamCheckCancel
+	r.memoryDreamCheckCancel, r.memoryDreamCheckDone = cancel, done
+	r.memoryMu.Unlock()
+	if previous != nil {
+		previous()
+	}
+	go func() {
+		defer func() {
+			r.memoryMu.Lock()
+			if r.memoryDreamCheckDone == done {
+				r.memoryDreamCheckCancel, r.memoryDreamCheckDone = nil, nil
+			}
+			close(done)
+			r.memoryMu.Unlock()
+		}()
+		ticker := time.NewTicker(time.Duration(*seconds) * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-timerCtx.Done():
+				return
+			case <-ticker.C:
+			}
+			_, _ = r.DreamMemory(timerCtx, false)
+		}
+	}()
 }
 
 func (r *Runner) SetMemoryEnabled(ctx context.Context, enabled bool) (string, error) {
@@ -399,15 +511,36 @@ func (r *Runner) WaitMemory(ctx context.Context) error {
 	}
 	r.memoryMu.Lock()
 	flushDone := r.memoryFlushDone
+	dreamCancel, checkDone, dreamDone := r.memoryDreamCheckCancel, r.memoryDreamCheckDone, r.memoryDreamDone
+	r.memoryDreamCheckCancel = nil
 	r.memoryMu.Unlock()
-	return waitMemoryTask(ctx, flushDone)
+	if dreamCancel != nil {
+		dreamCancel()
+	}
+	if err := waitMemoryTask(ctx, flushDone); err != nil {
+		return err
+	}
+	if err := waitMemoryTask(ctx, checkDone); err != nil {
+		return err
+	}
+	return waitMemoryTask(ctx, dreamDone)
 }
 
 func (r *Runner) CloseMemory(ctx context.Context) error {
 	if err := r.WaitMemory(ctx); err != nil {
 		return err
 	}
-	return r.saveSessionMemory()
+	if err := r.saveSessionMemory(); err != nil {
+		return err
+	}
+	store, cfg := r.memoryState()
+	if store == nil || !cfg.Enabled || !cfg.Dream.Enabled {
+		return nil
+	}
+	if _, err := r.DreamMemory(ctx, false); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+		r.log("memory_dream_skipped", map[string]any{"error": err.Error()})
+	}
+	return nil
 }
 
 func (r *Runner) saveSessionMemory() error {

@@ -727,7 +727,7 @@ func TestMemoryFlushExtensionAndSlashCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	commands := commandResponse["result"].(map[string]any)["commands"].([]any)
-	if len(commands) != 4 || commands[1].(map[string]any)["name"] != "flush" || commands[2].(map[string]any)["name"] != "memory" {
+	if len(commands) != 5 || commands[1].(map[string]any)["name"] != "flush" || commands[2].(map[string]any)["name"] != "dream" || commands[3].(map[string]any)["name"] != "memory" {
 		t.Fatalf("memory commands=%#v", commands)
 	}
 	output.Reset()
@@ -864,6 +864,49 @@ func TestMemoryFlushExtensionAndSlashCommand(t *testing.T) {
 	current.mu.Unlock()
 	if len(messages) != 1 || messages[0]["error"] == nil || running || runDone != nil || cancel != nil {
 		t.Fatalf("oversize messages=%#v running=%v runDone=%v cancel=%v", messages, running, runDone, cancel)
+	}
+}
+
+func TestMemoryDreamSlashCommandConsolidatesAndNotifies(t *testing.T) {
+	root, cwd := t.TempDir(), t.TempDir()
+	prior, err := memory.Open(root, cwd, "prior")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, _, err := prior.Write("session_end", "## Decision\n\nKeep this knowledge.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-10 * time.Minute)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+	store, err := memory.Open(root, cwd, "dream-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := memory.DefaultConfig()
+	cfg.Enabled = true
+	streamer := &fixtureStreamer{results: []api.StreamResult{{Text: "## Architecture\n\nKeep clear boundaries."}}}
+	runner := &agent.Runner{Client: streamer, Model: "test", Memory: store, MemoryConfig: cfg}
+	current := &session{id: "dream-session", cwd: cwd, runner: runner, activePrompt: -1, close: func() {}}
+	var output bytes.Buffer
+	server := &Server{output: &output, MemoryEnabled: true, sessions: map[string]*session{"dream-session": current}}
+	params, _ := json.Marshal(map[string]any{"sessionId": "dream-session", "prompt": []any{map[string]any{"type": "text", "text": "/dream"}}})
+	server.handlePrompt(context.Background(), message{ID: json.RawMessage("1"), Method: "session/prompt", Params: params})
+	server.wg.Wait()
+	messages := decodeACPOutput(t, output.Bytes())
+	notified, responded := false, false
+	for _, item := range messages {
+		if result, ok := item["result"].(map[string]any); ok && result["stopReason"] == "end_turn" {
+			responded = true
+		}
+		params, _ := item["params"].(map[string]any)
+		update, _ := params["update"].(map[string]any)
+		notified = notified || update["sessionUpdate"] == "memory_dream_completed" && update["result"] == "written" && update["path"] != ""
+	}
+	if !notified || !responded {
+		t.Fatalf("messages=%#v", messages)
 	}
 }
 

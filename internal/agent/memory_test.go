@@ -303,6 +303,104 @@ func TestRunnerEnhancesAndSavesGlobalMemoryWhileRetrievalDisabled(t *testing.T) 
 	}
 }
 
+func TestRunnerDreamUsesIsolatedModelAndCommitsWorkspaceMemory(t *testing.T) {
+	root, workspaceRoot := t.TempDir(), t.TempDir()
+	prior, err := memory.Open(root, workspaceRoot, "prior")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, _, err := prior.Write("session_end", "## Decision\n\nUse the release pipeline.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-10 * time.Minute)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+	store, err := memory.Open(root, workspaceRoot, "current")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := memory.DefaultConfig()
+	cfg.Enabled = true
+	streamer := &memoryRewriteStreamer{result: api.StreamResult{Text: "## Deployment\n\nUse the release pipeline."}}
+	runner := Runner{Client: streamer, Model: "session-model", Memory: store, MemoryConfig: cfg}
+	result, err := runner.DreamMemory(context.Background(), true)
+	if err != nil || result.Outcome != "written" || result.Cleaned != 1 || result.Path == "" {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	request := streamer.request
+	if streamer.includeHistory == nil || *streamer.includeHistory || request.Model != "session-model" || request.PreviousResponseID != "" || len(request.Tools) != 0 || !strings.Contains(request.Instructions, "reflective pass") {
+		t.Fatalf("request=%#v includeHistory=%v", request, streamer.includeHistory)
+	}
+	if data, err := os.ReadFile(result.Path); err != nil || string(data) != streamer.result.Text {
+		t.Fatalf("memory=%q err=%v", data, err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("processed session survived: %v", err)
+	}
+}
+
+func TestRunnerAutoDreamRunsAtCloseAndConfiguredIdleInterval(t *testing.T) {
+	for _, mode := range []string{"close", "interval"} {
+		t.Run(mode, func(t *testing.T) {
+			root, workspaceRoot := t.TempDir(), t.TempDir()
+			prior, err := memory.Open(root, workspaceRoot, "prior")
+			if err != nil {
+				t.Fatal(err)
+			}
+			path, _, err := prior.Write("session_end", "## Decision\n\nKeep durable context.")
+			if err != nil {
+				t.Fatal(err)
+			}
+			old := time.Now().Add(-10 * time.Minute)
+			if err := os.Chtimes(path, old, old); err != nil {
+				t.Fatal(err)
+			}
+			store, err := memory.Open(root, workspaceRoot, "current")
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg := memory.DefaultConfig()
+			cfg.Enabled, cfg.Dream.MinHours, cfg.Dream.MinSessions = true, 0, 1
+			streamer := &memoryRewriteStreamer{result: api.StreamResult{Text: "## Durable\n\nConsolidated context."}}
+			runner := Runner{Client: streamer, Model: "test", Memory: store, MemoryConfig: cfg}
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			if mode == "close" {
+				if err := runner.CloseMemory(ctx); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				seconds := uint64(1)
+				runner.MemoryConfig.Dream.CheckIntervalSeconds = &seconds
+				runner.scheduleMemoryDreamCheck(ctx)
+				for {
+					files, err := store.List()
+					found := false
+					for _, file := range files {
+						found = found || file.Source == "workspace"
+					}
+					if err == nil && found {
+						break
+					}
+					select {
+					case <-ctx.Done():
+						t.Fatal("periodic dream did not run")
+					case <-time.After(20 * time.Millisecond):
+					}
+				}
+				if err := runner.WaitMemory(ctx); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := os.Stat(path); !os.IsNotExist(err) {
+				t.Fatalf("session survived %s dream: %v", mode, err)
+			}
+		})
+	}
+}
+
 func TestRunnerIdleMemoryFlushTriggersAndStopsWithSession(t *testing.T) {
 	root, workspaceRoot := t.TempDir(), t.TempDir()
 	store, err := memory.Open(root, workspaceRoot, "idle")

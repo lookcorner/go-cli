@@ -513,6 +513,7 @@ func (s *Server) handleStaticExtension(incoming message) {
 		commands := []any{map[string]any{"name": "compact", "description": "Compress conversation history to save context window"}}
 		if s.MemoryEnabled {
 			commands = append(commands, map[string]any{"name": "flush", "description": "Save reusable conversation context to workspace memory"})
+			commands = append(commands, map[string]any{"name": "dream", "description": "Consolidate session logs into organized memory"})
 			commands = append(commands, map[string]any{"name": "memory", "description": "Browse or toggle workspace memory", "argumentHint": "on|off"})
 		}
 		commands = append(commands, map[string]any{"name": "loop", "description": "Run a prompt on a recurring interval", "argumentHint": "[interval] <prompt>"})
@@ -1619,6 +1620,10 @@ func (s *Server) handlePrompt(parent context.Context, incoming message) {
 		s.handleMemoryFlush(parent, incoming, current, false)
 		return
 	}
+	if strings.TrimSpace(prompt) == "/dream" {
+		s.handleMemoryDream(parent, incoming, current)
+		return
+	}
 	if action, ok := tools.ParseMemoryCommand(prompt); ok {
 		if action == "browse" {
 			s.handleMemoryFiles(incoming, current)
@@ -1840,6 +1845,44 @@ func (s *Server) handleMemoryFiles(incoming message, current *session) {
 	}
 	s.notify(current.id, map[string]any{"sessionUpdate": "memory_files", "files": files})
 	s.respond(incoming.ID, map[string]any{"stopReason": "end_turn"})
+}
+
+func (s *Server) handleMemoryDream(parent context.Context, incoming message, current *session) {
+	current.mu.Lock()
+	if current.closed {
+		current.mu.Unlock()
+		s.respondError(incoming.ID, -32000, "session is closed")
+		return
+	}
+	if current.running {
+		current.mu.Unlock()
+		s.respondError(incoming.ID, -32000, "session already has an active prompt")
+		return
+	}
+	runCtx, cancel := context.WithCancel(parent)
+	runDone := make(chan struct{})
+	current.cancel, current.running, current.runDone, current.updated = cancel, true, runDone, time.Now().UTC()
+	current.mu.Unlock()
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		result, err := current.runner.DreamMemory(runCtx, true)
+		current.mu.Lock()
+		current.cancel, current.running, current.runDone, current.updated = nil, false, nil, time.Now().UTC()
+		close(runDone)
+		current.mu.Unlock()
+		update := map[string]any{"sessionUpdate": "memory_dream_completed", "result": result.Outcome}
+		if result.Path != "" {
+			update["path"] = result.Path
+		}
+		s.notify(current.id, update)
+		if err != nil {
+			s.respondError(incoming.ID, -32000, err.Error())
+		} else {
+			s.respond(incoming.ID, map[string]any{"stopReason": "end_turn"})
+		}
+		s.startNextWake(current)
+	}()
 }
 
 func (s *Server) handleMemoryToggle(parent context.Context, incoming message, current *session, enabled bool) {

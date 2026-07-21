@@ -205,8 +205,9 @@ func TestMemoryDefaultsRemoteAndEnvironmentPrecedence(t *testing.T) {
 		MemoryEnabled: boolPointer(true), MemoryInitialInjectionEnabled: boolPointer(false),
 		FlushEnabled: boolPointer(false), FlushSoftThresholdTokens: intPointer(2000), FlushIdleTimeoutSeconds: uint64Pointer(120),
 		MemorySearchMaxResults: intPointer(9), MemorySearchMinScore: float64Pointer(0.6),
+		DreamEnabled: boolPointer(false), DreamMinHours: uint64Pointer(8), DreamMinSessions: uint64Pointer(6), DreamCheckIntervalSeconds: uint64Pointer(900),
 	})
-	if !cfg.Memory.Enabled || cfg.Memory.InitialInjection || cfg.Memory.Flush.Enabled || cfg.Memory.Flush.SoftThresholdTokens != 2000 || cfg.Memory.Flush.IdleTimeoutSeconds == nil || *cfg.Memory.Flush.IdleTimeoutSeconds != 120 || cfg.Memory.Search.MaxResults != 9 || cfg.Memory.Search.MinScore != 0.6 {
+	if !cfg.Memory.Enabled || cfg.Memory.InitialInjection || cfg.Memory.Flush.Enabled || cfg.Memory.Flush.SoftThresholdTokens != 2000 || cfg.Memory.Flush.IdleTimeoutSeconds == nil || *cfg.Memory.Flush.IdleTimeoutSeconds != 120 || cfg.Memory.Search.MaxResults != 9 || cfg.Memory.Search.MinScore != 0.6 || cfg.Memory.Dream.Enabled || cfg.Memory.Dream.MinHours != 8 || cfg.Memory.Dream.MinSessions != 6 || cfg.Memory.Dream.CheckIntervalSeconds == nil || *cfg.Memory.Dream.CheckIntervalSeconds != 900 {
 		t.Fatalf("remote=%#v", cfg.Memory)
 	}
 	path := filepath.Join(home, "config.toml")

@@ -7,6 +7,7 @@ type Config struct {
 	Flush            FlushConfig  `json:"flush"`
 	Index            IndexConfig  `json:"index"`
 	Search           SearchConfig `json:"search"`
+	Dream            DreamConfig  `json:"dream"`
 }
 
 type IndexConfig struct {
@@ -17,6 +18,14 @@ type IndexConfig struct {
 type SearchConfig struct {
 	MaxResults int     `json:"max_results"`
 	MinScore   float64 `json:"min_score"`
+}
+
+type DreamConfig struct {
+	Enabled              bool    `json:"enabled"`
+	MinHours             uint64  `json:"min_hours"`
+	MinSessions          uint64  `json:"min_sessions"`
+	StaleLockSeconds     uint64  `json:"stale_lock_secs"`
+	CheckIntervalSeconds *uint64 `json:"check_interval_secs,omitempty"`
 }
 
 type FlushConfig struct {
@@ -34,5 +43,6 @@ func DefaultConfig() Config {
 		Flush:            FlushConfig{Enabled: true, SoftThresholdTokens: 4000, MaxWriteChars: 8000},
 		Index:            IndexConfig{MaxChunkChars: 1600, ChunkOverlapChars: 320},
 		Search:           SearchConfig{MaxResults: 6, MinScore: 0.35},
+		Dream:            DreamConfig{Enabled: true, MinHours: 4, MinSessions: 3, StaleLockSeconds: 3600},
 	}
 }

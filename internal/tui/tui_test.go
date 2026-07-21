@@ -451,6 +451,50 @@ func TestRememberWithoutTextEntersInputMode(t *testing.T) {
 	}
 }
 
+func TestDreamCommandConsolidatesWithoutModelTurnUI(t *testing.T) {
+	root, cwd := t.TempDir(), t.TempDir()
+	prior, err := memory.Open(root, cwd, "prior")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, _, err := prior.Write("session_end", "## Decision\n\nKeep this knowledge.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-10 * time.Minute)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+	store, err := memory.Open(root, cwd, "current")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := memory.DefaultConfig()
+	cfg.Enabled = true
+	bridge := NewBridge(context.Background(), tools.PermissionAuto)
+	defer bridge.Close()
+	m := &model{ctx: context.Background(), runner: &agent.Runner{Client: rememberTUIStreamer{}, Model: "test", Memory: store, MemoryConfig: cfg}, bridge: bridge, status: "ready"}
+	m.input = []rune("/dream")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command == nil || !m.running || m.status != "consolidating memory" || m.transcript.Len() != 0 {
+		t.Fatalf("command=%v running=%v status=%q", command, m.running, m.status)
+	}
+	updated, _ = m.Update(command())
+	m = updated.(*model)
+	if m.running || m.status != "memory dream: written" {
+		t.Fatalf("running=%v status=%q", m.running, m.status)
+	}
+
+	m.running = true
+	m.scheduled = []tools.ScheduledTaskFired{{TaskID: "after-dream", Prompt: "continue work"}}
+	updated, command = m.Update(memoryDreamDoneEvent{result: memory.DreamResult{Outcome: "written"}})
+	m = updated.(*model)
+	if command == nil || !m.running || m.activeTask != "after-dream" || len(m.scheduled) != 0 {
+		t.Fatalf("command=%v running=%v active=%q scheduled=%#v", command, m.running, m.activeTask, m.scheduled)
+	}
+}
+
 func TestScheduledEventWaitsForTurnAndContinuesResponseChain(t *testing.T) {
 	ws, err := workspace.Open(t.TempDir())
 	if err != nil {

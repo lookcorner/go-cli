@@ -20,6 +20,10 @@ type RemoteSettings struct {
 	MemoryInitialInjectionEnabled   *bool          `json:"memory_initial_injection_enabled"`
 	MemorySearchMaxResults          *int           `json:"memory_search_max_results"`
 	MemorySearchMinScore            *float64       `json:"memory_search_min_score"`
+	DreamEnabled                    *bool          `json:"dream_enabled"`
+	DreamMinHours                   *uint64        `json:"dream_min_hours"`
+	DreamMinSessions                *uint64        `json:"dream_min_sessions"`
+	DreamCheckIntervalSeconds       *uint64        `json:"dream_check_interval_secs"`
 	FlushEnabled                    *bool          `json:"flush_enabled"`
 	FlushSoftThresholdTokens        *int           `json:"flush_soft_threshold_tokens"`
 	FlushIdleTimeoutSeconds         *uint64        `json:"flush_idle_timeout_secs"`
@@ -118,6 +122,21 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 		}
 		if remote.MemorySearchMinScore != nil {
 			c.Memory.Search.MinScore = min(1, max(0, *remote.MemorySearchMinScore))
+		}
+	}
+	if !c.memoryDreamConfigured {
+		if remote.DreamEnabled != nil {
+			c.Memory.Dream.Enabled = *remote.DreamEnabled
+		}
+		if remote.DreamMinHours != nil {
+			c.Memory.Dream.MinHours = *remote.DreamMinHours
+		}
+		if remote.DreamMinSessions != nil {
+			c.Memory.Dream.MinSessions = *remote.DreamMinSessions
+		}
+		if remote.DreamCheckIntervalSeconds != nil {
+			value := *remote.DreamCheckIntervalSeconds
+			c.Memory.Dream.CheckIntervalSeconds = &value
 		}
 	}
 	if !c.memoryFlushConfigured {

@@ -52,6 +52,10 @@ type memoryNoteSavedEvent struct {
 	path string
 	err  error
 }
+type memoryDreamDoneEvent struct {
+	result memory.DreamResult
+	err    error
+}
 type scheduledFiredEvent struct{ event tools.ScheduledTaskFired }
 type planModeEvent struct{ active bool }
 type planReviewEvent struct {
@@ -420,6 +424,16 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "memory saved"
 			fmt.Fprintf(&m.transcript, "\n[memory] Memory saved to %s\n", msg.path)
 		}
+	case memoryDreamDoneEvent:
+		m.running, m.turnCancel = false, nil
+		if msg.err != nil {
+			m.status = "memory dream failed: " + msg.err.Error()
+		} else {
+			m.status = "memory dream: " + msg.result.Outcome
+		}
+		if command := m.startScheduled(); command != nil {
+			return m, command
+		}
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
@@ -544,6 +558,10 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if prompt == "/flush" {
 			m.status = "flushing memory"
 			return m, runMemoryFlush(turnCtx, m.runner, m.previousID)
+		}
+		if prompt == "/dream" {
+			m.status = "consolidating memory"
+			return m, runMemoryDream(turnCtx, m.runner)
 		}
 		prompt, _ = tools.ExpandLoopCommand(prompt)
 		m.beginTurn(prompt)
@@ -786,6 +804,13 @@ func runMemoryToggle(ctx context.Context, runner *agent.Runner, enabled bool) te
 	return func() tea.Msg {
 		message, err := runner.SetMemoryEnabled(ctx, enabled)
 		return memoryToggleDoneEvent{message: message, err: err}
+	}
+}
+
+func runMemoryDream(ctx context.Context, runner *agent.Runner) tea.Cmd {
+	return func() tea.Msg {
+		result, err := runner.DreamMemory(ctx, true)
+		return memoryDreamDoneEvent{result: result, err: err}
 	}
 }
 

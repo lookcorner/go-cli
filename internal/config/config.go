@@ -71,6 +71,7 @@ type Config struct {
 	memoryInjectionConfigured       bool
 	memoryFlushConfigured           bool
 	memorySearchConfigured          bool
+	memoryDreamConfigured           bool
 	goalVerifierConfigured          bool
 	goalClassifierMaxConfigured     bool
 	goalPlannerConfigured           bool
@@ -407,6 +408,7 @@ type fileMemoryConfig struct {
 	Session          *fileMemorySessionConfig          `json:"session,omitempty" toml:"session"`
 	Index            *fileMemoryIndexConfig            `json:"index,omitempty" toml:"index"`
 	Search           *fileMemorySearchConfig           `json:"search,omitempty" toml:"search"`
+	Dream            *fileMemoryDreamConfig            `json:"dream,omitempty" toml:"dream"`
 }
 
 type fileMemoryIndexConfig struct {
@@ -417,6 +419,14 @@ type fileMemoryIndexConfig struct {
 type fileMemorySearchConfig struct {
 	MaxResults *int     `json:"max_results,omitempty" toml:"max_results"`
 	MinScore   *float64 `json:"min_score,omitempty" toml:"min_score"`
+}
+
+type fileMemoryDreamConfig struct {
+	Enabled              *bool   `json:"enabled,omitempty" toml:"enabled"`
+	MinHours             *uint64 `json:"min_hours,omitempty" toml:"min_hours"`
+	MinSessions          *uint64 `json:"min_sessions,omitempty" toml:"min_sessions"`
+	StaleLockSeconds     *uint64 `json:"stale_lock_secs,omitempty" toml:"stale_lock_secs"`
+	CheckIntervalSeconds *uint64 `json:"check_interval_secs,omitempty" toml:"check_interval_secs"`
 }
 
 type fileMemoryInitialInjectionConfig struct {
@@ -911,6 +921,25 @@ func applyMemoryConfig(cfg *Config, source *fileMemoryConfig, flush *fileMemoryF
 			}
 			if source.Search.MinScore != nil {
 				cfg.Memory.Search.MinScore = *source.Search.MinScore
+			}
+		}
+		if source.Dream != nil {
+			cfg.memoryDreamConfigured = true
+			if source.Dream.Enabled != nil {
+				cfg.Memory.Dream.Enabled = *source.Dream.Enabled
+			}
+			if source.Dream.MinHours != nil {
+				cfg.Memory.Dream.MinHours = *source.Dream.MinHours
+			}
+			if source.Dream.MinSessions != nil {
+				cfg.Memory.Dream.MinSessions = *source.Dream.MinSessions
+			}
+			if source.Dream.StaleLockSeconds != nil {
+				cfg.Memory.Dream.StaleLockSeconds = *source.Dream.StaleLockSeconds
+			}
+			if source.Dream.CheckIntervalSeconds != nil {
+				value := *source.Dream.CheckIntervalSeconds
+				cfg.Memory.Dream.CheckIntervalSeconds = &value
 			}
 		}
 	}
@@ -1585,6 +1614,12 @@ func (c Config) Validate() error {
 	}
 	if c.Memory.Enabled && (c.Memory.Search.MaxResults < 1 || c.Memory.Search.MinScore < 0 || c.Memory.Search.MinScore > 1) {
 		return errors.New("memory search max_results must be positive and min_score must be between 0 and 1")
+	}
+	if c.Memory.Enabled && (c.Memory.Dream.MinHours > uint64((1<<63-1)/int64(time.Hour)) || c.Memory.Dream.StaleLockSeconds > uint64((1<<63-1)/int64(time.Second))) {
+		return errors.New("memory dream duration is too large")
+	}
+	if interval := c.Memory.Dream.CheckIntervalSeconds; c.Memory.Enabled && interval != nil && *interval > uint64((1<<63-1)/int64(time.Second)) {
+		return errors.New("memory dream check_interval_secs is too large")
 	}
 	if c.WebFetch.ProxyConfigured {
 		proxy, err := url.Parse(c.WebFetch.ProxyEndpoint)
