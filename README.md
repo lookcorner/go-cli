@@ -285,9 +285,11 @@ Use `--tui` for the full-screen interface:
 
 The TUI streams model output as it arrives, renders headings, emphasis, links,
 lists, quotes, and inline or fenced code, and keeps a scrollable transcript.
-It supports Unicode input, displays tool status, cancels the current turn with
-Ctrl-C, and presents write/Shell/MCP approval prompts inside the alternate
-screen. Shift-Tab toggles persisted Plan mode and shows a visible mode badge.
+It supports Unicode input, keyboard and content-pane mouse-wheel scrolling,
+keeps a scrolled viewport stable while output streams, displays tool status,
+cancels the current turn with Ctrl-C, and presents write/Shell/MCP approval
+prompts inside the alternate screen. Shift-Tab toggles persisted Plan mode and
+shows a visible mode badge.
 Plan exits open a dedicated full-plan review with approve, revision-feedback,
 and abandon outcomes. Page Up/Page Down scroll, Ctrl-Q exits, and an optional
 prompt argument starts the first turn immediately. When providers report usage,

@@ -295,8 +295,59 @@ func TestModelInputAndView(t *testing.T) {
 		t.Fatalf("submit did not start turn: running=%v input=%q command=%v", m.running, m.input, command)
 	}
 	view := m.View()
-	if !view.AltScreen || !strings.Contains(view.Content, "Gork Go") || !strings.Contains(view.Content, "你") {
+	if !view.AltScreen || view.MouseMode != tea.MouseModeCellMotion || view.OnMouse == nil || !strings.Contains(view.Content, "Gork Go") || !strings.Contains(view.Content, "你") {
 		t.Fatalf("unexpected view: %#v", view)
+	}
+}
+
+func TestMouseWheelScrollsOnlyTheTranscriptPane(t *testing.T) {
+	m := &model{width: 60, height: 16}
+	view := m.View()
+	up := view.OnMouse(tea.MouseWheelMsg(tea.Mouse{X: 5, Y: 1, Button: tea.MouseWheelUp}))
+	if up == nil {
+		t.Fatal("transcript wheel-up was ignored")
+	}
+	updated, _ := m.Update(up())
+	m = updated.(*model)
+	if m.scroll != 3 {
+		t.Fatalf("wheel-up scroll=%d", m.scroll)
+	}
+	view = m.View()
+	down := view.OnMouse(tea.MouseWheelMsg(tea.Mouse{X: 5, Y: 1, Button: tea.MouseWheelDown}))
+	updated, _ = m.Update(down())
+	m = updated.(*model)
+	if m.scroll != 0 {
+		t.Fatalf("wheel-down scroll=%d", m.scroll)
+	}
+	view = m.View()
+	if command := view.OnMouse(tea.MouseWheelMsg(tea.Mouse{Y: 0, Button: tea.MouseWheelUp})); command != nil {
+		t.Fatal("header wheel event changed transcript scroll")
+	}
+	if command := view.OnMouse(tea.MouseWheelMsg(tea.Mouse{Y: m.contentHeight() + 1, Button: tea.MouseWheelUp})); command != nil {
+		t.Fatal("footer wheel event changed transcript scroll")
+	}
+	if command := view.OnMouse(tea.MouseWheelMsg(tea.Mouse{Y: 1, Button: tea.MouseWheelLeft})); command != nil {
+		t.Fatal("horizontal wheel event changed transcript scroll")
+	}
+	if command := view.OnMouse(tea.MouseClickMsg(tea.Mouse{Y: 1, Button: tea.MouseLeft})); command != nil {
+		t.Fatal("mouse click changed transcript scroll")
+	}
+}
+
+func TestStreamingTextPreservesScrolledViewport(t *testing.T) {
+	bridge := NewBridge(context.Background(), tools.PermissionAuto)
+	defer bridge.Close()
+	m := &model{bridge: bridge, width: 80, height: 16, scroll: 3}
+	m.transcript.WriteString("one\ntwo\nthree\nfour\nfive")
+	updated, _ := m.Update(textEvent{text: "\nsix"})
+	m = updated.(*model)
+	if m.scroll != 4 {
+		t.Fatalf("streaming scroll=%d want=4", m.scroll)
+	}
+	m.scroll = 0
+	updated, _ = m.Update(textEvent{text: "\nseven"})
+	if updated.(*model).scroll != 0 {
+		t.Fatal("bottom-pinned viewport stopped following streaming text")
 	}
 }
 

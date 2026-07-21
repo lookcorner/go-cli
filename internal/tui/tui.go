@@ -16,6 +16,8 @@ import (
 	"github.com/lookcorner/go-cli/internal/tools"
 )
 
+const mouseWheelScrollLines = 3
+
 type textEvent struct{ text string }
 type statusEvent struct{ text string }
 type approvalEvent struct {
@@ -58,6 +60,7 @@ type memoryDreamDoneEvent struct {
 }
 type scheduledFiredEvent struct{ event tools.ScheduledTaskFired }
 type wakeCancelledEvent struct{ id string }
+type mouseScrollEvent struct{ lines int }
 type planModeEvent struct{ active bool }
 type planReviewEvent struct {
 	event tools.PlanModeEvent
@@ -312,9 +315,19 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = max(msg.Width, 20)
 		m.height = max(msg.Height, 10)
 	case textEvent:
+		before := 0
+		if m.scroll > 0 {
+			before = len(renderMarkdown(m.transcript.String(), max(m.width, 20)))
+		}
 		m.transcript.WriteString(msg.text)
-		m.scroll = 0
+		if m.scroll > 0 {
+			after := len(renderMarkdown(m.transcript.String(), max(m.width, 20)))
+			m.scroll += max(after-before, 0)
+		}
 		return m, waitForBridge(m.bridge)
+	case mouseScrollEvent:
+		m.scroll = max(0, m.scroll+msg.lines)
+		return m, nil
 	case statusEvent:
 		m.status = cleanStatus(msg.text)
 		return m, waitForBridge(m.bridge)
@@ -923,6 +936,27 @@ func (m *model) View() tea.View {
 	status := "\x1b[2m" + truncate(m.status, width) + "\x1b[0m"
 	view := tea.NewView(header + "\n" + body + status + "\n" + footer)
 	view.AltScreen = true
+	view.MouseMode = tea.MouseModeCellMotion
+	contentHeight := m.contentHeight()
+	view.OnMouse = func(message tea.MouseMsg) tea.Cmd {
+		if _, ok := message.(tea.MouseWheelMsg); !ok {
+			return nil
+		}
+		mouse := message.Mouse()
+		if mouse.Y < 1 || mouse.Y > contentHeight {
+			return nil
+		}
+		lines := 0
+		switch mouse.Button {
+		case tea.MouseWheelUp:
+			lines = mouseWheelScrollLines
+		case tea.MouseWheelDown:
+			lines = -mouseWheelScrollLines
+		default:
+			return nil
+		}
+		return func() tea.Msg { return mouseScrollEvent{lines: lines} }
+	}
 	return view
 }
 
