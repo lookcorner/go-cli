@@ -7,12 +7,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/agents"
@@ -192,6 +194,11 @@ type persistedTask struct {
 
 const orphanedTaskError = "interrupted by process restart"
 
+const (
+	agentMemoryMaxLines = 200
+	agentMemoryMaxBytes = 25 * 1024
+)
+
 type mcpResource struct {
 	once  sync.Once
 	close func()
@@ -296,14 +303,14 @@ func (m *Manager) Start(ctx context.Context, request tools.SubagentRequest) (too
 		return tools.SubagentResult{}, err
 	}
 	keepRegistry := false
-	if childRegistry != nil {
-		defer func() {
-			if !keepRegistry {
+	defer func() {
+		if !keepRegistry {
+			if childRegistry != nil {
 				_ = childRegistry.Close()
-				m.removeWorktree(worktreePath)
 			}
-		}()
-	}
+			m.removeWorktree(worktreePath)
+		}
+	}()
 	model := ModelRuntime{Model: m.parentModel, ContextWindow: m.contextWindow, CompactThresholdPercent: m.compactThresholdPercent}
 	if request.Model != "" {
 		resolved, ok := m.resolve(request.Model)
@@ -325,6 +332,10 @@ func (m *Manager) Start(ctx context.Context, request tools.SubagentRequest) (too
 	capability := request.CapabilityMode
 	if capability == "" && (request.Type == "explore" || request.Type == "plan") {
 		capability = "read-only"
+	}
+	childRegistry, err = m.bindAgentMemory(childRoot, childRegistry, runtimeDefinition)
+	if err != nil {
+		return tools.SubagentResult{}, err
 	}
 	runner, hookRuntime, ownedMCPResource, err := m.buildRuntime(childRoot, childRegistry, runtimeDefinition, model, effort, id, request.Type, capability)
 	if err != nil {
@@ -358,7 +369,11 @@ func (m *Manager) buildRuntime(root string, childRegistry *tools.Registry, defin
 	if childRegistry != nil {
 		toolSource = childRegistry
 	}
-	view := toolSource.View(definition.Tools, definition.DisallowedTools, capability)
+	allowed := definition.Tools
+	if definition.Memory != "" && len(allowed) > 0 {
+		allowed = append(append([]string(nil), allowed...), "read_file", "search_replace", "write_file")
+	}
+	view := toolSource.View(allowed, definition.DisallowedTools, capability)
 	if definition.Plugin != "" {
 		view.FilterMCPServers(func(string) bool { return false })
 	} else {
@@ -390,6 +405,9 @@ func (m *Manager) buildRuntime(root string, childRegistry *tools.Registry, defin
 		return nil, nil, nil, err
 	}
 	instructions := definition.Prompt
+	if memoryContext := m.agentMemoryContext(definition); memoryContext != "" {
+		instructions += memoryContext
+	}
 	if childSkills != nil {
 		instructions = childSkills.Preload(definition.Skills) + instructions
 	}
@@ -520,6 +538,13 @@ func (m *Manager) restoreTaskRuntime(previous *task, definition agents.Definitio
 			return errors.New("persisted harness agent_type bypassPermissions is not enabled")
 		}
 		definition = override
+	}
+	childRegistry, err = m.bindAgentMemory(root, childRegistry, definition)
+	if err != nil {
+		if childRegistry != nil {
+			_ = childRegistry.Close()
+		}
+		return err
 	}
 	runner, hookRuntime, resource, err := m.buildRuntime(root, childRegistry, definition, model, definition.Effort, previous.id, previous.typeName, capability)
 	if err != nil {
@@ -1237,6 +1262,77 @@ func (m *Manager) childWorkspace(raw string) (string, *tools.Registry, error) {
 		return m.workspaceRoot, nil, nil
 	}
 	return ws.Root(), m.tools.ForWorkspace(ws), nil
+}
+
+func (m *Manager) bindAgentMemory(root string, current *tools.Registry, definition agents.Definition) (*tools.Registry, error) {
+	dir, err := definition.MemoryDir(m.workspaceRoot)
+	if err != nil || dir == "" {
+		return current, err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return current, fmt.Errorf("create agent memory directory: %w", err)
+	}
+	ws, err := workspace.Open(root)
+	if err != nil {
+		return current, err
+	}
+	ws, err = ws.WithExtraRoot(dir)
+	if err != nil {
+		return current, err
+	}
+	source := m.tools
+	if current != nil {
+		source = current
+	}
+	bound := source.ForWorkspace(ws)
+	if current != nil {
+		_ = current.Close()
+	}
+	return bound, nil
+}
+
+func (m *Manager) agentMemoryContext(definition agents.Definition) string {
+	dir, err := definition.MemoryDir(m.workspaceRoot)
+	if err != nil || dir == "" {
+		return ""
+	}
+	path := filepath.Join(dir, "MEMORY.md")
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return ""
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, agentMemoryMaxBytes+utf8.UTFMax))
+	if err != nil {
+		return ""
+	}
+	content := truncateUTF8Bytes(string(data), agentMemoryMaxBytes)
+	if !utf8.ValidString(content) {
+		return ""
+	}
+	lines := strings.Split(content, "\n")
+	if len(lines) > agentMemoryMaxLines {
+		lines = lines[:agentMemoryMaxLines]
+	}
+	content = strings.Join(lines, "\n")
+	if strings.TrimSpace(content) == "" {
+		return ""
+	}
+	return "\n\n<agent-memory>\nMemory directory: " + dir + "\n\n" + content + "\n</agent-memory>"
+}
+
+func truncateUTF8Bytes(value string, limit int) string {
+	if len(value) <= limit {
+		return value
+	}
+	for limit > 0 && !utf8.ValidString(value[:limit]) {
+		limit--
+	}
+	return value[:limit]
 }
 
 func (m *Manager) prepareWorkspace(ctx context.Context, id, rawCWD, isolation string) (string, *tools.Registry, string, error) {

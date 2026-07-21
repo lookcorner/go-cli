@@ -8,7 +8,8 @@ import (
 )
 
 type Workspace struct {
-	root string
+	root       string
+	extraRoots []string
 }
 
 func Open(root string) (*Workspace, error) {
@@ -31,6 +32,34 @@ func Open(root string) (*Workspace, error) {
 }
 
 func (w *Workspace) Root() string { return w.root }
+
+// WithExtraRoot returns an isolated workspace view that also permits absolute
+// paths inside root. Relative paths continue to resolve against the workspace.
+func (w *Workspace) WithExtraRoot(root string) (*Workspace, error) {
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return nil, fmt.Errorf("resolve extra workspace root: %w", err)
+	}
+	real, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return nil, fmt.Errorf("resolve extra workspace root symlinks: %w", err)
+	}
+	info, err := os.Stat(real)
+	if err != nil {
+		return nil, fmt.Errorf("stat extra workspace root: %w", err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("extra workspace root %q is not a directory", real)
+	}
+	result := &Workspace{root: w.root, extraRoots: append([]string(nil), w.extraRoots...)}
+	for _, existing := range append([]string{w.root}, result.extraRoots...) {
+		if existing == real {
+			return result, nil
+		}
+	}
+	result.extraRoots = append(result.extraRoots, filepath.Clean(real))
+	return result, nil
+}
 
 // Resolve confines a relative or absolute path to the workspace. Existing
 // symlinks are resolved to prevent reads and writes from escaping the root.
@@ -58,11 +87,7 @@ func (w *Workspace) Resolve(path string) (string, error) {
 		resolved = filepath.Join(realParent, filepath.Base(candidate))
 	}
 
-	rel, err := filepath.Rel(w.root, resolved)
-	if err != nil {
-		return "", fmt.Errorf("check workspace boundary: %w", err)
-	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	if !w.contains(resolved) {
 		return "", fmt.Errorf("path %q escapes workspace %q", path, w.root)
 	}
 	return resolved, nil
@@ -87,19 +112,25 @@ func (w *Workspace) ResolveEntry(path string) (string, error) {
 		return "", fmt.Errorf("resolve parent of %q: %w", path, err)
 	}
 	resolved := filepath.Join(parent, filepath.Base(candidate))
-	rel, err := filepath.Rel(w.root, resolved)
-	if err != nil {
-		return "", fmt.Errorf("check workspace boundary: %w", err)
-	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	if !w.contains(resolved) {
 		return "", fmt.Errorf("path %q escapes workspace %q", path, w.root)
 	}
 	return resolved, nil
 }
 
+func (w *Workspace) contains(path string) bool {
+	for _, root := range append([]string{w.root}, w.extraRoots...) {
+		rel, err := filepath.Rel(root, path)
+		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
 func (w *Workspace) Relative(path string) string {
 	rel, err := filepath.Rel(w.root, path)
-	if err != nil {
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return path
 	}
 	return filepath.ToSlash(rel)

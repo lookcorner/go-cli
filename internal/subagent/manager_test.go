@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/agents"
@@ -171,6 +173,136 @@ func TestTaskToolRunsFilteredSubagentAndResumes(t *testing.T) {
 	observer.mu.Unlock()
 	if !strings.Contains(events, "explore:completed") {
 		t.Fatalf("observer events=%q", events)
+	}
+}
+
+func TestAgentScopedMemoryInjectsAndConfinesFileTools(t *testing.T) {
+	root, grokHome := t.TempDir(), t.TempDir()
+	t.Setenv("GROK_HOME", grokHome)
+	agentDir := filepath.Join(grokHome, "agents")
+	if err := os.MkdirAll(agentDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	agentPath := filepath.Join(agentDir, "memory-agent.md")
+	agentConfig := "---\nname: memory-agent\ndescription: Persistent specialist\ntools: [grep]\ndiscoverSkills: false\nmemory: user\n---\nUse durable agent knowledge.\n"
+	if err := os.WriteFile(agentPath, []byte(agentConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	memoryDir := filepath.Join(grokHome, "agent-memory", "memory-agent")
+	if err := os.MkdirAll(memoryDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	memoryPath := filepath.Join(memoryDir, "MEMORY.md")
+	if err := os.WriteFile(memoryPath, []byte("## Review\n\nAlways inspect error paths."), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	catalog, discoveryErrors := agents.Discover(agents.Config{})
+	if len(discoveryErrors) != 0 {
+		t.Fatalf("agent discovery errors=%v", discoveryErrors)
+	}
+	client := &sequenceClient{results: []api.StreamResult{{Text: "done"}, {Text: "read only"}}}
+	manager, err := New(Config{
+		Context: context.Background(), Catalog: catalog, Tools: registry, WorkspaceRoot: root, ParentModel: "test",
+		NewClient: func(ModelRuntime) (agent.ResponseStreamer, error) { return client, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	result, err := manager.Start(context.Background(), tools.SubagentRequest{
+		Prompt: "use your memory", Description: "memory", Type: "memory-agent", BackgroundSet: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.mu.Lock()
+	request := client.requests[0]
+	client.mu.Unlock()
+	if !strings.Contains(request.Instructions, "<agent-memory>") || !strings.Contains(request.Instructions, memoryDir) || !strings.Contains(request.Instructions, "Always inspect error paths.") {
+		t.Fatalf("instructions=%q", request.Instructions)
+	}
+	names := make(map[string]bool, len(request.Tools))
+	for _, definition := range request.Tools {
+		names[definition.Name] = true
+	}
+	if !names["grep"] || !names["read_file"] || !names["search_replace"] || !names["write_file"] || names["shell"] {
+		t.Fatalf("tools=%v", names)
+	}
+	if _, err := manager.Start(context.Background(), tools.SubagentRequest{
+		Prompt: "inspect memory", Description: "read only", Type: "memory-agent", CapabilityMode: "read-only", BackgroundSet: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	client.mu.Lock()
+	readOnlyRequest := client.requests[1]
+	client.mu.Unlock()
+	readOnlyNames := make(map[string]bool, len(readOnlyRequest.Tools))
+	for _, definition := range readOnlyRequest.Tools {
+		readOnlyNames[definition.Name] = true
+	}
+	if !readOnlyNames["read_file"] || readOnlyNames["search_replace"] || readOnlyNames["write_file"] {
+		t.Fatalf("read-only tools=%v", readOnlyNames)
+	}
+	manager.mu.RLock()
+	child := manager.tasks[result.ID].runner.Tools
+	manager.mu.RUnlock()
+	readArgs, _ := json.Marshal(map[string]any{"target_file": memoryPath, "limit": 10})
+	if output, err := child.Execute(context.Background(), "read_file", readArgs); err != nil || !strings.Contains(output, "Always inspect error paths.") {
+		t.Fatalf("read output=%q err=%v", output, err)
+	}
+	editArgs, _ := json.Marshal(map[string]any{"file_path": memoryPath, "old_string": "error paths", "new_string": "failure paths"})
+	if _, err := child.Execute(context.Background(), "search_replace", editArgs); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(memoryPath); err != nil || !strings.Contains(string(data), "failure paths") {
+		t.Fatalf("memory=%q err=%v", data, err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	writeArgs, _ := json.Marshal(map[string]any{"path": outside, "content": "escape"})
+	if _, err := child.Execute(context.Background(), "write_file", writeArgs); err == nil {
+		t.Fatal("agent memory tools wrote outside the workspace and memory roots")
+	}
+	if _, err := registry.Execute(context.Background(), "read_file", readArgs); err == nil {
+		t.Fatal("parent registry inherited agent memory access")
+	}
+}
+
+func TestAgentMemoryContextBoundsLinesAndUTF8Bytes(t *testing.T) {
+	root := t.TempDir()
+	manager := &Manager{workspaceRoot: root}
+	definition := agents.Definition{Name: "bounded", Memory: "project"}
+	dir, err := definition.MemoryDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lines := make([]string, 201)
+	for index := range lines {
+		lines[index] = fmt.Sprintf("line-%03d", index)
+	}
+	path := filepath.Join(dir, "MEMORY.md")
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	context := manager.agentMemoryContext(definition)
+	if !strings.Contains(context, "line-199") || strings.Contains(context, "line-200") {
+		t.Fatalf("line-bounded context=%q", context)
+	}
+	if err := os.WriteFile(path, []byte(strings.Repeat("界", agentMemoryMaxBytes)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	context = manager.agentMemoryContext(definition)
+	content := strings.Split(strings.Split(context, "\n\n")[1], "\n</agent-memory>")[0]
+	if len(content) > agentMemoryMaxBytes || !utf8.ValidString(content) {
+		t.Fatalf("byte-bounded content bytes=%d valid=%v", len(content), utf8.ValidString(content))
 	}
 }
 
@@ -1015,7 +1147,22 @@ func TestManagerClosePersistsCancelledSubagent(t *testing.T) {
 }
 
 func TestPersistedSubagentLoadsAndResumesAfterRestart(t *testing.T) {
-	root := t.TempDir()
+	root, grokHome := t.TempDir(), t.TempDir()
+	t.Setenv("GROK_HOME", grokHome)
+	agentDir := filepath.Join(grokHome, "agents")
+	if err := os.MkdirAll(agentDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "memory-harness.md"), []byte("---\nname: memory-harness\ndescription: Persistent reader\ntools: [read_file]\ndiscoverSkills: false\nmemory: project\n---\nExplore persisted memory.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	memoryDir := filepath.Join(root, ".grok", "agent-memory", "memory-harness")
+	if err := os.MkdirAll(memoryDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(memoryDir, "MEMORY.md"), []byte("## Durable\n\nPersistent reviewer memory."), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	ws, err := workspace.Open(root)
 	if err != nil {
 		t.Fatal(err)
@@ -1035,14 +1182,14 @@ func TestPersistedSubagentLoadsAndResumesAfterRestart(t *testing.T) {
 	}
 	first, err := firstManager.Start(context.Background(), tools.SubagentRequest{
 		Prompt: "first prompt", Description: "persist", Type: "general-purpose", BackgroundSet: true,
-		HarnessType: "explore", CapabilityMode: "read-only",
+		HarnessType: "memory-harness", CapabilityMode: "read-only",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(filepath.Join(sessionDir, "subagents", "parent-session", first.ID, "meta.json"))
 	var meta persistedTask
-	if err != nil || json.Unmarshal(data, &meta) != nil || meta.HarnessType != "explore" || meta.CapabilityMode != "read-only" {
+	if err != nil || json.Unmarshal(data, &meta) != nil || meta.HarnessType != "memory-harness" || meta.CapabilityMode != "read-only" {
 		t.Fatalf("meta=%#v data=%q err=%v", meta, data, err)
 	}
 	firstManager.Close()
@@ -1067,7 +1214,7 @@ func TestPersistedSubagentLoadsAndResumesAfterRestart(t *testing.T) {
 	if err != nil || resumed.Status != "completed" || resumed.Output != "second done" {
 		t.Fatalf("resumed=%#v err=%v", resumed, err)
 	}
-	if len(secondClient.requests) != 1 || secondClient.requests[0].PreviousResponseID != "first-response" || !strings.Contains(secondClient.requests[0].Instructions, "Explore the codebase") {
+	if len(secondClient.requests) != 1 || secondClient.requests[0].PreviousResponseID != "first-response" || !strings.Contains(secondClient.requests[0].Instructions, "Explore persisted memory") || !strings.Contains(secondClient.requests[0].Instructions, "Persistent reviewer memory") || !strings.Contains(secondClient.requests[0].Instructions, memoryDir) {
 		t.Fatalf("requests=%#v", secondClient.requests)
 	}
 	for _, definition := range secondClient.requests[0].Tools {

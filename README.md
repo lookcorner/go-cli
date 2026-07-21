@@ -856,6 +856,12 @@ then `$GROK_HOME/agents`, legacy/user Claude locations, bundled agents, and
 enabled plugin `agents/*.md`. Trusted project agents may shadow the built-in
 `general-purpose`, `explore`, and `plan` types; user definitions cannot silently
 replace a built-in, and plugin agents use `plugin-name:agent-name` identities.
+Definitions may set `memory: user`, `memory: project`, or `memory: local`.
+The corresponding `MEMORY.md` is injected at startup with a 200-line/25-KiB
+cap, and that child alone receives standard read/write/replace access to its
+agent-memory directory. User memory lives under `$GROK_HOME/agent-memory`;
+project and local memory live under `.grok/agent-memory` and
+`.grok/agent-memory-local` respectively.
 
 The `task` tool runs these definitions through the existing Runner and parent
 tool infrastructure. It supports foreground and background execution,

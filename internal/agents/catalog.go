@@ -37,6 +37,7 @@ type Definition struct {
 	MCPInheritance  MCPInheritance
 	MCPServers      []MCPServerRef
 	Hooks           json.RawMessage
+	Memory          string
 	Builtin         bool
 }
 
@@ -156,6 +157,7 @@ type frontmatter struct {
 	MCPInheritance  *MCPInheritance `yaml:"mcpInheritance"`
 	MCPServers      mcpServerRefs   `yaml:"mcpServers"`
 	Hooks           yaml.Node       `yaml:"hooks"`
+	Memory          string          `yaml:"memory"`
 }
 
 type Config struct {
@@ -393,6 +395,7 @@ func parse(path, pluginName, scope string) (Definition, error) {
 	effort := strings.TrimSpace(metadata.Effort)
 	permissionMode := strings.TrimSpace(metadata.PermissionMode)
 	isolation := strings.TrimSpace(metadata.Isolation)
+	memoryScope := strings.TrimSpace(metadata.Memory)
 	if !oneOf(effort, "", "low", "medium", "high", "xhigh", "max") {
 		return Definition{}, fmt.Errorf("parse agent %q: invalid effort %q", path, effort)
 	}
@@ -401,6 +404,9 @@ func parse(path, pluginName, scope string) (Definition, error) {
 	}
 	if !oneOf(isolation, "", "none", "worktree") {
 		return Definition{}, fmt.Errorf("parse agent %q: invalid isolation %q", path, isolation)
+	}
+	if !oneOf(memoryScope, "", "user", "project", "local") {
+		return Definition{}, fmt.Errorf("parse agent %q: invalid memory %q", path, memoryScope)
 	}
 	maxTurns := 0
 	if metadata.MaxTurns != nil {
@@ -437,7 +443,38 @@ func parse(path, pluginName, scope string) (Definition, error) {
 		Background: metadata.Background, InitialPrompt: strings.TrimSpace(metadata.InitialPrompt),
 		Skills: metadata.Skills, DiscoverSkills: discoverSkills, InheritSkills: inheritSkills,
 		MCPInheritance: mcpInheritance, MCPServers: metadata.MCPServers, Hooks: inlineHooks,
+		Memory: memoryScope,
 	}, nil
+}
+
+func (d Definition) MemoryDir(projectRoot string) (string, error) {
+	if d.Memory == "" {
+		return "", nil
+	}
+	name := strings.TrimSpace(d.Name)
+	if name == "" || name == "." || name == ".." || filepath.Base(name) != name {
+		return "", fmt.Errorf("agent memory name %q is unsafe", d.Name)
+	}
+	var base string
+	switch d.Memory {
+	case "user":
+		base = strings.TrimSpace(os.Getenv("GROK_HOME"))
+		if base == "" {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return "", err
+			}
+			base = filepath.Join(home, ".grok")
+		}
+		base = filepath.Join(base, "agent-memory")
+	case "project":
+		base = filepath.Join(projectRoot, ".grok", "agent-memory")
+	case "local":
+		base = filepath.Join(projectRoot, ".grok", "agent-memory-local")
+	default:
+		return "", fmt.Errorf("invalid agent memory scope %q", d.Memory)
+	}
+	return filepath.Join(base, name), nil
 }
 
 func oneOf(value string, choices ...string) bool {
