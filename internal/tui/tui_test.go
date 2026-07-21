@@ -341,6 +341,125 @@ func TestInputEditingSupportsCursorNavigation(t *testing.T) {
 	}
 }
 
+func TestMultilineInputEnterModesAndContinuation(t *testing.T) {
+	press := func(m *model, key tea.Key) (*model, tea.Cmd) {
+		updated, command := m.Update(tea.KeyPressMsg(key))
+		return updated.(*model), command
+	}
+	for _, modifier := range []tea.KeyMod{tea.ModShift, tea.ModAlt} {
+		m := &model{ctx: context.Background(), runner: &agent.Runner{}}
+		m.setInput("first")
+		m, _ = press(m, tea.Key{Code: tea.KeyEnter, Mod: modifier})
+		m, _ = press(m, tea.Key{Code: 's', Text: "second"})
+		if got := string(m.input); got != "first\nsecond" || m.running {
+			t.Fatalf("modifier=%v input=%q running=%v", modifier, got, m.running)
+		}
+		m, command := press(m, tea.Key{Code: tea.KeyEnter})
+		if command == nil || !m.running || !strings.Contains(m.transcript.String(), "first\nsecond") {
+			t.Fatalf("default send modifier=%v running=%v transcript=%q", modifier, m.running, m.transcript.String())
+		}
+	}
+
+	m := &model{ctx: context.Background(), runner: &agent.Runner{}}
+	m.setInput("first")
+	m, _ = press(m, tea.Key{Code: 'm', Mod: tea.ModCtrl})
+	if !m.multiline {
+		t.Fatal("ctrl-m did not enable multiline mode")
+	}
+	m, command := press(m, tea.Key{Code: tea.KeyEnter})
+	if command != nil || string(m.input) != "first\n" || m.running {
+		t.Fatalf("multiline newline command=%v input=%q running=%v", command != nil, m.input, m.running)
+	}
+	m, _ = press(m, tea.Key{Code: 's', Text: "second"})
+	m, command = press(m, tea.Key{Code: tea.KeyEnter, Mod: tea.ModShift})
+	if command == nil || !m.running || !strings.Contains(m.transcript.String(), "first\nsecond") {
+		t.Fatalf("multiline send running=%v transcript=%q", m.running, m.transcript.String())
+	}
+
+	m = &model{}
+	m.setInput("continued\\")
+	m, command = press(m, tea.Key{Code: tea.KeyEnter})
+	if command != nil || string(m.input) != "continued\n" || m.cursor != len(m.input) {
+		t.Fatalf("continuation command=%v input=%q cursor=%d", command != nil, m.input, m.cursor)
+	}
+	m.setInput("multiline\\")
+	m, _ = press(m, tea.Key{Code: 'm', Mod: tea.ModCtrl})
+	m, command = press(m, tea.Key{Code: tea.KeyEnter})
+	if command != nil || string(m.input) != "multiline\n" {
+		t.Fatalf("multiline continuation command=%v input=%q", command != nil, m.input)
+	}
+}
+
+func TestMultilineCursorNavigationAndUndo(t *testing.T) {
+	m := &model{}
+	press := func(key tea.Key) {
+		updated, _ := m.Update(tea.KeyPressMsg(key))
+		m = updated.(*model)
+	}
+	m.setInput("abcd\nxy\n1234")
+	m.cursor = 2
+	press(tea.Key{Code: tea.KeyDown})
+	if m.cursor != 7 {
+		t.Fatalf("down cursor=%d", m.cursor)
+	}
+	press(tea.Key{Code: tea.KeyDown})
+	if m.cursor != 10 {
+		t.Fatalf("second down cursor=%d", m.cursor)
+	}
+	press(tea.Key{Code: tea.KeyUp})
+	press(tea.Key{Code: tea.KeyHome})
+	if m.cursor != 5 {
+		t.Fatalf("line home cursor=%d", m.cursor)
+	}
+	press(tea.Key{Code: tea.KeyEnd})
+	if m.cursor != 7 {
+		t.Fatalf("line end cursor=%d", m.cursor)
+	}
+	press(tea.Key{Code: tea.KeyRight})
+	if m.cursor != 8 {
+		t.Fatalf("right across newline cursor=%d", m.cursor)
+	}
+
+	m.clearInput()
+	press(tea.Key{Code: 'a', Text: "ab"})
+	press(tea.Key{Code: tea.KeyBackspace})
+	press(tea.Key{Code: 'z', Mod: tea.ModCtrl})
+	if string(m.input) != "ab" || m.cursor != 2 {
+		t.Fatalf("undo backspace input=%q cursor=%d", m.input, m.cursor)
+	}
+	press(tea.Key{Code: 'u', Mod: tea.ModCtrl})
+	press(tea.Key{Code: 'z', Mod: tea.ModSuper})
+	if string(m.input) != "ab" || m.cursor != 2 {
+		t.Fatalf("undo clear input=%q cursor=%d", m.input, m.cursor)
+	}
+	press(tea.Key{Code: tea.KeyEnter, Mod: tea.ModShift})
+	press(tea.Key{Code: 'z', Mod: tea.ModCtrl})
+	if string(m.input) != "ab" || m.cursor != 2 {
+		t.Fatalf("undo newline input=%q cursor=%d", m.input, m.cursor)
+	}
+}
+
+func TestInputUndoIsBounded(t *testing.T) {
+	m := &model{}
+	m.undoInput()
+	m.insertInput("")
+	if len(m.input) != 0 || len(m.inputUndo) != 0 {
+		t.Fatal("empty undo or insert changed input")
+	}
+	for range maxInputUndoEntries + 1 {
+		m.insertInput("x")
+	}
+	if len(m.inputUndo) != maxInputUndoEntries {
+		t.Fatalf("undo entries=%d", len(m.inputUndo))
+	}
+	for range maxInputUndoEntries {
+		m.undoInput()
+	}
+	if string(m.input) != "x" || m.cursor != 1 {
+		t.Fatalf("bounded undo input=%q cursor=%d", m.input, m.cursor)
+	}
+}
+
 func TestPromptHistoryBrowsesNewestFirstAndClosesPastNewest(t *testing.T) {
 	m := &model{history: []string{"third", "second", "first"}, historyIndex: -1}
 	press := func(code rune) {
@@ -391,6 +510,17 @@ func TestPromptHistoryDraftDoesNotOpenAndTypingDetaches(t *testing.T) {
 	m = updated.(*model)
 	if got := string(m.input); got != "remembered!" || m.historyActive {
 		t.Fatalf("edited input=%q active=%v", got, m.historyActive)
+	}
+}
+
+func TestPromptHistoryMultilineEntryKeepsBrowsing(t *testing.T) {
+	m := &model{history: []string{"new\nlines", "older"}, historyIndex: -1}
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
+	m = updated.(*model)
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
+	m = updated.(*model)
+	if got := string(m.input); got != "older" || !m.historyActive {
+		t.Fatalf("input=%q active=%v", got, m.historyActive)
 	}
 }
 
@@ -585,6 +715,30 @@ func TestRenderInputKeepsCursorVisibleWithinDisplayWidth(t *testing.T) {
 	}
 }
 
+func TestRenderPromptInputShowsCursorWindowAndShrinksContent(t *testing.T) {
+	input := "one\ntwo\nthree\nfour\nfive\nsix\nseven"
+	lines := renderPromptInput([]rune(input), len([]rune(input)), 20, maxPromptInputRows)
+	if len(lines) != maxPromptInputRows || strings.Contains(strings.Join(lines, "\n"), "one") || !strings.Contains(lines[len(lines)-1], "seven█") {
+		t.Fatalf("rendered lines=%q", lines)
+	}
+	if got := fitInputLine([]rune("你好"), 3); got != "你" {
+		t.Fatalf("wide line=%q", got)
+	}
+	m := &model{width: 20, height: 20}
+	m.setInput(input)
+	if got := m.contentHeight(); got != 10 {
+		t.Fatalf("content height=%d", got)
+	}
+	view := stripUIANSI(m.View().Content)
+	if !strings.Contains(view, "two") || !strings.Contains(view, "seven█") || strings.Contains(view, "> one") {
+		t.Fatalf("multiline composer not rendered:\n%s", view)
+	}
+	m.height = 10
+	if m.visiblePromptInputRows() != 4 || m.contentHeight() != 3 {
+		t.Fatalf("small viewport rows=%d content=%d", m.visiblePromptInputRows(), m.contentHeight())
+	}
+}
+
 func TestStructuredInputsShareCursorEditing(t *testing.T) {
 	m := &model{planReview: &planReviewState{editing: true}, input: []rune("ab"), cursor: 2}
 	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyLeft}))
@@ -749,6 +903,23 @@ func TestMouseClickTogglesMultiSelectQuestionOptions(t *testing.T) {
 	m = updated.(*model)
 	if got := string(m.input); got != "2" {
 		t.Fatalf("toggled input=%q", got)
+	}
+}
+
+func TestQuestionOptionSelectionCanBeUndone(t *testing.T) {
+	m := &model{question: &questionState{event: questionEvent{request: tools.UserQuestionRequest{Questions: []tools.UserQuestion{{
+		Question: "Deploy where?", Options: []tools.UserQuestionOption{{Label: "Local"}, {Label: "Cloud"}},
+	}}}}}}
+	m.input = []rune("custom")
+	m.cursor = 3
+	m.selectQuestionOption(1, true)
+	if got := string(m.input); got != "2" {
+		t.Fatalf("selected input=%q", got)
+	}
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'z', Mod: tea.ModCtrl}))
+	m = updated.(*model)
+	if got := string(m.input); got != "custom" || m.cursor != 3 {
+		t.Fatalf("undo input=%q cursor=%d", got, m.cursor)
 	}
 }
 

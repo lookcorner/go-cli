@@ -27,6 +27,8 @@ const (
 	questionDoubleClickWindow = 500 * time.Millisecond
 	maxHistorySearchResults   = 100
 	historySearchPageSize     = 8
+	maxInputUndoEntries       = 100
+	maxPromptInputRows        = 6
 )
 
 type textEvent struct{ text string }
@@ -250,6 +252,8 @@ type model struct {
 	transcript    strings.Builder
 	input         []rune
 	cursor        int
+	inputUndo     []inputSnapshot
+	multiline     bool
 	history       []string
 	historyIndex  int
 	historyActive bool
@@ -279,6 +283,11 @@ type model struct {
 type historySearchState struct {
 	results  []string
 	selected int
+}
+
+type inputSnapshot struct {
+	text   []rune
+	cursor int
 }
 
 type planReviewState struct {
@@ -617,10 +626,18 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if !m.rememberInput {
 		switch key.Code {
 		case tea.KeyUp:
-			m.browseHistory(-1)
+			if !m.historyActive && slices.Contains(m.input, '\n') {
+				m.moveInputCursorLine(-1)
+			} else {
+				m.browseHistory(-1)
+			}
 			return m, nil
 		case tea.KeyDown:
-			m.browseHistory(1)
+			if !m.historyActive && slices.Contains(m.input, '\n') {
+				m.moveInputCursorLine(1)
+			} else {
+				m.browseHistory(1)
+			}
 			return m, nil
 		case tea.KeyEsc:
 			if m.historyActive {
@@ -632,6 +649,15 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.historyActive {
 		m.historyActive = false
 		m.historyIndex = -1
+	}
+	if stroke == "ctrl+m" && !m.rememberInput {
+		m.multiline = !m.multiline
+		if m.multiline {
+			m.status = "multiline input"
+		} else {
+			m.status = "single-line input"
+		}
+		return m, nil
 	}
 	if stroke == "shift+tab" {
 		if m.runner.Tools == nil {
@@ -650,6 +676,18 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.status = "ready"
 		}
 		return m, nil
+	}
+	modifiedEnter := key.Code == tea.KeyEnter && key.Mod&(tea.ModShift|tea.ModAlt) != 0
+	if key.Code == tea.KeyEnter && !m.rememberInput {
+		if !modifiedEnter && len(m.input) > 0 && m.cursor == len(m.input) && m.input[len(m.input)-1] == '\\' {
+			m.saveInputUndo()
+			m.input[len(m.input)-1] = '\n'
+			return m, nil
+		}
+		if (!m.multiline && modifiedEnter) || (m.multiline && !modifiedEnter) {
+			m.insertInput("\n")
+			return m, nil
+		}
 	}
 	switch key.Code {
 	case tea.KeyEnter:
@@ -1022,7 +1060,12 @@ func (m *model) selectQuestionOption(index int, toggle bool) {
 	if !selected || !toggle {
 		kept = append(kept, value)
 	}
-	m.input = []rune(strings.Join(kept, ", "))
+	next := []rune(strings.Join(kept, ", "))
+	if string(next) == string(m.input) {
+		return
+	}
+	m.saveInputUndo()
+	m.input = next
 	m.cursor = len(m.input)
 }
 
@@ -1059,41 +1102,108 @@ func (m *model) finishQuestion(response tools.UserQuestionResponse) {
 func (m *model) clearInput() {
 	m.input = nil
 	m.cursor = 0
+	m.inputUndo = nil
 }
 
 func (m *model) setInput(value string) {
 	m.input = []rune(value)
 	m.cursor = len(m.input)
+	m.inputUndo = nil
+}
+
+func (m *model) saveInputUndo() {
+	snapshot := inputSnapshot{text: append([]rune(nil), m.input...), cursor: m.cursor}
+	if len(m.inputUndo) == maxInputUndoEntries {
+		copy(m.inputUndo, m.inputUndo[1:])
+		m.inputUndo[len(m.inputUndo)-1] = snapshot
+		return
+	}
+	m.inputUndo = append(m.inputUndo, snapshot)
+}
+
+func (m *model) undoInput() {
+	if len(m.inputUndo) == 0 {
+		return
+	}
+	last := m.inputUndo[len(m.inputUndo)-1]
+	m.inputUndo = m.inputUndo[:len(m.inputUndo)-1]
+	m.input, m.cursor = last.text, last.cursor
+}
+
+func (m *model) insertInput(value string) {
+	insert := []rune(value)
+	if len(insert) == 0 {
+		return
+	}
+	m.cursor = min(max(m.cursor, 0), len(m.input))
+	m.saveInputUndo()
+	oldLength := len(m.input)
+	m.input = append(m.input, insert...)
+	copy(m.input[m.cursor+len(insert):], m.input[m.cursor:oldLength])
+	copy(m.input[m.cursor:], insert)
+	m.cursor += len(insert)
+}
+
+func (m *model) inputLineBounds() (int, int) {
+	cursor := min(max(m.cursor, 0), len(m.input))
+	start := cursor
+	for start > 0 && m.input[start-1] != '\n' {
+		start--
+	}
+	end := cursor
+	for end < len(m.input) && m.input[end] != '\n' {
+		end++
+	}
+	return start, end
+}
+
+func (m *model) moveInputCursorLine(direction int) {
+	start, end := m.inputLineBounds()
+	column := m.cursor - start
+	if direction < 0 && start > 0 {
+		m.cursor = start - 1
+		targetStart, targetEnd := m.inputLineBounds()
+		m.cursor = min(targetStart+column, targetEnd)
+	} else if direction > 0 && end < len(m.input) {
+		m.cursor = end + 1
+		targetStart, targetEnd := m.inputLineBounds()
+		m.cursor = min(targetStart+column, targetEnd)
+	}
 }
 
 func (m *model) editInput(message tea.KeyPressMsg) {
 	key, stroke := message.Key(), message.Keystroke()
 	m.cursor = min(max(m.cursor, 0), len(m.input))
 	switch {
+	case stroke == "ctrl+z" || stroke == "super+z":
+		m.undoInput()
 	case key.Code == tea.KeyLeft:
 		m.cursor = max(0, m.cursor-1)
 	case key.Code == tea.KeyRight:
 		m.cursor = min(len(m.input), m.cursor+1)
-	case key.Code == tea.KeyHome || stroke == "ctrl+a":
+	case key.Code == tea.KeyHome:
+		m.cursor, _ = m.inputLineBounds()
+	case stroke == "ctrl+a":
 		m.cursor = 0
-	case key.Code == tea.KeyEnd || stroke == "ctrl+e":
+	case key.Code == tea.KeyEnd:
+		_, m.cursor = m.inputLineBounds()
+	case stroke == "ctrl+e":
 		m.cursor = len(m.input)
 	case key.Code == tea.KeyBackspace && m.cursor > 0:
+		m.saveInputUndo()
 		copy(m.input[m.cursor-1:], m.input[m.cursor:])
 		m.input = m.input[:len(m.input)-1]
 		m.cursor--
 	case key.Code == tea.KeyDelete && m.cursor < len(m.input):
+		m.saveInputUndo()
 		copy(m.input[m.cursor:], m.input[m.cursor+1:])
 		m.input = m.input[:len(m.input)-1]
-	case stroke == "ctrl+u":
-		m.clearInput()
+	case stroke == "ctrl+u" && len(m.input) > 0:
+		m.saveInputUndo()
+		m.input = nil
+		m.cursor = 0
 	case key.Text != "" && utf8.ValidString(key.Text):
-		insert := []rune(key.Text)
-		oldLength := len(m.input)
-		m.input = append(m.input, insert...)
-		copy(m.input[m.cursor+len(insert):], m.input[m.cursor:oldLength])
-		copy(m.input[m.cursor:], insert)
-		m.cursor += len(insert)
+		m.insertInput(key.Text)
 	}
 }
 
@@ -1258,13 +1368,17 @@ func (m *model) View() tea.View {
 	} else if m.historySearch != nil {
 		footer = "\x1b[1;32mPrompt history\x1b[0m\n> " + renderInput(m.input, m.cursor, max(width-2, 1)) + "\n\x1b[2mEnter/Tab restore · Esc cancel · Up/Down select\x1b[0m"
 	} else {
-		input := ""
+		inputLines := []string{"> "}
 		if m.running {
-			input = "> "
+			inputLines = []string{"> "}
 		} else {
-			input = "> " + renderInput(m.input, m.cursor, max(width-2, 1))
+			inputLines = renderPromptInput(m.input, m.cursor, width, m.visiblePromptInputRows())
 		}
-		footer = input + "\n\x1b[2m" + truncate("Enter send · Shift-Tab mode · PgUp/PgDn scroll · Ctrl-C cancel/quit · Ctrl-Q quit", width) + "\x1b[0m"
+		hint := "Enter send · Shift/Alt-Enter newline · Ctrl-M multiline · Ctrl-Z undo"
+		if m.multiline {
+			hint = "Shift/Alt-Enter send · Enter newline · Ctrl-M single-line · Ctrl-Z undo"
+		}
+		footer = strings.Join(inputLines, "\n") + "\n\x1b[2m" + truncate(hint, width) + "\x1b[0m"
 	}
 	status := "\x1b[2m" + truncate(m.status, width) + "\x1b[0m"
 	view := tea.NewView(header + "\n" + body + status + "\n" + footer)
@@ -1352,7 +1466,15 @@ func (m *model) contentHeight() int {
 	if m.historySearch != nil {
 		return max(m.height-6, 3)
 	}
-	return max(m.height-5, 3)
+	rows := 1
+	if !m.running {
+		rows = min(strings.Count(string(m.input), "\n")+1, m.visiblePromptInputRows())
+	}
+	return max(m.height-4-rows, 3)
+}
+
+func (m *model) visiblePromptInputRows() int {
+	return min(maxPromptInputRows, max(m.height-6, 1))
 }
 
 func (m *model) historySearchLines(width, height int) []string {
@@ -1435,6 +1557,49 @@ func renderInput(input []rune, cursor, width int) string {
 	visible := input[start:end]
 	position := cursor - start
 	return string(visible[:position]) + "█" + string(visible[position:])
+}
+
+func renderPromptInput(input []rune, cursor, width, maxRows int) []string {
+	logical := strings.Split(string(input), "\n")
+	cursor = min(max(cursor, 0), len(input))
+	active, column, remaining := 0, 0, cursor
+	for index, line := range logical {
+		length := len([]rune(line))
+		if remaining <= length || index == len(logical)-1 {
+			active, column = index, min(remaining, length)
+			break
+		}
+		remaining -= length + 1
+	}
+	start := max(0, active-max(maxRows, 1)+1)
+	end := min(len(logical), start+max(maxRows, 1))
+	lines := make([]string, 0, end-start)
+	for index := start; index < end; index++ {
+		prefix := "  "
+		if index == 0 {
+			prefix = "> "
+		}
+		line := []rune(logical[index])
+		if index == active {
+			lines = append(lines, prefix+renderInput(line, column, max(width-2, 1)))
+		} else {
+			lines = append(lines, prefix+fitInputLine(line, max(width-2, 1)))
+		}
+	}
+	return lines
+}
+
+func fitInputLine(input []rune, width int) string {
+	used, end := 0, 0
+	for end < len(input) {
+		charWidth := runeWidth(input[end])
+		if used+charWidth > width {
+			break
+		}
+		used += charWidth
+		end++
+	}
+	return string(input[:end])
 }
 
 func truncateANSIUnsafe(value string, width int) string {
