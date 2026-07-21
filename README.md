@@ -214,6 +214,10 @@ pending. Session startup also removes, in the background, empty orphan memory
 workspaces older than `[memory.gc].max_age_days` (30 by default); temporary
 `tmp*` workspaces use a 7-day limit when they contain sessions and are removed
 immediately when empty.
+Workspaces beneath system temporary directories are treated as ephemeral:
+global memory remains readable and `/remember` can still update it, but session
+flushes, session-end summaries, dream output, and workspace memory directories
+are not persisted.
 During an active REPL, TUI, or ACP session, `/memory off` (or `/mem off`)
 removes both retrieval tools and pauses all writes without deleting files;
 `/memory on` lazily reopens the same workspace store and restores the tools.

@@ -101,6 +101,9 @@ func (s *Store) PrepareDream(config DreamConfig, manual bool) (DreamInput, Dream
 func (s *Store) CommitDream(response string, input DreamInput, staleSeconds uint64) (DreamResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.ephemeral {
+		return DreamResult{Outcome: "nothing_to_consolidate", Eligible: input.Eligible}, nil
+	}
 	lockPath := filepath.Join(s.workspaceDir, ".dream-lock")
 	prior, acquired, err := acquireDreamLock(lockPath, staleSeconds)
 	if err != nil {

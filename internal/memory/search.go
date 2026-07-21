@@ -126,10 +126,8 @@ func (s *Store) files() ([]FileInfo, error) {
 }
 
 func (s *Store) allowedPath(path string) (string, error) {
-	for _, dir := range []string{s.root, s.workspaceDir, s.sessionsDir} {
-		if err := ensureDirectory(dir); err != nil {
-			return "", err
-		}
+	if err := ensureDirectory(s.root); err != nil {
+		return "", err
 	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -140,12 +138,26 @@ func (s *Store) allowedPath(path string) (string, error) {
 		return "", err
 	}
 	root, rootErr := canonicalDirectory(s.root)
-	workspace, workspaceErr := canonicalDirectory(s.workspaceDir)
-	sessions, sessionsErr := canonicalDirectory(s.sessionsDir)
-	if rootErr != nil || workspaceErr != nil || sessionsErr != nil {
+	if rootErr != nil {
 		return "", errors.New("memory roots could not be resolved safely")
 	}
-	if resolved == filepath.Join(root, "MEMORY.md") || resolved == filepath.Join(workspace, "MEMORY.md") {
+	if resolved == filepath.Join(root, "MEMORY.md") {
+		return resolved, nil
+	}
+	if s.ephemeral {
+		return "", errors.New("memory path is outside the active memory scope")
+	}
+	for _, dir := range []string{s.workspaceDir, s.sessionsDir} {
+		if err := ensureDirectory(dir); err != nil {
+			return "", err
+		}
+	}
+	workspace, workspaceErr := canonicalDirectory(s.workspaceDir)
+	sessions, sessionsErr := canonicalDirectory(s.sessionsDir)
+	if workspaceErr != nil || sessionsErr != nil {
+		return "", errors.New("memory roots could not be resolved safely")
+	}
+	if resolved == filepath.Join(workspace, "MEMORY.md") {
 		return resolved, nil
 	}
 	rel, err := filepath.Rel(sessions, resolved)

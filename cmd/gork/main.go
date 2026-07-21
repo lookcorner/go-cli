@@ -1243,7 +1243,7 @@ func newMemoryStore(workspaceRoot, sessionID string, gcMaxAgeDays uint64) (*memo
 	if err != nil {
 		return nil, err
 	}
-	store, err := memory.Open(root, workspaceRoot, sessionID)
+	store, err := memory.OpenWorkspace(root, workspaceRoot, sessionID)
 	if err != nil {
 		return nil, err
 	}

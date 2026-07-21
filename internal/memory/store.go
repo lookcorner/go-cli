@@ -27,6 +27,7 @@ type Store struct {
 	workspaceDir string
 	sessionsDir  string
 	sessionID    string
+	ephemeral    bool
 }
 
 type FileInfo struct {
@@ -155,6 +156,14 @@ func normalizeMemoryContent(value string) string {
 }
 
 func Open(root, workspace, sessionID string) (*Store, error) {
+	return open(root, workspace, sessionID, false)
+}
+
+func OpenWorkspace(root, workspace, sessionID string) (*Store, error) {
+	return open(root, workspace, sessionID, ephemeralWorkspace(workspace))
+}
+
+func open(root, workspace, sessionID string, ephemeral bool) (*Store, error) {
 	root, workspace = filepath.Clean(root), filepath.Clean(workspace)
 	if root == "." || workspace == "." || strings.TrimSpace(sessionID) == "" {
 		return nil, errors.New("memory root, workspace, and session ID are required")
@@ -165,14 +174,62 @@ func Open(root, workspace, sessionID string) (*Store, error) {
 	}
 	store := &Store{
 		root: root, workspaceDir: workspaceDir, sessionsDir: filepath.Join(workspaceDir, "sessions"),
-		sessionID: safeName(sessionID),
+		sessionID: safeName(sessionID), ephemeral: ephemeral,
 	}
-	for _, dir := range []string{store.root, store.workspaceDir, store.sessionsDir} {
+	dirs := []string{store.root}
+	if !ephemeral {
+		dirs = append(dirs, store.workspaceDir, store.sessionsDir)
+	}
+	for _, dir := range dirs {
 		if err := ensureDirectory(dir); err != nil {
 			return nil, err
 		}
 	}
 	return store, nil
+}
+
+func (s *Store) IsEphemeral() bool { return s.ephemeral }
+
+func ephemeralWorkspace(workspace string) bool {
+	raw := filepath.ToSlash(filepath.Clean(workspace))
+	resolved, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		resolved = workspace
+	}
+	temp := os.TempDir()
+	if canonical, err := filepath.EvalSymlinks(temp); err == nil {
+		temp = canonical
+	}
+	if pathWithin(resolved, temp) {
+		return true
+	}
+	resolvedSlash := filepath.ToSlash(resolved)
+	return temporaryPath(raw) || temporaryPath(resolvedSlash)
+}
+
+func temporaryPath(path string) bool {
+	for _, root := range []string{"/tmp", "/var/tmp", "/private/tmp", "/private/var/tmp"} {
+		if path == root || strings.HasPrefix(path, root+"/") {
+			return true
+		}
+	}
+	for _, root := range []string{"/var/folders", "/private/var/folders"} {
+		if (path == root || strings.HasPrefix(path, root+"/")) &&
+			(strings.Contains(path, "/T/") || strings.HasSuffix(path, "/T")) {
+			return true
+		}
+	}
+	return false
+}
+
+func pathWithin(path, root string) bool {
+	path, pathErr := filepath.Abs(path)
+	root, rootErr := filepath.Abs(root)
+	if pathErr != nil || rootErr != nil {
+		return false
+	}
+	rel, err := filepath.Rel(root, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func (s *Store) GC(maxAgeDays uint64) (int, error) {
@@ -253,6 +310,9 @@ func (s *Store) Write(trigger, content string) (string, bool, error) {
 	if content == "" {
 		return "", false, errors.New("memory content is empty")
 	}
+	if s.ephemeral {
+		return filepath.Join(s.sessionsDir, safeName(trigger)+"-"+s.sessionID+".md"), false, nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := ensureDirectory(s.sessionsDir); err != nil {
@@ -302,7 +362,7 @@ func (s *Store) Write(trigger, content string) (string, bool, error) {
 func (s *Store) List() ([]FileInfo, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := ensureDirectory(s.sessionsDir); err != nil {
+	if err := ensureDirectory(s.root); err != nil {
 		return nil, err
 	}
 	files := make([]FileInfo, 0)
@@ -332,7 +392,7 @@ func (s *Store) List() ([]FileInfo, error) {
 func (s *Store) Context() (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := ensureDirectory(s.sessionsDir); err != nil {
+	if err := ensureDirectory(s.root); err != nil {
 		return "", err
 	}
 	type candidate struct {
@@ -390,6 +450,9 @@ type memoryEntry struct {
 
 func sessionEntries(dir string) ([]memoryEntry, error) {
 	items, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}

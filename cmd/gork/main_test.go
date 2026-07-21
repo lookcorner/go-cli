@@ -168,6 +168,9 @@ func TestOpenMemoryStoreRunsConfiguredGC(t *testing.T) {
 	if err != nil || store == nil {
 		t.Fatalf("store=%#v err=%v", store, err)
 	}
+	if !store.IsEphemeral() {
+		t.Fatal("runtime temp workspace was not marked ephemeral")
+	}
 	deadline := time.Now().Add(time.Second)
 	for {
 		_, err := os.Stat(orphan)

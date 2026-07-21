@@ -307,3 +307,70 @@ func TestStoreGCHandlesMissingAndUnsafeRoots(t *testing.T) {
 		t.Fatal("symlink memory root was accepted")
 	}
 }
+
+func TestOpenWorkspaceSkipsEphemeralPersistenceButKeepsGlobalMemory(t *testing.T) {
+	root, workspace := t.TempDir(), t.TempDir()
+	store, err := OpenWorkspace(root, workspace, "ephemeral")
+	if err != nil || !store.IsEphemeral() {
+		t.Fatalf("store=%#v err=%v", store, err)
+	}
+	if _, err := os.Stat(store.workspaceDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ephemeral workspace directory exists: %v", err)
+	}
+	path, written, err := store.Write("session_end", "temporary knowledge")
+	if err != nil || written || filepath.Dir(path) != store.sessionsDir {
+		t.Fatalf("path=%q written=%v err=%v", path, written, err)
+	}
+	global, err := AppendGlobal(root, "global convention\n\nshared across workspaces")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := store.List()
+	if err != nil || len(files) != 1 || files[0].Source != "global" {
+		t.Fatalf("files=%#v err=%v", files, err)
+	}
+	context, err := store.Context()
+	if err != nil || !strings.Contains(context, "global convention") {
+		t.Fatalf("context=%q err=%v", context, err)
+	}
+	results, err := store.Search("global convention", DefaultConfig().Index, DefaultConfig().Search)
+	if err != nil || len(results) != 1 || results[0].Source != "global" {
+		t.Fatalf("results=%#v err=%v", results, err)
+	}
+	if file, err := store.Get(global, 0, 1); err != nil || len(file.Lines) != 1 {
+		t.Fatalf("file=%#v err=%v", file, err)
+	}
+	if _, result, err := store.PrepareDream(DefaultConfig().Dream, true); err != nil || result.Outcome != "nothing_to_consolidate" {
+		t.Fatalf("prepare dream=%#v err=%v", result, err)
+	}
+	if result, err := store.CommitDream("## Durable\n\nDo not write.", DreamInput{Eligible: 1}, 60); err != nil || result.Outcome != "nothing_to_consolidate" {
+		t.Fatalf("dream=%#v err=%v", result, err)
+	}
+	if _, err := os.Stat(store.workspaceDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ephemeral operations created workspace directory: %v", err)
+	}
+}
+
+func TestOpenWorkspaceDetectsTemporaryAndPersistentPaths(t *testing.T) {
+	for _, path := range []string{"/tmp", "/tmp/worktree", "/var/tmp/worktree", "/private/tmp/worktree", "/var/folders/aa/bb/T", "/var/folders/aa/bb/T/worktree", "/private/var/folders/aa/bb/T/worktree"} {
+		if !ephemeralWorkspace(path) {
+			t.Errorf("temporary path not detected: %s", path)
+		}
+	}
+	for _, path := range []string{"/home/user/project", "/Users/dev/project", "/opt/workspace", "/home/var/folders/aa/bb/T/project"} {
+		if ephemeralWorkspace(path) {
+			t.Errorf("persistent path misclassified: %s", path)
+		}
+	}
+	store, err := OpenWorkspace(t.TempDir(), "/home/user/project", "persistent")
+	if err != nil || store.IsEphemeral() {
+		t.Fatalf("store=%#v err=%v", store, err)
+	}
+	if _, err := os.Stat(store.sessionsDir); err != nil {
+		t.Fatalf("persistent sessions missing: %v", err)
+	}
+	flat, err := Open(t.TempDir(), t.TempDir(), "flat-memory")
+	if err != nil || flat.IsEphemeral() {
+		t.Fatalf("flat store=%#v err=%v", flat, err)
+	}
+}
