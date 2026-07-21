@@ -150,6 +150,37 @@ func TestMemoryClearCommandScopesConfirmationAndValidation(t *testing.T) {
 	}
 }
 
+func TestOpenMemoryStoreRunsConfiguredGC(t *testing.T) {
+	home, workspace := t.TempDir(), t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	orphan := filepath.Join(home, "memory", "old-orphan")
+	if err := os.MkdirAll(orphan, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * 24 * time.Hour)
+	if err := os.Chtimes(orphan, old, old); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{Memory: memory.DefaultConfig()}
+	cfg.Memory.Enabled = true
+	cfg.Memory.GC.MaxAgeDays = 1
+	store, err := openMemoryStore(cfg, workspace, "gc-open")
+	if err != nil || store == nil {
+		t.Fatalf("store=%#v err=%v", store, err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		_, err := os.Stat(orphan)
+		if errors.Is(err, os.ErrNotExist) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("orphan remains: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestInteractiveMemoryListDoesNotRunNormalTurn(t *testing.T) {
 	store, err := memory.Open(t.TempDir(), t.TempDir(), "interactive-list")
 	if err != nil {

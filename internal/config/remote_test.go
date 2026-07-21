@@ -198,7 +198,7 @@ func TestMemoryDefaultsRemoteAndEnvironmentPrecedence(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("GROK_HOME", home)
 	cfg, err := Load(filepath.Join(home, "missing.toml"))
-	if err != nil || cfg.Memory.Enabled || !cfg.Memory.InitialInjection || !cfg.Memory.SaveOnEnd || !cfg.Memory.Flush.Enabled || cfg.Memory.Flush.SoftThresholdTokens != 4000 || cfg.Memory.Flush.MaxWriteChars != 8000 || cfg.Memory.Flush.IdleTimeoutSeconds != nil || cfg.Memory.Search.RecencyDecay != 0.95 || !cfg.Memory.Search.TemporalDecay.Enabled || cfg.Memory.Search.TemporalDecay.HalfLifeDays != 7 || cfg.Memory.Search.MMR.Enabled || cfg.Memory.Search.MMR.Lambda != 0.7 || cfg.Memory.Search.SourceWeights["workspace"] != 1 {
+	if err != nil || cfg.Memory.Enabled || !cfg.Memory.InitialInjection || !cfg.Memory.SaveOnEnd || !cfg.Memory.Flush.Enabled || cfg.Memory.Flush.SoftThresholdTokens != 4000 || cfg.Memory.Flush.MaxWriteChars != 8000 || cfg.Memory.Flush.IdleTimeoutSeconds != nil || cfg.Memory.Search.RecencyDecay != 0.95 || !cfg.Memory.Search.TemporalDecay.Enabled || cfg.Memory.Search.TemporalDecay.HalfLifeDays != 7 || cfg.Memory.Search.MMR.Enabled || cfg.Memory.Search.MMR.Lambda != 0.7 || cfg.Memory.Search.SourceWeights["workspace"] != 1 || cfg.Memory.GC.MaxAgeDays != 30 {
 		t.Fatalf("defaults=%#v err=%v", cfg.Memory, err)
 	}
 	cfg.ApplyRemoteSettings(&RemoteSettings{

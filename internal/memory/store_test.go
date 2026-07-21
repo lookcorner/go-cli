@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestStoreWritesDeduplicatesAndBuildsBoundedContext(t *testing.T) {
@@ -211,5 +212,98 @@ func TestClearMemoryScopesAndRejectsSymlinks(t *testing.T) {
 	}
 	if _, err := os.Stat(outsideWorkspace); err != nil {
 		t.Fatalf("linked root target changed: %v", err)
+	}
+}
+
+func TestStoreGCRemovesOnlyEligibleWorkspaceDirectories(t *testing.T) {
+	root, workspace := t.TempDir(), t.TempDir()
+	store, err := Open(root, workspace, "gc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	create := func(name string, session, old bool) string {
+		t.Helper()
+		path := filepath.Join(root, name)
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if session {
+			if err := os.MkdirAll(filepath.Join(path, "sessions"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(path, "sessions", "log.md"), []byte("memory"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if old {
+			when := time.Now().Add(-31 * 24 * time.Hour)
+			if strings.HasPrefix(name, "tmp") {
+				when = time.Now().Add(-8 * 24 * time.Hour)
+			}
+			if err := os.Chtimes(path, when, when); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return path
+	}
+	removeEmptyTmp := create("tmp-empty", false, false)
+	keepYoungTmp := create("tmp-young", true, false)
+	removeOldTmp := create("tmp-old", true, true)
+	removeOldEmpty := create("old-empty", false, true)
+	if err := os.WriteFile(filepath.Join(removeOldEmpty, "MEMORY.md"), []byte("project"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(removeOldEmpty, "index.sqlite"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldEmptyTime := time.Now().Add(-31 * 24 * time.Hour)
+	if err := os.Chtimes(removeOldEmpty, oldEmptyTime, oldEmptyTime); err != nil {
+		t.Fatal(err)
+	}
+	keepYoungEmpty := create("young-empty", false, false)
+	keepActive := create("old-active", true, true)
+	rootFile := filepath.Join(root, "MEMORY.md")
+	if err := os.WriteFile(rootFile, []byte("global"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	linked := filepath.Join(root, "tmp-linked")
+	if err := os.Symlink(t.TempDir(), linked); err != nil {
+		t.Fatal(err)
+	}
+	currentOld := time.Now().Add(-60 * 24 * time.Hour)
+	if err := os.Chtimes(store.workspaceDir, currentOld, currentOld); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := store.GC(30)
+	if err != nil || removed != 3 {
+		t.Fatalf("removed=%d err=%v", removed, err)
+	}
+	for _, path := range []string{removeEmptyTmp, removeOldTmp, removeOldEmpty} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("eligible path remains %s: %v", path, err)
+		}
+	}
+	for _, path := range []string{keepYoungTmp, keepYoungEmpty, keepActive, store.workspaceDir, rootFile, linked} {
+		if _, err := os.Lstat(path); err != nil {
+			t.Fatalf("protected path removed %s: %v", path, err)
+		}
+	}
+}
+
+func TestStoreGCHandlesMissingAndUnsafeRoots(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing")
+	store := &Store{root: missing, workspaceDir: filepath.Join(missing, "current")}
+	if removed, err := store.GC(30); err != nil || removed != 0 {
+		t.Fatalf("missing root removed=%d err=%v", removed, err)
+	}
+	outside := t.TempDir()
+	linked := filepath.Join(t.TempDir(), "memory")
+	if err := os.Symlink(outside, linked); err != nil {
+		t.Fatal(err)
+	}
+	store.root = linked
+	if _, err := store.GC(30); err == nil {
+		t.Fatal("symlink memory root was accepted")
 	}
 }

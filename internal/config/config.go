@@ -408,6 +408,7 @@ type fileMemoryConfig struct {
 	Session          *fileMemorySessionConfig          `json:"session,omitempty" toml:"session"`
 	Index            *fileMemoryIndexConfig            `json:"index,omitempty" toml:"index"`
 	Search           *fileMemorySearchConfig           `json:"search,omitempty" toml:"search"`
+	GC               *fileMemoryGCConfig               `json:"gc,omitempty" toml:"gc"`
 	Dream            *fileMemoryDreamConfig            `json:"dream,omitempty" toml:"dream"`
 }
 
@@ -433,6 +434,10 @@ type fileMemoryTemporalDecayConfig struct {
 type fileMemoryMMRConfig struct {
 	Enabled *bool    `json:"enabled,omitempty" toml:"enabled"`
 	Lambda  *float64 `json:"lambda,omitempty" toml:"lambda"`
+}
+
+type fileMemoryGCConfig struct {
+	MaxAgeDays *uint64 `json:"max_age_days,omitempty" toml:"max_age_days"`
 }
 
 type fileMemoryDreamConfig struct {
@@ -958,6 +963,9 @@ func applyMemoryConfig(cfg *Config, source *fileMemoryConfig, flush *fileMemoryF
 			if source.Search.SourceWeights != nil {
 				cfg.Memory.Search.SourceWeights = source.Search.SourceWeights
 			}
+		}
+		if source.GC != nil && source.GC.MaxAgeDays != nil {
+			cfg.Memory.GC.MaxAgeDays = *source.GC.MaxAgeDays
 		}
 		if source.Dream != nil {
 			cfg.memoryDreamConfigured = true

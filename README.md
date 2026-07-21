@@ -210,7 +210,10 @@ session notes with a configurable half-life while treating global and workspace
 notes as evergreen. `[memory.search.source_weights]` adjusts source priority;
 optional `[memory.search.mmr]` promotes diverse results over near-duplicates.
 It is a deterministic text-only backend; semantic/vector retrieval remains
-pending.
+pending. Session startup also removes, in the background, empty orphan memory
+workspaces older than `[memory.gc].max_age_days` (30 by default); temporary
+`tmp*` workspaces use a 7-day limit when they contain sessions and are removed
+immediately when empty.
 During an active REPL, TUI, or ACP session, `/memory off` (or `/mem off`)
 removes both retrieval tools and pauses all writes without deleting files;
 `/memory on` lazily reopens the same workspace store and restores the tools.

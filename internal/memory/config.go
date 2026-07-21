@@ -9,6 +9,7 @@ type Config struct {
 	Flush            FlushConfig  `json:"flush"`
 	Index            IndexConfig  `json:"index"`
 	Search           SearchConfig `json:"search"`
+	GC               GCConfig     `json:"gc"`
 	Dream            DreamConfig  `json:"dream"`
 }
 
@@ -34,6 +35,10 @@ type TemporalDecayConfig struct {
 type MMRConfig struct {
 	Enabled bool    `json:"enabled"`
 	Lambda  float64 `json:"lambda"`
+}
+
+type GCConfig struct {
+	MaxAgeDays uint64 `json:"max_age_days"`
 }
 
 type DreamConfig struct {
@@ -64,6 +69,7 @@ func DefaultConfig() Config {
 			MMR:           MMRConfig{Lambda: 0.7},
 			SourceWeights: map[string]float64{"workspace": 1, "session": 1, "global": 1},
 		},
+		GC:    GCConfig{MaxAgeDays: 30},
 		Dream: DreamConfig{Enabled: true, MinHours: 4, MinSessions: 3, StaleLockSeconds: 3600},
 	}
 }

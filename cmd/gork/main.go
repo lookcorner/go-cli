@@ -525,7 +525,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		ContextWindow: cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,
 		TwoPassCompaction: cfg.TwoPassCompaction,
 		Memory:            memoryStore, MemoryConfig: cfg.Memory,
-		OpenMemory:       memoryStoreOpener(cfg.Memory.Enabled, ws.Root(), logger.ID()),
+		OpenMemory:       memoryStoreOpener(cfg.Memory, ws.Root(), logger.ID()),
 		UpdateMCPServers: mcpRuntime.Update, MCPServers: mcpRuntime.Configs,
 	}
 	defer waitRunnerMemory(runner)
@@ -1235,22 +1235,27 @@ func openMemoryStore(cfg config.Config, workspaceRoot, sessionID string) (*memor
 	if !cfg.Memory.Enabled {
 		return nil, nil
 	}
-	return newMemoryStore(workspaceRoot, sessionID)
+	return newMemoryStore(workspaceRoot, sessionID, cfg.Memory.GC.MaxAgeDays)
 }
 
-func newMemoryStore(workspaceRoot, sessionID string) (*memory.Store, error) {
+func newMemoryStore(workspaceRoot, sessionID string, gcMaxAgeDays uint64) (*memory.Store, error) {
 	root, err := memory.DefaultRoot()
 	if err != nil {
 		return nil, err
 	}
-	return memory.Open(root, workspaceRoot, sessionID)
+	store, err := memory.Open(root, workspaceRoot, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	go func() { _, _ = store.GC(gcMaxAgeDays) }()
+	return store, nil
 }
 
-func memoryStoreOpener(configured bool, workspaceRoot, sessionID string) func() (*memory.Store, error) {
-	if !configured {
+func memoryStoreOpener(cfg memory.Config, workspaceRoot, sessionID string) func() (*memory.Store, error) {
+	if !cfg.Enabled {
 		return nil
 	}
-	return func() (*memory.Store, error) { return newMemoryStore(workspaceRoot, sessionID) }
+	return func() (*memory.Store, error) { return newMemoryStore(workspaceRoot, sessionID, cfg.GC.MaxAgeDays) }
 }
 
 func waitRunnerMemory(runner *agent.Runner) {
@@ -1924,7 +1929,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			ContextWindow: cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,
 			TwoPassCompaction: sessionCfg.TwoPassCompaction,
 			Memory:            memoryStore, MemoryConfig: sessionCfg.Memory,
-			OpenMemory:       memoryStoreOpener(sessionCfg.Memory.Enabled, ws.Root(), logger.ID()),
+			OpenMemory:       memoryStoreOpener(sessionCfg.Memory, ws.Root(), logger.ID()),
 			UpdateMCPServers: mcpRuntime.Update, MCPServers: mcpRuntime.Configs,
 			UpdateSkills:      updateSkills,
 			UpdatePlugins:     updatePlugins,

@@ -175,6 +175,79 @@ func Open(root, workspace, sessionID string) (*Store, error) {
 	return store, nil
 }
 
+func (s *Store) GC(maxAgeDays uint64) (int, error) {
+	rootInfo, err := os.Lstat(s.root)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	if rootInfo.Mode()&os.ModeSymlink != 0 || !rootInfo.IsDir() {
+		return 0, errors.New("memory root has an unsafe file type")
+	}
+	entries, err := os.ReadDir(s.root)
+	if err != nil {
+		return 0, err
+	}
+	removed := 0
+	for _, entry := range entries {
+		if entry.Type()&os.ModeSymlink != 0 || !entry.IsDir() {
+			continue
+		}
+		initialInfo, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		path := filepath.Join(s.root, entry.Name())
+		if filepath.Clean(path) == filepath.Clean(s.workspaceDir) {
+			continue
+		}
+		empty := memoryWorkspaceEmpty(path)
+		temporary := strings.HasPrefix(entry.Name(), "tmp")
+		shouldRemove := temporary && (empty || memoryPathOlderThan(path, 7)) ||
+			!temporary && empty && memoryPathOlderThan(path, maxAgeDays)
+		if shouldRemove {
+			info, statErr := os.Lstat(path)
+			if statErr != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() || !os.SameFile(initialInfo, info) {
+				continue
+			}
+			empty = memoryWorkspaceEmpty(path)
+			shouldRemove = temporary && (empty || memoryPathOlderThan(path, 7)) ||
+				!temporary && empty && memoryPathOlderThan(path, maxAgeDays)
+			if !shouldRemove {
+				continue
+			}
+			if err := os.RemoveAll(path); err == nil {
+				removed++
+			}
+		}
+	}
+	return removed, nil
+}
+
+func memoryWorkspaceEmpty(path string) bool {
+	sessions := filepath.Join(path, "sessions")
+	info, err := os.Lstat(sessions)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return true
+	}
+	entries, err := os.ReadDir(sessions)
+	return err != nil || len(entries) == 0
+}
+
+func memoryPathOlderThan(path string, days uint64) bool {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return false
+	}
+	age := time.Since(info.ModTime())
+	if age <= 0 || days > uint64((1<<63-1)/int64(24*time.Hour)) {
+		return false
+	}
+	return age > time.Duration(days)*24*time.Hour
+}
+
 func (s *Store) Write(trigger, content string) (string, bool, error) {
 	content = strings.TrimSpace(content)
 	if content == "" {
