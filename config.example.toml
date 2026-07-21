@@ -21,6 +21,12 @@ auto_compact_threshold_percent = 85
 [features]
 # two_pass_compaction = false
 
+[ui]
+# flash clears the highlight after copying; hold keeps it until Esc or scrolling.
+# word_select also enables double-click word/URL and triple-click line selection.
+keep_text_selection = "flash"
+# word_separators = "!\"#$%&'()*+,-./:;<=>?@[\\]^`{|}~"
+
 [memory]
 # Memory is opt-in. --experimental-memory or GROK_MEMORY=true also enables it.
 enabled = false

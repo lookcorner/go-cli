@@ -50,6 +50,7 @@ type Config struct {
 	WebFetch                        WebFetchConfig             `json:"web_fetch,omitempty"`
 	AskUserQuestion                 AskUserQuestionConfig      `json:"ask_user_question,omitempty"`
 	Goal                            GoalConfig                 `json:"goal"`
+	UI                              UIConfig                   `json:"ui"`
 	AuthProviderCommand             string                     `json:"auth_provider_command,omitempty"`
 	AuthTokenTTL                    time.Duration              `json:"-"`
 	AuthPrincipalType               string                     `json:"auth_principal_type,omitempty"`
@@ -109,6 +110,11 @@ type WebFetchConfig struct {
 type AskUserQuestionConfig struct {
 	TimeoutEnabled bool   `json:"timeout_enabled"`
 	TimeoutSeconds uint64 `json:"timeout_secs"`
+}
+
+type UIConfig struct {
+	KeepTextSelection string  `json:"keep_text_selection"`
+	WordSeparators    *string `json:"word_separators,omitempty"`
 }
 
 type GoalConfig struct {
@@ -307,8 +313,14 @@ type fileConfig struct {
 		AskUserQuestion fileAskUserQuestionConfig `json:"ask_user_question,omitempty" toml:"ask_user_question"`
 	} `json:"toolset,omitempty" toml:"toolset"`
 	Goal        fileGoalConfig        `json:"goal,omitempty" toml:"goal"`
+	UI          fileUIConfig          `json:"ui,omitempty" toml:"ui"`
 	Endpoints   fileEndpointsConfig   `json:"endpoints,omitempty" toml:"endpoints"`
 	FolderTrust fileFolderTrustConfig `json:"folder_trust,omitempty" toml:"folder_trust"`
+}
+
+type fileUIConfig struct {
+	KeepTextSelection *string `json:"keep_text_selection,omitempty" toml:"keep_text_selection"`
+	WordSeparators    *string `json:"word_separators,omitempty" toml:"word_separators"`
 }
 
 type fileFolderTrustConfig struct {
@@ -501,6 +513,7 @@ func Load(path string) (Config, error) {
 		AutoWakeEnabled:             true,
 		AskUserQuestion:             AskUserQuestionConfig{TimeoutEnabled: true, TimeoutSeconds: 30 * 60},
 		Goal:                        GoalConfig{VerifierCount: 3, ClassifierMaxRuns: 10, ReverifyAfter: 8},
+		UI:                          UIConfig{KeepTextSelection: "flash"},
 		Pruning:                     PruningConfig{Enabled: true, KeepLastNTurns: 3, SoftTrimThreshold: 4000, SoftTrimHead: 1500, SoftTrimTail: 1500, HardClearAgeTurns: 10},
 		Memory:                      memory.DefaultConfig(),
 	}
@@ -624,6 +637,13 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 		cfg.WebFetch.DomainsConfigured = true
 	}
 	applyAskUserQuestionConfig(&cfg.AskUserQuestion, disk.Toolset.AskUserQuestion)
+	if disk.UI.KeepTextSelection != nil {
+		cfg.UI.KeepTextSelection = strings.TrimSpace(*disk.UI.KeepTextSelection)
+	}
+	if disk.UI.WordSeparators != nil {
+		value := *disk.UI.WordSeparators
+		cfg.UI.WordSeparators = &value
+	}
 	if disk.Goal.VerifierCount != nil {
 		cfg.Goal.VerifierCount = normalizedGoalVerifierCount(*disk.Goal.VerifierCount)
 		cfg.goalVerifierConfigured = true
@@ -1648,6 +1668,9 @@ func (c Config) Validate() error {
 	}
 	if c.AutoCompactThresholdPercent < 0 || c.AutoCompactThresholdPercent > 100 {
 		return errors.New("auto compact threshold must be between 0 and 100")
+	}
+	if c.UI.KeepTextSelection != "" && c.UI.KeepTextSelection != "flash" && c.UI.KeepTextSelection != "hold" && c.UI.KeepTextSelection != "word_select" {
+		return errors.New("ui keep_text_selection must be flash, hold, or word_select")
 	}
 	if c.Pruning.KeepLastNTurns < 0 || c.Pruning.SoftTrimThreshold < 0 || c.Pruning.SoftTrimHead < 0 || c.Pruning.SoftTrimTail < 0 || c.Pruning.HardClearAgeTurns < 0 {
 		return errors.New("compaction pruning values must not be negative")

@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
@@ -26,12 +28,16 @@ import (
 const (
 	mouseWheelScrollLines     = 3
 	questionDoubleClickWindow = 500 * time.Millisecond
+	textMultiClickWindow      = 300 * time.Millisecond
 	selectionHighlightTime    = 150 * time.Millisecond
 	maxHistorySearchResults   = 100
 	historySearchPageSize     = 8
 	maxInputUndoEntries       = 100
 	maxPromptInputRows        = 6
+	defaultWordSeparators     = "!\"#$%&'()*+,-./:;<=>?@[\\]^`{|}~"
 )
+
+var selectionURLPattern = regexp.MustCompile(`(?i)\b(?:https?|ftp|file)://[^\s\x00-\x1f]+`)
 
 type textEvent struct{ text string }
 type statusEvent struct{ text string }
@@ -48,6 +54,7 @@ type mouseSelectionEvent struct {
 	phase mouseSelectionPhase
 	point selectionPoint
 	lines []string
+	at    time.Time
 }
 type selectionClearEvent struct{ nonce uint64 }
 type approvalEvent struct {
@@ -277,6 +284,9 @@ type model struct {
 	historySearch  *historySearchState
 	selection      *textSelection
 	selectionNonce uint64
+	selectionMode  textSelectionMode
+	wordSeparators string
+	selectionClick selectionClickState
 	width          int
 	height         int
 	scroll         int
@@ -310,11 +320,50 @@ type inputSnapshot struct {
 }
 
 type textSelection struct {
-	anchor selectionPoint
-	head   selectionPoint
-	lines  []string
-	moved  bool
-	nonce  uint64
+	anchor   selectionPoint
+	head     selectionPoint
+	lines    []string
+	moved    bool
+	semantic bool
+	nonce    uint64
+}
+
+type selectionClickState struct {
+	line  int
+	count uint8
+	at    time.Time
+}
+
+type textSelectionMode uint8
+
+const (
+	selectionFlash textSelectionMode = iota
+	selectionHold
+	selectionWord
+)
+
+type TextSelectionOptions struct {
+	Mode           string
+	WordSeparators *string
+}
+
+func parseTextSelectionMode(value string) textSelectionMode {
+	switch value {
+	case "hold":
+		return selectionHold
+	case "word_select":
+		return selectionWord
+	default:
+		return selectionFlash
+	}
+}
+
+func (m textSelectionMode) holds() bool {
+	return m == selectionHold || m == selectionWord
+}
+
+func (m textSelectionMode) selectsWord() bool {
+	return m == selectionWord
 }
 
 type planReviewState struct {
@@ -338,7 +387,7 @@ type questionState struct {
 	partial     map[string]string
 }
 
-func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPrompt, previousID, initialTranscript, workspace, modelName string) error {
+func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPrompt, previousID, initialTranscript, workspace, modelName string, selectionOptions TextSelectionOptions) error {
 	defer bridge.Close()
 	runner.TextOutput = bridge.TextWriter()
 	runner.StatusOutput = bridge.StatusWriter()
@@ -346,7 +395,11 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		ctx: ctx, runner: runner, bridge: bridge, workspace: workspace,
 		modelName: modelName, previousID: previousID, width: 80, height: 24,
 		status: "ready", initial: strings.TrimSpace(initialPrompt), historyIndex: -1,
-		history: loadPromptHistory(runner, workspace),
+		history: loadPromptHistory(runner, workspace), selectionMode: parseTextSelectionMode(selectionOptions.Mode),
+		wordSeparators: defaultWordSeparators,
+	}
+	if selectionOptions.WordSeparators != nil {
+		m.wordSeparators = *selectionOptions.WordSeparators
 	}
 	if runner.Tools != nil {
 		m.planMode = runner.Tools.PlanModeActive()
@@ -380,10 +433,12 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := message.(type) {
 	case tea.WindowSizeMsg:
 		m.selection = nil
+		m.selectionClick = selectionClickState{}
 		m.width = max(msg.Width, 20)
 		m.height = max(msg.Height, 10)
 	case textEvent:
 		m.selection = nil
+		m.selectionClick = selectionClickState{}
 		before := 0
 		if m.scroll > 0 {
 			before = len(renderMarkdown(m.transcript.String(), max(m.width, 20)))
@@ -396,22 +451,59 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitForBridge(m.bridge)
 	case mouseScrollEvent:
 		m.selection = nil
+		m.selectionClick = selectionClickState{}
 		m.scroll = max(0, m.scroll+msg.lines)
 		return m, nil
 	case mouseSelectionEvent:
 		switch msg.phase {
 		case selectionStart:
+			if msg.point.line < 0 || msg.point.line >= len(msg.lines) {
+				m.selection = nil
+				m.selectionClick = selectionClickState{}
+				return m, nil
+			}
 			m.selectionNonce++
 			m.selection = &textSelection{
 				anchor: msg.point, head: msg.point, lines: append([]string(nil), msg.lines...), nonce: m.selectionNonce,
 			}
+			if m.selectionMode.selectsWord() {
+				clickedAt := msg.at
+				if clickedAt.IsZero() {
+					clickedAt = time.Now()
+				}
+				count := m.countTextClick(clickedAt, msg.point)
+				m.selectionClick = selectionClickState{line: msg.point.line, count: count, at: clickedAt}
+				line := m.selection.lines[msg.point.line]
+				from, to := 0, 0
+				switch count {
+				case 2:
+					from, to = semanticDisplayRange(line, msg.point.column, m.wordSeparators)
+				case 3:
+					to = displayWidth(line)
+					m.selectionClick = selectionClickState{}
+				}
+				if to > from {
+					m.selection.anchor.column, m.selection.head.column = from, to-1
+					m.selection.moved, m.selection.semantic = true, true
+					return m, m.copyTextSelection()
+				}
+			}
 		case selectionMove:
 			if m.selection != nil {
+				if m.selection.semantic {
+					return m, nil
+				}
 				m.selection.moved = m.selection.moved || msg.point != m.selection.anchor
 				m.selection.head = msg.point
+				if m.selection.moved {
+					m.selectionClick = selectionClickState{}
+				}
 			}
 		case selectionRelease:
 			if m.selection == nil {
+				return m, nil
+			}
+			if m.selection.semantic {
 				return m, nil
 			}
 			m.selection.moved = m.selection.moved || msg.point != m.selection.anchor
@@ -420,17 +512,7 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				m.selection = nil
 				return m, nil
 			}
-			text := m.selection.text()
-			if text == "" {
-				m.selection = nil
-				return m, nil
-			}
-			nonce := m.selection.nonce
-			m.status = "selection copied"
-			return m, tea.Batch(
-				tea.SetClipboard(text),
-				tea.Tick(selectionHighlightTime, func(time.Time) tea.Msg { return selectionClearEvent{nonce: nonce} }),
-			)
+			return m, m.copyTextSelection()
 		}
 		return m, nil
 	case selectionClearEvent:
@@ -632,6 +714,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	stroke := msg.Keystroke()
 	if key.Code == tea.KeyEsc && m.selection != nil {
 		m.selection = nil
+		m.selectionClick = selectionClickState{}
 		return m, nil
 	}
 	if m.approval != nil {
@@ -680,10 +763,12 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case "pgup", "ctrl+up":
 		m.selection = nil
+		m.selectionClick = selectionClickState{}
 		m.scroll += max(m.contentHeight()/2, 1)
 		return m, nil
 	case "pgdown", "ctrl+down":
 		m.selection = nil
+		m.selectionClick = selectionClickState{}
 		m.scroll -= max(m.contentHeight()/2, 1)
 		if m.scroll < 0 {
 			m.scroll = 0
@@ -1489,7 +1574,7 @@ func (m *model) View() tea.View {
 				return nil
 			}
 			if mouse.Y >= 1 && mouse.Y <= contentHeight {
-				event := mouseSelectionEvent{phase: selectionStart, point: selectionPointForMouse(mouse, plainVisible), lines: plainVisible}
+				event := mouseSelectionEvent{phase: selectionStart, point: selectionPointForMouse(mouse, plainVisible), lines: plainVisible, at: time.Now()}
 				return func() tea.Msg { return event }
 			}
 			if mouse.Y < contentHeight+3 {
@@ -1624,6 +1709,31 @@ func selectionPointForMouse(mouse tea.Mouse, lines []string) selectionPoint {
 	return selectionPoint{line: line, column: column}
 }
 
+func (m *model) countTextClick(at time.Time, point selectionPoint) uint8 {
+	previous := m.selectionClick
+	if previous.count > 0 && previous.line == point.line && !at.Before(previous.at) && at.Sub(previous.at) < textMultiClickWindow {
+		return min(previous.count+1, uint8(3))
+	}
+	return 1
+}
+
+func (m *model) copyTextSelection() tea.Cmd {
+	text := m.selection.text()
+	if text == "" {
+		m.selection = nil
+		return nil
+	}
+	m.status = "selection copied"
+	if m.selectionMode.holds() {
+		return tea.SetClipboard(text)
+	}
+	nonce := m.selection.nonce
+	return tea.Batch(
+		tea.SetClipboard(text),
+		tea.Tick(selectionHighlightTime, func(time.Time) tea.Msg { return selectionClearEvent{nonce: nonce} }),
+	)
+}
+
 func (s *textSelection) bounds() (selectionPoint, selectionPoint) {
 	start, end := s.anchor, s.head
 	if start.line > end.line || start.line == end.line && start.column > end.column {
@@ -1708,6 +1818,91 @@ func displayWidth(value string) int {
 		width += runeWidth(r)
 	}
 	return width
+}
+
+func semanticDisplayRange(value string, column int, separators string) (int, int) {
+	if start, end, ok := urlDisplayRange(value, column); ok {
+		return start, end
+	}
+	return wordDisplayRange(value, column, separators)
+}
+
+func wordDisplayRange(value string, column int, separators string) (int, int) {
+	type segment struct{ start, end, class int }
+	segments, current := make([]segment, 0, len([]rune(value))), 0
+	for _, r := range value {
+		width := runeWidth(r)
+		if width == 0 {
+			continue
+		}
+		class := 0
+		if unicode.IsSpace(r) {
+			class = 1
+		} else if strings.ContainsRune(separators, r) {
+			class = 2
+		}
+		segments = append(segments, segment{start: current, end: current + width, class: class})
+		current += width
+	}
+	if len(segments) == 0 {
+		return 0, 0
+	}
+	target := len(segments) - 1
+	for index, segment := range segments {
+		if column >= segment.start && column < segment.end {
+			target = index
+			break
+		}
+	}
+	left, right := target, target
+	for left > 0 && segments[left-1].class == segments[target].class {
+		left--
+	}
+	for right+1 < len(segments) && segments[right+1].class == segments[target].class {
+		right++
+	}
+	return segments[left].start, segments[right].end
+}
+
+func urlDisplayRange(value string, column int) (int, int, bool) {
+	for _, match := range selectionURLPattern.FindAllStringIndex(value, -1) {
+		url := stripTrailingURLPunctuation(value[match[0]:match[1]])
+		scheme := strings.Index(url, "://")
+		if scheme >= 0 && scheme+3 == len(url) {
+			continue
+		}
+		start := displayWidth(value[:match[0]])
+		end := start + displayWidth(url)
+		if column >= start && column < end {
+			return start, end, true
+		}
+	}
+	return 0, 0, false
+}
+
+func stripTrailingURLPunctuation(value string) string {
+	for value != "" {
+		r, size := utf8.DecodeLastRuneInString(value)
+		if !strings.ContainsRune(".,:;!?)]}>\"'", r) {
+			break
+		}
+		var opening rune
+		switch r {
+		case ')':
+			opening = '('
+		case ']':
+			opening = '['
+		case '}':
+			opening = '{'
+		case '>':
+			opening = '<'
+		}
+		if opening != 0 && strings.Count(value, string(opening)) >= strings.Count(value, string(r)) {
+			break
+		}
+		value = value[:len(value)-size]
+	}
+	return value
 }
 
 func truncate(value string, width int) string {

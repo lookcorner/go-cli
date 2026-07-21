@@ -900,6 +900,154 @@ func TestTextSelectionIgnoresClickAndClearsOnEscapeOrScroll(t *testing.T) {
 	}
 }
 
+func TestTextSelectionModesAndSemanticRanges(t *testing.T) {
+	for _, test := range []struct {
+		value      string
+		want       textSelectionMode
+		holds      bool
+		selectWord bool
+	}{
+		{value: "flash", want: selectionFlash},
+		{value: "hold", want: selectionHold, holds: true},
+		{value: "word_select", want: selectionWord, holds: true, selectWord: true},
+		{value: "invalid", want: selectionFlash},
+	} {
+		mode := parseTextSelectionMode(test.value)
+		if mode != test.want || mode.holds() != test.holds || mode.selectsWord() != test.selectWord {
+			t.Fatalf("mode %q=%v holds=%v word=%v", test.value, mode, mode.holds(), mode.selectsWord())
+		}
+	}
+	if from, to := semanticDisplayRange("hello world", 2, defaultWordSeparators); from != 0 || to != 5 {
+		t.Fatalf("semantic word range=%d..%d", from, to)
+	}
+
+	for _, test := range []struct {
+		value      string
+		column     int
+		separators string
+		from, to   int
+	}{
+		{value: "hello world", column: 2, separators: defaultWordSeparators, from: 0, to: 5},
+		{value: "hello world", column: 5, separators: defaultWordSeparators, from: 5, to: 6},
+		{value: "hello-world", column: 5, separators: defaultWordSeparators, from: 5, to: 6},
+		{value: "hello-world", column: 5, separators: "", from: 0, to: 11},
+		{value: "a_b", column: 1, separators: defaultWordSeparators, from: 0, to: 3},
+		{value: "你 好", column: 0, separators: defaultWordSeparators, from: 0, to: 2},
+		{value: "", column: 0, separators: defaultWordSeparators, from: 0, to: 0},
+	} {
+		from, to := wordDisplayRange(test.value, test.column, test.separators)
+		if from != test.from || to != test.to {
+			t.Fatalf("word range %q col=%d got=%d..%d want=%d..%d", test.value, test.column, from, to, test.from, test.to)
+		}
+	}
+
+	line := "see https://example.com, then https://en.wikipedia.org/wiki/Rust_(language)"
+	if from, to := semanticDisplayRange(line, 8, defaultWordSeparators); selectDisplayColumns(line, from, to-1) != "https://example.com" {
+		t.Fatalf("URL range=%d..%d text=%q", from, to, selectDisplayColumns(line, from, to-1))
+	}
+	if _, _, ok := urlDisplayRange(line, 23); ok {
+		t.Fatal("trailing URL punctuation was selectable as part of the URL")
+	}
+	if from, to, ok := urlDisplayRange(line, displayWidth("see https://example.com, then ")); !ok || selectDisplayColumns(line, from, to-1) != "https://en.wikipedia.org/wiki/Rust_(language)" {
+		t.Fatalf("balanced URL range=%d..%d ok=%v", from, to, ok)
+	}
+	if _, _, ok := urlDisplayRange("see https://.", 4); ok {
+		t.Fatal("scheme-only URL was accepted")
+	}
+	for _, value := range []string{
+		"https://example.com/path_(one)",
+		"https://example.com/path_[one]",
+		"https://example.com/path_{one}",
+		"https://example.com/path_<one>",
+	} {
+		if got := stripTrailingURLPunctuation(value); got != value {
+			t.Fatalf("balanced URL=%q want=%q", got, value)
+		}
+	}
+}
+
+func TestWordSelectionDoubleAndTripleClickCopy(t *testing.T) {
+	line := "visit https://example.com, now"
+	m := &model{selectionMode: selectionWord, wordSeparators: defaultWordSeparators}
+	t0 := time.Unix(100, 0)
+	click := func(at time.Time) tea.Cmd {
+		updated, command := m.Update(mouseSelectionEvent{
+			phase: selectionStart, point: selectionPoint{line: 0, column: 8}, lines: []string{line}, at: at,
+		})
+		m = updated.(*model)
+		return command
+	}
+	release := func() tea.Cmd {
+		updated, command := m.Update(mouseSelectionEvent{phase: selectionRelease, point: selectionPoint{line: 0, column: 8}})
+		m = updated.(*model)
+		return command
+	}
+	if command := click(t0); command != nil {
+		t.Fatal("single click copied text")
+	}
+	if command := release(); command != nil || m.selection != nil {
+		t.Fatal("single-click release retained a selection")
+	}
+	command := click(t0.Add(100 * time.Millisecond))
+	if command == nil || fmt.Sprint(command()) != "https://example.com" || m.selection == nil || !m.selection.semantic {
+		t.Fatalf("double click command=%v selection=%#v", command != nil, m.selection)
+	}
+	if command := release(); command != nil || m.selection == nil {
+		t.Fatal("double-click release cleared the held word")
+	}
+	command = click(t0.Add(200 * time.Millisecond))
+	if command == nil || fmt.Sprint(command()) != line || m.selectionClick.count != 0 {
+		t.Fatalf("triple click command=%v click=%#v", command != nil, m.selectionClick)
+	}
+}
+
+func TestHeldSelectionAndDragClickIsolation(t *testing.T) {
+	m := &model{selectionMode: selectionWord, wordSeparators: defaultWordSeparators}
+	lines := []string{"drag this"}
+	t0 := time.Unix(200, 0)
+	updated, _ := m.Update(mouseSelectionEvent{phase: selectionStart, point: selectionPoint{}, lines: lines, at: t0})
+	m = updated.(*model)
+	updated, _ = m.Update(mouseSelectionEvent{phase: selectionMove, point: selectionPoint{column: 3}})
+	m = updated.(*model)
+	updated, command := m.Update(mouseSelectionEvent{phase: selectionRelease, point: selectionPoint{column: 3}})
+	m = updated.(*model)
+	if command == nil || fmt.Sprint(command()) != "drag" || m.selection == nil {
+		t.Fatalf("held drag command=%v selection=%#v", command != nil, m.selection)
+	}
+
+	updated, _ = m.Update(mouseSelectionEvent{phase: selectionStart, point: selectionPoint{}, lines: lines, at: t0.Add(100 * time.Millisecond)})
+	m = updated.(*model)
+	if m.selectionClick.count != 1 {
+		t.Fatalf("drag was counted as a prior click: %#v", m.selectionClick)
+	}
+}
+
+func TestWordSelectionIgnoresInvalidLine(t *testing.T) {
+	for _, line := range []int{-1, 1} {
+		m := &model{selectionMode: selectionWord, wordSeparators: defaultWordSeparators}
+		updated, command := m.Update(mouseSelectionEvent{
+			phase: selectionStart, point: selectionPoint{line: line}, lines: []string{"only"}, at: time.Now(),
+		})
+		m = updated.(*model)
+		if command != nil || m.selection != nil {
+			t.Fatalf("line=%d command=%v selection=%#v", line, command != nil, m.selection)
+		}
+	}
+}
+
+func TestCopyTextSelectionFlashAndEmpty(t *testing.T) {
+	m := &model{selectionMode: selectionFlash, selection: &textSelection{
+		anchor: selectionPoint{}, head: selectionPoint{column: 3}, lines: []string{"copy"}, moved: true, nonce: 1,
+	}}
+	if command := m.copyTextSelection(); command == nil || m.status != "selection copied" || m.selection == nil {
+		t.Fatalf("flash command=%v status=%q selection=%#v", command != nil, m.status, m.selection)
+	}
+	m.selection = &textSelection{}
+	if command := m.copyTextSelection(); command != nil || m.selection != nil {
+		t.Fatalf("empty command=%v selection=%#v", command != nil, m.selection)
+	}
+}
+
 func TestMouseClickAnswersApproval(t *testing.T) {
 	for _, test := range []struct {
 		name    string

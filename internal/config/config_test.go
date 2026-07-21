@@ -136,6 +136,10 @@ paths = ["~/plugins/team-tools"]
 enabled = ["project-tools"]
 disabled = ["old-tools"]
 
+[ui]
+keep_text_selection = "word_select"
+word_separators = "./"
+
 [[permission.rules]]
 action = "allow"
 tool = "bash"
@@ -214,6 +218,9 @@ pattern = ".env*"
 	}
 	if len(cfg.Permission.Rules) != 2 || cfg.Permission.Rules[0].Action != "allow" || *cfg.Permission.Rules[1].Pattern != ".env*" {
 		t.Fatalf("unexpected permission config: %#v", cfg.Permission)
+	}
+	if cfg.UI.KeepTextSelection != "word_select" || cfg.UI.WordSeparators == nil || *cfg.UI.WordSeparators != "./" {
+		t.Fatalf("unexpected UI config: %#v", cfg.UI)
 	}
 	if strings.Join(cfg.Skills.Paths, ",") != "~/shared-skills,project-skills" || strings.Join(cfg.Skills.Ignore, ",") != "~/shared-skills/ignored" || strings.Join(cfg.Skills.Disabled, ",") != "manual-only" {
 		t.Fatalf("unexpected skills config: %#v", cfg.Skills)
@@ -572,6 +579,31 @@ func TestValidateWebFetchConfig(t *testing.T) {
 	base.WebFetch = WebFetchConfig{AllowedDomains: []string{"https://example.com"}, DomainsConfigured: true}
 	if err := base.Validate(); err == nil || !strings.Contains(err.Error(), "allowed domain") {
 		t.Fatalf("unexpected domain validation: %v", err)
+	}
+}
+
+func TestValidateTextSelectionMode(t *testing.T) {
+	base := Config{
+		APIKey: "key", BaseURL: "https://api.example/v1", Model: "model", Backend: "responses",
+		MaxSteps: 1, ContextWindow: 1000, AutoCompactThresholdPercent: 85,
+	}
+	base.UI.KeepTextSelection = "always"
+	if err := base.Validate(); err == nil || !strings.Contains(err.Error(), "keep_text_selection") {
+		t.Fatalf("unexpected selection validation: %v", err)
+	}
+}
+
+func TestLoadPreservesEmptyWordSeparators(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[ui]\nkeep_text_selection = \"hold\"\nword_separators = \"\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.UI.KeepTextSelection != "hold" || cfg.UI.WordSeparators == nil || *cfg.UI.WordSeparators != "" {
+		t.Fatalf("UI config=%#v", cfg.UI)
 	}
 }
 
