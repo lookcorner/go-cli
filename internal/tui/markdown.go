@@ -1,9 +1,14 @@
 package tui
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"net/url"
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 const (
@@ -19,9 +24,14 @@ const (
 type markdownSpan struct {
 	text  string
 	style string
+	link  string
 }
 
 func renderMarkdown(value string, width int) []string {
+	return renderMarkdownWithLinks(value, width, false)
+}
+
+func renderMarkdownWithLinks(value string, width int, links bool) []string {
 	if width < 1 {
 		width = 1
 	}
@@ -35,16 +45,16 @@ func renderMarkdown(value string, width int) []string {
 			inCode = !inCode
 			if inCode && strings.TrimSpace(strings.TrimPrefix(trimmed, "```")) != "" {
 				language := strings.TrimSpace(strings.TrimPrefix(trimmed, "```"))
-				lines = append(lines, wrapMarkdownSpans([]markdownSpan{{text: language, style: ansiDim}}, width)...)
+				lines = append(lines, wrapMarkdownSpans([]markdownSpan{{text: language, style: ansiDim}}, width, links)...)
 			}
 			continue
 		}
 		if inCode {
-			lines = append(lines, wrapMarkdownSpans([]markdownSpan{{text: "  " + raw, style: ansiCyan}}, width)...)
+			lines = append(lines, wrapMarkdownSpans([]markdownSpan{{text: "  " + raw, style: ansiCyan}}, width, links)...)
 			continue
 		}
 		if index+1 < len(rawLines) {
-			if table, consumed := renderMarkdownTable(rawLines[index:], width); consumed > 0 {
+			if table, consumed := renderMarkdownTable(rawLines[index:], width, links); consumed > 0 {
 				lines = append(lines, table...)
 				index += consumed - 1
 				continue
@@ -55,12 +65,12 @@ func renderMarkdown(value string, width int) []string {
 			lines = append(lines, "")
 			continue
 		}
-		lines = append(lines, wrapMarkdownSpans(spans, width)...)
+		lines = append(lines, wrapMarkdownSpans(spans, width, links)...)
 	}
 	return lines
 }
 
-func renderMarkdownTable(lines []string, width int) ([]string, int) {
+func renderMarkdownTable(lines []string, width int, links bool) ([]string, int) {
 	header, ok := splitMarkdownTableRow(lines[0])
 	if !ok || len(header) < 1 {
 		return nil, 0
@@ -102,7 +112,7 @@ func renderMarkdownTable(lines []string, width int) ([]string, int) {
 		wrapped := make([][]string, len(row))
 		height := 1
 		for column, cell := range row {
-			wrapped[column] = wrapMarkdownSpans(inlineMarkdown(strings.TrimSpace(cell)), columnWidths[column])
+			wrapped[column] = wrapMarkdownSpans(inlineMarkdown(strings.TrimSpace(cell)), columnWidths[column], links)
 			height = max(height, len(wrapped[column]))
 		}
 		for line := 0; line < height; line++ {
@@ -202,9 +212,7 @@ func markdownTableWidths(rows [][]string, width int) []int {
 }
 
 func markdownANSIWidth(value string) int {
-	for _, sequence := range []string{ansiReset, ansiBold, ansiDim, ansiItalic, ansiUnderline, ansiCyan, ansiYellow} {
-		value = strings.ReplaceAll(value, sequence, "")
-	}
+	value = ansi.Strip(value)
 	width := 0
 	for _, r := range value {
 		width += runeWidth(r)
@@ -248,6 +256,21 @@ func markdownLine(raw string) []markdownSpan {
 func inlineMarkdown(value string) []markdownSpan {
 	var spans []markdownSpan
 	for len(value) > 0 {
+		if value[0] == '"' || value[0] == '\'' {
+			quote := value[0]
+			if end := strings.IndexByte(value[1:], quote); end >= 0 {
+				path := value[1 : end+1]
+				if isAbsoluteDisplayPath(path) {
+					spans = append(spans,
+						markdownSpan{text: string(quote)},
+						markdownSpan{text: path, link: fileHyperlink(path)},
+						markdownSpan{text: string(quote)},
+					)
+					value = value[end+2:]
+					continue
+				}
+			}
+		}
 		if strings.HasPrefix(value, "**") {
 			if end := strings.Index(value[2:], "**"); end >= 0 {
 				spans = append(spans, markdownSpan{text: value[2 : end+2], style: ansiBold})
@@ -269,8 +292,9 @@ func inlineMarkdown(value string) []markdownSpan {
 			if closeLabel > 0 {
 				if closeURL := strings.IndexByte(value[closeLabel+2:], ')'); closeURL >= 0 {
 					urlEnd := closeLabel + 2 + closeURL
+					link := safeHyperlinkTarget(value[closeLabel+2 : urlEnd])
 					spans = append(spans,
-						markdownSpan{text: value[1:closeLabel], style: ansiUnderline},
+						markdownSpan{text: value[1:closeLabel], style: ansiUnderline, link: link},
 						markdownSpan{text: " (" + value[closeLabel+2:urlEnd] + ")", style: ansiDim},
 					)
 					value = value[urlEnd+1:]
@@ -295,14 +319,14 @@ func inlineMarkdown(value string) []markdownSpan {
 
 func nextMarkdownMarker(value string) int {
 	for index := 1; index < len(value); index++ {
-		if value[index] == '*' || value[index] == '_' || value[index] == '`' || value[index] == '[' {
+		if value[index] == '*' || value[index] == '_' || value[index] == '`' || value[index] == '[' || value[index] == '"' || value[index] == '\'' {
 			return index
 		}
 	}
 	return len(value)
 }
 
-func wrapMarkdownSpans(spans []markdownSpan, width int) []string {
+func wrapMarkdownSpans(spans []markdownSpan, width int, links bool) []string {
 	var lines []string
 	var line strings.Builder
 	used := 0
@@ -323,12 +347,18 @@ func wrapMarkdownSpans(spans []markdownSpan, width int) []string {
 				continue
 			}
 			part := span.text[:end]
+			if links && span.link != "" {
+				line.WriteString(ansi.SetHyperlink(span.link, "id="+hyperlinkID(span.link)))
+			}
 			if span.style != "" {
 				line.WriteString(span.style)
 				line.WriteString(part)
 				line.WriteString(ansiReset)
 			} else {
 				line.WriteString(part)
+			}
+			if links && span.link != "" {
+				line.WriteString(ansi.ResetHyperlink())
 			}
 			used += takenWidth
 			span.text = span.text[end:]
@@ -338,6 +368,50 @@ func wrapMarkdownSpans(spans []markdownSpan, width int) []string {
 		flush()
 	}
 	return lines
+}
+
+func isAbsoluteDisplayPath(path string) bool {
+	if strings.HasPrefix(path, "/") {
+		return true
+	}
+	return len(path) >= 3 && ((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z')) && path[1] == ':' && (path[2] == '\\' || path[2] == '/')
+}
+
+func fileHyperlink(path string) string {
+	if len(path) >= 3 && path[1] == ':' {
+		path = "/" + strings.ReplaceAll(path, "\\", "/")
+	}
+	return (&url.URL{Scheme: "file", Path: path}).String()
+}
+
+func hyperlinkID(target string) string {
+	sum := sha256.Sum256([]byte(target))
+	return hex.EncodeToString(sum[:8])
+}
+
+func safeHyperlinkTarget(value string) string {
+	for _, char := range value {
+		if char < 0x20 || char == 0x7f {
+			return ""
+		}
+	}
+	target, err := url.Parse(value)
+	if err != nil {
+		return ""
+	}
+	switch strings.ToLower(target.Scheme) {
+	case "http", "https":
+		if target.Host == "" {
+			return ""
+		}
+	case "mailto":
+		if target.Opaque == "" {
+			return ""
+		}
+	default:
+		return ""
+	}
+	return target.String()
 }
 
 func markdownPrefixWidth(value string, maximum int) (int, int) {

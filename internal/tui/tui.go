@@ -288,6 +288,7 @@ type model struct {
 	wordSeparators string
 	mouseToggle    bool
 	mouseReleased  bool
+	hyperlinks     bool
 	scrollFocused  bool
 	selectionClick selectionClickState
 	width          int
@@ -406,6 +407,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		status: "ready", initial: strings.TrimSpace(initialPrompt), historyIndex: -1,
 		history: loadPromptHistory(runner, workspace), selectionMode: parseTextSelectionMode(options.Mode),
 		wordSeparators: defaultWordSeparators, mouseToggle: options.MouseReportingToggle,
+		hyperlinks: detectTerminalHyperlinks(),
 	}
 	if options.WordSeparators != nil {
 		m.wordSeparators = *options.WordSeparators
@@ -1578,7 +1580,7 @@ func (m *model) View() tea.View {
 		}
 		content = "# Memory Note\n\n**" + label + "**\n\n" + note
 	}
-	contentLines := renderMarkdown(content, width)
+	contentLines := renderMarkdownWithLinks(content, width, m.hyperlinks)
 	if m.historySearch != nil {
 		contentLines = m.historySearchLines(width, m.contentHeight())
 	}
