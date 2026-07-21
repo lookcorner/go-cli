@@ -198,16 +198,18 @@ func TestMemoryDefaultsRemoteAndEnvironmentPrecedence(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("GROK_HOME", home)
 	cfg, err := Load(filepath.Join(home, "missing.toml"))
-	if err != nil || cfg.Memory.Enabled || !cfg.Memory.InitialInjection || !cfg.Memory.SaveOnEnd || !cfg.Memory.Flush.Enabled || cfg.Memory.Flush.SoftThresholdTokens != 4000 || cfg.Memory.Flush.MaxWriteChars != 8000 || cfg.Memory.Flush.IdleTimeoutSeconds != nil {
+	if err != nil || cfg.Memory.Enabled || !cfg.Memory.InitialInjection || !cfg.Memory.SaveOnEnd || !cfg.Memory.Flush.Enabled || cfg.Memory.Flush.SoftThresholdTokens != 4000 || cfg.Memory.Flush.MaxWriteChars != 8000 || cfg.Memory.Flush.IdleTimeoutSeconds != nil || cfg.Memory.Search.RecencyDecay != 0.95 || !cfg.Memory.Search.TemporalDecay.Enabled || cfg.Memory.Search.TemporalDecay.HalfLifeDays != 7 || cfg.Memory.Search.MMR.Enabled || cfg.Memory.Search.MMR.Lambda != 0.7 || cfg.Memory.Search.SourceWeights["workspace"] != 1 {
 		t.Fatalf("defaults=%#v err=%v", cfg.Memory, err)
 	}
 	cfg.ApplyRemoteSettings(&RemoteSettings{
 		MemoryEnabled: boolPointer(true), MemoryInitialInjectionEnabled: boolPointer(false),
 		FlushEnabled: boolPointer(false), FlushSoftThresholdTokens: intPointer(2000), FlushIdleTimeoutSeconds: uint64Pointer(120),
 		MemorySearchMaxResults: intPointer(9), MemorySearchMinScore: float64Pointer(0.6),
+		MemoryTemporalDecayEnabled: boolPointer(false), MemoryTemporalDecayHalfLifeDays: float64Pointer(14),
+		MemoryMMREnabled: boolPointer(true), MemoryMMRLambda: float64Pointer(2),
 		DreamEnabled: boolPointer(false), DreamMinHours: uint64Pointer(8), DreamMinSessions: uint64Pointer(6), DreamCheckIntervalSeconds: uint64Pointer(900),
 	})
-	if !cfg.Memory.Enabled || cfg.Memory.InitialInjection || cfg.Memory.Flush.Enabled || cfg.Memory.Flush.SoftThresholdTokens != 2000 || cfg.Memory.Flush.IdleTimeoutSeconds == nil || *cfg.Memory.Flush.IdleTimeoutSeconds != 120 || cfg.Memory.Search.MaxResults != 9 || cfg.Memory.Search.MinScore != 0.6 || cfg.Memory.Dream.Enabled || cfg.Memory.Dream.MinHours != 8 || cfg.Memory.Dream.MinSessions != 6 || cfg.Memory.Dream.CheckIntervalSeconds == nil || *cfg.Memory.Dream.CheckIntervalSeconds != 900 {
+	if !cfg.Memory.Enabled || cfg.Memory.InitialInjection || cfg.Memory.Flush.Enabled || cfg.Memory.Flush.SoftThresholdTokens != 2000 || cfg.Memory.Flush.IdleTimeoutSeconds == nil || *cfg.Memory.Flush.IdleTimeoutSeconds != 120 || cfg.Memory.Search.MaxResults != 9 || cfg.Memory.Search.MinScore != 0.6 || cfg.Memory.Search.TemporalDecay.Enabled || cfg.Memory.Search.TemporalDecay.HalfLifeDays != 14 || !cfg.Memory.Search.MMR.Enabled || cfg.Memory.Search.MMR.Lambda != 1 || cfg.Memory.Dream.Enabled || cfg.Memory.Dream.MinHours != 8 || cfg.Memory.Dream.MinSessions != 6 || cfg.Memory.Dream.CheckIntervalSeconds == nil || *cfg.Memory.Dream.CheckIntervalSeconds != 900 {
 		t.Fatalf("remote=%#v", cfg.Memory)
 	}
 	path := filepath.Join(home, "config.toml")
@@ -221,6 +223,20 @@ func TestMemoryDefaultsRemoteAndEnvironmentPrecedence(t *testing.T) {
 	cfg.ApplyRemoteSettings(&RemoteSettings{MemoryEnabled: boolPointer(true), FlushEnabled: boolPointer(false), FlushIdleTimeoutSeconds: uint64Pointer(120)})
 	if cfg.Memory.Enabled || !cfg.Memory.Flush.Enabled || cfg.Memory.Flush.IdleTimeoutSeconds != nil {
 		t.Fatalf("empty local sections did not block remote values: %#v", cfg.Memory)
+	}
+	if err := os.WriteFile(path, []byte("[memory.search]\nmax_results = 8\n[memory.search.mmr]\nlambda = -0.5\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{
+		MemorySearchMaxResults: intPointer(3), MemoryTemporalDecayEnabled: boolPointer(false),
+		MemoryMMREnabled: boolPointer(true), MemoryMMRLambda: float64Pointer(0.4),
+	})
+	if cfg.Memory.Search.MaxResults != 8 || !cfg.Memory.Search.TemporalDecay.Enabled || cfg.Memory.Search.MMR.Enabled || cfg.Memory.Search.MMR.Lambda != 0 {
+		t.Fatalf("local search did not block remote values: %#v", cfg.Memory.Search)
 	}
 	t.Setenv("GROK_MEMORY", "false")
 	if err := os.WriteFile(path, []byte("[memory]\nenabled = true\n[compaction.memory_flush]\nenabled = true\n"), 0o600); err != nil {

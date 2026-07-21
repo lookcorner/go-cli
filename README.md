@@ -206,8 +206,11 @@ summary for sessions with at least three real prompts and 50 prompt bytes;
 synthetic continuation prompts are excluded. This file-backed path
 also exposes `memory_search` and `memory_get` to the model. Search chunks
 Markdown by headings and bounded overlap, ranks token matches, and decays old
-session notes while treating global and workspace notes as evergreen. It is a
-deterministic text-only backend; semantic/vector retrieval remains pending.
+session notes with a configurable half-life while treating global and workspace
+notes as evergreen. `[memory.search.source_weights]` adjusts source priority;
+optional `[memory.search.mmr]` promotes diverse results over near-duplicates.
+It is a deterministic text-only backend; semantic/vector retrieval remains
+pending.
 During an active REPL, TUI, or ACP session, `/memory off` (or `/mem off`)
 removes both retrieval tools and pauses all writes without deleting files;
 `/memory on` lazily reopens the same workspace store and restores the tools.

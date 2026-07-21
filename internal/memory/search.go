@@ -36,6 +36,11 @@ type chunk struct {
 	created            int64
 }
 
+type rankedResult struct {
+	raw    float64
+	result Result
+}
+
 func (s *Store) Search(query string, index IndexConfig, search SearchConfig) ([]Result, error) {
 	terms := tokens(query)
 	if len(terms) == 0 {
@@ -298,32 +303,124 @@ func rankChunks(chunks []chunk, query []string, cfg SearchConfig) []Result {
 		}
 	}
 	now := time.Now().Unix()
-	results := make([]Result, 0, len(matches))
+	halfLife := effectiveHalfLife(cfg)
+	ranked := make([]rankedResult, 0, len(matches))
 	for _, match := range matches {
-		score := match.raw / best
-		if match.chunk.source == "session" && match.chunk.created > 0 {
-			ageDays := math.Max(0, float64(now-match.chunk.created)/86400)
-			score *= math.Pow(0.95, ageDays)
+		rawScore := match.raw / best
+		if match.chunk.source == "session" && halfLife > 0 {
+			created := max(int64(0), match.chunk.created)
+			ageDays := math.Max(0, float64(now-created)/86400)
+			rawScore *= math.Exp(-math.Ln2 * ageDays / halfLife)
 		}
+		weight := 1.0
+		if configured, ok := cfg.SourceWeights[match.chunk.source]; ok {
+			weight = configured
+		}
+		rawScore *= weight
+		score := min(1, max(0, rawScore))
 		if score < cfg.MinScore {
 			continue
 		}
 		id := chunkID(match.chunk.path, match.chunk.start, match.chunk.end)
-		results = append(results, Result{ChunkID: id, Path: match.chunk.path, StartLine: match.chunk.start, EndLine: match.chunk.end, Score: score, Snippet: match.chunk.text, Source: match.chunk.source, CreatedAt: match.chunk.created})
+		ranked = append(ranked, rankedResult{raw: rawScore, result: Result{ChunkID: id, Path: match.chunk.path, StartLine: match.chunk.start, EndLine: match.chunk.end, Score: score, Snippet: match.chunk.text, Source: match.chunk.source, CreatedAt: match.chunk.created}})
 	}
-	sort.Slice(results, func(i, j int) bool {
-		if results[i].Score != results[j].Score {
-			return results[i].Score > results[j].Score
+	sort.Slice(ranked, func(i, j int) bool {
+		if ranked[i].raw != ranked[j].raw {
+			return ranked[i].raw > ranked[j].raw
 		}
-		if results[i].Path != results[j].Path {
-			return results[i].Path < results[j].Path
+		if ranked[i].result.Path != ranked[j].result.Path {
+			return ranked[i].result.Path < ranked[j].result.Path
 		}
-		return results[i].StartLine < results[j].StartLine
+		return ranked[i].result.StartLine < ranked[j].result.StartLine
 	})
-	if len(results) > cfg.MaxResults {
-		results = results[:cfg.MaxResults]
+	if cfg.MaxResults <= len(ranked)/3 {
+		ranked = ranked[:cfg.MaxResults*3]
+	}
+	if cfg.MMR.Enabled && cfg.MMR.Lambda < 1 && len(ranked) > 1 {
+		ranked = rerankMMR(ranked, min(1, max(0, cfg.MMR.Lambda)))
+	}
+	if len(ranked) > cfg.MaxResults {
+		ranked = ranked[:cfg.MaxResults]
+	}
+	results := make([]Result, len(ranked))
+	for index := range ranked {
+		results[index] = ranked[index].result
 	}
 	return results
+}
+
+func effectiveHalfLife(cfg SearchConfig) float64 {
+	if cfg.TemporalDecay.Enabled {
+		return max(0, cfg.TemporalDecay.HalfLifeDays)
+	}
+	if cfg.RecencyDecay > 0 && cfg.RecencyDecay < 1 && math.Abs(cfg.RecencyDecay-defaultRecencyDecay) > 1e-7 {
+		return -1 / math.Log2(cfg.RecencyDecay)
+	}
+	return 0
+}
+
+func rerankMMR(ranked []rankedResult, lambda float64) []rankedResult {
+	tokensByResult := make([]map[string]struct{}, len(ranked))
+	minScore, maxScore := ranked[0].raw, ranked[0].raw
+	for index := range ranked {
+		tokensByResult[index] = similarityTokens(ranked[index].result.Snippet)
+		minScore = min(minScore, ranked[index].raw)
+		maxScore = max(maxScore, ranked[index].raw)
+	}
+	rangeScore := max(maxScore-minScore, math.SmallestNonzeroFloat64)
+	remaining := make([]int, len(ranked))
+	for index := range remaining {
+		remaining[index] = index
+	}
+	selected := make([]int, 0, len(ranked))
+	for len(remaining) > 0 {
+		bestPosition, bestScore := 0, math.Inf(-1)
+		for position, candidate := range remaining {
+			relevance := (ranked[candidate].raw - minScore) / rangeScore
+			similarity := 0.0
+			for _, prior := range selected {
+				similarity = max(similarity, jaccard(tokensByResult[candidate], tokensByResult[prior]))
+			}
+			score := lambda*relevance - (1-lambda)*similarity
+			if score > bestScore || score == bestScore && ranked[candidate].raw > ranked[remaining[bestPosition]].raw {
+				bestPosition, bestScore = position, score
+			}
+		}
+		selected = append(selected, remaining[bestPosition])
+		remaining = append(remaining[:bestPosition], remaining[bestPosition+1:]...)
+	}
+	result := make([]rankedResult, len(ranked))
+	for index, selectedIndex := range selected {
+		result[index] = ranked[selectedIndex]
+	}
+	return result
+}
+
+func similarityTokens(value string) map[string]struct{} {
+	result := map[string]struct{}{}
+	for _, token := range strings.FieldsFunc(strings.ToLower(value), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_'
+	}) {
+		result[token] = struct{}{}
+	}
+	return result
+}
+
+func jaccard(left, right map[string]struct{}) float64 {
+	if len(left) == 0 && len(right) == 0 {
+		return 1
+	}
+	intersection := 0
+	for token := range left {
+		if _, ok := right[token]; ok {
+			intersection++
+		}
+	}
+	union := len(left) + len(right) - intersection
+	if union == 0 {
+		return 0
+	}
+	return float64(intersection) / float64(union)
 }
 
 func tokens(value string) []string {

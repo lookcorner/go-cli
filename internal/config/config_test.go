@@ -70,6 +70,20 @@ chunk_overlap_chars = 200
 [memory.search]
 max_results = 4
 min_score = 0.5
+recency_decay = 0.9
+
+[memory.search.temporal_decay]
+enabled = true
+half_life_days = 14
+
+[memory.search.mmr]
+enabled = true
+lambda = 0.5
+
+[memory.search.source_weights]
+workspace = 1.0
+session = 0.8
+global = 0.6
 
 [memory.dream]
 enabled = false
@@ -148,7 +162,7 @@ pattern = ".env*"
 	if cfg.ContextWindow != 200000 || cfg.AutoCompactThresholdPercent != 80 {
 		t.Fatalf("unexpected compaction config: window=%d threshold=%d", cfg.ContextWindow, cfg.AutoCompactThresholdPercent)
 	}
-	if !cfg.Memory.Enabled || cfg.Memory.InitialInjection || cfg.Memory.SaveOnEnd || !cfg.Memory.Flush.Enabled || cfg.Memory.Flush.SoftThresholdTokens != 3000 || cfg.Memory.Flush.Model != "memory-model" || cfg.Memory.Flush.MaxWriteChars != 7000 || cfg.Memory.Flush.IdleTimeoutSeconds == nil || *cfg.Memory.Flush.IdleTimeoutSeconds != 300 || cfg.Memory.Index.MaxChunkChars != 1200 || cfg.Memory.Index.ChunkOverlapChars != 200 || cfg.Memory.Search.MaxResults != 4 || cfg.Memory.Search.MinScore != 0.5 || cfg.Memory.Dream.Enabled || cfg.Memory.Dream.MinHours != 12 || cfg.Memory.Dream.MinSessions != 5 || cfg.Memory.Dream.StaleLockSeconds != 1800 || cfg.Memory.Dream.CheckIntervalSeconds == nil || *cfg.Memory.Dream.CheckIntervalSeconds != 600 {
+	if !cfg.Memory.Enabled || cfg.Memory.InitialInjection || cfg.Memory.SaveOnEnd || !cfg.Memory.Flush.Enabled || cfg.Memory.Flush.SoftThresholdTokens != 3000 || cfg.Memory.Flush.Model != "memory-model" || cfg.Memory.Flush.MaxWriteChars != 7000 || cfg.Memory.Flush.IdleTimeoutSeconds == nil || *cfg.Memory.Flush.IdleTimeoutSeconds != 300 || cfg.Memory.Index.MaxChunkChars != 1200 || cfg.Memory.Index.ChunkOverlapChars != 200 || cfg.Memory.Search.MaxResults != 4 || cfg.Memory.Search.MinScore != 0.5 || cfg.Memory.Search.RecencyDecay != 0.9 || !cfg.Memory.Search.TemporalDecay.Enabled || cfg.Memory.Search.TemporalDecay.HalfLifeDays != 14 || !cfg.Memory.Search.MMR.Enabled || cfg.Memory.Search.MMR.Lambda != 0.5 || cfg.Memory.Search.SourceWeights["session"] != 0.8 || cfg.Memory.Search.SourceWeights["global"] != 0.6 || cfg.Memory.Dream.Enabled || cfg.Memory.Dream.MinHours != 12 || cfg.Memory.Dream.MinSessions != 5 || cfg.Memory.Dream.StaleLockSeconds != 1800 || cfg.Memory.Dream.CheckIntervalSeconds == nil || *cfg.Memory.Dream.CheckIntervalSeconds != 600 {
 		t.Fatalf("unexpected memory config: %#v", cfg.Memory)
 	}
 	if slugs := strings.Join(cfg.ModelSlugs(), ","); slugs != "local,search" {

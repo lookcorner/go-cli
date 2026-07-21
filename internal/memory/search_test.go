@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -58,7 +59,9 @@ func TestStoreSearchRanksFiltersAndDecaysSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	results, err := store.Search("deployment rollback", IndexConfig{MaxChunkChars: 1600, ChunkOverlapChars: 320}, SearchConfig{MaxResults: 2, MinScore: 0.1})
+	search := DefaultConfig().Search
+	search.MaxResults, search.MinScore = 2, 0.1
+	results, err := store.Search("deployment rollback", DefaultConfig().Index, search)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,6 +74,45 @@ func TestStoreSearchRanksFiltersAndDecaysSessions(t *testing.T) {
 	}
 	if empty, err := store.Search("not-present", DefaultConfig().Index, DefaultConfig().Search); err != nil || len(empty) != 0 {
 		t.Fatalf("empty=%#v err=%v", empty, err)
+	}
+}
+
+func TestRankChunksUsesTemporalDecaySourceWeightsAndMMR(t *testing.T) {
+	now := time.Now().Unix()
+	chunks := []chunk{
+		{path: "a.md", source: "session", text: "rust async programming patterns", start: 0, end: 1, created: now - 7*86400},
+		{path: "b.md", source: "workspace", text: "rust async programming tutorial", start: 0, end: 1, created: now - 100*86400},
+		{path: "c.md", source: "global", text: "rust python web framework flask", start: 0, end: 1, created: now - 100*86400},
+	}
+	cfg := DefaultConfig().Search
+	cfg.MaxResults = 3
+	cfg.MinScore = 0
+	cfg.SourceWeights["global"] = 0.9
+	results := rankChunks(chunks, tokens("rust async programming"), cfg)
+	if len(results) != 3 || results[0].Path != "b.md" || results[1].Path != "a.md" || math.Abs(results[1].Score-0.5) > 0.01 {
+		t.Fatalf("decayed results=%#v", results)
+	}
+
+	cfg.MMR.Enabled = true
+	cfg.MMR.Lambda = 0.5
+	results = rankChunks(chunks, tokens("rust async programming"), cfg)
+	if results[0].Path != "b.md" || results[1].Path != "c.md" || results[2].Path != "a.md" {
+		t.Fatalf("MMR results=%#v", results)
+	}
+
+	cfg.TemporalDecay.Enabled = false
+	cfg.RecencyDecay = 0.5
+	if halfLife := effectiveHalfLife(cfg); math.Abs(halfLife-1) > 1e-9 {
+		t.Fatalf("legacy half-life=%v", halfLife)
+	}
+	cfg.RecencyDecay = defaultRecencyDecay
+	if halfLife := effectiveHalfLife(cfg); halfLife != 0 {
+		t.Fatalf("disabled half-life=%v", halfLife)
+	}
+	cfg.TemporalDecay.Enabled = true
+	cfg.TemporalDecay.HalfLifeDays = -1
+	if halfLife := effectiveHalfLife(cfg); halfLife != 0 {
+		t.Fatalf("invalid half-life=%v", halfLife)
 	}
 }
 

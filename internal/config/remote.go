@@ -20,6 +20,10 @@ type RemoteSettings struct {
 	MemoryInitialInjectionEnabled   *bool          `json:"memory_initial_injection_enabled"`
 	MemorySearchMaxResults          *int           `json:"memory_search_max_results"`
 	MemorySearchMinScore            *float64       `json:"memory_search_min_score"`
+	MemoryTemporalDecayEnabled      *bool          `json:"memory_temporal_decay_enabled"`
+	MemoryTemporalDecayHalfLifeDays *float64       `json:"memory_temporal_decay_half_life_days"`
+	MemoryMMREnabled                *bool          `json:"memory_mmr_enabled"`
+	MemoryMMRLambda                 *float64       `json:"memory_mmr_lambda"`
 	DreamEnabled                    *bool          `json:"dream_enabled"`
 	DreamMinHours                   *uint64        `json:"dream_min_hours"`
 	DreamMinSessions                *uint64        `json:"dream_min_sessions"`
@@ -122,6 +126,18 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 		}
 		if remote.MemorySearchMinScore != nil {
 			c.Memory.Search.MinScore = min(1, max(0, *remote.MemorySearchMinScore))
+		}
+		if remote.MemoryTemporalDecayEnabled != nil {
+			c.Memory.Search.TemporalDecay.Enabled = *remote.MemoryTemporalDecayEnabled
+		}
+		if remote.MemoryTemporalDecayHalfLifeDays != nil {
+			c.Memory.Search.TemporalDecay.HalfLifeDays = *remote.MemoryTemporalDecayHalfLifeDays
+		}
+		if remote.MemoryMMREnabled != nil {
+			c.Memory.Search.MMR.Enabled = *remote.MemoryMMREnabled
+		}
+		if remote.MemoryMMRLambda != nil {
+			c.Memory.Search.MMR.Lambda = min(1, max(0, *remote.MemoryMMRLambda))
 		}
 	}
 	if !c.memoryDreamConfigured {

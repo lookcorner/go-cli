@@ -1,5 +1,7 @@
 package memory
 
+const defaultRecencyDecay = 0.95
+
 type Config struct {
 	Enabled          bool         `json:"enabled"`
 	InitialInjection bool         `json:"initial_injection"`
@@ -16,8 +18,22 @@ type IndexConfig struct {
 }
 
 type SearchConfig struct {
-	MaxResults int     `json:"max_results"`
-	MinScore   float64 `json:"min_score"`
+	MaxResults    int                 `json:"max_results"`
+	MinScore      float64             `json:"min_score"`
+	RecencyDecay  float64             `json:"recency_decay"`
+	TemporalDecay TemporalDecayConfig `json:"temporal_decay"`
+	MMR           MMRConfig           `json:"mmr"`
+	SourceWeights map[string]float64  `json:"source_weights"`
+}
+
+type TemporalDecayConfig struct {
+	Enabled      bool    `json:"enabled"`
+	HalfLifeDays float64 `json:"half_life_days"`
+}
+
+type MMRConfig struct {
+	Enabled bool    `json:"enabled"`
+	Lambda  float64 `json:"lambda"`
 }
 
 type DreamConfig struct {
@@ -42,7 +58,12 @@ func DefaultConfig() Config {
 		SaveOnEnd:        true,
 		Flush:            FlushConfig{Enabled: true, SoftThresholdTokens: 4000, MaxWriteChars: 8000},
 		Index:            IndexConfig{MaxChunkChars: 1600, ChunkOverlapChars: 320},
-		Search:           SearchConfig{MaxResults: 6, MinScore: 0.35},
-		Dream:            DreamConfig{Enabled: true, MinHours: 4, MinSessions: 3, StaleLockSeconds: 3600},
+		Search: SearchConfig{
+			MaxResults: 6, MinScore: 0.35, RecencyDecay: defaultRecencyDecay,
+			TemporalDecay: TemporalDecayConfig{Enabled: true, HalfLifeDays: 7},
+			MMR:           MMRConfig{Lambda: 0.7},
+			SourceWeights: map[string]float64{"workspace": 1, "session": 1, "global": 1},
+		},
+		Dream: DreamConfig{Enabled: true, MinHours: 4, MinSessions: 3, StaleLockSeconds: 3600},
 	}
 }

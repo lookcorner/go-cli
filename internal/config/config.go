@@ -417,8 +417,22 @@ type fileMemoryIndexConfig struct {
 }
 
 type fileMemorySearchConfig struct {
-	MaxResults *int     `json:"max_results,omitempty" toml:"max_results"`
-	MinScore   *float64 `json:"min_score,omitempty" toml:"min_score"`
+	MaxResults    *int                           `json:"max_results,omitempty" toml:"max_results"`
+	MinScore      *float64                       `json:"min_score,omitempty" toml:"min_score"`
+	RecencyDecay  *float64                       `json:"recency_decay,omitempty" toml:"recency_decay"`
+	TemporalDecay *fileMemoryTemporalDecayConfig `json:"temporal_decay,omitempty" toml:"temporal_decay"`
+	MMR           *fileMemoryMMRConfig           `json:"mmr,omitempty" toml:"mmr"`
+	SourceWeights map[string]float64             `json:"source_weights,omitempty" toml:"source_weights"`
+}
+
+type fileMemoryTemporalDecayConfig struct {
+	Enabled      *bool    `json:"enabled,omitempty" toml:"enabled"`
+	HalfLifeDays *float64 `json:"half_life_days,omitempty" toml:"half_life_days"`
+}
+
+type fileMemoryMMRConfig struct {
+	Enabled *bool    `json:"enabled,omitempty" toml:"enabled"`
+	Lambda  *float64 `json:"lambda,omitempty" toml:"lambda"`
 }
 
 type fileMemoryDreamConfig struct {
@@ -921,6 +935,28 @@ func applyMemoryConfig(cfg *Config, source *fileMemoryConfig, flush *fileMemoryF
 			}
 			if source.Search.MinScore != nil {
 				cfg.Memory.Search.MinScore = *source.Search.MinScore
+			}
+			if source.Search.RecencyDecay != nil {
+				cfg.Memory.Search.RecencyDecay = *source.Search.RecencyDecay
+			}
+			if source.Search.TemporalDecay != nil {
+				if source.Search.TemporalDecay.Enabled != nil {
+					cfg.Memory.Search.TemporalDecay.Enabled = *source.Search.TemporalDecay.Enabled
+				}
+				if source.Search.TemporalDecay.HalfLifeDays != nil {
+					cfg.Memory.Search.TemporalDecay.HalfLifeDays = *source.Search.TemporalDecay.HalfLifeDays
+				}
+			}
+			if source.Search.MMR != nil {
+				if source.Search.MMR.Enabled != nil {
+					cfg.Memory.Search.MMR.Enabled = *source.Search.MMR.Enabled
+				}
+				if source.Search.MMR.Lambda != nil {
+					cfg.Memory.Search.MMR.Lambda = min(1, max(0, *source.Search.MMR.Lambda))
+				}
+			}
+			if source.Search.SourceWeights != nil {
+				cfg.Memory.Search.SourceWeights = source.Search.SourceWeights
 			}
 		}
 		if source.Dream != nil {
