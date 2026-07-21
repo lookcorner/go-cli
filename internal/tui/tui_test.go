@@ -789,8 +789,114 @@ func TestMouseWheelScrollsOnlyTheTranscriptPane(t *testing.T) {
 	if command := view.OnMouse(tea.MouseWheelMsg(tea.Mouse{Y: 1, Button: tea.MouseWheelLeft})); command != nil {
 		t.Fatal("horizontal wheel event changed transcript scroll")
 	}
-	if command := view.OnMouse(tea.MouseClickMsg(tea.Mouse{Y: 1, Button: tea.MouseLeft})); command != nil {
-		t.Fatal("mouse click changed transcript scroll")
+	if command := view.OnMouse(tea.MouseClickMsg(tea.Mouse{Y: 1, Button: tea.MouseLeft})); command == nil {
+		t.Fatal("mouse click did not start transcript selection")
+	}
+}
+
+func TestTextSelectionCopiesRenderedTranscript(t *testing.T) {
+	lines := []string{"alpha beta", "second 你好"}
+	if got := (&textSelection{}).text(); got != "" {
+		t.Fatalf("empty selection=%q", got)
+	}
+	if got := selectDisplayColumns("e\u0301x", 0, 0); got != "e\u0301" {
+		t.Fatalf("combining selection=%q", got)
+	}
+	if got := selectDisplayColumns("e\u0301x", 1, 1); got != "x" {
+		t.Fatalf("post-combining selection=%q", got)
+	}
+	if got := selectDisplayColumns("x", 2, 3); got != "" {
+		t.Fatalf("out-of-range selection=%q", got)
+	}
+	if got := selectionPointForMouse(tea.Mouse{}, nil); got != (selectionPoint{}) {
+		t.Fatalf("empty mouse point=%#v", got)
+	}
+	if got := selectionPointForMouse(tea.Mouse{X: 99, Y: 99}, []string{"你"}); got != (selectionPoint{column: 1}) {
+		t.Fatalf("clamped mouse point=%#v", got)
+	}
+	blank := (&textSelection{lines: []string{""}}).highlightedLines([]string{""})
+	if blank[0] != "" {
+		t.Fatalf("blank highlight=%q", blank[0])
+	}
+	selection := textSelection{anchor: selectionPoint{line: 0, column: 6}, head: selectionPoint{line: 1, column: 5}, lines: lines, moved: true}
+	if got := selection.text(); got != "beta\nsecond" {
+		t.Fatalf("forward selection=%q", got)
+	}
+	selection.anchor, selection.head = selection.head, selection.anchor
+	if got := selection.text(); got != "beta\nsecond" {
+		t.Fatalf("reverse selection=%q", got)
+	}
+	selection.anchor, selection.head = selectionPoint{line: 1, column: 7}, selectionPoint{line: 1, column: 10}
+	if got := selection.text(); got != "你好" {
+		t.Fatalf("wide selection=%q", got)
+	}
+
+	m := &model{width: 60, height: 16, status: "ready"}
+	m.transcript.WriteString(strings.Join(lines, "\n"))
+	click := m.View().OnMouse(tea.MouseClickMsg(tea.Mouse{X: 6, Y: 1, Button: tea.MouseLeft}))
+	updated, _ := m.Update(click())
+	m = updated.(*model)
+	motion := m.View().OnMouse(tea.MouseMotionMsg(tea.Mouse{X: 5, Y: 2, Button: tea.MouseLeft}))
+	updated, _ = m.Update(motion())
+	m = updated.(*model)
+	if !strings.Contains(m.View().Content, "\x1b[7m") {
+		t.Fatal("drag selection was not highlighted")
+	}
+	release := m.View().OnMouse(tea.MouseReleaseMsg(tea.Mouse{X: 5, Y: 2, Button: tea.MouseLeft}))
+	updated, command := m.Update(release())
+	m = updated.(*model)
+	if command == nil || m.status != "selection copied" {
+		t.Fatalf("release command=%v status=%q", command != nil, m.status)
+	}
+	batch, ok := command().(tea.BatchMsg)
+	if !ok || len(batch) != 2 || fmt.Sprint(batch[0]()) != "beta\nsecond" {
+		t.Fatalf("clipboard batch=%#v", batch)
+	}
+	nonce := m.selection.nonce
+	updated, _ = m.Update(selectionClearEvent{nonce: nonce})
+	if updated.(*model).selection != nil {
+		t.Fatal("selection highlight did not clear")
+	}
+}
+
+func TestTextSelectionIgnoresClickAndClearsOnEscapeOrScroll(t *testing.T) {
+	m := &model{width: 40, height: 12}
+	m.transcript.WriteString("select me")
+	start := func() {
+		command := m.View().OnMouse(tea.MouseClickMsg(tea.Mouse{X: 1, Y: 1, Button: tea.MouseLeft}))
+		updated, _ := m.Update(command())
+		m = updated.(*model)
+	}
+	start()
+	release := m.View().OnMouse(tea.MouseReleaseMsg(tea.Mouse{X: 1, Y: 1, Button: tea.MouseLeft}))
+	updated, command := m.Update(release())
+	m = updated.(*model)
+	if command != nil || m.selection != nil {
+		t.Fatal("single click copied text")
+	}
+	start()
+	firstNonce := m.selection.nonce
+	start()
+	updated, _ = m.Update(selectionClearEvent{nonce: firstNonce})
+	m = updated.(*model)
+	if m.selection == nil {
+		t.Fatal("stale timer cleared a newer selection")
+	}
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
+	m = updated.(*model)
+	if m.selection != nil {
+		t.Fatal("escape did not clear selection")
+	}
+	start()
+	updated, _ = m.Update(mouseScrollEvent{lines: 3})
+	m = updated.(*model)
+	if m.selection != nil {
+		t.Fatal("scroll did not clear selection")
+	}
+	start()
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyPgUp}))
+	if updated.(*model).selection != nil {
+		t.Fatal("keyboard scroll did not clear selection")
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/memory"
@@ -25,6 +26,7 @@ import (
 const (
 	mouseWheelScrollLines     = 3
 	questionDoubleClickWindow = 500 * time.Millisecond
+	selectionHighlightTime    = 150 * time.Millisecond
 	maxHistorySearchResults   = 100
 	historySearchPageSize     = 8
 	maxInputUndoEntries       = 100
@@ -33,6 +35,21 @@ const (
 
 type textEvent struct{ text string }
 type statusEvent struct{ text string }
+type mouseSelectionPhase uint8
+
+const (
+	selectionStart mouseSelectionPhase = iota
+	selectionMove
+	selectionRelease
+)
+
+type selectionPoint struct{ line, column int }
+type mouseSelectionEvent struct {
+	phase mouseSelectionPhase
+	point selectionPoint
+	lines []string
+}
+type selectionClearEvent struct{ nonce uint64 }
 type approvalEvent struct {
 	action string
 	detail string
@@ -243,38 +260,40 @@ func (w bridgeWriter) Write(data []byte) (int, error) {
 }
 
 type model struct {
-	ctx           context.Context
-	runner        *agent.Runner
-	bridge        *Bridge
-	workspace     string
-	modelName     string
-	previousID    string
-	transcript    strings.Builder
-	input         []rune
-	cursor        int
-	inputUndo     []inputSnapshot
-	multiline     bool
-	history       []string
-	historyIndex  int
-	historyActive bool
-	historySearch *historySearchState
-	width         int
-	height        int
-	scroll        int
-	running       bool
-	status        string
-	approval      *approvalEvent
-	question      *questionState
-	planMode      bool
-	planReview    *planReviewState
-	remember      *rememberReviewState
-	rememberInput bool
-	rememberNonce uint64
-	turnCancel    context.CancelFunc
-	initial       string
-	scheduled     []tools.ScheduledTaskFired
-	activeTask    string
-	questionClick struct {
+	ctx            context.Context
+	runner         *agent.Runner
+	bridge         *Bridge
+	workspace      string
+	modelName      string
+	previousID     string
+	transcript     strings.Builder
+	input          []rune
+	cursor         int
+	inputUndo      []inputSnapshot
+	multiline      bool
+	history        []string
+	historyIndex   int
+	historyActive  bool
+	historySearch  *historySearchState
+	selection      *textSelection
+	selectionNonce uint64
+	width          int
+	height         int
+	scroll         int
+	running        bool
+	status         string
+	approval       *approvalEvent
+	question       *questionState
+	planMode       bool
+	planReview     *planReviewState
+	remember       *rememberReviewState
+	rememberInput  bool
+	rememberNonce  uint64
+	turnCancel     context.CancelFunc
+	initial        string
+	scheduled      []tools.ScheduledTaskFired
+	activeTask     string
+	questionClick  struct {
 		option int
 		at     time.Time
 	}
@@ -288,6 +307,14 @@ type historySearchState struct {
 type inputSnapshot struct {
 	text   []rune
 	cursor int
+}
+
+type textSelection struct {
+	anchor selectionPoint
+	head   selectionPoint
+	lines  []string
+	moved  bool
+	nonce  uint64
 }
 
 type planReviewState struct {
@@ -352,9 +379,11 @@ func (m *model) Init() tea.Cmd {
 func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := message.(type) {
 	case tea.WindowSizeMsg:
+		m.selection = nil
 		m.width = max(msg.Width, 20)
 		m.height = max(msg.Height, 10)
 	case textEvent:
+		m.selection = nil
 		before := 0
 		if m.scroll > 0 {
 			before = len(renderMarkdown(m.transcript.String(), max(m.width, 20)))
@@ -366,7 +395,48 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, waitForBridge(m.bridge)
 	case mouseScrollEvent:
+		m.selection = nil
 		m.scroll = max(0, m.scroll+msg.lines)
+		return m, nil
+	case mouseSelectionEvent:
+		switch msg.phase {
+		case selectionStart:
+			m.selectionNonce++
+			m.selection = &textSelection{
+				anchor: msg.point, head: msg.point, lines: append([]string(nil), msg.lines...), nonce: m.selectionNonce,
+			}
+		case selectionMove:
+			if m.selection != nil {
+				m.selection.moved = m.selection.moved || msg.point != m.selection.anchor
+				m.selection.head = msg.point
+			}
+		case selectionRelease:
+			if m.selection == nil {
+				return m, nil
+			}
+			m.selection.moved = m.selection.moved || msg.point != m.selection.anchor
+			m.selection.head = msg.point
+			if !m.selection.moved {
+				m.selection = nil
+				return m, nil
+			}
+			text := m.selection.text()
+			if text == "" {
+				m.selection = nil
+				return m, nil
+			}
+			nonce := m.selection.nonce
+			m.status = "selection copied"
+			return m, tea.Batch(
+				tea.SetClipboard(text),
+				tea.Tick(selectionHighlightTime, func(time.Time) tea.Msg { return selectionClearEvent{nonce: nonce} }),
+			)
+		}
+		return m, nil
+	case selectionClearEvent:
+		if m.selection != nil && m.selection.nonce == msg.nonce {
+			m.selection = nil
+		}
 		return m, nil
 	case mouseClickEvent:
 		switch msg.action {
@@ -560,6 +630,10 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := msg.Key()
 	stroke := msg.Keystroke()
+	if key.Code == tea.KeyEsc && m.selection != nil {
+		m.selection = nil
+		return m, nil
+	}
 	if m.approval != nil {
 		switch strings.ToLower(key.Text) {
 		case "y":
@@ -605,9 +679,11 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Quit
 	case "pgup", "ctrl+up":
+		m.selection = nil
 		m.scroll += max(m.contentHeight()/2, 1)
 		return m, nil
 	case "pgdown", "ctrl+down":
+		m.selection = nil
 		m.scroll -= max(m.contentHeight()/2, 1)
 		if m.scroll < 0 {
 			m.scroll = 0
@@ -1326,11 +1402,17 @@ func (m *model) View() tea.View {
 		contentLines = m.historySearchLines(width, m.contentHeight())
 	}
 	visible := sliceFromBottom(contentLines, m.contentHeight(), m.scroll)
-	body := strings.Join(visible, "\n")
 	for len(visible) < m.contentHeight() {
-		body += "\n"
 		visible = append(visible, "")
 	}
+	plainVisible := make([]string, len(visible))
+	for index, line := range visible {
+		plainVisible[index] = stripUIANSI(line)
+	}
+	if m.selection != nil {
+		visible = m.selection.highlightedLines(visible)
+	}
+	body := strings.Join(visible, "\n")
 
 	var footer string
 	if m.remember != nil {
@@ -1403,10 +1485,27 @@ func (m *model) View() tea.View {
 			}
 			return func() tea.Msg { return mouseScrollEvent{lines: lines} }
 		case tea.MouseClickMsg:
-			if mouse.Button != tea.MouseLeft || mouse.Y < contentHeight+3 {
+			if mouse.Button != tea.MouseLeft {
+				return nil
+			}
+			if mouse.Y >= 1 && mouse.Y <= contentHeight {
+				event := mouseSelectionEvent{phase: selectionStart, point: selectionPointForMouse(mouse, plainVisible), lines: plainVisible}
+				return func() tea.Msg { return event }
+			}
+			if mouse.Y < contentHeight+3 {
 				return nil
 			}
 			if event, ok := m.footerClick(mouse.X, mouse.Y, width); ok {
+				return func() tea.Msg { return event }
+			}
+		case tea.MouseMotionMsg:
+			if mouse.Button == tea.MouseLeft && m.selection != nil {
+				event := mouseSelectionEvent{phase: selectionMove, point: selectionPointForMouse(mouse, m.selection.lines)}
+				return func() tea.Msg { return event }
+			}
+		case tea.MouseReleaseMsg:
+			if (mouse.Button == tea.MouseLeft || mouse.Button == tea.MouseNone) && m.selection != nil {
+				event := mouseSelectionEvent{phase: selectionRelease, point: selectionPointForMouse(mouse, m.selection.lines)}
 				return func() tea.Msg { return event }
 			}
 		}
@@ -1516,6 +1615,101 @@ func sliceFromBottom(lines []string, height, scroll int) []string {
 	return append([]string(nil), lines[start:end]...)
 }
 
+func selectionPointForMouse(mouse tea.Mouse, lines []string) selectionPoint {
+	if len(lines) == 0 {
+		return selectionPoint{}
+	}
+	line := min(max(mouse.Y-1, 0), len(lines)-1)
+	column := min(max(mouse.X, 0), max(displayWidth(lines[line])-1, 0))
+	return selectionPoint{line: line, column: column}
+}
+
+func (s *textSelection) bounds() (selectionPoint, selectionPoint) {
+	start, end := s.anchor, s.head
+	if start.line > end.line || start.line == end.line && start.column > end.column {
+		start, end = end, start
+	}
+	return start, end
+}
+
+func (s *textSelection) text() string {
+	if len(s.lines) == 0 {
+		return ""
+	}
+	start, end := s.bounds()
+	selected := make([]string, 0, end.line-start.line+1)
+	for line := start.line; line <= end.line; line++ {
+		from, to := 0, max(displayWidth(s.lines[line])-1, 0)
+		if line == start.line {
+			from = start.column
+		}
+		if line == end.line {
+			to = end.column
+		}
+		selected = append(selected, selectDisplayColumns(s.lines[line], from, to))
+	}
+	return strings.Join(selected, "\n")
+}
+
+func (s *textSelection) highlightedLines(lines []string) []string {
+	start, end := s.bounds()
+	for line := start.line; line <= end.line && line < len(lines) && line < len(s.lines); line++ {
+		from, to := 0, max(displayWidth(s.lines[line])-1, 0)
+		if line == start.line {
+			from = start.column
+		}
+		if line == end.line {
+			to = end.column
+		}
+		plain := s.lines[line]
+		left, right := displayColumnRuneRange(plain, from, to)
+		runes := []rune(plain)
+		if left < right {
+			lines[line] = string(runes[:left]) + "\x1b[7m" + string(runes[left:right]) + "\x1b[0m" + string(runes[right:])
+		}
+	}
+	return lines
+}
+
+func selectDisplayColumns(value string, from, to int) string {
+	start, end := displayColumnRuneRange(value, from, to)
+	return string([]rune(value)[start:end])
+}
+
+func displayColumnRuneRange(value string, from, to int) (int, int) {
+	runes := []rune(value)
+	start, end, column := len(runes), len(runes), 0
+	for index, r := range runes {
+		width := runeWidth(r)
+		if width == 0 {
+			continue
+		}
+		if start == len(runes) && from < column+width {
+			start = index
+		}
+		if to < column+width {
+			end = index + 1
+			for end < len(runes) && runeWidth(runes[end]) == 0 {
+				end++
+			}
+			break
+		}
+		column += width
+	}
+	if start == len(runes) {
+		return len(runes), len(runes)
+	}
+	return start, end
+}
+
+func displayWidth(value string) int {
+	width := 0
+	for _, r := range value {
+		width += runeWidth(r)
+	}
+	return width
+}
+
 func truncate(value string, width int) string {
 	if width <= 0 {
 		return ""
@@ -1619,5 +1813,5 @@ func padRight(value string, width int) string {
 }
 
 func stripUIANSI(value string) string {
-	return strings.NewReplacer("\x1b[1m", "", "\x1b[0m", "", "\x1b[2m", "", "\x1b[30;43m", "").Replace(value)
+	return ansi.Strip(value)
 }

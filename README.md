@@ -296,6 +296,8 @@ mode, where Enter inserts a newline and Shift/Alt-Enter sends. A trailing
 backslash followed by Enter also continues the prompt on the next line. Mouse
 clicks can answer approval prompts, select structured question options, and
 trigger the three plan-review actions. Double-clicking a question option submits it.
+Dragging across visible transcript text copies the selection through OSC 52;
+the brief highlight can be dismissed with Esc and is cleared by scrolling.
 Up/Down browse durable prompt history when the prompt is empty. `/history`
 opens fuzzy search over the same workspace-scoped history; Enter or Tab restores
 the selected prompt to the composer without submitting it.
