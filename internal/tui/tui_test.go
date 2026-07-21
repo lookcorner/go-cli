@@ -300,6 +300,87 @@ func TestModelInputAndView(t *testing.T) {
 	}
 }
 
+func TestInputEditingSupportsCursorNavigation(t *testing.T) {
+	m := &model{}
+	press := func(key tea.Key) {
+		updated, _ := m.Update(tea.KeyPressMsg(key))
+		m = updated.(*model)
+	}
+	press(tea.Key{Code: '你', Text: "你ab"})
+	press(tea.Key{Code: tea.KeyLeft})
+	press(tea.Key{Code: tea.KeyLeft})
+	press(tea.Key{Code: 'X', Text: "X"})
+	if got := string(m.input); got != "你Xab" || m.cursor != 2 {
+		t.Fatalf("middle insert=%q cursor=%d", got, m.cursor)
+	}
+	press(tea.Key{Code: tea.KeyDelete})
+	press(tea.Key{Code: tea.KeyBackspace})
+	if got := string(m.input); got != "你b" || m.cursor != 1 {
+		t.Fatalf("delete/backspace=%q cursor=%d", got, m.cursor)
+	}
+	press(tea.Key{Code: tea.KeyHome})
+	press(tea.Key{Code: tea.KeyDelete})
+	press(tea.Key{Code: tea.KeyEnd})
+	press(tea.Key{Code: '界', Text: "界"})
+	if got := string(m.input); got != "b界" || m.cursor != 2 {
+		t.Fatalf("home/end edit=%q cursor=%d", got, m.cursor)
+	}
+	press(tea.Key{Code: 'a', Mod: tea.ModCtrl})
+	if m.cursor != 0 {
+		t.Fatalf("ctrl-a cursor=%d", m.cursor)
+	}
+	press(tea.Key{Code: 'e', Mod: tea.ModCtrl})
+	if m.cursor != len(m.input) {
+		t.Fatalf("ctrl-e cursor=%d", m.cursor)
+	}
+	press(tea.Key{Code: 'u', Mod: tea.ModCtrl})
+	if len(m.input) != 0 || m.cursor != 0 {
+		t.Fatalf("ctrl-u input=%q cursor=%d", m.input, m.cursor)
+	}
+}
+
+func TestRenderInputKeepsCursorVisibleWithinDisplayWidth(t *testing.T) {
+	tests := []struct {
+		input  string
+		cursor int
+		width  int
+		want   string
+	}{
+		{input: "abcdef", cursor: 0, width: 5, want: "█abcd"},
+		{input: "abcdef", cursor: 2, width: 5, want: "ab█cd"},
+		{input: "abcdef", cursor: 6, width: 5, want: "cdef█"},
+		{input: "你好ab", cursor: 1, width: 4, want: "你█"},
+		{input: "abcdef", cursor: 3, width: 1, want: "█"},
+	}
+	for _, test := range tests {
+		got := renderInput([]rune(test.input), test.cursor, test.width)
+		if got != test.want || markdownVisibleWidth(got) > test.width {
+			t.Fatalf("renderInput(%q,%d,%d)=%q width=%d want=%q", test.input, test.cursor, test.width, got, markdownVisibleWidth(got), test.want)
+		}
+	}
+}
+
+func TestStructuredInputsShareCursorEditing(t *testing.T) {
+	m := &model{planReview: &planReviewState{editing: true}, input: []rune("ab"), cursor: 2}
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyLeft}))
+	m = updated.(*model)
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: 'X', Text: "X"}))
+	m = updated.(*model)
+	if got := string(m.input); got != "aXb" || m.cursor != 2 {
+		t.Fatalf("plan input=%q cursor=%d", got, m.cursor)
+	}
+	m.planReview = nil
+	m.question = &questionState{event: questionEvent{request: tools.UserQuestionRequest{Questions: []tools.UserQuestion{{Question: "Where?"}}}}}
+	m.input, m.cursor = []rune("13"), 2
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyLeft}))
+	m = updated.(*model)
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: '2', Text: "2"}))
+	m = updated.(*model)
+	if got := string(m.input); got != "123" || m.cursor != 2 {
+		t.Fatalf("question input=%q cursor=%d", got, m.cursor)
+	}
+}
+
 func TestMouseWheelScrollsOnlyTheTranscriptPane(t *testing.T) {
 	m := &model{width: 60, height: 16}
 	view := m.View()

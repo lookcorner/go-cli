@@ -234,6 +234,7 @@ type model struct {
 	previousID    string
 	transcript    strings.Builder
 	input         []rune
+	cursor        int
 	width         int
 	height        int
 	scroll        int
@@ -340,7 +341,7 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			event: msg, answers: make(map[string][]string, len(msg.request.Questions)),
 			annotations: make(map[string]tools.UserQuestionAnnotation), partial: make(map[string]string, len(msg.request.Questions)),
 		}
-		m.input = nil
+		m.clearInput()
 		m.status = fmt.Sprintf("question 1/%d", len(msg.request.Questions))
 		return m, waitForBridge(m.bridge)
 	case planModeEvent:
@@ -352,7 +353,7 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case planReviewEvent:
 		m.planMode = true
 		m.planReview = &planReviewState{event: msg}
-		m.input = nil
+		m.clearInput()
 		m.status = "review implementation plan"
 		return m, waitForBridge(m.bridge)
 	case turnDoneEvent:
@@ -532,7 +533,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.rememberInput && key.Code == tea.KeyEsc {
 		m.rememberInput = false
-		m.input = nil
+		m.clearInput()
 		m.status = "memory note cancelled"
 		return m, nil
 	}
@@ -563,7 +564,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if prompt == "" {
 			return m, nil
 		}
-		m.input = nil
+		m.clearInput()
 		if m.rememberInput {
 			m.rememberInput = false
 			return m.startRememberReview(prompt)
@@ -602,19 +603,8 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		prompt, _ = tools.ExpandLoopCommand(prompt)
 		m.beginTurn(prompt)
 		return m, runTurn(turnCtx, m.runner, prompt, m.previousID)
-	case tea.KeyBackspace:
-		if len(m.input) > 0 {
-			m.input = m.input[:len(m.input)-1]
-		}
-		return m, nil
 	}
-	if stroke == "ctrl+u" {
-		m.input = nil
-		return m, nil
-	}
-	if key.Text != "" && utf8.ValidString(key.Text) {
-		m.input = append(m.input, []rune(key.Text)...)
-	}
+	m.editInput(msg)
 	return m, nil
 }
 
@@ -664,7 +654,7 @@ func (m *model) handlePlanReviewKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.finishPlanReview(tools.PlanModeDecision{Outcome: "approved"})
 		case "r":
 			m.planReview.editing = true
-			m.input = nil
+			m.clearInput()
 			m.status = "request plan changes"
 		case "a":
 			m.finishPlanReview(tools.PlanModeDecision{Outcome: "abandoned"})
@@ -677,7 +667,7 @@ func (m *model) handlePlanReviewKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if stroke == "esc" {
 		m.planReview.editing = false
-		m.input = nil
+		m.clearInput()
 		m.status = "review implementation plan"
 		return m, nil
 	}
@@ -689,16 +679,8 @@ func (m *model) handlePlanReviewKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.finishPlanReview(tools.PlanModeDecision{Outcome: "cancelled", Feedback: feedback})
-	case tea.KeyBackspace:
-		if len(m.input) > 0 {
-			m.input = m.input[:len(m.input)-1]
-		}
 	default:
-		if stroke == "ctrl+u" {
-			m.input = nil
-		} else if key.Text != "" && utf8.ValidString(key.Text) {
-			m.input = append(m.input, []rune(key.Text)...)
-		}
+		m.editInput(msg)
 	}
 	return m, nil
 }
@@ -706,7 +688,7 @@ func (m *model) handlePlanReviewKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m *model) finishPlanReview(decision tools.PlanModeDecision) {
 	m.planReview.event.reply <- decision
 	m.planReview = nil
-	m.input = nil
+	m.clearInput()
 	m.status = "thinking"
 }
 
@@ -740,22 +722,14 @@ func (m *model) handleQuestionKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.question.annotations[question.Question] = annotation
 		}
 		m.question.index++
-		m.input = nil
+		m.clearInput()
 		if m.question.index == len(m.question.event.request.Questions) {
 			m.finishQuestion(tools.UserQuestionResponse{Outcome: "accepted", Answers: m.question.answers, Annotations: m.question.annotations})
 		} else {
 			m.status = fmt.Sprintf("question %d/%d", m.question.index+1, len(m.question.event.request.Questions))
 		}
-	case tea.KeyBackspace:
-		if len(m.input) > 0 {
-			m.input = m.input[:len(m.input)-1]
-		}
 	default:
-		if stroke == "ctrl+u" {
-			m.input = nil
-		} else if key.Text != "" && utf8.ValidString(key.Text) {
-			m.input = append(m.input, []rune(key.Text)...)
-		}
+		m.editInput(msg)
 	}
 	return m, nil
 }
@@ -763,8 +737,44 @@ func (m *model) handleQuestionKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m *model) finishQuestion(response tools.UserQuestionResponse) {
 	m.question.event.reply <- response
 	m.question = nil
-	m.input = nil
+	m.clearInput()
 	m.status = "thinking"
+}
+
+func (m *model) clearInput() {
+	m.input = nil
+	m.cursor = 0
+}
+
+func (m *model) editInput(message tea.KeyPressMsg) {
+	key, stroke := message.Key(), message.Keystroke()
+	m.cursor = min(max(m.cursor, 0), len(m.input))
+	switch {
+	case key.Code == tea.KeyLeft:
+		m.cursor = max(0, m.cursor-1)
+	case key.Code == tea.KeyRight:
+		m.cursor = min(len(m.input), m.cursor+1)
+	case key.Code == tea.KeyHome || stroke == "ctrl+a":
+		m.cursor = 0
+	case key.Code == tea.KeyEnd || stroke == "ctrl+e":
+		m.cursor = len(m.input)
+	case key.Code == tea.KeyBackspace && m.cursor > 0:
+		copy(m.input[m.cursor-1:], m.input[m.cursor:])
+		m.input = m.input[:len(m.input)-1]
+		m.cursor--
+	case key.Code == tea.KeyDelete && m.cursor < len(m.input):
+		copy(m.input[m.cursor:], m.input[m.cursor+1:])
+		m.input = m.input[:len(m.input)-1]
+	case stroke == "ctrl+u":
+		m.clearInput()
+	case key.Text != "" && utf8.ValidString(key.Text):
+		insert := []rune(key.Text)
+		oldLength := len(m.input)
+		m.input = append(m.input, insert...)
+		copy(m.input[m.cursor+len(insert):], m.input[m.cursor:oldLength])
+		copy(m.input[m.cursor:], insert)
+		m.cursor += len(insert)
+	}
 }
 
 func (m *model) beginTurn(prompt string) {
@@ -901,7 +911,7 @@ func (m *model) View() tea.View {
 		footer = "\x1b[1;32mMemory note review\x1b[0m\n\x1b[2m" + truncate("Enter/Y save · "+tab+" · Esc cancel", width) + "\x1b[0m"
 	} else if m.planReview != nil {
 		if m.planReview.editing {
-			footer = fmt.Sprintf("\x1b[1;33m%s\x1b[0m\n> %s█\n\x1b[2m%s\x1b[0m", truncate("Request plan changes", width), truncateFromLeft(string(m.input), max(width-2, 1)), truncate("Enter send · Esc back · Ctrl-U clear", width))
+			footer = fmt.Sprintf("\x1b[1;33m%s\x1b[0m\n> %s\n\x1b[2m%s\x1b[0m", truncate("Request plan changes", width), renderInput(m.input, m.cursor, max(width-2, 1)), truncate("Enter send · Esc back · Ctrl-U clear", width))
 		} else {
 			footer = "\x1b[1;33mPlan review\x1b[0m\n\x1b[2m" + truncate("[Y] approve · [R] request changes · [A] abandon · Esc keep planning", width) + "\x1b[0m"
 		}
@@ -917,21 +927,19 @@ func (m *model) View() tea.View {
 		if m.question.event.request.Mode == "plan" {
 			hint += " · Ctrl-R clarify · Ctrl-S skip"
 		}
-		footer = fmt.Sprintf("\x1b[1;33m%s\x1b[0m\n%s\n> %s█\n\x1b[2m%s\x1b[0m",
+		footer = fmt.Sprintf("\x1b[1;33m%s\x1b[0m\n%s\n> %s\n\x1b[2m%s\x1b[0m",
 			truncate(question.Question, width), truncate(strings.Join(labels, "  ")+"  [Other] type response", width),
-			truncateFromLeft(string(m.input), max(width-2, 1)), truncate(hint, width))
+			renderInput(m.input, m.cursor, max(width-2, 1)), truncate(hint, width))
 	} else if m.rememberInput {
-		footer = "\x1b[1;32m# Save a memory note\x1b[0m\n> " + truncateFromLeft(string(m.input), max(width-2, 1)) + "█\n\x1b[2mEnter review · Esc cancel\x1b[0m"
+		footer = "\x1b[1;32m# Save a memory note\x1b[0m\n> " + renderInput(m.input, m.cursor, max(width-2, 1)) + "\n\x1b[2mEnter review · Esc cancel\x1b[0m"
 	} else {
-		input := string(m.input)
+		input := ""
 		if m.running {
-			input = ""
+			input = "> "
+		} else {
+			input = "> " + renderInput(m.input, m.cursor, max(width-2, 1))
 		}
-		prompt := "> " + input
-		if !m.running {
-			prompt += "█"
-		}
-		footer = truncateFromLeft(prompt, width) + "\n\x1b[2m" + truncate("Enter send · Shift-Tab mode · PgUp/PgDn scroll · Ctrl-C cancel/quit · Ctrl-Q quit", width) + "\x1b[0m"
+		footer = input + "\n\x1b[2m" + truncate("Enter send · Shift-Tab mode · PgUp/PgDn scroll · Ctrl-C cancel/quit · Ctrl-Q quit", width) + "\x1b[0m"
 	}
 	status := "\x1b[2m" + truncate(m.status, width) + "\x1b[0m"
 	view := tea.NewView(header + "\n" + body + status + "\n" + footer)
@@ -1002,15 +1010,33 @@ func truncate(value string, width int) string {
 	return string(runes[:width-1]) + "…"
 }
 
-func truncateFromLeft(value string, width int) string {
-	runes := []rune(value)
-	if len(runes) <= width {
-		return value
+func renderInput(input []rune, cursor, width int) string {
+	if width <= 0 {
+		return ""
 	}
-	if width <= 1 {
-		return "…"
+	cursor = min(max(cursor, 0), len(input))
+	textWidth := width - 1
+	start, used := cursor, 0
+	for start > 0 {
+		charWidth := runeWidth(input[start-1])
+		if used+charWidth > textWidth {
+			break
+		}
+		start--
+		used += charWidth
 	}
-	return "…" + string(runes[len(runes)-width+1:])
+	end := cursor
+	for end < len(input) {
+		charWidth := runeWidth(input[end])
+		if used+charWidth > textWidth {
+			break
+		}
+		end++
+		used += charWidth
+	}
+	visible := input[start:end]
+	position := cursor - start
+	return string(visible[:position]) + "█" + string(visible[position:])
 }
 
 func truncateANSIUnsafe(value string, width int) string {
