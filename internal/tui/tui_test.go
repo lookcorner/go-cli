@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -418,6 +419,149 @@ func TestRememberPromptMovesDuplicatesToNewest(t *testing.T) {
 	if got := strings.Join(m.history, "|"); got != "duplicate|new|old" || m.historyActive || m.historyIndex != -1 {
 		t.Fatalf("history=%q active=%v index=%d", got, m.historyActive, m.historyIndex)
 	}
+}
+
+func TestHistoryCommandOpensSearchWithoutStartingTurn(t *testing.T) {
+	empty := &model{}
+	empty.refreshHistorySearch()
+	if empty.historySearch != nil {
+		t.Fatal("inactive search changed")
+	}
+	m := &model{ctx: context.Background(), runner: &agent.Runner{}, history: []string{"newest", "oldest"}, historyIndex: -1, status: "ready"}
+	m.setInput("/history")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.running || m.historySearch == nil {
+		t.Fatalf("command=%v running=%v search=%#v", command != nil, m.running, m.historySearch)
+	}
+	if got := strings.Join(m.historySearch.results, "|"); got != "oldest|newest" || m.historySearch.selected != 1 || len(m.input) != 0 {
+		t.Fatalf("results=%q selected=%d input=%q", got, m.historySearch.selected, m.input)
+	}
+}
+
+func TestHistorySearchFiltersNavigatesAndAccepts(t *testing.T) {
+	m := &model{history: []string{"generate config", "git commit", "unrelated"}, historyIndex: -1}
+	m.openHistorySearch()
+	press := func(key tea.Key) {
+		updated, _ := m.Update(tea.KeyPressMsg(key))
+		m = updated.(*model)
+	}
+	for _, char := range "gco" {
+		press(tea.Key{Code: char, Text: string(char)})
+	}
+	if got := m.selectedHistorySearchResult(); got != "git commit" {
+		t.Fatalf("best match=%q results=%q", got, m.historySearch.results)
+	}
+	press(tea.Key{Code: tea.KeyUp})
+	press(tea.Key{Code: tea.KeyUp})
+	if m.historySearch.selected != 0 {
+		t.Fatalf("up wrapped selected=%d", m.historySearch.selected)
+	}
+	press(tea.Key{Code: tea.KeyDown})
+	press(tea.Key{Code: tea.KeyDown})
+	if m.historySearch.selected != len(m.historySearch.results)-1 {
+		t.Fatalf("down wrapped selected=%d", m.historySearch.selected)
+	}
+	press(tea.Key{Code: tea.KeyTab})
+	if m.historySearch != nil || string(m.input) != "git commit" || m.running {
+		t.Fatalf("accepted search=%#v input=%q running=%v", m.historySearch, m.input, m.running)
+	}
+}
+
+func TestHistorySearchAcceptsSelectionWithoutSubmitting(t *testing.T) {
+	for _, key := range []rune{tea.KeyEnter, tea.KeyTab} {
+		t.Run(tea.Key{Code: key}.String(), func(t *testing.T) {
+			m := &model{history: []string{"selected"}}
+			m.openHistorySearch()
+			updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: key}))
+			m = updated.(*model)
+			if command != nil || m.running || m.historySearch != nil || string(m.input) != "selected" {
+				t.Fatalf("command=%v running=%v search=%#v input=%q", command != nil, m.running, m.historySearch, m.input)
+			}
+		})
+	}
+}
+
+func TestHistorySearchPagingCancellationAndNoResults(t *testing.T) {
+	history := make([]string, 120)
+	for index := range history {
+		history[index] = fmt.Sprintf("prompt %03d", index)
+	}
+	m := &model{history: history, historyIndex: -1, width: 60, height: 18, scroll: 7}
+	m.openHistorySearch()
+	if len(m.historySearch.results) != maxHistorySearchResults || m.historySearch.selected != maxHistorySearchResults-1 || m.scroll != 0 {
+		t.Fatalf("results=%d selected=%d scroll=%d", len(m.historySearch.results), m.historySearch.selected, m.scroll)
+	}
+	m.setInput("p")
+	m.refreshHistorySearch()
+	if len(m.historySearch.results) != maxHistorySearchResults {
+		t.Fatalf("bounded fuzzy results=%d", len(m.historySearch.results))
+	}
+	m.clearInput()
+	m.refreshHistorySearch()
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'u', Mod: tea.ModCtrl}))
+	m = updated.(*model)
+	if m.historySearch.selected != maxHistorySearchResults-1-historySearchPageSize {
+		t.Fatalf("page up selected=%d", m.historySearch.selected)
+	}
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: 'd', Mod: tea.ModCtrl}))
+	m = updated.(*model)
+	if m.historySearch.selected != maxHistorySearchResults-1 {
+		t.Fatalf("page down selected=%d", m.historySearch.selected)
+	}
+	view := stripUIANSI(m.View().Content)
+	if !strings.Contains(view, "Prompt history") || !strings.Contains(view, "> prompt") {
+		t.Fatalf("history panel not rendered:\n%s", view)
+	}
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
+	m = updated.(*model)
+	if m.historySearch != nil || len(m.input) != 0 {
+		t.Fatalf("cancel search=%#v input=%q", m.historySearch, m.input)
+	}
+	m.openHistorySearch()
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: 'c', Mod: tea.ModCtrl}))
+	m = updated.(*model)
+	if m.historySearch != nil || len(m.input) != 0 {
+		t.Fatalf("ctrl-c search=%#v input=%q", m.historySearch, m.input)
+	}
+	m.openHistorySearch()
+	m.setInput("no possible result")
+	m.refreshHistorySearch()
+	if view := stripUIANSI(m.View().Content); !strings.Contains(view, "No matching prompts") || !strings.Contains(view, "no possible result") {
+		t.Fatalf("no-result panel not rendered:\n%s", view)
+	}
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if m.historySearch != nil || len(m.input) != 0 || m.running {
+		t.Fatalf("empty accept search=%#v input=%q running=%v", m.historySearch, m.input, m.running)
+	}
+}
+
+func TestStructuredInputsDoNotOpenHistorySearch(t *testing.T) {
+	t.Run("question", func(t *testing.T) {
+		m := &model{question: &questionState{event: questionEvent{request: tools.UserQuestionRequest{Questions: []tools.UserQuestion{{Question: "Continue?"}}}, reply: make(chan tools.UserQuestionResponse, 1)}, answers: map[string][]string{}, annotations: map[string]tools.UserQuestionAnnotation{}, partial: map[string]string{}}, history: []string{"saved"}}
+		m.setInput("/history")
+		updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+		if updated.(*model).historySearch != nil {
+			t.Fatal("question opened history search")
+		}
+	})
+	t.Run("plan", func(t *testing.T) {
+		m := &model{ctx: context.Background(), runner: &agent.Runner{}, planReview: &planReviewState{event: planReviewEvent{reply: make(chan tools.PlanModeDecision, 1)}, editing: true}, history: []string{"saved"}}
+		m.setInput("/history")
+		updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+		if updated.(*model).historySearch != nil {
+			t.Fatal("plan review opened history search")
+		}
+	})
+	t.Run("memory", func(t *testing.T) {
+		m := &model{ctx: context.Background(), runner: &agent.Runner{}, rememberInput: true, history: []string{"saved"}}
+		m.setInput("/history")
+		updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+		if updated.(*model).historySearch != nil {
+			t.Fatal("memory input opened history search")
+		}
+	})
 }
 
 func TestRenderInputKeepsCursorVisibleWithinDisplayWidth(t *testing.T) {

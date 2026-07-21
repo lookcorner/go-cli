@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,6 +25,8 @@ import (
 const (
 	mouseWheelScrollLines     = 3
 	questionDoubleClickWindow = 500 * time.Millisecond
+	maxHistorySearchResults   = 100
+	historySearchPageSize     = 8
 )
 
 type textEvent struct{ text string }
@@ -249,6 +253,7 @@ type model struct {
 	history       []string
 	historyIndex  int
 	historyActive bool
+	historySearch *historySearchState
 	width         int
 	height        int
 	scroll        int
@@ -269,6 +274,11 @@ type model struct {
 		option int
 		at     time.Time
 	}
+}
+
+type historySearchState struct {
+	results  []string
+	selected int
 }
 
 type planReviewState struct {
@@ -569,6 +579,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.question != nil {
 		return m.handleQuestionKey(msg)
 	}
+	if m.historySearch != nil {
+		return m.handleHistorySearchKey(msg)
+	}
 	switch stroke {
 	case "ctrl+c":
 		if m.running && m.turnCancel != nil {
@@ -656,6 +669,10 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			return m.startRememberReview(note)
+		}
+		if prompt == "/history" {
+			m.openHistorySearch()
+			return m, nil
 		}
 		m.running = true
 		turnCtx, cancel := context.WithCancel(m.ctx)
@@ -754,6 +771,121 @@ func (m *model) closeHistory() {
 	m.historyActive = false
 	m.historyIndex = -1
 	m.clearInput()
+}
+
+func (m *model) openHistorySearch() {
+	m.clearInput()
+	m.scroll = 0
+	m.historySearch = &historySearchState{}
+	m.refreshHistorySearch()
+	m.status = "search prompt history"
+}
+
+func (m *model) handleHistorySearchKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	key, stroke := msg.Key(), msg.Keystroke()
+	switch {
+	case key.Code == tea.KeyEsc || stroke == "ctrl+c":
+		m.historySearch = nil
+		m.clearInput()
+		m.status = "ready"
+	case key.Code == tea.KeyEnter || key.Code == tea.KeyTab:
+		if selected := m.selectedHistorySearchResult(); selected != "" {
+			m.setInput(selected)
+		} else {
+			m.clearInput()
+		}
+		m.historySearch = nil
+		m.status = "ready"
+	case key.Code == tea.KeyUp || stroke == "ctrl+p" || stroke == "ctrl+k":
+		m.historySearch.selected = max(0, m.historySearch.selected-1)
+	case key.Code == tea.KeyDown || stroke == "ctrl+n" || stroke == "ctrl+j":
+		m.historySearch.selected = min(len(m.historySearch.results)-1, m.historySearch.selected+1)
+	case stroke == "pgup" || stroke == "ctrl+u":
+		m.historySearch.selected = max(0, m.historySearch.selected-historySearchPageSize)
+	case stroke == "pgdown" || stroke == "ctrl+d":
+		m.historySearch.selected = min(len(m.historySearch.results)-1, m.historySearch.selected+historySearchPageSize)
+	default:
+		m.editInput(msg)
+		m.refreshHistorySearch()
+	}
+	return m, nil
+}
+
+func (m *model) selectedHistorySearchResult() string {
+	if m.historySearch == nil || m.historySearch.selected < 0 || m.historySearch.selected >= len(m.historySearch.results) {
+		return ""
+	}
+	return m.historySearch.results[m.historySearch.selected]
+}
+
+func (m *model) refreshHistorySearch() {
+	if m.historySearch == nil {
+		return
+	}
+	m.historySearch.results = filterPromptHistory(m.history, string(m.input))
+	m.historySearch.selected = len(m.historySearch.results) - 1
+}
+
+func filterPromptHistory(history []string, query string) []string {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		limit := min(len(history), maxHistorySearchResults)
+		results := append([]string(nil), history[:limit]...)
+		slices.Reverse(results)
+		return results
+	}
+	type match struct {
+		text  string
+		score int
+		index int
+	}
+	matches := make([]match, 0, len(history))
+	for index, item := range history {
+		if score, ok := fuzzyPromptScore(item, query); ok {
+			matches = append(matches, match{text: item, score: score, index: index})
+		}
+	}
+	sort.SliceStable(matches, func(i, j int) bool {
+		if matches[i].score != matches[j].score {
+			return matches[i].score > matches[j].score
+		}
+		return matches[i].index < matches[j].index
+	})
+	if len(matches) > maxHistorySearchResults {
+		matches = matches[:maxHistorySearchResults]
+	}
+	results := make([]string, len(matches))
+	for index := range matches {
+		results[len(matches)-1-index] = matches[index].text
+	}
+	return results
+}
+
+func fuzzyPromptScore(text, query string) (int, bool) {
+	textRunes := []rune(strings.ToLower(text))
+	queryRunes := []rune(strings.ToLower(query))
+	position, previous, score := 0, -2, 0
+	for _, wanted := range queryRunes {
+		found := -1
+		for index := position; index < len(textRunes); index++ {
+			if textRunes[index] == wanted {
+				found = index
+				break
+			}
+		}
+		if found < 0 {
+			return 0, false
+		}
+		score += 10 - found
+		if found == previous+1 {
+			score += 20
+		}
+		if found == 0 || textRunes[found-1] == ' ' || textRunes[found-1] == '/' || textRunes[found-1] == '-' || textRunes[found-1] == '_' {
+			score += 12
+		}
+		previous, position = found, found+1
+	}
+	return score, true
 }
 
 func (m *model) startRememberReview(raw string) (tea.Model, tea.Cmd) {
@@ -929,6 +1061,11 @@ func (m *model) clearInput() {
 	m.cursor = 0
 }
 
+func (m *model) setInput(value string) {
+	m.input = []rune(value)
+	m.cursor = len(m.input)
+}
+
 func (m *model) editInput(message tea.KeyPressMsg) {
 	key, stroke := message.Key(), message.Keystroke()
 	m.cursor = min(max(m.cursor, 0), len(m.input))
@@ -1075,6 +1212,9 @@ func (m *model) View() tea.View {
 		content = "# Memory Note\n\n**" + label + "**\n\n" + note
 	}
 	contentLines := renderMarkdown(content, width)
+	if m.historySearch != nil {
+		contentLines = m.historySearchLines(width, m.contentHeight())
+	}
 	visible := sliceFromBottom(contentLines, m.contentHeight(), m.scroll)
 	body := strings.Join(visible, "\n")
 	for len(visible) < m.contentHeight() {
@@ -1115,6 +1255,8 @@ func (m *model) View() tea.View {
 			renderInput(m.input, m.cursor, max(width-2, 1)), truncate(hint, width))
 	} else if m.rememberInput {
 		footer = "\x1b[1;32m# Save a memory note\x1b[0m\n> " + renderInput(m.input, m.cursor, max(width-2, 1)) + "\n\x1b[2mEnter review · Esc cancel\x1b[0m"
+	} else if m.historySearch != nil {
+		footer = "\x1b[1;32mPrompt history\x1b[0m\n> " + renderInput(m.input, m.cursor, max(width-2, 1)) + "\n\x1b[2mEnter/Tab restore · Esc cancel · Up/Down select\x1b[0m"
 	} else {
 		input := ""
 		if m.running {
@@ -1207,7 +1349,28 @@ func (m *model) contentHeight() int {
 	if m.question != nil || m.planReview != nil || m.remember != nil || m.rememberInput {
 		return max(m.height-7, 3)
 	}
+	if m.historySearch != nil {
+		return max(m.height-6, 3)
+	}
 	return max(m.height-5, 3)
+}
+
+func (m *model) historySearchLines(width, height int) []string {
+	if len(m.historySearch.results) == 0 {
+		return []string{"  No matching prompts"}
+	}
+	end := max(height, m.historySearch.selected+1)
+	end = min(end, len(m.historySearch.results))
+	start := max(0, end-height)
+	lines := make([]string, 0, end-start)
+	for index := start; index < end; index++ {
+		prefix := "  "
+		if index == m.historySearch.selected {
+			prefix = "> "
+		}
+		lines = append(lines, truncate(prefix+strings.ReplaceAll(m.historySearch.results[index], "\n", " "), width))
+	}
+	return lines
 }
 
 func cleanStatus(value string) string {
