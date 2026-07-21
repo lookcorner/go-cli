@@ -304,6 +304,8 @@ on triple-click. Table drags copy one cell or a rectangular TSV range; triple-cl
 a cell copies that cell, while triple-clicking a table border copies the whole table.
 `[ui] word_separators` overrides the default separator set,
 including an explicit empty string.
+Set `[ui] mouse_reporting_toggle = true` (or `GROK_MOUSE_REPORTING_TOGGLE=true`)
+to let Ctrl-R release mouse capture to the terminal and press Ctrl-R again to restore it.
 Up/Down browse durable prompt history when the prompt is empty. `/history`
 opens fuzzy search over the same workspace-scoped history; Enter or Tab restores
 the selected prompt to the composer without submitting it.

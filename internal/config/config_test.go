@@ -139,6 +139,7 @@ disabled = ["old-tools"]
 [ui]
 keep_text_selection = "word_select"
 word_separators = "./"
+mouse_reporting_toggle = true
 
 [[permission.rules]]
 action = "allow"
@@ -219,7 +220,7 @@ pattern = ".env*"
 	if len(cfg.Permission.Rules) != 2 || cfg.Permission.Rules[0].Action != "allow" || *cfg.Permission.Rules[1].Pattern != ".env*" {
 		t.Fatalf("unexpected permission config: %#v", cfg.Permission)
 	}
-	if cfg.UI.KeepTextSelection != "word_select" || cfg.UI.WordSeparators == nil || *cfg.UI.WordSeparators != "./" {
+	if cfg.UI.KeepTextSelection != "word_select" || cfg.UI.WordSeparators == nil || *cfg.UI.WordSeparators != "./" || !cfg.UI.MouseReportingToggle {
 		t.Fatalf("unexpected UI config: %#v", cfg.UI)
 	}
 	if strings.Join(cfg.Skills.Paths, ",") != "~/shared-skills,project-skills" || strings.Join(cfg.Skills.Ignore, ",") != "~/shared-skills/ignored" || strings.Join(cfg.Skills.Disabled, ",") != "manual-only" {
@@ -604,6 +605,29 @@ func TestLoadPreservesEmptyWordSeparators(t *testing.T) {
 	}
 	if cfg.UI.KeepTextSelection != "hold" || cfg.UI.WordSeparators == nil || *cfg.UI.WordSeparators != "" {
 		t.Fatalf("UI config=%#v", cfg.UI)
+	}
+}
+
+func TestMouseReportingToggleEnvironmentOverridesConfig(t *testing.T) {
+	t.Setenv("GROK_MOUSE_REPORTING_TOGGLE", "false")
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[ui]\nmouse_reporting_toggle = true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.UI.MouseReportingToggle {
+		t.Fatalf("environment override=%#v", cfg.UI)
+	}
+	t.Setenv("GROK_MOUSE_REPORTING_TOGGLE", "sometimes")
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.UI.MouseReportingToggle {
+		t.Fatalf("invalid environment value did not preserve config=%#v", cfg.UI)
 	}
 }
 

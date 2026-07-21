@@ -65,7 +65,7 @@ func TestBridgeApproval(t *testing.T) {
 func TestBridgeQuestionSelectionAndPlanClarification(t *testing.T) {
 	bridge := NewBridge(context.Background(), tools.PermissionAuto)
 	defer bridge.Close()
-	m := &model{ctx: context.Background(), runner: &agent.Runner{}, bridge: bridge, width: 70, height: 18, running: true}
+	m := &model{ctx: context.Background(), runner: &agent.Runner{}, bridge: bridge, width: 70, height: 18, running: true, mouseToggle: true}
 	request := tools.UserQuestionRequest{ToolCallID: "ask-1", Mode: "plan", Questions: []tools.UserQuestion{
 		{Question: "Which database?", Options: []tools.UserQuestionOption{{Label: "SQLite", Preview: "schema"}}},
 		{Question: "Which region?", Options: []tools.UserQuestionOption{{Label: "Local"}}},
@@ -104,7 +104,7 @@ func TestBridgeQuestionSelectionAndPlanClarification(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("question did not complete")
 	}
-	if m.question != nil || m.status != "thinking" {
+	if m.question != nil || m.status != "thinking" || m.mouseReleased {
 		t.Fatalf("question=%#v status=%q", m.question, m.status)
 	}
 }
@@ -299,6 +299,30 @@ func TestModelInputAndView(t *testing.T) {
 	view := m.View()
 	if !view.AltScreen || view.MouseMode != tea.MouseModeCellMotion || view.OnMouse == nil || !strings.Contains(view.Content, "Gork Go") || !strings.Contains(view.Content, "你") {
 		t.Fatalf("unexpected view: %#v", view)
+	}
+}
+
+func TestMouseReportingToggle(t *testing.T) {
+	m := &model{width: 60, height: 16, status: "ready", mouseToggle: true}
+	if m.View().MouseMode != tea.MouseModeCellMotion {
+		t.Fatal("mouse reporting did not start captured")
+	}
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: 'r', Mod: tea.ModCtrl}))
+	m = updated.(*model)
+	if command != nil || !m.mouseReleased || m.View().MouseMode != tea.MouseModeNone || m.status != "mouse reporting disabled" {
+		t.Fatalf("disabled mouse state=%#v mode=%v command=%v", m, m.View().MouseMode, command != nil)
+	}
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: 'r', Mod: tea.ModCtrl}))
+	m = updated.(*model)
+	if m.mouseReleased || m.View().MouseMode != tea.MouseModeCellMotion || m.status != "mouse reporting enabled" {
+		t.Fatalf("enabled mouse state=%#v mode=%v", m, m.View().MouseMode)
+	}
+
+	disabled := &model{width: 60, height: 16, status: "ready"}
+	updated, _ = disabled.Update(tea.KeyPressMsg(tea.Key{Code: 'r', Mod: tea.ModCtrl}))
+	disabled = updated.(*model)
+	if disabled.mouseReleased || disabled.status != "ready" {
+		t.Fatalf("disabled shortcut changed state=%#v", disabled)
 	}
 }
 

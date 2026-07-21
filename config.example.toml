@@ -26,6 +26,7 @@ auto_compact_threshold_percent = 85
 # word_select also enables double-click word/URL and triple-click line selection.
 keep_text_selection = "flash"
 # word_separators = "!\"#$%&'()*+,-./:;<=>?@[\\]^`{|}~"
+# mouse_reporting_toggle = false # Ctrl-R releases/restores terminal mouse capture.
 
 [memory]
 # Memory is opt-in. --experimental-memory or GROK_MEMORY=true also enables it.

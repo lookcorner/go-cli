@@ -286,6 +286,8 @@ type model struct {
 	selectionNonce uint64
 	selectionMode  textSelectionMode
 	wordSeparators string
+	mouseToggle    bool
+	mouseReleased  bool
 	selectionClick selectionClickState
 	width          int
 	height         int
@@ -347,9 +349,10 @@ const (
 	selectionWord
 )
 
-type TextSelectionOptions struct {
-	Mode           string
-	WordSeparators *string
+type UIOptions struct {
+	Mode                 string
+	WordSeparators       *string
+	MouseReportingToggle bool
 }
 
 func parseTextSelectionMode(value string) textSelectionMode {
@@ -392,7 +395,7 @@ type questionState struct {
 	partial     map[string]string
 }
 
-func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPrompt, previousID, initialTranscript, workspace, modelName string, selectionOptions TextSelectionOptions) error {
+func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPrompt, previousID, initialTranscript, workspace, modelName string, options UIOptions) error {
 	defer bridge.Close()
 	runner.TextOutput = bridge.TextWriter()
 	runner.StatusOutput = bridge.StatusWriter()
@@ -400,11 +403,11 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		ctx: ctx, runner: runner, bridge: bridge, workspace: workspace,
 		modelName: modelName, previousID: previousID, width: 80, height: 24,
 		status: "ready", initial: strings.TrimSpace(initialPrompt), historyIndex: -1,
-		history: loadPromptHistory(runner, workspace), selectionMode: parseTextSelectionMode(selectionOptions.Mode),
-		wordSeparators: defaultWordSeparators,
+		history: loadPromptHistory(runner, workspace), selectionMode: parseTextSelectionMode(options.Mode),
+		wordSeparators: defaultWordSeparators, mouseToggle: options.MouseReportingToggle,
 	}
-	if selectionOptions.WordSeparators != nil {
-		m.wordSeparators = *selectionOptions.WordSeparators
+	if options.WordSeparators != nil {
+		m.wordSeparators = *options.WordSeparators
 	}
 	if runner.Tools != nil {
 		m.planMode = runner.Tools.PlanModeActive()
@@ -778,6 +781,17 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.historySearch != nil {
 		return m.handleHistorySearchKey(msg)
+	}
+	if stroke == "ctrl+r" && m.mouseToggle {
+		m.mouseReleased = !m.mouseReleased
+		m.selection = nil
+		m.selectionClick = selectionClickState{}
+		if m.mouseReleased {
+			m.status = "mouse reporting disabled"
+		} else {
+			m.status = "mouse reporting enabled"
+		}
+		return m, nil
 	}
 	switch stroke {
 	case "ctrl+c":
@@ -1581,7 +1595,10 @@ func (m *model) View() tea.View {
 	status := "\x1b[2m" + truncate(m.status, width) + "\x1b[0m"
 	view := tea.NewView(header + "\n" + body + status + "\n" + footer)
 	view.AltScreen = true
-	view.MouseMode = tea.MouseModeCellMotion
+	view.MouseMode = tea.MouseModeNone
+	if !m.mouseReleased {
+		view.MouseMode = tea.MouseModeCellMotion
+	}
 	contentHeight := m.contentHeight()
 	view.OnMouse = func(message tea.MouseMsg) tea.Cmd {
 		mouse := message.Mouse()

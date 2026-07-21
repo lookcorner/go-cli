@@ -541,8 +541,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 	defer waitRunnerMemory(runner)
 	if opts.tui {
-		return tui.Run(ctx, runner, tuiBridge, prompt, opts.previousID, resumedTranscript, ws.Root(), cfg.Model, tui.TextSelectionOptions{
-			Mode: cfg.UI.KeepTextSelection, WordSeparators: cfg.UI.WordSeparators,
+		return tui.Run(ctx, runner, tuiBridge, prompt, opts.previousID, resumedTranscript, ws.Root(), cfg.Model, tui.UIOptions{
+			Mode: cfg.UI.KeepTextSelection, WordSeparators: cfg.UI.WordSeparators, MouseReportingToggle: cfg.UI.MouseReportingToggle,
 		})
 	}
 	fmt.Fprintf(stderr, "[gork] workspace: %s\n[gork] session: %s\n", ws.Root(), displayPath(logger.Path()))
