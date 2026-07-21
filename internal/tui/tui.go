@@ -320,12 +320,17 @@ type inputSnapshot struct {
 }
 
 type textSelection struct {
-	anchor   selectionPoint
-	head     selectionPoint
-	lines    []string
-	moved    bool
-	semantic bool
-	nonce    uint64
+	anchor     selectionPoint
+	head       selectionPoint
+	lines      []string
+	moved      bool
+	semantic   bool
+	nonce      uint64
+	table      *tableGeometry
+	fromCell   tableCell
+	toCell     tableCell
+	wholeCell  bool
+	wholeTable bool
 }
 
 type selectionClickState struct {
@@ -466,6 +471,12 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.selection = &textSelection{
 				anchor: msg.point, head: msg.point, lines: append([]string(nil), msg.lines...), nonce: m.selectionNonce,
 			}
+			geometry := tableAt(m.selection.lines, msg.point)
+			if geometry != nil {
+				if cell, ok := geometry.cellAt(msg.point, true); ok {
+					m.selection.table, m.selection.fromCell, m.selection.toCell = geometry, cell, cell
+				}
+			}
 			if m.selectionMode.selectsWord() {
 				clickedAt := msg.at
 				if clickedAt.IsZero() {
@@ -477,8 +488,22 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				from, to := 0, 0
 				switch count {
 				case 2:
+					m.selection.table = nil
 					from, to = semanticDisplayRange(line, msg.point.column, m.wordSeparators)
 				case 3:
+					if geometry != nil {
+						m.selection.table = geometry
+						if cell, ok := geometry.cellAt(msg.point, true); ok {
+							m.selection.fromCell, m.selection.toCell, m.selection.wholeCell = cell, cell, true
+						} else {
+							m.selection.fromCell = tableCell{}
+							m.selection.toCell = tableCell{row: len(geometry.rows) - 1, column: geometry.columnCount() - 1}
+							m.selection.wholeTable = true
+						}
+						m.selection.moved, m.selection.semantic = true, true
+						m.selectionClick = selectionClickState{}
+						return m, m.copyTextSelection()
+					}
 					to = displayWidth(line)
 					m.selectionClick = selectionClickState{}
 				}
@@ -495,6 +520,9 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.selection.moved = m.selection.moved || msg.point != m.selection.anchor
 				m.selection.head = msg.point
+				if m.selection.table != nil {
+					m.selection.toCell = m.selection.table.latchedCell(msg.point, m.selection.toCell)
+				}
 				if m.selection.moved {
 					m.selectionClick = selectionClickState{}
 				}
@@ -508,6 +536,9 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.selection.moved = m.selection.moved || msg.point != m.selection.anchor
 			m.selection.head = msg.point
+			if m.selection.table != nil {
+				m.selection.toCell = m.selection.table.latchedCell(msg.point, m.selection.toCell)
+			}
 			if !m.selection.moved {
 				m.selection = nil
 				return m, nil
@@ -1743,6 +1774,12 @@ func (s *textSelection) bounds() (selectionPoint, selectionPoint) {
 }
 
 func (s *textSelection) text() string {
+	if s.table != nil {
+		if s.wholeTable || s.wholeCell || s.fromCell != s.toCell {
+			return s.table.tsv(s.lines, s.fromCell, s.toCell)
+		}
+		return s.table.partialText(s.lines, s.fromCell, s.anchor, s.head)
+	}
 	if len(s.lines) == 0 {
 		return ""
 	}
@@ -1762,6 +1799,22 @@ func (s *textSelection) text() string {
 }
 
 func (s *textSelection) highlightedLines(lines []string) []string {
+	if s.table != nil {
+		rangesByLine := s.table.partialRanges(s.fromCell, s.anchor, s.head)
+		if s.wholeTable || s.wholeCell || s.fromCell != s.toCell {
+			rangesByLine = s.table.ranges(s.fromCell, s.toCell)
+		}
+		for line, ranges := range rangesByLine {
+			for index := len(ranges) - 1; index >= 0; index-- {
+				left, right := displayColumnRuneRange(s.lines[line], ranges[index][0], ranges[index][1])
+				runes := []rune(lines[line])
+				if left < right {
+					lines[line] = string(runes[:left]) + "\x1b[7m" + string(runes[left:right]) + "\x1b[0m" + string(runes[right:])
+				}
+			}
+		}
+		return lines
+	}
 	start, end := s.bounds()
 	for line := start.line; line <= end.line && line < len(lines) && line < len(s.lines); line++ {
 		from, to := 0, max(displayWidth(s.lines[line])-1, 0)

@@ -27,7 +27,9 @@ func renderMarkdown(value string, width int) []string {
 	}
 	var lines []string
 	inCode := false
-	for _, raw := range strings.Split(value, "\n") {
+	rawLines := strings.Split(value, "\n")
+	for index := 0; index < len(rawLines); index++ {
+		raw := rawLines[index]
 		trimmed := strings.TrimSpace(raw)
 		if strings.HasPrefix(trimmed, "```") {
 			inCode = !inCode
@@ -41,6 +43,13 @@ func renderMarkdown(value string, width int) []string {
 			lines = append(lines, wrapMarkdownSpans([]markdownSpan{{text: "  " + raw, style: ansiCyan}}, width)...)
 			continue
 		}
+		if index+1 < len(rawLines) {
+			if table, consumed := renderMarkdownTable(rawLines[index:], width); consumed > 0 {
+				lines = append(lines, table...)
+				index += consumed - 1
+				continue
+			}
+		}
 		spans := markdownLine(raw)
 		if len(spans) == 0 {
 			lines = append(lines, "")
@@ -49,6 +58,158 @@ func renderMarkdown(value string, width int) []string {
 		lines = append(lines, wrapMarkdownSpans(spans, width)...)
 	}
 	return lines
+}
+
+func renderMarkdownTable(lines []string, width int) ([]string, int) {
+	header, ok := splitMarkdownTableRow(lines[0])
+	if !ok || len(header) < 1 {
+		return nil, 0
+	}
+	delimiter, ok := splitMarkdownTableRow(lines[1])
+	if !ok || len(delimiter) != len(header) {
+		return nil, 0
+	}
+	for _, cell := range delimiter {
+		marker := strings.TrimSpace(cell)
+		marker = strings.TrimPrefix(strings.TrimSuffix(marker, ":"), ":")
+		if len(marker) < 3 || strings.Trim(marker, "-") != "" {
+			return nil, 0
+		}
+	}
+	rows := [][]string{header}
+	consumed := 2
+	for consumed < len(lines) {
+		row, valid := splitMarkdownTableRow(lines[consumed])
+		if !valid || len(row) != len(header) {
+			break
+		}
+		rows = append(rows, row)
+		consumed++
+	}
+	columnWidths := markdownTableWidths(rows, width)
+	if columnWidths == nil {
+		return nil, 0
+	}
+	border := func(left, middle, right string) string {
+		parts := make([]string, len(columnWidths))
+		for index, cellWidth := range columnWidths {
+			parts[index] = strings.Repeat("─", cellWidth+2)
+		}
+		return left + strings.Join(parts, middle) + right
+	}
+	result := []string{border("┌", "┬", "┐")}
+	for rowIndex, row := range rows {
+		wrapped := make([][]string, len(row))
+		height := 1
+		for column, cell := range row {
+			wrapped[column] = wrapMarkdownSpans(inlineMarkdown(strings.TrimSpace(cell)), columnWidths[column])
+			height = max(height, len(wrapped[column]))
+		}
+		for line := 0; line < height; line++ {
+			var rendered strings.Builder
+			rendered.WriteString("│")
+			for column := range row {
+				part := ""
+				if line < len(wrapped[column]) {
+					part = wrapped[column][line]
+				}
+				rendered.WriteString(" ")
+				rendered.WriteString(part)
+				rendered.WriteString(strings.Repeat(" ", max(columnWidths[column]-markdownANSIWidth(part), 0)+1))
+				rendered.WriteString("│")
+			}
+			result = append(result, rendered.String())
+		}
+		if rowIndex < len(rows)-1 {
+			result = append(result, border("├", "┼", "┤"))
+		}
+	}
+	result = append(result, border("└", "┴", "┘"))
+	return result, consumed
+}
+
+func splitMarkdownTableRow(line string) ([]string, bool) {
+	line = strings.TrimSpace(line)
+	if !strings.Contains(line, "|") {
+		return nil, false
+	}
+	if strings.HasPrefix(line, "|") {
+		line = line[1:]
+	}
+	if strings.HasSuffix(line, "|") && !strings.HasSuffix(line, `\|`) {
+		line = line[:len(line)-1]
+	}
+	var cells []string
+	var cell strings.Builder
+	inCode, escaped := false, false
+	for _, r := range line {
+		switch {
+		case escaped:
+			cell.WriteRune(r)
+			escaped = false
+		case r == '\\':
+			escaped = true
+		case r == '`':
+			inCode = !inCode
+			cell.WriteRune(r)
+		case r == '|' && !inCode:
+			cells = append(cells, strings.TrimSpace(cell.String()))
+			cell.Reset()
+		default:
+			cell.WriteRune(r)
+		}
+	}
+	if escaped {
+		cell.WriteRune('\\')
+	}
+	cells = append(cells, strings.TrimSpace(cell.String()))
+	return cells, true
+}
+
+func markdownTableWidths(rows [][]string, width int) []int {
+	columns := len(rows[0])
+	available := width - 3*columns - 1
+	if available < columns {
+		return nil
+	}
+	desired := make([]int, columns)
+	for _, row := range rows {
+		for column, cell := range row {
+			desired[column] = max(desired[column], markdownANSIWidth(strings.TrimSpace(cell)))
+		}
+	}
+	widths := make([]int, columns)
+	for index := range widths {
+		widths[index] = 1
+	}
+	for remaining := available - columns; remaining > 0; {
+		grew := false
+		for column := range widths {
+			if remaining == 0 {
+				break
+			}
+			if widths[column] < max(desired[column], 1) {
+				widths[column]++
+				remaining--
+				grew = true
+			}
+		}
+		if !grew {
+			break
+		}
+	}
+	return widths
+}
+
+func markdownANSIWidth(value string) int {
+	for _, sequence := range []string{ansiReset, ansiBold, ansiDim, ansiItalic, ansiUnderline, ansiCyan, ansiYellow} {
+		value = strings.ReplaceAll(value, sequence, "")
+	}
+	width := 0
+	for _, r := range value {
+		width += runeWidth(r)
+	}
+	return width
 }
 
 func markdownLine(raw string) []markdownSpan {

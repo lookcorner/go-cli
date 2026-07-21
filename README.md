@@ -284,7 +284,7 @@ Use `--tui` for the full-screen interface:
 ```
 
 The TUI streams model output as it arrives, renders headings, emphasis, links,
-lists, quotes, and inline or fenced code, and keeps a scrollable transcript.
+lists, quotes, pipe tables, and inline or fenced code, and keeps a scrollable transcript.
 It supports Unicode input, keyboard and content-pane mouse-wheel scrolling,
 keeps a scrolled viewport stable while output streams, displays tool status,
 cancels the current turn with Ctrl-C, and presents write/Shell/MCP approval
@@ -300,7 +300,9 @@ Dragging across visible transcript text copies the selection through OSC 52.
 `[ui] keep_text_selection` accepts `flash` (the default), `hold`, or
 `word_select`; held highlights clear on Esc or scrolling. `word_select` also
 copies a URL or tmux-style character class on double-click and the rendered line
-on triple-click. `[ui] word_separators` overrides the default separator set,
+on triple-click. Table drags copy one cell or a rectangular TSV range; triple-clicking
+a cell copies that cell, while triple-clicking a table border copies the whole table.
+`[ui] word_separators` overrides the default separator set,
 including an explicit empty string.
 Up/Down browse durable prompt history when the prompt is empty. `/history`
 opens fuzzy search over the same workspace-scoped history; Enter or Tab restores
