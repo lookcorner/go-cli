@@ -304,13 +304,17 @@ on triple-click. Table drags copy one cell or a rectangular TSV range; triple-cl
 a cell copies that cell, while triple-clicking a table border copies the whole table.
 `[ui] word_separators` overrides the default separator set,
 including an explicit empty string.
+Tab focuses the transcript scrollback; Ctrl-K/Ctrl-J move one line, Ctrl-U/Ctrl-D
+move half a page, Page Up/Page Down move a page, and g/G jump to the top/bottom.
+Tab or Space returns to the prompt, while typing a letter or `/` returns and forwards it.
 Set `[ui] mouse_reporting_toggle = true` (or `GROK_MOUSE_REPORTING_TOGGLE=true`)
-to let Ctrl-R release mouse capture to the terminal and press Ctrl-R again to restore it.
+to let Ctrl-R release mouse capture while scrollback is focused and press Ctrl-R again
+to restore it.
 Up/Down browse durable prompt history when the prompt is empty. `/history`
 opens fuzzy search over the same workspace-scoped history; Enter or Tab restores
 the selected prompt to the composer without submitting it.
 Plan exits open a dedicated full-plan review with approve, revision-feedback,
-and abandon outcomes. Page Up/Page Down scroll, Ctrl-Q exits, and an optional
+and abandon outcomes. Ctrl-Q exits, and an optional
 prompt argument starts the first turn immediately. When providers report usage,
 the status line shows input tokens, context window and percentage.
 

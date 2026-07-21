@@ -309,6 +309,13 @@ func TestMouseReportingToggle(t *testing.T) {
 	}
 	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: 'r', Mod: tea.ModCtrl}))
 	m = updated.(*model)
+	if command != nil || m.mouseReleased || m.status != "ready" {
+		t.Fatalf("prompt shortcut changed mouse state=%#v command=%v", m, command != nil)
+	}
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	m = updated.(*model)
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: 'r', Mod: tea.ModCtrl}))
+	m = updated.(*model)
 	if command != nil || !m.mouseReleased || m.View().MouseMode != tea.MouseModeNone || m.status != "mouse reporting disabled" {
 		t.Fatalf("disabled mouse state=%#v mode=%v command=%v", m, m.View().MouseMode, command != nil)
 	}
@@ -318,11 +325,105 @@ func TestMouseReportingToggle(t *testing.T) {
 		t.Fatalf("enabled mouse state=%#v mode=%v", m, m.View().MouseMode)
 	}
 
-	disabled := &model{width: 60, height: 16, status: "ready"}
+	disabled := &model{width: 60, height: 16, status: "ready", scrollFocused: true}
 	updated, _ = disabled.Update(tea.KeyPressMsg(tea.Key{Code: 'r', Mod: tea.ModCtrl}))
 	disabled = updated.(*model)
 	if disabled.mouseReleased || disabled.status != "ready" {
 		t.Fatalf("disabled shortcut changed state=%#v", disabled)
+	}
+}
+
+func TestScrollbackFocusAndNavigation(t *testing.T) {
+	m := &model{runner: &agent.Runner{}, width: 80, height: 12, status: "ready", history: []string{"old prompt"}, historyIndex: -1}
+	for line := 0; line < 40; line++ {
+		fmt.Fprintf(&m.transcript, "line %02d\n", line)
+	}
+	press := func(key tea.Key) {
+		updated, _ := m.Update(tea.KeyPressMsg(key))
+		m = updated.(*model)
+	}
+
+	press(tea.Key{Code: tea.KeyTab})
+	if !m.scrollFocused || !strings.Contains(m.View().Content, "SCROLLBACK") {
+		t.Fatalf("scrollback focus=%v view=%q", m.scrollFocused, m.View().Content)
+	}
+	press(tea.Key{Code: tea.KeyTab, Mod: tea.ModShift})
+	if !m.scrollFocused || m.status != "plan mode unavailable" {
+		t.Fatalf("shift-tab focus=%v status=%q", m.scrollFocused, m.status)
+	}
+	press(tea.Key{Code: tea.KeyUp})
+	press(tea.Key{Code: tea.KeyEnter})
+	if !m.scrollFocused || len(m.input) != 0 || m.historyActive {
+		t.Fatalf("unbound key escaped scrollback: focus=%v input=%q history=%v", m.scrollFocused, m.input, m.historyActive)
+	}
+	press(tea.Key{Code: 'k', Mod: tea.ModCtrl})
+	if m.scroll != 1 {
+		t.Fatalf("ctrl-k scroll=%d", m.scroll)
+	}
+	press(tea.Key{Code: 'j', Mod: tea.ModCtrl})
+	if m.scroll != 0 {
+		t.Fatalf("ctrl-j scroll=%d", m.scroll)
+	}
+	press(tea.Key{Code: 'u', Mod: tea.ModCtrl})
+	if m.scroll != max(m.contentHeight()/2, 1) {
+		t.Fatalf("ctrl-u scroll=%d", m.scroll)
+	}
+	press(tea.Key{Code: 'd', Mod: tea.ModCtrl})
+	if m.scroll != 0 {
+		t.Fatalf("ctrl-d scroll=%d", m.scroll)
+	}
+	press(tea.Key{Code: tea.KeyPgUp})
+	if m.scroll != m.contentHeight() {
+		t.Fatalf("page-up scroll=%d", m.scroll)
+	}
+	press(tea.Key{Code: tea.KeyPgDown})
+	if m.scroll != 0 {
+		t.Fatalf("page-down scroll=%d", m.scroll)
+	}
+	m.selection = &textSelection{}
+	press(tea.Key{Code: 'g', Text: "g"})
+	if m.scroll != m.maxTranscriptScroll() || m.selection != nil {
+		t.Fatalf("top scroll=%d max=%d selection=%#v", m.scroll, m.maxTranscriptScroll(), m.selection)
+	}
+	press(tea.Key{Code: 'k', Mod: tea.ModCtrl})
+	if m.scroll != m.maxTranscriptScroll() {
+		t.Fatalf("top clamp scroll=%d max=%d", m.scroll, m.maxTranscriptScroll())
+	}
+	press(tea.Key{Code: 'G', Text: "G"})
+	if m.scroll != 0 {
+		t.Fatalf("bottom scroll=%d", m.scroll)
+	}
+	press(tea.Key{Code: tea.KeyEsc})
+	if !m.scrollFocused {
+		t.Fatal("escape left scrollback")
+	}
+	press(tea.Key{Code: 'x', Text: "x"})
+	if m.scrollFocused || string(m.input) != "x" {
+		t.Fatalf("typed focus=%v input=%q", m.scrollFocused, m.input)
+	}
+	press(tea.Key{Code: tea.KeyPgUp})
+	if m.scroll != 0 {
+		t.Fatalf("prompt page-up scroll=%d", m.scroll)
+	}
+	press(tea.Key{Code: tea.KeyTab})
+	press(tea.Key{Code: ' ', Text: " "})
+	if m.scrollFocused || string(m.input) != "x" {
+		t.Fatalf("space focus=%v input=%q", m.scrollFocused, m.input)
+	}
+	press(tea.Key{Code: tea.KeyTab})
+	press(tea.Key{Code: '/', Text: "/"})
+	if m.scrollFocused || string(m.input) != "x/" {
+		t.Fatalf("slash focus=%v input=%q", m.scrollFocused, m.input)
+	}
+
+	command := m.View().OnMouse(tea.MouseClickMsg(tea.Mouse{X: 1, Y: 1, Button: tea.MouseLeft}))
+	if command == nil {
+		t.Fatal("transcript click was ignored")
+	}
+	updated, _ := m.Update(command())
+	m = updated.(*model)
+	if !m.scrollFocused {
+		t.Fatal("transcript click did not focus scrollback")
 	}
 }
 
@@ -918,6 +1019,7 @@ func TestTextSelectionIgnoresClickAndClearsOnEscapeOrScroll(t *testing.T) {
 		t.Fatal("scroll did not clear selection")
 	}
 	start()
+	m.scrollFocused = true
 	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyPgUp}))
 	if updated.(*model).selection != nil {
 		t.Fatal("keyboard scroll did not clear selection")

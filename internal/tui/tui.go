@@ -288,6 +288,7 @@ type model struct {
 	wordSeparators string
 	mouseToggle    bool
 	mouseReleased  bool
+	scrollFocused  bool
 	selectionClick selectionClickState
 	width          int
 	height         int
@@ -465,6 +466,7 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case mouseSelectionEvent:
 		switch msg.phase {
 		case selectionStart:
+			m.scrollFocused = true
 			if msg.point.line < 0 || msg.point.line >= len(msg.lines) {
 				m.selection = nil
 				m.selectionClick = selectionClickState{}
@@ -782,15 +784,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.historySearch != nil {
 		return m.handleHistorySearchKey(msg)
 	}
-	if stroke == "ctrl+r" && m.mouseToggle {
-		m.mouseReleased = !m.mouseReleased
-		m.selection = nil
-		m.selectionClick = selectionClickState{}
-		if m.mouseReleased {
-			m.status = "mouse reporting disabled"
-		} else {
-			m.status = "mouse reporting enabled"
-		}
+	if m.scrollFocused && m.handleScrollbackKey(msg) {
 		return m, nil
 	}
 	switch stroke {
@@ -806,24 +800,16 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.turnCancel()
 		}
 		return m, tea.Quit
-	case "pgup", "ctrl+up":
-		m.selection = nil
-		m.selectionClick = selectionClickState{}
-		m.scroll += max(m.contentHeight()/2, 1)
-		return m, nil
-	case "pgdown", "ctrl+down":
-		m.selection = nil
-		m.selectionClick = selectionClickState{}
-		m.scroll -= max(m.contentHeight()/2, 1)
-		if m.scroll < 0 {
-			m.scroll = 0
-		}
-		return m, nil
 	}
 	if m.rememberInput && key.Code == tea.KeyEsc {
 		m.rememberInput = false
 		m.clearInput()
 		m.status = "memory note cancelled"
+		return m, nil
+	}
+	if key.Code == tea.KeyTab && key.Mod == 0 {
+		m.scrollFocused = true
+		m.status = "scrollback focused"
 		return m, nil
 	}
 	if m.running {
@@ -948,6 +934,68 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	m.editInput(msg)
 	return m, nil
+}
+
+func (m *model) handleScrollbackKey(msg tea.KeyPressMsg) bool {
+	key, stroke := msg.Key(), msg.Keystroke()
+	if stroke == "ctrl+c" || stroke == "ctrl+q" || stroke == "shift+tab" {
+		return false
+	}
+	switch {
+	case key.Mod == 0 && (key.Code == tea.KeyTab || key.Text == " "):
+		m.scrollFocused = false
+		m.status = "ready"
+	case key.Code == tea.KeyEsc:
+		return true
+	case stroke == "ctrl+r" && m.mouseToggle:
+		m.mouseReleased = !m.mouseReleased
+		m.selection = nil
+		m.selectionClick = selectionClickState{}
+		if m.mouseReleased {
+			m.status = "mouse reporting disabled"
+		} else {
+			m.status = "mouse reporting enabled"
+		}
+	case stroke == "ctrl+k":
+		m.scrollTranscript(1)
+	case stroke == "ctrl+j":
+		m.scrollTranscript(-1)
+	case stroke == "ctrl+u":
+		m.scrollTranscript(max(m.contentHeight()/2, 1))
+	case stroke == "ctrl+d":
+		m.scrollTranscript(-max(m.contentHeight()/2, 1))
+	case stroke == "pgup":
+		m.scrollTranscript(max(m.contentHeight(), 1))
+	case stroke == "pgdown":
+		m.scrollTranscript(-max(m.contentHeight(), 1))
+	case key.Mod == 0 && key.Text == "g":
+		m.scrollTranscript(m.maxTranscriptScroll())
+	case key.Mod == 0 && key.Text == "G":
+		m.scrollTranscript(-m.scroll)
+	default:
+		if key.Mod != 0 || len(key.Text) != 1 || !isASCIILetterOrSlash(key.Text[0]) {
+			return true
+		}
+		m.scrollFocused = false
+		if !m.running {
+			m.editInput(msg)
+		}
+	}
+	return true
+}
+
+func (m *model) scrollTranscript(lines int) {
+	m.selection = nil
+	m.selectionClick = selectionClickState{}
+	m.scroll = min(max(m.scroll+lines, 0), m.maxTranscriptScroll())
+}
+
+func (m *model) maxTranscriptScroll() int {
+	return max(len(renderMarkdown(m.transcript.String(), max(m.width, 20)))-m.contentHeight(), 0)
+}
+
+func isASCIILetterOrSlash(value byte) bool {
+	return value == '/' || value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z'
 }
 
 func loadPromptHistory(runner *agent.Runner, workspace string) []string {
@@ -1514,6 +1562,9 @@ func (m *model) View() tea.View {
 	mode := ""
 	if m.planMode {
 		mode = "  \x1b[30;43m PLAN \x1b[0m"
+	}
+	if m.scrollFocused {
+		mode += "  \x1b[30;46m SCROLLBACK \x1b[0m"
 	}
 	header := fmt.Sprintf("\x1b[1m Gork Go\x1b[0m%s  \x1b[2m%s · %s\x1b[0m", mode, truncate(m.modelName, 24), truncate(m.workspace, max(width-45, 10)))
 	header = padRight(truncateANSIUnsafe(header, width), width)
