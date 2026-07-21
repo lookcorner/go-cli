@@ -293,7 +293,7 @@ func (r *Runner) memoryNoteContext() string {
 	return strings.TrimSpace(output.String())
 }
 
-func (r *Runner) injectMemoryContext(content any, previousResponseID string) any {
+func (r *Runner) injectMemoryContext(content any, query, previousResponseID string) any {
 	store, cfg := r.memoryState()
 	r.memoryMu.Lock()
 	if r.memoryInjected {
@@ -306,13 +306,24 @@ func (r *Runner) injectMemoryContext(content any, previousResponseID string) any
 	if !enabled {
 		return content
 	}
-	value, err := store.Context()
-	if err != nil || value == "" {
+	search := cfg.Search
+	search.MaxResults = 6
+	search.MinScore = 0
+	if cfg.InitialInjectionMinScore != nil {
+		search.MinScore = min(1, max(0, *cfg.InitialInjectionMinScore))
+	}
+	query = strings.TrimSpace(query)
+	if len(query) < 20 || isMemoryGreeting(query) {
+		query = "project conventions preferences architecture"
+	}
+	results, err := store.Search(query, cfg.Index, search)
+	if err != nil || len(results) == 0 {
 		if err != nil {
 			r.log("memory_context_error", map[string]any{"error": err.Error()})
 		}
 		return content
 	}
+	value := formatMemorySearchContext(results)
 	r.log("memory_context_injected", map[string]any{"characters": len([]rune(value))})
 	switch current := content.(type) {
 	case string:
@@ -322,6 +333,54 @@ func (r *Runner) injectMemoryContext(content any, previousResponseID string) any
 	default:
 		return content
 	}
+}
+
+func isMemoryGreeting(value string) bool {
+	value = strings.ToLower(strings.Trim(value, " \t\r\n.!?,"))
+	switch value {
+	case "hi", "hey", "hello", "howdy", "continue", "start", "begin", "go", "good morning", "good afternoon", "good evening", "what's up", "whats up", "sup":
+		return true
+	default:
+		return false
+	}
+}
+
+func formatMemorySearchContext(results []memory.Result) string {
+	const maxSnippetChars = 500
+	var output strings.Builder
+	output.WriteString("<memory-context>\n## Relevant Memory from Past Sessions\n\n")
+	for index, result := range results {
+		snippet := []rune(result.Snippet)
+		truncated := len(snippet) > maxSnippetChars
+		if truncated {
+			snippet = snippet[:maxSnippetChars]
+		}
+		fmt.Fprintf(&output, "### Result %d (score: %.2f, source: %s)\n**File:** %s (lines %d-%d)\n", index+1, result.Score, result.Source, result.Path, result.StartLine, result.EndLine)
+		if warning := memoryStalenessNote(result); warning != "" {
+			output.WriteString(warning + "\n")
+		}
+		fmt.Fprintf(&output, "```\n%s", string(snippet))
+		if truncated {
+			output.WriteString("...")
+		}
+		output.WriteString("\n```\n\n")
+	}
+	output.WriteString("</memory-context>")
+	return output.String()
+}
+
+func memoryStalenessNote(result memory.Result) string {
+	if result.Source != "session" || result.CreatedAt <= 0 {
+		return ""
+	}
+	age := time.Since(time.Unix(result.CreatedAt, 0))
+	if age > 7*24*time.Hour {
+		return "**Stale memory:** More than 7 days old; verify before relying on it."
+	}
+	if age > 24*time.Hour {
+		return "**Verification recommended:** This session memory is more than 1 day old."
+	}
+	return ""
 }
 
 func (r *Runner) maybeStartMemoryFlush(ctx context.Context, previousResponseID string) {

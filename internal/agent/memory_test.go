@@ -89,7 +89,7 @@ func (s *memoryFlushStreamer) StreamResponse(_ context.Context, request api.Resp
 	s.mu.Unlock()
 	if strings.Contains(request.Instructions, "memory assistant") {
 		s.flushOnce.Do(func() { close(s.flushDone) })
-		return api.StreamResult{ResponseID: "flush", Text: "## Decisions\n\nKeep the memory boundary small."}, nil
+		return api.StreamResult{ResponseID: "flush", Text: "## Project conventions\n\nKeep the memory boundary small."}, nil
 	}
 	s.mu.Lock()
 	s.normal++
@@ -189,6 +189,64 @@ func TestRunnerFlushesAndInjectsMemoryAcrossSessions(t *testing.T) {
 	resumedContent, _ := resumeStreamer.requests[0].Input[0].Content.(string)
 	if strings.Contains(resumedContent, "<memory-context>") {
 		t.Fatalf("resumed response chain duplicated memory context: %q", resumedContent)
+	}
+}
+
+func TestRunnerInitialMemoryInjectionSearchesRelevantContext(t *testing.T) {
+	store, err := memory.Open(t.TempDir(), t.TempDir(), "injection")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.Write("flush", "## Database migrations\n\nDeploy schema changes before application code."); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.Write("flush", "## Editor preferences\n\nUse a light theme and large text."); err != nil {
+		t.Fatal(err)
+	}
+	cfg := memory.DefaultConfig()
+	cfg.Enabled = true
+	runner := Runner{Memory: store, MemoryConfig: cfg}
+	content, _ := runner.injectMemoryContext("how should database migrations be deployed?", "how should database migrations be deployed?", "").(string)
+	if !strings.Contains(content, "Database migrations") || strings.Contains(content, "Editor preferences") || !strings.Contains(content, "score:") {
+		t.Fatalf("relevant injection=%q", content)
+	}
+
+	greetingRunner := Runner{Memory: store, MemoryConfig: cfg}
+	if _, _, err := store.Write("flush", "## Project conventions\n\nArchitecture decisions belong in durable memory."); err != nil {
+		t.Fatal(err)
+	}
+	greeting, _ := greetingRunner.injectMemoryContext("continue", "continue", "").(string)
+	if !strings.Contains(greeting, "Project conventions") {
+		t.Fatalf("greeting injection=%q", greeting)
+	}
+
+	strict := memory.DefaultConfig()
+	strict.Enabled = true
+	strict.Search.SourceWeights["session"] = 0.5
+	minScore := 0.9
+	strict.InitialInjectionMinScore = &minScore
+	strictRunner := Runner{Memory: store, MemoryConfig: strict}
+	plain, _ := strictRunner.injectMemoryContext("how should database migrations be deployed?", "how should database migrations be deployed?", "").(string)
+	if strings.Contains(plain, "<memory-context>") {
+		t.Fatalf("minimum score override was ignored: %q", plain)
+	}
+}
+
+func TestMemoryInjectionHelpersMatchReferenceBounds(t *testing.T) {
+	for _, greeting := range []string{"hi", " Hey! ", "good morning", "continue"} {
+		if !isMemoryGreeting(greeting) {
+			t.Errorf("greeting not detected: %q", greeting)
+		}
+	}
+	if isMemoryGreeting("hi there, help with this bug") {
+		t.Fatal("specific query was treated as a greeting")
+	}
+	value := formatMemorySearchContext([]memory.Result{{Path: "MEMORY.md", Score: 0.9, Source: "global", StartLine: 2, EndLine: 4, Snippet: strings.Repeat("x", 600)}, {Path: "session.md", Score: 0.4, Source: "session", CreatedAt: time.Now().Add(-48 * time.Hour).Unix(), Snippet: "old note"}})
+	if strings.Contains(value, strings.Repeat("x", 501)) || !strings.Contains(value, strings.Repeat("x", 500)+"...") || !strings.Contains(value, "lines 2-4") {
+		t.Fatalf("formatted context=%q", value)
+	}
+	if !strings.Contains(value, "Verification recommended") {
+		t.Fatalf("staleness note missing: %q", value)
 	}
 }
 

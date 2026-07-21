@@ -226,7 +226,7 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 	if err := r.logPrompt(prompt, content, synthetic); err != nil {
 		return Result{}, fmt.Errorf("persist user prompt: %w", err)
 	}
-	content = r.injectMemoryContext(content, previousResponseID)
+	content = r.injectMemoryContext(content, prompt, previousResponseID)
 	if r.Skills != nil {
 		if information := r.Skills.ExpandReferences(prompt, r.SessionID); information != "" {
 			switch value := content.(type) {

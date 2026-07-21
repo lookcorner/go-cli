@@ -449,7 +449,8 @@ type fileMemoryDreamConfig struct {
 }
 
 type fileMemoryInitialInjectionConfig struct {
-	Enabled *bool `json:"enabled,omitempty" toml:"enabled"`
+	Enabled  *bool    `json:"enabled,omitempty" toml:"enabled"`
+	MinScore *float64 `json:"min_score,omitempty" toml:"min_score"`
 }
 
 type fileMemorySessionConfig struct {
@@ -920,6 +921,10 @@ func applyMemoryConfig(cfg *Config, source *fileMemoryConfig, flush *fileMemoryF
 			cfg.memoryInjectionConfigured = true
 			if source.InitialInjection.Enabled != nil {
 				cfg.Memory.InitialInjection = *source.InitialInjection.Enabled
+			}
+			if source.InitialInjection.MinScore != nil {
+				value := min(1, max(0, *source.InitialInjection.MinScore))
+				cfg.Memory.InitialInjectionMinScore = &value
 			}
 		}
 		if source.Session != nil && source.Session.SaveOnEnd != nil {

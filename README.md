@@ -197,8 +197,10 @@ precedence kill switch. When enabled, `[compaction.memory_flush]` defaults to a
 Markdown is written atomically beneath `$GROK_HOME/memory/<workspace>/sessions`,
 with exact duplicates skipped. A new session receives a bounded
 `<memory-context>` block from workspace/global `MEMORY.md` files and recent
-session flushes on its first fresh turn. Existing response chains skip
-re-injection. `/flush` triggers the same quality-gated write path explicitly;
+session flushes on its first fresh turn, selected by the first user request.
+Short greetings use a project conventions/preferences/architecture fallback
+query, and `[memory.initial_injection] min_score` overrides its threshold.
+Existing response chains skip re-injection. `/flush` triggers the same quality-gated write path explicitly;
 optional `idle_timeout_secs` triggers it after a completed conversation has
 remained idle, while session shutdown cancels pending timers. By default,
 `[memory.session] save_on_end = true` also records a zero-latency metadata

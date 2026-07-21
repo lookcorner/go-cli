@@ -59,6 +59,7 @@ enabled = true
 
 [memory.initial_injection]
 enabled = false
+min_score = 0.25
 
 [memory.session]
 save_on_end = false
@@ -165,7 +166,7 @@ pattern = ".env*"
 	if cfg.ContextWindow != 200000 || cfg.AutoCompactThresholdPercent != 80 {
 		t.Fatalf("unexpected compaction config: window=%d threshold=%d", cfg.ContextWindow, cfg.AutoCompactThresholdPercent)
 	}
-	if !cfg.Memory.Enabled || cfg.Memory.InitialInjection || cfg.Memory.SaveOnEnd || !cfg.Memory.Flush.Enabled || cfg.Memory.Flush.SoftThresholdTokens != 3000 || cfg.Memory.Flush.Model != "memory-model" || cfg.Memory.Flush.MaxWriteChars != 7000 || cfg.Memory.Flush.IdleTimeoutSeconds == nil || *cfg.Memory.Flush.IdleTimeoutSeconds != 300 || cfg.Memory.Index.MaxChunkChars != 1200 || cfg.Memory.Index.ChunkOverlapChars != 200 || cfg.Memory.Search.MaxResults != 4 || cfg.Memory.Search.MinScore != 0.5 || cfg.Memory.Search.RecencyDecay != 0.9 || !cfg.Memory.Search.TemporalDecay.Enabled || cfg.Memory.Search.TemporalDecay.HalfLifeDays != 14 || !cfg.Memory.Search.MMR.Enabled || cfg.Memory.Search.MMR.Lambda != 0.5 || cfg.Memory.Search.SourceWeights["session"] != 0.8 || cfg.Memory.Search.SourceWeights["global"] != 0.6 || cfg.Memory.GC.MaxAgeDays != 15 || cfg.Memory.Dream.Enabled || cfg.Memory.Dream.MinHours != 12 || cfg.Memory.Dream.MinSessions != 5 || cfg.Memory.Dream.StaleLockSeconds != 1800 || cfg.Memory.Dream.CheckIntervalSeconds == nil || *cfg.Memory.Dream.CheckIntervalSeconds != 600 {
+	if !cfg.Memory.Enabled || cfg.Memory.InitialInjection || cfg.Memory.InitialInjectionMinScore == nil || *cfg.Memory.InitialInjectionMinScore != 0.25 || cfg.Memory.SaveOnEnd || !cfg.Memory.Flush.Enabled || cfg.Memory.Flush.SoftThresholdTokens != 3000 || cfg.Memory.Flush.Model != "memory-model" || cfg.Memory.Flush.MaxWriteChars != 7000 || cfg.Memory.Flush.IdleTimeoutSeconds == nil || *cfg.Memory.Flush.IdleTimeoutSeconds != 300 || cfg.Memory.Index.MaxChunkChars != 1200 || cfg.Memory.Index.ChunkOverlapChars != 200 || cfg.Memory.Search.MaxResults != 4 || cfg.Memory.Search.MinScore != 0.5 || cfg.Memory.Search.RecencyDecay != 0.9 || !cfg.Memory.Search.TemporalDecay.Enabled || cfg.Memory.Search.TemporalDecay.HalfLifeDays != 14 || !cfg.Memory.Search.MMR.Enabled || cfg.Memory.Search.MMR.Lambda != 0.5 || cfg.Memory.Search.SourceWeights["session"] != 0.8 || cfg.Memory.Search.SourceWeights["global"] != 0.6 || cfg.Memory.GC.MaxAgeDays != 15 || cfg.Memory.Dream.Enabled || cfg.Memory.Dream.MinHours != 12 || cfg.Memory.Dream.MinSessions != 5 || cfg.Memory.Dream.StaleLockSeconds != 1800 || cfg.Memory.Dream.CheckIntervalSeconds == nil || *cfg.Memory.Dream.CheckIntervalSeconds != 600 {
 		t.Fatalf("unexpected memory config: %#v", cfg.Memory)
 	}
 	if slugs := strings.Join(cfg.ModelSlugs(), ","); slugs != "local,search" {
@@ -216,6 +217,19 @@ pattern = ".env*"
 	}
 	if strings.Join(cfg.Skills.Paths, ",") != "~/shared-skills,project-skills" || strings.Join(cfg.Skills.Ignore, ",") != "~/shared-skills/ignored" || strings.Join(cfg.Skills.Disabled, ",") != "manual-only" {
 		t.Fatalf("unexpected skills config: %#v", cfg.Skills)
+	}
+}
+
+func TestMemoryInitialInjectionMinScoreIsClamped(t *testing.T) {
+	for _, test := range []struct {
+		input, want float64
+	}{{-1, 0}, {0.4, 0.4}, {2, 1}} {
+		cfg := Config{}
+		value := test.input
+		applyMemoryConfig(&cfg, &fileMemoryConfig{InitialInjection: &fileMemoryInitialInjectionConfig{MinScore: &value}}, nil)
+		if cfg.Memory.InitialInjectionMinScore == nil || *cfg.Memory.InitialInjectionMinScore != test.want {
+			t.Errorf("input=%v min_score=%v", test.input, cfg.Memory.InitialInjectionMinScore)
+		}
 	}
 }
 
