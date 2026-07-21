@@ -61,6 +61,7 @@ type memoryDreamDoneEvent struct {
 type scheduledFiredEvent struct{ event tools.ScheduledTaskFired }
 type wakeCancelledEvent struct{ id string }
 type mouseScrollEvent struct{ lines int }
+type mouseClickEvent struct{ action string }
 type planModeEvent struct{ active bool }
 type planReviewEvent struct {
 	event tools.PlanModeEvent
@@ -328,6 +329,34 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitForBridge(m.bridge)
 	case mouseScrollEvent:
 		m.scroll = max(0, m.scroll+msg.lines)
+		return m, nil
+	case mouseClickEvent:
+		switch msg.action {
+		case "approve", "deny":
+			if m.approval != nil {
+				allowed := msg.action == "approve"
+				m.approval.reply <- allowed
+				m.approval = nil
+				if allowed {
+					m.status = "approved"
+				} else {
+					m.status = "denied"
+				}
+			}
+		case "plan_approve", "plan_revise", "plan_abandon":
+			if m.planReview != nil && !m.planReview.editing {
+				switch msg.action {
+				case "plan_approve":
+					m.finishPlanReview(tools.PlanModeDecision{Outcome: "approved"})
+				case "plan_revise":
+					m.planReview.editing = true
+					m.clearInput()
+					m.status = "request plan changes"
+				case "plan_abandon":
+					m.finishPlanReview(tools.PlanModeDecision{Outcome: "abandoned"})
+				}
+			}
+		}
 		return m, nil
 	case statusEvent:
 		m.status = cleanStatus(msg.text)
@@ -947,25 +976,63 @@ func (m *model) View() tea.View {
 	view.MouseMode = tea.MouseModeCellMotion
 	contentHeight := m.contentHeight()
 	view.OnMouse = func(message tea.MouseMsg) tea.Cmd {
-		if _, ok := message.(tea.MouseWheelMsg); !ok {
-			return nil
-		}
 		mouse := message.Mouse()
-		if mouse.Y < 1 || mouse.Y > contentHeight {
-			return nil
+		switch message.(type) {
+		case tea.MouseWheelMsg:
+			if mouse.Y < 1 || mouse.Y > contentHeight {
+				return nil
+			}
+			lines := 0
+			switch mouse.Button {
+			case tea.MouseWheelUp:
+				lines = mouseWheelScrollLines
+			case tea.MouseWheelDown:
+				lines = -mouseWheelScrollLines
+			default:
+				return nil
+			}
+			return func() tea.Msg { return mouseScrollEvent{lines: lines} }
+		case tea.MouseClickMsg:
+			if mouse.Button != tea.MouseLeft || mouse.Y < contentHeight+3 {
+				return nil
+			}
+			if action := m.footerClickAction(mouse.X, width); action != "" {
+				return func() tea.Msg { return mouseClickEvent{action: action} }
+			}
 		}
-		lines := 0
-		switch mouse.Button {
-		case tea.MouseWheelUp:
-			lines = mouseWheelScrollLines
-		case tea.MouseWheelDown:
-			lines = -mouseWheelScrollLines
-		default:
-			return nil
-		}
-		return func() tea.Msg { return mouseScrollEvent{lines: lines} }
+		return nil
 	}
 	return view
+}
+
+func (m *model) footerClickAction(x, width int) string {
+	if m.approval != nil {
+		line := "[y] allow  [n/esc] deny"
+		for _, item := range []struct{ label, action string }{{"[y] allow", "approve"}, {"[n/esc] deny", "deny"}} {
+			if renderedLabelContains(line, item.label, x, width) {
+				return item.action
+			}
+		}
+	}
+	if m.planReview != nil && !m.planReview.editing {
+		line := "[Y] approve · [R] request changes · [A] abandon"
+		for _, item := range []struct{ label, action string }{{"[Y] approve", "plan_approve"}, {"[R] request changes", "plan_revise"}, {"[A] abandon", "plan_abandon"}} {
+			if renderedLabelContains(line, item.label, x, width) {
+				return item.action
+			}
+		}
+	}
+	return ""
+}
+
+func renderedLabelContains(line, label string, x, width int) bool {
+	byteStart := strings.Index(line, label)
+	if byteStart < 0 {
+		return false
+	}
+	start := len([]rune(line[:byteStart]))
+	end := start + len([]rune(label))
+	return end <= width && x >= start && x < end
 }
 
 func (m *model) contentHeight() int {

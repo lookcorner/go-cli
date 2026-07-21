@@ -290,7 +290,8 @@ keeps a scrolled viewport stable while output streams, displays tool status,
 cancels the current turn with Ctrl-C, and presents write/Shell/MCP approval
 prompts inside the alternate screen. Shift-Tab toggles persisted Plan mode and
 shows a visible mode badge. Left/Right, Home/End, Delete, Backspace, Ctrl-A,
-Ctrl-E, and Ctrl-U edit the active prompt or structured-response input.
+Ctrl-E, and Ctrl-U edit the active prompt or structured-response input. Mouse
+clicks can answer approval prompts and the three plan-review actions.
 Plan exits open a dedicated full-plan review with approve, revision-feedback,
 and abandon outcomes. Page Up/Page Down scroll, Ctrl-Q exits, and an optional
 prompt argument starts the first turn immediately. When providers report usage,

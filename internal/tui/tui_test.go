@@ -415,6 +415,85 @@ func TestMouseWheelScrollsOnlyTheTranscriptPane(t *testing.T) {
 	}
 }
 
+func TestMouseClickAnswersApproval(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		x       int
+		allowed bool
+	}{
+		{name: "approve", x: 1, allowed: true},
+		{name: "deny", x: 12, allowed: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			reply := make(chan bool, 1)
+			m := &model{width: 60, height: 16, approval: &approvalEvent{reply: reply}}
+			view := m.View()
+			command := view.OnMouse(tea.MouseClickMsg(tea.Mouse{X: test.x, Y: m.contentHeight() + 3, Button: tea.MouseLeft}))
+			if command == nil {
+				t.Fatal("approval click was ignored")
+			}
+			updated, _ := m.Update(command())
+			m = updated.(*model)
+			if got := <-reply; got != test.allowed || m.approval != nil {
+				t.Fatalf("allowed=%v approval=%#v", got, m.approval)
+			}
+		})
+	}
+}
+
+func TestMouseClickAnswersPlanReview(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		x    int
+		want string
+		edit bool
+	}{
+		{name: "approve", x: 1, want: "approved"},
+		{name: "revise", x: 14, edit: true},
+		{name: "abandon", x: 36, want: "abandoned"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			reply := make(chan tools.PlanModeDecision, 1)
+			m := &model{width: 60, height: 16, planReview: &planReviewState{event: planReviewEvent{reply: reply}}}
+			view := m.View()
+			command := view.OnMouse(tea.MouseClickMsg(tea.Mouse{X: test.x, Y: m.contentHeight() + 3, Button: tea.MouseLeft}))
+			if command == nil {
+				t.Fatal("plan review click was ignored")
+			}
+			updated, _ := m.Update(command())
+			m = updated.(*model)
+			if test.edit {
+				if m.planReview == nil || !m.planReview.editing {
+					t.Fatalf("plan review=%#v", m.planReview)
+				}
+				return
+			}
+			if decision := <-reply; decision.Outcome != test.want || m.planReview != nil {
+				t.Fatalf("decision=%#v review=%#v", decision, m.planReview)
+			}
+		})
+	}
+}
+
+func TestMouseClickIgnoresFooterGapsAndClippedActions(t *testing.T) {
+	m := &model{width: 60, height: 16, approval: &approvalEvent{reply: make(chan bool, 1)}}
+	view := m.View()
+	if command := view.OnMouse(tea.MouseClickMsg(tea.Mouse{X: 9, Y: m.contentHeight() + 3, Button: tea.MouseLeft})); command != nil {
+		t.Fatal("approval gap was clickable")
+	}
+	m.approval = nil
+	m.planReview = &planReviewState{event: planReviewEvent{reply: make(chan tools.PlanModeDecision, 1)}}
+	view = m.View()
+	if command := view.OnMouse(tea.MouseClickMsg(tea.Mouse{X: 12, Y: m.contentHeight() + 3, Button: tea.MouseLeft})); command != nil {
+		t.Fatal("plan action gap was clickable")
+	}
+	m.width = 20
+	view = m.View()
+	if command := view.OnMouse(tea.MouseClickMsg(tea.Mouse{X: 16, Y: m.contentHeight() + 3, Button: tea.MouseLeft})); command != nil {
+		t.Fatal("clipped plan action was clickable")
+	}
+}
+
 func TestStreamingTextPreservesScrolledViewport(t *testing.T) {
 	bridge := NewBridge(context.Background(), tools.PermissionAuto)
 	defer bridge.Close()
