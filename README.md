@@ -193,8 +193,10 @@ reasoning_effort = "low"
 patterns matched against both catalog keys and provider model IDs. Allowed
 models remain available internally but are omitted from user switching when
 they do not match; hidden models are omitted from ACP model pickers, while
-disabled models cannot be resolved. If the configured default is filtered out,
-new ACP sessions use the first selectable catalog entry instead when one exists.
+remaining explicitly selectable by catalog ID. Disabled models cannot be
+resolved. If the configured default is filtered out, new ACP sessions use the
+first visible, selectable catalog entry instead when one exists. Individual
+`[model.<name>]` entries may also set `hidden = true`.
 
 Gork-style `[model.<name>]` custom providers and `[mcp_servers.<name>]` tables
 are supported. The earlier JSON format remains accepted when passed with

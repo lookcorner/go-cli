@@ -31,6 +31,9 @@ func modelState(runner *agent.Runner) sessionModelState {
 	}
 	available := make([]modelInfo, 0, len(runner.ModelOptions))
 	for _, option := range runner.ModelOptions {
+		if option.Hidden {
+			continue
+		}
 		meta := map[string]any{}
 		if option.ContextWindow > 0 {
 			meta["totalContextTokens"] = option.ContextWindow
@@ -61,7 +64,7 @@ func modelState(runner *agent.Runner) sessionModelState {
 		}
 		available = append(available, modelInfo{ModelID: option.ID, Name: option.Name, Description: option.Description, Meta: meta})
 	}
-	if len(available) == 0 && current != "" {
+	if len(runner.ModelOptions) == 0 && current != "" {
 		available = append(available, modelInfo{ModelID: current, Name: current})
 	}
 	return sessionModelState{CurrentModelID: current, Available: available}

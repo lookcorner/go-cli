@@ -118,6 +118,7 @@ type ModelProfile struct {
 	Model                       string
 	Name                        string
 	Description                 string
+	Hidden                      bool
 	BaseURL                     string
 	APIKey                      string
 	Backend                     string
@@ -455,6 +456,7 @@ type modelConfig struct {
 	Model                       string `toml:"model"`
 	Name                        string `toml:"name"`
 	Description                 string `toml:"description"`
+	Hidden                      *bool  `toml:"hidden"`
 	BaseURL                     string `toml:"base_url"`
 	APIKey                      string `toml:"api_key"`
 	Backend                     string `toml:"backend"`
@@ -892,6 +894,9 @@ func mergeModelProfiles(cfg *Config, entries map[string]modelConfig) error {
 		if entry.Description != "" {
 			profile.Description = entry.Description
 		}
+		if entry.Hidden != nil {
+			profile.Hidden = *entry.Hidden
+		}
 		if entry.BaseURL != "" {
 			profile.BaseURL = entry.BaseURL
 		}
@@ -1023,8 +1028,12 @@ func (c Config) modelProfileWithDefault(slug string) (string, ModelProfile, bool
 
 func (c Config) ModelSelectable(id, model string) bool {
 	return !c.modelFiltered(c.DisabledModels, id, model) &&
-		!c.modelFiltered(c.HiddenModels, id, model) &&
 		(len(c.AllowedModels) == 0 || c.modelFiltered(c.AllowedModels, id, model))
+}
+
+func (c Config) ModelVisible(id, model string) bool {
+	profile, configured := c.ModelProfiles[id]
+	return c.ModelSelectable(id, model) && !(configured && profile.Hidden) && !c.modelFiltered(c.HiddenModels, id, model)
 }
 
 func (c Config) modelFiltered(patterns []string, id, model string) bool {

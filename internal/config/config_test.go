@@ -262,7 +262,7 @@ func TestLoadModelCatalogFiltersAndReasoning(t *testing.T) {
 	data := []byte(`
 [models]
 default = "smart"
-allowed_models = ["fast-*", "smart", "shared-api"]
+allowed_models = ["fast-*", "smart", "shared-api", "entry-hidden"]
 hidden_models = ["fast-hidden"]
 disabled_models = ["gone"]
 
@@ -283,6 +283,10 @@ model = "fast-api"
 
 [model.fast-hidden]
 model = "hidden-api"
+
+[model.entry-hidden]
+model = "entry-hidden-api"
+hidden = true
 
 [model.gone]
 model = "gone-api"
@@ -305,8 +309,11 @@ model = "gone-api"
 	if options[0].ID != "low" || options[0].Label != "Low" || options[1].ID != "max" || options[1].Value != "xhigh" || !options[1].Default {
 		t.Fatalf("reasoning options=%#v", options)
 	}
-	if !cfg.ModelSelectable("fast-one", "fast-api") || cfg.ModelSelectable("fast-hidden", "hidden-api") || cfg.ModelSelectable("other", "other-api") {
+	if !cfg.ModelSelectable("fast-one", "fast-api") || !cfg.ModelSelectable("fast-hidden", "hidden-api") || !cfg.ModelSelectable("entry-hidden", "entry-hidden-api") || cfg.ModelSelectable("other", "other-api") {
 		t.Fatalf("model filters were not applied")
+	}
+	if cfg.ModelVisible("fast-hidden", "hidden-api") || cfg.ModelVisible("entry-hidden", "entry-hidden-api") || !cfg.ModelVisible("fast-one", "fast-api") {
+		t.Fatalf("model visibility was not applied")
 	}
 	if _, _, ok := cfg.ResolveModelEntry("gone"); ok {
 		t.Fatal("disabled model remained resolvable")

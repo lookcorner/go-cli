@@ -55,6 +55,7 @@ type ModelOption struct {
 	ID                      string
 	Name                    string
 	Description             string
+	Hidden                  bool
 	ContextWindow           int
 	ReasoningEffort         string
 	SupportsReasoningEffort bool

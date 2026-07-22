@@ -1351,12 +1351,12 @@ func TestACPModelOptions(t *testing.T) {
 			"quick": {Model: "shared-model"},
 			"smart": {Model: "smart-model"},
 		},
-		AllowedModels: []string{"fast", "smart", "default-model"},
+		AllowedModels: []string{"fast", "smart", "default-model"}, HiddenModels: []string{"smart"},
 	}
 	got := acpModelOptions(cfg)
 	want := []agent.ModelOption{
 		{ID: "fast", Name: "Fast", Description: "Low latency", ContextWindow: 2000, ReasoningEffort: "high", SupportsReasoningEffort: true, ReasoningEfforts: []agent.ReasoningEffortOption{}},
-		{ID: "smart", Name: "smart-model", ReasoningEfforts: []agent.ReasoningEffortOption{}},
+		{ID: "smart", Name: "smart-model", Hidden: true, ReasoningEfforts: []agent.ReasoningEffortOption{}},
 		{ID: "default-model", Name: "default-model", ReasoningEfforts: []agent.ReasoningEffortOption{}},
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -1392,7 +1392,7 @@ func TestACPDefaultModelFallsBackToSelectableCatalogEntry(t *testing.T) {
 		explicitID    string
 		explicitModel string
 	}{
-		{name: "allowlist", allowed: []string{"fast"}, explicitID: "default", explicitModel: "default-api"},
+		{name: "allowlist", allowed: []string{"fast"}, explicitID: "fast", explicitModel: "fast-api"},
 		{name: "hidden", hidden: []string{"default"}, explicitID: "default", explicitModel: "default-api"},
 		{name: "disabled", disabled: []string{"default"}, explicitID: "fast", explicitModel: "fast-api"},
 	} {

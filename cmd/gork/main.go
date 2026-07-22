@@ -1610,7 +1610,7 @@ func acpModelOptions(cfg config.Config) []agent.ModelOption {
 			displayName = resolved.Model
 		}
 		options = append(options, agent.ModelOption{
-			ID: id, Name: displayName, Description: profile.Description,
+			ID: id, Name: displayName, Description: profile.Description, Hidden: !cfg.ModelVisible(id, resolved.Model),
 			ContextWindow: resolved.ContextWindow, ReasoningEffort: profile.ReasoningEffort,
 			SupportsReasoningEffort: profile.SupportsReasoningEffort, ReasoningEfforts: acpReasoningEffortOptions(profile.ReasoningEfforts),
 		})
@@ -1619,7 +1619,7 @@ func acpModelOptions(cfg config.Config) []agent.ModelOption {
 	currentID := acpSessionModelID(cfg, "")
 	if currentID != "" && !seen[currentID] && cfg.ModelSelectable(currentID, cfg.Model) {
 		options = append(options, agent.ModelOption{
-			ID: currentID, Name: cfg.Model, ContextWindow: cfg.ContextWindow,
+			ID: currentID, Name: cfg.Model, Hidden: !cfg.ModelVisible(currentID, cfg.Model), ContextWindow: cfg.ContextWindow,
 			ReasoningEffort: cfg.ReasoningEffort, SupportsReasoningEffort: cfg.ModelSupportsReasoningEffort,
 			ReasoningEfforts: acpReasoningEffortOptions(cfg.ModelReasoningEfforts),
 		})
@@ -1645,7 +1645,7 @@ func acpSessionModelID(cfg config.Config, requested string) string {
 
 func resolveACPSessionModelEntry(cfg config.Config, requested string) (string, config.Config) {
 	if requested = strings.TrimSpace(requested); requested != "" {
-		if id, resolved, ok := cfg.ResolveModelEntry(requested); ok {
+		if id, resolved, ok := cfg.ResolveModelEntry(requested); ok && cfg.ModelSelectable(id, resolved.Model) {
 			return id, resolved
 		}
 	}
@@ -1653,11 +1653,11 @@ func resolveACPSessionModelEntry(cfg config.Config, requested string) (string, c
 	if preferred == "" {
 		preferred = cfg.Model
 	}
-	if id, resolved, ok := cfg.ResolveModelEntry(preferred); ok && cfg.ModelSelectable(id, resolved.Model) {
+	if id, resolved, ok := cfg.ResolveModelEntry(preferred); ok && cfg.ModelVisible(id, resolved.Model) {
 		return id, resolved
 	}
 	for _, name := range cfg.ModelSlugs() {
-		if id, resolved, ok := cfg.ResolveModelEntry(name); ok && cfg.ModelSelectable(id, resolved.Model) {
+		if id, resolved, ok := cfg.ResolveModelEntry(name); ok && cfg.ModelVisible(id, resolved.Model) {
 			return id, resolved
 		}
 	}

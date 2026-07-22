@@ -21,7 +21,7 @@ func TestModelState(t *testing.T) {
 			ID: "fast", Name: "Fast", Description: "Fast model", ContextWindow: 2000,
 			SupportsReasoningEffort: true, ReasoningEffort: "medium",
 			ReasoningEfforts: []agent.ReasoningEffortOption{{ID: "low", Value: "low", Label: "Low"}, {ID: "max", Value: "xhigh", Label: "Max", Default: true}},
-		}, {ID: "smart", Name: "Smart"}},
+		}, {ID: "smart", Name: "Smart"}, {ID: "hidden", Name: "Hidden", Hidden: true}},
 	})
 	if got.CurrentModelID != "fast" || len(got.Available) != 2 || got.Available[1].ModelID != "smart" || got.Available[1].Name != "Smart" {
 		t.Fatalf("state=%#v", got)
@@ -33,6 +33,10 @@ func TestModelState(t *testing.T) {
 	efforts := meta["reasoningEfforts"].([]map[string]any)
 	if len(efforts) != 2 || efforts[1]["id"] != "max" || efforts[1]["value"] != "xhigh" || efforts[1]["default"] != true {
 		t.Fatalf("reasoning efforts=%#v", efforts)
+	}
+	hidden := modelState(&agent.Runner{ModelID: "hidden", Model: "hidden-model", ModelOptions: []agent.ModelOption{{ID: "hidden", Name: "Hidden", Hidden: true}}})
+	if hidden.CurrentModelID != "hidden" || len(hidden.Available) != 0 {
+		t.Fatalf("hidden model leaked into available models: %#v", hidden)
 	}
 	fallback := modelState(&agent.Runner{Model: "fallback"})
 	if fallback.CurrentModelID != "fallback" || len(fallback.Available) != 1 || fallback.Available[0].ModelID != "fallback" {
@@ -143,7 +147,7 @@ func TestSetSessionModelIgnoresUnsupportedOrInvalidReasoningEffort(t *testing.T)
 	}
 }
 
-func TestSetSessionModelBeforeFirstTurn(t *testing.T) {
+func TestSetSessionModelAllowsHiddenCatalogEntryBeforeFirstTurn(t *testing.T) {
 	logger, err := sessionlog.NewLoggerWithID(t.TempDir(), "new-session")
 	if err != nil {
 		t.Fatal(err)
@@ -155,12 +159,15 @@ func TestSetSessionModelBeforeFirstTurn(t *testing.T) {
 	newClient := &fixtureStreamer{}
 	runner := &agent.Runner{
 		Client: &fixtureStreamer{}, Logger: logger, ModelID: "old", Model: "old",
-		ModelOptions: []agent.ModelOption{{ID: "new", Name: "New"}},
+		ModelOptions: []agent.ModelOption{{ID: "old", Name: "Old"}, {ID: "new", Name: "New", Hidden: true}},
 		ResolveModel: func(string) (agent.ModelRuntime, error) {
 			return agent.ModelRuntime{ID: "new", Client: newClient, Model: "new"}, nil
 		},
 	}
 	current := &session{id: "new-session", runner: runner, logPath: logger.Path()}
+	if state := modelState(runner); len(state.Available) != 1 || state.Available[0].ModelID != "old" {
+		t.Fatalf("hidden model appeared in picker: %#v", state)
+	}
 	var output bytes.Buffer
 	server := &Server{output: &output, sessions: map[string]*session{current.id: current}}
 	server.handleSetSessionModel(message{ID: json.RawMessage("1"), Params: json.RawMessage(`{"sessionId":"new-session","modelId":"new"}`)})
