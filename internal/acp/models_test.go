@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/lookcorner/go-cli/internal/agent"
@@ -188,6 +189,66 @@ func TestReloadModelsIgnoresUnchangedAndPreservesStateOnError(t *testing.T) {
 				t.Fatalf("err=%v output=%q runner=%#v", err, output.String(), current.runner)
 			}
 		})
+	}
+}
+
+func TestInternalModelReloadReturnsCatalogCount(t *testing.T) {
+	current, _, _ := reloadModelFixture(t, "internal-reload")
+	current.runner.ReloadModels = func() (agent.ModelCatalogUpdate, error) {
+		return agent.ModelCatalogUpdate{Changed: true, Options: []agent.ModelOption{
+			{ID: "old", Model: "old-model"}, {ID: "new", Model: "new-model"},
+		}}, nil
+	}
+	var output bytes.Buffer
+	server := &Server{output: &output, sessions: map[string]*session{
+		current.id: current,
+		"nil":      nil,
+		"closed": {closed: true, runner: &agent.Runner{ReloadModels: func() (agent.ModelCatalogUpdate, error) {
+			t.Fatal("closed session reloaded")
+			return agent.ModelCatalogUpdate{}, nil
+		}}},
+	}}
+
+	server.handleModelReload(message{ID: json.RawMessage("7"), Method: "x.ai/internal/reload_models"})
+
+	messages := decodeACPOutput(t, output.Bytes())
+	if len(messages) != 2 || messages[0]["method"] != "x.ai/models/update" {
+		t.Fatalf("messages=%#v", messages)
+	}
+	result := messages[1]["result"].(map[string]any)
+	if messages[1]["id"] != float64(7) || result["models"] != float64(2) {
+		t.Fatalf("response=%#v", messages[1])
+	}
+}
+
+func TestInternalModelReloadReportsFailure(t *testing.T) {
+	current, _, _ := reloadModelFixture(t, "internal-reload-error")
+	current.runner.ReloadModels = func() (agent.ModelCatalogUpdate, error) {
+		return agent.ModelCatalogUpdate{}, errors.New("reload failed")
+	}
+	var output bytes.Buffer
+	server := &Server{output: &output, sessions: map[string]*session{current.id: current}}
+
+	server.handleModelReload(message{ID: json.RawMessage("8"), Method: "x.ai/internal/reload_models"})
+
+	messages := decodeACPOutput(t, output.Bytes())
+	if len(messages) != 1 || messages[0]["error"].(map[string]any)["code"] != float64(-32000) || !strings.Contains(messages[0]["error"].(map[string]any)["message"].(string), "reload failed") {
+		t.Fatalf("response=%#v", messages)
+	}
+}
+
+func TestInternalModelReloadRoutesThroughServe(t *testing.T) {
+	input := bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"x.ai/internal/reload_models"}` + "\n")
+	var output bytes.Buffer
+	server := &Server{SessionDir: t.TempDir(), Factory: func(context.Context, SessionConfig, tools.Approver, io.Writer, io.Writer) (*agent.Runner, func(), error) {
+		return nil, nil, nil
+	}}
+	if err := server.Serve(context.Background(), input, &output); err != nil {
+		t.Fatal(err)
+	}
+	messages := decodeACPOutput(t, output.Bytes())
+	if len(messages) != 1 || messages[0]["result"].(map[string]any)["models"] != float64(0) {
+		t.Fatalf("responses=%#v", messages)
 	}
 }
 

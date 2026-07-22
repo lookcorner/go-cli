@@ -224,6 +224,8 @@ exists. Individual `[model.<name>]` entries may also set `hidden = true`.
 
 While the ACP server is running, model changes in `config.toml`, local/system
 `managed_config.toml`, and `requirements.toml` are detected automatically.
+The `x.ai/internal/reload_models` endpoint triggers the same disk reload for
+every live session and returns the resolved catalog size.
 Connected clients receive `x.ai/models/update`; idle sessions switch when an
 explicit default changes or their current model disappears, while busy sessions
 defer that switch until the next prompt. Future subagents use the refreshed

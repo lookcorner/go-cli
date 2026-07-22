@@ -165,19 +165,42 @@ func (s *Server) handleSetSessionModel(incoming message) {
 // ReloadModels refreshes every live session catalog and emits the reference
 // machine-wide notification when a model-related config change is detected.
 func (s *Server) ReloadModels() error {
+	_, err := s.reloadModels()
+	return err
+}
+
+func (s *Server) handleModelReload(incoming message) {
+	count, err := s.reloadModels()
+	if err != nil {
+		s.respondError(incoming.ID, -32000, err.Error())
+		return
+	}
+	s.respond(incoming.ID, map[string]any{"models": count})
+}
+
+func (s *Server) reloadModels() (int, error) {
 	s.mu.Lock()
 	sessions := make([]*session, 0, len(s.sessions))
 	for _, current := range s.sessions {
 		sessions = append(sessions, current)
 	}
 	s.mu.Unlock()
+	modelCount := 0
 	var reloadErr error
 	for _, current := range sessions {
+		if current == nil {
+			continue
+		}
 		if err := s.reloadSessionModels(current); err != nil {
 			reloadErr = errors.Join(reloadErr, fmt.Errorf("session %s: %w", current.id, err))
 		}
+		current.mu.Lock()
+		if !current.closed && current.runner != nil && current.runner.ReloadModels != nil {
+			modelCount = max(modelCount, len(current.runner.ModelOptions))
+		}
+		current.mu.Unlock()
 	}
-	return reloadErr
+	return modelCount, reloadErr
 }
 
 func (s *Server) reloadSessionModels(current *session) error {
