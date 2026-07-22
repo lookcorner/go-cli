@@ -1334,7 +1334,7 @@ func TestResolveACPSessionModel(t *testing.T) {
 		{name: "unknown falls back", requested: "unknown", wantModel: "default-model", wantBaseURL: "https://default.example", wantBackend: "responses", wantContextWindow: 1000},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got := resolveACPSessionModel(cfg, test.requested)
+			_, got := resolveACPSessionModelEntry(cfg, test.requested)
 			if got.Model != test.wantModel || got.BaseURL != test.wantBaseURL || got.Backend != test.wantBackend || got.ContextWindow != test.wantContextWindow {
 				t.Fatalf("resolved config=%#v", got)
 			}
@@ -1380,5 +1380,38 @@ func TestACPSessionModelID(t *testing.T) {
 	}
 	if got := acpSessionModelID(cfg, "missing"); got != "default" {
 		t.Fatalf("fallback id=%q", got)
+	}
+}
+
+func TestACPDefaultModelFallsBackToSelectableCatalogEntry(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		allowed       []string
+		hidden        []string
+		disabled      []string
+		explicitID    string
+		explicitModel string
+	}{
+		{name: "allowlist", allowed: []string{"fast"}, explicitID: "default", explicitModel: "default-api"},
+		{name: "hidden", hidden: []string{"default"}, explicitID: "default", explicitModel: "default-api"},
+		{name: "disabled", disabled: []string{"default"}, explicitID: "fast", explicitModel: "fast-api"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := config.Config{
+				Model: "default-api", DefaultModelID: "default",
+				AllowedModels: test.allowed, HiddenModels: test.hidden, DisabledModels: test.disabled,
+				ModelProfiles: map[string]config.ModelProfile{
+					"default": {Model: "default-api"},
+					"fast":    {Model: "fast-api", ContextWindow: 2000},
+				},
+			}
+			id, resolved := resolveACPSessionModelEntry(cfg, "")
+			if id != "fast" || resolved.Model != "fast-api" || resolved.ContextWindow != 2000 {
+				t.Fatalf("id=%q resolved=%#v", id, resolved)
+			}
+			if explicitID, explicit := resolveACPSessionModelEntry(cfg, "default"); explicitID != test.explicitID || explicit.Model != test.explicitModel {
+				t.Fatalf("explicit id=%q resolved=%#v", explicitID, explicit)
+			}
+		})
 	}
 }

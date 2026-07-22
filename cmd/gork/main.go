@@ -1596,19 +1596,6 @@ func resolveACPSessionPermissionMode(defaultMode tools.PermissionMode, yoloMode,
 	return mode
 }
 
-func resolveACPSessionModel(cfg config.Config, requested string) config.Config {
-	if strings.TrimSpace(requested) == "" {
-		requested = cfg.DefaultModelID
-		if requested == "" {
-			requested = cfg.Model
-		}
-	}
-	if resolved, ok := cfg.ResolveModel(requested); ok {
-		return resolved
-	}
-	return cfg
-}
-
 func acpModelOptions(cfg config.Config) []agent.ModelOption {
 	seen := make(map[string]bool)
 	options := make([]agent.ModelOption, 0, len(cfg.ModelProfiles)+1)
@@ -1652,19 +1639,29 @@ func acpReasoningEffortOptions(options []config.ReasoningEffortOption) []agent.R
 }
 
 func acpSessionModelID(cfg config.Config, requested string) string {
-	if strings.TrimSpace(requested) == "" {
-		requested = cfg.DefaultModelID
-		if requested == "" {
-			requested = cfg.Model
+	id, _ := resolveACPSessionModelEntry(cfg, requested)
+	return id
+}
+
+func resolveACPSessionModelEntry(cfg config.Config, requested string) (string, config.Config) {
+	if requested = strings.TrimSpace(requested); requested != "" {
+		if id, resolved, ok := cfg.ResolveModelEntry(requested); ok {
+			return id, resolved
 		}
 	}
-	if id, _, ok := cfg.ResolveModelEntry(requested); ok {
-		return id
+	preferred := cfg.DefaultModelID
+	if preferred == "" {
+		preferred = cfg.Model
 	}
-	if id, _, ok := cfg.ResolveModelEntry(cfg.Model); ok {
-		return id
+	if id, resolved, ok := cfg.ResolveModelEntry(preferred); ok && cfg.ModelSelectable(id, resolved.Model) {
+		return id, resolved
 	}
-	return cfg.Model
+	for _, name := range cfg.ModelSlugs() {
+		if id, resolved, ok := cfg.ResolveModelEntry(name); ok && cfg.ModelSelectable(id, resolved.Model) {
+			return id, resolved
+		}
+	}
+	return cfg.Model, cfg
 }
 
 func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []string, tokenProvider api.TokenProvider, stdin io.Reader, stdout, stderr io.Writer) error {
@@ -1721,8 +1718,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			return nil, nil, err
 		}
 		modelCatalog := sessionCfg
-		modelID := acpSessionModelID(modelCatalog, sessionConfig.Model)
-		sessionCfg = resolveACPSessionModel(sessionCfg, sessionConfig.Model)
+		modelID, sessionCfg := resolveACPSessionModelEntry(sessionCfg, sessionConfig.Model)
 		reasoningEffort := sessionCfg.ReasoningEffort
 		if sessionConfig.ReasoningEffort != "" && sessionCfg.ModelSupportsReasoningEffort {
 			reasoningEffort = sessionConfig.ReasoningEffort
