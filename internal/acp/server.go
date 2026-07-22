@@ -34,6 +34,7 @@ var clientSessionIDPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0
 
 type SessionConfig struct {
 	CWD             string
+	Title           string
 	Model           string
 	ReasoningEffort string
 	MCPServers      []MCPServer
@@ -1496,7 +1497,7 @@ func (s *Server) handleNewSession(ctx context.Context, incoming message) {
 		s.respondError(incoming.ID, -32000, err.Error())
 		return
 	}
-	s.respond(incoming.ID, map[string]any{"sessionId": id, "modes": sessionModes("default"), "models": modelState(created.runner)})
+	s.respond(incoming.ID, sessionStartResponse(created, "default"))
 	s.startFolderTrustPrompt(created)
 }
 
@@ -1708,7 +1709,7 @@ func (s *Server) startSession(ctx context.Context, id string, sessionConfig Sess
 		return nil, err
 	}
 	created := &session{
-		id: id, ctx: ctx, cwd: sessionConfig.CWD, updated: time.Now().UTC(), previous: previous,
+		id: id, ctx: ctx, cwd: sessionConfig.CWD, title: sessionConfig.Title, updated: time.Now().UTC(), previous: previous,
 		runner: runner, close: closeRuntime, promptIndex: promptIndex, activePrompt: -1, rewind: rewind, logPath: sessionPath, mode: mode,
 		mcpServers: append([]MCPServer(nil), sessionConfig.MCPServers...), permissions: approver,
 		gitHeadEnabled: s.clientGitHead,
@@ -2269,12 +2270,13 @@ func (s *Server) handleRestoreSession(ctx context.Context, incoming message, rep
 		return
 	}
 	found := false
-	model := ""
+	model, title := "", ""
 	reasoningEffort := ""
 	for _, item := range items {
 		if item.SessionID == params.SessionID {
 			found = true
 			model = item.ModelID
+			title = item.Title
 			reasoningEffort = item.ReasoningEffort
 			if item.CWD != params.CWD {
 				s.respondError(incoming.ID, -32602, "cwd does not match the stored session")
@@ -2306,7 +2308,7 @@ func (s *Server) handleRestoreSession(ctx context.Context, incoming message, rep
 	}
 	yoloMode, autoMode := sessionPermissionModeOverrides(params.Meta)
 	config := SessionConfig{
-		CWD: params.CWD, Model: model, ReasoningEffort: reasoningEffort, SessionID: params.SessionID,
+		CWD: params.CWD, Title: title, Model: model, ReasoningEffort: reasoningEffort, SessionID: params.SessionID,
 		ResumePath: path, MCPServers: servers, YoloMode: yoloMode, AutoMode: autoMode,
 		ClientHooks: parseClientHooks(params.Meta),
 	}
@@ -2322,7 +2324,7 @@ func (s *Server) handleRestoreSession(ctx context.Context, incoming message, rep
 		mode = current.mode
 		current.mu.Unlock()
 	}
-	s.respond(incoming.ID, map[string]any{"sessionId": params.SessionID, "modes": sessionModes(mode), "models": modelState(created.runner)})
+	s.respond(incoming.ID, sessionStartResponse(created, mode))
 	s.startFolderTrustPrompt(created)
 }
 

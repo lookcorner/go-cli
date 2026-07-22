@@ -617,7 +617,10 @@ editor/IDE integrations:
 ```
 
 Each `session/new` gets its own workspace, tool state, model history, local
-session log, MCP/LSP processes, and cleanup lifecycle. The baseline
+session log, MCP/LSP processes, and cleanup lifecycle. New and restored session
+responses include `_meta["x.ai/sessionConfig"]` model/reasoning choices and
+`_meta["x.ai/sessionDetail"]` identity, workspace, model, and stored title data.
+The baseline
 `initialize`, `session/new`, `session/list`, `session/load`, `session/resume`,
 `session/prompt`, `session/update`, `session/cancel`, and `session/close`
 methods are supported. Persisted sessions use stable, path-safe IDs; load
