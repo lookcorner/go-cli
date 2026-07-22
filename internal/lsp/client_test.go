@@ -53,6 +53,19 @@ func TestLifecycleToolQueryAndDiagnostics(t *testing.T) {
 	if !strings.Contains(hover, "fixture hover") {
 		t.Fatalf("unexpected hover result: %s", hover)
 	}
+	resolvedPath, _ := ws.Resolve(path)
+	definitions, err := manager.Tool().CodeLocations(context.Background(), "definition", "main.go", 1, 9)
+	if err != nil || len(definitions) != 1 || definitions[0].Path != resolvedPath || definitions[0].Range.Start.Character != 8 {
+		t.Fatalf("definitions=%#v err=%v", definitions, err)
+	}
+	references, err := manager.Tool().CodeLocations(context.Background(), "references", "main.go", 1, 9)
+	if err != nil || len(references) != 2 || references[1].Range.Start.Line != 2 {
+		t.Fatalf("references=%#v err=%v", references, err)
+	}
+	symbols, err := manager.Tool().CodeSymbols(context.Background(), "fixture")
+	if err != nil || len(symbols) != 1 || symbols[0].Name != "fixture" || symbols[0].Location.Path != resolvedPath {
+		t.Fatalf("symbols=%#v err=%v", symbols, err)
+	}
 	if data, err := os.ReadFile(path); err != nil || string(data) != "package fixture\n" {
 		t.Fatalf("workspace/applyEdit was not applied: %q err=%v", data, err)
 	}
@@ -270,6 +283,7 @@ func TestLSPHelperProcess(t *testing.T) {
 		return
 	}
 	reader := bufio.NewReader(os.Stdin)
+	var documentURI string
 	for {
 		length, err := readContentLength(reader)
 		if err != nil {
@@ -310,6 +324,7 @@ func TestLSPHelperProcess(t *testing.T) {
 				} `json:"textDocument"`
 			}
 			_ = json.Unmarshal(message.Params, &params)
+			documentURI = params.TextDocument.URI
 			writeLSPFixtureMessage(map[string]any{
 				"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics",
 				"params": map[string]any{"uri": params.TextDocument.URI, "diagnostics": []any{map[string]any{
@@ -386,6 +401,38 @@ func TestLSPHelperProcess(t *testing.T) {
 				}
 			}
 			result = map[string]any{"contents": map[string]any{"kind": "plaintext", "value": "fixture hover"}}
+		case "textDocument/definition":
+			var params struct {
+				TextDocument struct {
+					URI string `json:"uri"`
+				} `json:"textDocument"`
+			}
+			_ = json.Unmarshal(message.Params, &params)
+			result = map[string]any{
+				"targetUri": params.TextDocument.URI,
+				"targetRange": map[string]any{
+					"start": map[string]any{"line": 0, "character": 0}, "end": map[string]any{"line": 0, "character": 15},
+				},
+				"targetSelectionRange": map[string]any{
+					"start": map[string]any{"line": 0, "character": 8}, "end": map[string]any{"line": 0, "character": 15},
+				},
+			}
+		case "textDocument/references":
+			var params struct {
+				TextDocument struct {
+					URI string `json:"uri"`
+				} `json:"textDocument"`
+			}
+			_ = json.Unmarshal(message.Params, &params)
+			result = []any{
+				map[string]any{"uri": params.TextDocument.URI, "range": map[string]any{"start": map[string]any{"line": 0, "character": 8}, "end": map[string]any{"line": 0, "character": 15}}},
+				map[string]any{"uri": params.TextDocument.URI, "range": map[string]any{"start": map[string]any{"line": 2, "character": 1}, "end": map[string]any{"line": 2, "character": 8}}},
+			}
+		case "workspace/symbol":
+			result = []any{map[string]any{
+				"name": "fixture", "kind": 13,
+				"location": map[string]any{"uri": documentURI, "range": map[string]any{"start": map[string]any{"line": 0, "character": 8}, "end": map[string]any{"line": 0, "character": 15}}},
+			}}
 		case "shutdown":
 			result = nil
 		default:

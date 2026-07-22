@@ -642,6 +642,12 @@ ignore and hidden-file modes, filter directories, preserve client request IDs,
 cancel superseded queries, and publish bounded `x.ai/search/fuzzy/status`
 notifications with relay routing metadata.
 
+ACP code navigation reuses each session's configured language servers for
+`x.ai/code/goto-definition`, `x.ai/code/goto-references`,
+`x.ai/code/find-definitions`, `x.ai/code/find-references`, and
+`x.ai/code/status`. Requests require an active session, accept editor-style
+1-based positions, and return absolute paths with normalized 1-based ranges.
+
 The `x.ai/session_summaries/session_list`, `workspace_list`, and
 `workspace_list_recent` extensions expose the same logs as reference-shaped
 summary snapshots for workspace history and recent-session views.

@@ -305,6 +305,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleContentSearch(ctx, incoming)
 		case "x.ai/search/fuzzy/open", "x.ai/search/fuzzy/change", "x.ai/search/fuzzy/close":
 			s.handleFuzzySearch(ctx, incoming)
+		case "x.ai/code/goto-definition", "x.ai/code/goto-references", "x.ai/code/find-definitions", "x.ai/code/find-references", "x.ai/code/status":
+			s.handleCodeNavigation(ctx, incoming)
 		case "x.ai/mcp/list", "x.ai/mcp/call", "x.ai/mcp/read_resource", "x.ai/mcp/auth_status", "x.ai/mcp/auth_trigger":
 			s.handleMCP(ctx, incoming)
 		case "x.ai/commands/list", "x.ai/workspaces/list":
