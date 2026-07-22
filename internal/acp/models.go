@@ -31,7 +31,7 @@ func modelState(runner *agent.Runner) sessionModelState {
 	}
 	available := make([]modelInfo, 0, len(runner.ModelOptions))
 	for _, option := range runner.ModelOptions {
-		if option.Hidden {
+		if option.Hidden || option.Disallowed {
 			continue
 		}
 		meta := map[string]any{}
@@ -98,6 +98,10 @@ func (s *Server) handleSetSessionModel(incoming message) {
 	selectable := false
 	for _, option := range current.runner.ModelOptions {
 		if option.ID == params.ModelID {
+			if option.Disallowed {
+				s.respondError(incoming.ID, -32602, "model is not allowed by allowed_models")
+				return
+			}
 			selectable = true
 			break
 		}
@@ -142,6 +146,7 @@ func (s *Server) handleSetSessionModel(incoming message) {
 		return
 	}
 	current.previous = ""
+	current.unavailableModel = ""
 	current.updated = time.Now().UTC()
 	update := map[string]any{"sessionUpdate": "model_changed", "model_id": runtime.ID}
 	if effort := strings.TrimSpace(current.runner.ReasoningEffort); effort != "" {
@@ -152,6 +157,43 @@ func (s *Server) handleSetSessionModel(incoming message) {
 		"params": map[string]any{"sessionId": current.id, "update": update},
 	})
 	s.respond(incoming.ID, map[string]any{"_meta": map[string]any{"model": runtime.Model}})
+}
+
+func modelRequestAvailable(runner *agent.Runner, requested string, visibleOnly bool) bool {
+	if runner == nil {
+		return false
+	}
+	if len(runner.ModelOptions) == 0 {
+		return true
+	}
+	for _, option := range runner.ModelOptions {
+		if (option.ID == requested || option.Model == requested) && !option.Disallowed && (!visibleOnly || !option.Hidden) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasAllowedModel(runner *agent.Runner) bool {
+	for _, option := range runner.ModelOptions {
+		if !option.Disallowed {
+			return true
+		}
+	}
+	return len(runner.ModelOptions) == 0
+}
+
+func sameModelFamily(first, second string) bool {
+	return strings.HasPrefix(first, "grok-build") == strings.HasPrefix(second, "grok-build")
+}
+
+func (s *Server) notifyModelAutoSwitched(sessionID, previous, next, reason string) {
+	s.write(map[string]any{
+		"jsonrpc": "2.0", "method": "x.ai/session_notification",
+		"params": map[string]any{"sessionId": sessionID, "update": map[string]any{
+			"sessionUpdate": "model_auto_switched", "previous_model_id": previous, "new_model_id": next, "reason": reason,
+		}},
+	})
 }
 
 func reasoningEffortOverride(meta map[string]any) string {

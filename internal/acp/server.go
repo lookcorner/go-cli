@@ -152,6 +152,7 @@ type session struct {
 	cancelTrigger     string
 	activeWakeID      string
 	closed            bool
+	unavailableModel  string
 }
 
 type syntheticWake struct {
@@ -1588,6 +1589,12 @@ func (s *Server) startSession(ctx context.Context, id string, sessionConfig Sess
 	if closeRuntime == nil {
 		closeRuntime = func() {}
 	}
+	fallbackFrom := strings.TrimSpace(sessionConfig.Model)
+	fellBack := fallbackFrom != "" && !modelRequestAvailable(runner, fallbackFrom, sessionConfig.ResumePath != "")
+	blocked := !hasAllowedModel(runner) || (fellBack && sessionConfig.ResumePath != "" && !sameModelFamily(fallbackFrom, runner.ModelID))
+	if fellBack && sessionConfig.ResumePath != "" && !blocked {
+		previous = ""
+	}
 	ws, err := workspace.Open(sessionConfig.CWD)
 	if err != nil {
 		closeRuntime()
@@ -1638,6 +1645,12 @@ func (s *Server) startSession(ctx context.Context, id string, sessionConfig Sess
 		runner: runner, close: closeRuntime, promptIndex: promptIndex, activePrompt: -1, rewind: rewind, logPath: sessionPath, mode: mode,
 		mcpServers: append([]MCPServer(nil), sessionConfig.MCPServers...),
 	}
+	if blocked {
+		created.unavailableModel = fallbackFrom
+		if created.unavailableModel == "" {
+			created.unavailableModel = runner.ModelID
+		}
+	}
 	runner.SessionID = id
 	runner.SessionPath = sessionPath
 	if sessionConfig.ResumePath != "" && previous == "" {
@@ -1647,6 +1660,12 @@ func (s *Server) startSession(ctx context.Context, id string, sessionConfig Sess
 			return nil, historyErr
 		}
 		runner.RestoreHistory(messages)
+	}
+	if fellBack && sessionConfig.ResumePath != "" && !blocked && runner.Logger != nil {
+		if err := runner.Logger.Append("session_model", map[string]any{"model_id": runner.ModelID, "reasoning_effort": runner.ReasoningEffort}); err != nil {
+			closeRuntime()
+			return nil, err
+		}
 	}
 	runner.ToolObserver = &sessionToolObserver{server: s, sessionID: id}
 	runner.Tools.SetRewindStore(rewind, func() int {
@@ -1662,6 +1681,14 @@ func (s *Server) startSession(ctx context.Context, id string, sessionConfig Sess
 	}
 	s.sessions[id] = created
 	s.mu.Unlock()
+	if fellBack {
+		newModel, reason := runner.ModelID, fmt.Sprintf("Model %q is no longer available; using %q.", fallbackFrom, runner.ModelID)
+		if blocked {
+			newModel = ""
+			reason = fmt.Sprintf("Model %q is no longer available. Please start a new session or select another model.", fallbackFrom)
+		}
+		s.notifyModelAutoSwitched(id, fallbackFrom, newModel, reason)
+	}
 	return created, nil
 }
 
@@ -1697,6 +1724,14 @@ func (s *Server) handlePromptRequest(parent context.Context, incoming message, c
 	}
 	if prompt == "" {
 		prompt = "Image prompt"
+	}
+	current.mu.Lock()
+	unavailableModel := current.unavailableModel
+	current.mu.Unlock()
+	if unavailableModel != "" {
+		s.notifyModelAutoSwitched(current.id, "", "", "Your previous model is no longer available. Please start a new session or select another model.")
+		s.finishPrompt(incoming, current, newPromptLifecycle(params), "end_turn", agent.Result{}, nil, "")
+		return
 	}
 	if s.queuePrompt(current, incoming, &params, prompt) {
 		return

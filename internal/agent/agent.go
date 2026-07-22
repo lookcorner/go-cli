@@ -53,9 +53,11 @@ type ResponseStreamer = api.Streamer
 
 type ModelOption struct {
 	ID                      string
+	Model                   string
 	Name                    string
 	Description             string
 	Hidden                  bool
+	Disallowed              bool
 	ContextWindow           int
 	ReasoningEffort         string
 	SupportsReasoningEffort bool

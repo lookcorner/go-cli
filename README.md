@@ -51,7 +51,13 @@ session accepts `session/set_model`, persists the selection, rebuilds backend
 history from the completed transcript, updates future subagent and goal-role
 defaults, and broadcasts `model_changed` before replying. The broadcast is live
 only and intentionally has no replay cursor. Busy sessions reject
-the switch so an in-flight turn cannot cross model backends.
+the switch so an in-flight turn cannot cross model backends. When a persisted
+model is no longer visible or allowed, loading the session automatically selects
+a visible model from the same `grok-build` or non-`grok-build` family, starts a
+fresh response chain from the saved transcript, and broadcasts the live-only
+`model_auto_switched` update. A cross-family fallback, or an allowlist that
+excludes every known model, blocks prompts until the client selects an allowed
+model with `session/set_model`.
 
 Completed ACP prompts publish `x.ai/session/prompt_complete` before their RPC
 response. Prompt responses include `_meta` correlation for the session,
@@ -190,13 +196,13 @@ reasoning_effort = "low"
 ```
 
 `models.allowed_models`, `hidden_models`, and `disabled_models` accept glob
-patterns matched against both catalog keys and provider model IDs. Allowed
-models remain available internally but are omitted from user switching when
-they do not match; hidden models are omitted from ACP model pickers, while
-remaining explicitly selectable by catalog ID. Disabled models cannot be
-resolved. If the configured default is filtered out, new ACP sessions use the
-first visible, selectable catalog entry instead when one exists. Individual
-`[model.<name>]` entries may also set `hidden = true`.
+patterns matched against both catalog keys and provider model IDs. Models that
+do not match the allowlist remain in the internal catalog for availability
+checks but are omitted from user switching; hidden models are omitted from ACP
+model pickers while remaining explicitly selectable by catalog ID. Disabled
+models cannot be resolved. If the configured default is filtered out, new ACP
+sessions use the first visible, selectable catalog entry instead when one
+exists. Individual `[model.<name>]` entries may also set `hidden = true`.
 
 Gork-style `[model.<name>]` custom providers and `[mcp_servers.<name>]` tables
 are supported. The earlier JSON format remains accepted when passed with

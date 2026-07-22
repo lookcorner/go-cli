@@ -1334,7 +1334,7 @@ func TestResolveACPSessionModel(t *testing.T) {
 		{name: "unknown falls back", requested: "unknown", wantModel: "default-model", wantBaseURL: "https://default.example", wantBackend: "responses", wantContextWindow: 1000},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			_, got := resolveACPSessionModelEntry(cfg, test.requested)
+			_, got := resolveACPSessionModelEntry(cfg, test.requested, false)
 			if got.Model != test.wantModel || got.BaseURL != test.wantBaseURL || got.Backend != test.wantBackend || got.ContextWindow != test.wantContextWindow {
 				t.Fatalf("resolved config=%#v", got)
 			}
@@ -1355,9 +1355,10 @@ func TestACPModelOptions(t *testing.T) {
 	}
 	got := acpModelOptions(cfg)
 	want := []agent.ModelOption{
-		{ID: "fast", Name: "Fast", Description: "Low latency", ContextWindow: 2000, ReasoningEffort: "high", SupportsReasoningEffort: true, ReasoningEfforts: []agent.ReasoningEffortOption{}},
-		{ID: "smart", Name: "smart-model", Hidden: true, ReasoningEfforts: []agent.ReasoningEffortOption{}},
-		{ID: "default-model", Name: "default-model", ReasoningEfforts: []agent.ReasoningEffortOption{}},
+		{ID: "fast", Model: "shared-model", Name: "Fast", Description: "Low latency", ContextWindow: 2000, ReasoningEffort: "high", SupportsReasoningEffort: true, ReasoningEfforts: []agent.ReasoningEffortOption{}},
+		{ID: "quick", Model: "shared-model", Name: "shared-model", Disallowed: true, ReasoningEfforts: []agent.ReasoningEffortOption{}},
+		{ID: "smart", Model: "smart-model", Name: "smart-model", Hidden: true, ReasoningEfforts: []agent.ReasoningEffortOption{}},
+		{ID: "default-model", Model: "default-model", Name: "default-model", ReasoningEfforts: []agent.ReasoningEffortOption{}},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("options=%#v want=%#v", got, want)
@@ -1405,12 +1406,15 @@ func TestACPDefaultModelFallsBackToSelectableCatalogEntry(t *testing.T) {
 					"fast":    {Model: "fast-api", ContextWindow: 2000},
 				},
 			}
-			id, resolved := resolveACPSessionModelEntry(cfg, "")
+			id, resolved := resolveACPSessionModelEntry(cfg, "", false)
 			if id != "fast" || resolved.Model != "fast-api" || resolved.ContextWindow != 2000 {
 				t.Fatalf("id=%q resolved=%#v", id, resolved)
 			}
-			if explicitID, explicit := resolveACPSessionModelEntry(cfg, "default"); explicitID != test.explicitID || explicit.Model != test.explicitModel {
+			if explicitID, explicit := resolveACPSessionModelEntry(cfg, "default", false); explicitID != test.explicitID || explicit.Model != test.explicitModel {
 				t.Fatalf("explicit id=%q resolved=%#v", explicitID, explicit)
+			}
+			if restoredID, restored := resolveACPSessionModelEntry(cfg, "default", true); restoredID != "fast" || restored.Model != "fast-api" {
+				t.Fatalf("restored id=%q resolved=%#v", restoredID, restored)
 			}
 		})
 	}

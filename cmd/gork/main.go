@@ -1601,7 +1601,7 @@ func acpModelOptions(cfg config.Config) []agent.ModelOption {
 	options := make([]agent.ModelOption, 0, len(cfg.ModelProfiles)+1)
 	for _, name := range cfg.ModelSlugs() {
 		id, resolved, ok := cfg.ResolveModelEntry(name)
-		if !ok || resolved.Model == "" || !cfg.ModelSelectable(id, resolved.Model) {
+		if !ok || resolved.Model == "" {
 			continue
 		}
 		profile := cfg.ModelProfiles[id]
@@ -1610,7 +1610,9 @@ func acpModelOptions(cfg config.Config) []agent.ModelOption {
 			displayName = resolved.Model
 		}
 		options = append(options, agent.ModelOption{
-			ID: id, Name: displayName, Description: profile.Description, Hidden: !cfg.ModelVisible(id, resolved.Model),
+			ID: id, Model: resolved.Model, Name: displayName, Description: profile.Description,
+			Hidden:        cfg.ModelSelectable(id, resolved.Model) && !cfg.ModelVisible(id, resolved.Model),
+			Disallowed:    !cfg.ModelSelectable(id, resolved.Model),
 			ContextWindow: resolved.ContextWindow, ReasoningEffort: profile.ReasoningEffort,
 			SupportsReasoningEffort: profile.SupportsReasoningEffort, ReasoningEfforts: acpReasoningEffortOptions(profile.ReasoningEfforts),
 		})
@@ -1619,7 +1621,7 @@ func acpModelOptions(cfg config.Config) []agent.ModelOption {
 	currentID := acpSessionModelID(cfg, "")
 	if currentID != "" && !seen[currentID] && cfg.ModelSelectable(currentID, cfg.Model) {
 		options = append(options, agent.ModelOption{
-			ID: currentID, Name: cfg.Model, Hidden: !cfg.ModelVisible(currentID, cfg.Model), ContextWindow: cfg.ContextWindow,
+			ID: currentID, Model: cfg.Model, Name: cfg.Model, Hidden: !cfg.ModelVisible(currentID, cfg.Model), ContextWindow: cfg.ContextWindow,
 			ReasoningEffort: cfg.ReasoningEffort, SupportsReasoningEffort: cfg.ModelSupportsReasoningEffort,
 			ReasoningEfforts: acpReasoningEffortOptions(cfg.ModelReasoningEfforts),
 		})
@@ -1639,14 +1641,20 @@ func acpReasoningEffortOptions(options []config.ReasoningEffortOption) []agent.R
 }
 
 func acpSessionModelID(cfg config.Config, requested string) string {
-	id, _ := resolveACPSessionModelEntry(cfg, requested)
+	id, _ := resolveACPSessionModelEntry(cfg, requested, false)
 	return id
 }
 
-func resolveACPSessionModelEntry(cfg config.Config, requested string) (string, config.Config) {
+func resolveACPSessionModelEntry(cfg config.Config, requested string, visibleOnly bool) (string, config.Config) {
 	if requested = strings.TrimSpace(requested); requested != "" {
-		if id, resolved, ok := cfg.ResolveModelEntry(requested); ok && cfg.ModelSelectable(id, resolved.Model) {
-			return id, resolved
+		if id, resolved, ok := cfg.ResolveModelEntry(requested); ok {
+			allowed := cfg.ModelSelectable(id, resolved.Model)
+			if visibleOnly {
+				allowed = cfg.ModelVisible(id, resolved.Model)
+			}
+			if allowed {
+				return id, resolved
+			}
 		}
 	}
 	preferred := cfg.DefaultModelID
@@ -1718,7 +1726,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			return nil, nil, err
 		}
 		modelCatalog := sessionCfg
-		modelID, sessionCfg := resolveACPSessionModelEntry(sessionCfg, sessionConfig.Model)
+		modelID, sessionCfg := resolveACPSessionModelEntry(sessionCfg, sessionConfig.Model, sessionConfig.ResumePath != "")
 		reasoningEffort := sessionCfg.ReasoningEffort
 		if sessionConfig.ReasoningEffort != "" && sessionCfg.ModelSupportsReasoningEffort {
 			reasoningEffort = sessionConfig.ReasoningEffort

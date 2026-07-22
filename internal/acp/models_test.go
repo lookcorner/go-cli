@@ -21,7 +21,7 @@ func TestModelState(t *testing.T) {
 			ID: "fast", Name: "Fast", Description: "Fast model", ContextWindow: 2000,
 			SupportsReasoningEffort: true, ReasoningEffort: "medium",
 			ReasoningEfforts: []agent.ReasoningEffortOption{{ID: "low", Value: "low", Label: "Low"}, {ID: "max", Value: "xhigh", Label: "Max", Default: true}},
-		}, {ID: "smart", Name: "Smart"}, {ID: "hidden", Name: "Hidden", Hidden: true}},
+		}, {ID: "smart", Name: "Smart"}, {ID: "hidden", Name: "Hidden", Hidden: true}, {ID: "blocked", Name: "Blocked", Disallowed: true}},
 	})
 	if got.CurrentModelID != "fast" || len(got.Available) != 2 || got.Available[1].ModelID != "smart" || got.Available[1].Name != "Smart" {
 		t.Fatalf("state=%#v", got)
@@ -44,6 +44,12 @@ func TestModelState(t *testing.T) {
 	}
 	if empty := modelState(nil); empty.CurrentModelID != "" || len(empty.Available) != 0 {
 		t.Fatalf("empty=%#v", empty)
+	}
+	if !hasAllowedModel(&agent.Runner{}) {
+		t.Fatal("empty catalog should remain unverified")
+	}
+	if hasAllowedModel(&agent.Runner{ModelOptions: []agent.ModelOption{{ID: "blocked", Disallowed: true}}}) {
+		t.Fatal("all-disallowed catalog reported an allowed model")
 	}
 }
 
@@ -241,6 +247,176 @@ func TestRestoredModelSwitchSeedsFreshResponseChain(t *testing.T) {
 	}
 }
 
+func TestRestoredUnavailableModelFallsBackWithinFamily(t *testing.T) {
+	sessionDir, root := t.TempDir(), t.TempDir()
+	path := modelRestoreLog(t, sessionDir, root, "family-fallback", "grok-build-old")
+	var output bytes.Buffer
+	server := &Server{
+		SessionDir: sessionDir, output: &output, sessions: make(map[string]*session),
+		Factory: modelRestoreFactory(t, "grok-build-new", "new-provider", &fixtureStreamer{}),
+	}
+	created, err := server.startSession(context.Background(), "family-fallback", SessionConfig{
+		CWD: root, ResumePath: path, Model: "grok-build-old",
+	}, "old-response")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer created.close()
+	if created.previous != "" || created.unavailableModel != "" {
+		t.Fatalf("previous=%q unavailable=%q", created.previous, created.unavailableModel)
+	}
+	messages := decodeACPOutput(t, output.Bytes())
+	if len(messages) != 1 {
+		t.Fatalf("messages=%#v", messages)
+	}
+	update := messages[0]["params"].(map[string]any)["update"].(map[string]any)
+	if update["sessionUpdate"] != "model_auto_switched" || update["previous_model_id"] != "grok-build-old" || update["new_model_id"] != "grok-build-new" {
+		t.Fatalf("update=%#v", update)
+	}
+	responseID, err := sessionlog.CompletedResponseID(path)
+	if err != nil || responseID != "" {
+		t.Fatalf("response id=%q err=%v", responseID, err)
+	}
+	items, err := sessionlog.List(sessionDir, root)
+	if err != nil || len(items) != 1 || items[0].ModelID != "grok-build-new" {
+		t.Fatalf("items=%#v err=%v", items, err)
+	}
+}
+
+func TestRestoredUnavailableModelBlocksUntilManualSwitch(t *testing.T) {
+	sessionDir, root := t.TempDir(), t.TempDir()
+	path := modelRestoreLog(t, sessionDir, root, "blocked-model", "grok-build-old")
+	streamer := &fixtureStreamer{results: []api.StreamResult{{ResponseID: "new-response", Text: "continued"}}}
+	var output bytes.Buffer
+	server := &Server{
+		SessionDir: sessionDir, output: &output, sessions: make(map[string]*session),
+		Factory: modelRestoreFactory(t, "other", "other-provider", streamer),
+	}
+	created, err := server.startSession(context.Background(), "blocked-model", SessionConfig{
+		CWD: root, ResumePath: path, Model: "grok-build-old",
+	}, "old-response")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer created.close()
+	if created.unavailableModel != "grok-build-old" || created.previous != "old-response" {
+		t.Fatalf("unavailable=%q previous=%q", created.unavailableModel, created.previous)
+	}
+	output.Reset()
+	prompt, _ := json.Marshal(map[string]any{"sessionId": created.id, "prompt": []any{map[string]any{"type": "text", "text": "continue"}}, "_meta": map[string]any{"promptId": "blocked"}})
+	server.handlePrompt(context.Background(), message{ID: json.RawMessage("1"), Params: prompt})
+	messages := decodeACPOutput(t, output.Bytes())
+	if len(messages) != 3 || messages[0]["method"] != "x.ai/session_notification" || messages[1]["method"] != "x.ai/session/prompt_complete" || messages[2]["result"].(map[string]any)["stopReason"] != "end_turn" {
+		t.Fatalf("blocked messages=%#v", messages)
+	}
+	streamer.mu.Lock()
+	requestCount := len(streamer.requests)
+	streamer.mu.Unlock()
+	if requestCount != 0 {
+		t.Fatalf("blocked prompt reached model: %d requests", requestCount)
+	}
+
+	output.Reset()
+	server.handleSetSessionModel(message{ID: json.RawMessage("2"), Params: json.RawMessage(`{"sessionId":"blocked-model","modelId":"other"}`)})
+	if created.unavailableModel != "" {
+		t.Fatalf("manual switch did not unblock session: %q", created.unavailableModel)
+	}
+	output.Reset()
+	server.handlePrompt(context.Background(), message{ID: json.RawMessage("3"), Params: prompt})
+	server.wg.Wait()
+	streamer.mu.Lock()
+	requestCount = len(streamer.requests)
+	streamer.mu.Unlock()
+	if requestCount != 1 || created.previous != "new-response" {
+		t.Fatalf("requests=%d previous=%q", requestCount, created.previous)
+	}
+}
+
+func TestAllDisallowedModelsBlockPrompts(t *testing.T) {
+	sessionDir, root := t.TempDir(), t.TempDir()
+	path := modelRestoreLog(t, sessionDir, root, "allowlist-blocked", "grok-build-old")
+	streamer := &fixtureStreamer{}
+	baseFactory := modelRestoreFactory(t, "grok-build-new", "new-provider", streamer)
+	var output bytes.Buffer
+	server := &Server{
+		SessionDir: sessionDir, output: &output, sessions: make(map[string]*session),
+		Factory: func(ctx context.Context, cfg SessionConfig, approver tools.Approver, text, status io.Writer) (*agent.Runner, func(), error) {
+			runner, closeRuntime, err := baseFactory(ctx, cfg, approver, text, status)
+			if err == nil {
+				runner.ModelOptions[0].Disallowed = true
+			}
+			return runner, closeRuntime, err
+		},
+	}
+	created, err := server.startSession(context.Background(), "allowlist-blocked", SessionConfig{
+		CWD: root, ResumePath: path, Model: "grok-build-old",
+	}, "old-response")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer created.close()
+	if created.unavailableModel == "" {
+		t.Fatal("all-disallowed catalog did not block the session")
+	}
+	output.Reset()
+	prompt := json.RawMessage(`{"sessionId":"allowlist-blocked","prompt":[{"type":"text","text":"continue"}]}`)
+	server.handlePrompt(context.Background(), message{ID: json.RawMessage("1"), Params: prompt})
+	streamer.mu.Lock()
+	requestCount := len(streamer.requests)
+	streamer.mu.Unlock()
+	if requestCount != 0 {
+		t.Fatalf("blocked prompt reached model: %d requests", requestCount)
+	}
+	messages := decodeACPOutput(t, output.Bytes())
+	if len(messages) != 3 || messages[2]["result"].(map[string]any)["stopReason"] != "end_turn" {
+		t.Fatalf("messages=%#v", messages)
+	}
+}
+
+func modelRestoreLog(t *testing.T, dir, root, id, model string) string {
+	t.Helper()
+	logger, err := sessionlog.NewLoggerWithID(dir, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []struct {
+		kind string
+		data any
+	}{
+		{"session_metadata", map[string]any{"cwd": root, "modelId": model}},
+		{"user_prompt", map[string]any{"text": "before"}},
+		{"model_response", map[string]any{"response_id": "old-response", "text": "answer", "tool_call_count": 0}},
+	} {
+		if err := logger.Append(event.kind, event.data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := logger.Path()
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func modelRestoreFactory(t *testing.T, id, model string, streamer *fixtureStreamer) Factory {
+	t.Helper()
+	return func(_ context.Context, cfg SessionConfig, _ tools.Approver, _, _ io.Writer) (*agent.Runner, func(), error) {
+		logger, _, err := sessionlog.Resume(cfg.ResumePath)
+		if err != nil {
+			return nil, nil, err
+		}
+		registry := permissionRegistry(t, tools.PermissionAuto)
+		runner := &agent.Runner{
+			Client: streamer, Tools: registry, Logger: logger, ModelID: id, Model: model, MaxSteps: 1,
+			ModelOptions: []agent.ModelOption{{ID: id, Model: model, Name: id}},
+		}
+		runner.ResolveModel = func(string) (agent.ModelRuntime, error) {
+			return agent.ModelRuntime{ID: id, Client: streamer, Model: model}, nil
+		}
+		return runner, func() { _ = logger.Close(); _ = registry.Close() }, nil
+	}
+}
+
 func TestSetSessionModelRejectsInvalidBusyAndResolverFailure(t *testing.T) {
 	newRunner := func() *agent.Runner {
 		return &agent.Runner{
@@ -258,6 +434,7 @@ func TestSetSessionModelRejectsInvalidBusyAndResolverFailure(t *testing.T) {
 		code   float64
 	}{
 		{name: "unknown model", model: "missing", code: -32602},
+		{name: "disallowed model", model: "new", code: -32602, mutate: func(current *session) { current.runner.ModelOptions[0].Disallowed = true }},
 		{name: "running", model: "new", code: -32000, mutate: func(current *session) { current.running = true }},
 		{name: "starting prompt", model: "new", code: -32000, mutate: func(current *session) { current.startingPromptID = "queued" }},
 		{name: "recap", model: "new", code: -32000, mutate: func(current *session) { current.recapDone = make(chan struct{}) }},
