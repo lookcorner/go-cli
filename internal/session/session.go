@@ -183,6 +183,16 @@ type Content struct {
 	Data     string `json:"-"`
 }
 
+// MaterializeContent resolves a persisted session content block for replay.
+func MaterializeContent(sessionPath string, content Content) (Content, error) {
+	if content.Type == "image" {
+		if err := loadImage(sessionPath, &content); err != nil {
+			return Content{}, err
+		}
+	}
+	return content, nil
+}
+
 type Logger struct {
 	mu           sync.Mutex
 	file         *os.File

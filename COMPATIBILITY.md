@@ -18,6 +18,9 @@ Skill catalogs support all-session `x.ai/skills/refresh-baseline` and
 `x.ai/internal/reload_skills` disk refreshes.
 Plugin extensions also support sessionless forced `x.ai/plugins/reload` with
 live component fan-out.
+ACP bulk history now includes rewind-filtered, paginated/tail/turn-indexed
+`x.ai/session/updates` responses with prompt boundaries, event cursors,
+multimodal/tool/lifecycle projection, and routed streaming chunks.
 
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |

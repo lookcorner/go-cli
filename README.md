@@ -603,7 +603,12 @@ session log, MCP/LSP processes, and cleanup lifecycle. The baseline
 `session/prompt`, `session/update`, `session/cancel`, and `session/close`
 methods are supported. Persisted sessions use stable, path-safe IDs; load
 replays completed user/agent text and image history while resume reconnects without
-replay. Prompts accept embedded text/resources plus validated base64 or remote
+replay. Clients can also fetch rewind-filtered history through
+`x.ai/session/updates`, with positive or tail offsets, limits, last-N-turn
+selection, prompt boundaries, event cursors, and conversation/tool/lifecycle
+ACP envelopes. Large histories can be delivered through ordered
+`x.ai/session/updates/chunk` notifications with caller routing metadata.
+Prompts accept embedded text/resources plus validated base64 or remote
 HTTP(S) images; audio is not yet supported. Text streams as
 `agent_message_chunk`, while tools emit correlated `tool_call` and
 `tool_call_update` lifecycle events; image and rendered PDF results are included
