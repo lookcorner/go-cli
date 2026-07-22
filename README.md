@@ -638,7 +638,10 @@ methods are supported. Persisted sessions use stable, path-safe IDs; load
 replays completed user/agent text and image history while resume reconnects without
 replay. Local ACP clients can inspect the active authentication profile through
 `x.ai/auth/info` and request a refresh-aware bearer token through
-`x.ai/auth/getBearerToken`. Clients can also fetch rewind-filtered history through
+`x.ai/auth/getBearerToken`. Legacy clients can read and update the environment-backed
+API key through `x.ai/getApiKey` and `x.ai/setApiKey`; updates are stored in the
+`xai::api_key` scope of `auth.json` and apply to newly created sessions. Clients can
+also fetch rewind-filtered history through
 `x.ai/session/updates`, with positive or tail offsets, limits, last-N-turn
 selection, prompt boundaries, event cursors, and conversation/tool/lifecycle
 ACP envelopes. Large histories can be delivered through ordered

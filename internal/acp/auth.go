@@ -2,6 +2,7 @@ package acp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"strings"
@@ -38,7 +39,42 @@ type authInfoResponse struct {
 }
 
 func (s *Server) handleAuth(ctx context.Context, incoming message) {
-	if incoming.Method == "x.ai/auth/getBearerToken" {
+	switch incoming.Method {
+	case "x.ai/getApiKey":
+		key, ok := auth.ReadAPIKeyEnvironment()
+		if !ok {
+			s.respond(incoming.ID, map[string]any{"key": nil})
+		} else {
+			s.respond(incoming.ID, map[string]any{"key": key})
+		}
+		return
+	case "x.ai/setApiKey":
+		var params any = map[string]any{}
+		if len(incoming.Params) > 0 && json.Unmarshal(incoming.Params, &params) != nil {
+			s.respondError(incoming.ID, -32602, "invalid params")
+			return
+		}
+		key := ""
+		if fields, ok := params.(map[string]any); ok {
+			key, _ = fields["key"].(string)
+		}
+		if err := auth.StoreAPIKey(s.Auth.Path, key); err != nil {
+			s.respondError(incoming.ID, -32000, err.Error())
+			return
+		}
+		var err error
+		if key == "" {
+			err = os.Unsetenv("XAI_API_KEY")
+		} else {
+			err = os.Setenv("XAI_API_KEY", key)
+		}
+		if err != nil {
+			s.respondError(incoming.ID, -32000, err.Error())
+			return
+		}
+		s.respond(incoming.ID, map[string]any{"ok": true})
+		return
+	case "x.ai/auth/getBearerToken":
 		token := s.Auth.Token
 		if s.Auth.TokenProvider != nil {
 			if refreshed, err := s.Auth.TokenProvider(ctx, ""); err == nil && refreshed != "" {

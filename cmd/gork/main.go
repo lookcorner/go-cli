@@ -1762,6 +1762,9 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		statusOutput io.Writer,
 	) (*agent.Runner, func(), error) {
 		cfg := cfg
+		if key, ok := auth.ReadAPIKeyEnvironment(); ok && !cfg.DisableAPIKeyAuth && !cfg.ForceLoginTeamConfigured && cfg.PreferredAuthMethod != "oidc" {
+			cfg.APIKey = key
+		}
 		if tokenProvider != nil {
 			token := cfg.APIKey
 			if refreshed, err := tokenProvider(sessionCtx, ""); err == nil && refreshed != "" {
