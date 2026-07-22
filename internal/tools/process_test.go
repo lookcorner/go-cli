@@ -410,11 +410,11 @@ func TestRegistryBackgroundTaskSnapshotsAndKillOutcomes(t *testing.T) {
 		t.Fatal(err)
 	}
 	finished := <-observer.completed
-	if finished.TaskID != completedID || !finished.Completed || finished.Output != "hello" {
+	if finished.TaskID != completedID || !finished.Completed || finished.Output != "hello" || finished.Description != "print greeting" {
 		t.Fatalf("completed=%#v", finished)
 	}
 	snapshots := registry.BackgroundTasks()
-	if len(snapshots) != 1 || snapshots[0].TaskID != completedID || snapshots[0].Command != "printf hello" || snapshots[0].Output != "hello" || !snapshots[0].Completed || snapshots[0].ExitCode == nil || *snapshots[0].ExitCode != 0 || snapshots[0].EndTime == nil {
+	if len(snapshots) != 1 || snapshots[0].TaskID != completedID || snapshots[0].Command != "printf hello" || snapshots[0].Description != "print greeting" || snapshots[0].Output != "hello" || !snapshots[0].Completed || snapshots[0].ExitCode == nil || *snapshots[0].ExitCode != 0 || snapshots[0].EndTime == nil {
 		t.Fatalf("snapshots=%#v", snapshots)
 	}
 	if outcome, err := registry.KillBackgroundTask(context.Background(), completedID); err != nil || outcome != "already_exited" {

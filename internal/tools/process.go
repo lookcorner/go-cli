@@ -80,6 +80,7 @@ type ProcessBackgrounded struct {
 type backgroundProcess struct {
 	id          string
 	command     string
+	description string
 	cmd         *exec.Cmd
 	output      *tailBuffer
 	started     time.Time
@@ -135,6 +136,7 @@ type ProcessTime struct {
 type ProcessSnapshot struct {
 	TaskID           string       `json:"task_id"`
 	Command          string       `json:"command"`
+	Description      string       `json:"description,omitempty"`
 	CWD              string       `json:"cwd"`
 	StartTime        ProcessTime  `json:"start_time"`
 	EndTime          *ProcessTime `json:"end_time"`
@@ -190,7 +192,7 @@ func (m *ProcessManager) start(ctx context.Context, command, description string,
 	id := fmt.Sprintf("task_%d", m.nextID.Add(1))
 	process := &backgroundProcess{
 		id: id, command: command, cmd: cmd, output: buffer, started: time.Now(), done: make(chan struct{}),
-		kind: kind,
+		description: description, kind: kind,
 	}
 	var monitorReady chan struct{}
 	if kind == "monitor" {
@@ -735,7 +737,7 @@ func snapshotProcess(process *backgroundProcess, completed bool) ProcessSnapshot
 	process.mu.Unlock()
 	output, truncated := process.output.Snapshot()
 	item := ProcessSnapshot{
-		TaskID: process.id, Command: process.command, CWD: process.cmd.Dir,
+		TaskID: process.id, Command: process.command, Description: process.description, CWD: process.cmd.Dir,
 		StartTime: processTime(process.started), Output: output, Truncated: truncated,
 		Completed: completed, Kind: process.kind, BlockWaited: blockWaited, ExplicitlyKilled: killed,
 	}

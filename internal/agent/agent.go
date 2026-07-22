@@ -142,6 +142,12 @@ type Result struct {
 	ErrorCount    int
 }
 
+type TaskSnapshot struct {
+	Subagents []tools.SubagentResult
+	Processes []tools.ProcessSnapshot
+	Scheduled []tools.ScheduledTaskCreated
+}
+
 type Progress struct {
 	Turns       int
 	ToolCalls   int
@@ -714,6 +720,23 @@ func (r *Runner) RewindHistory(messages []session.Message) {
 	if rewinder, ok := r.Client.(HistoryRewinder); ok {
 		rewinder.RewindHistory(messages)
 	}
+}
+
+func (r *Runner) TaskSnapshot() TaskSnapshot {
+	if r == nil {
+		return TaskSnapshot{}
+	}
+	var snapshot TaskSnapshot
+	if r.ListSubagents != nil {
+		snapshot.Subagents = r.ListSubagents()
+	}
+	if r.ListTasks != nil {
+		snapshot.Processes = r.ListTasks()
+	}
+	if r.Tools != nil {
+		snapshot.Scheduled = r.Tools.ScheduledTasks()
+	}
+	return snapshot
 }
 
 func (r *Runner) log(kind string, data any) {

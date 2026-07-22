@@ -293,6 +293,20 @@ func TestRunnerExportSessionRequiresCompletedConversation(t *testing.T) {
 	}
 }
 
+func TestRunnerTaskSnapshotAggregatesAvailableSources(t *testing.T) {
+	runner := &Runner{
+		ListSubagents: func() []tools.SubagentResult { return []tools.SubagentResult{{ID: "sub-1"}} },
+		ListTasks:     func() []tools.ProcessSnapshot { return []tools.ProcessSnapshot{{TaskID: "task-1"}} },
+	}
+	snapshot := runner.TaskSnapshot()
+	if len(snapshot.Subagents) != 1 || snapshot.Subagents[0].ID != "sub-1" || len(snapshot.Processes) != 1 || snapshot.Processes[0].TaskID != "task-1" || snapshot.Scheduled != nil {
+		t.Fatalf("snapshot=%#v", snapshot)
+	}
+	if snapshot := (*Runner)(nil).TaskSnapshot(); len(snapshot.Subagents)+len(snapshot.Processes)+len(snapshot.Scheduled) != 0 {
+		t.Fatalf("nil snapshot=%#v", snapshot)
+	}
+}
+
 func TestRunnerReportsFailureAndCompactionHookLifecycle(t *testing.T) {
 	ws, err := workspace.Open(t.TempDir())
 	if err != nil {

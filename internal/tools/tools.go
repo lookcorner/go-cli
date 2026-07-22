@@ -606,6 +606,18 @@ func (r *Registry) SetSchedulerObserver(observer SchedulerObserver) {
 	}
 }
 
+func (r *Registry) ScheduledTasks() []ScheduledTaskCreated {
+	if r == nil || r.scheduler == nil {
+		return nil
+	}
+	tasks := r.scheduler.List()
+	result := make([]ScheduledTaskCreated, len(tasks))
+	for index, task := range tasks {
+		result[index] = scheduledPayload(task)
+	}
+	return result
+}
+
 func (r *Registry) ConfigurePlanMode(artifactDir string) error {
 	if r == nil || r.plan == nil {
 		return errors.New("plan mode unavailable")

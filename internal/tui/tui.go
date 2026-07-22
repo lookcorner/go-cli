@@ -1019,12 +1019,15 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "/quit", "/exit":
 			return m, tea.Quit
 		case "/help":
-			m.appendSystem("# Commands\n\n`! <command>` `/always-approve` `/compact` `/context` `/copy [N]` `/dream` `/exit` `/export [filename]` `/find` `/flush` `/help` `/history` `/loop` `/memory` `/multiline` `/plan [description]` `/queue` `/remember` `/rename <title>` `/session-info` `/transcript` `/view-plan`")
+			m.appendSystem("# Commands\n\n`! <command>` `/always-approve` `/compact` `/context` `/copy [N]` `/dream` `/exit` `/export [filename]` `/find` `/flush` `/help` `/history` `/loop` `/memory` `/multiline` `/plan [description]` `/queue` `/remember` `/rename <title>` `/session-info` `/tasks` `/transcript` `/view-plan`")
 			m.status = "commands"
 			return m, nil
 		case "/queue":
 			m.appendSystem(formatPromptQueue(m.pendingPrompts))
 			m.status = "queue"
+			return m, nil
+		case "/tasks":
+			m.showTasks()
 			return m, nil
 		case "/export":
 			filename := strings.TrimSpace(strings.TrimPrefix(prompt, "/export"))
@@ -1226,10 +1229,15 @@ func (m *model) handleRunningKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		fields := strings.Fields(prompt)
-		if fields[0] == "/queue" {
+		switch fields[0] {
+		case "/queue":
 			m.clearInput()
 			m.appendSystem(formatPromptQueue(m.pendingPrompts))
 			m.status = "queue"
+			return m, nil
+		case "/tasks":
+			m.clearInput()
+			m.showTasks()
 			return m, nil
 		}
 		if strings.HasPrefix(prompt, "/") || strings.HasPrefix(prompt, "!") {
@@ -1244,6 +1252,15 @@ func (m *model) handleRunningKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	m.editInput(msg)
 	return m, nil
+}
+
+func (m *model) showTasks() {
+	if m.runner == nil || strings.TrimSpace(m.runner.SessionID) == "" {
+		m.status = "no active session"
+		return
+	}
+	m.appendSystem(formatTaskSnapshot(m.runner.TaskSnapshot(), time.Now()))
+	m.status = "tasks"
 }
 
 func (m *model) insertNewlineForEnter(key tea.Key) bool {
@@ -1285,6 +1302,110 @@ func formatPromptQueue(prompts []string) string {
 		}
 	}
 	return result.String()
+}
+
+func formatTaskSnapshot(snapshot agent.TaskSnapshot, now time.Time) string {
+	subagents := slices.Clone(snapshot.Subagents)
+	sort.Slice(subagents, func(i, j int) bool {
+		iRunning, jRunning := subagents[i].Status == "running", subagents[j].Status == "running"
+		if iRunning != jRunning {
+			return iRunning
+		}
+		if subagents[i].StartedAtMS != subagents[j].StartedAtMS {
+			return subagents[i].StartedAtMS > subagents[j].StartedAtMS
+		}
+		return subagents[i].ID < subagents[j].ID
+	})
+	processes := slices.Clone(snapshot.Processes)
+	sort.Slice(processes, func(i, j int) bool {
+		if processes[i].Completed != processes[j].Completed {
+			return !processes[i].Completed
+		}
+		if processes[i].StartTime.SecsSinceEpoch != processes[j].StartTime.SecsSinceEpoch {
+			return processes[i].StartTime.SecsSinceEpoch > processes[j].StartTime.SecsSinceEpoch
+		}
+		if processes[i].StartTime.NanosSinceEpoch != processes[j].StartTime.NanosSinceEpoch {
+			return processes[i].StartTime.NanosSinceEpoch > processes[j].StartTime.NanosSinceEpoch
+		}
+		return processes[i].TaskID < processes[j].TaskID
+	})
+	scheduled := slices.Clone(snapshot.Scheduled)
+	sort.Slice(scheduled, func(i, j int) bool {
+		if scheduled[i].HumanSchedule != scheduled[j].HumanSchedule {
+			return scheduled[i].HumanSchedule < scheduled[j].HumanSchedule
+		}
+		return scheduled[i].TaskID < scheduled[j].TaskID
+	})
+
+	rows := make([]string, 0, len(subagents)+len(processes)+len(scheduled))
+	for _, task := range subagents {
+		status := task.Status
+		if status == "" {
+			status = "done"
+		}
+		label := strings.TrimSpace(task.Type + " · " + task.Description)
+		label = strings.Trim(label, " ·")
+		rows = append(rows, fmt.Sprintf("  %-10s%s  (%s)", status, label, formatTaskDuration(time.Duration(task.DurationMS)*time.Millisecond)))
+	}
+	for _, task := range processes {
+		status := "running"
+		if task.Completed {
+			status = "done"
+			if task.ExplicitlyKilled {
+				status = "killed"
+			} else if task.Signal != nil || task.ExitCode != nil && *task.ExitCode != 0 {
+				status = "failed"
+			}
+		}
+		kind := "Task"
+		if task.Kind == "monitor" {
+			kind = "Monitor"
+		}
+		description := firstNonemptyLine(task.Description)
+		if description == "" {
+			description = firstNonemptyLine(task.Command)
+		}
+		rows = append(rows, fmt.Sprintf("  %-10s%s · %s  (%s)", status, kind, description, formatTaskDuration(processDuration(task, now))))
+	}
+	for _, task := range scheduled {
+		rows = append(rows, fmt.Sprintf("  %-10s%s · %s", "scheduled", task.HumanSchedule, firstNonemptyLine(task.Prompt)))
+	}
+	if len(rows) == 0 {
+		return "No background tasks or subagents."
+	}
+	label := "Task"
+	if len(rows) != 1 {
+		label = "Tasks"
+	}
+	return fmt.Sprintf("%s (%d):\n%s", label, len(rows), strings.Join(rows, "\n"))
+}
+
+func processDuration(task tools.ProcessSnapshot, now time.Time) time.Duration {
+	start := time.Unix(task.StartTime.SecsSinceEpoch, int64(task.StartTime.NanosSinceEpoch))
+	end := now
+	if task.EndTime != nil {
+		end = time.Unix(task.EndTime.SecsSinceEpoch, int64(task.EndTime.NanosSinceEpoch))
+	}
+	return max(0, end.Sub(start))
+}
+
+func formatTaskDuration(duration time.Duration) string {
+	if duration < time.Second {
+		return "<1s"
+	}
+	if duration < time.Minute {
+		return fmt.Sprintf("%.1fs", duration.Seconds())
+	}
+	return duration.Round(time.Second).String()
+}
+
+func firstNonemptyLine(text string) string {
+	for line := range strings.Lines(text) {
+		if line = strings.TrimSpace(line); line != "" {
+			return line
+		}
+	}
+	return ""
 }
 
 func copyMessageNumber(args string) (int, error) {

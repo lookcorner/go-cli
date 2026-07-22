@@ -165,6 +165,23 @@ func TestSchedulerEnforcesTaskLimit(t *testing.T) {
 	}
 }
 
+func TestRegistryScheduledTasksReturnsDisplaySnapshot(t *testing.T) {
+	scheduler := NewScheduler()
+	defer scheduler.Close()
+	task, err := scheduler.Create(5*time.Minute, "check deployment", true, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := &Registry{scheduler: scheduler}
+	listed := registry.ScheduledTasks()
+	if len(listed) != 1 || listed[0].TaskID != task.ID || listed[0].Prompt != "check deployment" || listed[0].HumanSchedule != "every 5 minutes" || listed[0].NextFireAt == nil {
+		t.Fatalf("tasks=%#v", listed)
+	}
+	if got := (*Registry)(nil).ScheduledTasks(); got != nil {
+		t.Fatalf("nil registry tasks=%#v", got)
+	}
+}
+
 func TestSchedulerRestoresMissedOneShotWithoutGhostCreatedEvent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "scheduler.json")
 	created := time.Now().UTC().Add(-2 * time.Minute)

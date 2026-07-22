@@ -574,6 +574,60 @@ func TestFormatPromptQueueEmpty(t *testing.T) {
 	}
 }
 
+func TestTasksCommandShowsAllTaskSourcesWithoutModelTurn(t *testing.T) {
+	exitCode := 1
+	end := tools.ProcessTime{SecsSinceEpoch: 13}
+	runner := &agent.Runner{
+		SessionID: "session-1",
+		ListSubagents: func() []tools.SubagentResult {
+			return []tools.SubagentResult{
+				{ID: "done-sub", Type: "explore", Status: "completed", Description: "old", StartedAtMS: 1, DurationMS: 2100},
+				{ID: "run-sub", Type: "worker", Status: "running", Description: "build feature", StartedAtMS: 2, DurationMS: 1500},
+			}
+		},
+		ListTasks: func() []tools.ProcessSnapshot {
+			return []tools.ProcessSnapshot{{
+				TaskID: "task-1", Command: "go test ./...", Description: "\n run full tests\n", StartTime: tools.ProcessTime{SecsSinceEpoch: 10}, EndTime: &end,
+				Completed: true, ExitCode: &exitCode,
+			}}
+		},
+	}
+	snapshot := runner.TaskSnapshot()
+	snapshot.Scheduled = []tools.ScheduledTaskCreated{{TaskID: "loop-1", Prompt: "check deploy", HumanSchedule: "every 5 minutes"}}
+	text := formatTaskSnapshot(snapshot, time.Unix(20, 0))
+	if !strings.Contains(text, "Tasks (4):") || !strings.Contains(text, "running   worker · build feature") || !strings.Contains(text, "completed explore · old") || !strings.Contains(text, "failed    Task · run full tests") || !strings.Contains(text, "scheduled every 5 minutes · check deploy") {
+		t.Fatalf("tasks=%q", text)
+	}
+
+	m := &model{runner: runner}
+	m.setInput("/tasks ignored")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.running || m.status != "tasks" || !strings.Contains(m.transcript.String(), "Tasks (3):") {
+		t.Fatalf("command=%v running=%v status=%q transcript=%q", command != nil, m.running, m.status, m.transcript.String())
+	}
+	m.running = true
+	m.setInput("/tasks")
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || !m.running || m.status != "tasks" || len(m.pendingPrompts) != 0 || string(m.input) != "" {
+		t.Fatalf("busy command=%v running=%v status=%q queue=%#v input=%q", command != nil, m.running, m.status, m.pendingPrompts, m.input)
+	}
+}
+
+func TestTasksCommandRequiresSessionAndFormatsEmptyState(t *testing.T) {
+	m := &model{runner: &agent.Runner{}}
+	m.setInput("/tasks")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.status != "no active session" || m.transcript.Len() != 0 {
+		t.Fatalf("command=%v status=%q transcript=%q", command != nil, m.status, m.transcript.String())
+	}
+	if got := formatTaskSnapshot(agent.TaskSnapshot{}, time.Now()); got != "No background tasks or subagents." {
+		t.Fatalf("empty tasks=%q", got)
+	}
+}
+
 func TestModelShellCommandDoesNotStartModelTurn(t *testing.T) {
 	ws, err := workspace.Open(t.TempDir())
 	if err != nil {

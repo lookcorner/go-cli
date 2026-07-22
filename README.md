@@ -311,6 +311,8 @@ active session without creating a model turn.
 writes it to disk with `~`, spaces, relative paths, and parent creation supported.
 While a turn is running, additional prompts are queued FIFO; `/queue` prints a
 read-only snapshot and queued prompts run before scheduled wake-ups.
+`/tasks` instantly lists background commands, subagents, and scheduled tasks
+without creating a model turn.
 Left/Right, Home/End, Delete, Backspace, Ctrl-A,
 Ctrl-E, Ctrl-U, and Ctrl/Cmd-Z edit or undo the active prompt and structured
 response input. Shift/Alt-Enter inserts a newline; Ctrl-M, `/multiline`, or `/ml`
