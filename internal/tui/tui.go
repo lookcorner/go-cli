@@ -138,14 +138,22 @@ type Bridge struct {
 	cancel        context.CancelFunc
 	modeMu        sync.RWMutex
 	mode          tools.PermissionMode
+	autoLocked    bool
 	events        chan tea.Msg
 	once          sync.Once
 	interactionMu sync.Mutex
 }
 
 func NewBridge(parent context.Context, mode tools.PermissionMode) *Bridge {
+	return NewBridgeWithAutoLock(parent, mode, false)
+}
+
+func NewBridgeWithAutoLock(parent context.Context, mode tools.PermissionMode, autoLocked bool) *Bridge {
+	if autoLocked && mode == tools.PermissionAuto {
+		mode = tools.PermissionPrompt
+	}
 	ctx, cancel := context.WithCancel(parent)
-	return &Bridge{ctx: ctx, cancel: cancel, mode: mode, events: make(chan tea.Msg, 1024)}
+	return &Bridge{ctx: ctx, cancel: cancel, mode: mode, autoLocked: autoLocked, events: make(chan tea.Msg, 1024)}
 }
 
 func (b *Bridge) Close() { b.once.Do(b.cancel) }
@@ -231,6 +239,9 @@ func (b *Bridge) SetAlwaysApprove(enabled bool) error {
 	defer b.modeMu.Unlock()
 	if enabled && b.mode == tools.PermissionDeny {
 		return errors.New("always-approve is disabled by deny mode")
+	}
+	if enabled && b.autoLocked {
+		return errors.New("always-approve is disabled by managed policy")
 	}
 	if enabled {
 		b.mode = tools.PermissionAuto

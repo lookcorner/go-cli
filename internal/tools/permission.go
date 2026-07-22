@@ -15,6 +15,7 @@ type ModeApprover struct {
 	mode       PermissionMode
 	prompt     Approver
 	lockedDeny bool
+	autoLocked bool
 }
 
 type permissionModeController interface {
@@ -34,13 +35,20 @@ func permissionBypassed(ctx context.Context) bool {
 }
 
 func NewModeApprover(mode PermissionMode, prompt Approver) (*ModeApprover, error) {
+	return NewModeApproverWithAutoLock(mode, prompt, false)
+}
+
+func NewModeApproverWithAutoLock(mode PermissionMode, prompt Approver, autoLocked bool) (*ModeApprover, error) {
 	if mode != PermissionPrompt && mode != PermissionAuto && mode != PermissionDeny {
 		return nil, fmt.Errorf("unknown permission mode %q", mode)
+	}
+	if autoLocked && mode == PermissionAuto {
+		mode = PermissionPrompt
 	}
 	if mode == PermissionPrompt && prompt == nil {
 		return nil, errors.New("prompt approver is required")
 	}
-	return &ModeApprover{mode: mode, prompt: prompt, lockedDeny: mode == PermissionDeny}, nil
+	return &ModeApprover{mode: mode, prompt: prompt, lockedDeny: mode == PermissionDeny, autoLocked: autoLocked}, nil
 }
 
 func (a *ModeApprover) Approve(ctx context.Context, action, detail string) error {
@@ -70,6 +78,9 @@ func (a *ModeApprover) SetPermissionMode(mode PermissionMode) error {
 	defer a.mu.Unlock()
 	if a.lockedDeny && mode != PermissionDeny {
 		return errors.New("permission mode is locked to deny")
+	}
+	if a.autoLocked && mode == PermissionAuto {
+		return errors.New("always-approve is disabled by managed policy")
 	}
 	if mode == PermissionPrompt && a.prompt == nil {
 		return errors.New("prompt approver is required")

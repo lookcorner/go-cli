@@ -8,6 +8,9 @@ disable_api_key_auth = true
 [auth]
 preferred_method = "oidc"
 
+[ui]
+disable_bypass_permissions_mode = true
+
 [toolset.ask_user_question]
 timeout_enabled = true
 timeout_secs = 1800

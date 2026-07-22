@@ -13,12 +13,16 @@ import (
 )
 
 func permissionRegistry(t *testing.T, mode tools.PermissionMode) *tools.Registry {
+	return permissionRegistryWithAutoLock(t, mode, false)
+}
+
+func permissionRegistryWithAutoLock(t *testing.T, mode tools.PermissionMode, autoLocked bool) *tools.Registry {
 	t.Helper()
 	ws, err := workspace.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	controller, err := tools.NewModeApprover(mode, tools.PromptApprover{Mode: tools.PermissionAuto})
+	controller, err := tools.NewModeApproverWithAutoLock(mode, tools.PromptApprover{Mode: tools.PermissionAuto}, autoLocked)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,13 +37,16 @@ func TestYoloModeChangedUpdatesAllMutableSessions(t *testing.T) {
 	first := permissionRegistry(t, tools.PermissionPrompt)
 	second := permissionRegistry(t, tools.PermissionPrompt)
 	locked := permissionRegistry(t, tools.PermissionDeny)
+	managed := permissionRegistryWithAutoLock(t, tools.PermissionPrompt, true)
 	defer first.Close()
 	defer second.Close()
 	defer locked.Close()
+	defer managed.Close()
 	server := &Server{sessions: map[string]*session{
-		"first":  {runner: &agent.Runner{Tools: first}},
-		"second": {runner: &agent.Runner{Tools: second}},
-		"locked": {runner: &agent.Runner{Tools: locked}},
+		"first":   {runner: &agent.Runner{Tools: first}},
+		"second":  {runner: &agent.Runner{Tools: second}},
+		"locked":  {runner: &agent.Runner{Tools: locked}},
+		"managed": {runner: &agent.Runner{Tools: managed}},
 	}}
 	server.handleYoloModeChanged([]byte(`{"yolo_mode":true,"permission_mode":"always-approve"}`))
 	for name, registry := range map[string]*tools.Registry{"first": first, "second": second} {
@@ -49,6 +56,9 @@ func TestYoloModeChangedUpdatesAllMutableSessions(t *testing.T) {
 	}
 	if mode, _ := locked.PermissionMode(); mode != tools.PermissionDeny {
 		t.Fatalf("explicit deny changed to %q", mode)
+	}
+	if mode, _ := managed.PermissionMode(); mode != tools.PermissionPrompt {
+		t.Fatalf("managed lock changed to %q", mode)
 	}
 	server.handleYoloModeChanged([]byte(`{"yolo_mode":false,"permission_mode":"ask"}`))
 	for name, registry := range map[string]*tools.Registry{"first": first, "second": second} {

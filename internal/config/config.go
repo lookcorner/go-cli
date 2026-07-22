@@ -58,6 +58,7 @@ type Config struct {
 	ForceLoginTeams                 []string                   `json:"force_login_team_uuid,omitempty"`
 	ForceLoginTeamConfigured        bool                       `json:"-"`
 	DisableAPIKeyAuth               bool                       `json:"disable_api_key_auth,omitempty"`
+	DisableBypassPermissionsMode    bool                       `json:"-"`
 	PreferredAuthMethod             string                     `json:"preferred_auth_method,omitempty"`
 	ProxyBaseURL                    string                     `json:"proxy_base_url,omitempty"`
 	ManagedConfigURL                string                     `json:"managed_config_url,omitempty"`
@@ -346,6 +347,10 @@ type requirementsFile struct {
 	Toolset       struct {
 		AskUserQuestion *fileAskUserQuestionConfig `toml:"ask_user_question"`
 	} `toml:"toolset"`
+	UI struct {
+		DisableBypassPermissionsMode any `toml:"disable_bypass_permissions_mode"`
+		Yolo                         any `toml:"yolo"`
+	} `toml:"ui"`
 }
 
 type requirementsAuthConfig struct {
@@ -1431,6 +1436,12 @@ func applyRequirementsData(cfg *Config, data []byte, source string, envFailClose
 	}
 	if requirement.Toolset.AskUserQuestion != nil {
 		applyAskUserQuestionConfig(&cfg.AskUserQuestion, *requirement.Toolset.AskUserQuestion)
+	}
+	if disabled, ok := requirement.UI.DisableBypassPermissionsMode.(bool); ok && disabled {
+		cfg.DisableBypassPermissionsMode = true
+	}
+	if yolo, ok := requirement.UI.Yolo.(bool); ok && !yolo {
+		cfg.DisableBypassPermissionsMode = true
 	}
 	if requirement.GrokComConfig == nil {
 		return nil

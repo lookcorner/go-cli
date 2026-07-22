@@ -36,7 +36,8 @@ hint; otherwise the dedicated `grok-build-0.1` suggestion model is used.
 The fire-and-forget `x.ai/yolo_mode_changed` notification switches every live
 session on the ACP connection between ask and always-approve behavior. Explicit
 deny mode and deny/ask/allow permission rules remain authoritative; the distinct
-reference `auto_mode` policy is not treated as always-approve.
+reference `auto_mode` policy is not treated as always-approve. A managed
+always-approve lock prevents the notification from enabling automatic approval.
 
 Completed ACP prompts publish `x.ai/session/prompt_complete` before their RPC
 response. Prompt responses include `_meta` correlation for the session,
@@ -185,6 +186,13 @@ win over CLI `--allow`. Invalid requirements soft-fail by default. Set
 `fail_closed = true` in a valid layer, or
 `GROK_MANAGED_CONFIG_FAIL_CLOSED=true`, to make policy loading errors stop
 startup. See `requirements.example.toml`.
+
+Administrators may set `[ui] disable_bypass_permissions_mode = true` in any
+`requirements.toml` layer to disable always-approve for CLI, TUI, ACP, and
+subagents. The legacy `[ui] yolo = false` form has the same effect. Once enabled
+by a requirements layer, a later layer cannot remove the lock; non-boolean
+values are ignored. These keys in ordinary `config.toml` files are not managed
+policy. Explicit deny modes and deny rules remain authoritative.
 
 On macOS, an administrator-forced `requirements_toml_base64` value in the
 `ai.x.grok` managed-preferences domain is applied after the system requirements
@@ -1034,7 +1042,8 @@ definitions may attach named or inline `mcpServers`; owned servers override an
 inherited server with the same name and remain private to that subagent.
 Non-plugin agents may set `permissionMode: bypassPermissions` to skip interactive
 approval, including after resume. Explicit deny mode and deny rules remain
-authoritative, and plugin agents cannot enable the bypass.
+authoritative, plugin agents cannot enable the bypass, and the managed
+requirements lock described above downgrades the setting to normal prompting.
 
 The same direct-install lifecycle is available outside ACP:
 

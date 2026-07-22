@@ -109,6 +109,20 @@ func TestAlwaysApproveCommandTogglesBridgeMode(t *testing.T) {
 	}
 }
 
+func TestBridgeManagedAutoLock(t *testing.T) {
+	bridge := NewBridgeWithAutoLock(context.Background(), tools.PermissionAuto, true)
+	defer bridge.Close()
+	if bridge.PermissionMode() != tools.PermissionPrompt {
+		t.Fatalf("initial mode=%q", bridge.PermissionMode())
+	}
+	if err := bridge.SetAlwaysApprove(true); err == nil || bridge.PermissionMode() != tools.PermissionPrompt {
+		t.Fatalf("enable err=%v mode=%q", err, bridge.PermissionMode())
+	}
+	if err := bridge.SetAlwaysApprove(false); err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+}
+
 func TestBridgeQuestionSelectionAndPlanClarification(t *testing.T) {
 	bridge := NewBridge(context.Background(), tools.PermissionAuto)
 	defer bridge.Close()

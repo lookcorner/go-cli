@@ -285,6 +285,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if mode != tools.PermissionPrompt && mode != tools.PermissionAuto && mode != tools.PermissionDeny {
 		return fmt.Errorf("invalid --approval %q", opts.approval)
 	}
+	if cfg.DisableBypassPermissionsMode && mode == tools.PermissionAuto {
+		mode = tools.PermissionPrompt
+	}
 	if opts.resume != "" && opts.previousID != "" {
 		return errors.New("--resume and --previous-response-id cannot be used together")
 	}
@@ -344,7 +347,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	var terminalPrompts *terminalPrompter
 	statusOutput := stderr
 	if opts.tui {
-		tuiBridge = tui.NewBridge(ctx, mode)
+		tuiBridge = tui.NewBridgeWithAutoLock(ctx, mode, cfg.DisableBypassPermissionsMode)
 		defer tuiBridge.Close()
 		approver = tuiBridge
 		askApprover = tui.PromptApprover(tuiBridge)
@@ -503,7 +506,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 				wakeSink.CancelWake(id)
 			}
 		},
-		ParentMCPServers: mcpRuntime.Configs(),
+		DisablePermissionBypass: cfg.DisableBypassPermissionsMode,
+		ParentMCPServers:        mcpRuntime.Configs(),
 		StartMCPServers: func(childCtx context.Context, root string, childTools *tools.Registry, servers []mcp.ServerConfig) (func(), error) {
 			return startSubagentMCPServers(childCtx, cfg, root, childTools, approver, tokenProvider, statusOutput, servers)
 		},
@@ -1535,6 +1539,9 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 	if mode != tools.PermissionPrompt && mode != tools.PermissionAuto && mode != tools.PermissionDeny {
 		return fmt.Errorf("invalid --approval %q", opts.approval)
 	}
+	if cfg.DisableBypassPermissionsMode && mode == tools.PermissionAuto {
+		mode = tools.PermissionPrompt
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	var extensionsMu sync.Mutex
@@ -1582,7 +1589,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		}
 		instructions := joinInstructions(cfg.SystemPrompt, workspace.FormatInstructions(instructionFiles), catalog.Summary())
 		permissionPrompts := &permissionPromptApprover{base: protocolApprover}
-		modeApprover, err := tools.NewModeApprover(mode, permissionPrompts)
+		modeApprover, err := tools.NewModeApproverWithAutoLock(mode, permissionPrompts, sessionCfg.DisableBypassPermissionsMode)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1767,8 +1774,9 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			AutoWake: func(result tools.SubagentResult) bool {
 				return sessionCfg.AutoWakeEnabled && server.QueueSubagentWake(logger.ID(), result)
 			},
-			CancelWake:       func(id string) { server.CancelSubagentWake(logger.ID(), id) },
-			ParentMCPServers: mcpRuntime.Configs(),
+			CancelWake:              func(id string) { server.CancelSubagentWake(logger.ID(), id) },
+			DisablePermissionBypass: sessionCfg.DisableBypassPermissionsMode,
+			ParentMCPServers:        mcpRuntime.Configs(),
 			StartMCPServers: func(childCtx context.Context, root string, childTools *tools.Registry, servers []mcp.ServerConfig) (func(), error) {
 				return startSubagentMCPServers(childCtx, sessionCfg, root, childTools, approver, tokenProvider, statusOutput, servers)
 			},

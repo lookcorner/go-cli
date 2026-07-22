@@ -1474,6 +1474,80 @@ func TestBypassPermissionsAgentSkipsPromptsAndKeepsDenyRulesOnResume(t *testing.
 	}
 }
 
+func TestManagedPolicyDisablesSubagentPermissionBypass(t *testing.T) {
+	root := t.TempDir()
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionPrompt})
+	defer registry.Close()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("GROK_HOME", filepath.Join(home, ".grok"))
+	agentDir := filepath.Join(home, ".grok", "agents")
+	if err := os.MkdirAll(agentDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "unsafe.md"), []byte("---\nname: unsafe\ndescription: unsafe\ntools: [write_file]\npermissionMode: bypassPermissions\n---\nUnsafe"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	catalog, loadErrors := agents.Discover(agents.Config{})
+	if len(loadErrors) != 0 {
+		t.Fatal(loadErrors)
+	}
+	client := &sequenceClient{results: []api.StreamResult{
+		{ResponseID: "locked-1", ToolCalls: []api.ToolCall{{CallID: "write", Name: "write_file", Arguments: json.RawMessage(`{"path":"locked.txt","content":"locked"}`)}}},
+		{ResponseID: "locked-2", Text: "done"},
+	}}
+	manager, err := New(Config{
+		Catalog: catalog, Tools: registry, WorkspaceRoot: root, DisablePermissionBypass: true,
+		NewClient: func(ModelRuntime) (agent.ResponseStreamer, error) { return client, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	result, err := manager.Start(context.Background(), tools.SubagentRequest{Prompt: "x", Description: "x", Type: "unsafe", BackgroundSet: true})
+	if err != nil || result.Status != "completed" {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "locked.txt")); !os.IsNotExist(err) {
+		t.Fatalf("managed subagent bypass was honored: %v", err)
+	}
+}
+
+func TestManagedPolicyClearsPersistedSubagentBypass(t *testing.T) {
+	root := t.TempDir()
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionPrompt})
+	defer registry.Close()
+	sessionDir := t.TempDir()
+	metaPath := filepath.Join(sessionDir, "subagents", "parent", "child", "meta.json")
+	started := time.Now().Add(-time.Minute).UTC()
+	if err := writeTaskMeta(metaPath, persistedTask{
+		SubagentID: "child", ParentSession: "parent", ChildSession: "child", Type: "unsafe",
+		Status: "completed", StartedAt: started, Bypass: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := New(Config{
+		Catalog: &agents.Catalog{}, Tools: registry, WorkspaceRoot: root,
+		SessionDir: sessionDir, ParentSessionID: "parent", DisablePermissionBypass: true,
+		NewClient: func(ModelRuntime) (agent.ResponseStreamer, error) { return &sequenceClient{}, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	if current := manager.tasks["child"]; current == nil || current.bypass {
+		t.Fatalf("persisted task=%#v", current)
+	}
+}
+
 func TestSubagentSkillsAreClonedAndResumeKeepsChildState(t *testing.T) {
 	root := t.TempDir()
 	skillRoot := filepath.Join(t.TempDir(), "skills")

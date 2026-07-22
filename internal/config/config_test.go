@@ -869,6 +869,60 @@ func TestSystemRequirementsOverrideUserRequirements(t *testing.T) {
 	}
 }
 
+func TestRequirementsDisablePermissionBypass(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want bool
+	}{
+		{"new key enabled", "[ui]\ndisable_bypass_permissions_mode = true\n", true},
+		{"new key disabled", "[ui]\ndisable_bypass_permissions_mode = false\n", false},
+		{"legacy key disabled", "[ui]\nyolo = false\n", true},
+		{"legacy key enabled", "[ui]\nyolo = true\n", false},
+		{"non boolean", "[ui]\ndisable_bypass_permissions_mode = \"true\"\nyolo = 0\n", false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := Config{}
+			if err := applyRequirementsData(&cfg, []byte(test.data), test.name, true, false); err != nil {
+				t.Fatal(err)
+			}
+			if cfg.DisableBypassPermissionsMode != test.want {
+				t.Fatalf("lock=%v want=%v", cfg.DisableBypassPermissionsMode, test.want)
+			}
+		})
+	}
+
+	cfg := Config{}
+	for _, data := range []string{
+		"[ui]\ndisable_bypass_permissions_mode = true\n",
+		"[ui]\ndisable_bypass_permissions_mode = false\nyolo = true\n",
+	} {
+		if err := applyRequirementsData(&cfg, []byte(data), "layer", false, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !cfg.DisableBypassPermissionsMode {
+		t.Fatal("later requirements layer removed the permission bypass lock")
+	}
+}
+
+func TestRegularConfigCannotDisablePermissionBypass(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	path := filepath.Join(home, "config.toml")
+	if err := os.WriteFile(path, []byte("[ui]\ndisable_bypass_permissions_mode = true\nyolo = false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DisableBypassPermissionsMode {
+		t.Fatal("regular config.toml activated the managed permission lock")
+	}
+}
+
 func TestRequirementsFailClosedParsing(t *testing.T) {
 	t.Setenv("GROK_MANAGED_CONFIG_FAIL_CLOSED", "")
 	path := filepath.Join(t.TempDir(), "requirements.toml")

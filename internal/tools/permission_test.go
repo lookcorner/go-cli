@@ -159,6 +159,29 @@ func TestModeApproverKeepsExplicitDenyLocked(t *testing.T) {
 	}
 }
 
+func TestModeApproverManagedAutoLock(t *testing.T) {
+	prompt := &recordingApprover{}
+	mode, err := NewModeApproverWithAutoLock(PermissionAuto, prompt, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode.PermissionMode() != PermissionPrompt {
+		t.Fatalf("initial mode=%q", mode.PermissionMode())
+	}
+	if err := mode.Approve(context.Background(), "shell", "true"); err != nil || prompt.calls != 1 {
+		t.Fatalf("managed prompt err=%v calls=%d", err, prompt.calls)
+	}
+	if err := mode.SetPermissionMode(PermissionAuto); err == nil || mode.PermissionMode() != PermissionPrompt {
+		t.Fatalf("enable auto err=%v mode=%q", err, mode.PermissionMode())
+	}
+	if err := mode.SetPermissionMode(PermissionDeny); err != nil || mode.PermissionMode() != PermissionDeny {
+		t.Fatalf("set deny err=%v mode=%q", err, mode.PermissionMode())
+	}
+	if _, err := NewModeApproverWithAutoLock(PermissionAuto, nil, true); err == nil {
+		t.Fatal("auto lock accepted fallback to prompt without a prompt approver")
+	}
+}
+
 func TestPermissionBypassSkipsPromptsButNotDenials(t *testing.T) {
 	prompt := &recordingApprover{}
 	mode, err := NewModeApprover(PermissionPrompt, prompt)
