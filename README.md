@@ -299,8 +299,8 @@ cancels the current turn with Ctrl-C, and presents write/Shell/MCP approval
 prompts inside the alternate screen. Shift-Tab toggles persisted Plan mode and
 shows a visible mode badge. Left/Right, Home/End, Delete, Backspace, Ctrl-A,
 Ctrl-E, Ctrl-U, and Ctrl/Cmd-Z edit or undo the active prompt and structured
-response input. Shift/Alt-Enter inserts a newline; Ctrl-M toggles multiline
-mode, where Enter inserts a newline and Shift/Alt-Enter sends. A trailing
+response input. Shift/Alt-Enter inserts a newline; Ctrl-M, `/multiline`, or `/ml`
+toggles multiline mode, where Enter inserts a newline and Shift/Alt-Enter sends. A trailing
 backslash followed by Enter also continues the prompt on the next line. Mouse
 clicks can answer approval prompts, select structured question options, and
 trigger the three plan-review actions. Double-clicking a question option submits it.

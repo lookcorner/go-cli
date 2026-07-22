@@ -540,6 +540,22 @@ func TestMultilineInputEnterModesAndContinuation(t *testing.T) {
 	}
 }
 
+func TestMultilineSlashCommandAndAlias(t *testing.T) {
+	m := &model{ctx: context.Background(), runner: &agent.Runner{}, status: "ready"}
+	m.setInput("/multiline ignored")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || !m.multiline || m.running || m.status != "multiline input" || m.transcript.Len() != 0 {
+		t.Fatalf("enable command=%v multiline=%v running=%v status=%q transcript=%q", command != nil, m.multiline, m.running, m.status, m.transcript.String())
+	}
+	m.setInput("/ml")
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter, Mod: tea.ModShift}))
+	m = updated.(*model)
+	if command != nil || m.multiline || m.running || m.status != "single-line input" || m.transcript.Len() != 0 {
+		t.Fatalf("disable command=%v multiline=%v running=%v status=%q transcript=%q", command != nil, m.multiline, m.running, m.status, m.transcript.String())
+	}
+}
+
 func TestMultilineCursorNavigationAndUndo(t *testing.T) {
 	m := &model{}
 	press := func(key tea.Key) {

@@ -871,12 +871,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.historyIndex = -1
 	}
 	if stroke == "ctrl+m" && !m.rememberInput {
-		m.multiline = !m.multiline
-		if m.multiline {
-			m.status = "multiline input"
-		} else {
-			m.status = "single-line input"
-		}
+		m.toggleMultiline()
 		return m, nil
 	}
 	if stroke == "shift+tab" {
@@ -936,6 +931,11 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.openScrollSearch(strings.TrimSpace(strings.TrimPrefix(prompt, "/find")))
 			return m, nil
 		}
+		fields := strings.Fields(prompt)
+		if fields[0] == "/multiline" || fields[0] == "/ml" {
+			m.toggleMultiline()
+			return m, nil
+		}
 		m.running = true
 		turnCtx, cancel := context.WithCancel(m.ctx)
 		m.turnCancel = cancel
@@ -983,6 +983,15 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	m.editInput(msg)
 	return m, nil
+}
+
+func (m *model) toggleMultiline() {
+	m.multiline = !m.multiline
+	if m.multiline {
+		m.status = "multiline input"
+	} else {
+		m.status = "single-line input"
+	}
 }
 
 func (m *model) handleScrollbackKey(msg tea.KeyPressMsg) bool {

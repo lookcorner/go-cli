@@ -69,6 +69,26 @@ func TestInteractiveMemoryFlushDoesNotRunNormalTurn(t *testing.T) {
 	}
 }
 
+func TestInteractiveShellDoesNotRunNormalTurn(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	runner := &agent.Runner{Tools: registry}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	input := newTerminalInput(ctx, bufio.NewReader(strings.NewReader("! printf interactive-shell\n/exit\n")))
+	var stdout, stderr bytes.Buffer
+	if err := interactiveLoop(ctx, runner, newScheduledWakeQueue(), input, &stdout, &stderr, "", "response-1"); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != "interactive-shell\n" || strings.Contains(stderr.String(), "turn failed") {
+		t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
 func TestMemoryClearCommandScopesConfirmationAndValidation(t *testing.T) {
 	home, cwd := t.TempDir(), t.TempDir()
 	t.Setenv("GROK_HOME", home)
