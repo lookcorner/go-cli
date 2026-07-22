@@ -5,10 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/lookcorner/go-cli/internal/agent"
+	"github.com/lookcorner/go-cli/internal/plugin"
 	sessionlog "github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/tools"
 )
@@ -89,5 +92,69 @@ func TestPluginUpdatesRejectMalformedParameters(t *testing.T) {
 				t.Fatalf("messages=%#v", messages)
 			}
 		})
+	}
+}
+
+func TestPluginsReloadRefreshesLocalInstallAndFansOutOnce(t *testing.T) {
+	t.Setenv("GROK_HOME", filepath.Join(t.TempDir(), ".grok"))
+	source := filepath.Join(t.TempDir(), "source")
+	if err := os.MkdirAll(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	manifest := filepath.Join(source, "plugin.json")
+	if err := os.WriteFile(manifest, []byte(`{"name":"alpha","version":"1.0.0"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := plugin.Install(source, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifest, []byte(`{"name":"alpha","version":"2.0.0"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	calls, version := 0, ""
+	update := func(context.Context, func(*plugin.Settings)) ([]plugin.Plugin, error) {
+		calls++
+		registry, err := plugin.LoadInstallRegistry()
+		if err == nil {
+			version = registry.Repos[installed.RepoKey].Plugins["alpha"].Version
+		}
+		return nil, err
+	}
+	var output bytes.Buffer
+	server := &Server{output: &output, sessions: map[string]*session{
+		"one": {id: "one", running: true, runner: &agent.Runner{UpdatePlugins: update}},
+		"two": {id: "two", running: true, runner: &agent.Runner{UpdatePlugins: update}},
+	}}
+	server.handlePlugins(context.Background(), message{ID: json.RawMessage("1"), Method: "x.ai/plugins/reload"})
+	messages := decodeACPOutput(t, output.Bytes())
+	if len(messages) != 1 || messages[0]["result"].(map[string]any)["ok"] != true || calls != 1 || version != "2.0.0" {
+		t.Fatalf("messages=%#v calls=%d version=%q", messages, calls, version)
+	}
+}
+
+func TestPluginsReloadRouteSucceedsWithoutSessionsOnRefreshFailure(t *testing.T) {
+	grokHome := filepath.Join(t.TempDir(), ".grok")
+	t.Setenv("GROK_HOME", grokHome)
+	registryPath := filepath.Join(grokHome, "installed-plugins", "registry.json")
+	if err := os.MkdirAll(filepath.Dir(registryPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(registryPath, []byte("not-json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	server := &Server{Factory: func(context.Context, SessionConfig, tools.Approver, io.Writer, io.Writer) (*agent.Runner, func(), error) {
+		t.Fatal("plugin reload started a session")
+		return nil, nil, nil
+	}}
+	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"x.ai/plugins/reload","params":{}}` + "\n")
+	if err := server.Serve(context.Background(), input, &output); err != nil {
+		t.Fatal(err)
+	}
+	messages := decodeACPOutput(t, output.Bytes())
+	if len(messages) != 1 || messages[0]["result"].(map[string]any)["ok"] != true {
+		t.Fatalf("messages=%#v", messages)
 	}
 }

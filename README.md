@@ -1087,7 +1087,8 @@ require a session restart. `install`, `update`, and confirmed `uninstall`
 actions manage isolated local/Git snapshots under
 `$GROK_HOME/installed-plugins`, persist an atomic registry, and refresh live
 skill/MCP/LSP/hook components. Multi-plugin repositories require explicit uninstall
-confirmation.
+confirmation. `x.ai/plugins/reload` forces local snapshot refresh and updates
+all live plugin-backed components without requiring a session ID.
 
 Enabled executable plugins may define `hooks/hooks.json`. Command and HTTPS
 handlers receive the compatible camel-case JSON event envelope on stdin or as

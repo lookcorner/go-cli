@@ -16,6 +16,10 @@ import (
 )
 
 func (s *Server) handlePlugins(ctx context.Context, incoming message) {
+	if incoming.Method == "x.ai/plugins/reload" {
+		s.handlePluginReload(ctx, incoming)
+		return
+	}
 	if incoming.Method == "x.ai/plugins/notify-updates" {
 		s.handlePluginUpdates(incoming)
 		return
@@ -72,6 +76,23 @@ func (s *Server) handlePluginUpdates(incoming message) {
 	}
 	if current := s.lookupSession(*req.SessionID); current != nil {
 		s.notifyXAI(current, map[string]any{"sessionUpdate": "plugin_updates_installed", "updates": *req.Updates})
+	}
+	s.respond(incoming.ID, map[string]any{"ok": true})
+}
+
+func (s *Server) handlePluginReload(ctx context.Context, incoming message) {
+	_ = plugin.RefreshLocal()
+	s.mu.Lock()
+	sessions := make([]*session, 0, len(s.sessions))
+	for _, current := range s.sessions {
+		sessions = append(sessions, current)
+	}
+	s.mu.Unlock()
+	for _, current := range sessions {
+		if current != nil && current.runner != nil && current.runner.UpdatePlugins != nil {
+			_, _ = current.runner.UpdatePlugins(ctx, nil)
+			break
+		}
 	}
 	s.respond(incoming.ID, map[string]any{"ok": true})
 }

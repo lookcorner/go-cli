@@ -16,6 +16,8 @@ with persisted completion updates and persisted fire-and-forget
 `x.ai/toggle_plan_mode` are also supported. ACP remains **partial** overall.
 Skill catalogs support all-session `x.ai/skills/refresh-baseline` and
 `x.ai/internal/reload_skills` disk refreshes.
+Plugin extensions also support sessionless forced `x.ai/plugins/reload` with
+live component fan-out.
 
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |
