@@ -141,6 +141,8 @@ type Registry struct {
 	webFetch      *webFetchTool
 	subagents     *subagentHolder
 	goalRoles     GoalRoleConfig
+	fileToolset   string
+	hashline      hashlineConfig
 }
 
 type mutationCheckpoint struct {
@@ -267,7 +269,8 @@ func NewRegistry(ws *workspace.Workspace, approver Approver) *Registry {
 		tools: make(map[string]Tool, len(items)), approver: approver, processes: processes, goal: goal,
 		hunks: NewHunkTracker(ws), rewind: rewind, readFile: readFile, webFetch: webFetch,
 		subagents: subagents, scheduler: scheduler, ownsScheduler: true, plan: plan, questions: questions,
-		todos: todos,
+		todos:       todos,
+		fileToolset: "standard", hashline: defaultHashlineConfig(),
 	}
 	for _, item := range items {
 		registry.tools[item.Definition().Name] = item
@@ -280,7 +283,13 @@ func (r *Registry) ForWorkspace(ws *workspace.Workspace) *Registry {
 	if r == nil {
 		return nil
 	}
+	r.mu.RLock()
+	fileToolset, hashline := r.fileToolset, r.hashline
+	r.mu.RUnlock()
 	child := NewRegistry(ws, r.approver)
+	if fileToolset == "hashline" {
+		_ = child.ConfigureFileToolset(fileToolset, hashline.scheme, hashline.hashLen, hashline.chunkSize)
+	}
 	_ = child.scheduler.Close()
 	child.scheduler, child.ownsScheduler = r.scheduler, false
 	child.plan = r.plan
@@ -873,15 +882,15 @@ func (r *Registry) View(allowed, denied []string, capability string) *Registry {
 		}
 		items[name] = tool
 	}
-	return &Registry{tools: items, approver: r.approver, readPolicy: r.readPolicy, hunks: r.hunks, rewind: r.rewind, readFile: r.readFile, webFetch: r.webFetch, subagents: r.subagents, scheduler: r.scheduler, plan: r.plan, questions: r.questions}
+	return &Registry{tools: items, approver: r.approver, readPolicy: r.readPolicy, hunks: r.hunks, rewind: r.rewind, readFile: r.readFile, webFetch: r.webFetch, subagents: r.subagents, scheduler: r.scheduler, plan: r.plan, questions: r.questions, fileToolset: r.fileToolset, hashline: r.hashline}
 }
 
 func toolNameSet(values []string) map[string]bool {
 	result := make(map[string]bool, len(values))
 	aliases := map[string][]string{
-		"read": {"read_file"}, "write": {"write_file", "edit_file", "search_replace"},
-		"edit": {"write_file", "edit_file", "search_replace"}, "bash": {"shell", "run_terminal_cmd", "monitor"},
-		"grep": {"grep", "search_files"}, "glob": {"list_files", "search_files"},
+		"read": {"read_file", "hashline_read"}, "write": {"write_file", "edit_file", "search_replace", "hashline_edit"},
+		"edit": {"write_file", "edit_file", "search_replace", "hashline_edit"}, "bash": {"shell", "run_terminal_cmd", "monitor"},
+		"grep": {"grep", "hashline_grep", "search_files"}, "glob": {"list_files", "search_files"},
 	}
 	for _, value := range values {
 		value = strings.ToLower(strings.TrimSpace(value))
@@ -902,11 +911,11 @@ func toolNameSet(values []string) map[string]bool {
 func capabilityAllows(capability, name string) bool {
 	switch strings.ToLower(strings.TrimSpace(capability)) {
 	case "read-only", "readonly":
-		return name != "write_file" && name != "edit_file" && name != "search_replace" && name != "shell" && name != "run_terminal_cmd" && name != "monitor" && name != "start_command" && name != "kill_command" && !strings.HasPrefix(name, "scheduler_")
+		return name != "write_file" && name != "edit_file" && name != "search_replace" && name != "hashline_edit" && name != "shell" && name != "run_terminal_cmd" && name != "monitor" && name != "start_command" && name != "kill_command" && !strings.HasPrefix(name, "scheduler_")
 	case "read-write", "readwrite":
 		return name != "shell" && name != "run_terminal_cmd" && name != "monitor" && name != "start_command" && name != "kill_command"
 	case "execute":
-		return name != "write_file" && name != "edit_file" && name != "search_replace" && !strings.HasPrefix(name, "scheduler_")
+		return name != "write_file" && name != "edit_file" && name != "search_replace" && name != "hashline_edit" && !strings.HasPrefix(name, "scheduler_")
 	default:
 		return true
 	}
@@ -960,7 +969,7 @@ func (r *Registry) ExecuteResult(ctx context.Context, name string, arguments jso
 }
 
 func mutationPath(name string, raw json.RawMessage) string {
-	if name != "write_file" && name != "edit_file" && name != "search_replace" {
+	if name != "write_file" && name != "edit_file" && name != "search_replace" && name != "hashline_edit" {
 		return ""
 	}
 	var values map[string]any
@@ -989,11 +998,11 @@ func readPolicyTarget(name string, raw json.RawMessage) (string, string) {
 		return "."
 	}
 	switch name {
-	case "read_file":
+	case "read_file", "hashline_read":
 		return "read policy", first("target_file", "path")
 	case "list_dir", "list_files":
 		return "read policy", first("target_directory", "path")
-	case "grep", "search_files":
+	case "grep", "hashline_grep", "search_files":
 		return "grep policy", first("query", "pattern")
 	default:
 		return "", ""

@@ -385,6 +385,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return err
 	}
 	registry := tools.NewRegistry(ws, approver)
+	if err := registry.ConfigureFileToolset(cfg.Toolset.FileToolset, cfg.Toolset.Hashline.Scheme, cfg.Toolset.Hashline.HashLen, cfg.Toolset.Hashline.ChunkSize); err != nil {
+		_ = registry.Close()
+		return err
+	}
 	if err := tools.RegisterMemoryTools(registry, memoryStore, cfg.Memory); err != nil {
 		_ = registry.Close()
 		return err
@@ -1746,6 +1750,10 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			return nil, nil, err
 		}
 		registry := tools.NewRegistry(ws, approver)
+		if err := registry.ConfigureFileToolset(sessionCfg.Toolset.FileToolset, sessionCfg.Toolset.Hashline.Scheme, sessionCfg.Toolset.Hashline.HashLen, sessionCfg.Toolset.Hashline.ChunkSize); err != nil {
+			_ = registry.Close()
+			return nil, nil, err
+		}
 		registry.ConfigureUserQuestions(sessionCfg.AskUserQuestion.TimeoutEnabled, time.Duration(sessionCfg.AskUserQuestion.TimeoutSeconds)*time.Second)
 		registry.ConfigureGoalRoles(goalRoleConfig(sessionCfg, true))
 		if search, enabled := cfg.WebSearchEndpoint(); enabled {

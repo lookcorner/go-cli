@@ -52,6 +52,7 @@ type Config struct {
 	WebSearch                       WebSearchConfig            `json:"web_search,omitempty"`
 	WebFetch                        WebFetchConfig             `json:"web_fetch,omitempty"`
 	AskUserQuestion                 AskUserQuestionConfig      `json:"ask_user_question,omitempty"`
+	Toolset                         ToolsetConfig              `json:"toolset"`
 	Goal                            GoalConfig                 `json:"goal"`
 	UI                              UIConfig                   `json:"ui"`
 	AuthProviderCommand             string                     `json:"auth_provider_command,omitempty"`
@@ -101,6 +102,17 @@ type AutoModeConfig struct {
 	PromptType      string `json:"prompt_type,omitempty" toml:"prompt_type"`
 	ClassifierModel string `json:"classifier_model,omitempty" toml:"classifier_model"`
 	ReasoningEffort string `json:"reasoning_effort,omitempty" toml:"reasoning_effort"`
+}
+
+type ToolsetConfig struct {
+	FileToolset string         `json:"file_toolset"`
+	Hashline    HashlineConfig `json:"hashline"`
+}
+
+type HashlineConfig struct {
+	Scheme    string `json:"scheme"`
+	HashLen   int    `json:"hash_len"`
+	ChunkSize int    `json:"chunk_size"`
 }
 
 func (c Config) AutoModeEnabled() bool {
@@ -360,6 +372,8 @@ type fileConfig struct {
 	} `json:"-" toml:"models"`
 	ModelEntries map[string]modelConfig `json:"-" toml:"model"`
 	Toolset      struct {
+		FileToolset     string                    `json:"file_toolset,omitempty" toml:"file_toolset"`
+		Hashline        fileHashlineConfig        `json:"hashline,omitempty" toml:"hashline"`
 		WebFetch        fileWebFetchConfig        `json:"web_fetch,omitempty" toml:"web_fetch"`
 		AskUserQuestion fileAskUserQuestionConfig `json:"ask_user_question,omitempty" toml:"ask_user_question"`
 	} `json:"toolset,omitempty" toml:"toolset"`
@@ -367,6 +381,12 @@ type fileConfig struct {
 	UI          fileUIConfig          `json:"ui,omitempty" toml:"ui"`
 	Endpoints   fileEndpointsConfig   `json:"endpoints,omitempty" toml:"endpoints"`
 	FolderTrust fileFolderTrustConfig `json:"folder_trust,omitempty" toml:"folder_trust"`
+}
+
+type fileHashlineConfig struct {
+	Scheme    *string `json:"scheme,omitempty" toml:"scheme"`
+	HashLen   *int    `json:"hash_len,omitempty" toml:"hash_len"`
+	ChunkSize *int    `json:"chunk_size,omitempty" toml:"chunk_size"`
 }
 
 type fileUIConfig struct {
@@ -575,6 +595,7 @@ func Load(path string) (Config, error) {
 		FolderTrustEnabled:          true,
 		AutoWakeEnabled:             true,
 		AskUserQuestion:             AskUserQuestionConfig{TimeoutEnabled: true, TimeoutSeconds: 30 * 60},
+		Toolset:                     ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}},
 		Goal:                        GoalConfig{VerifierCount: 3, ClassifierMaxRuns: 10, ReverifyAfter: 8},
 		UI:                          UIConfig{KeepTextSelection: "flash"},
 		Pruning:                     PruningConfig{Enabled: true, KeepLastNTurns: 3, SoftTrimThreshold: 4000, SoftTrimHead: 1500, SoftTrimTail: 1500, HardClearAgeTurns: 10},
@@ -735,6 +756,30 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 		cfg.WebFetch.DomainsConfigured = true
 	}
 	applyAskUserQuestionConfig(&cfg.AskUserQuestion, disk.Toolset.AskUserQuestion)
+	if disk.Toolset.FileToolset != "" {
+		cfg.Toolset.FileToolset = strings.TrimSpace(disk.Toolset.FileToolset)
+	}
+	if disk.Toolset.Hashline.Scheme != nil {
+		cfg.Toolset.Hashline.Scheme = strings.TrimSpace(*disk.Toolset.Hashline.Scheme)
+	}
+	if disk.Toolset.Hashline.HashLen != nil {
+		cfg.Toolset.Hashline.HashLen = *disk.Toolset.Hashline.HashLen
+	}
+	if disk.Toolset.Hashline.ChunkSize != nil {
+		cfg.Toolset.Hashline.ChunkSize = *disk.Toolset.Hashline.ChunkSize
+	}
+	if disk.Toolset.FileToolset != "" && cfg.Toolset.FileToolset != "standard" && cfg.Toolset.FileToolset != "hashline" {
+		return errors.New("toolset file_toolset must be standard or hashline")
+	}
+	if disk.Toolset.Hashline.Scheme != nil && cfg.Toolset.Hashline.Scheme != "chunk" && cfg.Toolset.Hashline.Scheme != "content_only" {
+		return errors.New("toolset hashline scheme must be chunk or content_only")
+	}
+	if disk.Toolset.Hashline.HashLen != nil && (cfg.Toolset.Hashline.HashLen < 1 || cfg.Toolset.Hashline.HashLen > 4) {
+		return errors.New("toolset hashline hash_len must be between 1 and 4")
+	}
+	if disk.Toolset.Hashline.ChunkSize != nil && cfg.Toolset.Hashline.Scheme == "chunk" && cfg.Toolset.Hashline.ChunkSize < 1 {
+		return errors.New("toolset hashline chunk_size must be greater than zero")
+	}
 	if disk.UI.KeepTextSelection != nil {
 		cfg.UI.KeepTextSelection = strings.TrimSpace(*disk.UI.KeepTextSelection)
 	}
@@ -1976,6 +2021,18 @@ func (c Config) Validate() error {
 	}
 	if c.UI.KeepTextSelection != "" && c.UI.KeepTextSelection != "flash" && c.UI.KeepTextSelection != "hold" && c.UI.KeepTextSelection != "word_select" {
 		return errors.New("ui keep_text_selection must be flash, hold, or word_select")
+	}
+	if c.Toolset.FileToolset != "" && c.Toolset.FileToolset != "standard" && c.Toolset.FileToolset != "hashline" {
+		return errors.New("toolset file_toolset must be standard or hashline")
+	}
+	if c.Toolset.Hashline.Scheme != "" && c.Toolset.Hashline.Scheme != "chunk" && c.Toolset.Hashline.Scheme != "content_only" {
+		return errors.New("toolset hashline scheme must be chunk or content_only")
+	}
+	if c.Toolset.Hashline.HashLen != 0 && (c.Toolset.Hashline.HashLen < 1 || c.Toolset.Hashline.HashLen > 4) {
+		return errors.New("toolset hashline hash_len must be between 1 and 4")
+	}
+	if c.Toolset.Hashline.Scheme == "chunk" && c.Toolset.Hashline.ChunkSize < 1 {
+		return errors.New("toolset hashline chunk_size must be greater than zero")
 	}
 	if c.Pruning.KeepLastNTurns < 0 || c.Pruning.SoftTrimThreshold < 0 || c.Pruning.SoftTrimHead < 0 || c.Pruning.SoftTrimTail < 0 || c.Pruning.HardClearAgeTurns < 0 {
 		return errors.New("compaction pruning values must not be negative")

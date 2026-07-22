@@ -90,6 +90,24 @@ requirements policy has final precedence. Invalid environment values are
 ignored, and an explicitly configured zero uses the 30-minute default rather
 than disabling the timer.
 
+The optional anchor-validated file toolset is enabled with:
+
+```toml
+[toolset]
+file_toolset = "hashline"
+
+[toolset.hashline]
+scheme = "chunk" # or "content_only"
+hash_len = 3
+chunk_size = 8
+```
+
+It replaces the standard read/edit/search entry points with `hashline_read`,
+`hashline_edit`, and `hashline_grep`. Edits use anchors copied from read or grep
+output; a stale or overlapping operation rejects the entire batch before disk
+mutation. Successful edits use the existing permission, rewind-checkpoint, and
+atomic-write paths and return fresh anchors.
+
 Workspace instruction and skill discovery respects repository and global Git
 ignore rules through Git's own matching engine. Project instructions load from
 the Git root through the current workspace so deeper files take precedence.

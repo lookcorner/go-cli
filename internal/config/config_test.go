@@ -741,6 +741,36 @@ func TestValidateWebFetchConfig(t *testing.T) {
 	}
 }
 
+func TestLoadAndValidateHashlineToolset(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[toolset]\nfile_toolset = \"hashline\"\n[toolset.hashline]\nscheme = \"content_only\"\nhash_len = 2\nchunk_size = 4\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Toolset.FileToolset != "hashline" || cfg.Toolset.Hashline.Scheme != "content_only" || cfg.Toolset.Hashline.HashLen != 2 || cfg.Toolset.Hashline.ChunkSize != 4 {
+		t.Fatalf("toolset=%#v", cfg.Toolset)
+	}
+	if err := os.WriteFile(path, []byte("[toolset]\nfile_toolset = \"hashline\"\n[toolset.hashline]\nhash_len = 0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "hash_len") {
+		t.Fatalf("validation error=%v", err)
+	}
+}
+
+func TestHashlineToolsetDefaults(t *testing.T) {
+	cfg, err := Load(filepath.Join(t.TempDir(), "missing.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Toolset.FileToolset != "standard" || cfg.Toolset.Hashline != (HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}) {
+		t.Fatalf("defaults=%#v", cfg.Toolset)
+	}
+}
+
 func TestValidateTextSelectionMode(t *testing.T) {
 	base := Config{
 		APIKey: "key", BaseURL: "https://api.example/v1", Model: "model", Backend: "responses",

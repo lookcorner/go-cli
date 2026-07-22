@@ -159,7 +159,7 @@ func AutoModeAllows(action, detail string) bool {
 func AutoModeFastPath(action, detail string) bool {
 	action = strings.ToLower(strings.TrimSpace(action))
 	switch action {
-	case "write_file", "edit_file", "read policy", "grep policy", "web search",
+	case "write_file", "edit_file", "hashline_edit", "read policy", "grep policy", "web search",
 		"enter plan mode", "exit plan mode":
 		return true
 	case "shell", "run terminal command", "start background command":
@@ -368,7 +368,7 @@ func (r permissionRule) matches(action, detail string) bool {
 	}
 	if strings.EqualFold(r.action, "Edit") {
 		switch action {
-		case "write_file", "edit_file", "search_replace":
+		case "write_file", "edit_file", "search_replace", "hashline_edit":
 			return r.pattern.MatchString(detail)
 		}
 		return false
