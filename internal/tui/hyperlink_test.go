@@ -66,14 +66,17 @@ func TestTmuxVersionAtLeast(t *testing.T) {
 
 func TestRenderMarkdownEmitsSafeOSC8Links(t *testing.T) {
 	path := "/Users/alice/src/app/release/mac_arm64/Demo App.app"
-	raw := strings.Join(renderMarkdownWithLinks(`Open "`+path+`" and [docs](https://example.com).`, 32, true), "\n")
-	for _, target := range []string{fileHyperlink(path), "https://example.com"} {
+	raw := strings.Join(renderMarkdownWithLinks(`Open "`+path+`" and [docs](https://example.com/a_(b)).`, 32, true), "\n")
+	for _, target := range []string{fileHyperlink(path), "https://example.com/a_(b)"} {
 		if !strings.Contains(raw, ansi.SetHyperlink(target, "id="+hyperlinkID(target))) {
 			t.Fatalf("missing hyperlink %q in %q", target, raw)
 		}
 	}
 	if !strings.Contains(raw, "Demo%20App.app") {
 		t.Fatalf("file hyperlink was truncated: %q", raw)
+	}
+	if !strings.Contains(raw, "example.com/a_(b)") {
+		t.Fatalf("markdown link target was truncated: %q", raw)
 	}
 	if got, want := fileHyperlink(`C:\Program Files\Demo App.exe`), "file:///C:/Program%20Files/Demo%20App.exe"; got != want {
 		t.Fatalf("windows file hyperlink=%q want=%q", got, want)

@@ -293,7 +293,7 @@ func inlineMarkdown(value string) []markdownSpan {
 		if value[0] == '[' {
 			closeLabel := strings.Index(value, "](")
 			if closeLabel > 0 {
-				if closeURL := strings.IndexByte(value[closeLabel+2:], ')'); closeURL >= 0 {
+				if closeURL := markdownLinkURLEnd(value, closeLabel+2); closeURL >= 0 {
 					urlEnd := closeLabel + 2 + closeURL
 					link := safeHyperlinkTarget(value[closeLabel+2 : urlEnd])
 					spans = append(spans,
@@ -318,6 +318,22 @@ func inlineMarkdown(value string) []markdownSpan {
 		value = value[next:]
 	}
 	return spans
+}
+
+func markdownLinkURLEnd(value string, start int) int {
+	depth := 0
+	for index := start; index < len(value); index++ {
+		switch value[index] {
+		case '(':
+			depth++
+		case ')':
+			if depth == 0 {
+				return index - start
+			}
+			depth--
+		}
+	}
+	return -1
 }
 
 func linkifyBareHyperlinks(value string) []markdownSpan {
