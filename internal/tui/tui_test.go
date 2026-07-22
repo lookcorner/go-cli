@@ -26,6 +26,15 @@ type scheduledTUIStreamer struct {
 
 type rememberTUIStreamer struct{}
 
+type recapTUIStreamer struct{ request api.ResponseRequest }
+
+func (s *recapTUIStreamer) CloneForCompaction(bool) api.Streamer { return s }
+
+func (s *recapTUIStreamer) StreamResponse(_ context.Context, request api.ResponseRequest, _ func(string)) (api.StreamResult, error) {
+	s.request = request
+	return api.StreamResult{Text: "We fixed task rendering in internal/tui."}, nil
+}
+
 func (rememberTUIStreamer) StreamResponse(_ context.Context, _ api.ResponseRequest, _ func(string)) (api.StreamResult, error) {
 	return api.StreamResult{Text: "## Deployment\n\n- Run enhanced checks."}, nil
 }
@@ -625,6 +634,74 @@ func TestTasksCommandRequiresSessionAndFormatsEmptyState(t *testing.T) {
 	}
 	if got := formatTaskSnapshot(agent.TaskSnapshot{}, time.Now()); got != "No background tasks or subagents." {
 		t.Fatalf("empty tasks=%q", got)
+	}
+}
+
+func TestRecapCommandIsDisplayOnlyWhenIdle(t *testing.T) {
+	streamer := &recapTUIStreamer{}
+	m := &model{
+		ctx: context.Background(), runner: &agent.Runner{Client: streamer, SessionID: "session-1", Model: "test"},
+		previousID: "response-1", status: "ready",
+	}
+	m.setInput("/recap ignored")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command == nil || m.running || !m.recapRunning || m.status != "generating recap" {
+		t.Fatalf("command=%v running=%v recap=%v status=%q", command != nil, m.running, m.recapRunning, m.status)
+	}
+	updated, followup := m.Update(command())
+	m = updated.(*model)
+	if followup != nil || m.recapRunning || m.previousID != "response-1" || m.status != "recap" || !strings.Contains(m.transcript.String(), "Recap \u2014 We fixed task rendering") {
+		t.Fatalf("followup=%v recap=%v previous=%q status=%q transcript=%q", followup != nil, m.recapRunning, m.previousID, m.status, m.transcript.String())
+	}
+	if len(streamer.request.Tools) != 0 || streamer.request.PreviousResponseID != "response-1" {
+		t.Fatalf("request=%#v", streamer.request)
+	}
+}
+
+func TestRecapCommandBypassesBusyPromptQueue(t *testing.T) {
+	streamer := &recapTUIStreamer{}
+	m := &model{
+		ctx: context.Background(), runner: &agent.Runner{Client: streamer, SessionID: "session-1"},
+		previousID: "response-1", running: true, status: "thinking",
+	}
+	m.setInput("/recap")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command == nil || !m.running || !m.recapRunning || len(m.pendingPrompts) != 0 || string(m.input) != "" || m.status != "thinking" {
+		t.Fatalf("command=%v running=%v recap=%v queue=%#v input=%q status=%q", command != nil, m.running, m.recapRunning, m.pendingPrompts, m.input, m.status)
+	}
+	updated, _ = m.Update(command())
+	m = updated.(*model)
+	if m.pendingRecap == "" || strings.Contains(m.transcript.String(), recapLabel) {
+		t.Fatalf("pending=%q transcript=%q", m.pendingRecap, m.transcript.String())
+	}
+	updated, _ = m.Update(turnDoneEvent{result: agent.Result{ResponseID: "response-2", Steps: 1}})
+	m = updated.(*model)
+	if m.pendingRecap != "" || m.previousID != "response-2" || !strings.Contains(m.transcript.String(), "Recap \u2014 We fixed task rendering") {
+		t.Fatalf("pending=%q previous=%q transcript=%q", m.pendingRecap, m.previousID, m.transcript.String())
+	}
+}
+
+func TestRecapCommandRequiresSessionAndDropsStaleResult(t *testing.T) {
+	m := &model{ctx: context.Background(), runner: &agent.Runner{}}
+	m.setInput("/recap")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.status != "no active session" {
+		t.Fatalf("command=%v status=%q", command != nil, m.status)
+	}
+	m.running, m.recapRunning, m.promptSerial = true, true, 2
+	m.setInput("new queued work")
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.promptSerial != 3 || len(m.pendingPrompts) != 1 {
+		t.Fatalf("command=%v serial=%d queue=%#v", command != nil, m.promptSerial, m.pendingPrompts)
+	}
+	updated, _ = m.Update(recapDoneEvent{text: "stale", serial: 2})
+	m = updated.(*model)
+	if m.recapRunning || m.transcript.Len() != 0 {
+		t.Fatalf("recap=%v transcript=%q", m.recapRunning, m.transcript.String())
 	}
 }
 

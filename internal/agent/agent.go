@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -28,6 +29,18 @@ import (
 const defaultInstructions = `You are Gork Go, an autonomous coding agent working inside a user-approved workspace.
 
 Inspect relevant files before making changes. Prefer small, focused edits. Use tools to verify your work. Never claim a command, edit, or test succeeded unless its tool result confirms it. All file tools are confined to the workspace; do not try to bypass that boundary. Destructive or system-affecting shell commands require explicit user approval. When the task is complete, summarize the outcome and verification concisely.`
+
+const recapInstruction = `<system-reminder>Write ONE sentence recap body for a user returning from idle. Output ONLY the body; the UI adds the recap label.
+
+Lead with "You asked ..." when the session was mainly questions or review with no landed change. Lead with "We <past-tense verb> ..." when code, config, or documentation changed. If almost nothing happened, say "You had just begun this session."
+
+Include concrete file, behavior, endpoint, flag, or command details from this session in about 25-40 words. Do not add a label, bullets, markdown, extra sentences, or invent work.</system-reminder>`
+
+var (
+	ErrRecapUnavailable = errors.New("no conversation to recap")
+	ErrRecapInProgress  = errors.New("recap already in progress")
+	ErrRecapSuperseded  = errors.New("recap superseded by a new prompt")
+)
 
 type ResponseStreamer = api.Streamer
 
@@ -114,6 +127,8 @@ type Runner struct {
 	memoryDreamDone         chan struct{}
 	memorySessionSaved      bool
 	hookStart               sync.Once
+	promptEpoch             atomic.Uint64
+	recapRunning            atomic.Bool
 }
 
 type compactionPrefire struct {
@@ -254,12 +269,83 @@ func (r *Runner) RunTurnParts(ctx context.Context, prompt string, parts []api.Co
 	return r.runTurn(ctx, prompt, parts, previousResponseID, false)
 }
 
+// Recap generates a display-only summary without changing model or session history.
+func (r *Runner) Recap(ctx context.Context, previousResponseID string) (string, error) {
+	if r == nil || r.Client == nil {
+		return "", ErrRecapUnavailable
+	}
+	epoch := r.promptEpoch.Load()
+	if previousResponseID == "" && epoch == 0 {
+		return "", ErrRecapUnavailable
+	}
+	if !r.recapRunning.CompareAndSwap(false, true) {
+		return "", ErrRecapInProgress
+	}
+	defer r.recapRunning.Store(false)
+	streamer := r.Client
+	if cloner, ok := r.Client.(api.CompactionCloner); ok {
+		streamer = cloner.CloneForCompaction(true)
+	} else if previousResponseID == "" {
+		return "", ErrRecapUnavailable
+	}
+
+	request := api.ResponseRequest{
+		Model: r.Model, Instructions: r.resolvedInstructions(),
+		Input:              []api.InputItem{{Type: "message", Role: "user", Content: recapInstruction}},
+		PreviousResponseID: previousResponseID, Stream: true,
+	}
+	response, err := streamer.StreamResponse(ctx, request, nil)
+	if err != nil {
+		return "", fmt.Errorf("generate recap: %w", err)
+	}
+	if r.promptEpoch.Load() != epoch {
+		return "", ErrRecapSuperseded
+	}
+	text := cleanRecapText(response.Text)
+	if text == "" {
+		return "", ErrRecapUnavailable
+	}
+	return text, nil
+}
+
+func (r *Runner) resolvedInstructions() string {
+	instructions := strings.TrimSpace(r.Instructions)
+	if instructions == "" {
+		return defaultInstructions
+	}
+	return defaultInstructions + "\n\nAdditional user instructions:\n" + instructions
+}
+
+func cleanRecapText(value string) string {
+	value = strings.Join(strings.Fields(value), " ")
+	for _, label := range []string{"Recap \u2014", "Recap\u2014", "Recap -", "Recap:", "recap:", "Session recap:", "Summary:"} {
+		if rest, ok := strings.CutPrefix(value, label); ok {
+			value = strings.TrimSpace(rest)
+			break
+		}
+	}
+	if len(value) >= 2 && (value[0] == '"' && value[len(value)-1] == '"' || value[0] == '\'' && value[len(value)-1] == '\'') {
+		value = strings.TrimSpace(value[1 : len(value)-1])
+	}
+	if len(value) > 1200 {
+		end := 1200
+		for end > 0 && !utf8.ValidString(value[:end]) {
+			end--
+		}
+		value = strings.TrimSpace(value[:end]) + "\u2026"
+	}
+	return value
+}
+
 func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previousResponseID string, synthetic bool) (final Result, runErr error) {
 	if r.Client == nil || r.Tools == nil {
 		return Result{}, errors.New("agent client and tools are required")
 	}
 	if strings.TrimSpace(prompt) == "" {
 		return Result{}, errors.New("prompt must not be empty")
+	}
+	if !synthetic {
+		r.promptEpoch.Add(1)
 	}
 	r.cancelMemoryIdleFlush()
 	r.cancelMemoryDreamCheck()
@@ -277,12 +363,7 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 	if r.MaxSteps < 1 {
 		r.MaxSteps = 20
 	}
-	instructions := strings.TrimSpace(r.Instructions)
-	if instructions == "" {
-		instructions = defaultInstructions
-	} else {
-		instructions = defaultInstructions + "\n\nAdditional user instructions:\n" + instructions
-	}
+	instructions := r.resolvedInstructions()
 	r.maybeStartMemoryFlush(ctx, previousResponseID)
 	promptTrace, traceable := compactionPromptTrace(prompt, content)
 	if !traceable {

@@ -313,6 +313,9 @@ While a turn is running, additional prompts are queued FIFO; `/queue` prints a
 read-only snapshot and queued prompts run before scheduled wake-ups.
 `/tasks` instantly lists background commands, subagents, and scheduled tasks
 without creating a model turn.
+`/recap` makes a tool-free, display-only model call against the current
+conversation. It can run beside an active turn, never enters the prompt queue or
+changes conversation history, and discards its result if a newer prompt starts.
 Left/Right, Home/End, Delete, Backspace, Ctrl-A,
 Ctrl-E, Ctrl-U, and Ctrl/Cmd-Z edit or undo the active prompt and structured
 response input. Shift/Alt-Enter inserts a newline; Ctrl-M, `/multiline`, or `/ml`

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/compat"
@@ -24,6 +25,48 @@ import (
 type fakeStreamer struct {
 	requests []api.ResponseRequest
 	results  []api.StreamResult
+}
+
+type recapStreamer struct {
+	mu       sync.Mutex
+	requests []api.ResponseRequest
+	started  chan struct{}
+	release  chan struct{}
+	cloned   bool
+}
+
+func (s *recapStreamer) CloneForCompaction(includeHistory bool) api.Streamer {
+	s.mu.Lock()
+	s.cloned = includeHistory
+	s.mu.Unlock()
+	return s
+}
+
+func (s *recapStreamer) StreamResponse(ctx context.Context, request api.ResponseRequest, _ func(string)) (api.StreamResult, error) {
+	s.mu.Lock()
+	s.requests = append(s.requests, request)
+	s.mu.Unlock()
+	content, _ := request.Input[0].Content.(string)
+	if strings.Contains(content, "ONE sentence recap body") {
+		if s.started != nil {
+			close(s.started)
+		}
+		if s.release != nil {
+			select {
+			case <-ctx.Done():
+				return api.StreamResult{}, ctx.Err()
+			case <-s.release:
+			}
+		}
+		return api.StreamResult{Text: "  Recap:  We fixed\n the parser.  "}, nil
+	}
+	return api.StreamResult{ResponseID: "new-response", Text: "done"}, nil
+}
+
+func (s *recapStreamer) snapshot() ([]api.ResponseRequest, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]api.ResponseRequest(nil), s.requests...), s.cloned
 }
 
 type prefireStreamer struct {
@@ -304,6 +347,86 @@ func TestRunnerTaskSnapshotAggregatesAvailableSources(t *testing.T) {
 	}
 	if snapshot := (*Runner)(nil).TaskSnapshot(); len(snapshot.Subagents)+len(snapshot.Processes)+len(snapshot.Scheduled) != 0 {
 		t.Fatalf("nil snapshot=%#v", snapshot)
+	}
+}
+
+func TestRunnerRecapIsDisplayOnlyAndCleansResponse(t *testing.T) {
+	streamer := &recapStreamer{}
+	runner := &Runner{Client: streamer, Model: "test-model", Instructions: "project rules"}
+	text, err := runner.Recap(context.Background(), "previous-response")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text != "We fixed the parser." {
+		t.Fatalf("recap=%q", text)
+	}
+	requests, cloned := streamer.snapshot()
+	if len(requests) != 1 || requests[0].PreviousResponseID != "previous-response" || len(requests[0].Tools) != 0 || requests[0].Model != "test-model" || !strings.Contains(requests[0].Instructions, "project rules") {
+		t.Fatalf("request=%#v", requests)
+	}
+	if !cloned {
+		t.Fatal("recap did not use an isolated history clone")
+	}
+}
+
+func TestRunnerRecapRejectsEmptyAndConcurrentRequests(t *testing.T) {
+	if _, err := (&Runner{Client: &fakeStreamer{}}).Recap(context.Background(), ""); !errors.Is(err, ErrRecapUnavailable) {
+		t.Fatalf("empty recap error=%v", err)
+	}
+	streamer := &recapStreamer{started: make(chan struct{}), release: make(chan struct{})}
+	runner := &Runner{Client: streamer}
+	done := make(chan error, 1)
+	go func() {
+		_, err := runner.Recap(context.Background(), "previous")
+		done <- err
+	}()
+	<-streamer.started
+	if _, err := runner.Recap(context.Background(), "previous"); !errors.Is(err, ErrRecapInProgress) {
+		t.Fatalf("concurrent recap error=%v", err)
+	}
+	close(streamer.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunnerRecapHandlesModelFailureAndEmptyResponse(t *testing.T) {
+	if _, err := (&Runner{Client: failingStreamer{err: errors.New("offline")}}).Recap(context.Background(), "previous"); err == nil || !strings.Contains(err.Error(), "offline") {
+		t.Fatalf("model failure=%v", err)
+	}
+	if _, err := (&Runner{Client: &fakeStreamer{results: []api.StreamResult{{}}}}).Recap(context.Background(), "previous"); !errors.Is(err, ErrRecapUnavailable) {
+		t.Fatalf("empty response error=%v", err)
+	}
+}
+
+func TestRunnerRecapDropsResultAfterNewPrompt(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	streamer := &recapStreamer{started: make(chan struct{}), release: make(chan struct{})}
+	runner := &Runner{Client: streamer, Tools: registry}
+	done := make(chan error, 1)
+	go func() {
+		_, err := runner.Recap(context.Background(), "previous")
+		done <- err
+	}()
+	<-streamer.started
+	if _, err := runner.RunTurn(context.Background(), "new work", "previous"); err != nil {
+		t.Fatal(err)
+	}
+	close(streamer.release)
+	if err := <-done; !errors.Is(err, ErrRecapSuperseded) {
+		t.Fatalf("superseded recap error=%v", err)
+	}
+}
+
+func TestCleanRecapTextCapsUTF8Safely(t *testing.T) {
+	text := cleanRecapText("Summary: " + strings.Repeat("\u3042", 500))
+	if !utf8.ValidString(text) || len(text) > 1203 || !strings.HasSuffix(text, "\u2026") {
+		t.Fatalf("invalid capped recap len=%d suffix=%q", len(text), text[len(text)-6:])
 	}
 }
 

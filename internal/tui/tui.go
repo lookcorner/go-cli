@@ -35,6 +35,7 @@ const (
 	maxInputUndoEntries       = 100
 	maxPromptInputRows        = 6
 	defaultWordSeparators     = "!\"#$%&'()*+,-./:;<=>?@[\\]^`{|}~"
+	recapLabel                = "Recap \u2014 "
 )
 
 var selectionURLPattern = regexp.MustCompile(`(?i)\b(?:https?|ftp|file)://[^\s\x00-\x1f]+`)
@@ -108,6 +109,11 @@ type memoryNoteSavedEvent struct {
 type memoryDreamDoneEvent struct {
 	result memory.DreamResult
 	err    error
+}
+type recapDoneEvent struct {
+	text   string
+	err    error
+	serial uint64
 }
 type scheduledFiredEvent struct{ event tools.ScheduledTaskFired }
 type wakeCancelledEvent struct{ id string }
@@ -348,6 +354,9 @@ type model struct {
 	pendingPrompts []string
 	scheduled      []tools.ScheduledTaskFired
 	activeTask     string
+	promptSerial   uint64
+	recapRunning   bool
+	pendingRecap   string
 	questionClick  struct {
 		option int
 		at     time.Time
@@ -694,6 +703,10 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.activeTask = ""
+		if m.pendingRecap != "" {
+			m.appendSystem(recapLabel + m.pendingRecap)
+			m.pendingRecap = ""
+		}
 		if command := m.startNext(); command != nil {
 			return m, command
 		}
@@ -846,6 +859,27 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if command := m.startNext(); command != nil {
 			return m, command
+		}
+	case recapDoneEvent:
+		m.recapRunning = false
+		if msg.serial != m.promptSerial || errors.Is(msg.err, agent.ErrRecapSuperseded) {
+			return m, nil
+		}
+		if msg.err != nil {
+			if !m.running {
+				if errors.Is(msg.err, agent.ErrRecapUnavailable) || errors.Is(msg.err, agent.ErrRecapInProgress) {
+					m.status = "recap unavailable"
+				} else {
+					m.status = "recap failed: " + msg.err.Error()
+				}
+			}
+			return m, nil
+		}
+		if m.running {
+			m.pendingRecap = msg.text
+		} else {
+			m.appendSystem(recapLabel + msg.text)
+			m.status = "recap"
 		}
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
@@ -1019,7 +1053,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "/quit", "/exit":
 			return m, tea.Quit
 		case "/help":
-			m.appendSystem("# Commands\n\n`! <command>` `/always-approve` `/compact` `/context` `/copy [N]` `/dream` `/exit` `/export [filename]` `/find` `/flush` `/help` `/history` `/loop` `/memory` `/multiline` `/plan [description]` `/queue` `/remember` `/rename <title>` `/session-info` `/tasks` `/transcript` `/view-plan`")
+			m.appendSystem("# Commands\n\n`! <command>` `/always-approve` `/compact` `/context` `/copy [N]` `/dream` `/exit` `/export [filename]` `/find` `/flush` `/help` `/history` `/loop` `/memory` `/multiline` `/plan [description]` `/queue` `/recap` `/remember` `/rename <title>` `/session-info` `/tasks` `/transcript` `/view-plan`")
 			m.status = "commands"
 			return m, nil
 		case "/queue":
@@ -1029,6 +1063,8 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "/tasks":
 			m.showTasks()
 			return m, nil
+		case "/recap":
+			return m, m.startRecap()
 		case "/export":
 			filename := strings.TrimSpace(strings.TrimPrefix(prompt, "/export"))
 			m.running = true
@@ -1239,6 +1275,9 @@ func (m *model) handleRunningKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.clearInput()
 			m.showTasks()
 			return m, nil
+		case "/recap":
+			m.clearInput()
+			return m, m.startRecap()
 		}
 		if strings.HasPrefix(prompt, "/") || strings.HasPrefix(prompt, "!") {
 			m.status = "only prompts can be queued while a turn is running"
@@ -1246,6 +1285,7 @@ func (m *model) handleRunningKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		m.clearInput()
 		m.rememberPrompt(prompt)
+		m.promptSerial++
 		m.pendingPrompts = append(m.pendingPrompts, prompt)
 		m.status = fmt.Sprintf("queued prompt #%d", len(m.pendingPrompts))
 		return m, nil
@@ -1261,6 +1301,24 @@ func (m *model) showTasks() {
 	}
 	m.appendSystem(formatTaskSnapshot(m.runner.TaskSnapshot(), time.Now()))
 	m.status = "tasks"
+}
+
+func (m *model) startRecap() tea.Cmd {
+	if m.runner == nil || strings.TrimSpace(m.runner.SessionID) == "" {
+		m.status = "no active session"
+		return nil
+	}
+	if m.recapRunning {
+		if !m.running {
+			m.status = "recap already in progress"
+		}
+		return nil
+	}
+	m.recapRunning = true
+	if !m.running {
+		m.status = "generating recap"
+	}
+	return runRecap(m.ctx, m.runner, m.previousID, m.promptSerial)
 }
 
 func (m *model) insertNewlineForEnter(key tea.Key) bool {
@@ -2062,6 +2120,7 @@ func (m *model) editInput(message tea.KeyPressMsg) {
 }
 
 func (m *model) beginTurn(prompt string) {
+	m.promptSerial++
 	if m.transcript.Len() > 0 {
 		m.transcript.WriteString("\n")
 	}
@@ -2085,6 +2144,13 @@ func runTurn(ctx context.Context, runner *agent.Runner, prompt, previousID strin
 	return func() tea.Msg {
 		result, err := runner.RunTurn(ctx, prompt, previousID)
 		return turnDoneEvent{result: result, err: err}
+	}
+}
+
+func runRecap(ctx context.Context, runner *agent.Runner, previousID string, serial uint64) tea.Cmd {
+	return func() tea.Msg {
+		text, err := runner.Recap(ctx, previousID)
+		return recapDoneEvent{text: text, err: err, serial: serial}
 	}
 }
 
