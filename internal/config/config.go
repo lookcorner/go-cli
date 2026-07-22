@@ -97,6 +97,10 @@ type Config struct {
 	autoModePromptConfigured        bool
 	autoModeModelConfigured         bool
 	autoModeReasoningConfigured     bool
+	uiTextSelectionConfigured       bool
+	uiTextSelectionInvalid          bool
+	uiSelectionHighlightDuration    *uint64
+	uiDoubleClickAction             *string
 	modelConfigured                 bool
 	defaultModelConfigured          bool
 	allowedModelsConfigured         bool
@@ -404,12 +408,14 @@ type fileHashlineConfig struct {
 }
 
 type fileUIConfig struct {
-	KeepTextSelection    *string `json:"keep_text_selection,omitempty" toml:"keep_text_selection"`
-	WordSeparators       *string `json:"word_separators,omitempty" toml:"word_separators"`
-	MouseReportingToggle *bool   `json:"mouse_reporting_toggle,omitempty" toml:"mouse_reporting_toggle"`
-	VimMode              *bool   `json:"vim_mode,omitempty" toml:"vim_mode"`
-	ScrollLines          *uint8  `json:"scroll_lines,omitempty" toml:"scroll_lines"`
-	InvertScroll         *bool   `json:"invert_scroll,omitempty" toml:"invert_scroll"`
+	KeepTextSelection            any     `json:"keep_text_selection,omitempty" toml:"keep_text_selection"`
+	WordSeparators               *string `json:"word_separators,omitempty" toml:"word_separators"`
+	MouseReportingToggle         *bool   `json:"mouse_reporting_toggle,omitempty" toml:"mouse_reporting_toggle"`
+	VimMode                      *bool   `json:"vim_mode,omitempty" toml:"vim_mode"`
+	ScrollLines                  *uint8  `json:"scroll_lines,omitempty" toml:"scroll_lines"`
+	InvertScroll                 *bool   `json:"invert_scroll,omitempty" toml:"invert_scroll"`
+	SelectionHighlightDurationMS *uint64 `json:"selection_highlight_duration_ms,omitempty" toml:"selection_highlight_duration_ms"`
+	DoubleClickAction            *string `json:"double_click_action,omitempty" toml:"double_click_action"`
 }
 
 type fileFolderTrustConfig struct {
@@ -811,7 +817,31 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 		return errors.New("toolset hashline chunk_size must be greater than zero")
 	}
 	if disk.UI.KeepTextSelection != nil {
-		cfg.UI.KeepTextSelection = strings.TrimSpace(*disk.UI.KeepTextSelection)
+		value, err := parseKeepTextSelection(disk.UI.KeepTextSelection)
+		if err != nil {
+			return err
+		}
+		cfg.uiTextSelectionConfigured = value == "flash" || value == "hold" || value == "word_select"
+		cfg.uiTextSelectionInvalid = !cfg.uiTextSelectionConfigured
+		if cfg.uiTextSelectionConfigured {
+			cfg.UI.KeepTextSelection = value
+		}
+	}
+	if disk.UI.SelectionHighlightDurationMS != nil {
+		value := *disk.UI.SelectionHighlightDurationMS
+		cfg.uiSelectionHighlightDuration = &value
+	}
+	if disk.UI.DoubleClickAction != nil {
+		value := *disk.UI.DoubleClickAction
+		cfg.uiDoubleClickAction = &value
+	}
+	if !cfg.uiTextSelectionConfigured {
+		cfg.UI.KeepTextSelection = "flash"
+		if cfg.uiDoubleClickAction != nil && *cfg.uiDoubleClickAction == "word_select" {
+			cfg.UI.KeepTextSelection = "word_select"
+		} else if !cfg.uiTextSelectionInvalid && cfg.uiSelectionHighlightDuration != nil && *cfg.uiSelectionHighlightDuration == 0 {
+			cfg.UI.KeepTextSelection = "hold"
+		}
 	}
 	if disk.UI.WordSeparators != nil {
 		value := *disk.UI.WordSeparators
@@ -1631,6 +1661,20 @@ func normalizedScrollLines(value uint8) *uint8 {
 	}
 	value = min(value, 10)
 	return &value
+}
+
+func parseKeepTextSelection(value any) (string, error) {
+	switch value := value.(type) {
+	case bool:
+		if value {
+			return "hold", nil
+		}
+		return "flash", nil
+	case string:
+		return strings.TrimSpace(value), nil
+	default:
+		return "", errors.New("ui keep_text_selection must be a boolean or string")
+	}
 }
 
 func (c Config) ManagedPolicyURL() string {

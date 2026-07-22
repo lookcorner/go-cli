@@ -891,6 +891,83 @@ func TestLoadPreservesEmptyWordSeparators(t *testing.T) {
 	}
 }
 
+func TestLoadTextSelectionCompatibility(t *testing.T) {
+	for _, test := range []struct {
+		name, config, want string
+	}{
+		{name: "legacy true", config: "keep_text_selection = true", want: "hold"},
+		{name: "legacy false", config: "keep_text_selection = false", want: "flash"},
+		{name: "legacy duration", config: "selection_highlight_duration_ms = 0", want: "hold"},
+		{name: "nonzero duration", config: "selection_highlight_duration_ms = 150", want: "flash"},
+		{name: "legacy word selection", config: "double_click_action = \"word_select\"", want: "word_select"},
+		{name: "word selection beats duration", config: "selection_highlight_duration_ms = 0\ndouble_click_action = \"word_select\"", want: "word_select"},
+		{name: "modern value wins", config: "keep_text_selection = \"flash\"\nselection_highlight_duration_ms = 0\ndouble_click_action = \"word_select\"", want: "flash"},
+		{name: "invalid modern value ignores duration", config: "keep_text_selection = \"unknown\"\nselection_highlight_duration_ms = 0", want: "flash"},
+		{name: "legacy word selection replaces invalid modern value", config: "keep_text_selection = \"unknown\"\ndouble_click_action = \"word_select\"", want: "word_select"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, []byte("[ui]\n"+test.config+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.UI.KeepTextSelection != test.want {
+				t.Fatalf("selection=%q want=%q", cfg.UI.KeepTextSelection, test.want)
+			}
+		})
+	}
+
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"ui":{"keep_text_selection":true}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.UI.KeepTextSelection != "hold" {
+		t.Fatalf("JSON legacy selection=%q", cfg.UI.KeepTextSelection)
+	}
+	if err := os.WriteFile(path, []byte(`{"ui":{"keep_text_selection":7}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "boolean or string") {
+		t.Fatalf("invalid value error=%v", err)
+	}
+}
+
+func TestTextSelectionCompatibilityAcrossJSONLayers(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	if err := os.WriteFile(filepath.Join(home, "managed_config.toml"), []byte("[ui]\ndouble_click_action = \"word_select\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(home, "config.json")
+	if err := os.WriteFile(path, []byte(`{"ui":{"keep_text_selection":false,"selection_highlight_duration_ms":0}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.UI.KeepTextSelection != "flash" {
+		t.Fatalf("modern user value did not beat managed legacy value: %#v", cfg.UI)
+	}
+	if err := os.WriteFile(path, []byte(`{"ui":{"selection_highlight_duration_ms":0}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.UI.KeepTextSelection != "word_select" {
+		t.Fatalf("managed double-click value did not beat user duration: %#v", cfg.UI)
+	}
+}
+
 func TestMouseReportingToggleEnvironmentOverridesConfig(t *testing.T) {
 	t.Setenv("GROK_MOUSE_REPORTING_TOGGLE", "false")
 	path := filepath.Join(t.TempDir(), "config.toml")
