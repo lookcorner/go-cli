@@ -341,7 +341,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleFS(incoming)
 		case "x.ai/rewind/points", "x.ai/rewind/execute":
 			s.handleRewind(incoming)
-		case "x.ai/terminal/pty/create", "x.ai/terminal/pty/load", "x.ai/terminal/pty/resize", "x.ai/terminal/list", "x.ai/terminal/kill":
+		case "x.ai/terminal/create", "x.ai/terminal/output", "x.ai/terminal/wait_for_exit", "x.ai/terminal/release", "x.ai/terminal/background", "x.ai/terminal/pty/create", "x.ai/terminal/pty/load", "x.ai/terminal/pty/resize", "x.ai/terminal/list", "x.ai/terminal/kill":
 			s.handleTerminal(incoming)
 		case "x.ai/terminal/pty/input":
 			s.handleTerminalInput(incoming.Params)
@@ -2505,6 +2505,9 @@ func (s *Server) closeSession(id string) bool {
 	if current.close != nil {
 		current.close()
 	}
+	if s.terminals != nil {
+		s.terminals.closeSessionCommands(id)
+	}
 	return true
 }
 
@@ -2674,6 +2677,71 @@ func (s *Server) handleTerminal(incoming message) {
 		return
 	}
 	switch incoming.Method {
+	case "x.ai/terminal/create":
+		var req struct {
+			SessionID string   `json:"sessionId"`
+			Command   *string  `json:"command"`
+			Args      []string `json:"args"`
+			CWD       string   `json:"cwd"`
+			Env       []struct {
+				Name  string `json:"name"`
+				Value string `json:"value"`
+			} `json:"env"`
+			OutputByteLimit *int `json:"outputByteLimit"`
+		}
+		if json.Unmarshal(incoming.Params, &req) != nil || req.SessionID == "" || req.Command == nil || *req.Command == "" {
+			s.respondError(incoming.ID, -32602, "sessionId and command are required")
+			return
+		}
+		limit := terminalOutputBytes
+		if req.OutputByteLimit != nil {
+			limit = *req.OutputByteLimit
+		}
+		if limit < 0 {
+			s.respondError(incoming.ID, -32602, "outputByteLimit must not be negative")
+			return
+		}
+		env := make(map[string]string, len(req.Env))
+		for _, item := range req.Env {
+			env[item.Name] = item.Value
+		}
+		id, err := s.terminals.createCommand(req.SessionID, *req.Command, req.Args, req.CWD, env, limit)
+		s.respondTerminal(incoming.ID, map[string]any{"terminalId": id}, err)
+	case "x.ai/terminal/output":
+		sessionID, terminalID, ok := parseTerminalIDRequest(incoming.Params)
+		if !ok {
+			s.respondError(incoming.ID, -32602, "sessionId and terminalId are required")
+			return
+		}
+		result, err := s.terminals.commandOutput(sessionID, terminalID)
+		s.respondTerminal(incoming.ID, result, err)
+	case "x.ai/terminal/wait_for_exit":
+		sessionID, terminalID, ok := parseTerminalIDRequest(incoming.Params)
+		if !ok {
+			s.respondError(incoming.ID, -32602, "sessionId and terminalId are required")
+			return
+		}
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			result, err := s.terminals.waitCommand(sessionID, terminalID)
+			if !s.closing.Load() {
+				s.respondTerminal(incoming.ID, result, err)
+			}
+		}()
+	case "x.ai/terminal/release", "x.ai/terminal/background":
+		sessionID, terminalID, ok := parseTerminalIDRequest(incoming.Params)
+		if !ok {
+			s.respondError(incoming.ID, -32602, "sessionId and terminalId are required")
+			return
+		}
+		var err error
+		if incoming.Method == "x.ai/terminal/release" {
+			err = s.terminals.releaseCommand(sessionID, terminalID)
+		} else {
+			err = s.terminals.backgroundCommand(sessionID, terminalID)
+		}
+		s.respondTerminal(incoming.ID, map[string]any{}, err)
 	case "x.ai/terminal/pty/create":
 		var req struct {
 			Shell     string `json:"shell"`
@@ -2701,11 +2769,7 @@ func (s *Server) handleTerminal(incoming message) {
 			env[item.Name] = item.Value
 		}
 		id, err := s.terminals.create(req.Shell, req.CWD, env, defaultTerminalDimension(req.Rows, 24), defaultTerminalDimension(req.Cols, 80), req.Name)
-		if err != nil {
-			s.respondError(incoming.ID, -32000, err.Error())
-			return
-		}
-		s.respond(incoming.ID, map[string]any{"terminalId": id})
+		s.respondTerminal(incoming.ID, map[string]any{"terminalId": id}, err)
 	case "x.ai/terminal/pty/load":
 		var req struct {
 			TerminalID string `json:"terminalId"`
@@ -2715,11 +2779,7 @@ func (s *Server) handleTerminal(incoming message) {
 			return
 		}
 		result, err := s.terminals.load(req.TerminalID)
-		if err != nil {
-			s.respondError(incoming.ID, -32000, err.Error())
-			return
-		}
-		s.respond(incoming.ID, result)
+		s.respondTerminal(incoming.ID, result, err)
 	case "x.ai/terminal/pty/resize":
 		var req struct {
 			TerminalID string `json:"terminalId"`
@@ -2730,28 +2790,50 @@ func (s *Server) handleTerminal(incoming message) {
 			s.respondError(incoming.ID, -32602, "terminalId, rows and cols are required")
 			return
 		}
-		if err := s.terminals.resize(req.TerminalID, req.Rows, req.Cols); err != nil {
-			s.respondError(incoming.ID, -32000, err.Error())
-			return
-		}
-		s.respond(incoming.ID, map[string]any{})
+		s.respondTerminal(incoming.ID, map[string]any{}, s.terminals.resize(req.TerminalID, req.Rows, req.Cols))
 	case "x.ai/terminal/list":
-		s.respond(incoming.ID, map[string]any{"terminals": s.terminals.list()})
+		s.respondTerminal(incoming.ID, map[string]any{"terminals": s.terminals.list()}, nil)
 	case "x.ai/terminal/kill":
 		var req struct {
 			TerminalID string `json:"terminalId"`
+			SessionID  string `json:"sessionId"`
 		}
 		if json.Unmarshal(incoming.Params, &req) != nil || req.TerminalID == "" {
 			s.respondError(incoming.ID, -32602, "terminalId is required")
 			return
 		}
-		outcome, err := s.terminals.kill(req.TerminalID)
-		if err != nil {
-			s.respondError(incoming.ID, -32000, err.Error())
-			return
+		var outcome string
+		var err error
+		if command := s.terminals.findCommand(req.TerminalID); command != nil {
+			sessionID := req.SessionID
+			if sessionID == "" {
+				sessionID = command.sessionID
+			}
+			outcome, err = s.terminals.killCommand(sessionID, req.TerminalID)
+		} else {
+			outcome, err = s.terminals.kill(req.TerminalID)
 		}
-		s.respond(incoming.ID, map[string]any{"outcome": outcome})
+		s.respondTerminal(incoming.ID, map[string]any{"outcome": outcome}, err)
 	}
+}
+
+func parseTerminalIDRequest(raw json.RawMessage) (string, string, bool) {
+	var req struct {
+		SessionID  string `json:"sessionId"`
+		TerminalID string `json:"terminalId"`
+	}
+	if json.Unmarshal(raw, &req) != nil || req.SessionID == "" || req.TerminalID == "" {
+		return "", "", false
+	}
+	return req.SessionID, req.TerminalID, true
+}
+
+func (s *Server) respondTerminal(id json.RawMessage, result any, err error) {
+	if err != nil {
+		s.respond(id, map[string]any{"result": nil, "error": err.Error()})
+		return
+	}
+	s.respond(id, map[string]any{"result": result, "error": nil})
 }
 
 func defaultTerminalDimension(value *uint16, fallback uint16) uint16 {

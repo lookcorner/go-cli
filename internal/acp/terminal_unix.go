@@ -4,6 +4,7 @@ package acp
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"syscall"
@@ -23,6 +24,21 @@ func resizeTerminal(file *os.File, rows, cols uint16) error {
 func terminalHasForegroundProcess(fd, shellPID int) bool {
 	foreground, err := unix.IoctlGetInt(fd, unix.TIOCGPGRP)
 	return err == nil && foreground > 0 && foreground != shellPID
+}
+
+func configureTerminalProcess(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+}
+
+func terminalProcessStatus(state *os.ProcessState) (*int, string) {
+	if state == nil {
+		return nil, ""
+	}
+	if status, ok := state.Sys().(syscall.WaitStatus); ok && status.Signaled() {
+		return nil, fmt.Sprintf("signal %d", status.Signal())
+	}
+	code := state.ExitCode()
+	return &code, ""
 }
 
 func killTerminalProcess(cmd *exec.Cmd) error {

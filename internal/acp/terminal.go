@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 const terminalOutputBytes = 256 << 10
@@ -21,7 +23,26 @@ const terminalActivityInterval = 500 * time.Millisecond
 type terminalManager struct {
 	mu        sync.Mutex
 	terminals map[string]*ptyTerminal
+	commands  map[string]*commandTerminal
 	notify    func(string, any)
+}
+
+type commandTerminal struct {
+	id         string
+	sessionID  string
+	cmd        *exec.Cmd
+	cwd        string
+	created    int64
+	limit      int
+	done       chan struct{}
+	background chan struct{}
+
+	mu           sync.Mutex
+	output       []byte
+	truncated    bool
+	exitCode     *int
+	signal       string
+	backgrounded bool
 }
 
 type ptyTerminal struct {
@@ -56,7 +77,7 @@ type terminalInfo struct {
 }
 
 func newTerminalManager(notify func(string, any)) *terminalManager {
-	return &terminalManager{terminals: make(map[string]*ptyTerminal), notify: notify}
+	return &terminalManager{terminals: make(map[string]*ptyTerminal), commands: make(map[string]*commandTerminal), notify: notify}
 }
 
 func (m *terminalManager) create(shell, cwd string, env map[string]string, rows, cols uint16, name string) (string, error) {
@@ -92,14 +113,13 @@ func (m *terminalManager) create(shell, cwd string, env map[string]string, rows,
 	if err != nil {
 		return "", fmt.Errorf("start PTY shell: %w", err)
 	}
-	idBytes := make([]byte, 16)
-	if _, err := rand.Read(idBytes); err != nil {
+	id, err := newTerminalID()
+	if err != nil {
 		_ = killTerminalProcess(cmd)
 		_ = file.Close()
 		_ = cmd.Wait()
 		return "", fmt.Errorf("create terminal ID: %w", err)
 	}
-	id := hex.EncodeToString(idBytes)
 	if name == "" {
 		name = filepath.Base(cwd)
 		if name == "." || name == string(filepath.Separator) || name == "" {
@@ -116,6 +136,14 @@ func (m *terminalManager) create(shell, cwd string, env map[string]string, rows,
 	go m.readOutput(terminal)
 	go m.monitorActivity(terminal)
 	return id, nil
+}
+
+func newTerminalID() (string, error) {
+	id := make([]byte, 16)
+	if _, err := rand.Read(id); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(id), nil
 }
 
 func terminalEnvironment(extra map[string]string) []string {
@@ -332,7 +360,7 @@ func (m *terminalManager) list() []terminalInfo {
 		})
 		terminal.mu.Unlock()
 	}
-	return result
+	return append(result, m.commandList()...)
 }
 
 func (m *terminalManager) kill(id string) (string, error) {
@@ -362,6 +390,261 @@ func (m *terminalManager) kill(id string) (string, error) {
 	return outcome, nil
 }
 
+func (m *terminalManager) createCommand(sessionID, command string, args []string, cwd string, env map[string]string, limit int) (string, error) {
+	if sessionID == "" || command == "" {
+		return "", errors.New("sessionId and command are required")
+	}
+	if limit < 0 {
+		return "", errors.New("outputByteLimit must not be negative")
+	}
+	if cwd == "" {
+		cwd, _ = os.Getwd()
+	}
+	if info, err := os.Stat(cwd); err != nil || !info.IsDir() {
+		return "", fmt.Errorf("terminal cwd is not a directory: %s", cwd)
+	}
+	var cmd *exec.Cmd
+	if len(args) > 0 {
+		cmd = exec.Command(command, args...)
+	} else if runtime.GOOS == "windows" {
+		cmd = exec.Command("cmd.exe", "/C", command)
+	} else {
+		shell := os.Getenv("SHELL")
+		if shell == "" {
+			shell = "/bin/sh"
+		}
+		cmd = exec.Command(shell, "-c", command)
+	}
+	cmd.Dir = cwd
+	cmd.Env = terminalEnvironment(env)
+	configureTerminalProcess(cmd)
+	reader, writer := io.Pipe()
+	cmd.Stdout, cmd.Stderr = writer, writer
+	if err := cmd.Start(); err != nil {
+		_ = reader.Close()
+		_ = writer.Close()
+		return "", fmt.Errorf("start terminal command: %w", err)
+	}
+	id, err := newTerminalID()
+	if err != nil {
+		_ = killTerminalProcess(cmd)
+		_ = cmd.Wait()
+		_ = reader.Close()
+		_ = writer.Close()
+		return "", fmt.Errorf("create terminal ID: %w", err)
+	}
+	terminal := &commandTerminal{
+		id: id, sessionID: sessionID, cmd: cmd, cwd: cwd, created: time.Now().Unix(), limit: limit,
+		done: make(chan struct{}), background: make(chan struct{}),
+	}
+	m.mu.Lock()
+	m.commands[id] = terminal
+	m.mu.Unlock()
+	go terminal.wait(writer)
+	go terminal.collect(reader)
+	return id, nil
+}
+
+func (t *commandTerminal) wait(writer *io.PipeWriter) {
+	_ = t.cmd.Wait()
+	exitCode, signal := terminalProcessStatus(t.cmd.ProcessState)
+	t.mu.Lock()
+	t.exitCode, t.signal = exitCode, signal
+	t.mu.Unlock()
+	_ = writer.Close()
+}
+
+func (t *commandTerminal) collect(reader *io.PipeReader) {
+	buffer := make([]byte, 8192)
+	for {
+		count, err := reader.Read(buffer)
+		if count > 0 {
+			t.record(buffer[:count])
+		}
+		if err != nil {
+			break
+		}
+	}
+	_ = reader.Close()
+	close(t.done)
+}
+
+func (t *commandTerminal) record(data []byte) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.output = append(t.output, data...)
+	if len(t.output) > t.limit {
+		start := len(t.output) - t.limit
+		for start < len(t.output) && !utf8.RuneStart(t.output[start]) {
+			start++
+		}
+		t.output = append([]byte(nil), t.output[start:]...)
+		t.truncated = true
+	}
+}
+
+func (m *terminalManager) command(sessionID, id string) (*commandTerminal, error) {
+	m.mu.Lock()
+	terminal := m.commands[id]
+	m.mu.Unlock()
+	if terminal == nil || terminal.sessionID != sessionID {
+		return nil, errors.New("terminal not found")
+	}
+	return terminal, nil
+}
+
+func (m *terminalManager) findCommand(id string) *commandTerminal {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.commands[id]
+}
+
+func (m *terminalManager) commandOutput(sessionID, id string) (map[string]any, error) {
+	terminal, err := m.command(sessionID, id)
+	if err != nil {
+		return nil, err
+	}
+	terminal.mu.Lock()
+	result := map[string]any{"output": strings.ToValidUTF8(string(terminal.output), "\uFFFD"), "truncated": terminal.truncated}
+	if terminal.exitCode != nil || terminal.signal != "" {
+		status := map[string]any{"exitCode": terminal.exitCode}
+		if terminal.signal != "" {
+			status["signal"] = terminal.signal
+		}
+		result["exitStatus"] = status
+	}
+	terminal.mu.Unlock()
+	return result, nil
+}
+
+func (m *terminalManager) waitCommand(sessionID, id string) (map[string]any, error) {
+	terminal, err := m.command(sessionID, id)
+	if err != nil {
+		return nil, err
+	}
+	select {
+	case <-terminal.done:
+	case <-terminal.background:
+		return nil, errors.New("terminal not found")
+	}
+	terminal.mu.Lock()
+	result := map[string]any{"exitCode": terminal.exitCode}
+	if terminal.signal != "" {
+		result["signal"] = terminal.signal
+	}
+	terminal.mu.Unlock()
+	return result, nil
+}
+
+func (m *terminalManager) backgroundCommand(sessionID, id string) error {
+	terminal, err := m.command(sessionID, id)
+	if err != nil {
+		return nil
+	}
+	terminal.mu.Lock()
+	if !terminal.backgrounded {
+		terminal.backgrounded = true
+		close(terminal.background)
+	}
+	terminal.mu.Unlock()
+	return nil
+}
+
+func (m *terminalManager) releaseCommand(sessionID, id string) error {
+	terminal, err := m.command(sessionID, id)
+	if err != nil {
+		return nil
+	}
+	m.mu.Lock()
+	delete(m.commands, id)
+	m.mu.Unlock()
+	terminal.mu.Lock()
+	exited := terminal.exitCode != nil || terminal.signal != ""
+	terminal.mu.Unlock()
+	if !exited {
+		_ = killTerminalProcess(terminal.cmd)
+		select {
+		case <-terminal.done:
+		case <-time.After(3 * time.Second):
+			return fmt.Errorf("terminal %q did not exit", id)
+		}
+	}
+	return nil
+}
+
+func (m *terminalManager) killCommand(sessionID, id string) (string, error) {
+	terminal, err := m.command(sessionID, id)
+	if err != nil {
+		return "", err
+	}
+	terminal.mu.Lock()
+	exited := terminal.exitCode != nil || terminal.signal != ""
+	terminal.mu.Unlock()
+	if exited {
+		return "already_exited", nil
+	}
+	_ = killTerminalProcess(terminal.cmd)
+	select {
+	case <-terminal.done:
+		return "killed", nil
+	case <-time.After(3 * time.Second):
+		return "", fmt.Errorf("terminal %q did not exit", id)
+	}
+}
+
+func (m *terminalManager) commandList() []terminalInfo {
+	m.mu.Lock()
+	commands := make([]*commandTerminal, 0, len(m.commands))
+	for _, command := range m.commands {
+		commands = append(commands, command)
+	}
+	m.mu.Unlock()
+	result := make([]terminalInfo, 0, len(commands))
+	for _, command := range commands {
+		command.mu.Lock()
+		status := "connected"
+		if command.exitCode != nil || command.signal != "" {
+			status = "exited"
+		}
+		result = append(result, terminalInfo{
+			TerminalID: command.id, Status: status, Interactive: false, ExitCode: command.exitCode,
+			CWD: command.cwd, OutputOffset: uint64(len(command.output)), CreatedAt: command.created,
+		})
+		command.mu.Unlock()
+	}
+	return result
+}
+
+func (m *terminalManager) closeSessionCommands(sessionID string) {
+	m.mu.Lock()
+	var commands []*commandTerminal
+	for id, command := range m.commands {
+		if command.sessionID != sessionID {
+			continue
+		}
+		command.mu.Lock()
+		backgrounded := command.backgrounded
+		command.mu.Unlock()
+		if !backgrounded {
+			commands = append(commands, command)
+			delete(m.commands, id)
+		}
+	}
+	m.mu.Unlock()
+	for _, command := range commands {
+		command.mu.Lock()
+		exited := command.exitCode != nil || command.signal != ""
+		command.mu.Unlock()
+		if !exited {
+			_ = killTerminalProcess(command.cmd)
+		}
+		select {
+		case <-command.done:
+		case <-time.After(3 * time.Second):
+		}
+	}
+}
+
 func (m *terminalManager) closeAll() {
 	m.mu.Lock()
 	terminals := make([]*ptyTerminal, 0, len(m.terminals))
@@ -369,6 +652,11 @@ func (m *terminalManager) closeAll() {
 		terminals = append(terminals, terminal)
 	}
 	m.terminals = make(map[string]*ptyTerminal)
+	commands := make([]*commandTerminal, 0, len(m.commands))
+	for _, command := range m.commands {
+		commands = append(commands, command)
+	}
+	m.commands = make(map[string]*commandTerminal)
 	m.mu.Unlock()
 	for _, terminal := range terminals {
 		terminal.mu.Lock()
@@ -381,6 +669,18 @@ func (m *terminalManager) closeAll() {
 			terminal.mu.Unlock()
 			select {
 			case <-terminal.done:
+			case <-time.After(3 * time.Second):
+			}
+		}
+	}
+	for _, command := range commands {
+		command.mu.Lock()
+		exited := command.exitCode != nil || command.signal != ""
+		command.mu.Unlock()
+		if !exited {
+			_ = killTerminalProcess(command.cmd)
+			select {
+			case <-command.done:
 			case <-time.After(3 * time.Second):
 			}
 		}

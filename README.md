@@ -722,6 +722,12 @@ commands emit transition-only `process_started` and `process_ended`
 notifications. PTYs are owned by the ACP server connection and are cleaned up
 when it closes.
 
+ACP clients can also run non-interactive commands through
+`x.ai/terminal/create`, then inspect bounded merged output, wait for completion,
+kill, release, or explicitly background the process. These terminals are
+session-isolated, preserve direct argument vectors, report exit codes or Unix
+signals, and stop with their session unless explicitly backgrounded.
+
 Git repositories also expose compatible hunk tracker ACP extensions:
 `x.ai/hunk-tracker/get-hunks`, `get-files`, `get-all-file-contents`,
 `get-summary`, `hunk-action`, `file-action`, `turn-action`, and `all-action`.

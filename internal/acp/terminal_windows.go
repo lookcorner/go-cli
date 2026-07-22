@@ -18,6 +18,16 @@ func resizeTerminal(_ *os.File, _, _ uint16) error {
 
 func terminalHasForegroundProcess(_ int, _ int) bool { return false }
 
+func configureTerminalProcess(_ *exec.Cmd) {}
+
+func terminalProcessStatus(state *os.ProcessState) (*int, string) {
+	if state == nil {
+		return nil, ""
+	}
+	code := state.ExitCode()
+	return &code, ""
+}
+
 func killTerminalProcess(cmd *exec.Cmd) error {
 	if cmd.Process == nil {
 		return nil

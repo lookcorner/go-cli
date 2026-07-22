@@ -50,7 +50,7 @@ func TestACPInteractivePTYLifecycle(t *testing.T) {
 		},
 	})
 	created, _ := waitForACPResponse(t, messages, 1)
-	terminalID := created["result"].(map[string]any)["terminalId"].(string)
+	terminalID := terminalExtensionResult(t, created)["terminalId"].(string)
 	if terminalID == "" {
 		t.Fatal("PTY create returned an empty terminal ID")
 	}
@@ -64,7 +64,7 @@ func TestACPInteractivePTYLifecycle(t *testing.T) {
 		"jsonrpc": "2.0", "id": 3, "method": "x.ai/terminal/list", "params": map[string]any{},
 	})
 	listed, _ := waitForACPResponse(t, messages, 3)
-	terminals := listed["result"].(map[string]any)["terminals"].([]any)
+	terminals := terminalExtensionResult(t, listed)["terminals"].([]any)
 	if len(terminals) != 1 || terminals[0].(map[string]any)["interactive"] != true {
 		t.Fatalf("unexpected PTY list response: %#v", listed)
 	}
@@ -112,7 +112,7 @@ func TestACPInteractivePTYLifecycle(t *testing.T) {
 		"params": map[string]any{"terminalId": terminalID},
 	})
 	loaded, notifications := waitForACPResponse(t, messages, 4)
-	loadResult := loaded["result"].(map[string]any)
+	loadResult := terminalExtensionResult(t, loaded)
 	if loadResult["exited"] != true || int(loadResult["rows"].(float64)) != 30 || int(loadResult["cols"].(float64)) != 100 {
 		t.Fatalf("unexpected PTY load response: %#v", loaded)
 	}
@@ -136,7 +136,7 @@ func TestACPInteractivePTYLifecycle(t *testing.T) {
 		"params": map[string]any{"terminalId": terminalID},
 	})
 	killed, _ := waitForACPResponse(t, messages, 5)
-	if killed["result"].(map[string]any)["outcome"] != "already_exited" {
+	if terminalExtensionResult(t, killed)["outcome"] != "already_exited" {
 		t.Fatalf("unexpected PTY kill outcome: %#v", killed)
 	}
 	encodeACP(t, encoder, map[string]any{
@@ -144,20 +144,20 @@ func TestACPInteractivePTYLifecycle(t *testing.T) {
 		"params": map[string]any{"shell": "/bin/sh", "cwd": t.TempDir()},
 	})
 	running, _ := waitForACPResponse(t, messages, 6)
-	runningID := running["result"].(map[string]any)["terminalId"].(string)
+	runningID := terminalExtensionResult(t, running)["terminalId"].(string)
 	encodeACP(t, encoder, map[string]any{
 		"jsonrpc": "2.0", "id": 7, "method": "x.ai/terminal/kill",
 		"params": map[string]any{"terminalId": runningID},
 	})
 	terminated, _ := waitForACPResponse(t, messages, 7)
-	if terminated["result"].(map[string]any)["outcome"] != "killed" {
+	if terminalExtensionResult(t, terminated)["outcome"] != "killed" {
 		t.Fatalf("unexpected running PTY kill outcome: %#v", terminated)
 	}
 	encodeACP(t, encoder, map[string]any{
 		"jsonrpc": "2.0", "id": 8, "method": "x.ai/terminal/list", "params": map[string]any{},
 	})
 	emptyList, _ := waitForACPResponse(t, messages, 8)
-	if terminals := emptyList["result"].(map[string]any)["terminals"].([]any); len(terminals) != 0 {
+	if terminals := terminalExtensionResult(t, emptyList)["terminals"].([]any); len(terminals) != 0 {
 		t.Fatalf("killed PTYs remained listed: %#v", emptyList)
 	}
 
@@ -170,6 +170,175 @@ func TestACPInteractivePTYLifecycle(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("ACP server did not stop after PTY test")
 	}
+}
+
+func terminalExtensionResult(t *testing.T, message map[string]any) map[string]any {
+	t.Helper()
+	envelope := message["result"].(map[string]any)
+	if envelope["error"] != nil {
+		t.Fatalf("terminal extension failed: %#v", message)
+	}
+	result, _ := envelope["result"].(map[string]any)
+	return result
+}
+
+func TestACPPipedTerminalLifecycle(t *testing.T) {
+	server := &Server{
+		SessionDir: t.TempDir(),
+		Factory: func(context.Context, SessionConfig, tools.Approver, io.Writer, io.Writer) (*agent.Runner, func(), error) {
+			return nil, nil, errors.New("session factory should not be called")
+		},
+	}
+	clientToAgentR, clientToAgentW := io.Pipe()
+	agentToClientR, agentToClientW := io.Pipe()
+	done := make(chan error, 1)
+	go func() { done <- server.Serve(context.Background(), clientToAgentR, agentToClientW) }()
+	encoder := json.NewEncoder(clientToAgentW)
+	messages := make(chan map[string]any, 32)
+	go func() {
+		decoder := json.NewDecoder(agentToClientR)
+		for {
+			var message map[string]any
+			if err := decoder.Decode(&message); err != nil {
+				close(messages)
+				return
+			}
+			messages <- message
+		}
+	}()
+
+	encodeACP(t, encoder, map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "x.ai/terminal/create",
+		"params": map[string]any{
+			"sessionId": "remote-session", "command": "/bin/sh",
+			"args": []string{"-c", `printf %s "$PIPE_TEST"; exit 7`}, "cwd": t.TempDir(), "outputByteLimit": 5,
+			"env": []any{map[string]any{"name": "PIPE_TEST", "value": "0123456789"}},
+		},
+	})
+	created, _ := waitForACPResponse(t, messages, 1)
+	terminalID := terminalExtensionResult(t, created)["terminalId"].(string)
+	encodeACP(t, encoder, map[string]any{
+		"jsonrpc": "2.0", "id": 2, "method": "x.ai/terminal/wait_for_exit",
+		"params": map[string]any{"sessionId": "remote-session", "terminalId": terminalID},
+	})
+	waited, _ := waitForACPResponse(t, messages, 2)
+	if terminalExtensionResult(t, waited)["exitCode"] != float64(7) {
+		t.Fatalf("unexpected terminal exit: %#v", waited)
+	}
+	encodeACP(t, encoder, map[string]any{
+		"jsonrpc": "2.0", "id": 3, "method": "x.ai/terminal/output",
+		"params": map[string]any{"sessionId": "remote-session", "terminalId": terminalID},
+	})
+	outputMessage, _ := waitForACPResponse(t, messages, 3)
+	output := terminalExtensionResult(t, outputMessage)
+	if output["output"] != "56789" || output["truncated"] != true || output["exitStatus"].(map[string]any)["exitCode"] != float64(7) {
+		t.Fatalf("unexpected terminal output: %#v", output)
+	}
+	encodeACP(t, encoder, map[string]any{
+		"jsonrpc": "2.0", "id": 31, "method": "x.ai/terminal/output",
+		"params": map[string]any{"sessionId": "other-session", "terminalId": terminalID},
+	})
+	isolated := mustACPResponse(t, messages, 31)["result"].(map[string]any)
+	if isolated["result"] != nil || isolated["error"] != "terminal not found" {
+		t.Fatalf("terminal crossed session boundary: %#v", isolated)
+	}
+	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 4, "method": "x.ai/terminal/list", "params": map[string]any{}})
+	listed, _ := waitForACPResponse(t, messages, 4)
+	terminals := terminalExtensionResult(t, listed)["terminals"].([]any)
+	if len(terminals) != 1 || terminals[0].(map[string]any)["interactive"] != false {
+		t.Fatalf("unexpected piped terminal list: %#v", listed)
+	}
+	encodeACP(t, encoder, map[string]any{
+		"jsonrpc": "2.0", "id": 5, "method": "x.ai/terminal/release",
+		"params": map[string]any{"sessionId": "remote-session", "terminalId": terminalID},
+	})
+	terminalExtensionResult(t, mustACPResponse(t, messages, 5))
+	encodeACP(t, encoder, map[string]any{
+		"jsonrpc": "2.0", "id": 6, "method": "x.ai/terminal/output",
+		"params": map[string]any{"sessionId": "remote-session", "terminalId": terminalID},
+	})
+	released := mustACPResponse(t, messages, 6)["result"].(map[string]any)
+	if released["result"] != nil || released["error"] != "terminal not found" {
+		t.Fatalf("released terminal remained accessible: %#v", released)
+	}
+
+	_ = clientToAgentW.Close()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ACP server did not stop after piped terminal test")
+	}
+}
+
+func TestACPPipedTerminalBackgroundUnblocksWait(t *testing.T) {
+	manager := newTerminalManager(nil)
+	defer manager.closeAll()
+	id, err := manager.createCommand("session", "sleep 5", nil, t.TempDir(), nil, terminalOutputBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waited := make(chan error, 1)
+	go func() {
+		_, err := manager.waitCommand("session", id)
+		waited <- err
+	}()
+	if err := manager.backgroundCommand("session", id); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-waited:
+		if err == nil || err.Error() != "terminal not found" {
+			t.Fatalf("background wait error=%v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("background did not unblock terminal wait")
+	}
+	if outcome, err := manager.killCommand("session", id); err != nil || outcome != "killed" {
+		t.Fatalf("kill outcome=%q err=%v", outcome, err)
+	}
+}
+
+func TestPipedTerminalSessionClosePreservesBackgroundedCommands(t *testing.T) {
+	manager := newTerminalManager(nil)
+	defer manager.closeAll()
+	foreground, err := manager.createCommand("session", "sleep 5", nil, t.TempDir(), nil, terminalOutputBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	background, err := manager.createCommand("session", "sleep 5", nil, t.TempDir(), nil, terminalOutputBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.backgroundCommand("session", background); err != nil {
+		t.Fatal(err)
+	}
+	manager.closeSessionCommands("session")
+	if _, err := manager.commandOutput("session", foreground); err == nil {
+		t.Fatal("foreground command survived session close")
+	}
+	if _, err := manager.commandOutput("session", background); err != nil {
+		t.Fatalf("background command was removed on session close: %v", err)
+	}
+	if _, err := manager.killCommand("session", background); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPipedTerminalTruncatesAtUTF8Boundary(t *testing.T) {
+	terminal := &commandTerminal{limit: 4}
+	terminal.record([]byte("a你好"))
+	if output := string(terminal.output); output != "好" || !terminal.truncated {
+		t.Fatalf("output=%q truncated=%v", output, terminal.truncated)
+	}
+}
+
+func mustACPResponse(t *testing.T, messages <-chan map[string]any, id int) map[string]any {
+	t.Helper()
+	message, _ := waitForACPResponse(t, messages, id)
+	return message
 }
 
 func waitForACPResponse(t *testing.T, messages <-chan map[string]any, id int) (map[string]any, []map[string]any) {
