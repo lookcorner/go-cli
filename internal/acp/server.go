@@ -275,6 +275,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleWorktree(ctx, incoming)
 		case "x.ai/git/git_repo_root", "x.ai/git/status", "x.ai/git/stage", "x.ai/git/stage/content", "x.ai/git/unstage", "x.ai/git/discard", "x.ai/git/current_commit", "x.ai/git/info", "x.ai/git/branches", "x.ai/git/stash", "x.ai/git/checkout", "x.ai/git/checkout_session_head", "x.ai/git/checkout_commit", "x.ai/git/commit", "x.ai/git/files", "x.ai/git/diffs":
 			s.handleGit(ctx, incoming)
+		case "x.ai/pr/status":
+			s.handlePRStatus(ctx, incoming)
 		case "x.ai/git/worktree/create_from_worktree", "x.ai/git/worktree/create_from_worktree_sync":
 			s.handleWorktreeFork(ctx, incoming)
 		case "x.ai/git/worktree/gc", "x.ai/git/worktree/db/stats", "x.ai/git/worktree/db/rebuild", "x.ai/git/worktree/db/path":

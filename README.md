@@ -629,6 +629,10 @@ session logs. Workspace history is returned newest-first, while `session_id`
 queries preserve chronological prompt indices; `filter_session_id` provides a
 newest-first session filter without maintaining a second history database.
 
+`x.ai/pr/status` resolves a branch through GitHub CLI and reports open, draft,
+closed, or merged state plus merge-queue membership. Missing CLI credentials or
+an absent pull request degrade to a null result.
+
 `x.ai/search/content` performs bounded local ripgrep searches using an explicit
 `cwd` or a live session workspace. It supports literal, whole-word, regex,
 case-insensitive, include/exclude-glob, ignore-file, file-limit, and match-limit
