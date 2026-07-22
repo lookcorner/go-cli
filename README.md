@@ -309,6 +309,8 @@ read-only viewer, including resumed sessions.
 active session without creating a model turn.
 `/export` copies the completed conversation as Markdown; `/export <filename>`
 writes it to disk with `~`, spaces, relative paths, and parent creation supported.
+While a turn is running, additional prompts are queued FIFO; `/queue` prints a
+read-only snapshot and queued prompts run before scheduled wake-ups.
 Left/Right, Home/End, Delete, Backspace, Ctrl-A,
 Ctrl-E, Ctrl-U, and Ctrl/Cmd-Z edit or undo the active prompt and structured
 response input. Shift/Alt-Enter inserts a newline; Ctrl-M, `/multiline`, or `/ml`

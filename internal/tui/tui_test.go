@@ -488,6 +488,92 @@ func TestModelInputAndView(t *testing.T) {
 	}
 }
 
+func TestBusyModelQueuesPromptsAndShowsQueueWithoutModelTurn(t *testing.T) {
+	m := &model{ctx: context.Background(), runner: &agent.Runner{}, running: true, width: 70, height: 18, status: "thinking"}
+	m.setInput("first follow-up")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || !m.running || len(m.pendingPrompts) != 1 || m.pendingPrompts[0] != "first follow-up" || m.status != "queued prompt #1" {
+		t.Fatalf("command=%v running=%v queue=%#v status=%q", command != nil, m.running, m.pendingPrompts, m.status)
+	}
+	m.setInput("second line\ncontinued")
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || len(m.pendingPrompts) != 2 {
+		t.Fatalf("command=%v queue=%#v", command != nil, m.pendingPrompts)
+	}
+	m.setInput("/queue ignored")
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	queue := m.transcript.String()
+	if command != nil || len(m.pendingPrompts) != 2 || !strings.Contains(queue, "Queued prompts (2):") || !strings.Contains(queue, "#1  first follow-up") || !strings.Contains(queue, "#2  second line  (+1 more line)") {
+		t.Fatalf("command=%v queue=%#v transcript=%q", command != nil, m.pendingPrompts, queue)
+	}
+	m.setInput("/compact")
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || string(m.input) != "/compact" || len(m.pendingPrompts) != 2 || !strings.Contains(m.status, "only prompts") {
+		t.Fatalf("command=%v input=%q queue=%#v status=%q", command != nil, m.input, m.pendingPrompts, m.status)
+	}
+}
+
+func TestQueuedPromptsRunFIFOBeforeScheduledWake(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	streamer := &scheduledTUIStreamer{}
+	m := &model{
+		ctx: context.Background(), runner: &agent.Runner{Client: streamer, Tools: registry, Model: "test"},
+		pendingPrompts: []string{"first follow-up", "second follow-up"}, scheduled: []tools.ScheduledTaskFired{{TaskID: "loop-1", Prompt: "scheduled"}},
+	}
+	updated, command := m.Update(turnDoneEvent{result: agent.Result{ResponseID: "first-response"}})
+	m = updated.(*model)
+	if command == nil || !m.running || len(m.pendingPrompts) != 1 || len(m.scheduled) != 1 || m.activeTask != "" {
+		t.Fatalf("command=%v running=%v pending=%#v scheduled=%#v active=%q", command != nil, m.running, m.pendingPrompts, m.scheduled, m.activeTask)
+	}
+	first := command()
+	if _, ok := first.(turnDoneEvent); !ok || streamer.request.PreviousResponseID != "first-response" || streamer.request.Input[0].Content != "first follow-up" {
+		t.Fatalf("first=%#v request=%#v", first, streamer.request)
+	}
+	updated, command = m.Update(first)
+	m = updated.(*model)
+	if command == nil {
+		t.Fatal("second queued prompt did not start")
+	}
+	second := command()
+	if streamer.request.PreviousResponseID != "scheduled-response" || streamer.request.Input[0].Content != "second follow-up" {
+		t.Fatalf("second=%#v request=%#v", second, streamer.request)
+	}
+	updated, command = m.Update(second)
+	m = updated.(*model)
+	if command == nil {
+		t.Fatal("scheduled wake did not start after queued prompts")
+	}
+	scheduled := command()
+	if m.activeTask != "loop-1" || len(m.scheduled) != 0 || streamer.request.PreviousResponseID != "scheduled-response" || streamer.request.Input[0].Content != "scheduled" {
+		t.Fatalf("scheduled=%#v request=%#v active=%q remaining=%#v", scheduled, streamer.request, m.activeTask, m.scheduled)
+	}
+}
+
+func TestQueueCommandIsInstantWhenIdle(t *testing.T) {
+	m := &model{runner: &agent.Runner{}, pendingPrompts: []string{"follow-up"}}
+	m.setInput("/queue ignored")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.running || !strings.Contains(m.transcript.String(), "Queued prompt (1):") {
+		t.Fatalf("command=%v running=%v transcript=%q", command != nil, m.running, m.transcript.String())
+	}
+}
+
+func TestFormatPromptQueueEmpty(t *testing.T) {
+	if got := formatPromptQueue(nil); got != "Queue is empty." {
+		t.Fatalf("queue=%q", got)
+	}
+}
+
 func TestModelShellCommandDoesNotStartModelTurn(t *testing.T) {
 	ws, err := workspace.Open(t.TempDir())
 	if err != nil {

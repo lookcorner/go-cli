@@ -345,6 +345,7 @@ type model struct {
 	rememberNonce  uint64
 	turnCancel     context.CancelFunc
 	initial        string
+	pendingPrompts []string
 	scheduled      []tools.ScheduledTaskFired
 	activeTask     string
 	questionClick  struct {
@@ -693,7 +694,7 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.activeTask = ""
-		if command := m.startScheduled(); command != nil {
+		if command := m.startNext(); command != nil {
 			return m, command
 		}
 	case shellDoneEvent:
@@ -708,7 +709,7 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.status = "shell completed"
 		}
-		if command := m.startScheduled(); command != nil {
+		if command := m.startNext(); command != nil {
 			return m, command
 		}
 	case copyDoneEvent:
@@ -721,12 +722,12 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.status = "response copied"
 			clipboard := tea.SetClipboard(msg.text)
-			if command := m.startScheduled(); command != nil {
+			if command := m.startNext(); command != nil {
 				return m, tea.Batch(clipboard, command)
 			}
 			return m, clipboard
 		}
-		if command := m.startScheduled(); command != nil {
+		if command := m.startNext(); command != nil {
 			return m, command
 		}
 	case exportDoneEvent:
@@ -739,12 +740,12 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.status = "conversation copied to clipboard"
 			clipboard := tea.SetClipboard(msg.text)
-			if command := m.startScheduled(); command != nil {
+			if command := m.startNext(); command != nil {
 				return m, tea.Batch(clipboard, command)
 			}
 			return m, clipboard
 		}
-		if command := m.startScheduled(); command != nil {
+		if command := m.startNext(); command != nil {
 			return m, command
 		}
 	case scheduledFiredEvent:
@@ -757,7 +758,7 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				m.scheduled = append(m.scheduled, msg.event)
 			}
 		}
-		if command := m.startScheduled(); command != nil {
+		if command := m.startNext(); command != nil {
 			return m, tea.Batch(waitForBridge(m.bridge), command)
 		}
 		return m, waitForBridge(m.bridge)
@@ -779,7 +780,7 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.previousID = ""
 			m.status = "context compacted"
 		}
-		if command := m.startScheduled(); command != nil {
+		if command := m.startNext(); command != nil {
 			return m, command
 		}
 	case memoryFlushDoneEvent:
@@ -790,7 +791,7 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.status = "memory flush: " + msg.result.Outcome
 		}
-		if command := m.startScheduled(); command != nil {
+		if command := m.startNext(); command != nil {
 			return m, command
 		}
 	case memoryFilesDoneEvent:
@@ -804,7 +805,7 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				fmt.Fprintf(&m.transcript, "\n[memory] %s %d %s\n", file.Source, file.SizeBytes, file.Path)
 			}
 		}
-		if command := m.startScheduled(); command != nil {
+		if command := m.startNext(); command != nil {
 			return m, command
 		}
 	case memoryToggleDoneEvent:
@@ -815,7 +816,7 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.status = msg.message
 		}
-		if command := m.startScheduled(); command != nil {
+		if command := m.startNext(); command != nil {
 			return m, command
 		}
 	case memoryNoteEnhancedEvent:
@@ -833,6 +834,9 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "memory saved"
 			fmt.Fprintf(&m.transcript, "\n[memory] Memory saved to %s\n", msg.path)
 		}
+		if command := m.startNext(); command != nil {
+			return m, command
+		}
 	case memoryDreamDoneEvent:
 		m.running, m.turnCancel = false, nil
 		if msg.err != nil {
@@ -840,7 +844,7 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.status = "memory dream: " + msg.result.Outcome
 		}
-		if command := m.startScheduled(); command != nil {
+		if command := m.startNext(); command != nil {
 			return m, command
 		}
 	case tea.KeyPressMsg:
@@ -930,7 +934,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.running {
-		return m, nil
+		return m.handleRunningKey(msg)
 	}
 	if !m.rememberInput {
 		switch key.Code {
@@ -980,17 +984,8 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	modifiedEnter := key.Code == tea.KeyEnter && key.Mod&(tea.ModShift|tea.ModAlt) != 0
-	if key.Code == tea.KeyEnter && !m.rememberInput {
-		if !modifiedEnter && len(m.input) > 0 && m.cursor == len(m.input) && m.input[len(m.input)-1] == '\\' {
-			m.saveInputUndo()
-			m.input[len(m.input)-1] = '\n'
-			return m, nil
-		}
-		if (!m.multiline && modifiedEnter) || (m.multiline && !modifiedEnter) {
-			m.insertInput("\n")
-			return m, nil
-		}
+	if !m.rememberInput && m.insertNewlineForEnter(key) {
+		return m, nil
 	}
 	switch key.Code {
 	case tea.KeyEnter:
@@ -1024,8 +1019,12 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "/quit", "/exit":
 			return m, tea.Quit
 		case "/help":
-			m.appendSystem("# Commands\n\n`! <command>` `/always-approve` `/compact` `/context` `/copy [N]` `/dream` `/exit` `/export [filename]` `/find` `/flush` `/help` `/history` `/loop` `/memory` `/multiline` `/plan [description]` `/remember` `/rename <title>` `/session-info` `/transcript` `/view-plan`")
+			m.appendSystem("# Commands\n\n`! <command>` `/always-approve` `/compact` `/context` `/copy [N]` `/dream` `/exit` `/export [filename]` `/find` `/flush` `/help` `/history` `/loop` `/memory` `/multiline` `/plan [description]` `/queue` `/remember` `/rename <title>` `/session-info` `/transcript` `/view-plan`")
 			m.status = "commands"
+			return m, nil
+		case "/queue":
+			m.appendSystem(formatPromptQueue(m.pendingPrompts))
+			m.status = "queue"
 			return m, nil
 		case "/export":
 			filename := strings.TrimSpace(strings.TrimPrefix(prompt, "/export"))
@@ -1214,6 +1213,78 @@ func (m *model) appendSystem(text string) {
 	}
 	m.transcript.WriteString(strings.TrimSpace(text) + "\n")
 	m.scroll = 0
+}
+
+func (m *model) handleRunningKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	key := msg.Key()
+	if key.Code == tea.KeyEnter {
+		if m.insertNewlineForEnter(key) {
+			return m, nil
+		}
+		prompt := strings.TrimSpace(string(m.input))
+		if prompt == "" {
+			return m, nil
+		}
+		fields := strings.Fields(prompt)
+		if fields[0] == "/queue" {
+			m.clearInput()
+			m.appendSystem(formatPromptQueue(m.pendingPrompts))
+			m.status = "queue"
+			return m, nil
+		}
+		if strings.HasPrefix(prompt, "/") || strings.HasPrefix(prompt, "!") {
+			m.status = "only prompts can be queued while a turn is running"
+			return m, nil
+		}
+		m.clearInput()
+		m.rememberPrompt(prompt)
+		m.pendingPrompts = append(m.pendingPrompts, prompt)
+		m.status = fmt.Sprintf("queued prompt #%d", len(m.pendingPrompts))
+		return m, nil
+	}
+	m.editInput(msg)
+	return m, nil
+}
+
+func (m *model) insertNewlineForEnter(key tea.Key) bool {
+	if key.Code != tea.KeyEnter {
+		return false
+	}
+	modified := key.Mod&(tea.ModShift|tea.ModAlt) != 0
+	if !modified && len(m.input) > 0 && m.cursor == len(m.input) && m.input[len(m.input)-1] == '\\' {
+		m.saveInputUndo()
+		m.input[len(m.input)-1] = '\n'
+		return true
+	}
+	if (!m.multiline && modified) || (m.multiline && !modified) {
+		m.insertInput("\n")
+		return true
+	}
+	return false
+}
+
+func formatPromptQueue(prompts []string) string {
+	if len(prompts) == 0 {
+		return "Queue is empty."
+	}
+	label := "prompt"
+	if len(prompts) != 1 {
+		label = "prompts"
+	}
+	var result strings.Builder
+	fmt.Fprintf(&result, "Queued %s (%d):", label, len(prompts))
+	for index, prompt := range prompts {
+		first, _, _ := strings.Cut(prompt, "\n")
+		fmt.Fprintf(&result, "\n  #%d  %s", index+1, strings.TrimSpace(first))
+		if extra := strings.Count(prompt, "\n"); extra > 0 {
+			suffix := ""
+			if extra != 1 {
+				suffix = "s"
+			}
+			fmt.Fprintf(&result, "  (+%d more line%s)", extra, suffix)
+		}
+	}
+	return result.String()
 }
 
 func copyMessageNumber(args string) (int, error) {
@@ -1945,8 +2016,20 @@ func runSyntheticTurn(ctx context.Context, runner *agent.Runner, prompt, previou
 	}
 }
 
-func (m *model) startScheduled() tea.Cmd {
-	if m.running || len(m.scheduled) == 0 {
+func (m *model) startNext() tea.Cmd {
+	if m.running {
+		return nil
+	}
+	if len(m.pendingPrompts) > 0 {
+		prompt := m.pendingPrompts[0]
+		m.pendingPrompts = m.pendingPrompts[1:]
+		m.running = true
+		turnCtx, cancel := context.WithCancel(m.ctx)
+		m.turnCancel = cancel
+		m.beginTurn(prompt)
+		return runTurn(turnCtx, m.runner, prompt, m.previousID)
+	}
+	if len(m.scheduled) == 0 {
 		return nil
 	}
 	event := m.scheduled[0]
