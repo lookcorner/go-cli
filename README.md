@@ -774,7 +774,8 @@ reports repository, branch/upstream, staged, unstaged, untracked, optional
 line-count data, and optional per-file patches with byte and line counts using
 the reference extension result envelope. Nested Git repositories and submodules
 are ignored by default and can be included explicitly. `diffs` compares
-commit-ish, staged, and working versions with optional patches and text content.
+commit-ish, staged, and working versions with optional patches and text content,
+and rejects all files whose patches exceed requested byte or line limits.
 Tracked, staged, and text untracked changes are included; mutations performed
 through Gork file tools are attributed to the agent, while other changes are
 reported as external. Attribution is per hunk, so user and agent edits in the

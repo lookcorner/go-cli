@@ -136,6 +136,61 @@ func TestGitExtensionWireContract(t *testing.T) {
 	}
 }
 
+func TestGitDiffPatchLimitsWireContract(t *testing.T) {
+	root := t.TempDir()
+	runACPGit(t, root, "init", "-q")
+	runACPGit(t, root, "config", "user.name", "Fixture")
+	runACPGit(t, root, "config", "user.email", "fixture@example.invalid")
+	for _, name := range []string{"a.txt", "b.txt"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("base\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runACPGit(t, root, "add", "a.txt", "b.txt")
+	runACPGit(t, root, "commit", "-qm", "baseline")
+	for _, name := range []string{"a.txt", "b.txt"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("changed\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runACPGit(t, root, "add", "a.txt", "b.txt")
+
+	server := &Server{}
+	request := func(params string) map[string]any {
+		t.Helper()
+		var output bytes.Buffer
+		server.output = &output
+		server.handleGit(context.Background(), message{ID: json.RawMessage("1"), Method: "x.ai/git/diffs", Params: json.RawMessage(params)})
+		var response map[string]any
+		if err := json.NewDecoder(&output).Decode(&response); err != nil {
+			t.Fatal(err)
+		}
+		return response["result"].(map[string]any)
+	}
+	base := `{"gitRoot":` + strconv.Quote(root) + `,"from":"HEAD","to":"staged","includePatch":true`
+	unlimited := request(base + `}`)
+	files := unlimited["result"].(map[string]any)["files"].([]any)
+	if len(files) != 2 {
+		t.Fatalf("unexpected diff files: %#v", unlimited)
+	}
+	var maxBytes, maxLines uint64
+	for _, raw := range files {
+		file := raw.(map[string]any)
+		maxBytes = max(maxBytes, uint64(file["patchBytes"].(float64)))
+		maxLines = max(maxLines, uint64(file["patchLines"].(float64)))
+	}
+	exact := request(base + `,"maxPatchBytes":` + strconv.FormatUint(maxBytes, 10) + `,"maxPatchLines":` + strconv.FormatUint(maxLines, 10) + `}`)
+	if exact["error"] != nil || len(exact["result"].(map[string]any)["files"].([]any)) != 2 {
+		t.Fatalf("exact patch limits were rejected: %#v", exact)
+	}
+	for _, limit := range []string{`,"maxPatchBytes":0}`, `,"maxPatchLines":0}`} {
+		exceeded := request(base + limit)
+		if exceeded["result"] != nil || exceeded["error"] != "Diff exceeds size limits for 2 file(s): a.txt, b.txt" {
+			t.Fatalf("unexpected patch limit response: %#v", exceeded)
+		}
+	}
+}
+
 func TestPlanModeExitApprovalWireContract(t *testing.T) {
 	tests := []tools.PlanModeDecision{
 		{Outcome: "approved"},

@@ -898,12 +898,15 @@ func (s *Server) handleGit(ctx context.Context, incoming message) {
 	case "x.ai/git/diffs":
 		result, err := worktrees.Diffs(ctx, root, req.Paths, req.From, req.To, req.IncludePatch, req.IncludeContent, req.MergeBase)
 		if err == nil {
+			exceeded := make([]string, 0)
 			for _, file := range result.Files {
 				if (req.MaxPatchBytes != nil && file.PatchBytes != nil && *file.PatchBytes > *req.MaxPatchBytes) ||
 					(req.MaxPatchLines != nil && file.PatchLines != nil && *file.PatchLines > *req.MaxPatchLines) {
-					err = fmt.Errorf("diff size limit exceeded for %s", file.Path)
-					break
+					exceeded = append(exceeded, file.Path)
 				}
+			}
+			if len(exceeded) > 0 {
+				err = fmt.Errorf("Diff exceeds size limits for %d file(s): %s", len(exceeded), strings.Join(exceeded, ", "))
 			}
 		}
 		extResult(result, err)
