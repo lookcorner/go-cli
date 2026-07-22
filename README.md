@@ -43,6 +43,13 @@ initial file index plus add/remove deltas with `index: true`, and configure
 `debounce_ms` and extra `ignore` globs. File watchers stop when their session
 closes.
 
+Clients can separately opt into `x.ai/git_head_changed` with the boolean
+`clientCapabilities._meta["x.ai/gitHeadChanged"]`. Each session publishes its
+initial branch and linked-worktree identity, then sends deduplicated updates
+after successful edit/shell tools or an external Git HEAD change. Detached
+HEADs use `null` for `branch`, normal repositories use `null` for `mainRepo`,
+and the watcher is released with the session.
+
 ACP `x.ai/suggest` provides interactive shell completion from workspace prompt
 history, `$PATH` executables, and filesystem entries. It returns safe whole-line
 insertions plus atomic token ranges for newer clients, respects shell quoting,

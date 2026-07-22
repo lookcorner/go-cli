@@ -10,7 +10,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
+
+	"github.com/fsnotify/fsnotify"
 )
 
 type GitFileChange struct {
@@ -37,6 +40,13 @@ type GitStatus struct {
 	Behind     *uint64         `json:"behind,omitempty"`
 	Staged     []GitFileChange `json:"staged"`
 	Unstaged   []GitFileChange `json:"unstaged"`
+}
+
+type GitHead struct {
+	Branch     string
+	Root       string
+	MainRoot   string
+	IsWorktree bool
 }
 
 type GitInfo struct {
@@ -114,6 +124,107 @@ func GitRoot(ctx context.Context, cwd string) (string, error) {
 func CurrentCommit(ctx context.Context, root string) (string, error) {
 	commit, err := gitOutput(ctx, root, "rev-parse", "HEAD^{commit}")
 	return strings.TrimSpace(commit), err
+}
+
+func HeadInfo(ctx context.Context, cwd string) (GitHead, error) {
+	root, err := GitRoot(ctx, cwd)
+	if err != nil {
+		return GitHead{}, err
+	}
+	mainRoot, err := mainRepositoryRoot(ctx, root)
+	if err != nil {
+		return GitHead{}, err
+	}
+	return GitHead{
+		Branch: optionalGit(ctx, root, "symbolic-ref", "--short", "-q", "HEAD"),
+		Root:   root, MainRoot: mainRoot, IsWorktree: root != mainRoot,
+	}, nil
+}
+
+// WatchHead reports repository events after a short debounce. Callers compare
+// Head snapshots, so commits that keep the same branch are naturally ignored.
+func WatchHead(ctx context.Context, cwd string, ready, changed func()) error {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return err
+	}
+	defer watcher.Close()
+
+	paths := make(map[string]bool)
+	add := func(path string) error {
+		path = filepath.Clean(strings.TrimSpace(path))
+		if path == "." || path == "" || paths[path] {
+			return nil
+		}
+		if err := watcher.Add(path); err != nil {
+			return err
+		}
+		paths[path] = true
+		return nil
+	}
+	if err := add(cwd); err != nil {
+		return fmt.Errorf("watch Git HEAD in %s: %w", cwd, err)
+	}
+	addRepository := func() bool {
+		root, rootErr := GitRoot(ctx, cwd)
+		if rootErr != nil {
+			return false
+		}
+		if add(root) != nil {
+			return false
+		}
+		gitDir, gitErr := gitOutput(ctx, root, "rev-parse", "--absolute-git-dir")
+		return gitErr == nil && add(gitDir) == nil
+	}
+	repositoryWatched := addRepository()
+	if ready != nil {
+		ready()
+	}
+
+	var timer *time.Timer
+	var timerC <-chan time.Time
+	defer func() {
+		if timer != nil {
+			timer.Stop()
+		}
+	}()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case _, ok := <-watcher.Errors:
+			if !ok {
+				return nil
+			}
+		case event, ok := <-watcher.Events:
+			if !ok {
+				return nil
+			}
+			if event.Op&(fsnotify.Create|fsnotify.Write|fsnotify.Remove|fsnotify.Rename) == 0 {
+				continue
+			}
+			if timer == nil {
+				timer = time.NewTimer(50 * time.Millisecond)
+			} else {
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				timer.Reset(50 * time.Millisecond)
+			}
+			timerC = timer.C
+		case <-timerC:
+			timerC = nil
+			if !repositoryWatched {
+				repositoryWatched = addRepository()
+			}
+			if changed != nil {
+				changed()
+			}
+		}
+	}
 }
 
 func Info(ctx context.Context, root string) (GitInfo, error) {

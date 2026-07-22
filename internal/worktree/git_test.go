@@ -6,7 +6,90 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestHeadInfoAndWatcher(t *testing.T) {
+	root := newRepo(t)
+	branch := strings.TrimSpace(runGitOutput(t, root, "branch", "--show-current"))
+	head, err := HeadInfo(context.Background(), root)
+	if err != nil || head.Branch != branch || head.IsWorktree || head.Root != head.MainRoot {
+		t.Fatalf("head=%#v err=%v", head, err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ready := make(chan struct{})
+	changed := make(chan struct{}, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- WatchHead(ctx, root, func() { close(ready) }, func() {
+			select {
+			case changed <- struct{}{}:
+			default:
+			}
+		})
+	}()
+	select {
+	case <-ready:
+	case <-time.After(3 * time.Second):
+		t.Fatal("git head watcher did not start")
+	}
+	runGit(t, root, "checkout", "-qb", "feature/head-watch")
+	select {
+	case <-changed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("git head watcher missed branch checkout")
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWatchHeadDiscoversInitializedRepository(t *testing.T) {
+	root := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ready := make(chan struct{})
+	changed := make(chan struct{}, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- WatchHead(ctx, root, func() { close(ready) }, func() {
+			select {
+			case changed <- struct{}{}:
+			default:
+			}
+		})
+	}()
+	select {
+	case <-ready:
+	case err := <-done:
+		t.Fatalf("git head watcher failed to start: %v", err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("git head watcher did not start")
+	}
+	runGit(t, root, "init", "-q")
+	select {
+	case <-changed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("git head watcher missed repository initialization")
+	}
+	if _, err := HeadInfo(context.Background(), root); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWatchHeadRejectsMissingWorkspace(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing")
+	if err := WatchHead(context.Background(), missing, nil, nil); err == nil || !strings.Contains(err.Error(), "watch Git HEAD") {
+		t.Fatalf("missing workspace error=%v", err)
+	}
+}
 
 func TestGitStatusStageUnstageAndDiscard(t *testing.T) {
 	ctx := context.Background()

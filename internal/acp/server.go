@@ -104,6 +104,7 @@ type Server struct {
 	pendingQuestion map[string]chan userQuestionResult
 	pendingHook     map[string]chan clientHookResult
 	clientFS        *clientFSConfig
+	clientGitHead   bool
 	nextSession     atomic.Uint64
 	nextRequest     atomic.Uint64
 	closing         atomic.Bool
@@ -144,6 +145,10 @@ type session struct {
 	suggestDone         chan struct{}
 	fileWatchCancel     context.CancelFunc
 	fileWatchDone       chan struct{}
+	gitWatchCancel      context.CancelFunc
+	gitWatchDone        chan struct{}
+	gitHeadEnabled      bool
+	lastGitHead         string
 	lastRecapPrompt     int
 	promptIndex         int
 	activePrompt        int
@@ -216,6 +221,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 	s.pendingQuestion = make(map[string]chan userQuestionResult)
 	s.pendingHook = make(map[string]chan clientHookResult)
 	s.clientFS = nil
+	s.clientGitHead = false
 	manager, err := worktrees.NewManager(s.SessionDir)
 	if err != nil {
 		return err
@@ -243,6 +249,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 		switch incoming.Method {
 		case "initialize":
 			s.clientFS = parseClientFS(incoming.Params)
+			s.clientGitHead = parseClientGitHead(incoming.Params)
 			s.respond(incoming.ID, map[string]any{
 				"protocolVersion": ProtocolVersion,
 				"agentCapabilities": map[string]any{
@@ -1690,6 +1697,7 @@ func (s *Server) startSession(ctx context.Context, id string, sessionConfig Sess
 		id: id, ctx: ctx, cwd: sessionConfig.CWD, updated: time.Now().UTC(), previous: previous,
 		runner: runner, close: closeRuntime, promptIndex: promptIndex, activePrompt: -1, rewind: rewind, logPath: sessionPath, mode: mode,
 		mcpServers: append([]MCPServer(nil), sessionConfig.MCPServers...), permissions: approver,
+		gitHeadEnabled: s.clientGitHead,
 	}
 	if blocked {
 		created.unavailableModel = fallbackFrom
@@ -1734,6 +1742,7 @@ func (s *Server) startSession(ctx context.Context, id string, sessionConfig Sess
 	}
 	runner.StartHooks(hooks.WithSessionStartSource(ctx, startSource))
 	s.startFileNotifications(created)
+	s.startGitHeadNotifications(created)
 	s.notifyRosterUpsert(created, "")
 	if fellBack {
 		newModel, reason := runner.ModelID, fmt.Sprintf("Model %q is no longer available; using %q.", fallbackFrom, runner.ModelID)
@@ -2558,7 +2567,11 @@ func (s *Server) shutdownSession(current *session) {
 	if current.fileWatchCancel != nil {
 		current.fileWatchCancel()
 	}
-	runDone, btwDone, recapDone, suggestDone, fileWatchDone := current.runDone, current.btwDone, current.recapDone, current.suggestDone, current.fileWatchDone
+	if current.gitWatchCancel != nil {
+		current.gitWatchCancel()
+	}
+	runDone, btwDone, recapDone, suggestDone := current.runDone, current.btwDone, current.recapDone, current.suggestDone
+	fileWatchDone, gitWatchDone := current.fileWatchDone, current.gitWatchDone
 	current.mu.Unlock()
 	for _, item := range queued {
 		s.respondQueuedPromptCancelled(current, item)
@@ -2577,6 +2590,9 @@ func (s *Server) shutdownSession(current *session) {
 	}
 	if fileWatchDone != nil {
 		<-fileWatchDone
+	}
+	if gitWatchDone != nil {
+		<-gitWatchDone
 	}
 	if current.close != nil {
 		current.close()
@@ -3028,7 +3044,11 @@ func (s *Server) closeAll() {
 		if current.fileWatchCancel != nil {
 			current.fileWatchCancel()
 		}
-		runDone, btwDone, recapDone, suggestDone, fileWatchDone := current.runDone, current.btwDone, current.recapDone, current.suggestDone, current.fileWatchDone
+		if current.gitWatchCancel != nil {
+			current.gitWatchCancel()
+		}
+		runDone, btwDone, recapDone, suggestDone := current.runDone, current.btwDone, current.recapDone, current.suggestDone
+		fileWatchDone, gitWatchDone := current.fileWatchDone, current.gitWatchDone
 		current.mu.Unlock()
 		for _, item := range queued {
 			s.respondQueuedPromptCancelled(current, item)
@@ -3047,6 +3067,9 @@ func (s *Server) closeAll() {
 		}
 		if fileWatchDone != nil {
 			<-fileWatchDone
+		}
+		if gitWatchDone != nil {
+			<-gitWatchDone
 		}
 		current.close()
 	}
@@ -3171,6 +3194,9 @@ func (o *sessionToolObserver) ToolFinished(call api.ToolCall, result tools.Execu
 		update["content"] = content
 	}
 	o.server.notify(o.sessionID, update)
+	if toolErr == nil && gitChangingTool(call.Name) {
+		o.server.notifyGitHead(o.server.lookupSession(o.sessionID))
+	}
 }
 
 func acpToolKind(name string) string {
