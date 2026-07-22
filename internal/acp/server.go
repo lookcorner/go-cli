@@ -253,6 +253,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handlePrompt(ctx, incoming)
 		case "session/set_mode":
 			s.handleSetMode(incoming)
+		case "session/set_model":
+			s.handleSetSessionModel(incoming)
 		case "x.ai/toggle_plan_mode":
 			s.handleTogglePlanMode(incoming.Params)
 		case "x.ai/yolo_mode_changed":
@@ -1421,12 +1423,12 @@ func (s *Server) handleNewSession(ctx context.Context, incoming message) {
 	}
 	yoloMode, autoMode := sessionPermissionModeOverrides(params.Meta)
 	sessionConfig := SessionConfig{CWD: params.CWD, Model: model, SessionID: id, MCPServers: servers, YoloMode: yoloMode, AutoMode: autoMode}
-	_, err = s.startSession(ctx, id, sessionConfig, "")
+	created, err := s.startSession(ctx, id, sessionConfig, "")
 	if err != nil {
 		s.respondError(incoming.ID, -32000, err.Error())
 		return
 	}
-	s.respond(incoming.ID, map[string]any{"sessionId": id, "modes": sessionModes("default")})
+	s.respond(incoming.ID, map[string]any{"sessionId": id, "modes": sessionModes("default"), "models": modelState(created.runner)})
 }
 
 func (s *Server) handleRewind(incoming message) {
@@ -2164,7 +2166,8 @@ func (s *Server) handleRestoreSession(ctx context.Context, incoming message, rep
 	}
 	yoloMode, autoMode := sessionPermissionModeOverrides(params.Meta)
 	config := SessionConfig{CWD: params.CWD, Model: model, SessionID: params.SessionID, ResumePath: path, MCPServers: servers, YoloMode: yoloMode, AutoMode: autoMode}
-	if _, err := s.startSession(ctx, params.SessionID, config, previous); err != nil {
+	created, err := s.startSession(ctx, params.SessionID, config, previous)
+	if err != nil {
 		s.respondError(incoming.ID, -32000, err.Error())
 		return
 	}
@@ -2175,7 +2178,7 @@ func (s *Server) handleRestoreSession(ctx context.Context, incoming message, rep
 		mode = current.mode
 		current.mu.Unlock()
 	}
-	s.respond(incoming.ID, map[string]any{"sessionId": params.SessionID, "modes": sessionModes(mode)})
+	s.respond(incoming.ID, map[string]any{"sessionId": params.SessionID, "modes": sessionModes(mode), "models": modelState(created.runner)})
 }
 
 func (s *Server) replaySession(path, sessionID string) error {

@@ -46,6 +46,11 @@ remain authoritative. `session/new` accepts a validated UUID in `_meta.sessionId
 and a configured profile or underlying model in `_meta.modelId` (unknown models
 fall back to the default); `session/load` accepts `_meta.noReplay=true` when the
 client already owns the transcript and only needs the persisted runtime state.
+New and loaded sessions return the active and available model state. An idle
+session accepts `session/set_model`, persists the selection, rebuilds backend
+history from the completed transcript, updates future subagent and goal-role
+defaults, and broadcasts `model_changed` before replying. Busy sessions reject
+the switch so an in-flight turn cannot cross model backends.
 
 Completed ACP prompts publish `x.ai/session/prompt_complete` before their RPC
 response. Prompt responses include `_meta` correlation for the session,

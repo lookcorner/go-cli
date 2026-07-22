@@ -319,6 +319,13 @@ func readInfo(path, id string) (Info, error) {
 					info.ModelID = data.ModelID
 				}
 			}
+		case "session_model":
+			var data struct {
+				ModelID string `json:"model_id"`
+			}
+			if json.Unmarshal(event.Data, &data) == nil && data.ModelID != "" {
+				info.ModelID = data.ModelID
+			}
 		case "user_prompt":
 			if info.Title == "" {
 				var data struct {
@@ -591,6 +598,16 @@ func Transcript(path string) ([]Message, error) {
 		return nil, err
 	}
 	return transcriptFromEvents(path, events, rewound)
+}
+
+// TranscriptOrEmpty is Transcript for operations that also apply before the
+// first model turn, such as changing a new session's model.
+func TranscriptOrEmpty(path string) ([]Message, error) {
+	events, _, _, err := liveTimeline(path)
+	if err != nil {
+		return nil, err
+	}
+	return transcriptFromEvents(path, events, true)
 }
 
 // PendingPrompt returns the latest real user prompt that has no completed model response.

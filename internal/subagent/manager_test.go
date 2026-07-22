@@ -183,6 +183,15 @@ func TestTaskToolRunsFilteredSubagentAndResumes(t *testing.T) {
 	}
 }
 
+func TestSetParentModelUpdatesFutureRuntime(t *testing.T) {
+	manager := &Manager{parentModel: "old", contextWindow: 1000, compactThresholdPercent: 80}
+	manager.SetParentModel("new", 2000, 70)
+	got := manager.parentModelRuntime()
+	if got.Model != "new" || got.ContextWindow != 2000 || got.CompactThresholdPercent != 70 {
+		t.Fatalf("runtime=%#v", got)
+	}
+}
+
 func TestAgentScopedMemoryInjectsAndConfinesFileTools(t *testing.T) {
 	root, grokHome := t.TempDir(), t.TempDir()
 	t.Setenv("GROK_HOME", grokHome)

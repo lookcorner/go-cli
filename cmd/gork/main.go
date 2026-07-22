@@ -1599,6 +1599,23 @@ func resolveACPSessionModel(cfg config.Config, requested string) config.Config {
 	return cfg
 }
 
+func acpModelOptions(cfg config.Config) []agent.ModelOption {
+	seen := make(map[string]bool)
+	options := make([]agent.ModelOption, 0, len(cfg.ModelProfiles)+1)
+	for _, name := range cfg.ModelSlugs() {
+		resolved, ok := cfg.ResolveModel(name)
+		if !ok || resolved.Model == "" || seen[resolved.Model] {
+			continue
+		}
+		seen[resolved.Model] = true
+		options = append(options, agent.ModelOption{ID: resolved.Model, Name: name})
+	}
+	if cfg.Model != "" && !seen[cfg.Model] {
+		options = append(options, agent.ModelOption{ID: cfg.Model, Name: cfg.Model})
+	}
+	return options
+}
+
 func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []string, tokenProvider api.TokenProvider, stdin io.Reader, stdout, stderr io.Writer) error {
 	mode := tools.PermissionMode(opts.approval)
 	if mode != tools.PermissionPrompt && mode != tools.PermissionAuto && mode != tools.PermissionAlwaysApprove && mode != tools.PermissionDeny {
@@ -1652,6 +1669,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		if err != nil {
 			return nil, nil, err
 		}
+		modelCatalog := sessionCfg
 		sessionCfg = resolveACPSessionModel(sessionCfg, sessionConfig.Model)
 		instructions := joinInstructions(cfg.SystemPrompt, workspace.FormatInstructions(instructionFiles), catalog.Summary())
 		permissionPrompts := &permissionPromptApprover{base: protocolApprover}
@@ -2054,10 +2072,11 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 				pluginState.hooks.Reconfigure(pluginState.hookCfg)
 				return nil
 			},
-			Model: sessionCfg.Model, Instructions: instructions, MaxSteps: cfg.MaxSteps,
+			ModelID: sessionCfg.Model, Model: sessionCfg.Model, ModelOptions: acpModelOptions(modelCatalog),
+			Instructions: instructions, MaxSteps: cfg.MaxSteps,
 			PermissionClassifier: permissionClassifier,
 			TextOutput:           textOutput, StatusOutput: statusOutput,
-			ContextWindow: cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,
+			ContextWindow: sessionCfg.ContextWindow, CompactThresholdPercent: sessionCfg.AutoCompactThresholdPercent,
 			TwoPassCompaction: sessionCfg.TwoPassCompaction,
 			Memory:            memoryStore, MemoryConfig: sessionCfg.Memory,
 			OpenMemory:       memoryStoreOpener(sessionCfg.Memory, ws.Root(), logger.ID()),
@@ -2067,6 +2086,26 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			MarketplaceList:   func() ([]marketplace.ScanResult, error) { return marketplace.List(opts.configPath, ws.Root()) },
 			MarketplaceAction: marketplaceAction,
 			SessionPath:       logger.Path(),
+		}
+		runner.ResolveModel = func(id string) (agent.ModelRuntime, error) {
+			resolved, ok := modelCatalog.ResolveModel(id)
+			if !ok {
+				return agent.ModelRuntime{}, fmt.Errorf("unknown model id %q", id)
+			}
+			client, err := newModelClient(resolved, tokenProvider)
+			if err != nil {
+				return agent.ModelRuntime{}, err
+			}
+			return agent.ModelRuntime{
+				ID: resolved.Model, Client: client, Model: resolved.Model,
+				ContextWindow: resolved.ContextWindow, CompactThresholdPercent: resolved.AutoCompactThresholdPercent,
+			}, nil
+		}
+		runner.OnModelChanged = func(runtime agent.ModelRuntime) {
+			subagentManager.SetParentModel(runtime.Model, runtime.ContextWindow, runtime.CompactThresholdPercent)
+			if resolved, ok := modelCatalog.ResolveModel(runtime.ID); ok {
+				registry.ConfigureGoalRoles(goalRoleConfig(resolved, true))
+			}
 		}
 		return runner, func() {
 			waitRunnerMemory(runner)

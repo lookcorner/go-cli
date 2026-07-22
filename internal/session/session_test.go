@@ -275,6 +275,27 @@ func TestNamedSessionMetadataAndList(t *testing.T) {
 	}
 }
 
+func TestListUsesLatestSessionModel(t *testing.T) {
+	dir := t.TempDir()
+	logger, err := NewLoggerWithID(dir, "model-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append("session_metadata", map[string]any{"cwd": "/workspace", "modelId": "old"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append("session_model", map[string]any{"model_id": "new"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	items, err := List(dir, "/workspace")
+	if err != nil || len(items) != 1 || items[0].ModelID != "new" {
+		t.Fatalf("items=%#v err=%v", items, err)
+	}
+}
+
 func TestForkCopiesTranscriptAndRebindsCWD(t *testing.T) {
 	dir := t.TempDir()
 	logger, err := NewLoggerWithID(dir, "parent")

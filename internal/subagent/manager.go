@@ -255,6 +255,18 @@ func (m *Manager) SetCatalog(catalog *agents.Catalog) {
 	m.mu.Unlock()
 }
 
+func (m *Manager) SetParentModel(model string, contextWindow, compactThresholdPercent int) {
+	m.mu.Lock()
+	m.parentModel, m.contextWindow, m.compactThresholdPercent = model, contextWindow, compactThresholdPercent
+	m.mu.Unlock()
+}
+
+func (m *Manager) parentModelRuntime() ModelRuntime {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return ModelRuntime{Model: m.parentModel, ContextWindow: m.contextWindow, CompactThresholdPercent: m.compactThresholdPercent}
+}
+
 func (m *Manager) Description() string {
 	m.mu.RLock()
 	definitions := m.catalog.Definitions()
@@ -313,7 +325,7 @@ func (m *Manager) Start(ctx context.Context, request tools.SubagentRequest) (too
 			m.removeWorktree(worktreePath)
 		}
 	}()
-	model := ModelRuntime{Model: m.parentModel, ContextWindow: m.contextWindow, CompactThresholdPercent: m.compactThresholdPercent}
+	model := m.parentModelRuntime()
 	if request.Model != "" {
 		resolved, ok := m.resolve(request.Model)
 		if !ok {
@@ -557,10 +569,11 @@ func (m *Manager) restoreTaskRuntime(previous *task, definition agents.Definitio
 }
 
 func (m *Manager) persistedModelRuntime(modelID string) (ModelRuntime, error) {
+	parent := m.parentModelRuntime()
 	if modelID == "" {
-		modelID = m.parentModel
+		modelID = parent.Model
 	}
-	fallback := ModelRuntime{Model: modelID, ContextWindow: m.contextWindow, CompactThresholdPercent: m.compactThresholdPercent}
+	fallback := ModelRuntime{Model: modelID, ContextWindow: parent.ContextWindow, CompactThresholdPercent: parent.CompactThresholdPercent}
 	if m.resolveModel == nil {
 		return fallback, nil
 	}
@@ -569,7 +582,7 @@ func (m *Manager) persistedModelRuntime(modelID string) (ModelRuntime, error) {
 			return candidate, nil
 		}
 	}
-	if modelID == m.parentModel {
+	if modelID == parent.Model {
 		return fallback, nil
 	}
 	return ModelRuntime{}, fmt.Errorf("resume_from subagent model %q is unavailable", modelID)

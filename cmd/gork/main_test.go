@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1338,5 +1339,26 @@ func TestResolveACPSessionModel(t *testing.T) {
 				t.Fatalf("resolved config=%#v", got)
 			}
 		})
+	}
+}
+
+func TestACPModelOptions(t *testing.T) {
+	threshold := 70
+	cfg := config.Config{
+		Model: "default-model",
+		ModelProfiles: map[string]config.ModelProfile{
+			"fast":  {Model: "shared-model", ContextWindow: 2000, AutoCompactThresholdPercent: &threshold},
+			"quick": {Model: "shared-model"},
+			"smart": {Model: "smart-model"},
+		},
+	}
+	got := acpModelOptions(cfg)
+	want := []agent.ModelOption{
+		{ID: "shared-model", Name: "fast"},
+		{ID: "smart-model", Name: "smart"},
+		{ID: "default-model", Name: "default-model"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("options=%#v want=%#v", got, want)
 	}
 }

@@ -27,6 +27,30 @@ type fakeStreamer struct {
 	results  []api.StreamResult
 }
 
+type modelSwitchStreamer struct {
+	requests []api.ResponseRequest
+	results  []api.StreamResult
+	errors   []error
+}
+
+func (s *modelSwitchStreamer) StreamResponse(_ context.Context, request api.ResponseRequest, _ func(string)) (api.StreamResult, error) {
+	s.requests = append(s.requests, request)
+	index := len(s.requests) - 1
+	if index < len(s.errors) && s.errors[index] != nil {
+		return api.StreamResult{}, s.errors[index]
+	}
+	return s.results[index], nil
+}
+
+type rewindingModelStreamer struct {
+	modelSwitchStreamer
+	history []session.Message
+}
+
+func (s *rewindingModelStreamer) RewindHistory(messages []session.Message) {
+	s.history = append([]session.Message(nil), messages...)
+}
+
 type recapStreamer struct {
 	mu       sync.Mutex
 	requests []api.ResponseRequest
@@ -635,6 +659,82 @@ func (f *fakeStreamer) StreamResponse(_ context.Context, request api.ResponseReq
 		onText(result.Text)
 	}
 	return result, nil
+}
+
+func TestRunnerApplyModelSeedsStatelessHistoryUntilSuccess(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	streamer := &modelSwitchStreamer{
+		results: []api.StreamResult{{}, {ResponseID: "new-1", Text: "done"}, {ResponseID: "new-2", Text: "again"}},
+		errors:  []error{errors.New("temporary failure")},
+	}
+	changed := false
+	runner := Runner{Client: &fakeStreamer{}, Tools: registry, ModelID: "old", Model: "old", MaxSteps: 1}
+	runner.OnModelChanged = func(ModelRuntime) { changed = true }
+	history := []session.Message{
+		{Role: "user", Text: "inspect", Content: []session.Content{
+			{Type: "text", Text: "inspect"},
+			{Type: "image", URI: "assets/image.png", MimeType: "image/png", Data: "aW1hZ2U="},
+		}},
+		{Role: "assistant", Content: []session.Content{{Type: "text", Text: "looks good"}}},
+	}
+	if err := runner.ApplyModel(ModelRuntime{ID: "new", Client: streamer, Model: "new-model", ContextWindow: 128000, CompactThresholdPercent: 75}, history); err != nil {
+		t.Fatal(err)
+	}
+	if !changed || runner.ModelID != "new" || runner.Model != "new-model" || runner.ContextWindow != 128000 || runner.CompactThresholdPercent != 75 {
+		t.Fatalf("runtime id=%q model=%q context=%d threshold=%d changed=%v", runner.ModelID, runner.Model, runner.ContextWindow, runner.CompactThresholdPercent, changed)
+	}
+	if _, err := runner.Run(context.Background(), "current"); err == nil {
+		t.Fatal("first model failure was lost")
+	}
+	if _, err := runner.Run(context.Background(), "current"); err != nil {
+		t.Fatal(err)
+	}
+	for _, index := range []int{0, 1} {
+		request := streamer.requests[index]
+		if request.Model != "new-model" || request.PreviousResponseID != "" || len(request.Input) != 3 {
+			t.Fatalf("request %d did not preserve switched history: %#v", index, request)
+		}
+		parts := request.Input[0].Content.([]api.ContentPart)
+		if len(parts) != 2 || parts[1].ImageURL != "data:image/png;base64,aW1hZ2U=" {
+			t.Fatalf("request %d image history=%#v", index, parts)
+		}
+		assistant := request.Input[1].Content.([]api.ContentPart)
+		if len(assistant) != 1 || assistant[0].Text != "looks good" {
+			t.Fatalf("request %d assistant history=%#v", index, assistant)
+		}
+	}
+	if _, err := runner.Run(context.Background(), "after success"); err != nil {
+		t.Fatal(err)
+	}
+	if len(streamer.requests[2].Input) != 1 {
+		t.Fatalf("history seed was not cleared: %#v", streamer.requests[2].Input)
+	}
+}
+
+func TestRunnerApplyModelRewindsStatefulClient(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	streamer := &rewindingModelStreamer{modelSwitchStreamer: modelSwitchStreamer{results: []api.StreamResult{{ResponseID: "new", Text: "done"}}}}
+	runner := Runner{Client: &fakeStreamer{}, Tools: registry, Model: "old", MaxSteps: 1}
+	history := []session.Message{{Role: "user", Text: "before"}, {Role: "assistant", Text: "answer"}}
+	if err := runner.ApplyModel(ModelRuntime{ID: "new", Client: streamer, Model: "new"}, history); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.Run(context.Background(), "current"); err != nil {
+		t.Fatal(err)
+	}
+	if len(streamer.history) != 2 || len(streamer.requests) != 1 || len(streamer.requests[0].Input) != 1 {
+		t.Fatalf("history=%#v requests=%#v", streamer.history, streamer.requests)
+	}
 }
 
 func TestRunnerAppliesPlanModeChangesWithinToolLoop(t *testing.T) {

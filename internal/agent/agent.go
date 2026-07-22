@@ -51,6 +51,19 @@ var (
 
 type ResponseStreamer = api.Streamer
 
+type ModelOption struct {
+	ID   string
+	Name string
+}
+
+type ModelRuntime struct {
+	ID                      string
+	Client                  ResponseStreamer
+	Model                   string
+	ContextWindow           int
+	CompactThresholdPercent int
+}
+
 type EventLogger interface {
 	Append(kind string, data any) error
 	AppendPrompt(text string, content []session.Content) error
@@ -95,7 +108,11 @@ type Runner struct {
 	Logger                  EventLogger
 	SessionID               string
 	SessionPath             string
+	ModelID                 string
 	Model                   string
+	ModelOptions            []ModelOption
+	ResolveModel            func(string) (ModelRuntime, error)
+	OnModelChanged          func(ModelRuntime)
 	ReasoningEffort         string
 	PermissionClassifier    PermissionClassifierConfig
 	Instructions            string
@@ -119,6 +136,7 @@ type Runner struct {
 	MarketplaceAction       func(context.Context, marketplace.Action) (marketplace.Outcome, error)
 	lastInputTokens         int
 	pendingSummary          string
+	modelHistory            []api.InputItem
 	prefireMu               sync.Mutex
 	prefire                 *compactionPrefire
 	memoryMu                sync.Mutex
@@ -570,7 +588,8 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 		}
 	}
 
-	input := []api.InputItem{{Type: "message", Role: "user", Content: content}}
+	input := append([]api.InputItem(nil), r.modelHistory...)
+	input = append(input, api.InputItem{Type: "message", Role: "user", Content: content})
 	progress := Progress{}
 	var inFlightInterjections []Interjection
 	seenTools := make(map[string]bool)
@@ -622,6 +641,7 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 			r.log("model_error", map[string]any{"step": step, "error": err.Error()})
 			return final, err
 		}
+		r.modelHistory = nil
 		inFlightInterjections = nil
 		usage := streamed.Usage
 		final = Result{
@@ -1009,6 +1029,60 @@ func (r *Runner) RewindHistory(messages []session.Message) {
 	if rewinder, ok := r.Client.(HistoryRewinder); ok {
 		rewinder.RewindHistory(messages)
 	}
+}
+
+func (r *Runner) ApplyModel(runtime ModelRuntime, messages []session.Message) error {
+	if runtime.Client == nil || strings.TrimSpace(runtime.Model) == "" {
+		return errors.New("resolved model runtime is incomplete")
+	}
+	r.Client, r.Model, r.ModelID = runtime.Client, runtime.Model, runtime.ID
+	r.ContextWindow, r.CompactThresholdPercent = runtime.ContextWindow, runtime.CompactThresholdPercent
+	r.lastInputTokens, r.pendingSummary = 0, ""
+	r.clearCompactionPrefire()
+	if rewinder, ok := runtime.Client.(HistoryRewinder); ok {
+		rewinder.RewindHistory(messages)
+		r.modelHistory = nil
+	} else {
+		r.modelHistory = modelHistoryInput(messages)
+	}
+	if r.OnModelChanged != nil {
+		r.OnModelChanged(runtime)
+	}
+	return nil
+}
+
+func modelHistoryInput(messages []session.Message) []api.InputItem {
+	input := make([]api.InputItem, 0, len(messages))
+	for _, message := range messages {
+		content := any(message.Text)
+		if len(message.Content) > 0 {
+			parts := make([]api.ContentPart, 0, len(message.Content))
+			for _, item := range message.Content {
+				switch item.Type {
+				case "text":
+					if item.Text != "" {
+						parts = append(parts, api.ContentPart{Type: "input_text", Text: item.Text})
+					}
+				case "image":
+					if item.URI != "" {
+						uri := item.URI
+						if item.Data != "" {
+							uri = "data:" + item.MimeType + ";base64," + item.Data
+						}
+						parts = append(parts, api.ContentPart{Type: "input_image", ImageURL: uri})
+					}
+				}
+			}
+			if len(parts) > 0 {
+				content = parts
+			}
+		}
+		if message.Role != "user" && message.Role != "assistant" || len(message.Text) == 0 && len(message.Content) == 0 {
+			continue
+		}
+		input = append(input, api.InputItem{Type: "message", Role: message.Role, Content: content})
+	}
+	return input
 }
 
 func (r *Runner) TaskSnapshot() TaskSnapshot {
