@@ -100,6 +100,9 @@ type session struct {
 	runDone           chan struct{}
 	btwCancel         context.CancelFunc
 	btwDone           chan struct{}
+	recapCancel       context.CancelFunc
+	recapDone         chan struct{}
+	lastRecapPrompt   int
 	promptIndex       int
 	activePrompt      int
 	rewind            *workspace.RewindStore
@@ -257,6 +260,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleBtw(ctx, incoming)
 		case "x.ai/interject":
 			s.handleInterject(incoming)
+		case "x.ai/recap":
+			s.handleRecap(ctx, incoming)
 		case "x.ai/skills/list", "x.ai/skills/config", "x.ai/skills/add", "x.ai/skills/remove", "x.ai/skills/reset", "x.ai/skills/toggle":
 			s.handleSkills(ctx, incoming)
 		case "x.ai/plugins/list", "x.ai/plugins/action":
@@ -2256,13 +2261,19 @@ func (s *Server) closeSession(id string) bool {
 	if current.btwCancel != nil {
 		current.btwCancel()
 	}
-	runDone, btwDone := current.runDone, current.btwDone
+	if current.recapCancel != nil {
+		current.recapCancel()
+	}
+	runDone, btwDone, recapDone := current.runDone, current.btwDone, current.recapDone
 	current.mu.Unlock()
 	if runDone != nil {
 		<-runDone
 	}
 	if btwDone != nil {
 		<-btwDone
+	}
+	if recapDone != nil {
+		<-recapDone
 	}
 	if current.close != nil {
 		current.close()
@@ -2614,13 +2625,19 @@ func (s *Server) closeAll() {
 		if current.btwCancel != nil {
 			current.btwCancel()
 		}
-		runDone, btwDone := current.runDone, current.btwDone
+		if current.recapCancel != nil {
+			current.recapCancel()
+		}
+		runDone, btwDone, recapDone := current.runDone, current.btwDone, current.recapDone
 		current.mu.Unlock()
 		if runDone != nil {
 			<-runDone
 		}
 		if btwDone != nil {
 			<-btwDone
+		}
+		if recapDone != nil {
+			<-recapDone
 		}
 		current.close()
 	}

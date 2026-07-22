@@ -531,6 +531,13 @@ safe point, are broadcast through `x.ai/session/interjection`, and fall back to
 standalone prompt turns ahead of background wakes if they arrive after the
 turn's final drain.
 
+`x.ai/recap` accepts a `sessionId` and optional `auto` flag, immediately
+acknowledges the request, then emits a display-only `session_recap` update with
+the summary. Manual failures emit `session_recap_unavailable`; automatic
+requests fail silently and run only after three turns, three idle minutes, and
+a new turn since the last successful recap. Closing the session cancels and
+waits for recap generation without changing the main response chain or history.
+
 `x.ai/workspaces/list` returns the reference-compatible partial `no_oauth`
 response because this local build has no cloud workspace backend.
 
