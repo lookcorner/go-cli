@@ -308,14 +308,45 @@ func TestViewPlanCommandsOpenReadOnlyPreview(t *testing.T) {
 		m.setInput(prompt)
 		updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 		m = updated.(*model)
-		if command != nil || m.running || m.planPreview == nil || m.status != "plan preview" || !strings.Contains(m.View().Content, "Refactor auth") {
-			t.Fatalf("prompt=%q command=%v running=%v preview=%v status=%q view=%q", prompt, command != nil, m.running, m.planPreview != nil, m.status, m.View().Content)
+		if command != nil || m.running || m.viewer == nil || m.status != "plan preview" || !strings.Contains(m.View().Content, "Refactor auth") {
+			t.Fatalf("prompt=%q command=%v running=%v preview=%v status=%q view=%q", prompt, command != nil, m.running, m.viewer != nil, m.status, m.View().Content)
 		}
 		updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
 		m = updated.(*model)
-		if m.planPreview != nil || m.status != "ready" {
-			t.Fatalf("preview did not close: preview=%v status=%q", m.planPreview != nil, m.status)
+		if m.viewer != nil || m.status != "ready" {
+			t.Fatalf("preview did not close: preview=%v status=%q", m.viewer != nil, m.status)
 		}
+	}
+}
+
+func TestTranscriptCommandsUseCompletedSession(t *testing.T) {
+	logger, err := session.NewLoggerWithID(t.TempDir(), "transcript-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logger.Close()
+	if err := logger.AppendPrompt("Inspect the auth flow", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append("model_response", map[string]any{"response_id": "r1", "text": "Auth is configured.", "tool_call_count": 0}); err != nil {
+		t.Fatal(err)
+	}
+	for _, prompt := range []string{"/transcript ignored", "/log"} {
+		m := &model{ctx: context.Background(), runner: &agent.Runner{SessionPath: logger.Path()}, width: 60, height: 16}
+		m.setInput(prompt)
+		updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+		m = updated.(*model)
+		view := m.View().Content
+		if command != nil || m.running || m.viewer == nil || m.status != "transcript" || !strings.Contains(view, "Inspect the auth flow") || !strings.Contains(view, "Auth is configured") {
+			t.Fatalf("prompt=%q command=%v running=%v viewer=%v status=%q view=%q", prompt, command != nil, m.running, m.viewer != nil, m.status, view)
+		}
+	}
+	m := &model{ctx: context.Background(), runner: &agent.Runner{}}
+	m.setInput("/transcript")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.viewer != nil || m.status != "no active session to view" {
+		t.Fatalf("missing session command=%v viewer=%v status=%q", command != nil, m.viewer != nil, m.status)
 	}
 }
 

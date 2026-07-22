@@ -334,7 +334,7 @@ type model struct {
 	question       *questionState
 	planMode       bool
 	planReview     *planReviewState
-	planPreview    *string
+	viewer         *readOnlyViewer
 	remember       *rememberReviewState
 	rememberInput  bool
 	rememberNonce  uint64
@@ -414,6 +414,11 @@ func (m textSelectionMode) selectsWord() bool {
 type planReviewState struct {
 	event   planReviewEvent
 	editing bool
+}
+
+type readOnlyViewer struct {
+	title   string
+	content string
 }
 
 type rememberReviewState struct {
@@ -857,12 +862,12 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.question != nil {
 		return m.handleQuestionKey(msg)
 	}
-	if m.planPreview != nil {
+	if m.viewer != nil {
 		if stroke == "ctrl+q" {
 			return m, tea.Quit
 		}
 		if key.Code == tea.KeyEsc {
-			m.planPreview = nil
+			m.viewer = nil
 			m.status = "ready"
 		}
 		return m, nil
@@ -996,8 +1001,22 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "/quit", "/exit":
 			return m, tea.Quit
 		case "/help":
-			m.appendSystem("# Commands\n\n`! <command>` `/always-approve` `/compact` `/context` `/copy [N]` `/dream` `/exit` `/find` `/flush` `/help` `/history` `/loop` `/memory` `/multiline` `/plan [description]` `/remember` `/session-info` `/view-plan`")
+			m.appendSystem("# Commands\n\n`! <command>` `/always-approve` `/compact` `/context` `/copy [N]` `/dream` `/exit` `/find` `/flush` `/help` `/history` `/loop` `/memory` `/multiline` `/plan [description]` `/remember` `/session-info` `/transcript` `/view-plan`")
 			m.status = "commands"
+			return m, nil
+		case "/transcript", "/log":
+			if m.runner == nil || strings.TrimSpace(m.runner.SessionPath) == "" {
+				m.status = "no active session to view"
+				return m, nil
+			}
+			messages, err := session.Transcript(m.runner.SessionPath)
+			if err != nil {
+				m.status = "transcript failed: " + err.Error()
+				return m, nil
+			}
+			m.viewer = &readOnlyViewer{title: "Conversation transcript", content: session.FormatTranscript(messages)}
+			m.status = "transcript"
+			m.scroll = 0
 			return m, nil
 		case "/view-plan", "/show-plan", "/plan-view":
 			if m.runner == nil || m.runner.Tools == nil {
@@ -1009,7 +1028,10 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.status = "plan preview failed: " + err.Error()
 				return m, nil
 			}
-			m.planPreview = &content
+			if strings.TrimSpace(content) == "" {
+				content = "No plan content."
+			}
+			m.viewer = &readOnlyViewer{title: "Current plan", content: content}
 			m.status = "plan preview"
 			m.scroll = 0
 			return m, nil
@@ -1956,11 +1978,8 @@ func (m *model) View() tea.View {
 	content := m.transcript.String()
 	if m.planReview != nil {
 		content = "# Review implementation plan\n\n" + m.planReview.event.event.PlanContent
-	} else if m.planPreview != nil {
-		content = "# Current plan\n\n" + strings.TrimSpace(*m.planPreview)
-		if strings.TrimSpace(*m.planPreview) == "" {
-			content += "No plan content."
-		}
+	} else if m.viewer != nil {
+		content = "# " + m.viewer.title + "\n\n" + strings.TrimSpace(m.viewer.content)
 	} else if m.remember != nil {
 		label, note := "Raw", m.remember.raw
 		if m.remember.showEnhanced && m.remember.enhanced != "" {

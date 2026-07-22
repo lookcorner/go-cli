@@ -303,6 +303,8 @@ otherwise unmatched tool actions while preserving explicit deny and ask rules.
 starts a planning turn. `/quit` and `/exit` close the TUI without a model turn.
 `/view-plan`, `/show-plan`, and `/plan-view` open the current confined plan file
 in a read-only preview; Esc returns to the conversation.
+`/transcript` and `/log` open the completed persisted conversation in the same
+read-only viewer, including resumed sessions.
 Left/Right, Home/End, Delete, Backspace, Ctrl-A,
 Ctrl-E, Ctrl-U, and Ctrl/Cmd-Z edit or undo the active prompt and structured
 response input. Shift/Alt-Enter inserts a newline; Ctrl-M, `/multiline`, or `/ml`
