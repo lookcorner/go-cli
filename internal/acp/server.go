@@ -92,26 +92,34 @@ type mcpServerParam struct {
 type Factory func(context.Context, SessionConfig, tools.Approver, io.Writer, io.Writer) (*agent.Runner, func(), error)
 
 type Server struct {
-	Factory         Factory
-	SessionDir      string
-	input           io.Reader
-	output          io.Writer
-	writeMu         sync.Mutex
-	mu              sync.Mutex
-	sessions        map[string]*session
-	pending         map[string]chan permissionResult
-	pendingPlan     map[string]chan planApprovalResult
-	pendingQuestion map[string]chan userQuestionResult
-	pendingHook     map[string]chan clientHookResult
-	clientFS        *clientFSConfig
-	clientGitHead   bool
-	nextSession     atomic.Uint64
-	nextRequest     atomic.Uint64
-	closing         atomic.Bool
-	wg              sync.WaitGroup
-	worktrees       *worktrees.Manager
-	terminals       *terminalManager
-	fuzzySearch     *workspace.FuzzySearchManager
+	Factory            Factory
+	SessionDir         string
+	FolderTrustEnabled bool
+	input              io.Reader
+	output             io.Writer
+	writeMu            sync.Mutex
+	mu                 sync.Mutex
+	sessions           map[string]*session
+	pending            map[string]chan permissionResult
+	pendingPlan        map[string]chan planApprovalResult
+	pendingQuestion    map[string]chan userQuestionResult
+	pendingHook        map[string]chan clientHookResult
+	pendingTrust       map[string]chan folderTrustResult
+	clientFS           *clientFSConfig
+	clientGitHead      bool
+	clientFolderTrust  bool
+	trustMu            sync.Mutex
+	trustPrompted      map[string]bool
+	trustPromptTimeout time.Duration
+	trustContext       context.Context
+	trustCancel        context.CancelFunc
+	nextSession        atomic.Uint64
+	nextRequest        atomic.Uint64
+	closing            atomic.Bool
+	wg                 sync.WaitGroup
+	worktrees          *worktrees.Manager
+	terminals          *terminalManager
+	fuzzySearch        *workspace.FuzzySearchManager
 }
 
 type message struct {
@@ -220,8 +228,12 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 	s.pendingPlan = make(map[string]chan planApprovalResult)
 	s.pendingQuestion = make(map[string]chan userQuestionResult)
 	s.pendingHook = make(map[string]chan clientHookResult)
+	s.pendingTrust = make(map[string]chan folderTrustResult)
 	s.clientFS = nil
 	s.clientGitHead = false
+	s.clientFolderTrust = false
+	s.trustPrompted = make(map[string]bool)
+	s.trustContext, s.trustCancel = context.WithCancel(ctx)
 	manager, err := worktrees.NewManager(s.SessionDir)
 	if err != nil {
 		return err
@@ -250,6 +262,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 		case "initialize":
 			s.clientFS = parseClientFS(incoming.Params)
 			s.clientGitHead = parseClientGitHead(incoming.Params)
+			s.clientFolderTrust = parseClientFolderTrust(incoming.Params)
 			s.respond(incoming.ID, map[string]any{
 				"protocolVersion": ProtocolVersion,
 				"agentCapabilities": map[string]any{
@@ -1484,6 +1497,7 @@ func (s *Server) handleNewSession(ctx context.Context, incoming message) {
 		return
 	}
 	s.respond(incoming.ID, map[string]any{"sessionId": id, "modes": sessionModes("default"), "models": modelState(created.runner)})
+	s.startFolderTrustPrompt(created)
 }
 
 func (s *Server) handleRewind(incoming message) {
@@ -2309,6 +2323,7 @@ func (s *Server) handleRestoreSession(ctx context.Context, incoming message, rep
 		current.mu.Unlock()
 	}
 	s.respond(incoming.ID, map[string]any{"sessionId": params.SessionID, "modes": sessionModes(mode), "models": modelState(created.runner)})
+	s.startFolderTrustPrompt(created)
 }
 
 func (s *Server) replaySession(path, sessionID string) error {
@@ -2987,6 +3002,9 @@ func (s *Server) lookupSession(id string) *session {
 
 func (s *Server) closeAll() {
 	s.closing.Store(true)
+	if s.trustCancel != nil {
+		s.trustCancel()
+	}
 	if s.worktrees != nil {
 		s.worktrees.CancelCopies()
 	}
@@ -3016,6 +3034,12 @@ func (s *Server) closeAll() {
 	for _, pending := range s.pendingQuestion {
 		select {
 		case pending <- userQuestionResult{err: io.EOF}:
+		default:
+		}
+	}
+	for _, pending := range s.pendingTrust {
+		select {
+		case pending <- folderTrustResult{err: io.EOF}:
 		default:
 		}
 	}
@@ -3297,8 +3321,13 @@ func (s *Server) handleClientResponse(incoming message) {
 	planPending := s.pendingPlan[key]
 	questionPending := s.pendingQuestion[key]
 	hookPending := s.pendingHook[key]
+	trustPending := s.pendingTrust[key]
 	pending := s.pending[key]
 	s.mu.Unlock()
+	if trustPending != nil {
+		handleFolderTrustResponse(trustPending, incoming)
+		return
+	}
 	if hookPending != nil {
 		handleClientHookResponse(hookPending, incoming)
 		return

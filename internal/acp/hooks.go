@@ -121,6 +121,7 @@ func (s *Server) handleHookAction(ctx context.Context, incoming message, current
 			s.hookActionOutcome(incoming, "validation_error", "Project hooks require a Git worktree.", false, false)
 			return
 		}
+		s.clearFolderTrustPrompt(root)
 		if err := workspace.RevokeFolderTrust(ctx, root); err != nil {
 			s.hookActionOutcome(incoming, "error", err.Error(), false, false)
 			return

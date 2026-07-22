@@ -5,11 +5,42 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 
 	"github.com/lookcorner/go-cli/internal/version"
 )
+
+func TestProjectExecutionConfigKindsMatchesGate(t *testing.T) {
+	root := t.TempDir()
+	if err := exec.Command("git", "init", "-q", root).Run(); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{
+		filepath.Join(root, ".grok", "plugins", "sample"),
+		filepath.Join(root, ".grok", "hooks"),
+		filepath.Join(root, ".grok", "agents"),
+	} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeTrustFile(t, filepath.Join(root, ".mcp.json"), `{}`)
+	writeTrustFile(t, filepath.Join(root, ".grok", "lsp.json"), `{}`)
+	writeTrustFile(t, filepath.Join(root, ".grok", "hooks", "pre.json"), `{}`)
+	writeTrustFile(t, filepath.Join(root, ".grok", "agents", "review.md"), `review`)
+	want := []string{"mcp", "plugins", "lsp", "hooks", "agents"}
+	if got := ProjectExecutionConfigKinds(root); !slices.Equal(got, want) {
+		t.Fatalf("config kinds=%v want %v", got, want)
+	}
+	if !ProjectExecutionConfigPresent(root) {
+		t.Fatal("config kinds and trust gate diverged")
+	}
+	if empty := ProjectExecutionConfigKinds(t.TempDir()); len(empty) != 0 {
+		t.Fatalf("empty workspace config kinds=%v", empty)
+	}
+}
 
 func TestResolveFolderTrustPrecedence(t *testing.T) {
 	home := canonicalOrCleanTrust(t.TempDir())

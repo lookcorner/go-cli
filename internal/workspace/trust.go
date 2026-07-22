@@ -127,13 +127,21 @@ func WorkspaceTrustKey(cwd string) string {
 	return root
 }
 
-// ProjectExecutionConfigPresent reports the repo-controlled config surfaces
-// that can start local processes in the current implementation.
+// ProjectExecutionConfigPresent reports whether repo-controlled configuration
+// can start local processes in the current implementation.
 func ProjectExecutionConfigPresent(cwd string) bool {
+	return len(ProjectExecutionConfigKinds(cwd)) > 0
+}
+
+// ProjectExecutionConfigKinds names the executable project configuration that
+// causes an untrusted workspace to be gated.
+func ProjectExecutionConfigKinds(cwd string) []string {
 	cwd = canonicalOrCleanTrust(cwd)
 	root := GitRoot(cwd)
+	found := make(map[string]bool)
+	add := func(kind string) { found[kind] = true }
 	if isFileTrust(filepath.Join(cwd, ".grok", "lsp.json")) {
-		return true
+		add("lsp")
 	}
 	for _, scope := range ProjectScopes(root, cwd) {
 		for _, path := range []string{
@@ -141,7 +149,7 @@ func ProjectExecutionConfigPresent(cwd string) bool {
 			filepath.Join(scope, ".cursor", "mcp.json"),
 		} {
 			if isFileTrust(path) {
-				return true
+				add("mcp")
 			}
 		}
 		for _, path := range []string{
@@ -149,14 +157,14 @@ func ProjectExecutionConfigPresent(cwd string) bool {
 			filepath.Join(scope, ".claude", "plugins"),
 		} {
 			if hasSubdirectory(path) {
-				return true
+				add("plugins")
 			}
 		}
 		if hasHookFile(filepath.Join(scope, ".grok", "hooks")) {
-			return true
+			add("hooks")
 		}
 		if hasAgentFile(filepath.Join(scope, ".grok", "agents")) || hasAgentFile(filepath.Join(scope, ".claude", "agents")) {
-			return true
+			add("agents")
 		}
 		for _, path := range []string{
 			filepath.Join(scope, ".cursor", "hooks.json"),
@@ -164,14 +172,20 @@ func ProjectExecutionConfigPresent(cwd string) bool {
 			filepath.Join(scope, ".claude", "settings.local.json"),
 		} {
 			if hasConfiguredHooks(path) {
-				return true
+				add("hooks")
 			}
 		}
-		if projectConfigExecutes(filepath.Join(scope, ".grok", "config.toml")) {
-			return true
+		for _, kind := range projectConfigKinds(filepath.Join(scope, ".grok", "config.toml")) {
+			add(kind)
 		}
 	}
-	return false
+	result := make([]string, 0, len(found))
+	for _, kind := range []string{"mcp", "plugins", "lsp", "hooks", "agents"} {
+		if found[kind] {
+			result = append(result, kind)
+		}
+	}
+	return result
 }
 
 func trustedByStore(document trustDocument, key, home string) bool {
@@ -287,26 +301,29 @@ func acquireTrustLock(ctx context.Context, path string) (func(), error) {
 	}
 }
 
-func projectConfigExecutes(path string) bool {
+func projectConfigKinds(path string) []string {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return false
+		return nil
 	}
 	var document map[string]any
 	if toml.Unmarshal(data, &document) != nil {
-		return true
+		return []string{"mcp", "plugins", "lsp", "hooks"}
 	}
-	for _, key := range []string{"mcp_servers", "lsp_servers", "hooks"} {
-		if value, ok := document[key].(map[string]any); ok && len(value) > 0 {
-			return true
+	var result []string
+	for _, item := range []struct{ key, kind string }{
+		{"mcp_servers", "mcp"}, {"lsp_servers", "lsp"}, {"hooks", "hooks"},
+	} {
+		if value, ok := document[item.key].(map[string]any); ok && len(value) > 0 {
+			result = append(result, item.kind)
 		}
 	}
 	if plugins, ok := document["plugins"].(map[string]any); ok {
 		if paths, ok := plugins["paths"].([]any); ok && len(paths) > 0 {
-			return true
+			result = append(result, "plugins")
 		}
 	}
-	return false
+	return result
 }
 
 func hasSubdirectory(path string) bool {

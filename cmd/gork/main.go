@@ -1742,7 +1742,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 	dynamicPlugins := clonePluginsConfig(cfg.Plugins)
 	pluginStates := make(map[*sessionPluginState]bool)
 	var server *acp.Server
-	server = &acp.Server{SessionDir: opts.sessionDir, Factory: func(
+	server = &acp.Server{SessionDir: opts.sessionDir, FolderTrustEnabled: cfg.FolderTrustEnabled, Factory: func(
 		sessionCtx context.Context,
 		sessionConfig acp.SessionConfig,
 		protocolApprover tools.Approver,

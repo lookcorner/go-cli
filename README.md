@@ -594,11 +594,16 @@ pins and inherited skeptic sessions.
 
 Release builds gate repo-controlled MCP/LSP and enabled project-plugin execution
 on folder trust. Interactive CLI startup asks once when executable project
-config is present; headless and ACP sessions fail closed. `--trust` records the Git
-workspace in `$GROK_HOME/trusted_folders.toml` (normally
-`~/.grok/trusted_folders.toml`). Parent trust cascades to child paths while a
-more specific child decision wins. Development versions such as `0.1.0-dev`
-match the reference's unstamped-build behavior and keep this gate inert.
+config is present; headless and non-interactive ACP sessions fail closed. ACP
+clients may opt into the same decision with
+`clientCapabilities._meta["x.ai/folderTrust"].interactive = true`; the agent
+sends `x.ai/folder_trust/request` after creating the gated session, and only an
+`{"outcome":"trust"}` response grants access and reloads executable project
+components. `--trust` records the Git workspace in
+`$GROK_HOME/trusted_folders.toml` (normally `~/.grok/trusted_folders.toml`).
+Parent trust cascades to child paths while a more specific child decision wins.
+Development versions such as `0.1.0-dev` match the reference's unstamped-build
+behavior and keep this gate inert.
 
 ```sh
 ./gork --trust --workspace /path/to/project "inspect this repository"
