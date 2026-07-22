@@ -49,6 +49,23 @@ type GitHead struct {
 	IsWorktree bool
 }
 
+type HeadDivergence struct {
+	SessionCommit string `json:"sessionCommit"`
+	CurrentCommit string `json:"currentCommit"`
+	SessionBranch string `json:"sessionBranch,omitempty"`
+}
+
+func DetectHeadDivergence(sessionCommit, sessionBranch, currentCommit string) *HeadDivergence {
+	if sessionCommit == "" || currentCommit == "" || sessionCommit == currentCommit {
+		return nil
+	}
+	return &HeadDivergence{
+		SessionCommit: sessionCommit,
+		CurrentCommit: currentCommit,
+		SessionBranch: sessionBranch,
+	}
+}
+
 type GitInfo struct {
 	Root          string   `json:"root"`
 	Remotes       []string `json:"remotes"`

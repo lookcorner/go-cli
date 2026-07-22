@@ -10,7 +10,7 @@ func TestSummariesFoldSessionEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = logger.Append("session_metadata", map[string]any{"cwd": cwd, "modelId": "model-one", "headCommit": "abc123"})
+	_ = logger.Append("session_metadata", map[string]any{"cwd": cwd, "modelId": "model-one", "headCommit": "abc123", "headBranch": "main"})
 	_ = logger.Append("user_prompt", map[string]any{"text": "Initial title"})
 	_ = logger.Append("model_response", map[string]any{"text": "answer", "response_id": "r1", "tool_call_count": 0})
 	_ = logger.Append("session_forked", map[string]any{"parent_session_id": "parent-session"})
@@ -31,7 +31,7 @@ func TestSummariesFoldSessionEvents(t *testing.T) {
 	if summary.NumMessages != 5 || summary.NumChatMessages != 2 || summary.CurrentModelID != "model-one" {
 		t.Fatalf("counts/model=%#v", summary)
 	}
-	if summary.ParentSessionID == nil || *summary.ParentSessionID != "parent-session" || summary.HeadCommit == nil || *summary.HeadCommit != "abc123" {
+	if summary.ParentSessionID == nil || *summary.ParentSessionID != "parent-session" || summary.HeadCommit == nil || *summary.HeadCommit != "abc123" || summary.HeadBranch == nil || *summary.HeadBranch != "main" {
 		t.Fatalf("fork/git metadata=%#v", summary)
 	}
 	if summary.GeneratedTitle == nil || *summary.GeneratedTitle != "Manual title" || !summary.TitleIsManual || summary.CreatedAt.IsZero() || summary.LastActiveAt == nil {

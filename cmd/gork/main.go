@@ -2528,6 +2528,9 @@ func sessionMetadata(ctx context.Context, cwd, model, reasoningEffort string) ma
 	if head, err := worktrees.Head(ctx, cwd); err == nil && head != "" {
 		metadata["headCommit"] = head
 	}
+	if info, err := worktrees.HeadInfo(ctx, cwd); err == nil && info.Branch != "" {
+		metadata["headBranch"] = info.Branch
+	}
 	return metadata
 }
 

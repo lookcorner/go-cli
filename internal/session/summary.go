@@ -23,6 +23,7 @@ type Summary struct {
 	CurrentModelID  string          `json:"current_model_id"`
 	ParentSessionID *string         `json:"parent_session_id,omitempty"`
 	HeadCommit      *string         `json:"head_commit,omitempty"`
+	HeadBranch      *string         `json:"head_branch,omitempty"`
 	LastActiveAt    *time.Time      `json:"last_active_at,omitempty"`
 	GeneratedTitle  *string         `json:"generated_title,omitempty"`
 	TitleIsManual   bool            `json:"title_is_manual,omitempty"`
@@ -115,6 +116,9 @@ func summaryFromInfo(dir string, info Info) (Summary, error) {
 	}
 	if info.HeadCommit != "" {
 		result.HeadCommit = &info.HeadCommit
+	}
+	if info.HeadBranch != "" {
+		result.HeadBranch = &info.HeadBranch
 	}
 	return result, nil
 }

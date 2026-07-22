@@ -2,12 +2,41 @@ package worktree
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestDetectHeadDivergence(t *testing.T) {
+	for name, input := range map[string][3]string{
+		"missing session commit": {"", "main", "current"},
+		"missing current commit": {"session", "main", ""},
+		"same commit":            {"same", "main", "same"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := DetectHeadDivergence(input[0], input[1], input[2]); got != nil {
+				t.Fatalf("divergence=%#v", got)
+			}
+		})
+	}
+
+	got := DetectHeadDivergence("session", "main", "current")
+	if got == nil || got.SessionCommit != "session" || got.CurrentCommit != "current" || got.SessionBranch != "main" {
+		t.Fatalf("divergence=%#v", got)
+	}
+	encoded, err := json.Marshal(got)
+	if err != nil || string(encoded) != `{"sessionCommit":"session","currentCommit":"current","sessionBranch":"main"}` {
+		t.Fatalf("json=%s err=%v", encoded, err)
+	}
+
+	withoutBranch, err := json.Marshal(DetectHeadDivergence("session", "", "current"))
+	if err != nil || string(withoutBranch) != `{"sessionCommit":"session","currentCommit":"current"}` {
+		t.Fatalf("json without branch=%s err=%v", withoutBranch, err)
+	}
+}
 
 func TestHeadInfoAndWatcher(t *testing.T) {
 	root := newRepo(t)

@@ -33,6 +33,8 @@ ACP bulk history now includes rewind-filtered, paginated/tail/turn-indexed
 multimodal/tool/lifecycle projection, and routed streaming chunks.
 New and loaded ACP sessions share reference-shaped `x.ai/sessionConfig` option
 metadata and `x.ai/sessionDetail` identity/title metadata.
+Loaded ACP sessions also report `gitDivergence` when their recorded Git HEAD
+differs from the workspace's current HEAD.
 
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |

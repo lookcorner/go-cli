@@ -245,6 +245,7 @@ type Info struct {
 	SessionID       string    `json:"sessionId"`
 	CWD             string    `json:"cwd"`
 	HeadCommit      string    `json:"headCommit,omitempty"`
+	HeadBranch      string    `json:"headBranch,omitempty"`
 	ModelID         string    `json:"modelId,omitempty"`
 	ReasoningEffort string    `json:"reasoningEffort,omitempty"`
 	Title           string    `json:"title,omitempty"`
@@ -319,6 +320,7 @@ func readInfo(path, id string) (Info, error) {
 			var data struct {
 				CWD             string `json:"cwd"`
 				HeadCommit      string `json:"headCommit"`
+				HeadBranch      string `json:"headBranch"`
 				ModelID         string `json:"modelId"`
 				ReasoningEffort string `json:"reasoningEffort"`
 			}
@@ -326,6 +328,9 @@ func readInfo(path, id string) (Info, error) {
 				info.CWD = data.CWD
 				if data.HeadCommit != "" {
 					info.HeadCommit = data.HeadCommit
+				}
+				if data.HeadBranch != "" {
+					info.HeadBranch = data.HeadBranch
 				}
 				if data.ModelID != "" {
 					info.ModelID = data.ModelID

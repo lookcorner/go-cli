@@ -5,6 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/lookcorner/go-cli/internal/agent"
@@ -65,11 +68,26 @@ func TestSessionStartResponseMetadata(t *testing.T) {
 
 func TestRestoreSessionReturnsStoredSessionMetadata(t *testing.T) {
 	dir, cwd := t.TempDir(), t.TempDir()
+	runACPGit(t, cwd, "init", "-q")
+	runACPGit(t, cwd, "config", "user.name", "Fixture")
+	runACPGit(t, cwd, "config", "user.email", "fixture@example.invalid")
+	if err := os.WriteFile(filepath.Join(cwd, "tracked.txt"), []byte("first\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runACPGit(t, cwd, "add", "tracked.txt")
+	runACPGit(t, cwd, "commit", "-qm", "first")
+	historicalHead := strings.TrimSpace(runACPGitOutput(t, cwd, "rev-parse", "HEAD"))
+	branch := strings.TrimSpace(runACPGitOutput(t, cwd, "branch", "--show-current"))
+	if err := os.WriteFile(filepath.Join(cwd, "tracked.txt"), []byte("second\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runACPGit(t, cwd, "commit", "-qam", "second")
+	currentHead := strings.TrimSpace(runACPGitOutput(t, cwd, "rev-parse", "HEAD"))
 	logger, err := sessionlog.NewLoggerWithID(dir, "stored-metadata")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := logger.Append("session_metadata", map[string]any{"cwd": cwd, "modelId": "grok-build"}); err != nil {
+	if err := logger.Append("session_metadata", map[string]any{"cwd": cwd, "modelId": "grok-build", "headCommit": historicalHead, "headBranch": branch}); err != nil {
 		t.Fatal(err)
 	}
 	if err := logger.Append("session_title", map[string]any{"title": "Restored title"}); err != nil {
@@ -106,6 +124,10 @@ func TestRestoreSessionReturnsStoredSessionMetadata(t *testing.T) {
 	detail := meta["x.ai/sessionDetail"].(map[string]any)
 	if detail["title"] != "Restored title" || detail["sessionId"] != "stored-metadata" || len(meta["x.ai/sessionConfig"].(map[string]any)["options"].([]any)) != 1 {
 		t.Fatalf("restored metadata=%#v", meta)
+	}
+	divergence := meta["gitDivergence"].(map[string]any)
+	if divergence["sessionCommit"] != historicalHead || divergence["currentCommit"] != currentHead || divergence["sessionBranch"] != branch {
+		t.Fatalf("git divergence=%#v", divergence)
 	}
 	if !server.closeSession("stored-metadata") {
 		t.Fatal("restored session did not close")

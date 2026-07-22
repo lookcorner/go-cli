@@ -2272,12 +2272,15 @@ func (s *Server) handleRestoreSession(ctx context.Context, incoming message, rep
 	found := false
 	model, title := "", ""
 	reasoningEffort := ""
+	sessionHead, sessionBranch := "", ""
 	for _, item := range items {
 		if item.SessionID == params.SessionID {
 			found = true
 			model = item.ModelID
 			title = item.Title
 			reasoningEffort = item.ReasoningEffort
+			sessionHead = item.HeadCommit
+			sessionBranch = item.HeadBranch
 			if item.CWD != params.CWD {
 				s.respondError(incoming.ID, -32602, "cwd does not match the stored session")
 				return
@@ -2324,7 +2327,13 @@ func (s *Server) handleRestoreSession(ctx context.Context, incoming message, rep
 		mode = current.mode
 		current.mu.Unlock()
 	}
-	s.respond(incoming.ID, sessionStartResponse(created, mode))
+	response := sessionStartResponse(created, mode)
+	if currentHead, headErr := worktrees.Head(ctx, params.CWD); headErr == nil {
+		if divergence := worktrees.DetectHeadDivergence(sessionHead, sessionBranch, currentHead); divergence != nil {
+			response["_meta"].(map[string]any)["gitDivergence"] = divergence
+		}
+	}
+	s.respond(incoming.ID, response)
 	s.startFolderTrustPrompt(created)
 }
 

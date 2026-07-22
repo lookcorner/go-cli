@@ -250,7 +250,7 @@ func TestNamedSessionMetadataAndList(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := logger.Append("session_metadata", map[string]any{"cwd": "/workspace/project", "headCommit": "abc123"}); err != nil {
+	if err := logger.Append("session_metadata", map[string]any{"cwd": "/workspace/project", "headCommit": "abc123", "headBranch": "main"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := logger.Append("user_prompt", map[string]any{"text": "Implement the persistent session support\nwith tests"}); err != nil {
@@ -263,7 +263,7 @@ func TestNamedSessionMetadataAndList(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(items) != 1 || items[0].SessionID != "acp-session-1" || items[0].Title != "Implement the persistent session support" || items[0].HeadCommit != "abc123" {
+	if len(items) != 1 || items[0].SessionID != "acp-session-1" || items[0].Title != "Implement the persistent session support" || items[0].HeadCommit != "abc123" || items[0].HeadBranch != "main" {
 		t.Fatalf("unexpected session list: %#v", items)
 	}
 	path, err := PathForID(dir, "acp-session-1")
