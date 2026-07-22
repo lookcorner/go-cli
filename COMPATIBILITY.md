@@ -11,7 +11,9 @@ and send-now operations, user-prompt priority over automatic wakes, and
 close-time cancellation of queued requests. Completed prompts publish ordered
 `x.ai/session/prompt_complete` notifications and correlated `_meta` response
 metadata with model/token/turn/cancellation details; removed queued prompts do
-not publish false completion events. ACP remains **partial** overall.
+not publish false completion events. Context-aware `x.ai/compact_conversation`
+with persisted completion updates and persisted fire-and-forget
+`x.ai/toggle_plan_mode` are also supported. ACP remains **partial** overall.
 
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |

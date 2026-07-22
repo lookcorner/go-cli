@@ -20,8 +20,12 @@ session Markdown sources without invoking the model. They also accept
 `/loop [interval] <prompt>`, which expands to the reference `scheduler_create`
 workflow without inventing a default interval. ACP advertises the enabled
 commands through `x.ai/commands/list`, emits `memory_files` metadata updates,
-and exposes `x.ai/memory/flush` plus the bounded, history-isolated
-`x.ai/memory/rewrite` note formatter.
+and exposes `x.ai/compact_conversation` with optional user context,
+`x.ai/memory/flush`, plus the bounded, history-isolated `x.ai/memory/rewrite`
+note formatter. Extension-triggered compaction returns an empty result and does
+not emit a prompt-completion event. Successful manual compaction first publishes
+a persisted `x.ai/session_notification` with `auto_compact_completed` so live
+and resumed clients reset context state consistently.
 
 Completed ACP prompts publish `x.ai/session/prompt_complete` before their RPC
 response. Prompt responses include `_meta` correlation for the session,
@@ -34,7 +38,9 @@ phase. While active, workspace mutations are limited to `.grok/plan.md`; shell,
 background, scheduler mutation, image-generation, task, monitor, and MCP tools
 are blocked. `exit_plan_mode` presents that file for approval, including the
 ACP `x.ai/exit_plan_mode` reverse request, and applies the decision before the
-next model step in the same turn.
+next model step in the same turn. Clients may also send the fire-and-forget
+`x.ai/toggle_plan_mode` notification; it persists the new mode and publishes the
+same `current_mode_update` as `session/set_mode`.
 
 `ask_user_question` accepts one or more option-based questions and remains
 available in plan mode. ACP sessions send `x.ai/ask_user_question`, advertise

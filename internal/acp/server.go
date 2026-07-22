@@ -219,6 +219,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handlePrompt(ctx, incoming)
 		case "session/set_mode":
 			s.handleSetMode(incoming)
+		case "x.ai/toggle_plan_mode":
+			s.handleTogglePlanMode(incoming.Params)
 		case "session/cancel":
 			s.handleCancel(incoming.Params)
 		case "session/close":
@@ -259,7 +261,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleMCP(ctx, incoming)
 		case "x.ai/commands/list", "x.ai/workspaces/list":
 			s.handleStaticExtension(incoming)
-		case "x.ai/memory/flush", "x.ai/memory/rewrite":
+		case "x.ai/compact_conversation", "x.ai/memory/flush", "x.ai/memory/rewrite":
 			s.handleMemoryExtension(ctx, incoming)
 		case "x.ai/btw":
 			s.handleBtw(ctx, incoming)
@@ -1642,7 +1644,7 @@ func (s *Server) handlePromptRequest(parent context.Context, incoming message, c
 		return
 	}
 	if strings.TrimSpace(prompt) == "/compact" {
-		s.handleCompactPrompt(parent, incoming, current, newPromptLifecycle(params))
+		s.handleCompactPrompt(parent, incoming, current, newPromptLifecycle(params), "", false)
 		s.markRunningPrompt(current, promptID(params.Meta))
 		return
 	}
@@ -1739,7 +1741,7 @@ func (s *Server) handlePromptRequest(parent context.Context, incoming message, c
 	s.broadcastQueue(current)
 }
 
-func (s *Server) handleCompactPrompt(parent context.Context, incoming message, current *session, lifecycle promptLifecycle) {
+func (s *Server) handleCompactPrompt(parent context.Context, incoming message, current *session, lifecycle promptLifecycle, userContext string, extension bool) {
 	current.mu.Lock()
 	if current.closed {
 		current.mu.Unlock()
@@ -1767,7 +1769,7 @@ func (s *Server) handleCompactPrompt(parent context.Context, incoming message, c
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		_, err := current.runner.Compact(runCtx, previous)
+		_, err := current.runner.CompactWithContext(runCtx, previous, userContext)
 		stopReason := "end_turn"
 		if errors.Is(runCtx.Err(), context.Canceled) {
 			stopReason = "cancelled"
@@ -1784,12 +1786,50 @@ func (s *Server) handleCompactPrompt(parent context.Context, incoming message, c
 		current.updated = time.Now().UTC()
 		close(runDone)
 		current.mu.Unlock()
-		s.finishPrompt(incoming, current, lifecycle, stopReason, agent.Result{}, err, cancelTrigger)
+		if err == nil {
+			s.notifyXAI(current, map[string]any{
+				"sessionUpdate": "auto_compact_completed", "tokens_after": 0, "summary_preview": nil,
+			})
+		}
+		if extension {
+			if err != nil {
+				s.respondError(incoming.ID, -32000, err.Error())
+			} else {
+				s.respond(incoming.ID, map[string]any{})
+			}
+		} else {
+			s.finishPrompt(incoming, current, lifecycle, stopReason, agent.Result{}, err, cancelTrigger)
+		}
 		s.startNext(current)
 	}()
 }
 
 func (s *Server) handleMemoryExtension(parent context.Context, incoming message) {
+	if incoming.Method == "x.ai/compact_conversation" {
+		var params struct {
+			SessionID      string `json:"sessionId"`
+			SessionIDSnake string `json:"session_id"`
+			UserContext    string `json:"userContext"`
+			ContextSnake   string `json:"user_context"`
+		}
+		if json.Unmarshal(incoming.Params, &params) != nil {
+			s.respondError(incoming.ID, -32602, "invalid compact parameters")
+			return
+		}
+		if params.SessionID == "" {
+			params.SessionID = params.SessionIDSnake
+		}
+		if params.UserContext == "" {
+			params.UserContext = params.ContextSnake
+		}
+		current := s.lookupSession(params.SessionID)
+		if current == nil {
+			s.respondError(incoming.ID, -32602, "unknown session")
+			return
+		}
+		s.handleCompactPrompt(parent, incoming, current, promptLifecycle{}, params.UserContext, true)
+		return
+	}
 	if incoming.Method == "x.ai/memory/rewrite" {
 		s.handleMemoryRewriteExtension(parent, incoming)
 		return
@@ -2118,7 +2158,7 @@ func (s *Server) replaySession(path, sessionID string) error {
 			s.notify(sessionID, map[string]any{"sessionUpdate": updateType, "content": content})
 		}
 	}
-	events, err := sessionlog.Events(path, "subagent_spawned", "subagent_finished", "task_backgrounded", "task_completed")
+	events, err := sessionlog.Events(path, "subagent_spawned", "subagent_finished", "task_backgrounded", "task_completed", "xai_session_notification")
 	if err != nil {
 		return err
 	}
@@ -2134,6 +2174,8 @@ func (s *Server) replaySession(path, sessionID string) error {
 			s.write(map[string]any{"jsonrpc": "2.0", "method": "x.ai/task_backgrounded", "params": map[string]any{"sessionId": sessionID, "update": update}})
 		case "task_completed":
 			s.write(map[string]any{"jsonrpc": "2.0", "method": "x.ai/task_completed", "params": map[string]any{"sessionId": sessionID, "update": update}})
+		case "xai_session_notification":
+			s.write(map[string]any{"jsonrpc": "2.0", "method": "x.ai/session_notification", "params": update})
 		}
 	}
 	return nil
@@ -2153,28 +2195,62 @@ func (s *Server) handleSetMode(incoming message) {
 		s.respondError(incoming.ID, -32602, "unknown session")
 		return
 	}
-	current.mu.Lock()
-	if current.mode == params.ModeID {
-		current.mu.Unlock()
+	if currentMode(current) == params.ModeID {
 		s.respond(incoming.ID, map[string]any{})
 		return
 	}
-	if err := current.runner.Tools.SetPlanMode(params.ModeID == "plan"); err != nil {
-		current.mu.Unlock()
+	if err := s.setSessionMode(current, params.ModeID); err != nil {
 		s.respondError(incoming.ID, -32000, err.Error())
 		return
 	}
+	s.respond(incoming.ID, map[string]any{})
+}
+
+func (s *Server) handleTogglePlanMode(raw json.RawMessage) {
+	var params struct {
+		SessionID string `json:"sessionId"`
+	}
+	if json.Unmarshal(raw, &params) != nil || params.SessionID == "" {
+		return
+	}
+	current := s.lookupSession(params.SessionID)
+	if current == nil {
+		return
+	}
+	next := "plan"
+	if currentMode(current) == "plan" {
+		next = "default"
+	}
+	_ = s.setSessionMode(current, next)
+}
+
+func currentMode(current *session) string {
+	current.mu.Lock()
+	defer current.mu.Unlock()
+	return current.mode
+}
+
+func (s *Server) setSessionMode(current *session, mode string) error {
+	current.mu.Lock()
+	if current.mode == mode {
+		current.mu.Unlock()
+		return nil
+	}
+	if err := current.runner.Tools.SetPlanMode(mode == "plan"); err != nil {
+		current.mu.Unlock()
+		return err
+	}
 	if current.runner.Logger != nil {
-		if err := current.runner.Logger.Append("session_mode", map[string]any{"mode_id": params.ModeID}); err != nil {
+		if err := current.runner.Logger.Append("session_mode", map[string]any{"mode_id": mode}); err != nil {
+			_ = current.runner.Tools.SetPlanMode(current.mode == "plan")
 			current.mu.Unlock()
-			s.respondError(incoming.ID, -32000, err.Error())
-			return
+			return err
 		}
 	}
-	current.mode = params.ModeID
+	current.mode = mode
 	current.mu.Unlock()
-	s.notify(params.SessionID, map[string]any{"sessionUpdate": "current_mode_update", "currentModeId": params.ModeID})
-	s.respond(incoming.ID, map[string]any{})
+	s.notify(current.id, map[string]any{"sessionUpdate": "current_mode_update", "currentModeId": mode})
+	return nil
 }
 
 func validSessionMode(mode string) bool {
@@ -2727,6 +2803,20 @@ func (s *Server) respondError(id json.RawMessage, code int, message string) {
 
 func (s *Server) notify(sessionID string, update any) {
 	s.write(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{"sessionId": sessionID, "update": update}})
+}
+
+func (s *Server) notifyXAI(current *session, update map[string]any) {
+	params := map[string]any{
+		"sessionId": current.id, "update": update,
+		"_meta": map[string]any{
+			"eventId":          fmt.Sprintf("%s-%d", current.id, s.nextRequest.Add(1)),
+			"agentTimestampMs": time.Now().UnixMilli(),
+		},
+	}
+	if current.runner == nil || current.runner.Logger == nil || current.runner.Logger.Append("xai_session_notification", params) != nil {
+		delete(params, "_meta")
+	}
+	s.write(map[string]any{"jsonrpc": "2.0", "method": "x.ai/session_notification", "params": params})
 }
 
 func (s *Server) write(value any) {

@@ -521,7 +521,7 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 	}
 	var prefire *compactionPrefire
 	if r.shouldCompact(previousResponseID) {
-		_, err := r.compact(ctx, previousResponseID, "auto")
+		_, err := r.compact(ctx, previousResponseID, "auto", "")
 		if err != nil {
 			r.log("compaction_error", map[string]any{"error": err.Error(), "input_tokens": r.lastInputTokens})
 		} else {
@@ -926,10 +926,14 @@ func (r *Runner) compactionStreamer(includeHistory bool) ResponseStreamer {
 }
 
 func (r *Runner) Compact(ctx context.Context, previousResponseID string) (string, error) {
-	return r.compact(ctx, previousResponseID, "manual")
+	return r.compact(ctx, previousResponseID, "manual", "")
 }
 
-func (r *Runner) compact(ctx context.Context, previousResponseID, source string) (string, error) {
+func (r *Runner) CompactWithContext(ctx context.Context, previousResponseID, userContext string) (string, error) {
+	return r.compact(ctx, previousResponseID, "manual", userContext)
+}
+
+func (r *Runner) compact(ctx context.Context, previousResponseID, source, userContext string) (string, error) {
 	if previousResponseID == "" {
 		return "", errors.New("no completed response is available to compact")
 	}
@@ -943,7 +947,7 @@ func (r *Runner) compact(ctx context.Context, previousResponseID, source string)
 		Instructions: "Create a precise successor-agent handoff summary. Preserve the user's goals, decisions, constraints, modified files, tool results, verification state, unresolved problems, and exact next actions. Do not claim unfinished work is complete.",
 		Input: []api.InputItem{{
 			Type: "message", Role: "user",
-			Content: "Summarize the conversation so a fresh agent context can continue without losing important implementation state.",
+			Content: compactionRequest("Summarize the conversation so a fresh agent context can continue without losing important implementation state.", userContext),
 		}},
 		PreviousResponseID: previousResponseID, Stream: true,
 	}
@@ -953,7 +957,7 @@ func (r *Runner) compact(ctx context.Context, previousResponseID, source string)
 	}
 	if twoPass {
 		request.PreviousResponseID = ""
-		request.Input[0].Content = "This is the final pass of hierarchical compaction. Merge the entire prior summary with the recent conversation into one self-contained successor-agent handoff.\n\n<summary_content>\n" + note + "\n</summary_content>\n\n<recent_conversation>\n" + tail + "\n</recent_conversation>"
+		request.Input[0].Content = compactionRequest("This is the final pass of hierarchical compaction. Merge the entire prior summary with the recent conversation into one self-contained successor-agent handoff.\n\n<summary_content>\n"+note+"\n</summary_content>\n\n<recent_conversation>\n"+tail+"\n</recent_conversation>", userContext)
 	}
 	streamer := r.Client
 	if twoPass {
@@ -964,7 +968,7 @@ func (r *Runner) compact(ctx context.Context, previousResponseID, source string)
 	if (err != nil || strings.TrimSpace(result.Text) == "") && twoPass {
 		r.log("compaction_prefire", map[string]any{"outcome": "pass2_failed"})
 		request.PreviousResponseID = previousResponseID
-		request.Input[0].Content = "Summarize the conversation so a fresh agent context can continue without losing important implementation state."
+		request.Input[0].Content = compactionRequest("Summarize the conversation so a fresh agent context can continue without losing important implementation state.", userContext)
 		result, err = r.Client.StreamResponse(ctx, request, nil)
 		usedTwoPass = false
 	}
@@ -986,6 +990,13 @@ func (r *Runner) compact(ctx context.Context, previousResponseID, source string)
 		r.HookPolicy.AfterCompact(ctx, source)
 	}
 	return summary, nil
+}
+
+func compactionRequest(prompt, userContext string) string {
+	if userContext = strings.TrimSpace(userContext); userContext != "" {
+		return prompt + "\n\n<user_provided_context>\n" + userContext + "\n</user_provided_context>\n\nIncorporate the user-provided context above into the summary."
+	}
+	return prompt
 }
 
 func (r *Runner) RewindHistory(messages []session.Message) {

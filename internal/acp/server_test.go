@@ -698,6 +698,165 @@ func TestStaticExtensionsAndCompactCommand(t *testing.T) {
 	}
 }
 
+func TestCompactConversationExtensionUsesContextWithoutPromptCompletion(t *testing.T) {
+	var output bytes.Buffer
+	streamer := &fixtureStreamer{results: []api.StreamResult{{Text: "focused summary"}}}
+	logger, err := sessionlog.NewLoggerWithID(t.TempDir(), "compact-extension")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logger.Close()
+	current := &session{
+		id: "compact-extension", cwd: t.TempDir(), previous: "response-1", activePrompt: -1,
+		runner: &agent.Runner{Client: streamer, Logger: logger, Model: "test-model"},
+	}
+	server := &Server{output: &output, sessions: map[string]*session{current.id: current}}
+	server.handleMemoryExtension(context.Background(), message{
+		ID: json.RawMessage("4"), Method: "x.ai/compact_conversation",
+		Params: json.RawMessage(`{"session_id":"compact-extension","user_context":"preserve the auth decision"}`),
+	})
+	server.wg.Wait()
+
+	messages := decodeACPOutput(t, output.Bytes())
+	if len(messages) != 2 || messages[1]["id"] != float64(4) || len(messages[1]["result"].(map[string]any)) != 0 {
+		t.Fatalf("messages=%#v", messages)
+	}
+	completed := messages[0]
+	params := completed["params"].(map[string]any)
+	update := params["update"].(map[string]any)
+	meta := params["_meta"].(map[string]any)
+	if completed["method"] != "x.ai/session_notification" || params["sessionId"] != current.id || update["sessionUpdate"] != "auto_compact_completed" || update["tokens_after"] != float64(0) || update["summary_preview"] != nil || meta["eventId"] == "" || meta["agentTimestampMs"].(float64) <= 0 {
+		t.Fatalf("completion=%#v", completed)
+	}
+	for _, item := range messages {
+		if item["method"] == "x.ai/session/prompt_complete" {
+			t.Fatalf("compact extension emitted prompt completion: %#v", item)
+		}
+	}
+	current.mu.Lock()
+	previous, running := current.previous, current.running
+	current.mu.Unlock()
+	if previous != "" || running {
+		t.Fatalf("previous=%q running=%v", previous, running)
+	}
+	streamer.mu.Lock()
+	requests := append([]api.ResponseRequest(nil), streamer.requests...)
+	streamer.mu.Unlock()
+	if len(requests) != 1 || requests[0].PreviousResponseID != "response-1" || !strings.Contains(requests[0].Input[0].Content.(string), "preserve the auth decision") {
+		t.Fatalf("requests=%#v", requests)
+	}
+	persisted, err := sessionlog.Events(logger.Path(), "xai_session_notification")
+	if err != nil || len(persisted) != 1 {
+		t.Fatalf("persisted=%#v err=%v", persisted, err)
+	}
+
+	output.Reset()
+	current.mu.Lock()
+	current.previous, current.running = "response-2", true
+	current.mu.Unlock()
+	server.handleMemoryExtension(context.Background(), message{
+		ID: json.RawMessage("5"), Method: "x.ai/compact_conversation",
+		Params: json.RawMessage(`{"sessionId":"compact-extension","userContext":"keep tests"}`),
+	})
+	failed := decodeACPOutput(t, output.Bytes())
+	if len(failed) != 1 || failed[0]["error"].(map[string]any)["message"] != "session already has an active prompt" {
+		t.Fatalf("failed=%#v", failed)
+	}
+
+	output.Reset()
+	current.mu.Lock()
+	current.previous, current.running = "response-3", false
+	current.runner.Client = promptErrorStreamer{err: errors.New("compact unavailable")}
+	current.mu.Unlock()
+	server.handleMemoryExtension(context.Background(), message{
+		ID: json.RawMessage("6"), Method: "x.ai/compact_conversation",
+		Params: json.RawMessage(`{"sessionId":"compact-extension"}`),
+	})
+	server.wg.Wait()
+	modelFailure := decodeACPOutput(t, output.Bytes())
+	if len(modelFailure) != 1 || modelFailure[0]["error"].(map[string]any)["message"] != "compact unavailable" {
+		t.Fatalf("modelFailure=%#v", modelFailure)
+	}
+}
+
+func TestTogglePlanModeNotificationPersistsAndPublishesMode(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	logger, err := sessionlog.NewLoggerWithID(t.TempDir(), "toggle-mode")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logger.Close()
+	current := &session{
+		id: "toggle-mode", mode: "default",
+		runner: &agent.Runner{Tools: registry, Logger: logger},
+	}
+	var output bytes.Buffer
+	server := &Server{output: &output, sessions: map[string]*session{current.id: current}}
+	params := json.RawMessage(`{"sessionId":"toggle-mode"}`)
+	server.handleTogglePlanMode(params)
+	if currentMode(current) != "plan" || !registry.PlanModeActive() {
+		t.Fatalf("mode=%q active=%v", currentMode(current), registry.PlanModeActive())
+	}
+	server.handleTogglePlanMode(params)
+	if currentMode(current) != "default" || registry.PlanModeActive() {
+		t.Fatalf("mode=%q active=%v", currentMode(current), registry.PlanModeActive())
+	}
+	if mode, err := sessionlog.CurrentMode(logger.Path()); err != nil || mode != "default" {
+		t.Fatalf("persisted mode=%q err=%v", mode, err)
+	}
+	messages := decodeACPOutput(t, output.Bytes())
+	if len(messages) != 2 {
+		t.Fatalf("messages=%#v", messages)
+	}
+	want := []string{"plan", "default"}
+	for index, item := range messages {
+		update := item["params"].(map[string]any)["update"].(map[string]any)
+		if item["method"] != "session/update" || update["sessionUpdate"] != "current_mode_update" || update["currentModeId"] != want[index] {
+			t.Fatalf("messages=%#v", messages)
+		}
+	}
+	output.Reset()
+	server.handleTogglePlanMode(json.RawMessage(`{"sessionId":"missing"}`))
+	if output.Len() != 0 {
+		t.Fatalf("unknown session produced output: %s", output.String())
+	}
+	current.runner.Logger = failingEventLogger{}
+	server.handleTogglePlanMode(params)
+	if currentMode(current) != "default" || registry.PlanModeActive() || output.Len() != 0 {
+		t.Fatalf("failed persistence was not rolled back: mode=%q active=%v output=%q", currentMode(current), registry.PlanModeActive(), output.String())
+	}
+}
+
+type failingEventLogger struct{}
+
+func (failingEventLogger) Append(string, any) error {
+	return errors.New("write failed")
+}
+
+func (failingEventLogger) AppendPrompt(string, []sessionlog.Content) error {
+	return errors.New("write failed")
+}
+
+func (failingEventLogger) AppendSyntheticPrompt(string, []sessionlog.Content) error {
+	return errors.New("write failed")
+}
+
+func TestXAINotificationWithoutPersistenceOmitsReplayCursor(t *testing.T) {
+	var output bytes.Buffer
+	server := &Server{output: &output}
+	server.notifyXAI(&session{id: "transient"}, map[string]any{"sessionUpdate": "auto_compact_completed"})
+	messages := decodeACPOutput(t, output.Bytes())
+	params := messages[0]["params"].(map[string]any)
+	if _, exists := params["_meta"]; exists {
+		t.Fatalf("unpersisted notification advertised a replay cursor: %#v", messages[0])
+	}
+}
+
 func TestBtwExtensionRunsBesideMainTurnAndPreservesSessionState(t *testing.T) {
 	sessionDir, cwd := t.TempDir(), t.TempDir()
 	logger, err := sessionlog.NewLoggerWithID(sessionDir, "btw-session")
@@ -1448,6 +1607,10 @@ func TestSessionReplayIncludesSubagentLifecycle(t *testing.T) {
 		{"subagent_finished", SubagentFinishedUpdate(tools.SubagentResult{ID: "child-1", Type: "explore", Status: "completed", Output: "done"})},
 		{"task_backgrounded", TaskBackgroundedUpdate(tools.ProcessBackgrounded{TaskID: "task-1", Command: "make test", CWD: "/work"})},
 		{"task_completed", TaskCompletedUpdate(tools.ProcessSnapshot{TaskID: "task-1", Command: "make test", Completed: true, ExitCode: &code}, true)},
+		{"xai_session_notification", map[string]any{
+			"sessionId": "parent-1", "update": map[string]any{"sessionUpdate": "auto_compact_completed", "tokens_after": 0},
+			"_meta": map[string]any{"eventId": "parent-1-9", "agentTimestampMs": 10},
+		}},
 	} {
 		if err := logger.Append(event.kind, event.data); err != nil {
 			t.Fatal(err)
@@ -1473,7 +1636,7 @@ func TestSessionReplayIncludesSubagentLifecycle(t *testing.T) {
 		}
 		messages = append(messages, message)
 	}
-	if len(messages) != 6 {
+	if len(messages) != 7 {
 		t.Fatalf("messages=%#v", messages)
 	}
 	spawn := messages[2]["params"].(map[string]any)["update"].(map[string]any)
@@ -1485,6 +1648,10 @@ func TestSessionReplayIncludesSubagentLifecycle(t *testing.T) {
 	taskFinished := messages[5]["params"].(map[string]any)["update"].(map[string]any)
 	if messages[4]["method"] != "x.ai/task_backgrounded" || taskStarted["task_id"] != "task-1" || messages[5]["method"] != "x.ai/task_completed" || taskFinished["will_wake"] != true {
 		t.Fatalf("task lifecycle=%#v", messages[4:])
+	}
+	compactParams := messages[6]["params"].(map[string]any)
+	if messages[6]["method"] != "x.ai/session_notification" || compactParams["update"].(map[string]any)["sessionUpdate"] != "auto_compact_completed" || compactParams["_meta"].(map[string]any)["eventId"] != "parent-1-9" {
+		t.Fatalf("compact replay=%#v", messages[6])
 	}
 }
 
@@ -2179,6 +2346,7 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 		}}},
 		{ResponseID: "response-2", Text: "finished"},
 		{ResponseID: "response-3", Text: "replacement answer"},
+		{ResponseID: "response-4", Text: "compacted replacement"},
 	}}
 	factoryConfigs := make(chan SessionConfig, 1)
 	sessionDir := t.TempDir()
@@ -2273,6 +2441,14 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 	_ = decodeACP(t, decoder)
 	if response := decodeACP(t, decoder); int(response["id"].(float64)) != 24 {
 		t.Fatalf("unexpected set default mode response: %#v", response)
+	}
+	for _, want := range []string{"plan", "default"} {
+		encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "method": "x.ai/toggle_plan_mode", "params": map[string]any{"sessionId": sessionID}})
+		modeUpdate := decodeACP(t, decoder)
+		modeData := modeUpdate["params"].(map[string]any)["update"].(map[string]any)
+		if modeData["sessionUpdate"] != "current_mode_update" || modeData["currentModeId"] != want {
+			t.Fatalf("unexpected toggle mode update: %#v", modeUpdate)
+		}
 	}
 	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 3, "method": "session/prompt", "params": map[string]any{
 		"sessionId": sessionID, "prompt": []any{map[string]any{"type": "text", "text": "create the file"}},
@@ -2475,6 +2651,24 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 	streamer.mu.Lock()
 	if len(streamer.requests) != 3 || streamer.requests[2].PreviousResponseID != "" || !strings.Contains(streamer.requests[2].Instructions, "Plan mode is active.") {
 		t.Fatalf("rewound prompt used the discarded response chain: %#v", streamer.requests)
+	}
+	streamer.mu.Unlock()
+	encodeACP(t, encoder, map[string]any{
+		"jsonrpc": "2.0", "id": 40, "method": "x.ai/compact_conversation",
+		"params": map[string]any{"sessionId": sessionID, "userContext": "retain the replacement plan"},
+	})
+	compactUpdate := decodeACPNonQueue(t, decoder)
+	compactUpdateParams := compactUpdate["params"].(map[string]any)
+	if compactUpdate["method"] != "x.ai/session_notification" || compactUpdateParams["update"].(map[string]any)["sessionUpdate"] != "auto_compact_completed" {
+		t.Fatalf("missing compact extension update: %#v", compactUpdate)
+	}
+	compactDone := decodeACPNonQueue(t, decoder)
+	if int(compactDone["id"].(float64)) != 40 || len(compactDone["result"].(map[string]any)) != 0 {
+		t.Fatalf("unexpected compact extension response: %#v", compactDone)
+	}
+	streamer.mu.Lock()
+	if len(streamer.requests) != 4 || streamer.requests[3].PreviousResponseID != "response-3" || !strings.Contains(streamer.requests[3].Input[0].Content.(string), "retain the replacement plan") {
+		t.Fatalf("compact extension was not routed: %#v", streamer.requests)
 	}
 	streamer.mu.Unlock()
 	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 4, "method": "session/close", "params": map[string]any{"sessionId": sessionID}})
