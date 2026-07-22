@@ -2335,6 +2335,7 @@ func TestSessionForkContractAndModelResume(t *testing.T) {
 
 func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 	root := t.TempDir()
+	const clientSessionID = "018f47a2-4df1-7d5b-8c2a-1f7d9e6b3a40"
 	gitInit := exec.Command("git", "init", "-q")
 	gitInit.Dir = root
 	if output, err := gitInit.CombinedOutput(); err != nil {
@@ -2396,8 +2397,11 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 		t.Fatalf("session list capability missing: %#v", sessionCapabilities)
 	}
 	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 2, "method": "session/new", "params": map[string]any{
-		"_meta": map[string]any{"yoloMode": true, "autoMode": true},
-		"cwd":   root, "mcpServers": []any{map[string]any{
+		"_meta": map[string]any{
+			"sessionId": clientSessionID, "modelId": "client-model",
+			"yoloMode": true, "autoMode": true,
+		},
+		"cwd": root, "mcpServers": []any{map[string]any{
 			"name": "client-tools", "command": "/fixture-mcp", "args": []string{"--stdio"},
 			"env": []any{map[string]any{"name": "TOKEN", "value": "secret"}},
 		}, map[string]any{
@@ -2409,6 +2413,9 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 	}})
 	created := decodeACP(t, decoder)
 	receivedConfig := <-factoryConfigs
+	if receivedConfig.SessionID != clientSessionID || receivedConfig.Model != "client-model" {
+		t.Fatalf("session identity metadata was not forwarded: %#v", receivedConfig)
+	}
 	if receivedConfig.YoloMode == nil || !*receivedConfig.YoloMode || receivedConfig.AutoMode == nil || !*receivedConfig.AutoMode {
 		t.Fatalf("session permission metadata was not forwarded: %#v", receivedConfig)
 	}
@@ -2418,6 +2425,9 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 		t.Fatalf("client MCP config was not forwarded: %#v", receivedConfig)
 	}
 	sessionID := created["result"].(map[string]any)["sessionId"].(string)
+	if sessionID != clientSessionID {
+		t.Fatalf("client session ID was not preserved: %q", sessionID)
+	}
 	modes := created["result"].(map[string]any)["modes"].(map[string]any)
 	if modes["currentModeId"] != "default" || len(modes["availableModes"].([]any)) != 3 {
 		t.Fatalf("unexpected session modes: %#v", modes)
@@ -3178,7 +3188,7 @@ func TestACPLoadReplaysAndResumeReconnectsPersistedSession(t *testing.T) {
 	if err := logger.Close(); err != nil {
 		t.Fatal(err)
 	}
-	factoryConfigs := make(chan SessionConfig, 2)
+	factoryConfigs := make(chan SessionConfig, 3)
 	server := &Server{SessionDir: sessionDir, Factory: func(_ context.Context, cfg SessionConfig, approver tools.Approver, text, status io.Writer) (*agent.Runner, func(), error) {
 		factoryConfigs <- cfg
 		ws, err := workspace.Open(cfg.CWD)
@@ -3226,10 +3236,19 @@ func TestACPLoadReplaysAndResumeReconnectsPersistedSession(t *testing.T) {
 	}
 	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 2, "method": "session/close", "params": map[string]any{"sessionId": "persisted-1"}})
 	_ = decodeACP(t, decoder)
+	loadParams["_meta"] = map[string]any{"noReplay": true}
+	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 3, "method": "session/load", "params": loadParams})
+	loadedWithoutReplay := decodeACP(t, decoder)
+	if int(loadedWithoutReplay["id"].(float64)) != 3 || loadedWithoutReplay["result"].(map[string]any)["sessionId"] != "persisted-1" {
+		t.Fatalf("noReplay load emitted transcript updates: %#v", loadedWithoutReplay)
+	}
+	_ = <-factoryConfigs
+	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 4, "method": "session/close", "params": map[string]any{"sessionId": "persisted-1"}})
+	_ = decodeACP(t, decoder)
 	loadParams["_meta"] = map[string]any{"yoloMode": "invalid", "auto_mode": true}
-	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 3, "method": "session/resume", "params": loadParams})
+	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 5, "method": "session/resume", "params": loadParams})
 	resumed := decodeACP(t, decoder)
-	if int(resumed["id"].(float64)) != 3 || resumed["result"].(map[string]any)["sessionId"] != "persisted-1" {
+	if int(resumed["id"].(float64)) != 5 || resumed["result"].(map[string]any)["sessionId"] != "persisted-1" {
 		t.Fatalf("unexpected resume response: %#v", resumed)
 	}
 	if resumed["result"].(map[string]any)["modes"].(map[string]any)["currentModeId"] != "plan" {
@@ -3270,6 +3289,59 @@ func TestSessionPermissionModeOverrides(t *testing.T) {
 				t.Fatalf("got yolo=%v auto=%v, want yolo=%v auto=%v", yolo, auto, test.wantYolo, test.wantAuto)
 			}
 		})
+	}
+}
+
+func TestSessionStartupOverrides(t *testing.T) {
+	const id = "018F47A2-4DF1-7D5B-8C2A-1F7D9E6B3A40"
+	tests := []struct {
+		name               string
+		meta               map[string]any
+		wantID, wantModel  string
+		wantErrorSubstring string
+	}{
+		{name: "empty"},
+		{name: "valid", meta: map[string]any{"sessionId": id, "modelId": "grok-build"}, wantID: id, wantModel: "grok-build"},
+		{name: "wrong types ignored", meta: map[string]any{"sessionId": 7, "modelId": true}},
+		{name: "empty model ignored", meta: map[string]any{"modelId": ""}},
+		{name: "invalid UUID", meta: map[string]any{"sessionId": "not-a-uuid"}, wantErrorSubstring: "invalid UUID format"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			gotID, gotModel, err := sessionStartupOverrides(test.meta)
+			if test.wantErrorSubstring != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErrorSubstring) {
+					t.Fatalf("error=%v, want substring %q", err, test.wantErrorSubstring)
+				}
+				return
+			}
+			if err != nil || gotID != test.wantID || gotModel != test.wantModel {
+				t.Fatalf("id=%q model=%q err=%v", gotID, gotModel, err)
+			}
+		})
+	}
+}
+
+func TestACPNewSessionRejectsInvalidClientSessionID(t *testing.T) {
+	params, err := json.Marshal(map[string]any{
+		"cwd": t.TempDir(), "mcpServers": []any{},
+		"_meta": map[string]any{"sessionId": "not-a-uuid"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	server := &Server{
+		output: &output,
+		Factory: func(context.Context, SessionConfig, tools.Approver, io.Writer, io.Writer) (*agent.Runner, func(), error) {
+			t.Fatal("factory called for invalid session metadata")
+			return nil, nil, nil
+		},
+	}
+	server.handleNewSession(context.Background(), message{ID: json.RawMessage("1"), Params: params})
+	response := decodeACP(t, json.NewDecoder(&output))
+	if response["error"].(map[string]any)["code"] != float64(-32602) {
+		t.Fatalf("unexpected response: %#v", response)
 	}
 }
 

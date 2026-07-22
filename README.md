@@ -42,7 +42,10 @@ always-approve locks and the `auto_mode.enabled` gate remain enforced during
 live switches. ACP `session/new`, `session/load`, and `session/resume` also honor
 boolean `_meta.yoloMode` and `_meta.autoMode` (or `_meta.auto_mode`) overrides;
 invalid metadata falls back to startup defaults, and the same managed gates
-remain authoritative.
+remain authoritative. `session/new` accepts a validated UUID in `_meta.sessionId`
+and a configured profile or underlying model in `_meta.modelId` (unknown models
+fall back to the default); `session/load` accepts `_meta.noReplay=true` when the
+client already owns the transcript and only needs the persisted runtime state.
 
 Completed ACP prompts publish `x.ai/session/prompt_complete` before their RPC
 response. Prompt responses include `_meta` correlation for the session,

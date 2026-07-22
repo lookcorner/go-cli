@@ -1315,3 +1315,28 @@ func TestResolveACPSessionPermissionMode(t *testing.T) {
 }
 
 func testBoolPointer(value bool) *bool { return &value }
+
+func TestResolveACPSessionModel(t *testing.T) {
+	cfg := config.Config{
+		Model: "default-model", BaseURL: "https://default.example", Backend: "responses", ContextWindow: 1000,
+		ModelProfiles: map[string]config.ModelProfile{
+			"fast": {Model: "fast-model", BaseURL: "https://fast.example", Backend: "chat", ContextWindow: 2000},
+		},
+	}
+	for _, test := range []struct {
+		name, requested, wantModel, wantBaseURL, wantBackend string
+		wantContextWindow                                    int
+	}{
+		{name: "default", wantModel: "default-model", wantBaseURL: "https://default.example", wantBackend: "responses", wantContextWindow: 1000},
+		{name: "profile slug", requested: "fast", wantModel: "fast-model", wantBaseURL: "https://fast.example", wantBackend: "chat", wantContextWindow: 2000},
+		{name: "profile model ID", requested: "fast-model", wantModel: "fast-model", wantBaseURL: "https://fast.example", wantBackend: "chat", wantContextWindow: 2000},
+		{name: "unknown falls back", requested: "unknown", wantModel: "default-model", wantBaseURL: "https://default.example", wantBackend: "responses", wantContextWindow: 1000},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := resolveACPSessionModel(cfg, test.requested)
+			if got.Model != test.wantModel || got.BaseURL != test.wantBaseURL || got.Backend != test.wantBackend || got.ContextWindow != test.wantContextWindow {
+				t.Fatalf("resolved config=%#v", got)
+			}
+		})
+	}
+}

@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -27,6 +28,8 @@ import (
 )
 
 const ProtocolVersion = 1
+
+var clientSessionIDPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 type SessionConfig struct {
 	CWD        string
@@ -50,6 +53,19 @@ func sessionPermissionModeOverrides(meta map[string]any) (yoloMode, autoMode *bo
 		autoMode = &value
 	}
 	return yoloMode, autoMode
+}
+
+func sessionStartupOverrides(meta map[string]any) (sessionID, model string, err error) {
+	if value, ok := meta["sessionId"].(string); ok {
+		if !clientSessionIDPattern.MatchString(value) {
+			return "", "", fmt.Errorf("invalid UUID format for _meta.sessionId %q", value)
+		}
+		sessionID = value
+	}
+	if value, ok := meta["modelId"].(string); ok && value != "" {
+		model = value
+	}
+	return sessionID, model, nil
 }
 
 type MCPServer = mcppkg.ServerConfig
@@ -1390,14 +1406,21 @@ func (s *Server) handleNewSession(ctx context.Context, incoming message) {
 		s.respondError(incoming.ID, -32602, "cwd is required")
 		return
 	}
-	id := fmt.Sprintf("gork-%s-%d", time.Now().UTC().Format("20060102T150405.000000000Z"), s.nextSession.Add(1))
+	id, model, err := sessionStartupOverrides(params.Meta)
+	if err != nil {
+		s.respondError(incoming.ID, -32602, err.Error())
+		return
+	}
+	if id == "" {
+		id = fmt.Sprintf("gork-%s-%d", time.Now().UTC().Format("20060102T150405.000000000Z"), s.nextSession.Add(1))
+	}
 	servers, err := parseMCPServers(params.MCPServers)
 	if err != nil {
 		s.respondError(incoming.ID, -32602, err.Error())
 		return
 	}
 	yoloMode, autoMode := sessionPermissionModeOverrides(params.Meta)
-	sessionConfig := SessionConfig{CWD: params.CWD, SessionID: id, MCPServers: servers, YoloMode: yoloMode, AutoMode: autoMode}
+	sessionConfig := SessionConfig{CWD: params.CWD, Model: model, SessionID: id, MCPServers: servers, YoloMode: yoloMode, AutoMode: autoMode}
 	_, err = s.startSession(ctx, id, sessionConfig, "")
 	if err != nil {
 		s.respondError(incoming.ID, -32000, err.Error())
@@ -2132,7 +2155,8 @@ func (s *Server) handleRestoreSession(ctx context.Context, incoming message, rep
 		s.respondError(incoming.ID, -32602, err.Error())
 		return
 	}
-	if replay {
+	noReplay, _ := params.Meta["noReplay"].(bool)
+	if replay && !noReplay {
 		if err := s.replaySession(path, params.SessionID); err != nil {
 			s.respondError(incoming.ID, -32000, err.Error())
 			return

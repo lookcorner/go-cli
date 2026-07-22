@@ -1592,6 +1592,13 @@ func resolveACPSessionPermissionMode(defaultMode tools.PermissionMode, yoloMode,
 	return mode
 }
 
+func resolveACPSessionModel(cfg config.Config, requested string) config.Config {
+	if resolved, ok := cfg.ResolveModel(requested); ok {
+		return resolved
+	}
+	return cfg
+}
+
 func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []string, tokenProvider api.TokenProvider, stdin io.Reader, stdout, stderr io.Writer) error {
 	mode := tools.PermissionMode(opts.approval)
 	if mode != tools.PermissionPrompt && mode != tools.PermissionAuto && mode != tools.PermissionAlwaysApprove && mode != tools.PermissionDeny {
@@ -1645,6 +1652,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		if err != nil {
 			return nil, nil, err
 		}
+		sessionCfg = resolveACPSessionModel(sessionCfg, sessionConfig.Model)
 		instructions := joinInstructions(cfg.SystemPrompt, workspace.FormatInstructions(instructionFiles), catalog.Summary())
 		permissionPrompts := &permissionPromptApprover{base: protocolApprover}
 		sessionMode := resolveACPSessionPermissionMode(
@@ -1661,11 +1669,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		}
 		registry := tools.NewRegistry(ws, approver)
 		registry.ConfigureUserQuestions(sessionCfg.AskUserQuestion.TimeoutEnabled, time.Duration(sessionCfg.AskUserQuestion.TimeoutSeconds)*time.Second)
-		goalCfg := sessionCfg
-		if sessionConfig.Model != "" {
-			goalCfg.Model = sessionConfig.Model
-		}
-		registry.ConfigureGoalRoles(goalRoleConfig(goalCfg, true))
+		registry.ConfigureGoalRoles(goalRoleConfig(sessionCfg, true))
 		if search, enabled := cfg.WebSearchEndpoint(); enabled {
 			if err := registry.Register(tools.NewWebSearchTool(search.BaseURL, search.APIKey, search.Model, &http.Client{Timeout: cfg.HTTPTimeout})); err != nil {
 				_ = registry.Close()
@@ -1733,11 +1737,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		registry.SetGoalObserver(&sessionGoalObserver{server: server, sessionID: logger.ID(), logger: logger})
 		registry.SetWebFetchEnabled(cfg.WebFetch.Enabled)
 		if sessionConfig.ResumePath == "" {
-			model := cfg.Model
-			if sessionConfig.Model != "" {
-				model = sessionConfig.Model
-			}
-			if err := logger.Append("session_metadata", sessionMetadata(ctx, ws.Root(), model)); err != nil {
+			if err := logger.Append("session_metadata", sessionMetadata(ctx, ws.Root(), sessionCfg.Model)); err != nil {
 				_ = logger.Close()
 				_ = registry.Close()
 				return nil, nil, err
@@ -1762,9 +1762,6 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		if err := registry.Register(catalog.Tool()); err != nil {
 			cleanup()
 			return nil, nil, err
-		}
-		if sessionConfig.Model != "" {
-			sessionCfg.Model = sessionConfig.Model
 		}
 		mcpRuntime = newSessionMCPRuntime(sessionCtx, sessionCfg, ws.Root(), registry, approver, tokenProvider, statusOutput)
 		if err = mcpRuntime.Update(sessionCtx, sessionConfig.MCPServers); err != nil {
