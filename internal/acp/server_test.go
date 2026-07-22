@@ -727,13 +727,13 @@ func TestStaticExtensionsAndCompactCommand(t *testing.T) {
 	runner := &agent.Runner{Client: streamer, Model: "test-model"}
 	current := &session{id: "compact-session", cwd: t.TempDir(), runner: runner, previous: "response-1", activePrompt: -1, close: func() {}}
 	server := &Server{output: &output, sessions: map[string]*session{"compact-session": current}}
-	server.handleStaticExtension(message{ID: json.RawMessage("1"), Method: "x.ai/commands/list", Params: json.RawMessage(`{}`)})
+	server.handleCommands(message{ID: json.RawMessage("1"), Method: "x.ai/commands/list", Params: json.RawMessage(`{}`)})
 	var response map[string]any
 	if err := json.NewDecoder(&output).Decode(&response); err != nil {
 		t.Fatal(err)
 	}
 	commands := response["result"].(map[string]any)["commands"].([]any)
-	if len(commands) != 2 || commands[0].(map[string]any)["name"] != "compact" || commands[1].(map[string]any)["name"] != "loop" || commands[1].(map[string]any)["argumentHint"] != "[interval] <prompt>" {
+	if len(commands) != 1 || commands[0].(map[string]any)["name"] != "compact" || commands[0].(map[string]any)["input"].(map[string]any)["hint"] != "optional context about what to preserve" {
 		t.Fatalf("unexpected commands response: %#v", response)
 	}
 	output.Reset()
@@ -1105,27 +1105,31 @@ func TestMemoryFlushExtensionAndSlashCommand(t *testing.T) {
 	runner := &agent.Runner{Client: streamer, Model: "test", Tools: registry, Memory: store, MemoryConfig: config, OpenMemory: func() (*memory.Store, error) { return memory.Open(root, cwd, "memory-session") }}
 	current := &session{id: "memory-session", cwd: cwd, runner: runner, previous: "response-1", activePrompt: -1, close: func() {}}
 	var output bytes.Buffer
-	server := &Server{output: &output, MemoryEnabled: true, sessions: map[string]*session{"memory-session": current}}
-	server.handleStaticExtension(message{ID: json.RawMessage("0"), Method: "x.ai/commands/list", Params: json.RawMessage(`{}`)})
+	server := &Server{output: &output, sessions: map[string]*session{"memory-session": current}}
+	server.handleCommands(message{ID: json.RawMessage("0"), Method: "x.ai/commands/list", Params: json.RawMessage(`{}`)})
 	var commandResponse map[string]any
 	if err := json.NewDecoder(&output).Decode(&commandResponse); err != nil {
 		t.Fatal(err)
 	}
 	commands := commandResponse["result"].(map[string]any)["commands"].([]any)
-	if len(commands) != 5 || commands[1].(map[string]any)["name"] != "flush" || commands[2].(map[string]any)["name"] != "dream" || commands[3].(map[string]any)["name"] != "memory" {
+	if len(commands) != 5 || commands[1].(map[string]any)["name"] != "flush" || commands[2].(map[string]any)["name"] != "dream" || commands[3].(map[string]any)["name"] != "memory" || commands[4].(map[string]any)["name"] != "loop" {
 		t.Fatalf("memory commands=%#v", commands)
 	}
 	output.Reset()
-	server.MemoryEnabled = false
-	server.handleStaticExtension(message{ID: json.RawMessage("0"), Method: "x.ai/commands/list", Params: json.RawMessage(`{}`)})
+	if _, err := runner.SetMemoryEnabled(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	server.handleCommands(message{ID: json.RawMessage("0"), Method: "x.ai/commands/list", Params: json.RawMessage(`{}`)})
 	if err := json.NewDecoder(&output).Decode(&commandResponse); err != nil {
 		t.Fatal(err)
 	}
 	commands = commandResponse["result"].(map[string]any)["commands"].([]any)
-	if len(commands) != 2 {
+	if len(commands) != 3 || commands[1].(map[string]any)["name"] != "memory" || commands[2].(map[string]any)["name"] != "loop" {
 		t.Fatalf("disabled memory commands=%#v", commands)
 	}
-	server.MemoryEnabled = true
+	if _, err := runner.SetMemoryEnabled(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
 	output.Reset()
 	server.handleMemoryExtension(context.Background(), message{
 		ID: json.RawMessage("1"), Method: "x.ai/memory/flush", Params: json.RawMessage(`{"session_id":"memory-session"}`),
@@ -1279,7 +1283,7 @@ func TestMemoryDreamSlashCommandConsolidatesAndNotifies(t *testing.T) {
 	runner := &agent.Runner{Client: streamer, Model: "test", Memory: store, MemoryConfig: cfg}
 	current := &session{id: "dream-session", cwd: cwd, runner: runner, activePrompt: -1, close: func() {}}
 	var output bytes.Buffer
-	server := &Server{output: &output, MemoryEnabled: true, sessions: map[string]*session{"dream-session": current}}
+	server := &Server{output: &output, sessions: map[string]*session{"dream-session": current}}
 	params, _ := json.Marshal(map[string]any{"sessionId": "dream-session", "prompt": []any{map[string]any{"type": "text", "text": "/dream"}}})
 	server.handlePrompt(context.Background(), message{ID: json.RawMessage("1"), Method: "session/prompt", Params: params})
 	server.wg.Wait()

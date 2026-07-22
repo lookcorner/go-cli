@@ -19,7 +19,10 @@ that response chain, while `/memory` lists the safe global, workspace, and
 session Markdown sources without invoking the model. They also accept
 `/loop [interval] <prompt>`, which expands to the reference `scheduler_create`
 workflow without inventing a default interval. ACP advertises the enabled
-commands through `x.ai/commands/list`, emits `memory_files` metadata updates,
+commands and user-invocable workspace skills through `x.ai/commands/list`.
+Skill collisions use scope-qualified names with source metadata, argument
+prompts use ACP `input.hint`, and initialization advertises commands that are
+safe before a session exists. ACP also emits `memory_files` metadata updates,
 and exposes `x.ai/compact_conversation` with optional user context,
 `x.ai/memory/flush`, plus the bounded, history-isolated `x.ai/memory/rewrite`
 note formatter. Extension-triggered compaction returns an empty result and does

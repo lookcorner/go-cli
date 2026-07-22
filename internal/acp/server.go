@@ -92,7 +92,6 @@ type Factory func(context.Context, SessionConfig, tools.Approver, io.Writer, io.
 type Server struct {
 	Factory         Factory
 	SessionDir      string
-	MemoryEnabled   bool
 	input           io.Reader
 	output          io.Writer
 	writeMu         sync.Mutex
@@ -245,6 +244,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				},
 				"authMethods": []any{},
 				"agentInfo":   map[string]any{"name": "gork-go", "version": "0.1.0-dev"},
+				"_meta":       map[string]any{"availableCommands": availableCommands(nil, false)},
 			})
 		case "session/new":
 			s.handleNewSession(ctx, incoming)
@@ -322,7 +322,9 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleCodeNavigation(ctx, incoming)
 		case "x.ai/mcp/list", "x.ai/mcp/call", "x.ai/mcp/read_resource", "x.ai/mcp/auth_status", "x.ai/mcp/auth_trigger", "x.ai/mcp/toggle", "x.ai/mcp/toggle_tool", "x.ai/mcp/upsert", "x.ai/mcp/delete":
 			s.handleMCP(ctx, incoming)
-		case "x.ai/commands/list", "x.ai/workspaces/list":
+		case "x.ai/commands/list":
+			s.handleCommands(incoming)
+		case "x.ai/workspaces/list":
 			s.handleStaticExtension(incoming)
 		case "x.ai/compact_conversation", "x.ai/memory/flush", "x.ai/memory/rewrite":
 			s.handleMemoryExtension(ctx, incoming)
@@ -595,15 +597,6 @@ func (s *Server) handleSessionSummaries(incoming message) {
 
 func (s *Server) handleStaticExtension(incoming message) {
 	switch incoming.Method {
-	case "x.ai/commands/list":
-		commands := []any{map[string]any{"name": "compact", "description": "Compress conversation history to save context window"}}
-		if s.MemoryEnabled {
-			commands = append(commands, map[string]any{"name": "flush", "description": "Save reusable conversation context to workspace memory"})
-			commands = append(commands, map[string]any{"name": "dream", "description": "Consolidate session logs into organized memory"})
-			commands = append(commands, map[string]any{"name": "memory", "description": "Browse or toggle workspace memory", "argumentHint": "on|off"})
-		}
-		commands = append(commands, map[string]any{"name": "loop", "description": "Run a prompt on a recurring interval", "argumentHint": "[interval] <prompt>"})
-		s.respond(incoming.ID, map[string]any{"commands": commands})
 	case "x.ai/workspaces/list":
 		var req struct {
 			PageSize  *int   `json:"pageSize"`

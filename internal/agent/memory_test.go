@@ -57,6 +57,9 @@ func TestRunnerTogglesMemoryAndToolsForSession(t *testing.T) {
 	if err != nil || message != "Memory disabled for this session." || runner.Memory != nil || runner.MemoryConfig.Enabled || registry.HasTool("memory_search") || registry.HasTool("memory_get") {
 		t.Fatalf("disable message=%q err=%v runner=%#v", message, err, runner.MemoryConfig)
 	}
+	if configured, enabled := runner.MemoryAvailability(); !configured || enabled {
+		t.Fatalf("disabled availability configured=%v enabled=%v", configured, enabled)
+	}
 	if _, err := runner.ListMemory(); err == nil {
 		t.Fatal("disabled memory remained readable")
 	}
@@ -64,12 +67,18 @@ func TestRunnerTogglesMemoryAndToolsForSession(t *testing.T) {
 	if err != nil || message != "Memory enabled for this session." || opened != 1 || runner.Memory == nil || !runner.MemoryConfig.Enabled || !registry.HasTool("memory_search") || !registry.HasTool("memory_get") {
 		t.Fatalf("enable message=%q opened=%d err=%v", message, opened, err)
 	}
+	if configured, enabled := runner.MemoryAvailability(); !configured || !enabled {
+		t.Fatalf("enabled availability configured=%v enabled=%v", configured, enabled)
+	}
 	if message, err = runner.SetMemoryEnabled(context.Background(), true); err != nil || message != "Memory is already enabled." || opened != 1 {
 		t.Fatalf("idempotent message=%q opened=%d err=%v", message, opened, err)
 	}
 	unconfigured := Runner{MemoryConfig: memory.DefaultConfig()}
 	if message, err = unconfigured.SetMemoryEnabled(context.Background(), true); err != nil || message != "Memory cannot be enabled (not configured for this session)." || unconfigured.Memory != nil || unconfigured.MemoryConfig.Enabled {
 		t.Fatalf("unconfigured message=%q err=%v", message, err)
+	}
+	if configured, enabled := unconfigured.MemoryAvailability(); configured || enabled {
+		t.Fatalf("unconfigured availability configured=%v enabled=%v", configured, enabled)
 	}
 }
 

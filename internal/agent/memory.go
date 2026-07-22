@@ -200,6 +200,15 @@ func (r *Runner) memoryState() (*memory.Store, memory.Config) {
 	return r.Memory, r.MemoryConfig
 }
 
+func (r *Runner) MemoryAvailability() (configured, enabled bool) {
+	if r == nil {
+		return false, false
+	}
+	r.memoryMu.Lock()
+	defer r.memoryMu.Unlock()
+	return r.OpenMemory != nil || r.Memory != nil, r.Memory != nil && r.MemoryConfig.Enabled
+}
+
 func (r *Runner) RewriteMemoryNote(ctx context.Context, rawText, contextSummary string) (string, error) {
 	const maxInputBytes = 32 << 10
 	combined := len(rawText) + len(contextSummary)
