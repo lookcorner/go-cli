@@ -286,6 +286,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleResolveLocalSession(ctx, incoming)
 		case "x.ai/session/fork":
 			s.handleSessionFork(incoming)
+		case "x.ai/session/repair":
+			s.handleSessionRepair(incoming)
 		case "x.ai/session/info", "x.ai/session/rename", "x.ai/session/delete", "x.ai/session/search", "x.ai/prompt_history":
 			s.handleSessionAdmin(incoming)
 		case "x.ai/session/update_mcp_servers":

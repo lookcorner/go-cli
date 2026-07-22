@@ -618,6 +618,12 @@ only the validated JSONL log and its exact artifact directory, and search
 supports workspace filtering, pagination, ranked title/content matches, and
 optional snippets without a separate index service.
 
+`x.ai/session/repair` recovers histories whose tool-call owner was lost to a
+corrupt JSONL line. It removes orphaned, displaced, and duplicate tool results,
+inserts synthetic failures for unanswered calls, and supports `dryRun`. Offline
+sessions are replaced atomically; resident sessions are rejected while busy and
+reset their provider history to a safe transcript after the repair is durable.
+
 `x.ai/prompt_history` reads user prompts directly from the same append-only
 session logs. Workspace history is returned newest-first, while `session_id`
 queries preserve chronological prompt indices; `filter_session_id` provides a
