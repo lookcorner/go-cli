@@ -27,6 +27,12 @@ not emit a prompt-completion event. Successful manual compaction first publishes
 a persisted `x.ai/session_notification` with `auto_compact_completed` so live
 and resumed clients reset context state consistently.
 
+ACP clients can request turn-end ghost text through `x.ai/suggestPrompt`. The
+extension echoes the client generation, returns `null` when no safe suggestion
+is available, and samples a bounded text-only transcript without tools or parent
+history mutation. `GROK_PROMPT_SUGGESTIONS_MODEL` overrides the request model
+hint; otherwise the dedicated `grok-build-0.1` suggestion model is used.
+
 Completed ACP prompts publish `x.ai/session/prompt_complete` before their RPC
 response. Prompt responses include `_meta` correlation for the session,
 request/prompt, model, token usage, optional turn, and cancellation trigger;

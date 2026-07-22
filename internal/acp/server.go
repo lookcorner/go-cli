@@ -102,6 +102,8 @@ type session struct {
 	btwDone           chan struct{}
 	recapCancel       context.CancelFunc
 	recapDone         chan struct{}
+	suggestCancel     context.CancelFunc
+	suggestDone       chan struct{}
 	lastRecapPrompt   int
 	promptIndex       int
 	activePrompt      int
@@ -269,6 +271,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleInterject(incoming)
 		case "x.ai/recap":
 			s.handleRecap(ctx, incoming)
+		case "x.ai/suggestPrompt":
+			s.handleSuggestPrompt(ctx, incoming)
 		case "x.ai/queue/remove", "x.ai/queue/reorder", "x.ai/queue/clear", "x.ai/queue/edit", "x.ai/queue/interject":
 			s.handleQueueUpdate(incoming)
 		case "x.ai/skills/list", "x.ai/skills/config", "x.ai/skills/add", "x.ai/skills/remove", "x.ai/skills/reset", "x.ai/skills/toggle":
@@ -2369,7 +2373,10 @@ func (s *Server) closeSession(id string) bool {
 	if current.recapCancel != nil {
 		current.recapCancel()
 	}
-	runDone, btwDone, recapDone := current.runDone, current.btwDone, current.recapDone
+	if current.suggestCancel != nil {
+		current.suggestCancel()
+	}
+	runDone, btwDone, recapDone, suggestDone := current.runDone, current.btwDone, current.recapDone, current.suggestDone
 	current.mu.Unlock()
 	for _, item := range queued {
 		s.respondQueuedPromptCancelled(current, item)
@@ -2382,6 +2389,9 @@ func (s *Server) closeSession(id string) bool {
 	}
 	if recapDone != nil {
 		<-recapDone
+	}
+	if suggestDone != nil {
+		<-suggestDone
 	}
 	if current.close != nil {
 		current.close()
@@ -2741,7 +2751,10 @@ func (s *Server) closeAll() {
 		if current.recapCancel != nil {
 			current.recapCancel()
 		}
-		runDone, btwDone, recapDone := current.runDone, current.btwDone, current.recapDone
+		if current.suggestCancel != nil {
+			current.suggestCancel()
+		}
+		runDone, btwDone, recapDone, suggestDone := current.runDone, current.btwDone, current.recapDone, current.suggestDone
 		current.mu.Unlock()
 		for _, item := range queued {
 			s.respondQueuedPromptCancelled(current, item)
@@ -2754,6 +2767,9 @@ func (s *Server) closeAll() {
 		}
 		if recapDone != nil {
 			<-recapDone
+		}
+		if suggestDone != nil {
+			<-suggestDone
 		}
 		current.close()
 	}
