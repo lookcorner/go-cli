@@ -9,9 +9,10 @@ import (
 
 func TestTerminalHyperlinksEnabled(t *testing.T) {
 	tests := []struct {
-		name string
-		env  map[string]string
-		want bool
+		name        string
+		env         map[string]string
+		tmuxVersion string
+		want        bool
 	}{
 		{name: "wezterm", env: map[string]string{"TERM_PROGRAM": "WezTerm"}, want: true},
 		{name: "iterm", env: map[string]string{"TERM_PROGRAM": "iTerm.app"}, want: true},
@@ -24,7 +25,12 @@ func TestTerminalHyperlinksEnabled(t *testing.T) {
 		{name: "apple terminal", env: map[string]string{"TERM_PROGRAM": "Apple_Terminal"}},
 		{name: "warp", env: map[string]string{"TERM_PROGRAM": "WarpTerminal"}},
 		{name: "unknown", env: map[string]string{"TERM": "xterm-256color"}},
-		{name: "multiplexer", env: map[string]string{"TERM_PROGRAM": "WezTerm", "TMUX": "/tmp/tmux"}},
+		{name: "tmux unknown", env: map[string]string{"TERM_PROGRAM": "WezTerm", "TMUX": "/tmp/tmux"}},
+		{name: "tmux old", env: map[string]string{"TERM_PROGRAM": "WezTerm", "TMUX": "/tmp/tmux"}, tmuxVersion: "tmux 3.3a"},
+		{name: "tmux 3.4", env: map[string]string{"TERM_PROGRAM": "WezTerm", "TMUX": "/tmp/tmux"}, tmuxVersion: "tmux 3.4", want: true},
+		{name: "tmux unsupported outer terminal", env: map[string]string{"TERM_PROGRAM": "Apple_Terminal", "TMUX": "/tmp/tmux"}, tmuxVersion: "tmux 3.4"},
+		{name: "screen", env: map[string]string{"TERM_PROGRAM": "WezTerm", "STY": "123"}},
+		{name: "zellij", env: map[string]string{"TERM_PROGRAM": "WezTerm", "ZELLIJ": "0"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -32,10 +38,29 @@ func TestTerminalHyperlinksEnabled(t *testing.T) {
 				value, ok := test.env[name]
 				return value, ok
 			}
-			if got := terminalHyperlinksEnabled(lookup); got != test.want {
+			if got := terminalHyperlinksEnabled(lookup, func() string { return test.tmuxVersion }); got != test.want {
 				t.Fatalf("enabled=%v want=%v", got, test.want)
 			}
 		})
+	}
+}
+
+func TestTmuxVersionAtLeast(t *testing.T) {
+	for _, test := range []struct {
+		value string
+		want  bool
+	}{
+		{value: "tmux 3.4", want: true},
+		{value: "tmux 3.4a", want: true},
+		{value: "tmux 4.0", want: true},
+		{value: "tmux 3.3a"},
+		{value: "3.4", want: true},
+		{value: "tmux next-3.4"},
+		{value: ""},
+	} {
+		if got := tmuxVersionAtLeast(test.value, 3, 4); got != test.want {
+			t.Errorf("tmuxVersionAtLeast(%q)=%v want=%v", test.value, got, test.want)
+		}
 	}
 }
 
