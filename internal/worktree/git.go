@@ -14,12 +14,15 @@ import (
 )
 
 type GitFileChange struct {
-	Path      string `json:"path"`
-	OldPath   string `json:"oldPath,omitempty"`
-	Type      string `json:"type"`
-	Staged    bool   `json:"staged"`
-	Additions uint64 `json:"additions"`
-	Deletions uint64 `json:"deletions"`
+	Path       string  `json:"path"`
+	OldPath    string  `json:"oldPath,omitempty"`
+	Type       string  `json:"type"`
+	Staged     bool    `json:"staged"`
+	Additions  uint64  `json:"additions"`
+	Deletions  uint64  `json:"deletions"`
+	Patch      *string `json:"patch,omitempty"`
+	PatchBytes *uint64 `json:"patchBytes,omitempty"`
+	PatchLines *uint64 `json:"patchLines,omitempty"`
 }
 
 type GitStatus struct {
@@ -161,7 +164,7 @@ func Branches(ctx context.Context, root string) (GitBranches, error) {
 	return result, nil
 }
 
-func Status(ctx context.Context, root string, includeUntracked, includeStats bool) (GitStatus, error) {
+func Status(ctx context.Context, root string, includeUntracked, includeStats, ignoreSubmodules, includePatches bool) (GitStatus, error) {
 	resolved, err := GitRoot(ctx, root)
 	if err != nil {
 		return GitStatus{}, err
@@ -187,11 +190,11 @@ func Status(ctx context.Context, root string, includeUntracked, includeStats boo
 			}
 		}
 	}
-	status.Staged, err = gitChanges(ctx, resolved, true, false, includeStats)
+	status.Staged, err = gitChanges(ctx, resolved, true, false, includeStats, ignoreSubmodules, includePatches)
 	if err != nil {
 		return GitStatus{}, err
 	}
-	status.Unstaged, err = gitChanges(ctx, resolved, false, includeUntracked, includeStats)
+	status.Unstaged, err = gitChanges(ctx, resolved, false, includeUntracked, includeStats, ignoreSubmodules, includePatches)
 	return status, err
 }
 
@@ -558,10 +561,13 @@ func relativeGitPath(root, path string) (string, error) {
 	return filepath.ToSlash(clean), nil
 }
 
-func gitChanges(ctx context.Context, root string, staged, includeUntracked, includeStats bool) ([]GitFileChange, error) {
+func gitChanges(ctx context.Context, root string, staged, includeUntracked, includeStats, ignoreSubmodules, includePatches bool) ([]GitFileChange, error) {
 	args := []string{"diff", "--name-status", "-z"}
 	if staged {
 		args = append(args, "--cached")
+	}
+	if ignoreSubmodules {
+		args = append(args, "--ignore-submodules=all")
 	}
 	args = append(args, "--")
 	data, err := gitBytes(ctx, root, args...)
@@ -569,8 +575,8 @@ func gitChanges(ctx context.Context, root string, staged, includeUntracked, incl
 		return nil, err
 	}
 	stats := map[string][2]uint64{}
-	if includeStats {
-		stats, err = gitNumstat(ctx, root, staged)
+	if includeStats || includePatches {
+		stats, err = gitNumstat(ctx, root, staged, ignoreSubmodules)
 		if err != nil {
 			return nil, err
 		}
@@ -594,7 +600,16 @@ func gitChanges(ctx context.Context, root string, staged, includeUntracked, incl
 			i++
 		}
 		counts := stats[path]
-		changes = append(changes, GitFileChange{Path: path, OldPath: oldPath, Type: changeType(code), Staged: staged, Additions: counts[0], Deletions: counts[1]})
+		change := GitFileChange{Path: path, OldPath: oldPath, Type: changeType(code), Staged: staged, Additions: counts[0], Deletions: counts[1]}
+		if includePatches {
+			patch, err := gitChangePatch(ctx, root, staged, path, ignoreSubmodules)
+			if err != nil {
+				return nil, err
+			}
+			patchBytes, patchLines := uint64(len(patch)), uint64(strings.Count(patch, "\n"))
+			change.Patch, change.PatchBytes, change.PatchLines = &patch, &patchBytes, &patchLines
+		}
+		changes = append(changes, change)
 	}
 	if includeUntracked {
 		untracked, err := gitBytes(ctx, root, "ls-files", "--others", "--exclude-standard", "-z")
@@ -602,8 +617,9 @@ func gitChanges(ctx context.Context, root string, staged, includeUntracked, incl
 			return nil, err
 		}
 		for _, raw := range bytes.Split(untracked, []byte{0}) {
-			if len(raw) > 0 {
-				changes = append(changes, GitFileChange{Path: filepath.ToSlash(string(raw)), Type: "untracked"})
+			path := filepath.ToSlash(string(raw))
+			if len(raw) > 0 && (!ignoreSubmodules || !nestedGitRepository(root, path)) {
+				changes = append(changes, GitFileChange{Path: path, Type: "untracked"})
 			}
 		}
 	}
@@ -611,10 +627,13 @@ func gitChanges(ctx context.Context, root string, staged, includeUntracked, incl
 	return changes, nil
 }
 
-func gitNumstat(ctx context.Context, root string, staged bool) (map[string][2]uint64, error) {
+func gitNumstat(ctx context.Context, root string, staged, ignoreSubmodules bool) (map[string][2]uint64, error) {
 	args := []string{"diff", "--numstat"}
 	if staged {
 		args = append(args, "--cached")
+	}
+	if ignoreSubmodules {
+		args = append(args, "--ignore-submodules=all")
 	}
 	args = append(args, "--")
 	output, err := gitOutput(ctx, root, args...)
@@ -622,6 +641,23 @@ func gitNumstat(ctx context.Context, root string, staged bool) (map[string][2]ui
 		return nil, err
 	}
 	return parseNumstat(output), nil
+}
+
+func gitChangePatch(ctx context.Context, root string, staged bool, path string, ignoreSubmodules bool) (string, error) {
+	args := []string{"diff"}
+	if staged {
+		args = append(args, "--cached")
+	}
+	if ignoreSubmodules {
+		args = append(args, "--ignore-submodules=all")
+	}
+	args = append(args, "--", path)
+	return gitOutput(ctx, root, args...)
+}
+
+func nestedGitRepository(root, path string) bool {
+	_, err := os.Stat(filepath.Join(root, filepath.FromSlash(path), ".git"))
+	return err == nil
 }
 
 func optionalGit(ctx context.Context, root string, args ...string) string {

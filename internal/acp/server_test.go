@@ -43,9 +43,14 @@ func TestGitExtensionWireContract(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("changed\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	nested := filepath.Join(root, "nested")
+	if err := os.Mkdir(nested, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runACPGit(t, nested, "init", "-q")
 	var output bytes.Buffer
 	server := &Server{output: &output}
-	server.handleGit(context.Background(), message{ID: json.RawMessage("1"), Method: "x.ai/git/status", Params: json.RawMessage(`{"gitRoot":` + strconv.Quote(root) + `}`)})
+	server.handleGit(context.Background(), message{ID: json.RawMessage("1"), Method: "x.ai/git/status", Params: json.RawMessage(`{"gitRoot":` + strconv.Quote(root) + `,"includePatches":true}`)})
 	var response map[string]any
 	if err := json.NewDecoder(&output).Decode(&response); err != nil {
 		t.Fatal(err)
@@ -56,7 +61,8 @@ func TestGitExtensionWireContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status["root"] != resolvedRoot || len(status["unstaged"].([]any)) != 1 || extension["error"] != nil {
+	unstaged := status["unstaged"].([]any)
+	if status["root"] != resolvedRoot || len(unstaged) != 1 || extension["error"] != nil || !strings.Contains(unstaged[0].(map[string]any)["patch"].(string), "+changed") || unstaged[0].(map[string]any)["patchBytes"].(float64) == 0 || unstaged[0].(map[string]any)["patchLines"].(float64) == 0 {
 		t.Fatalf("unexpected status wire response: %#v", response)
 	}
 	output.Reset()

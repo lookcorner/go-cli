@@ -26,7 +26,7 @@ func TestGitStatusStageUnstageAndDiscard(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "new.txt"), []byte("new\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	status, err := Status(ctx, root, true, true)
+	status, err := Status(ctx, root, true, false, true, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,8 +40,17 @@ func TestGitStatusStageUnstageAndDiscard(t *testing.T) {
 	if len(status.Staged) != 1 || status.Staged[0].Path != "both.txt" || !status.Staged[0].Staged || status.Staged[0].Additions != 1 || status.Staged[0].Deletions != 1 {
 		t.Fatalf("unexpected staged status: %#v", status.Staged)
 	}
+	if status.Staged[0].Patch == nil || !strings.Contains(*status.Staged[0].Patch, "+staged") || status.Staged[0].PatchBytes == nil || *status.Staged[0].PatchBytes == 0 || status.Staged[0].PatchLines == nil || *status.Staged[0].PatchLines == 0 {
+		t.Fatalf("missing staged patch: %#v", status.Staged[0])
+	}
 	if len(status.Unstaged) != 2 || status.Unstaged[0].Path != "both.txt" || status.Unstaged[0].Staged || status.Unstaged[1].Path != "new.txt" || status.Unstaged[1].Type != "untracked" {
 		t.Fatalf("unexpected unstaged status: %#v", status.Unstaged)
+	}
+	if status.Unstaged[0].Additions != 1 || status.Unstaged[0].Deletions != 1 || status.Unstaged[0].Patch == nil || !strings.Contains(*status.Unstaged[0].Patch, "+working") {
+		t.Fatalf("missing unstaged patch and implicit stats: %#v", status.Unstaged[0])
+	}
+	if status.Unstaged[1].Patch != nil || status.Unstaged[1].PatchBytes != nil || status.Unstaged[1].PatchLines != nil {
+		t.Fatalf("untracked file unexpectedly has patch data: %#v", status.Unstaged[1])
 	}
 	if _, err := Stage(ctx, root, []string{"new.txt"}); err != nil {
 		t.Fatal(err)
@@ -49,17 +58,20 @@ func TestGitStatusStageUnstageAndDiscard(t *testing.T) {
 	if err := Unstage(ctx, root, []string{"new.txt"}); err != nil {
 		t.Fatal(err)
 	}
-	status, err = Status(ctx, root, false, false)
+	status, err = Status(ctx, root, false, false, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(status.Unstaged) != 1 || status.Unstaged[0].Path != "both.txt" {
 		t.Fatalf("includeUntracked=false status: %#v", status.Unstaged)
 	}
+	if status.Unstaged[0].Additions != 0 || status.Unstaged[0].Deletions != 0 || status.Unstaged[0].Patch != nil || status.Unstaged[0].PatchBytes != nil || status.Unstaged[0].PatchLines != nil {
+		t.Fatalf("patches and stats included when disabled: %#v", status.Unstaged[0])
+	}
 	if err := Discard(ctx, root, nil, "both", true); err != nil {
 		t.Fatal(err)
 	}
-	status, err = Status(ctx, root, true, false)
+	status, err = Status(ctx, root, true, false, true, false)
 	if err != nil || len(status.Staged) != 0 || len(status.Unstaged) != 0 {
 		t.Fatalf("discard did not clean repository: %#v err=%v", status, err)
 	}
@@ -69,6 +81,35 @@ func TestGitStatusStageUnstageAndDiscard(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "new.txt")); !os.IsNotExist(err) {
 		t.Fatalf("discard kept untracked file: %v", err)
+	}
+}
+
+func TestGitStatusFiltersNestedRepositories(t *testing.T) {
+	ctx := context.Background()
+	root := newRepo(t)
+	nested := filepath.Join(root, "nested")
+	if err := os.Mkdir(nested, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, nested, "init", "-q")
+	if err := os.WriteFile(filepath.Join(nested, "file.txt"), []byte("nested\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ignored, err := Status(ctx, root, true, false, true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ignored.Unstaged) != 0 {
+		t.Fatalf("nested repository was not ignored: %#v", ignored.Unstaged)
+	}
+
+	included, err := Status(ctx, root, true, false, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(included.Unstaged) != 1 || included.Unstaged[0].Path != "nested/" || included.Unstaged[0].Type != "untracked" {
+		t.Fatalf("nested repository was not included: %#v", included.Unstaged)
 	}
 }
 

@@ -760,6 +760,8 @@ func (s *Server) handleGit(ctx context.Context, incoming message) {
 		Paths            []string `json:"paths"`
 		IncludeUntracked *bool    `json:"includeUntracked"`
 		IncludeStats     bool     `json:"includeStats"`
+		IgnoreSubmodules *bool    `json:"ignoreSubmodules"`
+		IncludePatches   bool     `json:"includePatches"`
 		Scope            string   `json:"scope"`
 		Branch           string   `json:"branch"`
 		Create           bool     `json:"create"`
@@ -835,7 +837,11 @@ func (s *Server) handleGit(ctx context.Context, incoming message) {
 		if req.IncludeUntracked != nil {
 			includeUntracked = *req.IncludeUntracked
 		}
-		result, err := worktrees.Status(ctx, root, includeUntracked, req.IncludeStats)
+		ignoreSubmodules := true
+		if req.IgnoreSubmodules != nil {
+			ignoreSubmodules = *req.IgnoreSubmodules
+		}
+		result, err := worktrees.Status(ctx, root, includeUntracked, req.IncludeStats, ignoreSubmodules, req.IncludePatches)
 		extResult(result, err)
 	case "x.ai/git/stage":
 		paths, err := worktrees.Stage(ctx, root, req.Paths)

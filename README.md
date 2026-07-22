@@ -770,8 +770,10 @@ Core Git extensions are available through `x.ai/git/git_repo_root`, `status`,
 `stage/content`, `checkout`, `checkout_session_head`, `checkout_commit`,
 `commit`, and `files`. Session HEAD checkout restores the commit recorded in a
 persisted session, with optional dirty-state stashing and fetch fallback. Status
-reports repository, branch/upstream, staged, unstaged, untracked, and optional
-line-count data using the reference extension result envelope. `diffs` compares
+reports repository, branch/upstream, staged, unstaged, untracked, optional
+line-count data, and optional per-file patches with byte and line counts using
+the reference extension result envelope. Nested Git repositories and submodules
+are ignored by default and can be included explicitly. `diffs` compares
 commit-ish, staged, and working versions with optional patches and text content.
 Tracked, staged, and text untracked changes are included; mutations performed
 through Gork file tools are attributed to the agent, while other changes are
