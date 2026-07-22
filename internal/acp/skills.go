@@ -10,6 +10,10 @@ import (
 )
 
 func (s *Server) handleSkills(ctx context.Context, incoming message) {
+	if incoming.Method == "x.ai/skills/refresh-baseline" || incoming.Method == "x.ai/internal/reload_skills" {
+		s.handleSkillRefresh(incoming)
+		return
+	}
 	var req struct {
 		CWD     string `json:"cwd"`
 		Path    string `json:"path"`
@@ -41,6 +45,25 @@ func (s *Server) handleSkills(ctx context.Context, incoming message) {
 	default:
 		s.handleSkillsMutation(ctx, incoming, current, req.CWD, req.Path, req.Name, req.Enabled)
 	}
+}
+
+func (s *Server) handleSkillRefresh(incoming message) {
+	s.mu.Lock()
+	sessions := make([]*session, 0, len(s.sessions))
+	for _, current := range s.sessions {
+		sessions = append(sessions, current)
+	}
+	s.mu.Unlock()
+	for _, current := range sessions {
+		if current != nil && current.runner != nil && current.runner.Skills != nil {
+			_ = current.runner.Skills.Refresh()
+		}
+	}
+	if incoming.Method == "x.ai/internal/reload_skills" {
+		s.respond(incoming.ID, map[string]any{"reloaded": len(sessions)})
+		return
+	}
+	s.respond(incoming.ID, map[string]any{"ok": true})
 }
 
 func (s *Server) handleSkillsMutation(ctx context.Context, incoming message, current *session, cwd, path, name string, enabled bool) {

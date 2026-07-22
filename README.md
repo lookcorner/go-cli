@@ -691,6 +691,8 @@ response because this local build has no cloud workspace backend.
 Live ACP sessions expose their resolved skill catalog through
 `x.ai/skills/list` and `x.ai/skills/config`, including scope, invocation gates,
 plugin metadata, configured paths, ignore paths, and enabled state.
+`x.ai/skills/refresh-baseline` and the internal skills reload endpoint
+re-discover every live session's catalog from disk.
 
 Live session MCP servers are exposed through `x.ai/mcp/list`, and
 `x.ai/mcp/call` invokes a named server tool through the same client and

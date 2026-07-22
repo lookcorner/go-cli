@@ -269,6 +269,16 @@ func (c *Catalog) ReconfigurePlugins(plugins []plugin.Plugin) error {
 	return c.rebuild(cfg)
 }
 
+func (c *Catalog) Refresh() error {
+	if c == nil {
+		return nil
+	}
+	c.mu.RLock()
+	cfg := cloneConfig(c.config)
+	c.mu.RUnlock()
+	return c.rebuild(cfg)
+}
+
 func (c *Catalog) rebuild(cfg Config) error {
 	fresh, err := Discover(c.root, cfg)
 	if err != nil {
