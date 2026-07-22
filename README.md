@@ -678,6 +678,10 @@ has no cloud conversations backend.
 `x.ai/session/close` performs idempotent live-session shutdown using the same
 runtime and cancellation cleanup as the standard ACP close method.
 
+`x.ai/internal/evict_sessions` unloads fully idle sessions when their client
+disconnects while keeping sessions with active turns, queued input, background
+work, scheduled tasks, or foreground commands resident and resumable.
+
 `x.ai/btw` accepts a `sessionId` and `question`, answers from an isolated
 snapshot without interrupting an active prompt, and returns
 `{"result":{"answer":"..."}}`. Closing the session cancels and waits for the

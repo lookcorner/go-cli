@@ -615,6 +615,23 @@ func (m *terminalManager) commandList() []terminalInfo {
 	return result
 }
 
+func (m *terminalManager) hasLiveSession(sessionID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, command := range m.commands {
+		if command.sessionID != sessionID {
+			continue
+		}
+		command.mu.Lock()
+		live := !command.backgrounded && command.exitCode == nil && command.signal == ""
+		command.mu.Unlock()
+		if live {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *terminalManager) closeSessionCommands(sessionID string) {
 	m.mu.Lock()
 	var commands []*commandTerminal

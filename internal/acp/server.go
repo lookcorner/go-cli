@@ -302,6 +302,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleMCPReload(ctx, incoming)
 		case "x.ai/internal/reload_models", "x.ai/internal/reload_models_cache":
 			s.handleModelReload(incoming)
+		case "x.ai/internal/evict_sessions":
+			s.handleEvictSessions(incoming.Params)
 		case "x.ai/session_summaries/session_list", "x.ai/session_summaries/workspace_list", "x.ai/session_summaries/workspace_list_recent":
 			s.handleSessionSummaries(incoming)
 		case "x.ai/sessions/list":
@@ -2468,13 +2470,21 @@ func validHTTPHeaderName(name string) bool {
 func (s *Server) closeSession(id string) bool {
 	s.mu.Lock()
 	current := s.sessions[id]
-	delete(s.sessions, id)
-	s.mu.Unlock()
 	if current == nil {
+		s.mu.Unlock()
 		return false
 	}
 	current.mu.Lock()
 	current.closed = true
+	delete(s.sessions, id)
+	current.mu.Unlock()
+	s.mu.Unlock()
+	s.shutdownSession(current)
+	return true
+}
+
+func (s *Server) shutdownSession(current *session) {
+	current.mu.Lock()
 	current.wakeQueue = nil
 	current.interjectionQueue = nil
 	queued := current.promptQueue
@@ -2515,9 +2525,8 @@ func (s *Server) closeSession(id string) bool {
 		current.close()
 	}
 	if s.terminals != nil {
-		s.terminals.closeSessionCommands(id)
+		s.terminals.closeSessionCommands(current.id)
 	}
-	return true
 }
 
 func (s *Server) handleListSessions(incoming message) {
