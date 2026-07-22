@@ -556,6 +556,55 @@ func TestMultilineSlashCommandAndAlias(t *testing.T) {
 	}
 }
 
+func TestCopyAssistantMessageUsesSessionTranscript(t *testing.T) {
+	logger, err := session.NewLoggerWithID(t.TempDir(), "copy-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logger.Close()
+	for index, text := range []string{"first response", "latest response"} {
+		if err := logger.AppendPrompt(fmt.Sprintf("prompt-%d", index), nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := logger.Append("model_response", map[string]any{"response_id": fmt.Sprintf("r-%d", index), "text": text, "tool_call_count": 0}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := &model{ctx: context.Background(), runner: &agent.Runner{SessionPath: logger.Path()}, status: "ready"}
+	m.setInput("/copy 2")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command == nil || !m.running || m.status != "copying response" {
+		t.Fatalf("copy start command=%v running=%v status=%q", command != nil, m.running, m.status)
+	}
+	updated, clipboard := m.Update(command())
+	m = updated.(*model)
+	if clipboard == nil || m.running || m.status != "response copied" {
+		t.Fatalf("copy result clipboard=%v running=%v status=%q", clipboard != nil, m.running, m.status)
+	}
+	if _, err := copyMessageNumber("0"); err == nil {
+		t.Fatal("zero copy index was accepted")
+	}
+	if message := runCopy(&agent.Runner{}, 1)(); message.(copyDoneEvent).err == nil {
+		t.Fatal("copy without a session path was accepted")
+	}
+	empty, err := session.NewLoggerWithID(t.TempDir(), "empty-copy-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer empty.Close()
+	if err := empty.AppendPrompt("prompt", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := empty.Append("model_response", map[string]any{"response_id": "empty", "tool_call_count": 0}); err != nil {
+		t.Fatal(err)
+	}
+	message := runCopy(&agent.Runner{SessionPath: empty.Path()}, 1)().(copyDoneEvent)
+	if message.err != nil || message.text != "" {
+		t.Fatalf("empty copy text=%q err=%v", message.text, message.err)
+	}
+}
+
 func TestMultilineCursorNavigationAndUndo(t *testing.T) {
 	m := &model{}
 	press := func(key tea.Key) {

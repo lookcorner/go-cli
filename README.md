@@ -321,6 +321,8 @@ to restore it.
 Up/Down browse durable prompt history when the prompt is empty. `/history`
 opens fuzzy search over the same workspace-scoped history; Enter or Tab restores
 the selected prompt to the composer without submitting it.
+`/copy [N]` copies the latest (or Nth-latest) assistant response from the session
+transcript to the terminal clipboard.
 While scrollback is focused, `/` opens incremental regular-expression search; Enter
 accepts the query, Up/Down or `n`/`N` navigates matches, and Esc closes it. `/find <pattern>`
 opens the same search directly from the prompt without sending a model turn.

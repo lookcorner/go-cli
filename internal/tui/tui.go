@@ -75,6 +75,10 @@ type shellDoneEvent struct {
 	output  string
 	err     error
 }
+type copyDoneEvent struct {
+	text string
+	err  error
+}
 type compactDoneEvent struct{ err error }
 type memoryFlushDoneEvent struct {
 	result agent.MemoryFlushResult
@@ -668,6 +672,24 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if command := m.startScheduled(); command != nil {
 			return m, command
 		}
+	case copyDoneEvent:
+		m.running = false
+		m.turnCancel = nil
+		if msg.err != nil {
+			m.status = "copy failed: " + msg.err.Error()
+		} else if msg.text == "" {
+			m.status = "no assistant messages to copy"
+		} else {
+			m.status = "response copied"
+			clipboard := tea.SetClipboard(msg.text)
+			if command := m.startScheduled(); command != nil {
+				return m, tea.Batch(clipboard, command)
+			}
+			return m, clipboard
+		}
+		if command := m.startScheduled(); command != nil {
+			return m, command
+		}
 	case scheduledFiredEvent:
 		if msg.event.TaskID != m.activeTask {
 			duplicate := false
@@ -936,6 +958,16 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.toggleMultiline()
 			return m, nil
 		}
+		if fields[0] == "/copy" {
+			n, err := copyMessageNumber(strings.TrimSpace(strings.TrimPrefix(prompt, "/copy")))
+			if err != nil {
+				m.status = err.Error()
+				return m, nil
+			}
+			m.running = true
+			m.status = "copying response"
+			return m, runCopy(m.runner, n)
+		}
 		m.running = true
 		turnCtx, cancel := context.WithCancel(m.ctx)
 		m.turnCancel = cancel
@@ -992,6 +1024,18 @@ func (m *model) toggleMultiline() {
 	} else {
 		m.status = "single-line input"
 	}
+}
+
+func copyMessageNumber(args string) (int, error) {
+	args = strings.TrimSpace(args)
+	if args == "" {
+		return 1, nil
+	}
+	n, err := strconv.Atoi(args)
+	if err != nil || n < 1 {
+		return 0, errors.New("usage: /copy [N] where N is 1, 2, 3, ...")
+	}
+	return n, nil
 }
 
 func (m *model) handleScrollbackKey(msg tea.KeyPressMsg) bool {
@@ -1666,6 +1710,31 @@ func runShell(ctx context.Context, runner *agent.Runner, command string) tea.Cmd
 	return func() tea.Msg {
 		output, err := runner.RunShell(ctx, command)
 		return shellDoneEvent{command: command, output: output, err: err}
+	}
+}
+
+func runCopy(runner *agent.Runner, n int) tea.Cmd {
+	return func() tea.Msg {
+		if runner == nil || strings.TrimSpace(runner.SessionPath) == "" {
+			return copyDoneEvent{err: errors.New("session transcript is unavailable")}
+		}
+		messages, err := session.Transcript(runner.SessionPath)
+		if err != nil {
+			return copyDoneEvent{err: err}
+		}
+		assistant := make([]string, 0, len(messages))
+		for index := len(messages) - 1; index >= 0; index-- {
+			if messages[index].Role == "assistant" && strings.TrimSpace(messages[index].Text) != "" {
+				assistant = append(assistant, messages[index].Text)
+			}
+		}
+		if len(assistant) == 0 {
+			return copyDoneEvent{}
+		}
+		if n > len(assistant) {
+			return copyDoneEvent{err: fmt.Errorf("only %d assistant message(s) available", len(assistant))}
+		}
+		return copyDoneEvent{text: assistant[n-1]}
 	}
 }
 
