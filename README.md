@@ -46,6 +46,11 @@ remain authoritative. `session/new` accepts a validated UUID in `_meta.sessionId
 and a configured profile or underlying model in `_meta.modelId` (unknown models
 fall back to the default); `session/load` accepts `_meta.noReplay=true` when the
 client already owns the transcript and only needs the persisted runtime state.
+
+ACP permission prompts also offer an exact-request `allow_always` choice for
+the current session. `x.ai/permissions/reset` clears those remembered grants
+from every live session without changing its ask, auto, always-approve, deny,
+or managed-policy mode.
 New and loaded sessions return the active and available model state. An idle
 session accepts `session/set_model`, persists the selection, rebuilds backend
 history from the completed transcript, updates future subagent and goal-role

@@ -155,6 +155,7 @@ type session struct {
 	closed            bool
 	unavailableModel  string
 	pendingModelID    string
+	permissions       *serverApprover
 }
 
 type syntheticWake struct {
@@ -263,6 +264,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleTogglePlanMode(incoming.Params)
 		case "x.ai/yolo_mode_changed":
 			s.handleYoloModeChanged(incoming.Params)
+		case "x.ai/permissions/reset":
+			s.handlePermissionReset()
 		case "session/cancel":
 			s.handleCancel(incoming.Params)
 		case "session/close":
@@ -1659,7 +1662,7 @@ func (s *Server) startSession(ctx context.Context, id string, sessionConfig Sess
 	created := &session{
 		id: id, ctx: ctx, cwd: sessionConfig.CWD, updated: time.Now().UTC(), previous: previous,
 		runner: runner, close: closeRuntime, promptIndex: promptIndex, activePrompt: -1, rewind: rewind, logPath: sessionPath, mode: mode,
-		mcpServers: append([]MCPServer(nil), sessionConfig.MCPServers...),
+		mcpServers: append([]MCPServer(nil), sessionConfig.MCPServers...), permissions: approver,
 	}
 	if blocked {
 		created.unavailableModel = fallbackFrom
@@ -3118,9 +3121,23 @@ func acpToolKind(name string) string {
 type serverApprover struct {
 	server    *Server
 	sessionID string
+	mu        sync.RWMutex
+	grants    map[permissionGrant]struct{}
+}
+
+type permissionGrant struct {
+	action string
+	detail string
 }
 
 func (a *serverApprover) Approve(ctx context.Context, action, detail string) error {
+	grant := permissionGrant{action: action, detail: detail}
+	a.mu.RLock()
+	_, allowed := a.grants[grant]
+	a.mu.RUnlock()
+	if allowed {
+		return nil
+	}
 	id := fmt.Sprintf("gork-permission-%d", a.server.nextRequest.Add(1))
 	toolCallID := id
 	if call, ok := tools.ToolCallFromContext(ctx); ok && call.ID != "" {
@@ -3138,6 +3155,7 @@ func (a *serverApprover) Approve(ctx context.Context, action, detail string) err
 			"toolCall":  map[string]any{"toolCallId": toolCallID, "title": action + ": " + detail, "status": "pending", "rawInput": detail},
 			"options": []any{
 				map[string]any{"optionId": "allow_once", "name": "Allow once", "kind": "allow_once"},
+				map[string]any{"optionId": "allow_always", "name": "Always allow this request", "kind": "allow_always"},
 				map[string]any{"optionId": "reject_once", "name": "Reject", "kind": "reject_once"},
 			},
 		},
@@ -3147,13 +3165,30 @@ func (a *serverApprover) Approve(ctx context.Context, action, detail string) err
 		if response.err != nil {
 			return response.err
 		}
-		if response.outcome == "selected" && response.optionID == "allow_once" {
-			return nil
+		if response.outcome == "selected" {
+			switch response.optionID {
+			case "allow_once":
+				return nil
+			case "allow_always":
+				a.mu.Lock()
+				if a.grants == nil {
+					a.grants = make(map[permissionGrant]struct{})
+				}
+				a.grants[grant] = struct{}{}
+				a.mu.Unlock()
+				return nil
+			}
 		}
 		return &tools.PermissionDeniedError{Action: action}
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+func (a *serverApprover) reset() {
+	a.mu.Lock()
+	clear(a.grants)
+	a.mu.Unlock()
 }
 
 func (s *Server) handleClientResponse(incoming message) {

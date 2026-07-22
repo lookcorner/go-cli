@@ -70,3 +70,24 @@ func (s *Server) handleYoloModeChanged(raw json.RawMessage) {
 		}
 	}
 }
+
+func (s *Server) handlePermissionReset() {
+	s.mu.Lock()
+	sessions := make([]*session, 0, len(s.sessions))
+	for _, current := range s.sessions {
+		sessions = append(sessions, current)
+	}
+	s.mu.Unlock()
+	approvers := make([]*serverApprover, 0, len(sessions))
+	for _, current := range sessions {
+		current.mu.Lock()
+		approver, closed := current.permissions, current.closed
+		current.mu.Unlock()
+		if !closed && approver != nil {
+			approvers = append(approvers, approver)
+		}
+	}
+	for _, approver := range approvers {
+		approver.reset()
+	}
+}

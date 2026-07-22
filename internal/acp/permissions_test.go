@@ -6,11 +6,99 @@ import (
 	"encoding/json"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/tools"
 	"github.com/lookcorner/go-cli/internal/workspace"
 )
+
+func TestServerApproverRemembersExactRequestUntilReset(t *testing.T) {
+	var output bytes.Buffer
+	server := &Server{output: &output, pending: make(map[string]chan permissionResult)}
+	approver := &serverApprover{server: server, sessionID: "permission-session"}
+	approve := func(action, detail, option string) error {
+		t.Helper()
+		done := make(chan error, 1)
+		go func() { done <- approver.Approve(context.Background(), action, detail) }()
+		deadline := time.Now().Add(time.Second)
+		var id string
+		for id == "" && time.Now().Before(deadline) {
+			server.mu.Lock()
+			for id = range server.pending {
+				break
+			}
+			server.mu.Unlock()
+			if id == "" {
+				time.Sleep(time.Millisecond)
+			}
+		}
+		if id == "" {
+			t.Fatal("permission request was not registered")
+		}
+		server.handleClientResponse(message{
+			ID:     json.RawMessage(quoteJSON(id)),
+			Result: json.RawMessage(`{"outcome":{"outcome":"selected","optionId":"` + option + `"}}`),
+		})
+		select {
+		case err := <-done:
+			return err
+		case <-time.After(time.Second):
+			t.Fatal("permission request did not complete")
+			return nil
+		}
+	}
+
+	if err := approve("shell", "git status", "allow_always"); err != nil {
+		t.Fatal(err)
+	}
+	messages := decodeACPOutput(t, output.Bytes())
+	options := messages[0]["params"].(map[string]any)["options"].([]any)
+	if len(options) != 3 || options[1].(map[string]any)["optionId"] != "allow_always" {
+		t.Fatalf("permission options=%#v", options)
+	}
+	requests := server.nextRequest.Load()
+	if err := approver.Approve(context.Background(), "shell", "git status"); err != nil || server.nextRequest.Load() != requests {
+		t.Fatalf("remembered request err=%v requests=%d", err, server.nextRequest.Load())
+	}
+	if err := approve("shell", "git diff", "allow_once"); err != nil {
+		t.Fatal(err)
+	}
+	approver.reset()
+	if err := approve("shell", "git status", "allow_once"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPermissionResetClearsAllLiveSessionsAndIsFireAndForget(t *testing.T) {
+	first := &serverApprover{grants: map[permissionGrant]struct{}{{action: "shell", detail: "one"}: {}}}
+	second := &serverApprover{grants: map[permissionGrant]struct{}{{action: "shell", detail: "two"}: {}}}
+	closed := &serverApprover{grants: map[permissionGrant]struct{}{{action: "shell", detail: "closed"}: {}}}
+	server := &Server{sessions: map[string]*session{
+		"first":  {permissions: first},
+		"second": {permissions: second},
+		"closed": {permissions: closed, closed: true},
+	}}
+	server.handlePermissionReset()
+	if len(first.grants) != 0 || len(second.grants) != 0 {
+		t.Fatalf("live grants remain: first=%v second=%v", first.grants, second.grants)
+	}
+	if len(closed.grants) != 1 {
+		t.Fatalf("closed session was mutated: %v", closed.grants)
+	}
+
+	server = &Server{SessionDir: t.TempDir(), Factory: func(context.Context, SessionConfig, tools.Approver, io.Writer, io.Writer) (*agent.Runner, func(), error) {
+		return nil, nil, nil
+	}}
+	var output bytes.Buffer
+	input := bytes.NewBufferString(`{"jsonrpc":"2.0","method":"x.ai/permissions/reset","params":{}}` + "\n")
+	if err := server.Serve(context.Background(), input, &output); err != nil {
+		t.Fatal(err)
+	}
+	if output.Len() != 0 {
+		t.Fatalf("notification produced a response: %s", output.String())
+	}
+}
 
 func permissionRegistry(t *testing.T, mode tools.PermissionMode) *tools.Registry {
 	return permissionRegistryWithAutoLock(t, mode, false)
