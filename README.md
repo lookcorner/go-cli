@@ -36,6 +36,13 @@ is available, and samples a bounded text-only transcript without tools or parent
 history mutation. `GROK_PROMPT_SUGGESTIONS_MODEL` overrides the request model
 hint; otherwise the dedicated `grok-build-0.1` suggestion model is used.
 
+ACP `x.ai/suggest` provides interactive shell completion from workspace prompt
+history, `$PATH` executables, and filesystem entries. It returns safe whole-line
+insertions plus atomic token ranges for newer clients, respects shell quoting,
+and supports deterministic token-only completion. Clients may also request a
+best-effort AI completion; strong history matches skip sampling, and failures or
+the two-second timeout leave the local results intact.
+
 The fire-and-forget `x.ai/yolo_mode_changed` notification switches every live
 session on the ACP connection among ask, always-approve, and classifier-based
 auto behavior. Explicit `auto_mode` wins over the compatible `permission_mode`

@@ -14,11 +14,16 @@ import (
 
 const (
 	defaultPromptSuggestionModel = "grok-build-0.1"
+	defaultShellSuggestionModel  = "grok-build"
 	suggestionTranscriptBytes    = 24_000
 	suggestionMessageBytes       = 1_500
 	suggestionMaxBytes           = 120
 	suggestionMaxWords           = 16
 )
+
+const shellSuggestionInstructions = `You are a shell command autocomplete engine.
+Given a partial command, output ONLY the completed command.
+No explanation, no markdown, no quotes. Just the raw command.`
 
 const promptSuggestionInstructions = `You predict what the USER will type next into their coding agent CLI.
 Use the transcript to predict what they were just about to type, not what they should do.
@@ -27,6 +32,31 @@ Return one short message of 2-12 words, or NONE when the next step is not obviou
 Return only the suggestion: no quotes, markdown, labels, questions, or explanation.`
 
 var errPromptSuggestionUnavailable = errors.New("prompt suggestion unavailable")
+
+// SuggestShell completes one command without tools or parent response history.
+func (r *Runner) SuggestShell(ctx context.Context, prefix, cwd, modelOverride string) (string, error) {
+	if r == nil || r.Client == nil || strings.TrimSpace(prefix) == "" {
+		return "", errPromptSuggestionUnavailable
+	}
+	model := strings.TrimSpace(modelOverride)
+	if model == "" {
+		model = defaultShellSuggestionModel
+	}
+	streamer := r.Client
+	if cloner, ok := r.Client.(api.CompactionCloner); ok {
+		streamer = cloner.CloneForCompaction(false)
+	}
+	temperature := 0.1
+	response, err := streamer.StreamResponse(ctx, api.ResponseRequest{
+		Model: model, Instructions: shellSuggestionInstructions,
+		Input:           []api.InputItem{{Type: "message", Role: "user", Content: "CWD: " + cwd + "\nPartial command: " + prefix}},
+		MaxOutputTokens: 50, Temperature: &temperature, Stream: true,
+	}, nil)
+	if err != nil || strings.TrimSpace(response.Text) == "" {
+		return "", errPromptSuggestionUnavailable
+	}
+	return response.Text, nil
+}
 
 // SuggestPrompt predicts the next user message from a bounded, text-only
 // transcript without changing the parent model history.

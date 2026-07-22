@@ -13,6 +13,8 @@ implementation.
 - `internal/workspace` owns confined paths, instruction discovery, release-build
   folder trust, and durable before/after file checkpoints used by session rewind.
 - `internal/agent` owns the model/tool turn loop and context compaction.
+- `internal/suggest` owns shell-token parsing, local command/file completion,
+  history ranking, safe insertion text, and suggestion aggregation.
 - `internal/memory` owns workspace-scoped cross-session memory files, bounded
   context reads, exact deduplication, and atomic persistence.
 - `internal/auth` owns login protocols, credential policy, scoped persistence,

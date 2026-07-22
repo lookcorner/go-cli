@@ -336,6 +336,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleRecap(ctx, incoming)
 		case "x.ai/suggestPrompt":
 			s.handleSuggestPrompt(ctx, incoming)
+		case "x.ai/suggest":
+			s.handleSuggest(ctx, incoming)
 		case "x.ai/queue/remove", "x.ai/queue/reorder", "x.ai/queue/clear", "x.ai/queue/edit", "x.ai/queue/interject":
 			s.handleQueueUpdate(incoming)
 		case "x.ai/skills/list", "x.ai/skills/config", "x.ai/skills/add", "x.ai/skills/remove", "x.ai/skills/reset", "x.ai/skills/toggle", "x.ai/skills/refresh-baseline", "x.ai/internal/reload_skills":

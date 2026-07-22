@@ -5,7 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/lookcorner/go-cli/internal/agent"
@@ -132,5 +135,56 @@ func TestSuggestPromptServeRoute(t *testing.T) {
 	result := decodeACPOutput(t, output.Bytes())[0]["result"].(map[string]any)
 	if result["generation"] != float64(9) || result["suggestion"] != nil {
 		t.Fatalf("result=%#v", result)
+	}
+}
+
+func TestShellSuggestServeRouteAndWireContract(t *testing.T) {
+	cwd := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cwd, "My File.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	request := fmt.Sprintf("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"x.ai/suggest\",\"params\":{\"text\":\"cat My\",\"cursor\":6,\"cwd\":%q,\"limit\":10,\"generation\":12,\"tokenOnly\":true}}\n", cwd)
+	var output bytes.Buffer
+	server := &Server{SessionDir: t.TempDir(), Factory: func(context.Context, SessionConfig, tools.Approver, io.Writer, io.Writer) (*agent.Runner, func(), error) {
+		return nil, nil, errors.New("factory must not be called")
+	}}
+	if err := server.Serve(context.Background(), bytes.NewBufferString(request), &output); err != nil {
+		t.Fatal(err)
+	}
+	result := decodeACPOutput(t, output.Bytes())[0]["result"].(map[string]any)
+	rows := result["completions"].([]any)
+	if result["generation"] != float64(12) || result["ghost"] != nil || len(rows) != 1 {
+		t.Fatalf("result=%#v", result)
+	}
+	row := rows[0].(map[string]any)
+	rangeValue := row["replaceRange"].([]any)
+	if row["display"] != "My File.txt" || row["insertText"] != `cat My\ File.txt` || row["tokenText"] != `My\ File.txt` || row["source"] != "file" || rangeValue[0] != float64(4) || rangeValue[1] != float64(6) {
+		t.Fatalf("row=%#v", row)
+	}
+}
+
+func TestShellSuggestAIAndValidation(t *testing.T) {
+	streamer := &acpRecapStreamer{result: api.StreamResult{Text: "git commit --amend"}}
+	current, logger := acpSuggestionSession(t, streamer)
+	defer logger.Close()
+	var output bytes.Buffer
+	server := &Server{SessionDir: t.TempDir(), output: &output, sessions: map[string]*session{current.id: current}}
+	server.handleSuggest(context.Background(), message{ID: json.RawMessage("1"), Params: json.RawMessage(`{"text":"git","cursor":3,"cwd":"/work","limit":10,"generation":3,"includeAi":true,"aiModel":"fast-model","sessionId":"suggest-session"}`)})
+	server.wg.Wait()
+	result := decodeACPOutput(t, output.Bytes())[0]["result"].(map[string]any)
+	ghost := result["ghost"].(map[string]any)
+	if ghost["fullText"] != "git commit --amend" || ghost["source"] != "ai" || result["generation"] != float64(3) {
+		t.Fatalf("result=%#v", result)
+	}
+	streamer.mu.Lock()
+	if len(streamer.requests) != 1 || streamer.requests[0].Model != "fast-model" || streamer.requests[0].MaxOutputTokens != 50 {
+		t.Fatalf("requests=%#v", streamer.requests)
+	}
+	streamer.mu.Unlock()
+
+	var invalid bytes.Buffer
+	(&Server{output: &invalid}).handleSuggest(context.Background(), message{ID: json.RawMessage("2"), Params: json.RawMessage(`{"text":"git"}`)})
+	if decodeACPOutput(t, invalid.Bytes())[0]["error"].(map[string]any)["code"] != float64(-32602) {
+		t.Fatalf("invalid=%s", invalid.String())
 	}
 }

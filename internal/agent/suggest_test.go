@@ -77,6 +77,35 @@ func TestSuggestPromptUsesBoundedIsolatedTranscript(t *testing.T) {
 	}
 }
 
+func TestSuggestShellUsesIsolatedBoundedRequest(t *testing.T) {
+	streamer := &suggestionStreamer{result: api.StreamResult{Text: "git commit --amend"}}
+	runner := &Runner{Client: streamer}
+	got, err := runner.SuggestShell(context.Background(), "git", "/work/project", "fast-model")
+	if err != nil || got != "git commit --amend" {
+		t.Fatalf("got=%q err=%v", got, err)
+	}
+	streamer.mu.Lock()
+	defer streamer.mu.Unlock()
+	if len(streamer.clones) != 1 || streamer.clones[0] || len(streamer.requests) != 1 {
+		t.Fatalf("clones=%v requests=%#v", streamer.clones, streamer.requests)
+	}
+	request := streamer.requests[0]
+	content, _ := request.Input[0].Content.(string)
+	if request.Model != "fast-model" || request.PreviousResponseID != "" || len(request.Tools) != 0 || request.MaxOutputTokens != 50 || request.Temperature == nil || *request.Temperature != 0.1 || !strings.Contains(content, "CWD: /work/project") || !strings.Contains(content, "Partial command: git") {
+		t.Fatalf("request=%#v", request)
+	}
+}
+
+func TestSuggestShellRejectsUnavailableInputs(t *testing.T) {
+	if _, err := (&Runner{}).SuggestShell(context.Background(), "git", "/work", ""); err == nil {
+		t.Fatal("missing client was accepted")
+	}
+	streamer := &suggestionStreamer{result: api.StreamResult{}}
+	if _, err := (&Runner{Client: streamer}).SuggestShell(context.Background(), "", "/work", ""); err == nil {
+		t.Fatal("empty prefix was accepted")
+	}
+}
+
 func TestSuggestPromptModelPrecedenceAndFailures(t *testing.T) {
 	path := suggestionSessionPath(t, "fix it", "Fixed.")
 	t.Run("environment wins", func(t *testing.T) {
