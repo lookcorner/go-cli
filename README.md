@@ -297,7 +297,9 @@ It supports Unicode input, keyboard and content-pane mouse-wheel scrolling,
 keeps a scrolled viewport stable while output streams, displays tool status,
 cancels the current turn with Ctrl-C, and presents write/Shell/MCP approval
 prompts inside the alternate screen. Shift-Tab toggles persisted Plan mode and
-shows a visible mode badge. Left/Right, Home/End, Delete, Backspace, Ctrl-A,
+shows a visible mode badge. `/always-approve` toggles automatic approval for
+otherwise unmatched tool actions while preserving explicit deny and ask rules.
+Left/Right, Home/End, Delete, Backspace, Ctrl-A,
 Ctrl-E, Ctrl-U, and Ctrl/Cmd-Z edit or undo the active prompt and structured
 response input. Shift/Alt-Enter inserts a newline; Ctrl-M, `/multiline`, or `/ml`
 toggles multiline mode, where Enter inserts a newline and Shift/Alt-Enter sends. A trailing

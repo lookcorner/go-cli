@@ -62,6 +62,44 @@ func TestBridgeApproval(t *testing.T) {
 	}
 }
 
+func TestAlwaysApproveCommandTogglesBridgeMode(t *testing.T) {
+	bridge := NewBridge(context.Background(), tools.PermissionPrompt)
+	defer bridge.Close()
+	m := &model{bridge: bridge, width: 60, height: 16, status: "ready"}
+	m.setInput("/always-approve ignored")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.running || bridge.PermissionMode() != tools.PermissionAuto || m.status != "always-approve mode" || !strings.Contains(m.View().Content, " AUTO ") {
+		t.Fatalf("enable command=%v running=%v mode=%q status=%q", command != nil, m.running, bridge.PermissionMode(), m.status)
+	}
+	if err := bridge.Approve(context.Background(), "shell", "go test ./..."); err != nil {
+		t.Fatalf("automatic approval failed: %v", err)
+	}
+	asked := make(chan error, 1)
+	go func() { asked <- PromptApprover(bridge).Approve(context.Background(), "shell", "git push") }()
+	event := (<-bridge.events).(approvalEvent)
+	event.reply <- true
+	if err := <-asked; err != nil {
+		t.Fatalf("explicit ask was not preserved: %v", err)
+	}
+	m.setInput("/always-approve")
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || bridge.PermissionMode() != tools.PermissionPrompt || m.status != "normal mode" || strings.Contains(m.View().Content, " AUTO ") {
+		t.Fatalf("disable command=%v mode=%q status=%q", command != nil, bridge.PermissionMode(), m.status)
+	}
+
+	denied := NewBridge(context.Background(), tools.PermissionDeny)
+	defer denied.Close()
+	m = &model{bridge: denied}
+	m.setInput("/always-approve")
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if denied.PermissionMode() != tools.PermissionDeny || !strings.Contains(m.status, "disabled by deny mode") {
+		t.Fatalf("deny mode=%q status=%q", denied.PermissionMode(), m.status)
+	}
+}
+
 func TestBridgeQuestionSelectionAndPlanClarification(t *testing.T) {
 	bridge := NewBridge(context.Background(), tools.PermissionAuto)
 	defer bridge.Close()

@@ -120,6 +120,7 @@ type planReviewEvent struct {
 type Bridge struct {
 	ctx           context.Context
 	cancel        context.CancelFunc
+	modeMu        sync.RWMutex
 	mode          tools.PermissionMode
 	events        chan tea.Msg
 	once          sync.Once
@@ -190,7 +191,8 @@ func (b *Bridge) TextWriter() io.Writer   { return bridgeWriter{bridge: b, statu
 func (b *Bridge) StatusWriter() io.Writer { return bridgeWriter{bridge: b, status: true} }
 
 func (b *Bridge) Approve(ctx context.Context, action, detail string) error {
-	switch b.mode {
+	mode := b.PermissionMode()
+	switch mode {
 	case tools.PermissionAuto:
 		return nil
 	case tools.PermissionDeny:
@@ -198,8 +200,28 @@ func (b *Bridge) Approve(ctx context.Context, action, detail string) error {
 	case tools.PermissionPrompt:
 		return b.prompt(ctx, action, detail)
 	default:
-		return fmt.Errorf("unknown permission mode %q", b.mode)
+		return fmt.Errorf("unknown permission mode %q", mode)
 	}
+}
+
+func (b *Bridge) PermissionMode() tools.PermissionMode {
+	b.modeMu.RLock()
+	defer b.modeMu.RUnlock()
+	return b.mode
+}
+
+func (b *Bridge) SetAlwaysApprove(enabled bool) error {
+	b.modeMu.Lock()
+	defer b.modeMu.Unlock()
+	if enabled && b.mode == tools.PermissionDeny {
+		return errors.New("always-approve is disabled by deny mode")
+	}
+	if enabled {
+		b.mode = tools.PermissionAuto
+	} else {
+		b.mode = tools.PermissionPrompt
+	}
+	return nil
 }
 
 func (b *Bridge) AskUserQuestion(ctx context.Context, request tools.UserQuestionRequest) (tools.UserQuestionResponse, error) {
@@ -962,8 +984,24 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		fields := strings.Fields(prompt)
 		switch fields[0] {
 		case "/help":
-			m.appendSystem("# Commands\n\n`! <command>` `/compact` `/context` `/copy [N]` `/dream` `/find` `/flush` `/help` `/history` `/loop` `/memory` `/multiline` `/remember` `/session-info`")
+			m.appendSystem("# Commands\n\n`! <command>` `/always-approve` `/compact` `/context` `/copy [N]` `/dream` `/find` `/flush` `/help` `/history` `/loop` `/memory` `/multiline` `/remember` `/session-info`")
 			m.status = "commands"
+			return m, nil
+		case "/always-approve":
+			if m.bridge == nil {
+				m.status = "always-approve unavailable"
+				return m, nil
+			}
+			enabled := m.bridge.PermissionMode() != tools.PermissionAuto
+			if err := m.bridge.SetAlwaysApprove(enabled); err != nil {
+				m.status = err.Error()
+				return m, nil
+			}
+			if enabled {
+				m.status = "always-approve mode"
+			} else {
+				m.status = "normal mode"
+			}
 			return m, nil
 		case "/session-info":
 			if m.runner == nil || strings.TrimSpace(m.runner.SessionID) == "" {
@@ -1853,6 +1891,9 @@ func (m *model) View() tea.View {
 	mode := ""
 	if m.planMode {
 		mode = "  \x1b[30;43m PLAN \x1b[0m"
+	}
+	if m.bridge != nil && m.bridge.PermissionMode() == tools.PermissionAuto {
+		mode += "  \x1b[30;41m AUTO \x1b[0m"
 	}
 	if m.scrollFocused {
 		mode += "  \x1b[30;46m SCROLLBACK \x1b[0m"
