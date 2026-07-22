@@ -282,6 +282,8 @@ type model struct {
 	workspace      string
 	modelName      string
 	previousID     string
+	inputTokens    int
+	contextWindow  int
 	transcript     strings.Builder
 	input          []rune
 	cursor         int
@@ -647,6 +649,10 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.transcript.WriteString("\n[error] " + msg.err.Error() + "\n")
 		} else {
 			m.previousID = msg.result.ResponseID
+			if msg.result.InputTokens > 0 && msg.result.ContextWindow > 0 {
+				m.inputTokens = msg.result.InputTokens
+				m.contextWindow = msg.result.ContextWindow
+			}
 			m.status = fmt.Sprintf("ready · %d step(s)", msg.result.Steps)
 			if msg.result.InputTokens > 0 && msg.result.ContextWindow > 0 {
 				percent := msg.result.InputTokens * 100 / msg.result.ContextWindow
@@ -954,6 +960,33 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		fields := strings.Fields(prompt)
+		switch fields[0] {
+		case "/help":
+			m.appendSystem("# Commands\n\n`! <command>` `/compact` `/context` `/copy [N]` `/dream` `/find` `/flush` `/help` `/history` `/loop` `/memory` `/multiline` `/remember` `/session-info`")
+			m.status = "commands"
+			return m, nil
+		case "/session-info":
+			if m.runner == nil || strings.TrimSpace(m.runner.SessionID) == "" {
+				m.status = "no active session"
+				return m, nil
+			}
+			m.appendSystem(fmt.Sprintf("# Session info\n\n- Session: `%s`\n- Workspace: `%s`\n- Model: `%s`", m.runner.SessionID, m.workspace, m.modelName))
+			m.status = "session info"
+			return m, nil
+		case "/context":
+			if m.runner == nil || strings.TrimSpace(m.runner.SessionID) == "" {
+				m.status = "no active session"
+				return m, nil
+			}
+			if m.inputTokens <= 0 || m.contextWindow <= 0 {
+				m.status = "context usage unavailable"
+				return m, nil
+			}
+			percent := m.inputTokens * 100 / m.contextWindow
+			m.appendSystem(fmt.Sprintf("# Context usage\n\n%d / %d tokens (%d%%)", m.inputTokens, m.contextWindow, percent))
+			m.status = "context usage"
+			return m, nil
+		}
 		if fields[0] == "/multiline" || fields[0] == "/ml" {
 			m.toggleMultiline()
 			return m, nil
@@ -1024,6 +1057,14 @@ func (m *model) toggleMultiline() {
 	} else {
 		m.status = "single-line input"
 	}
+}
+
+func (m *model) appendSystem(text string) {
+	if m.transcript.Len() > 0 {
+		m.transcript.WriteString("\n")
+	}
+	m.transcript.WriteString(strings.TrimSpace(text) + "\n")
+	m.scroll = 0
 }
 
 func copyMessageNumber(args string) (int, error) {

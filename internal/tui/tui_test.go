@@ -605,6 +605,40 @@ func TestCopyAssistantMessageUsesSessionTranscript(t *testing.T) {
 	}
 }
 
+func TestInstantInfoCommandsDoNotRunModelTurn(t *testing.T) {
+	tests := []struct {
+		prompt string
+		want   string
+		status string
+	}{
+		{prompt: "/help ignored", want: "# Commands", status: "commands"},
+		{prompt: "/session-info ignored", want: "session-1", status: "session info"},
+		{prompt: "/context ignored", want: "250 / 1000 tokens (25%)", status: "context usage"},
+	}
+	for _, test := range tests {
+		t.Run(test.prompt, func(t *testing.T) {
+			m := &model{
+				ctx: context.Background(), runner: &agent.Runner{SessionID: "session-1"},
+				workspace: "/workspace", modelName: "test-model", inputTokens: 250, contextWindow: 1000,
+			}
+			m.setInput(test.prompt)
+			updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+			m = updated.(*model)
+			if command != nil || m.running || m.status != test.status || !strings.Contains(m.transcript.String(), test.want) {
+				t.Fatalf("command=%v running=%v status=%q transcript=%q", command != nil, m.running, m.status, m.transcript.String())
+			}
+		})
+	}
+
+	m := &model{ctx: context.Background(), runner: &agent.Runner{SessionID: "session-1"}}
+	m.setInput("/context")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.running || m.status != "context usage unavailable" || m.transcript.Len() != 0 {
+		t.Fatalf("unavailable command=%v running=%v status=%q transcript=%q", command != nil, m.running, m.status, m.transcript.String())
+	}
+}
+
 func TestMultilineCursorNavigationAndUndo(t *testing.T) {
 	m := &model{}
 	press := func(key tea.Key) {
