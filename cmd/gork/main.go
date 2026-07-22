@@ -1722,6 +1722,15 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	authPath, _ := auth.DefaultPath()
+	authConfig := auth.DefaultConfig()
+	applyAuthPolicy(&authConfig, cfg)
+	authMethodID := ""
+	if tokenProvider != nil {
+		authMethodID = "cached_token"
+	} else if cfg.APIKey != "" {
+		authMethodID = "xai.api_key"
+	}
 	cacheAuth, cacheOrigin := modelCacheIdentity(cfg, tokenProvider)
 	modelCache, _ := config.LoadModelCache(cacheAuth, cacheOrigin)
 	var modelCacheMu sync.RWMutex
@@ -1742,7 +1751,9 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 	dynamicPlugins := clonePluginsConfig(cfg.Plugins)
 	pluginStates := make(map[*sessionPluginState]bool)
 	var server *acp.Server
-	server = &acp.Server{SessionDir: opts.sessionDir, FolderTrustEnabled: cfg.FolderTrustEnabled, Factory: func(
+	server = &acp.Server{SessionDir: opts.sessionDir, FolderTrustEnabled: cfg.FolderTrustEnabled, Auth: acp.AuthConfig{
+		Path: authPath, Scope: authConfig.Scope(), MethodID: authMethodID, Token: cfg.APIKey, TokenProvider: tokenProvider,
+	}, Factory: func(
 		sessionCtx context.Context,
 		sessionConfig acp.SessionConfig,
 		protocolApprover tools.Approver,

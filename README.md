@@ -629,7 +629,9 @@ The baseline
 `session/prompt`, `session/update`, `session/cancel`, and `session/close`
 methods are supported. Persisted sessions use stable, path-safe IDs; load
 replays completed user/agent text and image history while resume reconnects without
-replay. Clients can also fetch rewind-filtered history through
+replay. Local ACP clients can inspect the active authentication profile through
+`x.ai/auth/info` and request a refresh-aware bearer token through
+`x.ai/auth/getBearerToken`. Clients can also fetch rewind-filtered history through
 `x.ai/session/updates`, with positive or tail offsets, limits, last-N-turn
 selection, prompt boundaries, event cursors, and conversation/tool/lifecycle
 ACP envelopes. Large histories can be delivered through ordered

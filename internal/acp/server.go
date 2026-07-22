@@ -94,6 +94,7 @@ type Factory func(context.Context, SessionConfig, tools.Approver, io.Writer, io.
 
 type Server struct {
 	Factory            Factory
+	Auth               AuthConfig
 	SessionDir         string
 	FolderTrustEnabled bool
 	input              io.Reader
@@ -343,6 +344,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleModelReload(incoming)
 		case "x.ai/internal/evict_sessions":
 			s.handleEvictSessions(incoming.Params)
+		case "x.ai/auth/info", "x.ai/auth/getBearerToken":
+			s.handleAuth(ctx, incoming)
 		case "x.ai/session_summaries/session_list", "x.ai/session_summaries/workspace_list", "x.ai/session_summaries/workspace_list_recent":
 			s.handleSessionSummaries(incoming)
 		case "x.ai/sessions/list":
