@@ -16,6 +16,10 @@ import (
 )
 
 func (s *Server) handlePlugins(ctx context.Context, incoming message) {
+	if incoming.Method == "x.ai/plugins/notify-updates" {
+		s.handlePluginUpdates(incoming)
+		return
+	}
 	var req struct {
 		SessionID string `json:"sessionId"`
 		Action    struct {
@@ -49,6 +53,27 @@ func (s *Server) handlePlugins(ctx context.Context, incoming message) {
 		items = append(items, pluginWireInfo(item))
 	}
 	s.respond(incoming.ID, map[string]any{"result": map[string]any{"plugins": items}, "error": nil})
+}
+
+func (s *Server) handlePluginUpdates(incoming message) {
+	var req struct {
+		SessionID *string     `json:"sessionId"`
+		Updates   *[][]string `json:"updates"`
+	}
+	if json.Unmarshal(incoming.Params, &req) != nil || req.SessionID == nil || req.Updates == nil {
+		s.respondError(incoming.ID, -32602, "invalid plugin update notification")
+		return
+	}
+	for _, update := range *req.Updates {
+		if len(update) != 3 {
+			s.respondError(incoming.ID, -32602, "invalid plugin update notification")
+			return
+		}
+	}
+	if current := s.lookupSession(*req.SessionID); current != nil {
+		s.notifyXAI(current, map[string]any{"sessionUpdate": "plugin_updates_installed", "updates": *req.Updates})
+	}
+	s.respond(incoming.ID, map[string]any{"ok": true})
 }
 
 func (s *Server) handlePluginAction(ctx context.Context, incoming message, current *session, action, path, source, pluginID string, confirmed bool) {

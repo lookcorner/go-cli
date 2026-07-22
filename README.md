@@ -1076,8 +1076,9 @@ project plugin may start MCP or LSP processes. ACP sessions expose enabled and
 disabled inventory through `x.ai/plugins/list`, including scope, trust, skill,
 agent, hook, and MCP summaries. `x.ai/plugins/action` persists local path add/remove and
 plugin enable/disable, while reload re-runs discovery. Inventory and
-skill/command components update immediately. Plugin MCP servers are restarted
-with rollback on failure while preserving client-provided session overrides;
+skill/command components update immediately. `x.ai/plugins/notify-updates`
+delivers durable, session-targeted installed-update notifications. Plugin MCP
+servers are restarted with rollback on failure while preserving client-provided session overrides;
 plugin LSP servers are started as a complete replacement set and atomically
 swapped into the live manager. Supported local plugin actions therefore do not
 require a session restart. `install`, `update`, and confirmed `uninstall`

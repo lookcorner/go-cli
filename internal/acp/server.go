@@ -327,7 +327,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleQueueUpdate(incoming)
 		case "x.ai/skills/list", "x.ai/skills/config", "x.ai/skills/add", "x.ai/skills/remove", "x.ai/skills/reset", "x.ai/skills/toggle":
 			s.handleSkills(ctx, incoming)
-		case "x.ai/plugins/list", "x.ai/plugins/action":
+		case "x.ai/plugins/list", "x.ai/plugins/action", "x.ai/plugins/notify-updates":
 			s.handlePlugins(ctx, incoming)
 		case "x.ai/hooks/list", "x.ai/hooks/action":
 			s.handleHooks(ctx, incoming)
