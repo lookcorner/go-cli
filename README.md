@@ -285,8 +285,9 @@ Use `--tui` for the full-screen interface:
 
 The TUI streams model output as it arrives, renders headings, emphasis, links,
 lists, quotes, pipe tables, and inline or fenced code, and keeps a scrollable transcript.
-On directly supported terminals, Markdown links and quoted absolute file paths use
-safe OSC 8 targets; spaces in file paths are preserved and percent-encoded.
+On directly supported terminals, Markdown links, bare web/email URLs, and quoted
+absolute file paths use safe OSC 8 targets; spaces in file paths are preserved and
+percent-encoded.
 It supports Unicode input, keyboard and content-pane mouse-wheel scrolling,
 keeps a scrolled viewport stable while output streams, displays tool status,
 cancels the current turn with Ctrl-C, and presents write/Shell/MCP approval

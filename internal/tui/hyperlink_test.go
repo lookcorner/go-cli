@@ -63,14 +63,37 @@ func TestRenderMarkdownEmitsSafeOSC8Links(t *testing.T) {
 		}
 	}
 
-	disabled := strings.Join(renderMarkdownWithLinks(`[docs](https://example.com)`, 80, false), "\n")
+	disabled := strings.Join(renderMarkdownWithLinks(`[docs](https://example.com) https://example.com`, 80, false), "\n")
 	if strings.Contains(disabled, "\x1b]8;") {
 		t.Fatalf("disabled renderer emitted OSC 8: %q", disabled)
 	}
 }
 
+func TestRenderMarkdownLinkifiesBareURLs(t *testing.T) {
+	input := "See https://example.com/a_(b), then mailto:dev@example.com."
+	raw := strings.Join(renderMarkdownWithLinks(input, 18, true), "\n")
+	for _, target := range []string{"https://example.com/a_(b)", "mailto:dev@example.com"} {
+		if !strings.Contains(raw, ansi.SetHyperlink(target, "id="+hyperlinkID(target))) {
+			t.Fatalf("missing bare hyperlink %q in %q", target, raw)
+		}
+	}
+	plain := strings.ReplaceAll(ansi.Strip(raw), "\n", "")
+	if plain != input {
+		t.Fatalf("visible bare URLs changed: %q", plain)
+	}
+	if strings.Contains(raw, ansi.SetHyperlink("https://example.com/a_(b),")) ||
+		strings.Contains(raw, ansi.SetHyperlink("mailto:dev@example.com.")) {
+		t.Fatalf("trailing punctuation entered hyperlink: %q", raw)
+	}
+	if id := "id=" + hyperlinkID("https://example.com/a_(b)"); strings.Count(raw, id) < 2 {
+		t.Fatalf("wrapped hyperlink did not retain a stable id: %q", raw)
+	}
+}
+
 func TestRenderMarkdownRejectsUnsafeHyperlinks(t *testing.T) {
 	for _, input := range []string{
+		`http://`,
+		`mailto:`,
 		`[script](javascript:alert)`,
 		"[control](https://example.com/\x1bpayload)",
 		`[file](file:///etc/passwd)`,

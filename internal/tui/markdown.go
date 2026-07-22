@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"net/url"
+	"regexp"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -26,6 +27,8 @@ type markdownSpan struct {
 	style string
 	link  string
 }
+
+var bareHyperlinkPattern = regexp.MustCompile(`(?i)(?:https?://[^\s\x00-\x1f]+|mailto:[^\s\x00-\x1f]+)`)
 
 func renderMarkdown(value string, width int) []string {
 	return renderMarkdownWithLinks(value, width, false)
@@ -311,15 +314,53 @@ func inlineMarkdown(value string) []markdownSpan {
 			}
 		}
 		next := nextMarkdownMarker(value)
-		spans = append(spans, markdownSpan{text: value[:next]})
+		spans = append(spans, linkifyBareHyperlinks(value[:next])...)
 		value = value[next:]
 	}
 	return spans
 }
 
+func linkifyBareHyperlinks(value string) []markdownSpan {
+	matches := bareHyperlinkPattern.FindAllStringIndex(value, -1)
+	if len(matches) == 0 {
+		return []markdownSpan{{text: value}}
+	}
+	spans := make([]markdownSpan, 0, len(matches)*2+1)
+	position := 0
+	for _, match := range matches {
+		if match[0] > position {
+			spans = append(spans, markdownSpan{text: value[position:match[0]]})
+		}
+		raw := value[match[0]:match[1]]
+		linked := stripTrailingURLPunctuation(raw)
+		if target := safeHyperlinkTarget(linked); target != "" {
+			spans = append(spans, markdownSpan{text: linked, link: target})
+		} else {
+			spans = append(spans, markdownSpan{text: linked})
+		}
+		if len(linked) < len(raw) {
+			spans = append(spans, markdownSpan{text: raw[len(linked):]})
+		}
+		position = match[1]
+	}
+	if position < len(value) {
+		spans = append(spans, markdownSpan{text: value[position:]})
+	}
+	return spans
+}
+
 func nextMarkdownMarker(value string) int {
+	links := bareHyperlinkPattern.FindAllStringIndex(value, -1)
+
+scan:
 	for index := 1; index < len(value); index++ {
 		if value[index] == '*' || value[index] == '_' || value[index] == '`' || value[index] == '[' || value[index] == '"' || value[index] == '\'' {
+			for _, link := range links {
+				if index >= link[0] && index < link[1] {
+					index = link[1] - 1
+					continue scan
+				}
+			}
 			return index
 		}
 	}
