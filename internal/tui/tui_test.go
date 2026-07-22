@@ -371,6 +371,42 @@ func TestRenameCommandsPersistWithoutModelTurn(t *testing.T) {
 	}
 }
 
+func TestExportCommandCopiesOrWritesWithoutModelTurn(t *testing.T) {
+	logger, err := session.NewLoggerWithID(t.TempDir(), "export-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logger.Close()
+	if err := logger.AppendPrompt("Inspect auth", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append("model_response", map[string]any{"response_id": "r1", "text": "Auth is ready.", "tool_call_count": 0}); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	m := &model{ctx: context.Background(), runner: &agent.Runner{SessionPath: logger.Path()}, workspace: root}
+	m.setInput("/export")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	updated, clipboard := m.Update(command())
+	m = updated.(*model)
+	if clipboard == nil || m.running || m.status != "conversation copied to clipboard" {
+		t.Fatalf("clipboard=%v running=%v status=%q", clipboard != nil, m.running, m.status)
+	}
+	m.setInput("/export exports/my conversation.md")
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	updated, clipboard = m.Update(command())
+	m = updated.(*model)
+	path := filepath.Join(root, "exports", "my conversation.md")
+	if clipboard != nil || m.running || !strings.Contains(m.status, path) {
+		t.Fatalf("clipboard=%v running=%v status=%q", clipboard != nil, m.running, m.status)
+	}
+	if data, err := os.ReadFile(path); err != nil || !strings.Contains(string(data), "Auth is ready") {
+		t.Fatalf("data=%q err=%v", data, err)
+	}
+}
+
 func TestExitSlashCommandsQuitWithoutModelTurn(t *testing.T) {
 	for _, prompt := range []string{"/quit ignored", "/exit"} {
 		m := &model{ctx: context.Background(), runner: &agent.Runner{}}

@@ -79,6 +79,11 @@ type copyDoneEvent struct {
 	text string
 	err  error
 }
+type exportDoneEvent struct {
+	text string
+	path string
+	err  error
+}
 type compactDoneEvent struct{ err error }
 type memoryFlushDoneEvent struct {
 	result agent.MemoryFlushResult
@@ -724,6 +729,24 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if command := m.startScheduled(); command != nil {
 			return m, command
 		}
+	case exportDoneEvent:
+		m.running = false
+		m.turnCancel = nil
+		if msg.err != nil {
+			m.status = "export failed: " + msg.err.Error()
+		} else if msg.path != "" {
+			m.status = "conversation exported to " + msg.path
+		} else {
+			m.status = "conversation copied to clipboard"
+			clipboard := tea.SetClipboard(msg.text)
+			if command := m.startScheduled(); command != nil {
+				return m, tea.Batch(clipboard, command)
+			}
+			return m, clipboard
+		}
+		if command := m.startScheduled(); command != nil {
+			return m, command
+		}
 	case scheduledFiredEvent:
 		if msg.event.TaskID != m.activeTask {
 			duplicate := false
@@ -1001,9 +1024,14 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "/quit", "/exit":
 			return m, tea.Quit
 		case "/help":
-			m.appendSystem("# Commands\n\n`! <command>` `/always-approve` `/compact` `/context` `/copy [N]` `/dream` `/exit` `/find` `/flush` `/help` `/history` `/loop` `/memory` `/multiline` `/plan [description]` `/remember` `/rename <title>` `/session-info` `/transcript` `/view-plan`")
+			m.appendSystem("# Commands\n\n`! <command>` `/always-approve` `/compact` `/context` `/copy [N]` `/dream` `/exit` `/export [filename]` `/find` `/flush` `/help` `/history` `/loop` `/memory` `/multiline` `/plan [description]` `/remember` `/rename <title>` `/session-info` `/transcript` `/view-plan`")
 			m.status = "commands"
 			return m, nil
+		case "/export":
+			filename := strings.TrimSpace(strings.TrimPrefix(prompt, "/export"))
+			m.running = true
+			m.status = "exporting conversation"
+			return m, runExport(m.runner, filename, m.workspace)
 		case "/rename", "/title":
 			title := strings.TrimSpace(strings.TrimPrefix(prompt, fields[0]))
 			if err := m.runner.RenameSession(title); err != nil {
@@ -1897,6 +1925,16 @@ func runCopy(runner *agent.Runner, n int) tea.Cmd {
 			return copyDoneEvent{err: fmt.Errorf("only %d assistant message(s) available", len(assistant))}
 		}
 		return copyDoneEvent{text: assistant[n-1]}
+	}
+}
+
+func runExport(runner *agent.Runner, filename, cwd string) tea.Cmd {
+	return func() tea.Msg {
+		if runner == nil {
+			return exportDoneEvent{err: errors.New("no active session to export")}
+		}
+		text, path, err := runner.ExportSession(filename, cwd)
+		return exportDoneEvent{text: text, path: path, err: err}
 	}
 }
 

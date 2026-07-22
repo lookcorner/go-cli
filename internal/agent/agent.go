@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -177,6 +179,58 @@ func (r *Runner) RenameSession(title string) error {
 		return errors.New("usage: /rename <new title>")
 	}
 	return r.Logger.Append("session_title", map[string]any{"title": title})
+}
+
+func (r *Runner) ExportSession(filename, cwd string) (string, string, error) {
+	if strings.TrimSpace(r.SessionPath) == "" {
+		return "", "", errors.New("no active session to export")
+	}
+	messages, err := session.Transcript(r.SessionPath)
+	if err != nil {
+		return "", "", err
+	}
+	content := session.FormatTranscript(messages)
+	if strings.TrimSpace(content) == "" {
+		return "", "", errors.New("no conversation content to export")
+	}
+	filename = strings.TrimSpace(filename)
+	if filename == "" {
+		return content, "", nil
+	}
+	path, err := expandExportPath(filename, cwd)
+	if err != nil {
+		return "", "", err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return "", "", fmt.Errorf("create export directory: %w", err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		return "", "", fmt.Errorf("write conversation export: %w", err)
+	}
+	return content, path, nil
+}
+
+func expandExportPath(filename, cwd string) (string, error) {
+	if filename == "~" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve home directory: %w", err)
+		}
+		filename = home
+	} else if strings.HasPrefix(filename, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve home directory: %w", err)
+		}
+		filename = filepath.Join(home, strings.TrimPrefix(filename, "~/"))
+	}
+	if !filepath.IsAbs(filename) {
+		if strings.TrimSpace(cwd) == "" {
+			return "", errors.New("export working directory is unavailable")
+		}
+		filename = filepath.Join(cwd, filename)
+	}
+	return filepath.Clean(filename), nil
 }
 
 func (r *Runner) RunTurn(ctx context.Context, prompt, previousResponseID string) (Result, error) {

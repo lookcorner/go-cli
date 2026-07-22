@@ -241,6 +241,58 @@ func TestRunnerRenameSessionUsesActiveLogger(t *testing.T) {
 	}
 }
 
+func TestRunnerExportSessionCopiesOrWritesMarkdown(t *testing.T) {
+	logger, err := session.NewLoggerWithID(t.TempDir(), "export-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logger.Close()
+	if err := logger.AppendPrompt("Inspect auth", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append("model_response", map[string]any{"response_id": "r1", "text": "Auth is ready.", "tool_call_count": 0}); err != nil {
+		t.Fatal(err)
+	}
+	runner := Runner{SessionPath: logger.Path()}
+	content, path, err := runner.ExportSession("", t.TempDir())
+	if err != nil || path != "" || !strings.Contains(content, "Inspect auth") || !strings.Contains(content, "Auth is ready") {
+		t.Fatalf("content=%q path=%q err=%v", content, path, err)
+	}
+	root := t.TempDir()
+	content, path, err = runner.ExportSession("exports/my conversation.md", root)
+	if err != nil || path != filepath.Join(root, "exports", "my conversation.md") {
+		t.Fatalf("content=%q path=%q err=%v", content, path, err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != content {
+		t.Fatalf("data=%q err=%v", data, err)
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	_, path, err = runner.ExportSession("~/exports/conversation.md", root)
+	if err != nil || path != filepath.Join(home, "exports", "conversation.md") {
+		t.Fatalf("path=%q err=%v", path, err)
+	}
+	path, err = expandExportPath("~", root)
+	if err != nil || path != home {
+		t.Fatalf("home path=%q err=%v", path, err)
+	}
+}
+
+func TestRunnerExportSessionRequiresCompletedConversation(t *testing.T) {
+	if _, _, err := (&Runner{}).ExportSession("", t.TempDir()); err == nil {
+		t.Fatal("export without an active session was accepted")
+	}
+	logger, err := session.NewLoggerWithID(t.TempDir(), "empty-export-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logger.Close()
+	if _, _, err := (&Runner{SessionPath: logger.Path()}).ExportSession("", t.TempDir()); err == nil {
+		t.Fatal("export without a completed conversation was accepted")
+	}
+}
+
 func TestRunnerReportsFailureAndCompactionHookLifecycle(t *testing.T) {
 	ws, err := workspace.Open(t.TempDir())
 	if err != nil {

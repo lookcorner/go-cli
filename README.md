@@ -307,6 +307,8 @@ in a read-only preview; Esc returns to the conversation.
 read-only viewer, including resumed sessions.
 `/rename <title>` and `/title <title>` append a durable title update to the
 active session without creating a model turn.
+`/export` copies the completed conversation as Markdown; `/export <filename>`
+writes it to disk with `~`, spaces, relative paths, and parent creation supported.
 Left/Right, Home/End, Delete, Backspace, Ctrl-A,
 Ctrl-E, Ctrl-U, and Ctrl/Cmd-Z edit or undo the active prompt and structured
 response input. Shift/Alt-Enter inserts a newline; Ctrl-M, `/multiline`, or `/ml`
