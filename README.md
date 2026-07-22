@@ -638,7 +638,12 @@ methods are supported. Persisted sessions use stable, path-safe IDs; load
 replays completed user/agent text and image history while resume reconnects without
 replay. Local ACP clients can inspect the active authentication profile through
 `x.ai/auth/info` and request a refresh-aware bearer token through
-`x.ai/auth/getBearerToken`. Legacy clients can read and update the environment-backed
+`x.ai/auth/getBearerToken`. They can clear the current or a named OAuth scope through
+`x.ai/auth/logout`; `x.ai/internal/auth_cleared` applies the same runtime cleanup when
+the credential store changes externally. Both paths refresh live model state, prevent
+new sessions from reusing the removed token, and remove orphaned team policy while
+preserving deployment-managed policy and static API-key authentication. Legacy clients
+can read and update the environment-backed
 API key through `x.ai/getApiKey` and `x.ai/setApiKey`; updates are stored in the
 `xai::api_key` scope of `auth.json` and apply to newly created sessions. Clients can
 also enforce the privacy build's coding-data-retention opt-out through

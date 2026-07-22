@@ -43,6 +43,47 @@ type authInfoResponse struct {
 
 func (s *Server) handleAuth(ctx context.Context, incoming message) {
 	switch incoming.Method {
+	case "x.ai/auth/logout":
+		var params struct {
+			Scope *string `json:"scope"`
+		}
+		if len(incoming.Params) == 0 || json.Unmarshal(incoming.Params, &params) != nil || strings.TrimSpace(string(incoming.Params)) == "null" {
+			s.respondErrorData(incoming.ID, -32602, "Invalid params", "invalid params")
+			return
+		}
+		result, err := auth.Logout(s.Auth.Path, s.Auth.Scope, params.Scope)
+		if err != nil {
+			s.respondErrorData(incoming.ID, -32603, "Internal error", "failed to logout: "+err.Error())
+			return
+		}
+		if result.ClearedCurrent && s.Auth.MethodID == "cached_token" {
+			s.Auth.MethodID = ""
+			s.Auth.Token = ""
+		}
+		if s.AuthChanged != nil {
+			if err := s.AuthChanged(ctx, result); err != nil {
+				s.respondErrorData(incoming.ID, -32603, "Internal error", "failed to refresh authentication state: "+err.Error())
+				return
+			}
+		}
+		s.respond(incoming.ID, map[string]any{
+			"ok": true, "was_logged_in": result.WasLoggedIn,
+			"email": optionalString(result.Email), "api_key_still_set": result.APIKeyStillSet,
+		})
+		return
+	case "x.ai/internal/auth_cleared":
+		if s.Auth.MethodID == "cached_token" {
+			s.Auth.MethodID = ""
+			s.Auth.Token = ""
+		}
+		if s.AuthChanged != nil {
+			if err := s.AuthChanged(ctx, auth.LogoutResult{ClearedCurrent: true}); err != nil {
+				s.respondErrorData(incoming.ID, -32603, "Internal error", "failed to refresh authentication state: "+err.Error())
+				return
+			}
+		}
+		s.respond(incoming.ID, map[string]any{"ok": true})
+		return
 	case "x.ai/getApiKey":
 		key, ok := auth.ReadAPIKeyEnvironment()
 		if !ok {
@@ -80,7 +121,7 @@ func (s *Server) handleAuth(ctx context.Context, incoming message) {
 	case "x.ai/auth/getBearerToken":
 		token := s.Auth.Token
 		if s.Auth.TokenProvider != nil {
-			if refreshed, err := s.Auth.TokenProvider(ctx, ""); err == nil && refreshed != "" {
+			if refreshed, err := s.Auth.TokenProvider(ctx, ""); err == nil {
 				token = refreshed
 			}
 		}
@@ -89,6 +130,7 @@ func (s *Server) handleAuth(ctx context.Context, incoming message) {
 	}
 
 	credential := auth.Credential{}
+	methodID := s.Auth.MethodID
 	if s.Auth.Path != "" && s.Auth.Scope != "" {
 		loaded, err := auth.Load(s.Auth.Path, s.Auth.Scope)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -97,6 +139,8 @@ func (s *Server) handleAuth(ctx context.Context, incoming message) {
 		}
 		if err == nil {
 			credential = loaded
+		} else if methodID == "cached_token" {
+			methodID = ""
 		}
 	}
 	profileImageURL := credential.ProfileImageAssetID
@@ -104,7 +148,7 @@ func (s *Server) handleAuth(ctx context.Context, incoming message) {
 		profileImageURL = "grok-asset:///" + profileImageURL
 	}
 	s.respond(incoming.ID, authInfoResponse{
-		MethodID: optionalString(s.Auth.MethodID), Email: optionalString(credential.Email),
+		MethodID: optionalString(methodID), Email: optionalString(credential.Email),
 		FirstName: optionalString(credential.FirstName), LastName: optionalString(credential.LastName),
 		ProfileImageURL: optionalString(profileImageURL), TeamID: optionalString(credential.TeamID),
 		TeamName: optionalString(credential.TeamName), TeamRole: optionalString(credential.TeamRole),

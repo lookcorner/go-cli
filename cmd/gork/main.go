@@ -1783,6 +1783,11 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 	server = &acp.Server{SessionDir: opts.sessionDir, FolderTrustEnabled: cfg.FolderTrustEnabled, BillingMeta: getBillingMeta, Auth: acp.AuthConfig{
 		Path: authPath, Scope: authConfig.Scope(), MethodID: authMethodID, Token: cfg.APIKey, TokenProvider: tokenProvider,
 		ProxyBaseURL: cfg.ProxyBaseURL, HTTP: &http.Client{Timeout: cfg.HTTPTimeout},
+	}, AuthChanged: func(authCtx context.Context, result auth.LogoutResult) error {
+		if err := clearACPLogoutPolicy(authCtx, cfg, result); err != nil {
+			return err
+		}
+		return server.ReloadModels()
 	}, Factory: func(
 		sessionCtx context.Context,
 		sessionConfig acp.SessionConfig,
@@ -1795,16 +1800,17 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			cfg.APIKey = key
 		}
 		if tokenProvider != nil {
-			token := cfg.APIKey
-			if refreshed, err := tokenProvider(sessionCtx, ""); err == nil && refreshed != "" {
-				token = refreshed
-			}
-			settingsCtx, cancel := context.WithTimeout(sessionCtx, 5*time.Second)
-			remote := config.FetchRemoteSettings(settingsCtx, cfg.ProxyBaseURL, token, &http.Client{Timeout: 3 * time.Second})
-			cancel()
-			if remote != nil {
-				cfg.ApplyRemoteSettings(remote)
-				setBillingMeta(cfg)
+			refreshed, refreshErr := tokenProvider(sessionCtx, "")
+			cfg.APIKey = ""
+			if refreshErr == nil && refreshed != "" {
+				cfg.APIKey = refreshed
+				settingsCtx, cancel := context.WithTimeout(sessionCtx, 5*time.Second)
+				remote := config.FetchRemoteSettings(settingsCtx, cfg.ProxyBaseURL, refreshed, &http.Client{Timeout: 3 * time.Second})
+				cancel()
+				if remote != nil {
+					cfg.ApplyRemoteSettings(remote)
+					setBillingMeta(cfg)
+				}
 			}
 		}
 		ws, err := workspace.Open(sessionConfig.CWD)
@@ -2400,6 +2406,17 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		return err
 	}
 	return nil
+}
+
+func clearACPLogoutPolicy(ctx context.Context, cfg config.Config, result auth.LogoutResult) error {
+	if !result.ClearedCurrent || cfg.DeploymentKey != "" || (result.WasLoggedIn && result.Credential.TeamID == "") {
+		return nil
+	}
+	home, err := config.PolicyHome()
+	if err != nil {
+		return err
+	}
+	return config.ClearManagedPolicy(ctx, home)
 }
 
 func goalRoleConfig(cfg config.Config, goalEnabled bool) tools.GoalRoleConfig {

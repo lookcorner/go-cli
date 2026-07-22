@@ -20,6 +20,7 @@ import (
 
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/api"
+	"github.com/lookcorner/go-cli/internal/auth"
 	"github.com/lookcorner/go-cli/internal/hooks"
 	mcppkg "github.com/lookcorner/go-cli/internal/mcp"
 	sessionlog "github.com/lookcorner/go-cli/internal/session"
@@ -95,6 +96,7 @@ type Factory func(context.Context, SessionConfig, tools.Approver, io.Writer, io.
 type Server struct {
 	Factory            Factory
 	Auth               AuthConfig
+	AuthChanged        func(context.Context, auth.LogoutResult) error
 	BillingMeta        func() (*bool, *string)
 	SessionDir         string
 	FolderTrustEnabled bool
@@ -345,7 +347,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleModelReload(incoming)
 		case "x.ai/internal/evict_sessions":
 			s.handleEvictSessions(incoming.Params)
-		case "x.ai/auth/info", "x.ai/auth/getBearerToken", "x.ai/getApiKey", "x.ai/setApiKey":
+		case "x.ai/auth/info", "x.ai/auth/getBearerToken", "x.ai/auth/logout", "x.ai/internal/auth_cleared", "x.ai/getApiKey", "x.ai/setApiKey":
 			s.handleAuth(ctx, incoming)
 		case "x.ai/privacy/setCodingDataRetention":
 			s.handlePrivacy(ctx, incoming)

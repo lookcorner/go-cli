@@ -657,6 +657,53 @@ func TestModelCacheIdentityFollowsAuthenticationRoute(t *testing.T) {
 	}
 }
 
+func TestClearACPLogoutPolicy(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	managed := filepath.Join(home, "managed_config.toml")
+	writeManaged := func() {
+		if err := os.WriteFile(managed, []byte("[ui]\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeManaged()
+	team := auth.LogoutResult{WasLoggedIn: true, ClearedCurrent: true, Credential: auth.Credential{TeamID: "team-1"}}
+	if err := clearACPLogoutPolicy(context.Background(), config.Config{}, team); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(managed); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("team policy still exists: %v", err)
+	}
+
+	for _, test := range []struct {
+		name   string
+		cfg    config.Config
+		result auth.LogoutResult
+	}{
+		{name: "sibling scope", result: auth.LogoutResult{WasLoggedIn: true, Credential: auth.Credential{TeamID: "team-1"}}},
+		{name: "personal account", result: auth.LogoutResult{WasLoggedIn: true, ClearedCurrent: true}},
+		{name: "deployment policy", cfg: config.Config{DeploymentKey: "deployment"}, result: team},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			writeManaged()
+			if err := clearACPLogoutPolicy(context.Background(), test.cfg, test.result); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(managed); err != nil {
+				t.Fatalf("policy was cleared: %v", err)
+			}
+		})
+	}
+
+	writeManaged()
+	if err := clearACPLogoutPolicy(context.Background(), config.Config{}, auth.LogoutResult{ClearedCurrent: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(managed); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("externally cleared auth left policy: %v", err)
+	}
+}
+
 func TestDiscoverSkillsLoadsConfiguredPlugin(t *testing.T) {
 	root := t.TempDir()
 	pluginRoot := filepath.Join(root, "plugin")
