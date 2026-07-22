@@ -925,16 +925,15 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if stroke == "shift+tab" {
-		if m.runner.Tools == nil {
+		if m.runner == nil || m.runner.Tools == nil {
 			m.status = "plan mode unavailable"
 			return m, nil
 		}
 		next := !m.planMode
-		if err := m.runner.Tools.SetPlanMode(next); err != nil {
+		if err := m.setPlanMode(next); err != nil {
 			m.status = "plan mode failed: " + err.Error()
 			return m, nil
 		}
-		m.planMode = next
 		if next {
 			m.status = "plan mode"
 		} else {
@@ -983,10 +982,28 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		fields := strings.Fields(prompt)
 		switch fields[0] {
+		case "/quit", "/exit":
+			return m, tea.Quit
 		case "/help":
-			m.appendSystem("# Commands\n\n`! <command>` `/always-approve` `/compact` `/context` `/copy [N]` `/dream` `/find` `/flush` `/help` `/history` `/loop` `/memory` `/multiline` `/remember` `/session-info`")
+			m.appendSystem("# Commands\n\n`! <command>` `/always-approve` `/compact` `/context` `/copy [N]` `/dream` `/exit` `/find` `/flush` `/help` `/history` `/loop` `/memory` `/multiline` `/plan [description]` `/remember` `/session-info`")
 			m.status = "commands"
 			return m, nil
+		case "/plan":
+			if err := m.setPlanMode(true); err != nil {
+				m.status = "plan mode failed: " + err.Error()
+				return m, nil
+			}
+			description := strings.TrimSpace(strings.TrimPrefix(prompt, "/plan"))
+			if description == "" {
+				m.status = "plan mode"
+				return m, nil
+			}
+			m.running = true
+			turnCtx, cancel := context.WithCancel(m.ctx)
+			m.turnCancel = cancel
+			m.rememberPrompt(description)
+			m.beginTurn(description)
+			return m, runTurn(turnCtx, m.runner, description, m.previousID)
 		case "/always-approve":
 			if m.bridge == nil {
 				m.status = "always-approve unavailable"
@@ -1095,6 +1112,17 @@ func (m *model) toggleMultiline() {
 	} else {
 		m.status = "single-line input"
 	}
+}
+
+func (m *model) setPlanMode(active bool) error {
+	if m.runner == nil || m.runner.Tools == nil {
+		return errors.New("plan mode unavailable")
+	}
+	if err := m.runner.Tools.SetPlanMode(active); err != nil {
+		return err
+	}
+	m.planMode = active
+	return nil
 }
 
 func (m *model) appendSystem(text string) {

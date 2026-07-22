@@ -271,6 +271,40 @@ func TestShiftTabTogglesPersistedPlanMode(t *testing.T) {
 	}
 }
 
+func TestPlanSlashCommandEntersModeAndStartsDescription(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	m := &model{ctx: context.Background(), runner: &agent.Runner{Tools: registry}, status: "ready"}
+	m.setInput("/plan")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.running || !m.planMode || !registry.PlanModeActive() || m.status != "plan mode" {
+		t.Fatalf("plain command=%v running=%v plan=%v active=%v status=%q", command != nil, m.running, m.planMode, registry.PlanModeActive(), m.status)
+	}
+	m.setInput("/plan Refactor the auth flow")
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command == nil || !m.running || !m.planMode || !strings.Contains(m.transcript.String(), "Refactor the auth flow") {
+		t.Fatalf("description command=%v running=%v plan=%v transcript=%q", command != nil, m.running, m.planMode, m.transcript.String())
+	}
+}
+
+func TestExitSlashCommandsQuitWithoutModelTurn(t *testing.T) {
+	for _, prompt := range []string{"/quit ignored", "/exit"} {
+		m := &model{ctx: context.Background(), runner: &agent.Runner{}}
+		m.setInput(prompt)
+		updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+		m = updated.(*model)
+		if command == nil || m.running || m.transcript.Len() != 0 {
+			t.Fatalf("prompt=%q command=%v running=%v transcript=%q", prompt, command != nil, m.running, m.transcript.String())
+		}
+	}
+}
+
 func TestPlanModeFooterFitsNarrowViewport(t *testing.T) {
 	m := &model{
 		planMode: true, width: 20, height: 10, status: "review implementation plan",
