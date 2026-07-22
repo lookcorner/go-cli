@@ -412,9 +412,10 @@ func TestScrollbackFocusAndNavigation(t *testing.T) {
 	}
 	press(tea.Key{Code: tea.KeyTab})
 	press(tea.Key{Code: '/', Text: "/"})
-	if m.scrollFocused || string(m.input) != "x/" {
-		t.Fatalf("slash focus=%v input=%q", m.scrollFocused, m.input)
+	if !m.scrollFocused || m.scrollSearch == nil || string(m.input) != "x" {
+		t.Fatalf("slash focus=%v search=%#v input=%q", m.scrollFocused, m.scrollSearch, m.input)
 	}
+	press(tea.Key{Code: tea.KeyEsc})
 
 	command := m.View().OnMouse(tea.MouseClickMsg(tea.Mouse{X: 1, Y: 1, Button: tea.MouseLeft}))
 	if command == nil {

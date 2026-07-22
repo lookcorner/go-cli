@@ -318,6 +318,9 @@ to restore it.
 Up/Down browse durable prompt history when the prompt is empty. `/history`
 opens fuzzy search over the same workspace-scoped history; Enter or Tab restores
 the selected prompt to the composer without submitting it.
+While scrollback is focused, `/` opens incremental regular-expression search; Enter
+accepts the query, Up/Down or `n`/`N` navigates matches, and Esc closes it. `/find <pattern>`
+opens the same search directly from the prompt without sending a model turn.
 Plan exits open a dedicated full-plan review with approve, revision-feedback,
 and abandon outcomes. Ctrl-Q exits, and an optional
 prompt argument starts the first turn immediately. When providers report usage,

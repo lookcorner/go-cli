@@ -282,6 +282,7 @@ type model struct {
 	historyIndex   int
 	historyActive  bool
 	historySearch  *historySearchState
+	scrollSearch   *scrollSearchState
 	selection      *textSelection
 	selectionNonce uint64
 	selectionMode  textSelectionMode
@@ -447,6 +448,7 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.selectionClick = selectionClickState{}
 		m.width = max(msg.Width, 20)
 		m.height = max(msg.Height, 10)
+		m.refreshScrollSearch()
 	case textEvent:
 		m.selection = nil
 		m.selectionClick = selectionClickState{}
@@ -459,6 +461,7 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			after := len(renderMarkdown(m.transcript.String(), max(m.width, 20)))
 			m.scroll += max(after-before, 0)
 		}
+		m.refreshScrollSearch()
 		return m, waitForBridge(m.bridge)
 	case mouseScrollEvent:
 		m.selection = nil
@@ -750,7 +753,7 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := msg.Key()
 	stroke := msg.Keystroke()
-	if key.Code == tea.KeyEsc && m.selection != nil {
+	if key.Code == tea.KeyEsc && m.selection != nil && m.scrollSearch == nil {
 		m.selection = nil
 		m.selectionClick = selectionClickState{}
 		return m, nil
@@ -785,6 +788,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.historySearch != nil {
 		return m.handleHistorySearchKey(msg)
+	}
+	if m.scrollSearch != nil && m.handleScrollSearchKey(msg) {
+		return m, nil
 	}
 	if m.scrollFocused && m.handleScrollbackKey(msg) {
 		return m, nil
@@ -906,6 +912,10 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.openHistorySearch()
 			return m, nil
 		}
+		if prompt == "/find" || strings.HasPrefix(prompt, "/find ") {
+			m.openScrollSearch(strings.TrimSpace(strings.TrimPrefix(prompt, "/find")))
+			return m, nil
+		}
 		m.running = true
 		turnCtx, cancel := context.WithCancel(m.ctx)
 		m.turnCancel = cancel
@@ -945,6 +955,7 @@ func (m *model) handleScrollbackKey(msg tea.KeyPressMsg) bool {
 	}
 	switch {
 	case key.Mod == 0 && (key.Code == tea.KeyTab || key.Text == " "):
+		m.scrollSearch = nil
 		m.scrollFocused = false
 		m.status = "ready"
 	case key.Code == tea.KeyEsc:
@@ -974,16 +985,131 @@ func (m *model) handleScrollbackKey(msg tea.KeyPressMsg) bool {
 		m.scrollTranscript(m.maxTranscriptScroll())
 	case key.Mod == 0 && key.Text == "G":
 		m.scrollTranscript(-m.scroll)
+	case key.Mod == 0 && key.Text == "/":
+		m.openScrollSearch("")
 	default:
 		if key.Mod != 0 || len(key.Text) != 1 || !isASCIILetterOrSlash(key.Text[0]) {
 			return true
 		}
+		m.scrollSearch = nil
 		m.scrollFocused = false
 		if !m.running {
 			m.editInput(msg)
 		}
 	}
 	return true
+}
+
+func (m *model) openScrollSearch(query string) {
+	if strings.TrimSpace(m.transcript.String()) == "" {
+		m.status = "scrollback is empty"
+		return
+	}
+	m.scrollFocused = true
+	m.scrollSearch = newScrollSearch()
+	m.scrollSearch.query = []rune(query)
+	m.scrollSearch.cursor = len(m.scrollSearch.query)
+	m.refreshScrollSearch()
+}
+
+func (m *model) handleScrollSearchKey(msg tea.KeyPressMsg) bool {
+	search := m.scrollSearch
+	key, stroke := msg.Key(), msg.Keystroke()
+	if key.Code == tea.KeyEsc {
+		m.scrollSearch = nil
+		m.status = "scrollback focused"
+		return true
+	}
+	if key.Mod == 0 && (key.Code == tea.KeyDown || key.Code == tea.KeyUp) {
+		if key.Code == tea.KeyDown {
+			search.step(1)
+		} else {
+			search.step(-1)
+		}
+		m.revealScrollSearch()
+		m.status = search.status()
+		return true
+	}
+	if !search.composing {
+		switch {
+		case key.Mod == 0 && key.Text == "n":
+			search.step(1)
+		case key.Text == "N" && (key.Mod == 0 || key.Mod == tea.ModShift):
+			search.step(-1)
+		case key.Mod == 0 && key.Text == "/":
+			search.composing = true
+		default:
+			return false
+		}
+		m.revealScrollSearch()
+		m.status = search.status()
+		return true
+	}
+	if key.Code == tea.KeyEnter {
+		if len(search.query) == 0 {
+			m.scrollSearch = nil
+			m.status = "scrollback focused"
+		} else {
+			search.composing = false
+			m.revealScrollSearch()
+			m.status = search.status()
+		}
+		return true
+	}
+	search.cursor = min(max(search.cursor, 0), len(search.query))
+	switch {
+	case key.Code == tea.KeyLeft:
+		search.cursor = max(search.cursor-1, 0)
+	case key.Code == tea.KeyRight:
+		search.cursor = min(search.cursor+1, len(search.query))
+	case key.Code == tea.KeyHome || stroke == "ctrl+a":
+		search.cursor = 0
+	case key.Code == tea.KeyEnd || stroke == "ctrl+e":
+		search.cursor = len(search.query)
+	case key.Code == tea.KeyBackspace && search.cursor > 0:
+		search.query = append(search.query[:search.cursor-1], search.query[search.cursor:]...)
+		search.cursor--
+	case key.Code == tea.KeyDelete && search.cursor < len(search.query):
+		search.query = append(search.query[:search.cursor], search.query[search.cursor+1:]...)
+	case stroke == "ctrl+u":
+		search.query = nil
+		search.cursor = 0
+	case key.Text != "" && (key.Mod == 0 || key.Mod == tea.ModShift) && utf8.ValidString(key.Text):
+		insert := []rune(key.Text)
+		search.query = append(search.query, insert...)
+		copy(search.query[search.cursor+len(insert):], search.query[search.cursor:len(search.query)-len(insert)])
+		copy(search.query[search.cursor:], insert)
+		search.cursor += len(insert)
+	default:
+		return true
+	}
+	m.refreshScrollSearch()
+	return true
+}
+
+func (m *model) refreshScrollSearch() {
+	if m.scrollSearch == nil {
+		return
+	}
+	lines := renderMarkdown(m.transcript.String(), max(m.width, 20))
+	for index := range lines {
+		lines[index] = stripUIANSI(lines[index])
+	}
+	m.scrollSearch.update(lines)
+	m.revealScrollSearch()
+	m.status = m.scrollSearch.status()
+}
+
+func (m *model) revealScrollSearch() {
+	if m.scrollSearch == nil || m.scrollSearch.current < 0 {
+		return
+	}
+	lines := renderMarkdown(m.transcript.String(), max(m.width, 20))
+	target := m.scrollSearch.matches[m.scrollSearch.current].line
+	height := m.contentHeight()
+	maxStart := max(len(lines)-height, 0)
+	start := min(max(target-height/2, 0), maxStart)
+	m.scroll = maxStart - start
 }
 
 func (m *model) scrollTranscript(lines int) {
@@ -1583,6 +1709,8 @@ func (m *model) View() tea.View {
 	contentLines := renderMarkdownWithLinks(content, width, m.hyperlinks)
 	if m.historySearch != nil {
 		contentLines = m.historySearchLines(width, m.contentHeight())
+	} else if m.scrollSearch != nil {
+		contentLines = m.scrollSearch.highlighted(contentLines)
 	}
 	visible := sliceFromBottom(contentLines, m.contentHeight(), m.scroll)
 	for len(visible) < m.contentHeight() {
@@ -1632,6 +1760,8 @@ func (m *model) View() tea.View {
 		footer = "\x1b[1;32m# Save a memory note\x1b[0m\n> " + renderInput(m.input, m.cursor, max(width-2, 1)) + "\n\x1b[2mEnter review · Esc cancel\x1b[0m"
 	} else if m.historySearch != nil {
 		footer = "\x1b[1;32mPrompt history\x1b[0m\n> " + renderInput(m.input, m.cursor, max(width-2, 1)) + "\n\x1b[2mEnter/Tab restore · Esc cancel · Up/Down select\x1b[0m"
+	} else if m.scrollSearch != nil {
+		footer = "\x1b[1;32mSearch scrollback\x1b[0m\n> " + renderInput(m.scrollSearch.query, m.scrollSearch.cursor, max(width-2, 1)) + "\n\x1b[2m" + truncate(m.scrollSearch.status(), width) + "\x1b[0m"
 	} else {
 		inputLines := []string{"> "}
 		if m.running {
@@ -1749,6 +1879,9 @@ func (m *model) contentHeight() int {
 		return max(m.height-7, 3)
 	}
 	if m.historySearch != nil {
+		return max(m.height-6, 3)
+	}
+	if m.scrollSearch != nil {
 		return max(m.height-6, 3)
 	}
 	rows := 1
