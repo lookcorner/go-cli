@@ -577,6 +577,80 @@ func TestMCPAuthExtensionsForLocalServers(t *testing.T) {
 	}
 }
 
+func TestMCPConfigExtensions(t *testing.T) {
+	root := t.TempDir()
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, nil)
+	defer registry.Close()
+	catalog := []mcppkg.ServerConfig{{Name: "disabled", Command: "server", Disabled: true, DisabledTools: []string{"hidden"}}}
+	var toggled string
+	var toggleEnabled bool
+	var toggledTool string
+	var upserted mcppkg.ServerConfig
+	var deleted string
+	runner := &agent.Runner{
+		Tools: registry, MCPServerCatalog: func() []mcppkg.ServerConfig { return append([]mcppkg.ServerConfig(nil), catalog...) },
+		ToggleMCPServer: func(_ context.Context, name string, enabled bool) error {
+			toggled, toggleEnabled = name, enabled
+			return nil
+		},
+		ToggleMCPTool: func(_ context.Context, serverName, toolName string, enabled bool) error {
+			toggledTool = serverName + "/" + toolName
+			toggleEnabled = enabled
+			return nil
+		},
+		UpsertMCPServer: func(_ context.Context, server mcppkg.ServerConfig) error {
+			upserted = server
+			return nil
+		},
+		DeleteMCPServer: func(_ context.Context, name string) error {
+			deleted = name
+			return nil
+		},
+	}
+	var output bytes.Buffer
+	server := &Server{output: &output, sessions: map[string]*session{"mcp-config": {id: "mcp-config", runner: runner}}}
+	call := func(id int, method, params string) map[string]any {
+		t.Helper()
+		output.Reset()
+		server.handleMCP(context.Background(), message{ID: json.RawMessage(strconv.Itoa(id)), Method: method, Params: json.RawMessage(params)})
+		var response map[string]any
+		if err := json.NewDecoder(&output).Decode(&response); err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}
+
+	listed := call(1, "x.ai/mcp/list", `{"session_id":"mcp-config"}`)
+	entry := listed["result"].(map[string]any)["result"].(map[string]any)["servers"].([]any)[0].(map[string]any)
+	if state := entry["session"].(map[string]any); state["enabled"] != false || state["status"] != nil || state["tools"].([]any)[0].(map[string]any)["enabled"] != false {
+		t.Fatalf("unexpected disabled MCP entry: %#v", entry)
+	}
+	toggledResponse := call(2, "x.ai/mcp/toggle", `{"session_id":"mcp-config","server_name":"disabled","enabled":true}`)
+	if toggled != "disabled" || !toggleEnabled || toggledResponse["error"] != nil {
+		t.Fatalf("toggle=%q enabled=%v response=%#v", toggled, toggleEnabled, toggledResponse)
+	}
+	toolResponse := call(3, "x.ai/mcp/toggle_tool", `{"session_id":"mcp-config","server_name":"disabled","tool_name":"hidden","enabled":false}`)
+	if toggledTool != "disabled/hidden" || toggleEnabled || toolResponse["error"] != nil {
+		t.Fatalf("toggle tool=%q enabled=%v response=%#v", toggledTool, toggleEnabled, toolResponse)
+	}
+	upsertResponse := call(4, "x.ai/mcp/upsert", `{"session_id":"mcp-config","server_name":"remote","url":"https://mcp.example","headers":{"X-Test":"yes"}}`)
+	if upserted.Name != "remote" || upserted.Type != "http" || upserted.Headers["X-Test"] != "yes" || upsertResponse["error"] != nil {
+		t.Fatalf("upsert=%#v response=%#v", upserted, upsertResponse)
+	}
+	deletedResponse := call(5, "x.ai/mcp/delete", `{"sessionId":"mcp-config","serverName":"remote"}`)
+	if deleted != "remote" || deletedResponse["error"] != nil {
+		t.Fatalf("delete=%q response=%#v", deleted, deletedResponse)
+	}
+	invalid := call(6, "x.ai/mcp/upsert", `{"session_id":"mcp-config","server_name":"empty"}`)
+	if invalid["error"].(map[string]any)["code"] != float64(-32602) {
+		t.Fatalf("invalid upsert response: %#v", invalid)
+	}
+}
+
 func TestUpdateMCPServersExtension(t *testing.T) {
 	var output bytes.Buffer
 	var updated []mcppkg.ServerConfig

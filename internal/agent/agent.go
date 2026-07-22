@@ -156,6 +156,11 @@ type Runner struct {
 	OpenMemory              func() (*memory.Store, error)
 	UpdateMCPServers        func(context.Context, []mcp.ServerConfig) error
 	MCPServers              func() []mcp.ServerConfig
+	MCPServerCatalog        func() []mcp.ServerConfig
+	ToggleMCPServer         func(context.Context, string, bool) error
+	ToggleMCPTool           func(context.Context, string, string, bool) error
+	UpsertMCPServer         func(context.Context, mcp.ServerConfig) error
+	DeleteMCPServer         func(context.Context, string) error
 	UpdateSkills            func(context.Context, func(*skills.Settings)) (skills.Settings, error)
 	UpdatePlugins           func(context.Context, func(*plugin.Settings)) ([]plugin.Plugin, error)
 	MarketplaceList         func() ([]marketplace.ScanResult, error)

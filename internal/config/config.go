@@ -35,6 +35,8 @@ type Config struct {
 	SystemPrompt                    string                     `json:"system_prompt,omitempty"`
 	MaxSteps                        int                        `json:"max_steps,omitempty"`
 	MCPServers                      map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
+	DisabledMCPServers              []string                   `json:"disabled_mcp_servers,omitempty"`
+	DisabledMCPTools                map[string][]string        `json:"disabled_mcp_tools,omitempty"`
 	LSPServers                      map[string]LSPServerConfig `json:"lsp_servers,omitempty"`
 	Permission                      PermissionConfig           `json:"permission,omitempty"`
 	AutoMode                        AutoModeConfig             `json:"auto_mode,omitempty"`
@@ -340,26 +342,28 @@ func (c MCPServerConfig) IsEnabled() bool {
 }
 
 type fileConfig struct {
-	APIKey        string                     `json:"api_key,omitempty" toml:"api_key"`
-	BaseURL       string                     `json:"base_url,omitempty" toml:"base_url"`
-	Model         string                     `json:"model,omitempty" toml:"model_name"`
-	Backend       string                     `json:"backend,omitempty" toml:"backend"`
-	SystemPrompt  string                     `json:"system_prompt,omitempty" toml:"system_prompt"`
-	MaxSteps      int                        `json:"max_steps,omitempty" toml:"max_steps"`
-	HTTPTimeout   string                     `json:"http_timeout,omitempty" toml:"http_timeout"`
-	MCPServers    map[string]MCPServerConfig `json:"mcp_servers,omitempty" toml:"mcp_servers"`
-	LSPServers    map[string]LSPServerConfig `json:"lsp_servers,omitempty" toml:"lsp_servers"`
-	Permission    PermissionConfig           `json:"permission,omitempty" toml:"permission"`
-	AutoMode      AutoModeConfig             `json:"auto_mode,omitempty" toml:"auto_mode"`
-	Session       sessionConfig              `json:"session,omitempty" toml:"session"`
-	ContextWindow int                        `json:"context_window,omitempty" toml:"context_window"`
-	Compaction    fileCompactionConfig       `json:"compaction,omitempty" toml:"compaction"`
-	Memory        *fileMemoryConfig          `json:"memory,omitempty" toml:"memory"`
-	Compat        fileCompatConfig           `json:"compat,omitempty" toml:"compat"`
-	Skills        SkillsConfig               `json:"skills,omitempty" toml:"skills"`
-	Plugins       PluginsConfig              `json:"plugins,omitempty" toml:"plugins"`
-	Marketplace   MarketplaceConfig          `json:"marketplace,omitempty" toml:"marketplace"`
-	Features      struct {
+	APIKey             string                     `json:"api_key,omitempty" toml:"api_key"`
+	BaseURL            string                     `json:"base_url,omitempty" toml:"base_url"`
+	Model              string                     `json:"model,omitempty" toml:"model_name"`
+	Backend            string                     `json:"backend,omitempty" toml:"backend"`
+	SystemPrompt       string                     `json:"system_prompt,omitempty" toml:"system_prompt"`
+	MaxSteps           int                        `json:"max_steps,omitempty" toml:"max_steps"`
+	HTTPTimeout        string                     `json:"http_timeout,omitempty" toml:"http_timeout"`
+	MCPServers         map[string]MCPServerConfig `json:"mcp_servers,omitempty" toml:"mcp_servers"`
+	DisabledMCPServers []string                   `json:"disabled_mcp_servers,omitempty" toml:"disabled_mcp_servers"`
+	DisabledMCPTools   map[string][]string        `json:"disabled_mcp_tools,omitempty" toml:"disabled_mcp_tools"`
+	LSPServers         map[string]LSPServerConfig `json:"lsp_servers,omitempty" toml:"lsp_servers"`
+	Permission         PermissionConfig           `json:"permission,omitempty" toml:"permission"`
+	AutoMode           AutoModeConfig             `json:"auto_mode,omitempty" toml:"auto_mode"`
+	Session            sessionConfig              `json:"session,omitempty" toml:"session"`
+	ContextWindow      int                        `json:"context_window,omitempty" toml:"context_window"`
+	Compaction         fileCompactionConfig       `json:"compaction,omitempty" toml:"compaction"`
+	Memory             *fileMemoryConfig          `json:"memory,omitempty" toml:"memory"`
+	Compat             fileCompatConfig           `json:"compat,omitempty" toml:"compat"`
+	Skills             SkillsConfig               `json:"skills,omitempty" toml:"skills"`
+	Plugins            PluginsConfig              `json:"plugins,omitempty" toml:"plugins"`
+	Marketplace        MarketplaceConfig          `json:"marketplace,omitempty" toml:"marketplace"`
+	Features           struct {
 		WebFetch          *bool `json:"web_fetch,omitempty" toml:"web_fetch"`
 		AutoWake          *bool `json:"auto_wake,omitempty" toml:"auto_wake"`
 		TwoPassCompaction *bool `json:"two_pass_compaction,omitempty" toml:"two_pass_compaction"`
@@ -734,6 +738,12 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 		for name, server := range disk.MCPServers {
 			cfg.MCPServers[name] = server
 		}
+	}
+	if disk.DisabledMCPServers != nil {
+		cfg.DisabledMCPServers = append([]string(nil), disk.DisabledMCPServers...)
+	}
+	if disk.DisabledMCPTools != nil {
+		cfg.DisabledMCPTools = cloneStringSlices(disk.DisabledMCPTools)
 	}
 	if disk.LSPServers != nil {
 		if cfg.LSPServers == nil {

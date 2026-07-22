@@ -1987,11 +1987,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		extensionsMu.Lock()
 		pluginStates[pluginState] = true
 		extensionsMu.Unlock()
-		watchMCPConfig(sessionCtx, time.Second, func() ([]string, error) {
-			extensionsMu.Lock()
-			defer extensionsMu.Unlock()
-			return config.MCPWatchPaths(pluginState.root, opts.configPath, pluginState.mcpSource, pluginState.inventory, pluginState.trusted), nil
-		}, func() error {
+		reloadMCPBase := func(updateCtx context.Context) error {
 			pluginState.updateMu.Lock()
 			defer pluginState.updateMu.Unlock()
 			reloaded, err := config.Load(opts.configPath)
@@ -2003,18 +1999,27 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			inventory := append([]plugin.Plugin(nil), pluginState.inventory...)
 			extensionsMu.Unlock()
 			source.MCPServers = reloaded.MCPServers
+			source.DisabledMCPServers = reloaded.DisabledMCPServers
+			source.DisabledMCPTools = reloaded.DisabledMCPTools
 			source.Compat = reloaded.Compat
 			base := source
 			base.MCPServers = config.DiscoverMCPServers(pluginState.root, base, enabledPlugins(inventory), pluginState.trusted)
-			if err := pluginState.mcp.UpdateBase(sessionCtx, base); err != nil {
+			if err := pluginState.mcp.UpdateBase(updateCtx, base); err != nil {
 				return err
 			}
 			extensionsMu.Lock()
 			pluginState.mcpSource.MCPServers = reloaded.MCPServers
+			pluginState.mcpSource.DisabledMCPServers = reloaded.DisabledMCPServers
+			pluginState.mcpSource.DisabledMCPTools = reloaded.DisabledMCPTools
 			pluginState.mcpSource.Compat = reloaded.Compat
 			extensionsMu.Unlock()
 			return nil
-		}, statusOutput)
+		}
+		watchMCPConfig(sessionCtx, time.Second, func() ([]string, error) {
+			extensionsMu.Lock()
+			defer extensionsMu.Unlock()
+			return config.MCPWatchPaths(pluginState.root, opts.configPath, pluginState.mcpSource, pluginState.inventory, pluginState.trusted), nil
+		}, func() error { return reloadMCPBase(sessionCtx) }, statusOutput)
 		var closeOnce sync.Once
 		closeRuntime := func() {
 			closeOnce.Do(func() {
@@ -2156,6 +2161,58 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			_, err = updatePlugins(actionCtx, update)
 			return outcome, err
 		}
+		toggleMCPServer := func(updateCtx context.Context, name string, enabled bool) error {
+			found := false
+			for _, server := range pluginState.mcp.Catalog() {
+				if server.Name == name {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return fmt.Errorf("MCP server %q not found in config", name)
+			}
+			if err := config.SetMCPServerEnabled(opts.configPath, name, enabled); err != nil {
+				return err
+			}
+			return reloadMCPBase(updateCtx)
+		}
+		toggleMCPTool := func(updateCtx context.Context, serverName, toolName string, enabled bool) error {
+			found := false
+			for _, server := range pluginState.mcp.Catalog() {
+				if server.Name == serverName {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return fmt.Errorf("MCP server %q not found in config", serverName)
+			}
+			if err := config.SetMCPToolEnabled(opts.configPath, serverName, toolName, enabled); err != nil {
+				return err
+			}
+			return reloadMCPBase(updateCtx)
+		}
+		upsertMCPServer := func(updateCtx context.Context, server mcp.ServerConfig) error {
+			enabled := true
+			if err := config.UpsertMCPServer(opts.configPath, server.Name, config.MCPServerConfig{
+				Type: server.Type, Command: server.Command, Args: append([]string(nil), server.Args...), Env: cloneStringsMap(server.Env),
+				URL: server.URL, Headers: cloneStringsMap(server.Headers), Enabled: &enabled,
+			}); err != nil {
+				return err
+			}
+			return reloadMCPBase(updateCtx)
+		}
+		deleteMCPServer := func(updateCtx context.Context, name string) error {
+			existed, err := config.DeleteMCPServer(opts.configPath, name)
+			if err != nil {
+				return err
+			}
+			if !existed {
+				return fmt.Errorf("MCP server %q not found in config.toml", name)
+			}
+			return reloadMCPBase(updateCtx)
+		}
 		runner := &agent.Runner{
 			Client: modelClient, Tools: registry, Skills: catalog, PluginInventory: pluginInventory, Logger: logger,
 			HookCatalog: pluginState.hooks, HookPolicy: pluginState.hookRun,
@@ -2180,7 +2237,9 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			TwoPassCompaction: sessionCfg.TwoPassCompaction,
 			Memory:            memoryStore, MemoryConfig: sessionCfg.Memory,
 			OpenMemory:       memoryStoreOpener(sessionCfg.Memory, ws.Root(), logger.ID()),
-			UpdateMCPServers: mcpRuntime.Update, MCPServers: mcpRuntime.Configs,
+			UpdateMCPServers: mcpRuntime.Update, MCPServers: mcpRuntime.Configs, MCPServerCatalog: mcpRuntime.Catalog,
+			ToggleMCPServer: toggleMCPServer, ToggleMCPTool: toggleMCPTool,
+			UpsertMCPServer: upsertMCPServer, DeleteMCPServer: deleteMCPServer,
 			UpdateSkills:      updateSkills,
 			UpdatePlugins:     updatePlugins,
 			MarketplaceList:   func() ([]marketplace.ScanResult, error) { return marketplace.List(opts.configPath, ws.Root()) },
@@ -3018,6 +3077,11 @@ func startMCPServers(
 				return nil, fmt.Errorf("list tools from MCP server %q: %w", name, err)
 			}
 		}
+		disabledTools := make(map[string]bool, len(cfg.DisabledMCPTools[name]))
+		for _, toolName := range cfg.DisabledMCPTools[name] {
+			disabledTools[toolName] = true
+		}
+		remoteTools = slices.DeleteFunc(remoteTools, func(tool mcp.ToolInfo) bool { return disabledTools[tool.Name] })
 		toolAdapters := mcp.NewToolAdapters(client, name, remoteTools, approver)
 		remoteNames := make([]string, 0, len(toolAdapters))
 		for _, adapter := range toolAdapters {
@@ -3042,6 +3106,7 @@ func startMCPServers(
 					fmt.Fprintf(stderr, "[gork] MCP %s tool reload failed: %v\n", name, listErr)
 					return
 				}
+				updated = slices.DeleteFunc(updated, func(tool mcp.ToolInfo) bool { return disabledTools[tool.Name] })
 				updatedAdapters := mcp.NewToolAdapters(client, name, updated, approver)
 				replacements := make([]tools.Tool, 0, len(updatedAdapters))
 				for _, adapter := range updatedAdapters {
@@ -3121,6 +3186,7 @@ type sessionMCPRuntime struct {
 	clients       []*mcp.Client
 	clientConfigs []mcp.ServerConfig
 	effective     []mcp.ServerConfig
+	catalog       []mcp.ServerConfig
 	closed        bool
 }
 
@@ -3190,6 +3256,12 @@ func (r *sessionMCPRuntime) Configs() []mcp.ServerConfig {
 	return cloneMCPServerConfigs(r.effective)
 }
 
+func (r *sessionMCPRuntime) Catalog() []mcp.ServerConfig {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return cloneMCPServerConfigs(r.catalog)
+}
+
 func (r *sessionMCPRuntime) Close() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -3200,20 +3272,20 @@ func (r *sessionMCPRuntime) Close() {
 	r.stopLocked()
 }
 
-func (r *sessionMCPRuntime) startLocked(requested []mcp.ServerConfig) ([]*mcp.Client, []mcp.ServerConfig, error) {
-	cfg, effective := r.mergedConfig(requested)
+func (r *sessionMCPRuntime) startLocked(requested []mcp.ServerConfig) ([]*mcp.Client, []mcp.ServerConfig, []mcp.ServerConfig, error) {
+	cfg, effective, catalog := r.mergedConfig(requested)
 	clients, err := startMCPServers(r.ctx, cfg, r.workspaceRoot, r.registry, r.approver, r.tokenProvider, r.stderr)
-	return clients, effective, err
+	return clients, effective, catalog, err
 }
 
 func (r *sessionMCPRuntime) restartLocked(requested []mcp.ServerConfig) error {
 	r.stopLocked()
-	clients, effective, err := r.startLocked(requested)
+	clients, effective, catalog, err := r.startLocked(requested)
 	if err != nil {
 		r.stopLocked()
 		return err
 	}
-	r.clients, r.effective = clients, effective
+	r.clients, r.effective, r.catalog = clients, effective, catalog
 	return nil
 }
 
@@ -3227,9 +3299,10 @@ func (r *sessionMCPRuntime) stopLocked() {
 	}
 	r.clients = nil
 	r.effective = nil
+	r.catalog = nil
 }
 
-func (r *sessionMCPRuntime) mergedConfig(requested []mcp.ServerConfig) (config.Config, []mcp.ServerConfig) {
+func (r *sessionMCPRuntime) mergedConfig(requested []mcp.ServerConfig) (config.Config, []mcp.ServerConfig, []mcp.ServerConfig) {
 	cfg := r.base
 	cfg.MCPServers = cloneMCPConfigMap(r.base.MCPServers)
 	for _, server := range requested {
@@ -3238,22 +3311,33 @@ func (r *sessionMCPRuntime) mergedConfig(requested []mcp.ServerConfig) (config.C
 			Env: cloneStringsMap(server.Env), URL: server.URL, Headers: cloneStringsMap(server.Headers),
 		}
 	}
-	names := make([]string, 0, len(cfg.MCPServers))
-	for name, server := range cfg.MCPServers {
-		if server.IsEnabled() {
-			names = append(names, name)
+	for _, name := range cfg.DisabledMCPServers {
+		if server, exists := cfg.MCPServers[name]; exists {
+			disabled := false
+			server.Enabled = &disabled
+			cfg.MCPServers[name] = server
 		}
+	}
+	names := make([]string, 0, len(cfg.MCPServers))
+	for name := range cfg.MCPServers {
+		names = append(names, name)
 	}
 	sort.Strings(names)
 	effective := make([]mcp.ServerConfig, 0, len(names))
+	catalog := make([]mcp.ServerConfig, 0, len(names))
 	for _, name := range names {
 		server := cfg.MCPServers[name]
-		effective = append(effective, mcp.ServerConfig{
+		entry := mcp.ServerConfig{
 			Type: server.Type, Name: name, Command: server.Command, Args: append([]string(nil), server.Args...),
-			Env: cloneStringsMap(server.Env), URL: server.URL, Headers: cloneStringsMap(server.Headers),
-		})
+			Env: cloneStringsMap(server.Env), URL: server.URL, Headers: cloneStringsMap(server.Headers), Disabled: !server.IsEnabled(),
+			DisabledTools: append([]string(nil), cfg.DisabledMCPTools[name]...),
+		}
+		catalog = append(catalog, entry)
+		if !entry.Disabled {
+			effective = append(effective, entry)
+		}
 	}
-	return cfg, effective
+	return cfg, effective, catalog
 }
 
 func registeredMCPToolNames(registry *tools.Registry) []string {
@@ -3368,6 +3452,7 @@ func cloneMCPServerConfigs(source []mcp.ServerConfig) []mcp.ServerConfig {
 		server.Args = append([]string(nil), server.Args...)
 		server.Env = cloneStringsMap(server.Env)
 		server.Headers = cloneStringsMap(server.Headers)
+		server.DisabledTools = append([]string(nil), server.DisabledTools...)
 		cloned[index] = server
 	}
 	return cloned

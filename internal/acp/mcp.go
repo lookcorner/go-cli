@@ -20,14 +20,24 @@ type readableMCPResource interface {
 
 func (s *Server) handleMCP(ctx context.Context, incoming message) {
 	var req struct {
-		SessionID       string          `json:"sessionId"`
-		LegacySessionID string          `json:"session_id"`
-		Server          string          `json:"server"`
-		ServerName      string          `json:"server_name"`
-		ServerURL       string          `json:"serverUrl"`
-		Tool            string          `json:"tool"`
-		URI             string          `json:"uri"`
-		Arguments       json.RawMessage `json:"arguments"`
+		SessionID       string            `json:"sessionId"`
+		LegacySessionID string            `json:"session_id"`
+		Server          string            `json:"server"`
+		ServerName      string            `json:"server_name"`
+		ServerNameCamel string            `json:"serverName"`
+		ToolName        string            `json:"tool_name"`
+		ToolNameCamel   string            `json:"toolName"`
+		ServerURL       string            `json:"serverUrl"`
+		Tool            string            `json:"tool"`
+		URI             string            `json:"uri"`
+		Arguments       json.RawMessage   `json:"arguments"`
+		Enabled         *bool             `json:"enabled"`
+		Type            string            `json:"type"`
+		Command         string            `json:"command"`
+		Args            []string          `json:"args"`
+		Env             map[string]string `json:"env"`
+		URL             string            `json:"url"`
+		Headers         map[string]string `json:"headers"`
 	}
 	if json.Unmarshal(incoming.Params, &req) != nil {
 		s.respondError(incoming.ID, -32602, "invalid MCP parameters")
@@ -35,6 +45,19 @@ func (s *Server) handleMCP(ctx context.Context, incoming message) {
 	}
 	if req.SessionID == "" {
 		req.SessionID = req.LegacySessionID
+	}
+	if req.ServerName == "" {
+		req.ServerName = req.ServerNameCamel
+	}
+	if req.ToolName == "" {
+		req.ToolName = req.ToolNameCamel
+	}
+	if incoming.Method == "x.ai/mcp/toggle" || incoming.Method == "x.ai/mcp/toggle_tool" || incoming.Method == "x.ai/mcp/upsert" || incoming.Method == "x.ai/mcp/delete" {
+		s.handleMCPConfig(ctx, incoming, req.SessionID, req.ServerName, req.ToolName, req.Enabled, mcppkg.ServerConfig{
+			Type: req.Type, Name: req.ServerName, Command: req.Command, Args: req.Args,
+			Env: req.Env, URL: req.URL, Headers: req.Headers,
+		})
+		return
 	}
 	if incoming.Method == "x.ai/mcp/auth_status" {
 		if s.lookupSession(req.SessionID) == nil {
@@ -202,7 +225,10 @@ func (s *Server) handleMCPList(incoming message, sessionID string) {
 	}
 	current.mu.Lock()
 	configs := append([]MCPServer(nil), current.mcpServers...)
-	provider := current.runner.MCPServers
+	provider := current.runner.MCPServerCatalog
+	if provider == nil {
+		provider = current.runner.MCPServers
+	}
 	current.mu.Unlock()
 	if provider != nil {
 		configs = provider()
@@ -253,9 +279,92 @@ func (s *Server) handleMCPList(incoming message, sessionID string) {
 		if tools == nil {
 			tools = []map[string]any{}
 		}
-		entry["session"] = map[string]any{"enabled": true, "status": "ready", "tools": tools}
+		existing := make(map[string]bool, len(tools))
+		for _, tool := range tools {
+			existing[tool["name"].(string)] = true
+		}
+		disabledTools := append([]string(nil), config.DisabledTools...)
+		sort.Strings(disabledTools)
+		for _, name := range disabledTools {
+			if !existing[name] {
+				tools = append(tools, map[string]any{"name": name, "enabled": false})
+			}
+		}
+		session := map[string]any{"enabled": !config.Disabled, "tools": tools}
+		if !config.Disabled {
+			session["status"] = "ready"
+		}
+		entry["session"] = session
 		servers = append(servers, entry)
 	}
 	sort.Slice(servers, func(i, j int) bool { return servers[i]["name"].(string) < servers[j]["name"].(string) })
 	s.respond(incoming.ID, map[string]any{"result": map[string]any{"servers": servers}, "error": nil})
+}
+
+func (s *Server) handleMCPConfig(ctx context.Context, incoming message, sessionID, name, toolName string, enabled *bool, server mcppkg.ServerConfig) {
+	if sessionID == "" || name == "" {
+		s.respondError(incoming.ID, -32602, "session_id and server_name are required")
+		return
+	}
+	current := s.lookupSession(sessionID)
+	if current == nil || current.runner == nil {
+		s.respondError(incoming.ID, -32602, "session not found")
+		return
+	}
+	var err error
+	switch incoming.Method {
+	case "x.ai/mcp/toggle":
+		if enabled == nil || current.runner.ToggleMCPServer == nil {
+			s.respondError(incoming.ID, -32602, "enabled is required")
+			return
+		}
+		err = current.runner.ToggleMCPServer(ctx, name, *enabled)
+	case "x.ai/mcp/toggle_tool":
+		if enabled == nil || toolName == "" {
+			s.respondError(incoming.ID, -32602, "tool_name and enabled are required")
+			return
+		}
+		if current.runner.ToggleMCPTool == nil {
+			s.respondError(incoming.ID, -32000, "MCP tool configuration is read-only")
+			return
+		}
+		err = current.runner.ToggleMCPTool(ctx, name, toolName, *enabled)
+	case "x.ai/mcp/upsert":
+		if current.runner.UpsertMCPServer == nil {
+			s.respondError(incoming.ID, -32000, "MCP configuration is read-only")
+			return
+		}
+		if enabled != nil && !*enabled {
+			s.respondError(incoming.ID, -32602, "server config is disabled")
+			return
+		}
+		if server.URL == "" && server.Command == "" {
+			s.respondError(incoming.ID, -32602, "command or url is required")
+			return
+		}
+		if server.Type == "" {
+			if server.URL != "" {
+				server.Type = "http"
+			} else {
+				server.Type = "stdio"
+			}
+		}
+		err = current.runner.UpsertMCPServer(ctx, server)
+	case "x.ai/mcp/delete":
+		if current.runner.DeleteMCPServer == nil {
+			s.respondError(incoming.ID, -32000, "MCP configuration is read-only")
+			return
+		}
+		err = current.runner.DeleteMCPServer(ctx, name)
+	}
+	if err != nil {
+		s.respondError(incoming.ID, -32000, err.Error())
+		return
+	}
+	s.respond(incoming.ID, map[string]any{"result": map[string]any{"ok": true}, "error": nil})
+	if incoming.Method == "x.ai/mcp/toggle_tool" {
+		s.write(map[string]any{"jsonrpc": "2.0", "method": "x.ai/mcp/tools_changed", "params": map[string]any{
+			"sessionId": sessionID, "serverName": name, "tools": []any{},
+		}})
+	}
 }

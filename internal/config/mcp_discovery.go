@@ -97,6 +97,14 @@ func discoverMCPServers(workspaceRoot, home string, cfg Config, plugins []plugin
 		}
 	}
 
+	for _, name := range cfg.DisabledMCPServers {
+		if server, exists := servers[name]; exists {
+			disabled := false
+			server.Enabled = &disabled
+			servers[name] = server
+		}
+	}
+
 	for name, server := range servers {
 		server = expandMCPServer(server, "", "")
 		if strings.TrimSpace(server.Command) == "" && strings.TrimSpace(server.URL) == "" {

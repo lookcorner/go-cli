@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -532,13 +533,17 @@ func TestSessionMCPRuntimeMergesAndRestoresConfiguration(t *testing.T) {
 	runtime := &sessionMCPRuntime{base: config.Config{MCPServers: map[string]config.MCPServerConfig{
 		"base":     {Command: "base-server"},
 		"disabled": {Command: "disabled-server", Enabled: &disabled},
-	}}}
-	_, effective := runtime.mergedConfig([]mcp.ServerConfig{
+	}, DisabledMCPServers: []string{"client-disabled"}, DisabledMCPTools: map[string][]string{"base": {"hidden"}}}}
+	_, effective, catalog := runtime.mergedConfig([]mcp.ServerConfig{
 		{Name: "base", Command: "client-override"},
+		{Name: "client-disabled", Command: "client-server"},
 		{Name: "extra", Command: "extra-server"},
 	})
 	if len(effective) != 2 || effective[0].Name != "base" || effective[0].Command != "client-override" || effective[1].Name != "extra" {
 		t.Fatalf("unexpected effective MCP configuration: %#v", effective)
+	}
+	if len(catalog) != 4 || catalog[0].Name != "base" || !slices.Equal(catalog[0].DisabledTools, []string{"hidden"}) || catalog[1].Name != "client-disabled" || !catalog[1].Disabled || catalog[2].Name != "disabled" || !catalog[2].Disabled {
+		t.Fatalf("unexpected MCP catalog: %#v", catalog)
 	}
 
 	root := t.TempDir()
@@ -589,7 +594,10 @@ func TestSessionMCPRuntimeMergesAndRestoresConfiguration(t *testing.T) {
 			writer.WriteHeader(http.StatusAccepted)
 		case "tools/list":
 			_ = json.NewEncoder(writer).Encode(map[string]any{
-				"jsonrpc": "2.0", "id": rpc.ID, "result": map[string]any{"tools": []any{}},
+				"jsonrpc": "2.0", "id": rpc.ID, "result": map[string]any{"tools": []any{
+					map[string]any{"name": "visible", "inputSchema": map[string]any{"type": "object"}},
+					map[string]any{"name": "hidden", "inputSchema": map[string]any{"type": "object"}},
+				}},
 			})
 		default:
 			t.Errorf("unexpected MCP method %q", rpc.Method)
@@ -599,11 +607,20 @@ func TestSessionMCPRuntimeMergesAndRestoresConfiguration(t *testing.T) {
 	defer server.Close()
 	if err := live.UpdateBase(context.Background(), config.Config{MCPServers: map[string]config.MCPServerConfig{
 		"hot-base": {Type: "http", URL: server.URL},
-	}}); err != nil {
+	}, DisabledMCPTools: map[string][]string{"hot-base": {"hidden"}}}); err != nil {
 		t.Fatal(err)
 	}
 	if configs := live.Configs(); len(configs) != 1 || configs[0].Name != "hot-base" {
 		t.Fatalf("hot base was not applied: %#v", configs)
+	}
+	var mcpTools []string
+	for _, tool := range registry.SnapshotTools() {
+		if serverName, ok := tool.(interface{ MCPServerName() string }); ok && serverName.MCPServerName() == "hot-base" {
+			mcpTools = append(mcpTools, tool.Definition().Name)
+		}
+	}
+	if len(mcpTools) != 1 || !strings.Contains(mcpTools[0], "visible") {
+		t.Fatalf("disabled MCP tool was registered: %#v", mcpTools)
 	}
 	if err := live.UpdateBase(context.Background(), config.Config{}); err != nil {
 		t.Fatal(err)

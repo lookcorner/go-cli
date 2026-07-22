@@ -691,7 +691,11 @@ plugin metadata, configured paths, ignore paths, and enabled state.
 Live session MCP servers are exposed through `x.ai/mcp/list`, and
 `x.ai/mcp/call` invokes a named server tool through the same client and
 permission path used by model tool calls. `x.ai/mcp/read_resource` returns raw
-text or base64 resource contents. `x.ai/session/update_mcp_servers` safely
+text or base64 resource contents. Local servers and individual tools can be
+persistently enabled or disabled with `x.ai/mcp/toggle` and
+`x.ai/mcp/toggle_tool`; `x.ai/mcp/upsert` and `x.ai/mcp/delete` atomically
+update the user config and hot-reload the live session. Disabled entries remain
+visible in `x.ai/mcp/list`. `x.ai/session/update_mcp_servers` safely
 restarts the session MCP runtime, preserves project/plugin base servers, and
 restores the previous runtime if replacement fails. Sessionless agent-level MCP
 pools and OAuth enrollment are not yet available. Local MCP configuration files
