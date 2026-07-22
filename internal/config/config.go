@@ -95,6 +95,11 @@ type Config struct {
 	autoModePromptConfigured        bool
 	autoModeModelConfigured         bool
 	autoModeReasoningConfigured     bool
+	modelConfigured                 bool
+	defaultModelConfigured          bool
+	allowedModelsConfigured         bool
+	hiddenModelsConfigured          bool
+	disabledModelsConfigured        bool
 }
 
 type AutoModeConfig struct {
@@ -668,15 +673,22 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.Models.AllowedModels != nil {
 		cfg.AllowedModels = append([]string(nil), disk.Models.AllowedModels...)
+		cfg.allowedModelsConfigured = true
 	}
 	if disk.Models.HiddenModels != nil {
 		cfg.HiddenModels = append([]string(nil), disk.Models.HiddenModels...)
+		cfg.hiddenModelsConfigured = true
 	}
 	if disk.Models.DisabledModels != nil {
 		cfg.DisabledModels = append([]string(nil), disk.Models.DisabledModels...)
+		cfg.disabledModelsConfigured = true
 	}
 	if disk.Models.Default != "" {
 		cfg.DefaultModelID = disk.Models.Default
+		cfg.defaultModelConfigured = true
+	}
+	if disk.Model != "" {
+		cfg.modelConfigured = true
 	}
 	applyModelConfig(disk)
 	if disk.Models.WebSearch != "" {
@@ -1046,6 +1058,50 @@ func (c Config) ModelSlugs() []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// ReloadModelCatalog applies model-only config changes without disturbing live
+// credentials or unrelated session settings. Remote filters remain fail-closed
+// unless the local config explicitly owns that field.
+func (c *Config) ReloadModelCatalog(next Config) {
+	c.ModelProfiles = cloneModelProfiles(next.ModelProfiles)
+	c.Model = next.Model
+	if next.defaultModelConfigured || c.defaultModelConfigured {
+		c.DefaultModelID = next.DefaultModelID
+	}
+	if next.allowedModelsConfigured || c.allowedModelsConfigured {
+		c.AllowedModels = append([]string(nil), next.AllowedModels...)
+	}
+	if next.hiddenModelsConfigured || c.hiddenModelsConfigured {
+		c.HiddenModels = append([]string(nil), next.HiddenModels...)
+	}
+	if next.disabledModelsConfigured || c.disabledModelsConfigured {
+		c.DisabledModels = append([]string(nil), next.DisabledModels...)
+	}
+	c.modelConfigured = next.modelConfigured
+	c.defaultModelConfigured = next.defaultModelConfigured
+	c.allowedModelsConfigured = next.allowedModelsConfigured
+	c.hiddenModelsConfigured = next.hiddenModelsConfigured
+	c.disabledModelsConfigured = next.disabledModelsConfigured
+	c.ReasoningEffort = next.ReasoningEffort
+	c.ModelSupportsReasoningEffort = next.ModelSupportsReasoningEffort
+	c.ModelReasoningEfforts = append([]ReasoningEffortOption(nil), next.ModelReasoningEfforts...)
+}
+
+func (c Config) HasExplicitModelPreference() bool {
+	return c.defaultModelConfigured || c.modelConfigured
+}
+
+func cloneModelProfiles(source map[string]ModelProfile) map[string]ModelProfile {
+	if source == nil {
+		return nil
+	}
+	cloned := make(map[string]ModelProfile, len(source))
+	for id, profile := range source {
+		profile.ReasoningEfforts = append([]ReasoningEffortOption(nil), profile.ReasoningEfforts...)
+		cloned[id] = profile
+	}
+	return cloned
 }
 
 func (c Config) modelProfileWithDefault(slug string) (string, ModelProfile, bool) {

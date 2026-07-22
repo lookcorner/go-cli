@@ -2,6 +2,8 @@ package acp
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -147,6 +149,7 @@ func (s *Server) handleSetSessionModel(incoming message) {
 	}
 	current.previous = ""
 	current.unavailableModel = ""
+	current.pendingModelID = ""
 	current.updated = time.Now().UTC()
 	update := map[string]any{"sessionUpdate": "model_changed", "model_id": runtime.ID}
 	if effort := strings.TrimSpace(current.runner.ReasoningEffort); effort != "" {
@@ -157,6 +160,149 @@ func (s *Server) handleSetSessionModel(incoming message) {
 		"params": map[string]any{"sessionId": current.id, "update": update},
 	})
 	s.respond(incoming.ID, map[string]any{"_meta": map[string]any{"model": runtime.Model}})
+}
+
+// ReloadModels refreshes every live session catalog and emits the reference
+// machine-wide notification when a model-related config change is detected.
+func (s *Server) ReloadModels() error {
+	s.mu.Lock()
+	sessions := make([]*session, 0, len(s.sessions))
+	for _, current := range s.sessions {
+		sessions = append(sessions, current)
+	}
+	s.mu.Unlock()
+	var reloadErr error
+	for _, current := range sessions {
+		if err := s.reloadSessionModels(current); err != nil {
+			reloadErr = errors.Join(reloadErr, fmt.Errorf("session %s: %w", current.id, err))
+		}
+	}
+	return reloadErr
+}
+
+func (s *Server) reloadSessionModels(current *session) error {
+	current.mu.Lock()
+	if current.closed || current.runner == nil || current.runner.ReloadModels == nil {
+		current.mu.Unlock()
+		return nil
+	}
+	update, err := current.runner.ReloadModels()
+	if err != nil || !update.Changed {
+		current.mu.Unlock()
+		return err
+	}
+	current.runner.ModelOptions = append([]agent.ModelOption(nil), update.Options...)
+	previous := current.runner.ModelID
+	if previous == "" {
+		previous = current.runner.Model
+	}
+	currentAvailable := modelOptionAvailable(update.Options, previous, false)
+	target := ""
+	if update.PreferredChanged && modelOptionAvailable(update.Options, update.PreferredID, true) {
+		target = update.PreferredID
+	} else if !currentAvailable {
+		target = firstAvailableModel(update.Options, update.PreferredID)
+	}
+	busy := current.running || current.startingPromptID != "" || current.btwDone != nil || current.recapDone != nil || current.suggestDone != nil
+	switched := ""
+	if target != "" && target != previous {
+		if busy {
+			current.pendingModelID = target
+			if !currentAvailable {
+				current.unavailableModel = previous
+			}
+		} else if err := switchSessionModelLocked(current, target); err != nil {
+			current.mu.Unlock()
+			return err
+		} else {
+			switched = target
+		}
+	} else if !currentAvailable {
+		current.unavailableModel = previous
+		current.pendingModelID = ""
+	} else {
+		current.unavailableModel = ""
+		current.pendingModelID = ""
+	}
+	state := modelState(current.runner)
+	current.mu.Unlock()
+	s.write(map[string]any{"jsonrpc": "2.0", "method": "x.ai/models/update", "params": state})
+	if switched != "" {
+		s.notifyModelAutoSwitched(current.id, previous, switched, fmt.Sprintf("Model catalog changed; using %q.", switched))
+	}
+	return nil
+}
+
+func modelOptionAvailable(options []agent.ModelOption, id string, visibleOnly bool) bool {
+	for _, option := range options {
+		if (option.ID == id || option.Model == id) && !option.Disallowed && (!visibleOnly || !option.Hidden) {
+			return true
+		}
+	}
+	return false
+}
+
+func firstAvailableModel(options []agent.ModelOption, preferred string) string {
+	if modelOptionAvailable(options, preferred, true) {
+		return preferred
+	}
+	for _, option := range options {
+		if !option.Hidden && !option.Disallowed {
+			return option.ID
+		}
+	}
+	for _, option := range options {
+		if !option.Disallowed {
+			return option.ID
+		}
+	}
+	return ""
+}
+
+func switchSessionModelLocked(current *session, id string) error {
+	if current.runner.ResolveModel == nil {
+		return errors.New("session model switching is unavailable")
+	}
+	messages, err := sessionlog.TranscriptOrEmpty(current.logPath)
+	if err != nil {
+		return err
+	}
+	runtime, err := current.runner.ResolveModel(id)
+	if err != nil {
+		return err
+	}
+	if runtime.Client == nil || strings.TrimSpace(runtime.ID) == "" || strings.TrimSpace(runtime.Model) == "" {
+		return errors.New("resolved model runtime is incomplete")
+	}
+	if current.runner.Logger != nil {
+		if err := current.runner.Logger.Append("session_model", map[string]any{"model_id": runtime.ID, "reasoning_effort": runtime.ReasoningEffort}); err != nil {
+			return err
+		}
+	}
+	if err := current.runner.ApplyModel(runtime, messages); err != nil {
+		return err
+	}
+	current.previous = ""
+	current.unavailableModel = ""
+	current.pendingModelID = ""
+	current.updated = time.Now().UTC()
+	return nil
+}
+
+func (s *Server) applyPendingModel(current *session) error {
+	current.mu.Lock()
+	previous, target := current.runner.ModelID, current.pendingModelID
+	if target == "" {
+		current.mu.Unlock()
+		return nil
+	}
+	if err := switchSessionModelLocked(current, target); err != nil {
+		current.mu.Unlock()
+		return err
+	}
+	current.mu.Unlock()
+	s.notifyModelAutoSwitched(current.id, previous, target, fmt.Sprintf("Model catalog changed; using %q.", target))
+	return nil
 }
 
 func modelRequestAvailable(runner *agent.Runner, requested string, visibleOnly bool) bool {

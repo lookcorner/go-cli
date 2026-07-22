@@ -703,6 +703,38 @@ func TestWatchMCPConfigReloadsChangedFiles(t *testing.T) {
 	}
 }
 
+func TestWatchModelConfigRetriesFailedReload(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("model = \"old\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	attempts := make(chan int, 2)
+	count := 0
+	watchModelConfig(ctx, 5*time.Millisecond, []string{path}, func() error {
+		count++
+		attempts <- count
+		if count == 1 {
+			return errors.New("temporary failure")
+		}
+		return nil
+	}, io.Discard)
+	if err := os.WriteFile(path, []byte("model = \"new\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for want := 1; want <= 2; want++ {
+		select {
+		case got := <-attempts:
+			if got != want {
+				t.Fatalf("attempt=%d want=%d", got, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("model reload attempt %d did not run", want)
+		}
+	}
+}
+
 func TestRunPluginLifecycle(t *testing.T) {
 	grokHome := filepath.Join(t.TempDir(), ".grok")
 	t.Setenv("GROK_HOME", grokHome)

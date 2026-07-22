@@ -3,6 +3,8 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -317,6 +319,82 @@ model = "gone-api"
 	}
 	if _, _, ok := cfg.ResolveModelEntry("gone"); ok {
 		t.Fatal("disabled model remained resolvable")
+	}
+}
+
+func TestModelWatchPathsIncludesEveryConfigLayer(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	path := filepath.Join(home, "config.toml")
+	paths := ModelWatchPaths(path)
+	for _, want := range []string{path, filepath.Join(home, "managed_config.toml"), filepath.Join(home, "requirements.toml")} {
+		if !slices.Contains(paths, want) {
+			t.Fatalf("paths=%#v missing %q", paths, want)
+		}
+	}
+	if !sort.StringsAreSorted(paths) {
+		t.Fatalf("paths are not sorted: %#v", paths)
+	}
+	for index := 1; index < len(paths); index++ {
+		if paths[index] == paths[index-1] {
+			t.Fatalf("duplicate path %q in %#v", paths[index], paths)
+		}
+	}
+	if defaults := ModelWatchPaths(""); !slices.Contains(defaults, path) {
+		t.Fatalf("default paths=%#v missing %q", defaults, path)
+	}
+}
+
+func TestReloadModelCatalogUpdatesOnlyModelState(t *testing.T) {
+	current := Config{
+		APIKey: "live-key", BaseURL: "https://live.example", MaxSteps: 9,
+		Model: "old-api", DefaultModelID: "old", defaultModelConfigured: true,
+		AllowedModels: []string{"old"}, allowedModelsConfigured: true,
+		ModelProfiles: map[string]ModelProfile{"old": {Model: "old-api"}},
+	}
+	next := Config{
+		APIKey: "disk-key", BaseURL: "https://disk.example", MaxSteps: 2,
+		Model: "new-api", DefaultModelID: "new", defaultModelConfigured: true,
+		AllowedModels: []string{"new"}, allowedModelsConfigured: true,
+		ModelProfiles: map[string]ModelProfile{"new": {Model: "new-api", ReasoningEfforts: []ReasoningEffortOption{{ID: "high"}}}},
+	}
+	current.ReloadModelCatalog(next)
+	if current.Model != "new-api" || current.DefaultModelID != "new" || !slices.Equal(current.AllowedModels, []string{"new"}) || current.ModelProfiles["new"].Model != "new-api" {
+		t.Fatalf("model catalog=%#v", current)
+	}
+	if current.APIKey != "live-key" || current.BaseURL != "https://live.example" || current.MaxSteps != 9 {
+		t.Fatalf("live config changed=%#v", current)
+	}
+	next.ModelProfiles["new"] = ModelProfile{Model: "mutated"}
+	if current.ModelProfiles["new"].Model != "new-api" {
+		t.Fatal("model profiles were not cloned")
+	}
+}
+
+func TestReloadModelCatalogClearsLocalFiltersButPreservesExternalFloor(t *testing.T) {
+	local := Config{AllowedModels: []string{"old"}, allowedModelsConfigured: true}
+	local.ReloadModelCatalog(Config{})
+	if local.AllowedModels != nil || local.allowedModelsConfigured {
+		t.Fatalf("removed local allowlist survived: %#v", local.AllowedModels)
+	}
+
+	external := Config{AllowedModels: []string{"remote-floor"}}
+	external.ReloadModelCatalog(Config{Model: "updated"})
+	if !slices.Equal(external.AllowedModels, []string{"remote-floor"}) {
+		t.Fatalf("external allowlist was relaxed: %#v", external.AllowedModels)
+	}
+}
+
+func TestReloadModelCatalogTracksExplicitModelPreference(t *testing.T) {
+	current := Config{DefaultModelID: "old", defaultModelConfigured: true}
+	current.ReloadModelCatalog(Config{Model: "fallback"})
+	if current.HasExplicitModelPreference() || current.DefaultModelID != "" {
+		t.Fatalf("removed default remained explicit: %#v", current)
+	}
+
+	current.ReloadModelCatalog(Config{Model: "new", modelConfigured: true})
+	if !current.HasExplicitModelPreference() || current.Model != "new" {
+		t.Fatalf("top-level preference was lost: %#v", current)
 	}
 }
 

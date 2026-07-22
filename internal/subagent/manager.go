@@ -261,6 +261,18 @@ func (m *Manager) SetParentModel(model string, contextWindow, compactThresholdPe
 	m.mu.Unlock()
 }
 
+func (m *Manager) SetAvailableModels(models []string) {
+	m.mu.Lock()
+	m.availableModels = append([]string(nil), models...)
+	m.mu.Unlock()
+}
+
+func (m *Manager) availableModelSlugs() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return append([]string(nil), m.availableModels...)
+}
+
 func (m *Manager) parentModelRuntime() ModelRuntime {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -329,7 +341,7 @@ func (m *Manager) Start(ctx context.Context, request tools.SubagentRequest) (too
 	if request.Model != "" {
 		resolved, ok := m.resolve(request.Model)
 		if !ok {
-			valid := strings.Join(m.availableModels, ", ")
+			valid := strings.Join(m.availableModelSlugs(), ", ")
 			if valid == "" {
 				return tools.SubagentResult{}, fmt.Errorf("unknown Task.model slug %q; no valid model slugs are currently available; omit model to inherit the parent model", request.Model)
 			}
@@ -577,7 +589,7 @@ func (m *Manager) persistedModelRuntime(modelID string) (ModelRuntime, error) {
 	if m.resolveModel == nil {
 		return fallback, nil
 	}
-	for _, slug := range m.availableModels {
+	for _, slug := range m.availableModelSlugs() {
 		if candidate, ok := m.resolve(slug); ok && candidate.Model == modelID {
 			return candidate, nil
 		}

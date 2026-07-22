@@ -222,6 +222,14 @@ models cannot be resolved. If the configured default is filtered out, new ACP
 sessions use the first visible, selectable catalog entry instead when one
 exists. Individual `[model.<name>]` entries may also set `hidden = true`.
 
+While the ACP server is running, model changes in `config.toml`, local/system
+`managed_config.toml`, and `requirements.toml` are detected automatically.
+Connected clients receive `x.ai/models/update`; idle sessions switch when an
+explicit default changes or their current model disappears, while busy sessions
+defer that switch until the next prompt. Future subagents use the refreshed
+catalog. A removed local filter is cleared, but an externally supplied filter
+that is not owned by local config remains fail-closed.
+
 Gork-style `[model.<name>]` custom providers and `[mcp_servers.<name>]` tables
 are supported. The earlier JSON format remains accepted when passed with
 `--config`; an existing `$XDG_CONFIG_HOME/gork-go/config.json` is used as a

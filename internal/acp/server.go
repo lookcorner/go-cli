@@ -153,6 +153,7 @@ type session struct {
 	activeWakeID      string
 	closed            bool
 	unavailableModel  string
+	pendingModelID    string
 }
 
 type syntheticWake struct {
@@ -1724,6 +1725,10 @@ func (s *Server) handlePromptRequest(parent context.Context, incoming message, c
 	}
 	if prompt == "" {
 		prompt = "Image prompt"
+	}
+	if err := s.applyPendingModel(current); err != nil {
+		s.respondError(incoming.ID, -32000, err.Error())
+		return
 	}
 	current.mu.Lock()
 	unavailableModel := current.unavailableModel

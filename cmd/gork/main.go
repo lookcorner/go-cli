@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"sort"
@@ -1676,6 +1677,31 @@ func resolveACPSessionModelEntry(cfg config.Config, requested string, visibleOnl
 	return cfg.Model, cfg
 }
 
+func preferredACPModelID(cfg config.Config) string {
+	id, _ := resolveACPSessionModelEntry(cfg, "", false)
+	return id
+}
+
+func modelCatalogChanged(previous, next config.Config) bool {
+	type catalog struct {
+		Model, Default, Effort string
+		Profiles               map[string]config.ModelProfile
+		Allowed, Hidden        []string
+		Disabled               []string
+		SupportsEffort         bool
+		Efforts                []config.ReasoningEffortOption
+	}
+	view := func(cfg config.Config) catalog {
+		return catalog{
+			Model: cfg.Model, Default: cfg.DefaultModelID, Effort: cfg.ReasoningEffort,
+			Profiles: cfg.ModelProfiles, Allowed: cfg.AllowedModels, Hidden: cfg.HiddenModels,
+			Disabled: cfg.DisabledModels, SupportsEffort: cfg.ModelSupportsReasoningEffort,
+			Efforts: cfg.ModelReasoningEfforts,
+		}
+	}
+	return !reflect.DeepEqual(view(previous), view(next))
+}
+
 func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []string, tokenProvider api.TokenProvider, stdin io.Reader, stdout, stderr io.Writer) error {
 	mode := tools.PermissionMode(opts.approval)
 	if mode != tools.PermissionPrompt && mode != tools.PermissionAuto && mode != tools.PermissionAlwaysApprove && mode != tools.PermissionDeny {
@@ -1730,6 +1756,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			return nil, nil, err
 		}
 		modelCatalog := sessionCfg
+		var modelCatalogMu sync.RWMutex
 		modelID, sessionCfg := resolveACPSessionModelEntry(sessionCfg, sessionConfig.Model, sessionConfig.ResumePath != "")
 		reasoningEffort := sessionCfg.ReasoningEffort
 		if sessionConfig.ReasoningEffort != "" && sessionCfg.ModelSupportsReasoningEffort {
@@ -1910,7 +1937,10 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			fmt.Fprintln(statusOutput, "[gork] agent definition:", agentErr)
 		}
 		resolveSubagentModel := func(slug string) (subagent.ModelRuntime, bool) {
-			resolved, ok := sessionCfg.ResolveModel(slug)
+			modelCatalogMu.RLock()
+			catalog := modelCatalog
+			modelCatalogMu.RUnlock()
+			resolved, ok := catalog.ResolveModel(slug)
 			return subagent.ModelRuntime{Profile: slug, Model: resolved.Model, ContextWindow: resolved.ContextWindow, CompactThresholdPercent: resolved.AutoCompactThresholdPercent}, ok
 		}
 		subagentManager, err = subagent.New(subagent.Config{
@@ -1932,9 +1962,11 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 				return startSubagentMCPServers(childCtx, sessionCfg, root, childTools, approver, tokenProvider, statusOutput, servers)
 			},
 			NewClient: func(model subagent.ModelRuntime) (agent.ResponseStreamer, error) {
-				child := sessionCfg
+				modelCatalogMu.RLock()
+				child := modelCatalog
+				modelCatalogMu.RUnlock()
 				if model.Profile != "" {
-					child, _ = sessionCfg.ResolveModel(model.Profile)
+					child, _ = child.ResolveModel(model.Profile)
 				} else {
 					child.Model = model.Model
 				}
@@ -2156,7 +2188,10 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			SessionPath:       logger.Path(),
 		}
 		runner.ResolveModel = func(id string) (agent.ModelRuntime, error) {
-			resolvedID, resolved, ok := modelCatalog.ResolveModelEntry(id)
+			modelCatalogMu.RLock()
+			catalog := modelCatalog
+			modelCatalogMu.RUnlock()
+			resolvedID, resolved, ok := catalog.ResolveModelEntry(id)
 			if !ok {
 				return agent.ModelRuntime{}, fmt.Errorf("unknown model id %q", id)
 			}
@@ -2172,15 +2207,47 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		}
 		runner.OnModelChanged = func(runtime agent.ModelRuntime) {
 			subagentManager.SetParentModel(runtime.Model, runtime.ContextWindow, runtime.CompactThresholdPercent)
-			if _, resolved, ok := modelCatalog.ResolveModelEntry(runtime.ID); ok {
+			modelCatalogMu.RLock()
+			catalog := modelCatalog
+			modelCatalogMu.RUnlock()
+			if _, resolved, ok := catalog.ResolveModelEntry(runtime.ID); ok {
 				registry.ConfigureGoalRoles(goalRoleConfig(resolved, true))
 			}
+		}
+		runner.ReloadModels = func() (agent.ModelCatalogUpdate, error) {
+			reloaded, err := config.Load(opts.configPath)
+			if err != nil {
+				return agent.ModelCatalogUpdate{}, err
+			}
+			modelCatalogMu.Lock()
+			previous := modelCatalog
+			next := previous
+			next.ReloadModelCatalog(reloaded)
+			if opts.model != "" {
+				next.Model, next.DefaultModelID = opts.model, ""
+			}
+			oldPreferred := preferredACPModelID(previous)
+			newPreferred := preferredACPModelID(next)
+			changed := modelCatalogChanged(previous, next)
+			if changed {
+				modelCatalog = next
+			}
+			modelCatalogMu.Unlock()
+			if changed {
+				subagentManager.SetAvailableModels(next.ModelSlugs())
+			}
+			return agent.ModelCatalogUpdate{
+				Options: acpModelOptions(next), PreferredID: newPreferred,
+				PreferredChanged: oldPreferred != newPreferred && next.HasExplicitModelPreference(),
+				Changed:          changed,
+			}, nil
 		}
 		return runner, func() {
 			waitRunnerMemory(runner)
 			closeRuntime()
 		}, nil
 	}}
+	watchModelConfig(ctx, time.Second, config.ModelWatchPaths(opts.configPath), server.ReloadModels, stderr)
 	if err := server.Serve(ctx, stdin, stdout); err != nil {
 		fmt.Fprintln(stderr, "[gork] ACP server failed:", err)
 		return err
@@ -3248,6 +3315,31 @@ func watchMCPConfig(
 			}
 			fingerprint = next
 			fmt.Fprintln(stderr, "[gork] MCP configuration reloaded")
+		}
+	}()
+}
+
+func watchModelConfig(ctx context.Context, interval time.Duration, paths []string, reload func() error, stderr io.Writer) {
+	fingerprint := fileSetFingerprint(paths)
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+			next := fileSetFingerprint(paths)
+			if next == fingerprint {
+				continue
+			}
+			if err := reload(); err != nil {
+				fmt.Fprintln(stderr, "[gork] model config reload failed:", err)
+				continue
+			}
+			fingerprint = next
+			fmt.Fprintln(stderr, "[gork] model configuration reloaded")
 		}
 	}()
 }

@@ -53,6 +53,177 @@ func TestModelState(t *testing.T) {
 	}
 }
 
+func TestReloadModelsKeepsAvailableCurrentModelAndNotifies(t *testing.T) {
+	current, _, _ := reloadModelFixture(t, "reload-keep")
+	current.runner.ReloadModels = func() (agent.ModelCatalogUpdate, error) {
+		return agent.ModelCatalogUpdate{Changed: true, PreferredID: "new", Options: []agent.ModelOption{
+			{ID: "old", Model: "old-model", Name: "Old"}, {ID: "new", Model: "new-model", Name: "New"},
+		}}, nil
+	}
+	var output bytes.Buffer
+	server := &Server{output: &output, sessions: map[string]*session{current.id: current}}
+	if err := server.ReloadModels(); err != nil {
+		t.Fatal(err)
+	}
+	if current.runner.ModelID != "old" || current.pendingModelID != "" {
+		t.Fatalf("current model changed: id=%q pending=%q", current.runner.ModelID, current.pendingModelID)
+	}
+	messages := decodeACPOutput(t, output.Bytes())
+	if len(messages) != 1 || messages[0]["method"] != "x.ai/models/update" {
+		t.Fatalf("messages=%#v", messages)
+	}
+	params := messages[0]["params"].(map[string]any)
+	if params["currentModelId"] != "old" || len(params["availableModels"].([]any)) != 2 {
+		t.Fatalf("params=%#v", params)
+	}
+}
+
+func TestReloadModelsSwitchesIdleSessionWhenPreferredChanges(t *testing.T) {
+	current, _, newClient := reloadModelFixture(t, "reload-switch")
+	current.runner.ReloadModels = func() (agent.ModelCatalogUpdate, error) {
+		return agent.ModelCatalogUpdate{Changed: true, PreferredChanged: true, PreferredID: "new", Options: []agent.ModelOption{
+			{ID: "old", Model: "old-model", Name: "Old"}, {ID: "new", Model: "new-model", Name: "New"},
+		}}, nil
+	}
+	var output bytes.Buffer
+	server := &Server{output: &output, sessions: map[string]*session{current.id: current}}
+	if err := server.ReloadModels(); err != nil {
+		t.Fatal(err)
+	}
+	if current.runner.ModelID != "new" || current.runner.Client != newClient || current.previous != "" {
+		t.Fatalf("runner=%#v previous=%q", current.runner, current.previous)
+	}
+	events, err := sessionlog.Events(current.logPath, "session_model")
+	if err != nil || len(events) != 1 {
+		t.Fatalf("session model events=%#v err=%v", events, err)
+	}
+	messages := decodeACPOutput(t, output.Bytes())
+	if len(messages) != 2 || messages[0]["method"] != "x.ai/models/update" || messages[1]["method"] != "x.ai/session_notification" {
+		t.Fatalf("messages=%#v", messages)
+	}
+}
+
+func TestReloadModelsDefersBusySessionSwitch(t *testing.T) {
+	current, oldClient, newClient := reloadModelFixture(t, "reload-busy")
+	current.running = true
+	current.runner.ReloadModels = func() (agent.ModelCatalogUpdate, error) {
+		return agent.ModelCatalogUpdate{Changed: true, PreferredChanged: true, PreferredID: "new", Options: []agent.ModelOption{{ID: "new", Model: "new-model", Name: "New"}}}, nil
+	}
+	var output bytes.Buffer
+	server := &Server{output: &output, sessions: map[string]*session{current.id: current}}
+	if err := server.ReloadModels(); err != nil {
+		t.Fatal(err)
+	}
+	if current.runner.Client != oldClient || current.pendingModelID != "new" || current.unavailableModel != "old" {
+		t.Fatalf("client=%p pending=%q unavailable=%q", current.runner.Client, current.pendingModelID, current.unavailableModel)
+	}
+	current.running = false
+	if err := server.applyPendingModel(current); err != nil {
+		t.Fatal(err)
+	}
+	if current.runner.Client != newClient || current.runner.ModelID != "new" || current.pendingModelID != "" || current.unavailableModel != "" {
+		t.Fatalf("runner=%#v pending=%q unavailable=%q", current.runner, current.pendingModelID, current.unavailableModel)
+	}
+}
+
+func TestReloadModelsClearsStalePendingSwitch(t *testing.T) {
+	current, oldClient, _ := reloadModelFixture(t, "reload-stale-pending")
+	current.running = true
+	updates := []agent.ModelCatalogUpdate{
+		{Changed: true, PreferredChanged: true, PreferredID: "new", Options: []agent.ModelOption{{ID: "old", Model: "old-model"}, {ID: "new", Model: "new-model"}}},
+		{Changed: true, PreferredID: "old", Options: []agent.ModelOption{{ID: "old", Model: "old-model"}, {ID: "new", Model: "new-model"}}},
+	}
+	current.runner.ReloadModels = func() (agent.ModelCatalogUpdate, error) {
+		update := updates[0]
+		updates = updates[1:]
+		return update, nil
+	}
+	server := &Server{output: io.Discard, sessions: map[string]*session{current.id: current}}
+	if err := server.ReloadModels(); err != nil || current.pendingModelID != "new" {
+		t.Fatalf("first reload err=%v pending=%q", err, current.pendingModelID)
+	}
+	if err := server.ReloadModels(); err != nil {
+		t.Fatal(err)
+	}
+	if current.pendingModelID != "" || current.runner.Client != oldClient || current.runner.ModelID != "old" {
+		t.Fatalf("stale switch survived: pending=%q runner=%#v", current.pendingModelID, current.runner)
+	}
+}
+
+func TestReloadModelsBlocksCatalogWithNoAllowedModels(t *testing.T) {
+	current, oldClient, _ := reloadModelFixture(t, "reload-blocked")
+	current.runner.ReloadModels = func() (agent.ModelCatalogUpdate, error) {
+		return agent.ModelCatalogUpdate{Changed: true, Options: []agent.ModelOption{{ID: "new", Model: "new-model", Disallowed: true}}}, nil
+	}
+	var output bytes.Buffer
+	server := &Server{output: &output, sessions: map[string]*session{current.id: current}}
+	if err := server.ReloadModels(); err != nil {
+		t.Fatal(err)
+	}
+	if current.runner.Client != oldClient || current.unavailableModel != "old" || current.pendingModelID != "" {
+		t.Fatalf("client=%p unavailable=%q pending=%q", current.runner.Client, current.unavailableModel, current.pendingModelID)
+	}
+	params := decodeACPOutput(t, output.Bytes())[0]["params"].(map[string]any)
+	if available := params["availableModels"].([]any); len(available) != 0 {
+		t.Fatalf("available models=%#v", available)
+	}
+}
+
+func TestReloadModelsIgnoresUnchangedAndPreservesStateOnError(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		update agent.ModelCatalogUpdate
+		err    error
+	}{
+		{name: "unchanged"},
+		{name: "error", update: agent.ModelCatalogUpdate{Changed: true, Options: []agent.ModelOption{{ID: "new"}}}, err: errors.New("reload failed")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			current, oldClient, _ := reloadModelFixture(t, "reload-"+test.name)
+			current.runner.ReloadModels = func() (agent.ModelCatalogUpdate, error) { return test.update, test.err }
+			var output bytes.Buffer
+			server := &Server{output: &output, sessions: map[string]*session{current.id: current}}
+			err := server.ReloadModels()
+			if !errors.Is(err, test.err) || output.Len() != 0 || current.runner.Client != oldClient || current.runner.ModelID != "old" {
+				t.Fatalf("err=%v output=%q runner=%#v", err, output.String(), current.runner)
+			}
+		})
+	}
+}
+
+func reloadModelFixture(t *testing.T, id string) (*session, *fixtureStreamer, *fixtureStreamer) {
+	t.Helper()
+	logger, err := sessionlog.NewLoggerWithID(t.TempDir(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = logger.Close() })
+	for _, event := range []struct {
+		kind string
+		data any
+	}{
+		{"session_metadata", map[string]any{"cwd": "/workspace", "modelId": "old"}},
+		{"user_prompt", map[string]any{"text": "before"}},
+		{"model_response", map[string]any{"response_id": "old-response", "text": "answer", "tool_call_count": 0}},
+	} {
+		if err := logger.Append(event.kind, event.data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	oldClient, newClient := &fixtureStreamer{}, &fixtureStreamer{}
+	runner := &agent.Runner{
+		Client: oldClient, Logger: logger, ModelID: "old", Model: "old-model",
+		ModelOptions: []agent.ModelOption{{ID: "old", Model: "old-model", Name: "Old"}},
+		ResolveModel: func(id string) (agent.ModelRuntime, error) {
+			if id != "new" {
+				return agent.ModelRuntime{}, errors.New("unknown model")
+			}
+			return agent.ModelRuntime{ID: "new", Model: "new-model", Client: newClient}, nil
+		},
+	}
+	return &session{id: id, runner: runner, logPath: logger.Path(), previous: "old-response"}, oldClient, newClient
+}
+
 func TestSetSessionModelPersistsAndNotifiesBeforeResponse(t *testing.T) {
 	dir := t.TempDir()
 	logger, err := sessionlog.NewLoggerWithID(dir, "switch-model")

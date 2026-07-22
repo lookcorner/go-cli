@@ -82,6 +82,13 @@ type ModelRuntime struct {
 	SupportsReasoningEffort bool
 }
 
+type ModelCatalogUpdate struct {
+	Options          []ModelOption
+	PreferredID      string
+	PreferredChanged bool
+	Changed          bool
+}
+
 type EventLogger interface {
 	Append(kind string, data any) error
 	AppendPrompt(text string, content []session.Content) error
@@ -130,6 +137,7 @@ type Runner struct {
 	Model                   string
 	ModelOptions            []ModelOption
 	ResolveModel            func(string) (ModelRuntime, error)
+	ReloadModels            func() (ModelCatalogUpdate, error)
 	OnModelChanged          func(ModelRuntime)
 	ReasoningEffort         string
 	PermissionClassifier    PermissionClassifierConfig
