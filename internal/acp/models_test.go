@@ -238,7 +238,10 @@ func TestInternalModelReloadReportsFailure(t *testing.T) {
 }
 
 func TestInternalModelReloadRoutesThroughServe(t *testing.T) {
-	input := bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"x.ai/internal/reload_models"}` + "\n")
+	input := bytes.NewBufferString(
+		`{"jsonrpc":"2.0","id":1,"method":"x.ai/internal/reload_models"}` + "\n" +
+			`{"jsonrpc":"2.0","id":2,"method":"x.ai/internal/reload_models_cache"}` + "\n",
+	)
 	var output bytes.Buffer
 	server := &Server{SessionDir: t.TempDir(), Factory: func(context.Context, SessionConfig, tools.Approver, io.Writer, io.Writer) (*agent.Runner, func(), error) {
 		return nil, nil, nil
@@ -247,8 +250,30 @@ func TestInternalModelReloadRoutesThroughServe(t *testing.T) {
 		t.Fatal(err)
 	}
 	messages := decodeACPOutput(t, output.Bytes())
-	if len(messages) != 1 || messages[0]["result"].(map[string]any)["models"] != float64(0) {
+	if len(messages) != 2 || messages[0]["result"].(map[string]any)["models"] != float64(0) || messages[1]["result"].(map[string]any)["reloaded"] != true {
 		t.Fatalf("responses=%#v", messages)
+	}
+}
+
+func TestInternalModelCacheReloadUpdatesCatalog(t *testing.T) {
+	current, _, _ := reloadModelFixture(t, "internal-cache-reload")
+	current.runner.ReloadModelCache = func() (agent.ModelCatalogUpdate, error) {
+		return agent.ModelCatalogUpdate{Changed: true, Options: []agent.ModelOption{
+			{ID: "old", Model: "old-model", Name: "Old"},
+			{ID: "cached", Model: "cached-model", Name: "Cached"},
+		}}, nil
+	}
+	var output bytes.Buffer
+	server := &Server{output: &output, sessions: map[string]*session{current.id: current}}
+
+	server.handleModelReload(message{ID: json.RawMessage("9"), Method: "x.ai/internal/reload_models_cache"})
+
+	messages := decodeACPOutput(t, output.Bytes())
+	if len(messages) != 2 || messages[0]["method"] != "x.ai/models/update" || messages[1]["result"].(map[string]any)["reloaded"] != true {
+		t.Fatalf("messages=%#v", messages)
+	}
+	if len(current.runner.ModelOptions) != 2 || current.runner.ModelOptions[1].ID != "cached" {
+		t.Fatalf("models=%#v", current.runner.ModelOptions)
 	}
 }
 

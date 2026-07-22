@@ -165,20 +165,25 @@ func (s *Server) handleSetSessionModel(incoming message) {
 // ReloadModels refreshes every live session catalog and emits the reference
 // machine-wide notification when a model-related config change is detected.
 func (s *Server) ReloadModels() error {
-	_, err := s.reloadModels()
+	_, err := s.reloadModels(false)
 	return err
 }
 
 func (s *Server) handleModelReload(incoming message) {
-	count, err := s.reloadModels()
+	cache := incoming.Method == "x.ai/internal/reload_models_cache"
+	count, err := s.reloadModels(cache)
 	if err != nil {
 		s.respondError(incoming.ID, -32000, err.Error())
+		return
+	}
+	if cache {
+		s.respond(incoming.ID, map[string]any{"reloaded": true})
 		return
 	}
 	s.respond(incoming.ID, map[string]any{"models": count})
 }
 
-func (s *Server) reloadModels() (int, error) {
+func (s *Server) reloadModels(cache bool) (int, error) {
 	s.mu.Lock()
 	sessions := make([]*session, 0, len(s.sessions))
 	for _, current := range s.sessions {
@@ -191,11 +196,11 @@ func (s *Server) reloadModels() (int, error) {
 		if current == nil {
 			continue
 		}
-		if err := s.reloadSessionModels(current); err != nil {
+		if err := s.reloadSessionModels(current, cache); err != nil {
 			reloadErr = errors.Join(reloadErr, fmt.Errorf("session %s: %w", current.id, err))
 		}
 		current.mu.Lock()
-		if !current.closed && current.runner != nil && current.runner.ReloadModels != nil {
+		if !current.closed && current.runner != nil && ((!cache && current.runner.ReloadModels != nil) || (cache && current.runner.ReloadModelCache != nil)) {
 			modelCount = max(modelCount, len(current.runner.ModelOptions))
 		}
 		current.mu.Unlock()
@@ -203,13 +208,21 @@ func (s *Server) reloadModels() (int, error) {
 	return modelCount, reloadErr
 }
 
-func (s *Server) reloadSessionModels(current *session) error {
+func (s *Server) reloadSessionModels(current *session, cache bool) error {
 	current.mu.Lock()
-	if current.closed || current.runner == nil || current.runner.ReloadModels == nil {
+	if current.closed || current.runner == nil {
 		current.mu.Unlock()
 		return nil
 	}
-	update, err := current.runner.ReloadModels()
+	reload := current.runner.ReloadModels
+	if cache {
+		reload = current.runner.ReloadModelCache
+	}
+	if reload == nil {
+		current.mu.Unlock()
+		return nil
+	}
+	update, err := reload()
 	if err != nil || !update.Changed {
 		current.mu.Unlock()
 		return err

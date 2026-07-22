@@ -1242,6 +1242,16 @@ func isXAIBaseURL(raw string) bool {
 	return err == nil && strings.EqualFold(parsed.Hostname(), "api.x.ai")
 }
 
+func modelCacheIdentity(cfg config.Config, tokenProvider api.TokenProvider) (string, string) {
+	authMethod, baseURL := "api_key", cfg.BaseURL
+	if tokenProvider != nil {
+		authMethod, baseURL = "session", cfg.ProxyBaseURL
+	} else if cfg.DeploymentKey != "" {
+		authMethod, baseURL = "deployment", cfg.ProxyBaseURL
+	}
+	return authMethod, strings.TrimRight(baseURL, "/") + "/models"
+}
+
 func newModelClient(cfg config.Config, tokenProvider api.TokenProvider) (agent.ResponseStreamer, error) {
 	httpClient := &http.Client{Timeout: cfg.HTTPTimeout}
 	switch cfg.Backend {
@@ -1712,6 +1722,21 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	cacheAuth, cacheOrigin := modelCacheIdentity(cfg, tokenProvider)
+	modelCache, _ := config.LoadModelCache(cacheAuth, cacheOrigin)
+	var modelCacheMu sync.RWMutex
+	modelCacheSnapshot := func() config.ModelCache {
+		modelCacheMu.RLock()
+		defer modelCacheMu.RUnlock()
+		return modelCache
+	}
+	refreshModelCache := func() {
+		if refreshed, ok := config.LoadModelCache(cacheAuth, cacheOrigin); ok {
+			modelCacheMu.Lock()
+			modelCache = refreshed
+			modelCacheMu.Unlock()
+		}
+	}
 	var extensionsMu sync.Mutex
 	dynamicSkills := cloneSkillsConfig(cfg.Skills)
 	dynamicPlugins := clonePluginsConfig(cfg.Plugins)
@@ -1755,6 +1780,8 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		if err != nil {
 			return nil, nil, err
 		}
+		modelSource := sessionCfg
+		sessionCfg.ApplyModelCache(modelCacheSnapshot())
 		modelCatalog := sessionCfg
 		var modelCatalogMu sync.RWMutex
 		modelID, sessionCfg := resolveACPSessionModelEntry(sessionCfg, sessionConfig.Model, sessionConfig.ResumePath != "")
@@ -2274,15 +2301,25 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 				registry.ConfigureGoalRoles(goalRoleConfig(resolved, true))
 			}
 		}
-		runner.ReloadModels = func() (agent.ModelCatalogUpdate, error) {
-			reloaded, err := config.Load(opts.configPath)
-			if err != nil {
-				return agent.ModelCatalogUpdate{}, err
+		reloadModels := func(cacheOnly bool) (agent.ModelCatalogUpdate, error) {
+			var reloaded config.Config
+			if cacheOnly {
+				refreshModelCache()
+			} else {
+				var err error
+				reloaded, err = config.Load(opts.configPath)
+				if err != nil {
+					return agent.ModelCatalogUpdate{}, err
+				}
 			}
+			cache := modelCacheSnapshot()
 			modelCatalogMu.Lock()
 			previous := modelCatalog
-			next := previous
-			next.ReloadModelCatalog(reloaded)
+			if !cacheOnly {
+				modelSource.ReloadModelCatalog(reloaded)
+			}
+			next := modelSource
+			next.ApplyModelCache(cache)
 			if opts.model != "" {
 				next.Model, next.DefaultModelID = opts.model, ""
 			}
@@ -2302,6 +2339,8 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 				Changed:          changed,
 			}, nil
 		}
+		runner.ReloadModels = func() (agent.ModelCatalogUpdate, error) { return reloadModels(false) }
+		runner.ReloadModelCache = func() (agent.ModelCatalogUpdate, error) { return reloadModels(true) }
 		return runner, func() {
 			waitRunnerMemory(runner)
 			closeRuntime()

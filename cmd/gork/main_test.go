@@ -642,6 +642,21 @@ func TestSessionMCPRuntimeMergesAndRestoresConfiguration(t *testing.T) {
 	}
 }
 
+func TestModelCacheIdentityFollowsAuthenticationRoute(t *testing.T) {
+	cfg := config.Config{BaseURL: "https://api.x.ai/v1/", ProxyBaseURL: "https://proxy.example/v1/"}
+	if auth, origin := modelCacheIdentity(cfg, nil); auth != "api_key" || origin != "https://api.x.ai/v1/models" {
+		t.Fatalf("api identity=%q %q", auth, origin)
+	}
+	cfg.DeploymentKey = "deployment"
+	if auth, origin := modelCacheIdentity(cfg, nil); auth != "deployment" || origin != "https://proxy.example/v1/models" {
+		t.Fatalf("deployment identity=%q %q", auth, origin)
+	}
+	provider := func(context.Context, string) (string, error) { return "token", nil }
+	if auth, origin := modelCacheIdentity(cfg, provider); auth != "session" || origin != "https://proxy.example/v1/models" {
+		t.Fatalf("session identity=%q %q", auth, origin)
+	}
+}
+
 func TestDiscoverSkillsLoadsConfiguredPlugin(t *testing.T) {
 	root := t.TempDir()
 	pluginRoot := filepath.Join(root, "plugin")

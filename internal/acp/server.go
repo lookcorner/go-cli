@@ -297,7 +297,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleUpdateMCPServers(ctx, incoming)
 		case "x.ai/internal/reload_all_mcp_servers", "x.ai/internal/reload_project_mcp_servers":
 			s.handleMCPReload(ctx, incoming)
-		case "x.ai/internal/reload_models":
+		case "x.ai/internal/reload_models", "x.ai/internal/reload_models_cache":
 			s.handleModelReload(incoming)
 		case "x.ai/session_summaries/session_list", "x.ai/session_summaries/workspace_list", "x.ai/session_summaries/workspace_list_recent":
 			s.handleSessionSummaries(incoming)

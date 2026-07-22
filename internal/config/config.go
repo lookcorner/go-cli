@@ -146,6 +146,8 @@ type ModelProfile struct {
 	ReasoningEffort             string
 	SupportsReasoningEffort     bool
 	ReasoningEfforts            []ReasoningEffortOption
+	hiddenConfigured            bool
+	supportsReasoningConfigured bool
 }
 
 type ReasoningEffortOption struct {
@@ -963,6 +965,7 @@ func mergeModelProfiles(cfg *Config, entries map[string]modelConfig) error {
 		}
 		if entry.Hidden != nil {
 			profile.Hidden = *entry.Hidden
+			profile.hiddenConfigured = true
 		}
 		if entry.BaseURL != "" {
 			profile.BaseURL = entry.BaseURL
@@ -987,6 +990,7 @@ func mergeModelProfiles(cfg *Config, entries map[string]modelConfig) error {
 		}
 		if entry.SupportsReasoningEffort != nil {
 			profile.SupportsReasoningEffort = *entry.SupportsReasoningEffort
+			profile.supportsReasoningConfigured = true
 		}
 		if entry.ReasoningEfforts != nil {
 			options, err := parseReasoningEffortOptions(entry.ReasoningEfforts)

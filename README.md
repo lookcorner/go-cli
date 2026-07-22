@@ -226,6 +226,10 @@ While the ACP server is running, model changes in `config.toml`, local/system
 `managed_config.toml`, and `requirements.toml` are detected automatically.
 The `x.ai/internal/reload_models` endpoint triggers the same disk reload for
 every live session and returns the resolved catalog size.
+Fresh reference-compatible `models_cache.json` catalogs are loaded from
+`$GROK_HOME` or `~/.grok` and can be refreshed through
+`x.ai/internal/reload_models_cache`. Version, five-minute TTL, authentication
+method and models-list origin must all match before cached endpoints are used.
 Connected clients receive `x.ai/models/update`; idle sessions switch when an
 explicit default changes or their current model disappears, while busy sessions
 defer that switch until the next prompt. Future subagents use the refreshed
