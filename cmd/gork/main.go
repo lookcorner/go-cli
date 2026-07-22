@@ -118,7 +118,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	flags.StringVar(&opts.baseURL, "base-url", "", "Responses-compatible API base URL")
 	flags.StringVar(&opts.backend, "backend", "", "model API backend: responses, chat_completions, or anthropic_messages")
 	flags.StringVar(&opts.system, "system", "", "additional agent instructions")
-	flags.StringVar(&opts.approval, "approval", "prompt", "write/shell approval: prompt, auto, or deny")
+	flags.StringVar(&opts.approval, "approval", "prompt", "write/shell approval: prompt, auto, always-approve, or deny")
 	flags.Var(&opts.allow, "allow", "allow matching Tool(pattern) permission rule; repeatable")
 	flags.Var(&opts.deny, "deny", "deny matching Tool(pattern) permission rule; repeatable")
 	flags.StringVar(&opts.sessionDir, "session-dir", "", "session JSONL directory")
@@ -282,10 +282,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 	cfg.SystemPrompt = joinInstructions(cfg.SystemPrompt, projectInstructions, skillCatalog.Summary())
 	mode := tools.PermissionMode(opts.approval)
-	if mode != tools.PermissionPrompt && mode != tools.PermissionAuto && mode != tools.PermissionDeny {
+	if mode != tools.PermissionPrompt && mode != tools.PermissionAuto && mode != tools.PermissionAlwaysApprove && mode != tools.PermissionDeny {
 		return fmt.Errorf("invalid --approval %q", opts.approval)
 	}
-	if cfg.DisableBypassPermissionsMode && mode == tools.PermissionAuto {
+	if cfg.DisableBypassPermissionsMode && mode == tools.PermissionAlwaysApprove {
 		mode = tools.PermissionPrompt
 	}
 	if opts.resume != "" && opts.previousID != "" {
@@ -355,13 +355,19 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	} else {
 		terminalLines = newTerminalInput(ctx, inputReader)
 		terminalPrompts = &terminalPrompter{input: terminalLines, output: stderr}
-		approver = tools.PromptApprover{Mode: mode}
 		askApprover = terminalPrompts
 	}
 	permissionPrompts := &permissionPromptApprover{base: askApprover}
 	askApprover = permissionPrompts
-	if mode == tools.PermissionPrompt {
-		approver = permissionPrompts
+	if opts.tui {
+		if mode == tools.PermissionPrompt {
+			approver = permissionPrompts
+		}
+	} else {
+		approver, err = tools.NewModeApproverWithAutoLock(mode, permissionPrompts, cfg.DisableBypassPermissionsMode)
+		if err != nil {
+			return err
+		}
 	}
 	approver, err = tools.NewPolicyApprover(approver, askApprover, allowRules, askRules, denyRules)
 	if err != nil {
@@ -1536,10 +1542,10 @@ func formatLocalTaskWake(snapshot tools.ProcessSnapshot) string {
 
 func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []string, tokenProvider api.TokenProvider, stdin io.Reader, stdout, stderr io.Writer) error {
 	mode := tools.PermissionMode(opts.approval)
-	if mode != tools.PermissionPrompt && mode != tools.PermissionAuto && mode != tools.PermissionDeny {
+	if mode != tools.PermissionPrompt && mode != tools.PermissionAuto && mode != tools.PermissionAlwaysApprove && mode != tools.PermissionDeny {
 		return fmt.Errorf("invalid --approval %q", opts.approval)
 	}
-	if cfg.DisableBypassPermissionsMode && mode == tools.PermissionAuto {
+	if cfg.DisableBypassPermissionsMode && mode == tools.PermissionAlwaysApprove {
 		mode = tools.PermissionPrompt
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

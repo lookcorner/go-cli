@@ -15,7 +15,7 @@ func (s *Server) handleYoloModeChanged(raw json.RawMessage) {
 	}
 	mode := tools.PermissionPrompt
 	if *params.YoloMode {
-		mode = tools.PermissionAuto
+		mode = tools.PermissionAlwaysApprove
 	}
 	s.mu.Lock()
 	sessions := make([]*session, 0, len(s.sessions))

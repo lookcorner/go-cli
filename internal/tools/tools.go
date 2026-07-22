@@ -35,9 +35,10 @@ const (
 type PermissionMode string
 
 const (
-	PermissionPrompt PermissionMode = "prompt"
-	PermissionAuto   PermissionMode = "auto"
-	PermissionDeny   PermissionMode = "deny"
+	PermissionPrompt        PermissionMode = "prompt"
+	PermissionAuto          PermissionMode = "auto"
+	PermissionAlwaysApprove PermissionMode = "always-approve"
+	PermissionDeny          PermissionMode = "deny"
 )
 
 type Approver interface {
@@ -52,12 +53,12 @@ type PromptApprover struct {
 
 func (a PromptApprover) Approve(ctx context.Context, action, detail string) error {
 	switch a.Mode {
-	case PermissionAuto:
+	case PermissionAuto, PermissionAlwaysApprove:
 		return nil
 	case PermissionDeny:
 		return &PermissionDeniedError{Action: action}
 	case PermissionPrompt:
-		if permissionBypassed(ctx) {
+		if PermissionBypassed(ctx) {
 			return nil
 		}
 		if a.Input == nil || a.Output == nil {

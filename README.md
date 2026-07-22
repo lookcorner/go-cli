@@ -517,8 +517,8 @@ sampling through the configured model without modifying the main conversation
 history. Default
 prompt approvals use ACP's bidirectional `session/request_permission`, linked
 to the actual tool call, so protocol stdin is never consumed by a CLI prompt.
-`--approval auto` and `--approval deny` remain available for clients that
-intentionally want a fixed policy.
+`--approval auto`, `--approval always-approve`, and `--approval deny` remain
+available for clients that intentionally want a fixed policy.
 
 When a turn is busy, additional `session/prompt` requests remain pending in a
 server-authoritative FIFO queue and run before interjection fallbacks or
@@ -687,8 +687,12 @@ Local mutations require confirmation by default:
 
 - `--approval prompt`: ask before every file mutation and shell command.
 - `--approval deny`: allow only read-only tools.
-- `--approval auto`: approve all available local tools. Use only in a trusted
-  workspace and environment.
+- `--approval auto`: automatically approve edits, reads, searches, and routine
+  local development commands; prompt for unknown, risky, external, or
+  interactive actions.
+- `--approval always-approve`: approve every unmatched action. Use only in a
+  trusted workspace and environment. Managed requirements may disable this
+  mode without disabling classifier-based `auto`.
 
 Repeatable `--allow 'Tool(pattern)'` and `--deny 'Tool(pattern)'` rules refine
 the base mode. Deny always wins, allow bypasses the base prompt, and unmatched

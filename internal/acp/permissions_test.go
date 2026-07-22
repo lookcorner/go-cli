@@ -50,7 +50,7 @@ func TestYoloModeChangedUpdatesAllMutableSessions(t *testing.T) {
 	}}
 	server.handleYoloModeChanged([]byte(`{"yolo_mode":true,"permission_mode":"always-approve"}`))
 	for name, registry := range map[string]*tools.Registry{"first": first, "second": second} {
-		if mode, ok := registry.PermissionMode(); !ok || mode != tools.PermissionAuto {
+		if mode, ok := registry.PermissionMode(); !ok || mode != tools.PermissionAlwaysApprove {
 			t.Fatalf("%s mode=%q ok=%v", name, mode, ok)
 		}
 	}
@@ -105,7 +105,7 @@ func TestYoloModeChangedServeRouteIsFireAndForget(t *testing.T) {
 		t.Fatal(err)
 	}
 	registry := <-registries
-	if mode, ok := registry.PermissionMode(); !ok || mode != tools.PermissionAuto {
+	if mode, ok := registry.PermissionMode(); !ok || mode != tools.PermissionAlwaysApprove {
 		t.Fatalf("mode=%q ok=%v output=%s", mode, ok, output.String())
 	}
 	if messages := decodeACPOutput(t, output.Bytes()); len(messages) != 1 || messages[0]["id"] != float64(1) {

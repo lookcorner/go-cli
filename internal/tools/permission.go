@@ -29,7 +29,8 @@ func WithPermissionBypass(ctx context.Context) context.Context {
 	return context.WithValue(ctx, permissionBypassKey{}, true)
 }
 
-func permissionBypassed(ctx context.Context) bool {
+// PermissionBypassed reports whether prompt-based approval should be skipped.
+func PermissionBypassed(ctx context.Context) bool {
 	bypassed, _ := ctx.Value(permissionBypassKey{}).(bool)
 	return bypassed
 }
@@ -39,13 +40,13 @@ func NewModeApprover(mode PermissionMode, prompt Approver) (*ModeApprover, error
 }
 
 func NewModeApproverWithAutoLock(mode PermissionMode, prompt Approver, autoLocked bool) (*ModeApprover, error) {
-	if mode != PermissionPrompt && mode != PermissionAuto && mode != PermissionDeny {
+	if mode != PermissionPrompt && mode != PermissionAuto && mode != PermissionAlwaysApprove && mode != PermissionDeny {
 		return nil, fmt.Errorf("unknown permission mode %q", mode)
 	}
-	if autoLocked && mode == PermissionAuto {
+	if autoLocked && mode == PermissionAlwaysApprove {
 		mode = PermissionPrompt
 	}
-	if mode == PermissionPrompt && prompt == nil {
+	if (mode == PermissionPrompt || mode == PermissionAuto) && prompt == nil {
 		return nil, errors.New("prompt approver is required")
 	}
 	return &ModeApprover{mode: mode, prompt: prompt, lockedDeny: mode == PermissionDeny, autoLocked: autoLocked}, nil
@@ -56,12 +57,15 @@ func (a *ModeApprover) Approve(ctx context.Context, action, detail string) error
 	mode, prompt := a.mode, a.prompt
 	a.mu.RUnlock()
 	switch mode {
-	case PermissionAuto:
+	case PermissionAlwaysApprove:
 		return nil
 	case PermissionDeny:
 		return &PermissionDeniedError{Action: action}
-	case PermissionPrompt:
-		if permissionBypassed(ctx) {
+	case PermissionPrompt, PermissionAuto:
+		if PermissionBypassed(ctx) {
+			return nil
+		}
+		if mode == PermissionAuto && AutoModeAllows(action, detail) {
 			return nil
 		}
 		return prompt.Approve(ctx, action, detail)
@@ -71,7 +75,7 @@ func (a *ModeApprover) Approve(ctx context.Context, action, detail string) error
 }
 
 func (a *ModeApprover) SetPermissionMode(mode PermissionMode) error {
-	if mode != PermissionPrompt && mode != PermissionAuto && mode != PermissionDeny {
+	if mode != PermissionPrompt && mode != PermissionAuto && mode != PermissionAlwaysApprove && mode != PermissionDeny {
 		return fmt.Errorf("unknown permission mode %q", mode)
 	}
 	a.mu.Lock()
@@ -79,10 +83,10 @@ func (a *ModeApprover) SetPermissionMode(mode PermissionMode) error {
 	if a.lockedDeny && mode != PermissionDeny {
 		return errors.New("permission mode is locked to deny")
 	}
-	if a.autoLocked && mode == PermissionAuto {
+	if a.autoLocked && mode == PermissionAlwaysApprove {
 		return errors.New("always-approve is disabled by managed policy")
 	}
-	if mode == PermissionPrompt && a.prompt == nil {
+	if (mode == PermissionPrompt || mode == PermissionAuto) && a.prompt == nil {
 		return errors.New("prompt approver is required")
 	}
 	a.mode = mode
@@ -93,6 +97,75 @@ func (a *ModeApprover) PermissionMode() PermissionMode {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.mode
+}
+
+// AutoModeAllows is the deterministic fast path for classifier-based auto
+// mode. Unknown or externally-visible actions return false and still prompt.
+func AutoModeAllows(action, detail string) bool {
+	action = strings.ToLower(strings.TrimSpace(action))
+	switch action {
+	case "write_file", "edit_file", "read policy", "grep policy", "web search",
+		"enter plan mode", "exit plan mode":
+		return true
+	case "shell", "run terminal command", "start background command":
+		return routineShellCommand(detail)
+	default:
+		return false
+	}
+}
+
+func routineShellCommand(command string) bool {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return false
+	}
+	lower := strings.ToLower(command)
+	if strings.ContainsAny(command, "|<>") || strings.Contains(strings.ReplaceAll(command, "&&", ""), "&") {
+		return false
+	}
+	for _, unsafe := range []string{
+		"$(", "`", "sudo ", "git push", "git reset", "git rebase",
+		"git clean", "git branch -d", "git branch --delete", "cargo publish", "npm publish", "pnpm publish",
+		"yarn publish", "kubectl apply", "kubectl delete", "kubectl exec", "ssh ", "scp ",
+		"rsync ", "curl ", "wget ", "rm ", "rmdir ", "mkfs", "dd if=", "shutdown",
+		"reboot", "chmod ", "chown ", "kill ", "pkill ", "base64 -d",
+	} {
+		if strings.Contains(lower, unsafe) {
+			return false
+		}
+	}
+	parts := strings.FieldsFunc(strings.ReplaceAll(lower, "&&", "\n"), func(r rune) bool { return r == ';' || r == '\n' })
+	if len(parts) == 0 {
+		return false
+	}
+	for _, part := range parts {
+		if !routineShellSegment(strings.TrimSpace(part)) {
+			return false
+		}
+	}
+	return true
+}
+
+func routineShellSegment(command string) bool {
+	for _, prefix := range []string{
+		"cargo ", "go ", "pytest", "python ", "python3 ", "node ", "rustc ", "rustfmt", "clippy",
+		"make ", "cmake ", "bazel ", "just ", "git status", "git diff", "git log", "git branch",
+		"git add", "git commit", "git checkout", "git switch", "git stash", "git pull", "git fetch",
+		"git show", "git blame", "git grep", "git ls-files", "git rev-parse", "git describe",
+		"git merge-base", "git worktree list", "kubectl get", "kubectl logs", "kubectl describe",
+		"cd", "pushd", "popd", "ls", "pwd", "echo ", "printf ", "cat ", "head ", "tail ",
+		"wc ", "rg ", "grep ", "which ", "type ", "sort ", "uniq ", "tr ", "cut ", "diff ",
+		"jq ", "date", "whoami", "hostname", "uname", "nproc", "printenv", "stat ", "file ",
+		"tree", "basename ", "dirname ", "realpath ", "readlink ", "strings ", "sleep ", "df ",
+		"du ", "ps ", "top", "htop", "set", "true", "false", ":",
+	} {
+		bare := strings.TrimSpace(prefix)
+		if command == bare || strings.HasSuffix(prefix, " ") && strings.HasPrefix(command, prefix) ||
+			!strings.HasSuffix(prefix, " ") && strings.HasPrefix(command, bare+" ") {
+			return true
+		}
+	}
+	return false
 }
 
 type permissionRule struct {
@@ -161,7 +234,7 @@ func (a *RuleApprover) Approve(ctx context.Context, action, detail string) error
 			return &PermissionDeniedError{Action: action, Reason: fmt.Sprintf("permission denied by rule %s", rule.raw)}
 		}
 	}
-	if permissionBypassed(ctx) {
+	if PermissionBypassed(ctx) {
 		return a.base.Approve(ctx, action, detail)
 	}
 	for _, rule := range a.ask {

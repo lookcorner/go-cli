@@ -78,7 +78,7 @@ func TestAlwaysApproveCommandTogglesBridgeMode(t *testing.T) {
 	m.setInput("/always-approve ignored")
 	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)
-	if command != nil || m.running || bridge.PermissionMode() != tools.PermissionAuto || m.status != "always-approve mode" || !strings.Contains(m.View().Content, " AUTO ") {
+	if command != nil || m.running || bridge.PermissionMode() != tools.PermissionAlwaysApprove || m.status != "always-approve mode" || !strings.Contains(m.View().Content, " ALWAYS ") {
 		t.Fatalf("enable command=%v running=%v mode=%q status=%q", command != nil, m.running, bridge.PermissionMode(), m.status)
 	}
 	if err := bridge.Approve(context.Background(), "shell", "go test ./..."); err != nil {
@@ -94,7 +94,7 @@ func TestAlwaysApproveCommandTogglesBridgeMode(t *testing.T) {
 	m.setInput("/always-approve")
 	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)
-	if command != nil || bridge.PermissionMode() != tools.PermissionPrompt || m.status != "normal mode" || strings.Contains(m.View().Content, " AUTO ") {
+	if command != nil || bridge.PermissionMode() != tools.PermissionPrompt || m.status != "normal mode" || strings.Contains(m.View().Content, " ALWAYS ") {
 		t.Fatalf("disable command=%v mode=%q status=%q", command != nil, bridge.PermissionMode(), m.status)
 	}
 
@@ -110,7 +110,7 @@ func TestAlwaysApproveCommandTogglesBridgeMode(t *testing.T) {
 }
 
 func TestBridgeManagedAutoLock(t *testing.T) {
-	bridge := NewBridgeWithAutoLock(context.Background(), tools.PermissionAuto, true)
+	bridge := NewBridgeWithAutoLock(context.Background(), tools.PermissionAlwaysApprove, true)
 	defer bridge.Close()
 	if bridge.PermissionMode() != tools.PermissionPrompt {
 		t.Fatalf("initial mode=%q", bridge.PermissionMode())
@@ -120,6 +120,39 @@ func TestBridgeManagedAutoLock(t *testing.T) {
 	}
 	if err := bridge.SetAlwaysApprove(false); err != nil {
 		t.Fatalf("disable: %v", err)
+	}
+	auto := NewBridgeWithAutoLock(context.Background(), tools.PermissionAuto, true)
+	defer auto.Close()
+	if auto.PermissionMode() != tools.PermissionAuto || !strings.Contains((&model{bridge: auto, width: 60, height: 16}).View().Content, " AUTO ") {
+		t.Fatalf("classifier auto mode=%q", auto.PermissionMode())
+	}
+}
+
+func TestBridgeAutoModePromptsOnlyForRisk(t *testing.T) {
+	bridge := NewBridge(context.Background(), tools.PermissionAuto)
+	defer bridge.Close()
+	if err := bridge.Approve(context.Background(), "shell", "go test ./..."); err != nil {
+		t.Fatalf("routine command: %v", err)
+	}
+	select {
+	case event := <-bridge.events:
+		t.Fatalf("routine command prompted: %#v", event)
+	default:
+	}
+	result := make(chan error, 1)
+	go func() { result <- bridge.Approve(context.Background(), "shell", "git push origin main") }()
+	event := (<-bridge.events).(approvalEvent)
+	event.reply <- true
+	if err := <-result; err != nil {
+		t.Fatalf("risky command approval: %v", err)
+	}
+	if err := bridge.Approve(tools.WithPermissionBypass(context.Background()), "shell", "git push origin main"); err != nil {
+		t.Fatalf("bypassed command: %v", err)
+	}
+	select {
+	case event := <-bridge.events:
+		t.Fatalf("bypassed command prompted: %#v", event)
+	default:
 	}
 }
 
