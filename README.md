@@ -161,6 +161,12 @@ model = "YOUR_RESPONSES_API_MODEL"
 base_url = "https://api.x.ai/v1"
 backend = "responses"
 env_key = ["GORK_API_KEY", "XAI_API_KEY"]
+
+[auto_mode]
+enabled = true
+prompt_type = "full"
+classifier_model = "gork-default"
+reasoning_effort = "low"
 ```
 
 Gork-style `[model.<name>]` custom providers and `[mcp_servers.<name>]` tables
@@ -193,6 +199,16 @@ subagents. The legacy `[ui] yolo = false` form has the same effect. Once enabled
 by a requirements layer, a later layer cannot remove the lock; non-boolean
 values are ignored. These keys in ordinary `config.toml` files are not managed
 policy. Explicit deny modes and deny rules remain authoritative.
+
+`[auto_mode]` controls classifier-based automatic permission decisions. It is
+enabled by default; `GROK_AUTO_PERMISSION_MODE` overrides the local gate, and
+requirements may enforce `auto_mode.enabled`. `prompt_type` accepts `full`,
+`no_user_tool_prefix`, `bare_instructions`, or `just_command`. An optional
+`classifier_model` names a configured `[model.<name>]` profile, while
+`reasoning_effort` accepts `none`, `minimal`, `low`, `medium`, `high`, or
+`xhigh`. Local fields override remote settings individually, so omitted local
+fields can still receive managed remote defaults. The same classifier settings
+apply to fresh and resumed subagents.
 
 On macOS, an administrator-forced `requirements_toml_base64` value in the
 `ai.x.grok` managed-preferences domain is applied after the system requirements

@@ -288,6 +288,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if cfg.DisableBypassPermissionsMode && mode == tools.PermissionAlwaysApprove {
 		mode = tools.PermissionPrompt
 	}
+	if mode == tools.PermissionAuto && !cfg.AutoModeEnabled() {
+		mode = tools.PermissionPrompt
+	}
 	if opts.resume != "" && opts.previousID != "" {
 		return errors.New("--resume and --previous-response-id cannot be used together")
 	}
@@ -337,6 +340,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	skillCatalog.Watch(ctx, time.Second)
 
 	client, err := newModelClient(cfg, tokenProvider)
+	if err != nil {
+		return err
+	}
+	permissionClassifier, err := newPermissionClassifierConfig(cfg, tokenProvider)
 	if err != nil {
 		return err
 	}
@@ -498,7 +505,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 	subagents, err := subagent.New(subagent.Config{
 		Context: ctx, Catalog: agentCatalog, Tools: registry, WorkspaceRoot: ws.Root(), ParentModel: cfg.Model,
-		ContextWindow: cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,
+		PermissionClassifier: permissionClassifier,
+		ContextWindow:        cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,
 		TwoPassCompaction: cfg.TwoPassCompaction,
 		ResolveModel:      resolveSubagentModel, AvailableModels: cfg.ModelSlugs(), Skills: skillCatalog,
 		SkillConfig: workspaceSkillsConfig(cfg, plugins), Worktrees: worktreeManager,
@@ -542,7 +550,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		ListTasks: registry.BackgroundTasks, KillTask: registry.KillBackgroundTask,
 		SessionID: logger.ID(), SessionPath: logger.Path(),
 		Model: cfg.Model, Instructions: cfg.SystemPrompt, MaxSteps: cfg.MaxSteps,
-		TextOutput: stdout, StatusOutput: stderr,
+		PermissionClassifier: permissionClassifier,
+		TextOutput:           stdout, StatusOutput: stderr,
 		ContextWindow: cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,
 		TwoPassCompaction: cfg.TwoPassCompaction,
 		Memory:            memoryStore, MemoryConfig: cfg.Memory,
@@ -1246,6 +1255,25 @@ func newModelClient(cfg config.Config, tokenProvider api.TokenProvider) (agent.R
 	}
 }
 
+func newPermissionClassifierConfig(cfg config.Config, tokenProvider api.TokenProvider) (agent.PermissionClassifierConfig, error) {
+	result := agent.PermissionClassifierConfig{
+		PromptType: cfg.AutoModePromptType(), ReasoningEffort: cfg.AutoMode.ReasoningEffort,
+	}
+	if cfg.AutoMode.ClassifierModel == "" {
+		return result, nil
+	}
+	classifier, ok := cfg.ResolveModel(cfg.AutoMode.ClassifierModel)
+	if !ok {
+		return agent.PermissionClassifierConfig{}, fmt.Errorf("auto_mode classifier model %q is not defined", cfg.AutoMode.ClassifierModel)
+	}
+	client, err := newModelClient(classifier, tokenProvider)
+	if err != nil {
+		return agent.PermissionClassifierConfig{}, fmt.Errorf("create auto_mode classifier client: %w", err)
+	}
+	result.Client, result.Model = client, classifier.Model
+	return result, nil
+}
+
 func modelPruningConfig(cfg config.Config) api.PruningConfig {
 	return api.PruningConfig{
 		Enabled: cfg.Pruning.Enabled, KeepLastNTurns: cfg.Pruning.KeepLastNTurns,
@@ -1595,7 +1623,11 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		}
 		instructions := joinInstructions(cfg.SystemPrompt, workspace.FormatInstructions(instructionFiles), catalog.Summary())
 		permissionPrompts := &permissionPromptApprover{base: protocolApprover}
-		modeApprover, err := tools.NewModeApproverWithAutoLock(mode, permissionPrompts, sessionCfg.DisableBypassPermissionsMode)
+		sessionMode := mode
+		if sessionMode == tools.PermissionAuto && !sessionCfg.AutoModeEnabled() {
+			sessionMode = tools.PermissionPrompt
+		}
+		modeApprover, err := tools.NewModeApproverWithAutoLock(sessionMode, permissionPrompts, sessionCfg.DisableBypassPermissionsMode)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1725,6 +1757,11 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			cleanup()
 			return nil, nil, err
 		}
+		permissionClassifier, err := newPermissionClassifierConfig(sessionCfg, tokenProvider)
+		if err != nil {
+			cleanup()
+			return nil, nil, err
+		}
 		pluginState := &sessionPluginState{
 			root: ws.Root(), trusted: projectTrusted, catalog: catalog,
 			mcp: mcpRuntime, mcpSource: sessionBase,
@@ -1771,7 +1808,8 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		}
 		subagentManager, err = subagent.New(subagent.Config{
 			Context: sessionCtx, Catalog: agentCatalog, Tools: registry, WorkspaceRoot: ws.Root(), ParentModel: sessionCfg.Model,
-			ContextWindow: sessionCfg.ContextWindow, CompactThresholdPercent: sessionCfg.AutoCompactThresholdPercent,
+			PermissionClassifier: permissionClassifier,
+			ContextWindow:        sessionCfg.ContextWindow, CompactThresholdPercent: sessionCfg.AutoCompactThresholdPercent,
 			TwoPassCompaction: sessionCfg.TwoPassCompaction,
 			ResolveModel:      resolveSubagentModel, AvailableModels: sessionCfg.ModelSlugs(), Skills: catalog,
 			SkillConfig: workspaceSkillsConfig(sessionCfg, plugins), Worktrees: server.WorktreeManager(),
@@ -1996,7 +2034,8 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 				return nil
 			},
 			Model: sessionCfg.Model, Instructions: instructions, MaxSteps: cfg.MaxSteps,
-			TextOutput: textOutput, StatusOutput: statusOutput,
+			PermissionClassifier: permissionClassifier,
+			TextOutput:           textOutput, StatusOutput: statusOutput,
 			ContextWindow: cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,
 			TwoPassCompaction: sessionCfg.TwoPassCompaction,
 			Memory:            memoryStore, MemoryConfig: sessionCfg.Memory,

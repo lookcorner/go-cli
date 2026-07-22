@@ -10,6 +10,12 @@ env_key = ["GORK_API_KEY", "XAI_API_KEY"]
 context_window = 131072
 auto_compact_threshold_percent = 85
 
+[auto_mode]
+enabled = true
+prompt_type = "full"
+# classifier_model = "gork-default"
+# reasoning_effort = "low"
+
 [endpoints]
 # cli_chat_proxy_base_url = "https://cli-chat-proxy.grok.com/v1"
 # managed_config_url = "https://cli-chat-proxy.grok.com/v1/deployment/config"

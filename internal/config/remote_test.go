@@ -143,6 +143,56 @@ func TestApplyRemoteSettingsUsesLocalAndEnvironmentPrecedence(t *testing.T) {
 	}
 }
 
+func TestAutoModeRemoteRefreshAndFieldPrecedence(t *testing.T) {
+	cfg, err := Load(filepath.Join(t.TempDir(), "missing.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{AutoMode: &AutoModeConfig{
+		Enabled: boolPointer(false), PromptType: "bare_instructions", ClassifierModel: "remote", ReasoningEffort: "high",
+	}})
+	if cfg.AutoModeEnabled() || cfg.AutoMode.PromptType != "bare_instructions" || cfg.AutoMode.ClassifierModel != "remote" || cfg.AutoMode.ReasoningEffort != "high" {
+		t.Fatalf("first remote=%#v", cfg.AutoMode)
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{AutoMode: &AutoModeConfig{PromptType: "just_command"}})
+	if !cfg.AutoModeEnabled() || cfg.AutoMode.PromptType != "just_command" || cfg.AutoMode.ClassifierModel != "" || cfg.AutoMode.ReasoningEffort != "" {
+		t.Fatalf("refreshed remote=%#v", cfg.AutoMode)
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{WebFetchEnabled: boolPointer(true)})
+	if !cfg.AutoModeEnabled() || cfg.AutoMode.PromptType != "" {
+		t.Fatalf("omitted remote auto mode survived=%#v", cfg.AutoMode)
+	}
+
+	home := t.TempDir()
+	path := filepath.Join(home, "config.toml")
+	if err := os.WriteFile(path, []byte("[auto_mode]\nprompt_type = \"full\"\nclassifier_model = \"local\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{AutoMode: &AutoModeConfig{
+		Enabled: boolPointer(false), PromptType: "bare_instructions", ClassifierModel: "remote", ReasoningEffort: "low",
+	}})
+	if cfg.AutoModeEnabled() || cfg.AutoMode.PromptType != "full" || cfg.AutoMode.ClassifierModel != "local" || cfg.AutoMode.ReasoningEffort != "low" {
+		t.Fatalf("local precedence=%#v", cfg.AutoMode)
+	}
+}
+
+func TestMalformedRemoteAutoModeDoesNotPoisonOtherSettings(t *testing.T) {
+	for _, data := range []string{
+		`{"auto_mode":{"enabled":"yes"},"web_fetch_enabled":true}`,
+		`{"auto_mode":{"prompt_type":"typo"},"web_fetch_enabled":true}`,
+		`{"auto_mode":42,"web_fetch_enabled":true}`,
+	} {
+		var settings RemoteSettings
+		if err := json.Unmarshal([]byte(data), &settings); err != nil || settings.AutoMode != nil || settings.WebFetchEnabled == nil || !*settings.WebFetchEnabled {
+			t.Fatalf("settings=%#v err=%v", settings, err)
+		}
+	}
+}
+
 func TestAutoWakeDefaultsOnAndRemoteCanDisable(t *testing.T) {
 	cfg, err := Load(filepath.Join(t.TempDir(), "missing.toml"))
 	if err != nil {

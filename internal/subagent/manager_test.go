@@ -126,10 +126,12 @@ func TestTaskToolRunsFilteredSubagentAndResumes(t *testing.T) {
 		{ResponseID: "child-1", Text: "found it"},
 		{ResponseID: "child-2", Text: "continued"},
 	}}
+	classifier := &sequenceClient{}
 	observer := &recordingObserver{}
 	manager, err := New(Config{
 		Context: context.Background(), Catalog: catalog, Tools: registry, WorkspaceRoot: root, ParentModel: "parent",
-		ContextWindow: 256000, CompactThresholdPercent: 80, TwoPassCompaction: true,
+		PermissionClassifier: agent.PermissionClassifierConfig{Client: classifier, Model: "classifier", PromptType: "bare_instructions", ReasoningEffort: "low"},
+		ContextWindow:        256000, CompactThresholdPercent: 80, TwoPassCompaction: true,
 		ResolveModel: func(model string) (ModelRuntime, bool) {
 			return ModelRuntime{Profile: model, Model: model, ContextWindow: 256000, CompactThresholdPercent: 80}, model == "parent"
 		}, AvailableModels: []string{"parent"},
@@ -168,6 +170,9 @@ func TestTaskToolRunsFilteredSubagentAndResumes(t *testing.T) {
 		runner := manager.tasks[id].runner
 		if runner.ContextWindow != 256000 || runner.CompactThresholdPercent != 80 || !runner.TwoPassCompaction {
 			t.Fatalf("task %s context=%d threshold=%d two_pass=%v", id, runner.ContextWindow, runner.CompactThresholdPercent, runner.TwoPassCompaction)
+		}
+		if runner.PermissionClassifier.Client != classifier || runner.PermissionClassifier.Model != "classifier" || runner.PermissionClassifier.PromptType != "bare_instructions" || runner.PermissionClassifier.ReasoningEffort != "low" {
+			t.Fatalf("task %s classifier=%#v", id, runner.PermissionClassifier)
 		}
 	}
 	observer.mu.Lock()

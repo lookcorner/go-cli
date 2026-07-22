@@ -12,45 +12,69 @@ import (
 )
 
 type RemoteSettings struct {
-	OfficialMarketplaceAutoRegister *bool          `json:"official_marketplace_auto_register"`
-	WebFetchEnabled                 *bool          `json:"web_fetch_enabled"`
-	AutoWakeEnabled                 *bool          `json:"auto_wake_enabled"`
-	TwoPassCompactionEnabled        *bool          `json:"two_pass_compaction_enabled"`
-	MemoryEnabled                   *bool          `json:"memory_enabled"`
-	MemoryInitialInjectionEnabled   *bool          `json:"memory_initial_injection_enabled"`
-	MemorySearchMaxResults          *int           `json:"memory_search_max_results"`
-	MemorySearchMinScore            *float64       `json:"memory_search_min_score"`
-	MemoryTemporalDecayEnabled      *bool          `json:"memory_temporal_decay_enabled"`
-	MemoryTemporalDecayHalfLifeDays *float64       `json:"memory_temporal_decay_half_life_days"`
-	MemoryMMREnabled                *bool          `json:"memory_mmr_enabled"`
-	MemoryMMRLambda                 *float64       `json:"memory_mmr_lambda"`
-	DreamEnabled                    *bool          `json:"dream_enabled"`
-	DreamMinHours                   *uint64        `json:"dream_min_hours"`
-	DreamMinSessions                *uint64        `json:"dream_min_sessions"`
-	DreamCheckIntervalSeconds       *uint64        `json:"dream_check_interval_secs"`
-	FlushEnabled                    *bool          `json:"flush_enabled"`
-	FlushSoftThresholdTokens        *int           `json:"flush_soft_threshold_tokens"`
-	FlushIdleTimeoutSeconds         *uint64        `json:"flush_idle_timeout_secs"`
-	GoalVerifierCount               *int           `json:"goal_verifier_count"`
-	GoalClassifierMaxRuns           *uint32        `json:"goal_classifier_max_runs"`
-	GoalPlannerEnabled              *bool          `json:"goal_planner_enabled"`
-	GoalPlannerModel                *GoalRoleModel `json:"goal_planner_model"`
-	GoalSummaryEnabled              *bool          `json:"goal_summary_enabled"`
-	GoalStrategistEvery             *uint32        `json:"goal_strategist_every"`
-	GoalStrategistModel             *GoalRoleModel `json:"goal_strategist_model"`
-	GoalSkepticModels               goalRoleModels `json:"goal_skeptic_models"`
-	WebFetchProxy                   *string        `json:"web_fetch_proxy"`
-	WebFetchAllowedDomains          []string       `json:"web_fetch_allowed_domains"`
-	CursorSkills                    *bool          `json:"cursor_skills_enabled"`
-	CursorRules                     *bool          `json:"cursor_rules_enabled"`
-	CursorAgents                    *bool          `json:"cursor_agents_enabled"`
-	CursorMCPs                      *bool          `json:"cursor_mcps_enabled"`
-	CursorHooks                     *bool          `json:"cursor_hooks_enabled"`
-	ClaudeSkills                    *bool          `json:"claude_skills_enabled"`
-	ClaudeRules                     *bool          `json:"claude_rules_enabled"`
-	ClaudeAgents                    *bool          `json:"claude_agents_enabled"`
-	ClaudeMCPs                      *bool          `json:"claude_mcps_enabled"`
-	ClaudeHooks                     *bool          `json:"claude_hooks_enabled"`
+	AutoMode                        *AutoModeConfig `json:"auto_mode"`
+	OfficialMarketplaceAutoRegister *bool           `json:"official_marketplace_auto_register"`
+	WebFetchEnabled                 *bool           `json:"web_fetch_enabled"`
+	AutoWakeEnabled                 *bool           `json:"auto_wake_enabled"`
+	TwoPassCompactionEnabled        *bool           `json:"two_pass_compaction_enabled"`
+	MemoryEnabled                   *bool           `json:"memory_enabled"`
+	MemoryInitialInjectionEnabled   *bool           `json:"memory_initial_injection_enabled"`
+	MemorySearchMaxResults          *int            `json:"memory_search_max_results"`
+	MemorySearchMinScore            *float64        `json:"memory_search_min_score"`
+	MemoryTemporalDecayEnabled      *bool           `json:"memory_temporal_decay_enabled"`
+	MemoryTemporalDecayHalfLifeDays *float64        `json:"memory_temporal_decay_half_life_days"`
+	MemoryMMREnabled                *bool           `json:"memory_mmr_enabled"`
+	MemoryMMRLambda                 *float64        `json:"memory_mmr_lambda"`
+	DreamEnabled                    *bool           `json:"dream_enabled"`
+	DreamMinHours                   *uint64         `json:"dream_min_hours"`
+	DreamMinSessions                *uint64         `json:"dream_min_sessions"`
+	DreamCheckIntervalSeconds       *uint64         `json:"dream_check_interval_secs"`
+	FlushEnabled                    *bool           `json:"flush_enabled"`
+	FlushSoftThresholdTokens        *int            `json:"flush_soft_threshold_tokens"`
+	FlushIdleTimeoutSeconds         *uint64         `json:"flush_idle_timeout_secs"`
+	GoalVerifierCount               *int            `json:"goal_verifier_count"`
+	GoalClassifierMaxRuns           *uint32         `json:"goal_classifier_max_runs"`
+	GoalPlannerEnabled              *bool           `json:"goal_planner_enabled"`
+	GoalPlannerModel                *GoalRoleModel  `json:"goal_planner_model"`
+	GoalSummaryEnabled              *bool           `json:"goal_summary_enabled"`
+	GoalStrategistEvery             *uint32         `json:"goal_strategist_every"`
+	GoalStrategistModel             *GoalRoleModel  `json:"goal_strategist_model"`
+	GoalSkepticModels               goalRoleModels  `json:"goal_skeptic_models"`
+	WebFetchProxy                   *string         `json:"web_fetch_proxy"`
+	WebFetchAllowedDomains          []string        `json:"web_fetch_allowed_domains"`
+	CursorSkills                    *bool           `json:"cursor_skills_enabled"`
+	CursorRules                     *bool           `json:"cursor_rules_enabled"`
+	CursorAgents                    *bool           `json:"cursor_agents_enabled"`
+	CursorMCPs                      *bool           `json:"cursor_mcps_enabled"`
+	CursorHooks                     *bool           `json:"cursor_hooks_enabled"`
+	ClaudeSkills                    *bool           `json:"claude_skills_enabled"`
+	ClaudeRules                     *bool           `json:"claude_rules_enabled"`
+	ClaudeAgents                    *bool           `json:"claude_agents_enabled"`
+	ClaudeMCPs                      *bool           `json:"claude_mcps_enabled"`
+	ClaudeHooks                     *bool           `json:"claude_hooks_enabled"`
+}
+
+func (r *RemoteSettings) UnmarshalJSON(data []byte) error {
+	type alias RemoteSettings
+	var raw struct {
+		*alias
+		AutoMode json.RawMessage `json:"auto_mode"`
+	}
+	raw.alias = (*alias)(r)
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	r.AutoMode = nil
+	if len(raw.AutoMode) == 0 || string(raw.AutoMode) == "null" {
+		return nil
+	}
+	var autoMode AutoModeConfig
+	if json.Unmarshal(raw.AutoMode, &autoMode) == nil {
+		if normalized, err := normalizeAutoModeConfig(autoMode); err == nil {
+			r.AutoMode = &normalized
+		}
+	}
+	return nil
 }
 
 func FetchRemoteSettings(ctx context.Context, baseURL, token string, client *http.Client) *RemoteSettings {
@@ -101,6 +125,26 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 	}
 	if remote.OfficialMarketplaceAutoRegister != nil {
 		c.OfficialMarketplaceAutoRegister = *remote.OfficialMarketplaceAutoRegister
+	}
+	value := AutoModeConfig{}
+	if remote.AutoMode != nil {
+		value, _ = normalizeAutoModeConfig(*remote.AutoMode)
+	}
+	if !c.autoModeEnabledConfigured {
+		c.AutoMode.Enabled = nil
+		if value.Enabled != nil {
+			enabled := *value.Enabled
+			c.AutoMode.Enabled = &enabled
+		}
+	}
+	if !c.autoModePromptConfigured {
+		c.AutoMode.PromptType = value.PromptType
+	}
+	if !c.autoModeModelConfigured {
+		c.AutoMode.ClassifierModel = value.ClassifierModel
+	}
+	if !c.autoModeReasoningConfigured {
+		c.AutoMode.ReasoningEffort = value.ReasoningEffort
 	}
 	if value, ok := envBool("GROK_OFFICIAL_MARKETPLACE_AUTO_REGISTER"); ok {
 		c.OfficialMarketplaceAutoRegister = value

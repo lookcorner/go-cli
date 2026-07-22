@@ -11,6 +11,9 @@ preferred_method = "oidc"
 [ui]
 disable_bypass_permissions_mode = true
 
+[auto_mode]
+enabled = true
+
 [toolset.ask_user_question]
 timeout_enabled = true
 timeout_secs = 1800

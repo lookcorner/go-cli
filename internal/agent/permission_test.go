@@ -104,7 +104,7 @@ func TestRunnerLivePermissionClassifierAllowsUnknownLocalCommand(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "classified.txt")); err != nil {
 		t.Fatalf("classified command did not run: %v", err)
 	}
-	content, _ := streamer.request.Input[0].Content.(string)
+	content := permissionInputText(streamer.request.Input)
 	if !streamer.cloned || streamer.request.Model != "classifier-model" || len(streamer.request.Tools) != 0 ||
 		!strings.Contains(content, "create a local marker") || !strings.Contains(content, "touch classified.txt") ||
 		!strings.Contains(content, "project safety rules") {
@@ -191,10 +191,81 @@ func TestRunnerToolLoopUsesLivePermissionClassifier(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "loop-classified.txt")); err != nil {
 		t.Fatalf("classified tool call did not run: %v", err)
 	}
-	content, _ := streamer.classifier.Input[0].Content.(string)
+	content := permissionInputText(streamer.classifier.Input)
 	if !strings.Contains(content, "touch loop-classified.txt") || len(streamer.classifier.Tools) != 0 {
 		t.Fatalf("classifier request=%#v", streamer.classifier)
 	}
+}
+
+func TestPermissionClassifierPromptTypes(t *testing.T) {
+	tests := []struct {
+		name             string
+		promptType       string
+		wantProject      bool
+		wantTranscript   bool
+		wantActionHeader bool
+	}{
+		{name: "full", promptType: "full", wantProject: true, wantTranscript: true, wantActionHeader: true},
+		{name: "default", wantProject: true, wantTranscript: true, wantActionHeader: true},
+		{name: "invalid defaults full", promptType: "unknown", wantProject: true, wantTranscript: true, wantActionHeader: true},
+		{name: "no user tool prefix", promptType: "no_user_tool_prefix", wantProject: true, wantActionHeader: true},
+		{name: "bare instructions", promptType: "bare_instructions", wantActionHeader: true},
+		{name: "just command", promptType: "just_command"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			input := permissionClassifierInput(test.promptType, "PROJECT-MARKER", "TRANSCRIPT-MARKER", "shell", `{"command":"ACTION-MARKER"}`, "shell", "ACTION-MARKER")
+			content := permissionInputText(input)
+			if strings.Contains(content, "PROJECT-MARKER") != test.wantProject ||
+				strings.Contains(content, "TRANSCRIPT-MARKER") != test.wantTranscript ||
+				strings.Contains(content, "## Proposed action") != test.wantActionHeader ||
+				!strings.Contains(content, "ACTION-MARKER") {
+				t.Fatalf("input=%#v", input)
+			}
+		})
+	}
+}
+
+func TestRunnerUsesDedicatedPermissionClassifierModelAndReasoning(t *testing.T) {
+	root := t.TempDir()
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt := &rejectingPermissionPrompt{}
+	mode, err := tools.NewModeApprover(tools.PermissionAuto, prompt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, mode)
+	defer registry.Close()
+	main := &permissionTestStreamer{err: errors.New("main classifier must not be used")}
+	classifier := &permissionTestStreamer{response: api.StreamResult{Text: `{"shouldBlock":false}`}}
+	runner := Runner{
+		Client: main, Tools: registry, Model: "main-model",
+		PermissionClassifier: PermissionClassifierConfig{Client: classifier, Model: "classifier-model", ReasoningEffort: "low", PromptType: "just_command"},
+	}
+	if _, err := runner.RunShell(context.Background(), "touch dedicated.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if main.calls != 0 || classifier.calls != 1 || !classifier.cloned || classifier.request.Model != "classifier-model" ||
+		classifier.request.Reasoning == nil || classifier.request.Reasoning.Effort != "low" {
+		t.Fatalf("main calls=%d classifier=%#v cloned=%v", main.calls, classifier.request, classifier.cloned)
+	}
+	content := permissionInputText(classifier.request.Input)
+	if strings.Contains(content, "## Proposed action") || !strings.Contains(content, "touch dedicated.txt") {
+		t.Fatalf("classifier input=%q", content)
+	}
+}
+
+func permissionInputText(input []api.InputItem) string {
+	parts := make([]string, 0, len(input))
+	for _, item := range input {
+		if content, ok := item.Content.(string); ok {
+			parts = append(parts, content)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 func TestParsePermissionClassifier(t *testing.T) {

@@ -35,6 +35,7 @@ type Config struct {
 	MCPServers                      map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
 	LSPServers                      map[string]LSPServerConfig `json:"lsp_servers,omitempty"`
 	Permission                      PermissionConfig           `json:"permission,omitempty"`
+	AutoMode                        AutoModeConfig             `json:"auto_mode,omitempty"`
 	ContextWindow                   int                        `json:"context_window,omitempty"`
 	AutoCompactThresholdPercent     int                        `json:"auto_compact_threshold_percent,omitempty"`
 	TwoPassCompaction               bool                       `json:"two_pass_compaction,omitempty"`
@@ -81,6 +82,28 @@ type Config struct {
 	goalSummaryConfigured           bool
 	goalSummaryResolved             bool
 	goalStrategistEveryConfigured   bool
+	autoModeEnabledConfigured       bool
+	autoModePromptConfigured        bool
+	autoModeModelConfigured         bool
+	autoModeReasoningConfigured     bool
+}
+
+type AutoModeConfig struct {
+	Enabled         *bool  `json:"enabled,omitempty" toml:"enabled"`
+	PromptType      string `json:"prompt_type,omitempty" toml:"prompt_type"`
+	ClassifierModel string `json:"classifier_model,omitempty" toml:"classifier_model"`
+	ReasoningEffort string `json:"reasoning_effort,omitempty" toml:"reasoning_effort"`
+}
+
+func (c Config) AutoModeEnabled() bool {
+	return c.AutoMode.Enabled == nil || *c.AutoMode.Enabled
+}
+
+func (c Config) AutoModePromptType() string {
+	if c.AutoMode.PromptType == "" {
+		return "full"
+	}
+	return c.AutoMode.PromptType
 }
 
 type ModelProfile struct {
@@ -288,6 +311,7 @@ type fileConfig struct {
 	MCPServers    map[string]MCPServerConfig `json:"mcp_servers,omitempty" toml:"mcp_servers"`
 	LSPServers    map[string]LSPServerConfig `json:"lsp_servers,omitempty" toml:"lsp_servers"`
 	Permission    PermissionConfig           `json:"permission,omitempty" toml:"permission"`
+	AutoMode      AutoModeConfig             `json:"auto_mode,omitempty" toml:"auto_mode"`
 	Session       sessionConfig              `json:"session,omitempty" toml:"session"`
 	ContextWindow int                        `json:"context_window,omitempty" toml:"context_window"`
 	Compaction    fileCompactionConfig       `json:"compaction,omitempty" toml:"compaction"`
@@ -342,6 +366,7 @@ type fileAuthConfig struct {
 
 type requirementsFile struct {
 	Permission    *PermissionConfig       `toml:"permission"`
+	AutoMode      *AutoModeConfig         `toml:"auto_mode"`
 	GrokComConfig *requirementsGrokConfig `toml:"grok_com_config"`
 	Auth          *requirementsAuthConfig `toml:"auth"`
 	Toolset       struct {
@@ -629,6 +654,13 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	if disk.Permission.Rules != nil {
 		cfg.Permission = disk.Permission
 	}
+	if err := applyAutoModeConfig(&cfg.AutoMode, disk.AutoMode); err != nil {
+		return err
+	}
+	cfg.autoModeEnabledConfigured = cfg.autoModeEnabledConfigured || disk.AutoMode.Enabled != nil
+	cfg.autoModePromptConfigured = cfg.autoModePromptConfigured || strings.TrimSpace(disk.AutoMode.PromptType) != ""
+	cfg.autoModeModelConfigured = cfg.autoModeModelConfigured || strings.TrimSpace(disk.AutoMode.ClassifierModel) != ""
+	cfg.autoModeReasoningConfigured = cfg.autoModeReasoningConfigured || strings.TrimSpace(disk.AutoMode.ReasoningEffort) != ""
 	if disk.Toolset.WebFetch.ProxyEndpoint != nil {
 		cfg.WebFetch.ProxyEndpoint = *disk.Toolset.WebFetch.ProxyEndpoint
 		cfg.WebFetch.ProxyConfigured = true
@@ -1063,6 +1095,48 @@ func normalizedGoalVerifierCount(count int) int {
 	return max(1, min(5, count))
 }
 
+func applyAutoModeConfig(target *AutoModeConfig, source AutoModeConfig) error {
+	normalized, err := normalizeAutoModeConfig(source)
+	if err != nil {
+		return err
+	}
+	if normalized.Enabled != nil {
+		value := *normalized.Enabled
+		target.Enabled = &value
+	}
+	if normalized.PromptType != "" {
+		target.PromptType = normalized.PromptType
+	}
+	if normalized.ClassifierModel != "" {
+		target.ClassifierModel = normalized.ClassifierModel
+	}
+	if normalized.ReasoningEffort != "" {
+		target.ReasoningEffort = normalized.ReasoningEffort
+	}
+	return nil
+}
+
+func normalizeAutoModeConfig(value AutoModeConfig) (AutoModeConfig, error) {
+	value.PromptType = strings.ToLower(strings.TrimSpace(value.PromptType))
+	value.ClassifierModel = strings.TrimSpace(value.ClassifierModel)
+	value.ReasoningEffort = strings.ToLower(strings.TrimSpace(value.ReasoningEffort))
+	if value.PromptType != "" {
+		switch value.PromptType {
+		case "full", "no_user_tool_prefix", "bare_instructions", "just_command":
+		default:
+			return AutoModeConfig{}, fmt.Errorf("invalid auto_mode prompt_type %q", value.PromptType)
+		}
+	}
+	if value.ReasoningEffort != "" {
+		switch value.ReasoningEffort {
+		case "none", "minimal", "low", "medium", "high", "xhigh":
+		default:
+			return AutoModeConfig{}, fmt.Errorf("invalid auto_mode reasoning_effort %q", value.ReasoningEffort)
+		}
+	}
+	return value, nil
+}
+
 func applyEnv(cfg *Config) {
 	if value := firstEnv("GORK_API_KEY", "XAI_API_KEY", "OPENAI_API_KEY"); value != "" {
 		cfg.APIKey = value
@@ -1075,6 +1149,10 @@ func applyEnv(cfg *Config) {
 	}
 	if value := os.Getenv("GORK_BACKEND"); value != "" {
 		cfg.Backend = value
+	}
+	if value, ok := envBool("GROK_AUTO_PERMISSION_MODE"); ok {
+		cfg.AutoMode.Enabled = &value
+		cfg.autoModeEnabledConfigured = true
 	}
 	if value, ok := envBool("GROK_MOUSE_REPORTING_TOGGLE"); ok {
 		cfg.UI.MouseReportingToggle = value
@@ -1430,6 +1508,11 @@ func applyRequirementsData(cfg *Config, data []byte, source string, envFailClose
 	}
 	if requirement.Permission != nil {
 		cfg.Permission = *requirement.Permission
+	}
+	if requirement.AutoMode != nil && requirement.AutoMode.Enabled != nil {
+		value := *requirement.AutoMode.Enabled
+		cfg.AutoMode.Enabled = &value
+		cfg.autoModeEnabledConfigured = true
 	}
 	if requirement.Auth != nil && requirement.Auth.PreferredMethod != nil {
 		cfg.PreferredAuthMethod = strings.ToLower(strings.TrimSpace(*requirement.Auth.PreferredMethod))

@@ -330,6 +330,78 @@ func TestAskUserQuestionConfigPrecedence(t *testing.T) {
 	}
 }
 
+func TestAutoModeConfigDefaultsAndValidation(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	cfg, err := Load(filepath.Join(home, "missing.toml"))
+	if err != nil || !cfg.AutoModeEnabled() || cfg.AutoModePromptType() != "full" {
+		t.Fatalf("defaults=%#v err=%v", cfg.AutoMode, err)
+	}
+	for _, promptType := range []string{"full", "no_user_tool_prefix", "bare_instructions", "just_command"} {
+		path := filepath.Join(home, promptType+".toml")
+		data := []byte("[auto_mode]\nprompt_type = \"" + promptType + "\"\nreasoning_effort = \"xhigh\"\n")
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := Load(path)
+		if err != nil || cfg.AutoMode.PromptType != promptType || cfg.AutoMode.ReasoningEffort != "xhigh" {
+			t.Fatalf("prompt_type=%q config=%#v err=%v", promptType, cfg.AutoMode, err)
+		}
+	}
+	for _, effort := range []string{"none", "minimal", "low", "medium", "high", "xhigh"} {
+		path := filepath.Join(home, effort+".toml")
+		if err := os.WriteFile(path, []byte("[auto_mode]\nreasoning_effort = \""+effort+"\"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := Load(path)
+		if err != nil || cfg.AutoMode.ReasoningEffort != effort {
+			t.Fatalf("reasoning_effort=%q config=%#v err=%v", effort, cfg.AutoMode, err)
+		}
+	}
+	for _, data := range []string{
+		"[auto_mode]\nprompt_type = \"almost_full\"\n",
+		"[auto_mode]\nreasoning_effort = \"extreme\"\n",
+	} {
+		path := filepath.Join(home, "invalid.toml")
+		if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "invalid auto_mode") {
+			t.Fatalf("data=%q err=%v", data, err)
+		}
+	}
+}
+
+func TestAutoModeConfigLayerPrecedence(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	if err := os.WriteFile(filepath.Join(home, "managed_config.toml"), []byte("[auto_mode]\nenabled = true\nprompt_type = \"full\"\nreasoning_effort = \"medium\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(home, "config.json")
+	if err := os.WriteFile(path, []byte(`{"auto_mode":{"enabled":false,"prompt_type":"just_command","classifier_model":"classifier"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GROK_AUTO_PERMISSION_MODE", "true")
+	if err := os.WriteFile(filepath.Join(home, "requirements.toml"), []byte("[auto_mode]\nenabled = false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AutoModeEnabled() || cfg.AutoMode.PromptType != "just_command" || cfg.AutoMode.ClassifierModel != "classifier" || cfg.AutoMode.ReasoningEffort != "medium" {
+		t.Fatalf("effective auto mode=%#v", cfg.AutoMode)
+	}
+	if err := os.Remove(filepath.Join(home, "requirements.toml")); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(path)
+	if err != nil || !cfg.AutoModeEnabled() {
+		t.Fatalf("environment gate=%#v err=%v", cfg.AutoMode, err)
+	}
+}
+
 func TestGoalVerifierCountConfigPrecedenceAndClamp(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("GROK_HOME", home)

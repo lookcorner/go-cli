@@ -97,6 +97,7 @@ type Runner struct {
 	SessionPath             string
 	Model                   string
 	ReasoningEffort         string
+	PermissionClassifier    PermissionClassifierConfig
 	Instructions            string
 	MaxSteps                int
 	TextOutput              io.Writer

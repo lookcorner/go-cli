@@ -48,6 +48,26 @@ func (s failingGoalStreamer) StreamResponse(context.Context, api.ResponseRequest
 	return api.StreamResult{}, s.err
 }
 
+func TestNewPermissionClassifierConfig(t *testing.T) {
+	cfg := config.Config{Model: "main", Backend: "responses", BaseURL: "https://main.example/v1"}
+	inherited, err := newPermissionClassifierConfig(cfg, nil)
+	if err != nil || inherited.Client != nil || inherited.Model != "" || inherited.PromptType != "full" {
+		t.Fatalf("inherited=%#v err=%v", inherited, err)
+	}
+	cfg.AutoMode = config.AutoModeConfig{ClassifierModel: "classifier", PromptType: "just_command", ReasoningEffort: "high"}
+	cfg.ModelProfiles = map[string]config.ModelProfile{
+		"classifier": {Model: "classifier-id", Backend: "responses", BaseURL: "https://classifier.example/v1"},
+	}
+	dedicated, err := newPermissionClassifierConfig(cfg, nil)
+	if err != nil || dedicated.Client == nil || dedicated.Model != "classifier-id" || dedicated.PromptType != "just_command" || dedicated.ReasoningEffort != "high" {
+		t.Fatalf("dedicated=%#v err=%v", dedicated, err)
+	}
+	cfg.AutoMode.ClassifierModel = "missing"
+	if _, err := newPermissionClassifierConfig(cfg, nil); err == nil || !strings.Contains(err.Error(), "is not defined") {
+		t.Fatalf("missing classifier error=%v", err)
+	}
+}
+
 func TestInteractiveMemoryFlushDoesNotRunNormalTurn(t *testing.T) {
 	store, err := memory.Open(t.TempDir(), t.TempDir(), "interactive")
 	if err != nil {

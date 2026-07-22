@@ -56,6 +56,7 @@ type Config struct {
 	Tools                   *tools.Registry
 	WorkspaceRoot           string
 	ParentModel             string
+	PermissionClassifier    agent.PermissionClassifierConfig
 	ContextWindow           int
 	CompactThresholdPercent int
 	TwoPassCompaction       bool
@@ -85,6 +86,7 @@ type Manager struct {
 	tools                   *tools.Registry
 	workspaceRoot           string
 	parentModel             string
+	permissionClassifier    agent.PermissionClassifierConfig
 	contextWindow           int
 	compactThresholdPercent int
 	twoPassCompaction       bool
@@ -226,7 +228,7 @@ func New(config Config) (*Manager, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	manager := &Manager{
 		ctx: ctx, cancel: cancel, catalog: config.Catalog, tools: config.Tools,
-		workspaceRoot: config.WorkspaceRoot, parentModel: config.ParentModel,
+		workspaceRoot: config.WorkspaceRoot, parentModel: config.ParentModel, permissionClassifier: config.PermissionClassifier,
 		contextWindow: config.ContextWindow, compactThresholdPercent: config.CompactThresholdPercent,
 		twoPassCompaction: config.TwoPassCompaction,
 		resolveModel:      config.ResolveModel, availableModels: append([]string(nil), config.AvailableModels...),
@@ -423,7 +425,8 @@ func (m *Manager) buildRuntime(root string, childRegistry *tools.Registry, defin
 	}
 	runner := &agent.Runner{
 		Client: client, Tools: view, Model: model.Model, ReasoningEffort: effort, Instructions: instructions,
-		SessionID: id, MaxSteps: definition.MaxTurns, ContextWindow: model.ContextWindow,
+		PermissionClassifier: m.permissionClassifier,
+		SessionID:            id, MaxSteps: definition.MaxTurns, ContextWindow: model.ContextWindow,
 		CompactThresholdPercent: model.CompactThresholdPercent, TwoPassCompaction: m.twoPassCompaction, Skills: childSkills,
 	}
 	var hookRuntime *hooks.Runtime
@@ -477,8 +480,9 @@ func (m *Manager) resume(ctx context.Context, request tools.SubagentRequest, def
 	}
 	runner := &agent.Runner{
 		Client: previous.runner.Client, Tools: previous.runner.Tools, Model: previous.runner.Model,
-		ReasoningEffort: first(request.ReasoningEffort, definition.Effort, previous.runner.ReasoningEffort),
-		Instructions:    previous.runner.Instructions, SessionID: id, MaxSteps: previous.runner.MaxSteps,
+		ReasoningEffort:      first(request.ReasoningEffort, definition.Effort, previous.runner.ReasoningEffort),
+		PermissionClassifier: previous.runner.PermissionClassifier,
+		Instructions:         previous.runner.Instructions, SessionID: id, MaxSteps: previous.runner.MaxSteps,
 		ContextWindow: previous.runner.ContextWindow, CompactThresholdPercent: previous.runner.CompactThresholdPercent,
 		TwoPassCompaction: previous.runner.TwoPassCompaction,
 		Skills:            previous.runner.Skills,
