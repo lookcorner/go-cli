@@ -629,6 +629,12 @@ session logs. Workspace history is returned newest-first, while `session_id`
 queries preserve chronological prompt indices; `filter_session_id` provides a
 newest-first session filter without maintaining a second history database.
 
+`x.ai/search/content` performs bounded local ripgrep searches using an explicit
+`cwd` or a live session workspace. It supports literal, whole-word, regex,
+case-insensitive, include/exclude-glob, ignore-file, file-limit, and match-limit
+options, streams `x.ai/search/content/status` batches, and returns the complete
+reference-shaped result.
+
 The `x.ai/session_summaries/session_list`, `workspace_list`, and
 `workspace_list_recent` extensions expose the same logs as reference-shaped
 summary snapshots for workspace history and recent-session views.
