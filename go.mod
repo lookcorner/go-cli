@@ -8,6 +8,7 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/coreos/go-oidc/v3 v3.20.0
 	github.com/creack/pty v1.1.24
+	github.com/fsnotify/fsnotify v1.9.0
 	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
 	github.com/pelletier/go-toml/v2 v2.2.4

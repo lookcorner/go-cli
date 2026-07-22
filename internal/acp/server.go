@@ -103,6 +103,7 @@ type Server struct {
 	pendingPlan     map[string]chan planApprovalResult
 	pendingQuestion map[string]chan userQuestionResult
 	pendingHook     map[string]chan clientHookResult
+	clientFS        *clientFSConfig
 	nextSession     atomic.Uint64
 	nextRequest     atomic.Uint64
 	closing         atomic.Bool
@@ -140,6 +141,8 @@ type session struct {
 	recapDone         chan struct{}
 	suggestCancel     context.CancelFunc
 	suggestDone       chan struct{}
+	fileWatchCancel   context.CancelFunc
+	fileWatchDone     chan struct{}
 	lastRecapPrompt   int
 	promptIndex       int
 	activePrompt      int
@@ -211,6 +214,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 	s.pendingPlan = make(map[string]chan planApprovalResult)
 	s.pendingQuestion = make(map[string]chan userQuestionResult)
 	s.pendingHook = make(map[string]chan clientHookResult)
+	s.clientFS = nil
 	manager, err := worktrees.NewManager(s.SessionDir)
 	if err != nil {
 		return err
@@ -237,6 +241,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 		}
 		switch incoming.Method {
 		case "initialize":
+			s.clientFS = parseClientFS(incoming.Params)
 			s.respond(incoming.ID, map[string]any{
 				"protocolVersion": ProtocolVersion,
 				"agentCapabilities": map[string]any{
@@ -245,6 +250,10 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 					"mcpCapabilities":     map[string]any{"http": true, "sse": true},
 					"sessionCapabilities": map[string]any{"close": map[string]any{}, "list": map[string]any{}, "resume": map[string]any{}},
 					"auth":                map[string]any{},
+					"_meta": map[string]any{
+						"x.ai/fs_notify": true,
+						"x.ai/hooks":     map[string]any{"blockingEvents": []any{"pre_tool_use"}, "decisions": []any{"deny"}},
+					},
 				},
 				"authMethods": []any{},
 				"agentInfo":   map[string]any{"name": "gork-go", "version": "0.1.0-dev"},
@@ -1723,6 +1732,7 @@ func (s *Server) startSession(ctx context.Context, id string, sessionConfig Sess
 		startSource = "load"
 	}
 	runner.StartHooks(hooks.WithSessionStartSource(ctx, startSource))
+	s.startFileNotifications(created)
 	if fellBack {
 		newModel, reason := runner.ModelID, fmt.Sprintf("Model %q is no longer available; using %q.", fallbackFrom, runner.ModelID)
 		if blocked {
@@ -2530,7 +2540,10 @@ func (s *Server) shutdownSession(current *session) {
 	if current.suggestCancel != nil {
 		current.suggestCancel()
 	}
-	runDone, btwDone, recapDone, suggestDone := current.runDone, current.btwDone, current.recapDone, current.suggestDone
+	if current.fileWatchCancel != nil {
+		current.fileWatchCancel()
+	}
+	runDone, btwDone, recapDone, suggestDone, fileWatchDone := current.runDone, current.btwDone, current.recapDone, current.suggestDone, current.fileWatchDone
 	current.mu.Unlock()
 	for _, item := range queued {
 		s.respondQueuedPromptCancelled(current, item)
@@ -2546,6 +2559,9 @@ func (s *Server) shutdownSession(current *session) {
 	}
 	if suggestDone != nil {
 		<-suggestDone
+	}
+	if fileWatchDone != nil {
+		<-fileWatchDone
 	}
 	if current.close != nil {
 		current.close()
@@ -2994,7 +3010,10 @@ func (s *Server) closeAll() {
 		if current.suggestCancel != nil {
 			current.suggestCancel()
 		}
-		runDone, btwDone, recapDone, suggestDone := current.runDone, current.btwDone, current.recapDone, current.suggestDone
+		if current.fileWatchCancel != nil {
+			current.fileWatchCancel()
+		}
+		runDone, btwDone, recapDone, suggestDone, fileWatchDone := current.runDone, current.btwDone, current.recapDone, current.suggestDone, current.fileWatchDone
 		current.mu.Unlock()
 		for _, item := range queued {
 			s.respondQueuedPromptCancelled(current, item)
@@ -3010,6 +3029,9 @@ func (s *Server) closeAll() {
 		}
 		if suggestDone != nil {
 			<-suggestDone
+		}
+		if fileWatchDone != nil {
+			<-fileWatchDone
 		}
 		current.close()
 	}

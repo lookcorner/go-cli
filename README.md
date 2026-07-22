@@ -36,6 +36,13 @@ is available, and samples a bounded text-only transcript without tools or parent
 history mutation. `GROK_PROMPT_SUGGESTIONS_MODEL` overrides the request model
 hint; otherwise the dedicated `grok-build-0.1` suggestion model is used.
 
+ACP clients can enable workspace file notifications with
+`clientCapabilities._meta["x.ai/fs_notify"]`. Boolean `true` streams absolute
+create, modify, and remove events. Object form can request a Gitignore-aware
+initial file index plus add/remove deltas with `index: true`, and configure
+`debounce_ms` and extra `ignore` globs. File watchers stop when their session
+closes.
+
 ACP `x.ai/suggest` provides interactive shell completion from workspace prompt
 history, `$PATH` executables, and filesystem entries. It returns safe whole-line
 insertions plus atomic token ranges for newer clients, respects shell quoting,

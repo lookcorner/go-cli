@@ -2535,6 +2535,10 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 	if _, ok := sessionCapabilities["list"]; !ok || initialize["result"].(map[string]any)["agentCapabilities"].(map[string]any)["loadSession"] != true {
 		t.Fatalf("session list capability missing: %#v", sessionCapabilities)
 	}
+	capabilityMeta := initialize["result"].(map[string]any)["agentCapabilities"].(map[string]any)["_meta"].(map[string]any)
+	if capabilityMeta["x.ai/fs_notify"] != true || capabilityMeta["x.ai/hooks"].(map[string]any)["blockingEvents"].([]any)[0] != "pre_tool_use" {
+		t.Fatalf("extension capabilities missing: %#v", capabilityMeta)
+	}
 	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 2, "method": "session/new", "params": map[string]any{
 		"_meta": map[string]any{
 			"sessionId": clientSessionID, "modelId": "client-model",

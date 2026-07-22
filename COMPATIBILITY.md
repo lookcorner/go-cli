@@ -14,6 +14,8 @@ metadata with model/token/turn/cancellation details; removed queued prompts do
 not publish false completion events. Context-aware `x.ai/compact_conversation`
 with persisted completion updates and persisted fire-and-forget
 `x.ai/toggle_plan_mode` are also supported. ACP remains **partial** overall.
+ACP clients can negotiate session-bound real-time workspace events or a
+Gitignore-aware chunked file index with add/remove deltas.
 Skill catalogs support all-session `x.ai/skills/refresh-baseline` and
 `x.ai/internal/reload_skills` disk refreshes.
 Plugin extensions also support sessionless forced `x.ai/plugins/reload` with

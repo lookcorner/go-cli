@@ -11,7 +11,8 @@ implementation.
 - `internal/worktree` owns worktree identity, lifecycle, Git state transfer,
   conflict rules, registry maintenance, and historical code restoration.
 - `internal/workspace` owns confined paths, instruction discovery, release-build
-  folder trust, and durable before/after file checkpoints used by session rewind.
+  folder trust, Gitignore-aware file indexing and watching, and durable
+  before/after file checkpoints used by session rewind.
 - `internal/agent` owns the model/tool turn loop and context compaction.
 - `internal/suggest` owns shell-token parsing, local command/file completion,
   history ranking, safe insertion text, and suggestion aggregation.
