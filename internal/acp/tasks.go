@@ -296,6 +296,7 @@ func (s *Server) startNextWake(current *session) {
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
+			s.notifyRosterUpsert(current, "working")
 			baseInstructions := current.runner.Instructions
 			current.runner.Instructions = turnInstructionsForMode(baseInstructions, mode)
 			content := append([]api.ContentPart{{Type: "input_text", Text: interjection.Text}}, interjection.Content...)
@@ -319,6 +320,7 @@ func (s *Server) startNextWake(current *session) {
 			current.updated = time.Now().UTC()
 			close(runDone)
 			current.mu.Unlock()
+			s.notifyRosterUpsert(current, "idle")
 			s.startNext(current)
 		}()
 		return
@@ -339,6 +341,7 @@ func (s *Server) startNextWake(current *session) {
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
+		s.notifyRosterUpsert(current, "working")
 		baseInstructions := current.runner.Instructions
 		current.runner.Instructions = turnInstructionsForMode(baseInstructions, mode)
 		turn, err := current.runner.RunSyntheticTurn(runCtx, wake.prompt, previous)
@@ -360,6 +363,7 @@ func (s *Server) startNextWake(current *session) {
 		}
 		current.updated = time.Now().UTC()
 		current.mu.Unlock()
+		s.notifyRosterUpsert(current, "idle")
 		s.startNext(current)
 	}()
 }

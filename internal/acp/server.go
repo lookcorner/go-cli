@@ -123,44 +123,45 @@ type message struct {
 }
 
 type session struct {
-	id                string
-	ctx               context.Context
-	cwd               string
-	title             string
-	updated           time.Time
-	runner            *agent.Runner
-	close             func()
-	mu                sync.Mutex
-	previous          string
-	cancel            context.CancelFunc
-	running           bool
-	runDone           chan struct{}
-	btwCancel         context.CancelFunc
-	btwDone           chan struct{}
-	recapCancel       context.CancelFunc
-	recapDone         chan struct{}
-	suggestCancel     context.CancelFunc
-	suggestDone       chan struct{}
-	fileWatchCancel   context.CancelFunc
-	fileWatchDone     chan struct{}
-	lastRecapPrompt   int
-	promptIndex       int
-	activePrompt      int
-	rewind            *workspace.RewindStore
-	logPath           string
-	mode              string
-	mcpServers        []MCPServer
-	wakeQueue         []syntheticWake
-	interjectionQueue []agent.Interjection
-	promptQueue       []queuedPrompt
-	runningPromptID   string
-	startingPromptID  string
-	cancelTrigger     string
-	activeWakeID      string
-	closed            bool
-	unavailableModel  string
-	pendingModelID    string
-	permissions       *serverApprover
+	id                  string
+	ctx                 context.Context
+	cwd                 string
+	title               string
+	updated             time.Time
+	runner              *agent.Runner
+	close               func()
+	mu                  sync.Mutex
+	previous            string
+	cancel              context.CancelFunc
+	running             bool
+	pendingInteractions int
+	runDone             chan struct{}
+	btwCancel           context.CancelFunc
+	btwDone             chan struct{}
+	recapCancel         context.CancelFunc
+	recapDone           chan struct{}
+	suggestCancel       context.CancelFunc
+	suggestDone         chan struct{}
+	fileWatchCancel     context.CancelFunc
+	fileWatchDone       chan struct{}
+	lastRecapPrompt     int
+	promptIndex         int
+	activePrompt        int
+	rewind              *workspace.RewindStore
+	logPath             string
+	mode                string
+	mcpServers          []MCPServer
+	wakeQueue           []syntheticWake
+	interjectionQueue   []agent.Interjection
+	promptQueue         []queuedPrompt
+	runningPromptID     string
+	startingPromptID    string
+	cancelTrigger       string
+	activeWakeID        string
+	closed              bool
+	unavailableModel    string
+	pendingModelID      string
+	permissions         *serverApprover
 }
 
 type syntheticWake struct {
@@ -1733,6 +1734,7 @@ func (s *Server) startSession(ctx context.Context, id string, sessionConfig Sess
 	}
 	runner.StartHooks(hooks.WithSessionStartSource(ctx, startSource))
 	s.startFileNotifications(created)
+	s.notifyRosterUpsert(created, "")
 	if fellBack {
 		newModel, reason := runner.ModelID, fmt.Sprintf("Model %q is no longer available; using %q.", fallbackFrom, runner.ModelID)
 		if blocked {
@@ -1854,6 +1856,7 @@ func (s *Server) handlePromptRequest(parent context.Context, incoming message, c
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
+		s.notifyRosterUpsert(current, "working")
 		baseInstructions := current.runner.Instructions
 		current.runner.Instructions = turnInstructionsForMode(baseInstructions, mode)
 		result, err := current.runner.RunTurnParts(runCtx, prompt, content, previous)
@@ -1885,6 +1888,7 @@ func (s *Server) handlePromptRequest(parent context.Context, incoming message, c
 		current.updated = time.Now().UTC()
 		close(runDone)
 		current.mu.Unlock()
+		s.notifyRosterUpsert(current, "idle")
 		s.finishPrompt(incoming, current, newPromptLifecycle(params), stopReason, result, err, cancelTrigger)
 		s.startNext(current)
 	}()
@@ -1919,6 +1923,7 @@ func (s *Server) handleCompactPrompt(parent context.Context, incoming message, c
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
+		s.notifyRosterUpsert(current, "working")
 		_, err := current.runner.CompactWithContext(runCtx, previous, userContext)
 		stopReason := "end_turn"
 		if errors.Is(runCtx.Err(), context.Canceled) {
@@ -1936,6 +1941,7 @@ func (s *Server) handleCompactPrompt(parent context.Context, incoming message, c
 		current.updated = time.Now().UTC()
 		close(runDone)
 		current.mu.Unlock()
+		s.notifyRosterUpsert(current, "idle")
 		if err == nil {
 			s.notifyXAI(current, map[string]any{
 				"sessionUpdate": "auto_compact_completed", "tokens_after": 0, "summary_preview": nil,
@@ -2038,11 +2044,13 @@ func (s *Server) handleMemoryRewriteExtension(parent context.Context, incoming m
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
+		s.notifyRosterUpsert(current, "working")
 		rewritten, err := current.runner.RewriteMemoryNote(runCtx, rawText, contextSummary)
 		current.mu.Lock()
 		current.cancel, current.running, current.runDone, current.updated = nil, false, nil, time.Now().UTC()
 		close(runDone)
 		current.mu.Unlock()
+		s.notifyRosterUpsert(current, "idle")
 		if err != nil {
 			s.respondError(incoming.ID, -32000, err.Error())
 		} else {
@@ -2093,6 +2101,7 @@ func (s *Server) handleMemoryDream(parent context.Context, incoming message, cur
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
+		s.notifyRosterUpsert(current, "working")
 		result, err := current.runner.DreamMemory(runCtx, true)
 		current.mu.Lock()
 		current.cancel, current.running, current.runDone, current.updated = nil, false, nil, time.Now().UTC()
@@ -2100,6 +2109,7 @@ func (s *Server) handleMemoryDream(parent context.Context, incoming message, cur
 		current.cancelTrigger = ""
 		close(runDone)
 		current.mu.Unlock()
+		s.notifyRosterUpsert(current, "idle")
 		update := map[string]any{"sessionUpdate": "memory_dream_completed", "result": result.Outcome}
 		if result.Path != "" {
 			update["path"] = result.Path
@@ -2133,6 +2143,7 @@ func (s *Server) handleMemoryToggle(parent context.Context, incoming message, cu
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
+		s.notifyRosterUpsert(current, "working")
 		text, err := current.runner.SetMemoryEnabled(runCtx, enabled)
 		current.mu.Lock()
 		current.cancel, current.running, current.runDone, current.updated = nil, false, nil, time.Now().UTC()
@@ -2140,6 +2151,7 @@ func (s *Server) handleMemoryToggle(parent context.Context, incoming message, cu
 		current.cancelTrigger = ""
 		close(runDone)
 		current.mu.Unlock()
+		s.notifyRosterUpsert(current, "idle")
 		if err == nil {
 			s.notify(current.id, map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": text}})
 		}
@@ -2178,6 +2190,7 @@ func (s *Server) handleMemoryFlush(parent context.Context, incoming message, cur
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
+		s.notifyRosterUpsert(current, "working")
 		result, err := current.runner.FlushMemory(runCtx, previous)
 		stopReason := "end_turn"
 		if errors.Is(runCtx.Err(), context.Canceled) {
@@ -2189,6 +2202,7 @@ func (s *Server) handleMemoryFlush(parent context.Context, incoming message, cur
 		current.cancelTrigger = ""
 		close(runDone)
 		current.mu.Unlock()
+		s.notifyRosterUpsert(current, "idle")
 		update := map[string]any{"sessionUpdate": "memory_flush_completed", "result": result.Outcome}
 		if result.Path != "" {
 			update["path"] = result.Path
@@ -2515,6 +2529,7 @@ func (s *Server) closeSession(id string) bool {
 	delete(s.sessions, id)
 	current.mu.Unlock()
 	s.mu.Unlock()
+	s.notifyRosterRemoved(id)
 	s.shutdownSession(current)
 	return true
 }
@@ -3195,6 +3210,8 @@ func (a *serverApprover) Approve(ctx context.Context, action, detail string) err
 	if allowed {
 		return nil
 	}
+	a.server.beginRosterInteraction(a.sessionID)
+	defer a.server.endRosterInteraction(a.sessionID)
 	id := fmt.Sprintf("gork-permission-%d", a.server.nextRequest.Add(1))
 	toolCallID := id
 	if call, ok := tools.ToolCallFromContext(ctx); ok && call.ID != "" {

@@ -252,8 +252,19 @@ func TestYoloModeChangedServeRouteIsFireAndForget(t *testing.T) {
 	if mode, ok := registry.PermissionMode(); !ok || mode != tools.PermissionAuto {
 		t.Fatalf("mode=%q ok=%v output=%s", mode, ok, output.String())
 	}
-	if messages := decodeACPOutput(t, output.Bytes()); len(messages) != 1 || messages[0]["id"] != float64(1) {
-		t.Fatalf("notification produced a response: %#v", messages)
+	messages := decodeACPOutput(t, output.Bytes())
+	responses := 0
+	rosterUpdates := 0
+	for _, item := range messages {
+		if item["id"] != nil {
+			responses++
+		}
+		if item["method"] == "x.ai/sessions/changed" {
+			rosterUpdates++
+		}
+	}
+	if responses != 1 || rosterUpdates != 1 {
+		t.Fatalf("fire-and-forget responses=%d roster=%d messages=%#v", responses, rosterUpdates, messages)
 	}
 }
 

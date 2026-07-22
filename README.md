@@ -694,7 +694,10 @@ The `x.ai/session_summaries/session_list`, `workspace_list`, and
 summary snapshots for workspace history and recent-session views.
 
 `x.ai/sessions/list` merges those persisted summaries with live ACP sessions
-for a compact roster of working, idle, and dormant sessions.
+for a compact roster of working, idle, needs-input, and dormant sessions.
+`x.ai/sessions/changed` publishes matching upsert/remove deltas when sessions
+become resident, cross turn or interaction boundaries, or close. Resident rows
+include the active model, reasoning effort, permission mode, and worktree state.
 
 `x.ai/session/list` provides the local build-session lane with reference cursor
 encoding, title/ID search, page limits, `kind`/`cwd` facet filters, and window

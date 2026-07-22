@@ -10,6 +10,8 @@ import (
 )
 
 func (s *Server) RequestUserQuestion(ctx context.Context, sessionID string, request tools.UserQuestionRequest) (tools.UserQuestionResponse, error) {
+	s.beginRosterInteraction(sessionID)
+	defer s.endRosterInteraction(sessionID)
 	id := fmt.Sprintf("gork-question-%d", s.nextRequest.Add(1))
 	result := make(chan userQuestionResult, 1)
 	s.mu.Lock()

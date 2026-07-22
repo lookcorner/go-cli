@@ -523,6 +523,7 @@ func TestRestoredUnavailableModelFallsBackWithinFamily(t *testing.T) {
 		t.Fatalf("previous=%q unavailable=%q", created.previous, created.unavailableModel)
 	}
 	messages := decodeACPOutput(t, output.Bytes())
+	messages = withoutRosterMessages(messages)
 	if len(messages) != 1 {
 		t.Fatalf("messages=%#v", messages)
 	}

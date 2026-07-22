@@ -435,6 +435,16 @@ func TestSessionSummariesWireContract(t *testing.T) {
 
 func TestSessionRosterWireContract(t *testing.T) {
 	dir, cwd := t.TempDir(), t.TempDir()
+	ws, err := workspace.Open(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller, err := tools.NewModeApprover(tools.PermissionAlwaysApprove, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, controller)
+	defer registry.Close()
 	for _, id := range []string{"live-session", "dormant-session"} {
 		logger, err := sessionlog.NewLoggerWithID(dir, id)
 		if err != nil {
@@ -448,7 +458,7 @@ func TestSessionRosterWireContract(t *testing.T) {
 	server := &Server{
 		SessionDir: dir, output: &output,
 		sessions: map[string]*session{"live-session": {
-			id: "live-session", cwd: cwd, runner: &agent.Runner{Model: "live-model"}, running: true, updated: time.Now().UTC(),
+			id: "live-session", cwd: cwd, runner: &agent.Runner{Model: "live-model", ReasoningEffort: "high", Tools: registry}, running: true, updated: time.Now().UTC(),
 		}},
 	}
 	server.handleSessionRoster(context.Background(), message{ID: json.RawMessage("1"), Method: "x.ai/sessions/list", Params: json.RawMessage(`{}`)})
@@ -466,11 +476,43 @@ func TestSessionRosterWireContract(t *testing.T) {
 		item := row.(map[string]any)
 		byID[item["sessionId"].(string)] = item
 	}
-	if live := byID["live-session"]; live["activity"] != "working" || live["resident"] != true || live["modelId"] != "live-model" {
+	if live := byID["live-session"]; live["activity"] != "working" || live["resident"] != true || live["modelId"] != "live-model" || live["reasoningEffort"] != "high" || live["yolo"] != true {
 		t.Fatalf("unexpected live roster row: %#v", live)
 	}
 	if dormant := byID["dormant-session"]; dormant["activity"] != "dormant" || dormant["resident"] != false {
 		t.Fatalf("unexpected dormant roster row: %#v", dormant)
+	}
+}
+
+func TestSessionRosterChangedLifecycle(t *testing.T) {
+	var output bytes.Buffer
+	current := &session{id: "roster-session", cwd: t.TempDir(), runner: &agent.Runner{Model: "live-model"}, updated: time.Now().UTC()}
+	server := &Server{output: &output, sessions: map[string]*session{current.id: current}}
+	server.notifyRosterUpsert(current, "")
+	current.mu.Lock()
+	current.running = true
+	current.mu.Unlock()
+	server.notifyRosterUpsert(current, "working")
+	server.beginRosterInteraction(current.id)
+	server.endRosterInteraction(current.id)
+	if !server.closeSession(current.id) {
+		t.Fatal("session did not close")
+	}
+	server.notifyRosterUpsert(current, "idle")
+	messages := decodeACPOutput(t, output.Bytes())
+	if len(messages) != 5 {
+		t.Fatalf("messages=%#v", messages)
+	}
+	for index, activity := range []string{"idle", "working", "needs_input", "working"} {
+		params := messages[index]["params"].(map[string]any)
+		upserted := params["upserted"].([]any)
+		if messages[index]["method"] != "x.ai/sessions/changed" || len(upserted) != 1 || upserted[0].(map[string]any)["activity"] != activity {
+			t.Fatalf("message %d=%#v", index, messages[index])
+		}
+	}
+	removed := messages[4]["params"].(map[string]any)
+	if messages[4]["method"] != "x.ai/sessions/changed" || len(removed["upserted"].([]any)) != 0 || removed["removed"].([]any)[0] != current.id {
+		t.Fatalf("removed=%#v", messages[4])
 	}
 }
 
@@ -535,11 +577,14 @@ func TestExtensionSessionCloseIsIdempotent(t *testing.T) {
 		t.Helper()
 		output.Reset()
 		server.handleExtensionSessionClose(message{ID: json.RawMessage(strconv.Itoa(id)), Method: "x.ai/session/close", Params: json.RawMessage(`{"sessionId":"close-session"}`)})
-		var response map[string]any
-		if err := json.NewDecoder(&output).Decode(&response); err != nil {
-			t.Fatal(err)
+		messages := decodeACPOutput(t, output.Bytes())
+		for _, response := range messages {
+			if response["id"] == float64(id) {
+				return response
+			}
 		}
-		return response
+		t.Fatalf("response %d missing: %#v", id, messages)
+		return nil
 	}
 	for id := 1; id <= 2; id++ {
 		response := call(id)
@@ -853,6 +898,7 @@ func TestCompactConversationExtensionUsesContextWithoutPromptCompletion(t *testi
 	server.wg.Wait()
 
 	messages := decodeACPOutput(t, output.Bytes())
+	messages = withoutRosterMessages(messages)
 	if len(messages) != 2 || messages[1]["id"] != float64(4) || len(messages[1]["result"].(map[string]any)) != 0 {
 		t.Fatalf("messages=%#v", messages)
 	}
@@ -909,6 +955,7 @@ func TestCompactConversationExtensionUsesContextWithoutPromptCompletion(t *testi
 	})
 	server.wg.Wait()
 	modelFailure := decodeACPOutput(t, output.Bytes())
+	modelFailure = withoutRosterMessages(modelFailure)
 	if len(modelFailure) != 1 || modelFailure[0]["error"].(map[string]any)["message"] != "compact unavailable" {
 		t.Fatalf("modelFailure=%#v", modelFailure)
 	}
@@ -1087,6 +1134,7 @@ func TestBtwExtensionCloseCancelsAndWaitsForRequest(t *testing.T) {
 	}
 	server.wg.Wait()
 	messages := decodeACPOutput(t, output.Bytes())
+	messages = withoutRosterMessages(messages)
 	if len(messages) != 2 || messages[0]["error"] == nil || messages[1]["error"] == nil {
 		t.Fatalf("messages=%#v", messages)
 	}
@@ -1291,6 +1339,7 @@ func TestMemoryFlushExtensionAndSlashCommand(t *testing.T) {
 	})
 	server.wg.Wait()
 	messages = decodeACPOutput(t, output.Bytes())
+	messages = withoutRosterMessages(messages)
 	if len(messages) != 1 || messages[0]["result"].(map[string]any)["rewritten"] != "## Deployment\n\n- Run release checks." {
 		t.Fatalf("rewrite messages=%#v", messages)
 	}
@@ -1312,6 +1361,7 @@ func TestMemoryFlushExtensionAndSlashCommand(t *testing.T) {
 	server.handleMemoryExtension(context.Background(), message{ID: json.RawMessage("5"), Method: "x.ai/memory/rewrite", Params: oversize})
 	server.wg.Wait()
 	messages = decodeACPOutput(t, output.Bytes())
+	messages = withoutRosterMessages(messages)
 	current.mu.Lock()
 	running, runDone, cancel := current.running, current.runDone, current.cancel
 	current.mu.Unlock()
@@ -1377,6 +1427,16 @@ func decodeACPOutput(t *testing.T, data []byte) []map[string]any {
 		messages = append(messages, message)
 	}
 	return messages
+}
+
+func withoutRosterMessages(messages []map[string]any) []map[string]any {
+	filtered := messages[:0]
+	for _, message := range messages {
+		if message["method"] != "x.ai/sessions/changed" {
+			filtered = append(filtered, message)
+		}
+	}
+	return filtered
 }
 
 func TestLoopCommandExpandsBeforeModelTurn(t *testing.T) {
@@ -3263,14 +3323,25 @@ func TestACPCancelReturnsCancelledStopReason(t *testing.T) {
 	if titleUpdate["method"] != "session/update" {
 		t.Fatalf("unexpected title update: %#v", titleUpdate)
 	}
+	queueUpdate := decodeACP(t, decoder)
+	if queueUpdate["method"] != "x.ai/queue/changed" {
+		t.Fatalf("unexpected queue update: %#v", queueUpdate)
+	}
+	select {
+	case <-streamer.started:
+	default:
+		var roster map[string]any
+		if err := decoder.Decode(&roster); err != nil {
+			t.Fatal(err)
+		}
+		if roster["method"] != "x.ai/sessions/changed" {
+			t.Fatalf("unexpected turn-start update: %#v", roster)
+		}
+	}
 	select {
 	case <-streamer.started:
 	case <-time.After(time.Second):
 		t.Fatal("prompt did not start")
-	}
-	queueUpdate := decodeACP(t, decoder)
-	if queueUpdate["method"] != "x.ai/queue/changed" {
-		t.Fatalf("unexpected queue update: %#v", queueUpdate)
 	}
 	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "method": "session/cancel", "params": map[string]any{"sessionId": sessionID}})
 	promptComplete := decodeACPNonQueue(t, decoder)
@@ -3503,11 +3574,15 @@ func encodeACP(t *testing.T, encoder *json.Encoder, value any) {
 
 func decodeACP(t *testing.T, decoder *json.Decoder) map[string]any {
 	t.Helper()
-	var value map[string]any
-	if err := decoder.Decode(&value); err != nil {
-		t.Fatal(err)
+	for {
+		var value map[string]any
+		if err := decoder.Decode(&value); err != nil {
+			t.Fatal(err)
+		}
+		if value["method"] != "x.ai/sessions/changed" {
+			return value
+		}
 	}
-	return value
 }
 
 func decodeACPNonQueue(t *testing.T, decoder *json.Decoder) map[string]any {

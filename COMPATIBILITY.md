@@ -16,6 +16,8 @@ with persisted completion updates and persisted fire-and-forget
 `x.ai/toggle_plan_mode` are also supported. ACP remains **partial** overall.
 ACP clients can negotiate session-bound real-time workspace events or a
 Gitignore-aware chunked file index with add/remove deltas.
+Live session rosters publish `x.ai/sessions/changed` deltas for resident,
+working, idle, needs-input, and removed transitions.
 Skill catalogs support all-session `x.ai/skills/refresh-baseline` and
 `x.ai/internal/reload_skills` disk refreshes.
 Plugin extensions also support sessionless forced `x.ai/plugins/reload` with

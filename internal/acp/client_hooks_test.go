@@ -112,11 +112,18 @@ func TestNewSessionRegistersClientHooksFromMeta(t *testing.T) {
 	if started["method"] != "x.ai/hooks/event" || startedParams["hookCallbackId"] != "started" || startedParams["source"] != "new" {
 		t.Fatalf("session start=%#v", started)
 	}
+	roster := <-output.messages
+	if roster["method"] != "x.ai/sessions/changed" {
+		t.Fatalf("roster update=%#v", roster)
+	}
 	created := <-output.messages
 	sessionID := created["result"].(map[string]any)["sessionId"].(string)
 	current := server.lookupSession(sessionID)
 	if current == nil {
 		t.Fatalf("session response=%#v", created)
+	}
+	if roster["params"].(map[string]any)["upserted"].([]any)[0].(map[string]any)["sessionId"] != sessionID {
+		t.Fatalf("roster update=%#v", roster)
 	}
 	defer current.close()
 	current.runner.StartHooks(context.Background())

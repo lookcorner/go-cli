@@ -10,6 +10,8 @@ import (
 )
 
 func (s *Server) RequestPlanModeExit(ctx context.Context, sessionID string, event tools.PlanModeEvent) (tools.PlanModeDecision, error) {
+	s.beginRosterInteraction(sessionID)
+	defer s.endRosterInteraction(sessionID)
 	id := fmt.Sprintf("gork-plan-approval-%d", s.nextRequest.Add(1))
 	result := make(chan planApprovalResult, 1)
 	s.mu.Lock()

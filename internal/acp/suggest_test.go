@@ -117,7 +117,8 @@ func TestSuggestPromptCloseCancelsAndWaits(t *testing.T) {
 		t.Fatal("session did not wait for suggestion cancellation")
 	}
 	server.wg.Wait()
-	result := decodeACPOutput(t, output.Bytes())[0]["result"].(map[string]any)
+	messages := withoutRosterMessages(decodeACPOutput(t, output.Bytes()))
+	result := messages[0]["result"].(map[string]any)
 	if result["suggestion"] != nil {
 		t.Fatalf("result=%#v", result)
 	}

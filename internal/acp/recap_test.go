@@ -206,8 +206,8 @@ func TestRecapCloseCancelsAndWaits(t *testing.T) {
 		t.Fatal("session did not close after cancelling recap")
 	}
 	server.wg.Wait()
-	if messages := decodeACPOutput(t, output.Bytes()); len(messages) != 1 {
-		t.Fatalf("cancelled recap should only ack: %#v", messages)
+	if messages := decodeACPOutput(t, output.Bytes()); len(messages) != 2 || messages[0]["id"] != float64(1) || messages[1]["method"] != "x.ai/sessions/changed" || messages[1]["params"].(map[string]any)["removed"].([]any)[0] != "closing" {
+		t.Fatalf("cancelled recap close output: %#v", messages)
 	}
 }
 
