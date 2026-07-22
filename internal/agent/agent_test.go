@@ -1182,6 +1182,52 @@ func TestRunnerCompactsAtUsageThresholdAndStartsFreshChain(t *testing.T) {
 	}
 }
 
+func TestRunnerForcedCompactionTriggersOnceBelowThreshold(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamer := &fakeStreamer{results: []api.StreamResult{
+		{ResponseID: "old-response", Text: "first answer", Usage: api.Usage{InputTokens: 100}},
+		{ResponseID: "summary-response", Text: "Preserve the implementation state."},
+		{ResponseID: "fresh-response", Text: "continued", Usage: api.Usage{InputTokens: 100}},
+		{ResponseID: "next-response", Text: "next", Usage: api.Usage{InputTokens: 100}},
+	}}
+	runner := Runner{
+		Client: streamer, Tools: tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto}),
+		Model: "test-model", ContextWindow: 1000, CompactThresholdPercent: 85,
+	}
+	defer runner.Tools.Close()
+	if _, err := runner.RunTurn(context.Background(), "first", ""); err != nil {
+		t.Fatal(err)
+	}
+	runner.ArmAutoCompact()
+	if result, err := runner.RunTurn(context.Background(), "continue", "old-response"); err != nil || result.ResponseID != "fresh-response" {
+		t.Fatalf("forced turn result=%#v err=%v", result, err)
+	}
+	if result, err := runner.RunTurn(context.Background(), "next", "fresh-response"); err != nil || result.ResponseID != "next-response" {
+		t.Fatalf("following turn result=%#v err=%v", result, err)
+	}
+	if len(streamer.requests) != 4 || streamer.requests[1].PreviousResponseID != "old-response" || streamer.requests[2].PreviousResponseID != "" || streamer.requests[3].PreviousResponseID != "fresh-response" {
+		t.Fatalf("requests=%#v", streamer.requests)
+	}
+}
+
+func TestRunnerForcedCompactionWaitsForUsableHistory(t *testing.T) {
+	var runner Runner
+	runner.ArmAutoCompact()
+	if runner.shouldCompact("") {
+		t.Fatal("force flag compacted without history")
+	}
+	runner.ContextWindow = 1000
+	if !runner.shouldCompact("response") {
+		t.Fatal("force flag was consumed before compaction became usable")
+	}
+	if runner.shouldCompact("response") {
+		t.Fatal("force flag was not consumed after use")
+	}
+}
+
 func TestRunnerTwoPassPrefireMergesOnlyRecentTail(t *testing.T) {
 	run := func(t *testing.T, client ResponseStreamer, streamer *prefireStreamer) {
 		ws, err := workspace.Open(t.TempDir())

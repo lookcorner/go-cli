@@ -178,6 +178,7 @@ type Runner struct {
 	memoryFlushRunning      bool
 	memoryFlushDone         chan struct{}
 	memoryFlushCount        uint64
+	forceCompact            atomic.Bool
 	memoryLastFlush         string
 	memoryIdleCancel        context.CancelFunc
 	memoryIdleDone          chan struct{}
@@ -827,11 +828,23 @@ func (r *Runner) appendInterjections(input *[]api.InputItem, pending []Interject
 }
 
 func (r *Runner) shouldCompact(previousResponseID string) bool {
-	if previousResponseID == "" || r.ContextWindow <= 0 || r.lastInputTokens <= 0 {
+	if previousResponseID == "" || r.ContextWindow <= 0 {
+		return false
+	}
+	if r.forceCompact.CompareAndSwap(true, false) {
+		return true
+	}
+	if r.lastInputTokens <= 0 {
 		return false
 	}
 	threshold := r.ContextWindow * r.CompactThresholdPercent / 100
 	return r.lastInputTokens >= threshold
+}
+
+func (r *Runner) ArmAutoCompact() {
+	if r != nil {
+		r.forceCompact.Store(true)
+	}
 }
 
 func (r *Runner) shouldPrefire(previousResponseID string) bool {

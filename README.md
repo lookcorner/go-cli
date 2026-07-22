@@ -608,6 +608,10 @@ to the actual tool call, so protocol stdin is never consumed by a CLI prompt.
 `--approval auto`, `--approval always-approve`, and `--approval deny` remain
 available for clients that intentionally want a fixed policy.
 
+For client integration testing, `x.ai/debug/arm_auto_compact` arms one session's
+next eligible turn to compact regardless of token usage. The flag is consumed
+after that single compaction and accepts either `sessionId` or `session_id`.
+
 When a turn is busy, additional `session/prompt` requests remain pending in a
 server-authoritative FIFO queue and run before interjection fallbacks or
 scheduled/background wake-ups. Clients receive `x.ai/queue/changed` snapshots
