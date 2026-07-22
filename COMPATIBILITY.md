@@ -8,7 +8,10 @@ Status values: **done**, **partial**, **planned**.
 ACP prompt queuing includes server-authoritative busy-turn FIFO execution,
 `x.ai/queue/changed` snapshots, versioned owner-aware remove/reorder/clear/edit
 and send-now operations, user-prompt priority over automatic wakes, and
-close-time cancellation of queued requests. ACP remains **partial** overall.
+close-time cancellation of queued requests. Completed prompts publish ordered
+`x.ai/session/prompt_complete` notifications and correlated `_meta` response
+metadata with model/token/turn/cancellation details; removed queued prompts do
+not publish false completion events. ACP remains **partial** overall.
 
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |

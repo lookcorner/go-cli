@@ -23,7 +23,11 @@ func TestParseSSETextAndToolCall(t *testing.T) {
 			"type": "response.completed",
 			"response": map[string]any{
 				"id": "resp_1", "output": []any{toolItem},
-				"usage": map[string]any{"input_tokens": 123, "output_tokens": 7, "total_tokens": 130},
+				"usage": map[string]any{
+					"input_tokens": 123, "output_tokens": 7, "total_tokens": 130,
+					"input_tokens_details":  map[string]any{"cached_tokens": 100},
+					"output_tokens_details": map[string]any{"reasoning_tokens": 5},
+				},
 			},
 		}),
 		"",
@@ -37,7 +41,7 @@ func TestParseSSETextAndToolCall(t *testing.T) {
 	if result.ResponseID != "resp_1" || result.Text != "hello world" || streamed.String() != result.Text {
 		t.Fatalf("unexpected result: %#v, streamed=%q", result, streamed.String())
 	}
-	if result.Usage.InputTokens != 123 || result.Usage.TotalTokens != 130 {
+	if result.Usage.InputTokens != 123 || result.Usage.OutputTokens != 7 || result.Usage.TotalTokens != 130 || result.Usage.CachedReadTokens != 100 || result.Usage.ReasoningTokens != 5 {
 		t.Fatalf("usage missing: %#v", result.Usage)
 	}
 	if len(result.ToolCalls) != 1 {
@@ -45,6 +49,16 @@ func TestParseSSETextAndToolCall(t *testing.T) {
 	}
 	if result.ToolCalls[0].CallID != "call_1" || result.ToolCalls[0].Name != "read_file" {
 		t.Fatalf("unexpected tool call: %#v", result.ToolCalls[0])
+	}
+}
+
+func TestParseJSONUsageDetails(t *testing.T) {
+	result, err := parseJSON(strings.NewReader(`{"id":"resp_1","output":[],"usage":{"input_tokens":20,"output_tokens":4,"total_tokens":24,"input_tokens_details":{"cached_tokens":12},"output_tokens_details":{"reasoning_tokens":3}}}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Usage != (Usage{InputTokens: 20, OutputTokens: 4, TotalTokens: 24, CachedReadTokens: 12, ReasoningTokens: 3}) {
+		t.Fatalf("usage=%#v", result.Usage)
 	}
 }
 

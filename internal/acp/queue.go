@@ -80,6 +80,7 @@ func (s *Server) queuePrompt(current *session, incoming message, request *prompt
 		current.promptQueue = append(current.promptQueue, item)
 	}
 	if item.sendNow && current.cancel != nil && !goalActive(current) {
+		current.cancelTrigger = "send_now"
 		current.cancel()
 	}
 	current.mu.Unlock()
@@ -240,6 +241,7 @@ func (s *Server) handleQueueUpdate(incoming message) {
 					item.sendNow = true
 					insertQueuedPrompt(&current.promptQueue, item)
 					if current.cancel != nil && !goalActive(current) {
+						current.cancelTrigger = "send_now"
 						current.cancel()
 					}
 				} else {
@@ -250,7 +252,7 @@ func (s *Server) handleQueueUpdate(incoming message) {
 	}
 	current.mu.Unlock()
 	for _, item := range removed {
-		s.respond(item.incoming.ID, map[string]any{"stopReason": "cancelled"})
+		s.respondQueuedPromptCancelled(current, item)
 	}
 	if changed || incoming.Method != "x.ai/queue/edit" {
 		s.broadcastQueue(current)

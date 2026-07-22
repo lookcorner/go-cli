@@ -34,7 +34,11 @@ func TestParseChatSSEIncrementalToolCall(t *testing.T) {
 		"",
 		sseLine(t, map[string]any{
 			"id": "chat_1", "choices": []any{},
-			"usage": map[string]any{"prompt_tokens": 44, "completion_tokens": 6, "total_tokens": 50},
+			"usage": map[string]any{
+				"prompt_tokens": 44, "completion_tokens": 6, "total_tokens": 50,
+				"prompt_tokens_details":     map[string]any{"cached_tokens": 30},
+				"completion_tokens_details": map[string]any{"reasoning_tokens": 4},
+			},
 		}),
 		"",
 		"data: [DONE]",
@@ -46,12 +50,22 @@ func TestParseChatSSEIncrementalToolCall(t *testing.T) {
 	if result.ResponseID != "chat_1" || result.Text != "checking " || len(result.ToolCalls) != 1 {
 		t.Fatalf("unexpected result: %#v", result)
 	}
-	if result.Usage.InputTokens != 44 || result.Usage.TotalTokens != 50 {
+	if result.Usage.InputTokens != 44 || result.Usage.OutputTokens != 6 || result.Usage.TotalTokens != 50 || result.Usage.CachedReadTokens != 30 || result.Usage.ReasoningTokens != 4 {
 		t.Fatalf("usage missing: %#v", result.Usage)
 	}
 	call := result.ToolCalls[0]
 	if call.CallID != "call_1" || call.Name != "read_file" || string(call.Arguments) != "{\"path\":\"README.md\"}" {
 		t.Fatalf("unexpected call: %#v", call)
+	}
+}
+
+func TestParseChatJSONUsageDetails(t *testing.T) {
+	result, err := parseChatJSON(strings.NewReader(`{"id":"chat_1","choices":[],"usage":{"prompt_tokens":20,"completion_tokens":4,"total_tokens":24,"prompt_tokens_details":{"cached_tokens":12},"completion_tokens_details":{"reasoning_tokens":3}}}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Usage != (Usage{InputTokens: 20, OutputTokens: 4, TotalTokens: 24, CachedReadTokens: 12, ReasoningTokens: 3}) {
+		t.Fatalf("usage=%#v", result.Usage)
 	}
 }
 

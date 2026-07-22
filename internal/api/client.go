@@ -80,6 +80,12 @@ type wireResponse struct {
 		InputTokens  int `json:"input_tokens"`
 		OutputTokens int `json:"output_tokens"`
 		TotalTokens  int `json:"total_tokens"`
+		InputDetails struct {
+			CachedTokens int `json:"cached_tokens"`
+		} `json:"input_tokens_details"`
+		OutputDetails struct {
+			ReasoningTokens int `json:"reasoning_tokens"`
+		} `json:"output_tokens_details"`
 	} `json:"usage"`
 }
 
@@ -125,7 +131,7 @@ func parseSSE(reader io.Reader, onText func(string)) (StreamResult, error) {
 				return StreamResult{}, fmt.Errorf("decode terminal response: %w", err)
 			}
 			result.ResponseID = response.ID
-			result.Usage = Usage{InputTokens: response.Usage.InputTokens, OutputTokens: response.Usage.OutputTokens, TotalTokens: response.Usage.TotalTokens}
+			result.Usage = responseUsage(response)
 			for _, item := range response.Output {
 				appendToolCall(item, &result, seenCalls)
 			}
@@ -142,9 +148,7 @@ func parseJSON(reader io.Reader, onText func(string)) (StreamResult, error) {
 	if err := json.NewDecoder(reader).Decode(&response); err != nil {
 		return StreamResult{}, fmt.Errorf("decode response: %w", err)
 	}
-	result := StreamResult{ResponseID: response.ID, Usage: Usage{
-		InputTokens: response.Usage.InputTokens, OutputTokens: response.Usage.OutputTokens, TotalTokens: response.Usage.TotalTokens,
-	}}
+	result := StreamResult{ResponseID: response.ID, Usage: responseUsage(response)}
 	seenCalls := make(map[string]struct{})
 	for _, raw := range response.Output {
 		var item struct {
@@ -167,6 +171,14 @@ func parseJSON(reader io.Reader, onText func(string)) (StreamResult, error) {
 		appendToolCall(raw, &result, seenCalls)
 	}
 	return result, nil
+}
+
+func responseUsage(response wireResponse) Usage {
+	return Usage{
+		InputTokens: response.Usage.InputTokens, OutputTokens: response.Usage.OutputTokens,
+		TotalTokens: response.Usage.TotalTokens, CachedReadTokens: response.Usage.InputDetails.CachedTokens,
+		ReasoningTokens: response.Usage.OutputDetails.ReasoningTokens,
+	}
 }
 
 func appendToolCall(raw json.RawMessage, result *StreamResult, seen map[string]struct{}) {

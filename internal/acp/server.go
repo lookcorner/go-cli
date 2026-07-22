@@ -114,6 +114,7 @@ type session struct {
 	promptQueue       []queuedPrompt
 	runningPromptID   string
 	startingPromptID  string
+	cancelTrigger     string
 	activeWakeID      string
 	closed            bool
 }
@@ -1641,25 +1642,25 @@ func (s *Server) handlePromptRequest(parent context.Context, incoming message, c
 		return
 	}
 	if strings.TrimSpace(prompt) == "/compact" {
-		s.handleCompactPrompt(parent, incoming, current)
+		s.handleCompactPrompt(parent, incoming, current, newPromptLifecycle(params))
 		s.markRunningPrompt(current, promptID(params.Meta))
 		return
 	}
 	if strings.TrimSpace(prompt) == "/flush" {
-		s.handleMemoryFlush(parent, incoming, current, false)
+		s.handleMemoryFlush(parent, incoming, current, false, newPromptLifecycle(params))
 		s.markRunningPrompt(current, promptID(params.Meta))
 		return
 	}
 	if strings.TrimSpace(prompt) == "/dream" {
-		s.handleMemoryDream(parent, incoming, current)
+		s.handleMemoryDream(parent, incoming, current, newPromptLifecycle(params))
 		s.markRunningPrompt(current, promptID(params.Meta))
 		return
 	}
 	if action, ok := tools.ParseMemoryCommand(prompt); ok {
 		if action == "browse" {
-			s.handleMemoryFiles(incoming, current)
+			s.handleMemoryFiles(incoming, current, newPromptLifecycle(params))
 		} else {
-			s.handleMemoryToggle(parent, incoming, current, action == "enable")
+			s.handleMemoryToggle(parent, incoming, current, action == "enable", newPromptLifecycle(params))
 		}
 		s.markRunningPrompt(current, promptID(params.Meta))
 		return
@@ -1709,8 +1710,6 @@ func (s *Server) handlePromptRequest(parent context.Context, incoming message, c
 		stopReason := "end_turn"
 		if errors.Is(runCtx.Err(), context.Canceled) {
 			stopReason = "cancelled"
-		} else if err != nil {
-			s.respondError(incoming.ID, -32000, err.Error())
 		}
 		current.mu.Lock()
 		if err == nil {
@@ -1729,32 +1728,32 @@ func (s *Server) handlePromptRequest(parent context.Context, incoming message, c
 			current.promptIndex = len(points)
 		}
 		current.cancel = nil
+		cancelTrigger := current.cancelTrigger
+		current.cancelTrigger = ""
 		current.updated = time.Now().UTC()
 		close(runDone)
 		current.mu.Unlock()
-		if err == nil || stopReason == "cancelled" {
-			s.respond(incoming.ID, map[string]any{"stopReason": stopReason})
-		}
+		s.finishPrompt(incoming, current, newPromptLifecycle(params), stopReason, result, err, cancelTrigger)
 		s.startNext(current)
 	}()
 	s.broadcastQueue(current)
 }
 
-func (s *Server) handleCompactPrompt(parent context.Context, incoming message, current *session) {
+func (s *Server) handleCompactPrompt(parent context.Context, incoming message, current *session, lifecycle promptLifecycle) {
 	current.mu.Lock()
 	if current.closed {
 		current.mu.Unlock()
-		s.respondError(incoming.ID, -32000, "session is closed")
+		s.failPrompt(incoming, current, lifecycle, "session is closed")
 		return
 	}
 	if current.running {
 		current.mu.Unlock()
-		s.respondError(incoming.ID, -32000, "session already has an active prompt")
+		s.failPrompt(incoming, current, lifecycle, "session already has an active prompt")
 		return
 	}
 	if current.previous == "" {
 		current.mu.Unlock()
-		s.respondError(incoming.ID, -32000, "no completed response is available to compact")
+		s.failPrompt(incoming, current, lifecycle, "no completed response is available to compact")
 		return
 	}
 	runCtx, cancel := context.WithCancel(parent)
@@ -1772,8 +1771,6 @@ func (s *Server) handleCompactPrompt(parent context.Context, incoming message, c
 		stopReason := "end_turn"
 		if errors.Is(runCtx.Err(), context.Canceled) {
 			stopReason = "cancelled"
-		} else if err != nil {
-			s.respondError(incoming.ID, -32000, err.Error())
 		}
 		current.mu.Lock()
 		if err == nil {
@@ -1782,12 +1779,12 @@ func (s *Server) handleCompactPrompt(parent context.Context, incoming message, c
 		current.running = false
 		current.runDone = nil
 		current.cancel = nil
+		cancelTrigger := current.cancelTrigger
+		current.cancelTrigger = ""
 		current.updated = time.Now().UTC()
 		close(runDone)
 		current.mu.Unlock()
-		if err == nil || stopReason == "cancelled" {
-			s.respond(incoming.ID, map[string]any{"stopReason": stopReason})
-		}
+		s.finishPrompt(incoming, current, lifecycle, stopReason, agent.Result{}, err, cancelTrigger)
 		s.startNext(current)
 	}()
 }
@@ -1814,7 +1811,7 @@ func (s *Server) handleMemoryExtension(parent context.Context, incoming message)
 		s.respondError(incoming.ID, -32602, "unknown session")
 		return
 	}
-	s.handleMemoryFlush(parent, incoming, current, true)
+	s.handleMemoryFlush(parent, incoming, current, true, promptLifecycle{})
 }
 
 func (s *Server) handleMemoryRewriteExtension(parent context.Context, incoming message) {
@@ -1865,38 +1862,38 @@ func (s *Server) handleMemoryRewriteExtension(parent context.Context, incoming m
 	}()
 }
 
-func (s *Server) handleMemoryFiles(incoming message, current *session) {
+func (s *Server) handleMemoryFiles(incoming message, current *session, lifecycle promptLifecycle) {
 	current.mu.Lock()
 	if current.closed {
 		current.mu.Unlock()
-		s.respondError(incoming.ID, -32000, "session is closed")
+		s.failPrompt(incoming, current, lifecycle, "session is closed")
 		return
 	}
 	if current.running {
 		current.mu.Unlock()
-		s.respondError(incoming.ID, -32000, "session already has an active prompt")
+		s.failPrompt(incoming, current, lifecycle, "session already has an active prompt")
 		return
 	}
 	current.mu.Unlock()
 	files, err := current.runner.ListMemory()
 	if err != nil {
-		s.respondError(incoming.ID, -32000, err.Error())
+		s.failPrompt(incoming, current, lifecycle, err.Error())
 		return
 	}
 	s.notify(current.id, map[string]any{"sessionUpdate": "memory_files", "files": files})
-	s.respond(incoming.ID, map[string]any{"stopReason": "end_turn"})
+	s.finishPrompt(incoming, current, lifecycle, "end_turn", agent.Result{}, nil, "")
 }
 
-func (s *Server) handleMemoryDream(parent context.Context, incoming message, current *session) {
+func (s *Server) handleMemoryDream(parent context.Context, incoming message, current *session, lifecycle promptLifecycle) {
 	current.mu.Lock()
 	if current.closed {
 		current.mu.Unlock()
-		s.respondError(incoming.ID, -32000, "session is closed")
+		s.failPrompt(incoming, current, lifecycle, "session is closed")
 		return
 	}
 	if current.running {
 		current.mu.Unlock()
-		s.respondError(incoming.ID, -32000, "session already has an active prompt")
+		s.failPrompt(incoming, current, lifecycle, "session already has an active prompt")
 		return
 	}
 	runCtx, cancel := context.WithCancel(parent)
@@ -1909,6 +1906,8 @@ func (s *Server) handleMemoryDream(parent context.Context, incoming message, cur
 		result, err := current.runner.DreamMemory(runCtx, true)
 		current.mu.Lock()
 		current.cancel, current.running, current.runDone, current.updated = nil, false, nil, time.Now().UTC()
+		cancelTrigger := current.cancelTrigger
+		current.cancelTrigger = ""
 		close(runDone)
 		current.mu.Unlock()
 		update := map[string]any{"sessionUpdate": "memory_dream_completed", "result": result.Outcome}
@@ -1916,25 +1915,25 @@ func (s *Server) handleMemoryDream(parent context.Context, incoming message, cur
 			update["path"] = result.Path
 		}
 		s.notify(current.id, update)
-		if err != nil {
-			s.respondError(incoming.ID, -32000, err.Error())
-		} else {
-			s.respond(incoming.ID, map[string]any{"stopReason": "end_turn"})
+		stopReason := "end_turn"
+		if errors.Is(runCtx.Err(), context.Canceled) {
+			stopReason = "cancelled"
 		}
+		s.finishPrompt(incoming, current, lifecycle, stopReason, agent.Result{}, err, cancelTrigger)
 		s.startNext(current)
 	}()
 }
 
-func (s *Server) handleMemoryToggle(parent context.Context, incoming message, current *session, enabled bool) {
+func (s *Server) handleMemoryToggle(parent context.Context, incoming message, current *session, enabled bool, lifecycle promptLifecycle) {
 	current.mu.Lock()
 	if current.closed {
 		current.mu.Unlock()
-		s.respondError(incoming.ID, -32000, "session is closed")
+		s.failPrompt(incoming, current, lifecycle, "session is closed")
 		return
 	}
 	if current.running {
 		current.mu.Unlock()
-		s.respondError(incoming.ID, -32000, "session already has an active prompt")
+		s.failPrompt(incoming, current, lifecycle, "session already has an active prompt")
 		return
 	}
 	runCtx, cancel := context.WithCancel(parent)
@@ -1947,33 +1946,37 @@ func (s *Server) handleMemoryToggle(parent context.Context, incoming message, cu
 		text, err := current.runner.SetMemoryEnabled(runCtx, enabled)
 		current.mu.Lock()
 		current.cancel, current.running, current.runDone, current.updated = nil, false, nil, time.Now().UTC()
+		cancelTrigger := current.cancelTrigger
+		current.cancelTrigger = ""
 		close(runDone)
 		current.mu.Unlock()
-		if err != nil {
-			s.respondError(incoming.ID, -32000, err.Error())
-		} else {
+		if err == nil {
 			s.notify(current.id, map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": text}})
-			s.respond(incoming.ID, map[string]any{"stopReason": "end_turn"})
 		}
+		stopReason := "end_turn"
+		if errors.Is(runCtx.Err(), context.Canceled) {
+			stopReason = "cancelled"
+		}
+		s.finishPrompt(incoming, current, lifecycle, stopReason, agent.Result{}, err, cancelTrigger)
 		s.startNext(current)
 	}()
 }
 
-func (s *Server) handleMemoryFlush(parent context.Context, incoming message, current *session, extension bool) {
+func (s *Server) handleMemoryFlush(parent context.Context, incoming message, current *session, extension bool, lifecycle promptLifecycle) {
 	current.mu.Lock()
 	if current.closed {
 		current.mu.Unlock()
-		s.respondError(incoming.ID, -32000, "session is closed")
+		s.failPrompt(incoming, current, lifecycle, "session is closed")
 		return
 	}
 	if current.running {
 		current.mu.Unlock()
-		s.respondError(incoming.ID, -32000, "session already has an active prompt")
+		s.failPrompt(incoming, current, lifecycle, "session already has an active prompt")
 		return
 	}
 	if current.previous == "" {
 		current.mu.Unlock()
-		s.respondError(incoming.ID, -32000, "no completed response is available to flush")
+		s.failPrompt(incoming, current, lifecycle, "no completed response is available to flush")
 		return
 	}
 	runCtx, cancel := context.WithCancel(parent)
@@ -1989,11 +1992,11 @@ func (s *Server) handleMemoryFlush(parent context.Context, incoming message, cur
 		stopReason := "end_turn"
 		if errors.Is(runCtx.Err(), context.Canceled) {
 			stopReason = "cancelled"
-		} else if err != nil {
-			s.respondError(incoming.ID, -32000, err.Error())
 		}
 		current.mu.Lock()
 		current.running, current.cancel, current.runDone, current.updated = false, nil, nil, time.Now().UTC()
+		cancelTrigger := current.cancelTrigger
+		current.cancelTrigger = ""
 		close(runDone)
 		current.mu.Unlock()
 		update := map[string]any{"sessionUpdate": "memory_flush_completed", "result": result.Outcome}
@@ -2004,12 +2007,14 @@ func (s *Server) handleMemoryFlush(parent context.Context, incoming message, cur
 			update["result"] = "error: " + err.Error()
 		}
 		s.notify(current.id, update)
-		if err == nil || stopReason == "cancelled" {
-			if extension {
-				s.respond(incoming.ID, map[string]any{})
+		if extension {
+			if err != nil && stopReason != "cancelled" {
+				s.respondError(incoming.ID, -32000, err.Error())
 			} else {
-				s.respond(incoming.ID, map[string]any{"stopReason": stopReason})
+				s.respond(incoming.ID, map[string]any{})
 			}
+		} else {
+			s.finishPrompt(incoming, current, lifecycle, stopReason, agent.Result{}, err, cancelTrigger)
 		}
 		s.startNext(current)
 	}()
@@ -2291,7 +2296,7 @@ func (s *Server) closeSession(id string) bool {
 	runDone, btwDone, recapDone := current.runDone, current.btwDone, current.recapDone
 	current.mu.Unlock()
 	for _, item := range queued {
-		s.respond(item.incoming.ID, map[string]any{"stopReason": "cancelled"})
+		s.respondQueuedPromptCancelled(current, item)
 	}
 	if runDone != nil {
 		<-runDone
@@ -2460,6 +2465,9 @@ func (s *Server) handleCancel(raw json.RawMessage) {
 		current.runner.ClearInterjections()
 	}
 	if current.cancel != nil {
+		if current.cancelTrigger == "" {
+			current.cancelTrigger = "ctrl_c"
+		}
 		current.cancel()
 	}
 	current.mu.Unlock()
@@ -2660,7 +2668,7 @@ func (s *Server) closeAll() {
 		runDone, btwDone, recapDone := current.runDone, current.btwDone, current.recapDone
 		current.mu.Unlock()
 		for _, item := range queued {
-			s.respond(item.incoming.ID, map[string]any{"stopReason": "cancelled"})
+			s.respondQueuedPromptCancelled(current, item)
 		}
 		if runDone != nil {
 			<-runDone

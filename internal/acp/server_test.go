@@ -901,6 +901,9 @@ func TestMemoryFlushExtensionAndSlashCommand(t *testing.T) {
 	messages := decodeACPOutput(t, output.Bytes())
 	started, completed, responded := false, false, false
 	for _, message := range messages {
+		if message["method"] == "x.ai/session/prompt_complete" {
+			t.Fatalf("memory extension emitted prompt completion: %#v", message)
+		}
 		if message["id"] != nil {
 			responded = message["error"] == nil
 			continue
@@ -2305,6 +2308,8 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 	if textUpdate["method"] != "session/update" {
 		t.Fatalf("unexpected stream update: %#v", textUpdate)
 	}
+	promptComplete := decodeACPNonQueue(t, decoder)
+	assertPromptComplete(t, promptComplete, sessionID, "", "end_turn")
 	completed := decodeACPNonQueue(t, decoder)
 	if int(completed["id"].(float64)) != 3 || completed["result"].(map[string]any)["stopReason"] != "end_turn" {
 		t.Fatalf("unexpected prompt response: %#v", completed)
@@ -2461,6 +2466,8 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 	if replacementUpdate["method"] != "session/update" {
 		t.Fatalf("missing replacement stream update: %#v", replacementUpdate)
 	}
+	replacementComplete := decodeACPNonQueue(t, decoder)
+	assertPromptComplete(t, replacementComplete, sessionID, "", "end_turn")
 	replacementDone := decodeACPNonQueue(t, decoder)
 	if int(replacementDone["id"].(float64)) != 39 {
 		t.Fatalf("unexpected replacement completion: %#v", replacementDone)
@@ -2915,9 +2922,22 @@ func TestACPCancelReturnsCancelledStopReason(t *testing.T) {
 		t.Fatalf("unexpected queue update: %#v", queueUpdate)
 	}
 	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "method": "session/cancel", "params": map[string]any{"sessionId": sessionID}})
+	promptComplete := decodeACPNonQueue(t, decoder)
+	assertPromptComplete(t, promptComplete, sessionID, "", "cancelled")
+	completeParams := promptComplete["params"].(map[string]any)
+	if completeParams["cancelTrigger"] != "ctrl_c" {
+		t.Fatalf("unexpected cancel completion: %#v", promptComplete)
+	}
 	response := decodeACPNonQueue(t, decoder)
 	if response["result"].(map[string]any)["stopReason"] != "cancelled" {
 		t.Fatalf("unexpected cancel response: %#v", response)
+	}
+	responseMeta := response["result"].(map[string]any)["_meta"].(map[string]any)
+	if responseMeta["cancelTrigger"] != "ctrl_c" {
+		t.Fatalf("unexpected cancel response metadata: %#v", response)
+	}
+	if completeParams["promptId"] == "" || completeParams["promptId"] != responseMeta["promptId"] {
+		t.Fatalf("generated prompt ID did not correlate completion and response: %#v %#v", promptComplete, response)
 	}
 	emptyQueue := decodeACP(t, decoder)
 	if emptyQueue["method"] != "x.ai/queue/changed" || len(emptyQueue["params"].(map[string]any)["entries"].([]any)) != 0 {
@@ -3041,5 +3061,19 @@ func decodeACPNonQueue(t *testing.T, decoder *json.Decoder) map[string]any {
 		if value["method"] != "x.ai/queue/changed" {
 			return value
 		}
+	}
+}
+
+func assertPromptComplete(t *testing.T, value map[string]any, sessionID, promptID, stopReason string) {
+	t.Helper()
+	if value["method"] != "x.ai/session/prompt_complete" {
+		t.Fatalf("unexpected prompt completion: %#v", value)
+	}
+	params := value["params"].(map[string]any)
+	if params["sessionId"] != sessionID || params["stopReason"] != stopReason || params["agentResult"] != nil {
+		t.Fatalf("unexpected prompt completion: %#v", value)
+	}
+	if promptID != "" && params["promptId"] != promptID {
+		t.Fatalf("unexpected prompt completion: %#v", value)
 	}
 }

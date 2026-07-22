@@ -23,6 +23,12 @@ commands through `x.ai/commands/list`, emits `memory_files` metadata updates,
 and exposes `x.ai/memory/flush` plus the bounded, history-isolated
 `x.ai/memory/rewrite` note formatter.
 
+Completed ACP prompts publish `x.ai/session/prompt_complete` before their RPC
+response. Prompt responses include `_meta` correlation for the session,
+request/prompt, model, token usage, optional turn, and cancellation trigger;
+queued prompts removed before execution return cancelled without publishing a
+false completion event.
+
 The model can call `enter_plan_mode` to enter a persisted, read-only planning
 phase. While active, workspace mutations are limited to `.grok/plan.md`; shell,
 background, scheduler mutation, image-generation, task, monitor, and MCP tools

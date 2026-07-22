@@ -299,8 +299,9 @@ type messagesEvent struct {
 	Message struct {
 		ID    string `json:"id"`
 		Usage struct {
-			InputTokens  int `json:"input_tokens"`
-			OutputTokens int `json:"output_tokens"`
+			InputTokens      int `json:"input_tokens"`
+			OutputTokens     int `json:"output_tokens"`
+			CachedReadTokens int `json:"cache_read_input_tokens"`
 		} `json:"usage"`
 	} `json:"message,omitempty"`
 	ContentBlock struct {
@@ -316,8 +317,9 @@ type messagesEvent struct {
 		PartialJSON string `json:"partial_json,omitempty"`
 	} `json:"delta,omitempty"`
 	Usage struct {
-		InputTokens  int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
+		InputTokens      int `json:"input_tokens"`
+		OutputTokens     int `json:"output_tokens"`
+		CachedReadTokens int `json:"cache_read_input_tokens"`
 	} `json:"usage,omitempty"`
 	Error *wireError `json:"error,omitempty"`
 }
@@ -358,12 +360,16 @@ func parseMessagesSSE(reader io.Reader, onText func(string)) (StreamResult, erro
 			result.ResponseID = event.Message.ID
 			result.Usage.InputTokens = event.Message.Usage.InputTokens
 			result.Usage.OutputTokens = event.Message.Usage.OutputTokens
+			result.Usage.CachedReadTokens = event.Message.Usage.CachedReadTokens
 		case "message_delta":
 			if event.Usage.InputTokens > 0 {
 				result.Usage.InputTokens = event.Usage.InputTokens
 			}
 			if event.Usage.OutputTokens > 0 {
 				result.Usage.OutputTokens = event.Usage.OutputTokens
+			}
+			if event.Usage.CachedReadTokens > 0 {
+				result.Usage.CachedReadTokens = event.Usage.CachedReadTokens
 			}
 		case "content_block_start":
 			if event.ContentBlock.Type == "text" && event.ContentBlock.Text != "" {
@@ -421,8 +427,9 @@ func parseMessagesJSON(reader io.Reader, onText func(string)) (StreamResult, err
 		ID      string          `json:"id"`
 		Content []messagesBlock `json:"content"`
 		Usage   struct {
-			InputTokens  int `json:"input_tokens"`
-			OutputTokens int `json:"output_tokens"`
+			InputTokens      int `json:"input_tokens"`
+			OutputTokens     int `json:"output_tokens"`
+			CachedReadTokens int `json:"cache_read_input_tokens"`
 		} `json:"usage"`
 	}
 	if err := json.NewDecoder(reader).Decode(&response); err != nil {
@@ -430,7 +437,7 @@ func parseMessagesJSON(reader io.Reader, onText func(string)) (StreamResult, err
 	}
 	result := StreamResult{ResponseID: response.ID, Usage: Usage{
 		InputTokens: response.Usage.InputTokens, OutputTokens: response.Usage.OutputTokens,
-		TotalTokens: response.Usage.InputTokens + response.Usage.OutputTokens,
+		TotalTokens: response.Usage.InputTokens + response.Usage.OutputTokens, CachedReadTokens: response.Usage.CachedReadTokens,
 	}}
 	for _, block := range response.Content {
 		switch block.Type {

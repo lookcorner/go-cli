@@ -177,6 +177,9 @@ func TestPromptQueueUpdatesAreAuthoritative(t *testing.T) {
 	messages := decodeACPOutput(t, output.Bytes())
 	foundDisplay, cancelled := false, map[float64]bool{}
 	for _, item := range messages {
+		if item["method"] == "x.ai/session/prompt_complete" {
+			t.Fatalf("removed queued prompt emitted completion: %#v", item)
+		}
 		if item["method"] == "x.ai/queue/changed" {
 			params := item["params"].(map[string]any)
 			if params["runningPromptId"] == "running" {
@@ -189,6 +192,12 @@ func TestPromptQueueUpdatesAreAuthoritative(t *testing.T) {
 		if id, ok := item["id"].(float64); ok {
 			result, _ := item["result"].(map[string]any)
 			cancelled[id] = result["stopReason"] == "cancelled"
+			if cancelled[id] {
+				meta := result["_meta"].(map[string]any)
+				if meta["promptId"] == "" || meta["totalTokens"] != float64(0) {
+					t.Fatalf("cancelled response=%#v", item)
+				}
+			}
 		}
 	}
 	if !foundDisplay || !cancelled[1] || !cancelled[2] || !cancelled[3] {
@@ -213,9 +222,14 @@ func TestClosingSessionCancelsQueuedPrompt(t *testing.T) {
 	if last["id"] != float64(7) || last["result"].(map[string]any)["stopReason"] != "cancelled" {
 		t.Fatalf("messages=%#v", messages)
 	}
+	for _, item := range messages {
+		if item["method"] == "x.ai/session/prompt_complete" {
+			t.Fatalf("queued prompt emitted completion during close: %#v", item)
+		}
+	}
 }
 
-func TestCancelContinuesWithNextQueuedPrompt(t *testing.T) {
+func TestSendNowContinuesWithNextQueuedPromptWithoutLeakingTrigger(t *testing.T) {
 	ws, err := workspace.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -230,30 +244,36 @@ func TestCancelContinuesWithNextQueuedPrompt(t *testing.T) {
 	var output bytes.Buffer
 	server := &Server{output: &output, sessions: map[string]*session{"cancel-next": current}}
 	for id, text := range []string{"active", "next"} {
+		meta := map[string]any{"promptId": text}
+		if id == 1 {
+			meta["sendNow"] = true
+		}
 		params, _ := json.Marshal(map[string]any{
 			"sessionId": "cancel-next", "prompt": []any{map[string]any{"type": "text", "text": text}},
-			"_meta": map[string]any{"promptId": text},
+			"_meta": meta,
 		})
 		server.handlePrompt(context.Background(), message{ID: json.RawMessage([]byte{byte('1' + id)}), Method: "session/prompt", Params: params})
 		if id == 0 {
 			waitPromptStart(t, streamer.started, 0)
 		}
 	}
-	server.handleCancel(json.RawMessage(`{"sessionId":"cancel-next"}`))
 	waitPromptStart(t, streamer.started, 1)
 	streamer.release <- api.StreamResult{ResponseID: "next-response"}
 	server.wg.Wait()
 
-	responses := map[float64]string{}
+	responses := map[float64]map[string]any{}
 	for _, item := range decodeACPOutput(t, output.Bytes()) {
 		if id, ok := item["id"].(float64); ok {
 			if result, ok := item["result"].(map[string]any); ok {
-				responses[id], _ = result["stopReason"].(string)
+				responses[id] = result
 			}
 		}
 	}
-	if responses[1] != "cancelled" || responses[2] != "end_turn" {
+	if responses[1]["stopReason"] != "cancelled" || responses[1]["_meta"].(map[string]any)["cancelTrigger"] != "send_now" || responses[2]["stopReason"] != "end_turn" {
 		t.Fatalf("responses=%#v", responses)
+	}
+	if _, leaked := responses[2]["_meta"].(map[string]any)["cancelTrigger"]; leaked {
+		t.Fatalf("cancel trigger leaked to next prompt: %#v", responses)
 	}
 }
 
@@ -274,6 +294,9 @@ func TestCloseAllCancelsEveryQueuedPrompt(t *testing.T) {
 	}
 	cancelled := map[float64]bool{}
 	for _, item := range decodeACPOutput(t, output.Bytes()) {
+		if item["method"] == "x.ai/session/prompt_complete" {
+			t.Fatalf("queued prompt emitted completion during close-all: %#v", item)
+		}
 		id, _ := item["id"].(float64)
 		result, _ := item["result"].(map[string]any)
 		cancelled[id] = result["stopReason"] == "cancelled"

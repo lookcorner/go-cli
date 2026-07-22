@@ -164,6 +164,7 @@ const (
 type Result struct {
 	ResponseID    string
 	Text          string
+	Usage         *api.Usage
 	Steps         int
 	InputTokens   int
 	ContextWindow int
@@ -620,9 +621,10 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 			return final, err
 		}
 		inFlightInterjections = nil
+		usage := streamed.Usage
 		final = Result{
 			ResponseID: streamed.ResponseID, Text: streamed.Text, Steps: step,
-			InputTokens: streamed.Usage.InputTokens, ContextWindow: r.ContextWindow,
+			Usage: &usage, InputTokens: streamed.Usage.InputTokens, ContextWindow: r.ContextWindow,
 		}
 		progress.Turns, progress.InputTokens = step, streamed.Usage.InputTokens
 		tokens := streamed.Usage.TotalTokens

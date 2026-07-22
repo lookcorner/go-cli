@@ -13,7 +13,7 @@ import (
 func TestParseMessagesSSE(t *testing.T) {
 	events := []any{
 		map[string]any{"type": "message_start", "message": map[string]any{
-			"id": "msg_1", "usage": map[string]any{"input_tokens": 55, "output_tokens": 0},
+			"id": "msg_1", "usage": map[string]any{"input_tokens": 55, "output_tokens": 0, "cache_read_input_tokens": 40},
 		}},
 		map[string]any{"type": "content_block_start", "index": 0, "content_block": map[string]any{"type": "text", "text": ""}},
 		map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]any{"type": "text_delta", "text": "working"}},
@@ -37,12 +37,22 @@ func TestParseMessagesSSE(t *testing.T) {
 	if result.ResponseID != "msg_1" || result.Text != "working" || len(result.ToolCalls) != 1 {
 		t.Fatalf("unexpected result: %#v", result)
 	}
-	if result.Usage.InputTokens != 55 || result.Usage.TotalTokens != 63 {
+	if result.Usage.InputTokens != 55 || result.Usage.OutputTokens != 8 || result.Usage.TotalTokens != 63 || result.Usage.CachedReadTokens != 40 {
 		t.Fatalf("usage missing: %#v", result.Usage)
 	}
 	call := result.ToolCalls[0]
 	if call.CallID != "tool_1" || call.Name != "read_file" || string(call.Arguments) != "{\"path\":\"README.md\"}" {
 		t.Fatalf("unexpected tool call: %#v", call)
+	}
+}
+
+func TestParseMessagesJSONUsageDetails(t *testing.T) {
+	result, err := parseMessagesJSON(strings.NewReader(`{"id":"msg_1","content":[],"usage":{"input_tokens":20,"output_tokens":4,"cache_read_input_tokens":12}}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Usage != (Usage{InputTokens: 20, OutputTokens: 4, TotalTokens: 24, CachedReadTokens: 12}) {
+		t.Fatalf("usage=%#v", result.Usage)
 	}
 }
 

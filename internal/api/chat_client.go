@@ -266,6 +266,12 @@ type chatChunk struct {
 		PromptTokens     int `json:"prompt_tokens"`
 		CompletionTokens int `json:"completion_tokens"`
 		TotalTokens      int `json:"total_tokens"`
+		PromptDetails    struct {
+			CachedTokens int `json:"cached_tokens"`
+		} `json:"prompt_tokens_details"`
+		CompletionDetails struct {
+			ReasoningTokens int `json:"reasoning_tokens"`
+		} `json:"completion_tokens_details"`
 	} `json:"usage,omitempty"`
 	Choices []struct {
 		Delta struct {
@@ -310,7 +316,7 @@ func parseChatSSE(reader io.Reader, onText func(string)) (StreamResult, error) {
 			result.ResponseID = chunk.ID
 		}
 		if chunk.Usage != nil {
-			result.Usage = Usage{InputTokens: chunk.Usage.PromptTokens, OutputTokens: chunk.Usage.CompletionTokens, TotalTokens: chunk.Usage.TotalTokens}
+			result.Usage = chatUsage(chunk.Usage.PromptTokens, chunk.Usage.CompletionTokens, chunk.Usage.TotalTokens, chunk.Usage.PromptDetails.CachedTokens, chunk.Usage.CompletionDetails.ReasoningTokens)
 		}
 		for _, choice := range chunk.Choices {
 			if choice.Delta.Content != "" {
@@ -363,6 +369,12 @@ func parseChatJSON(reader io.Reader, onText func(string)) (StreamResult, error) 
 			PromptTokens     int `json:"prompt_tokens"`
 			CompletionTokens int `json:"completion_tokens"`
 			TotalTokens      int `json:"total_tokens"`
+			PromptDetails    struct {
+				CachedTokens int `json:"cached_tokens"`
+			} `json:"prompt_tokens_details"`
+			CompletionDetails struct {
+				ReasoningTokens int `json:"reasoning_tokens"`
+			} `json:"completion_tokens_details"`
 		} `json:"usage"`
 		Choices []struct {
 			Message chatMessage `json:"message"`
@@ -371,9 +383,10 @@ func parseChatJSON(reader io.Reader, onText func(string)) (StreamResult, error) 
 	if err := json.NewDecoder(reader).Decode(&response); err != nil {
 		return StreamResult{}, fmt.Errorf("decode chat response: %w", err)
 	}
-	result := StreamResult{ResponseID: response.ID, Usage: Usage{
-		InputTokens: response.Usage.PromptTokens, OutputTokens: response.Usage.CompletionTokens, TotalTokens: response.Usage.TotalTokens,
-	}}
+	result := StreamResult{ResponseID: response.ID, Usage: chatUsage(
+		response.Usage.PromptTokens, response.Usage.CompletionTokens, response.Usage.TotalTokens,
+		response.Usage.PromptDetails.CachedTokens, response.Usage.CompletionDetails.ReasoningTokens,
+	)}
 	for _, choice := range response.Choices {
 		content, _ := choice.Message.Content.(string)
 		result.Text += content
@@ -391,4 +404,8 @@ func parseChatJSON(reader io.Reader, onText func(string)) (StreamResult, error) 
 		}
 	}
 	return result, nil
+}
+
+func chatUsage(input, output, total, cached, reasoning int) Usage {
+	return Usage{InputTokens: input, OutputTokens: output, TotalTokens: total, CachedReadTokens: cached, ReasoningTokens: reasoning}
 }
