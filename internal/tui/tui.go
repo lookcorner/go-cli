@@ -334,6 +334,7 @@ type model struct {
 	question       *questionState
 	planMode       bool
 	planReview     *planReviewState
+	planPreview    *string
 	remember       *rememberReviewState
 	rememberInput  bool
 	rememberNonce  uint64
@@ -856,6 +857,16 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.question != nil {
 		return m.handleQuestionKey(msg)
 	}
+	if m.planPreview != nil {
+		if stroke == "ctrl+q" {
+			return m, tea.Quit
+		}
+		if key.Code == tea.KeyEsc {
+			m.planPreview = nil
+			m.status = "ready"
+		}
+		return m, nil
+	}
 	if m.historySearch != nil {
 		return m.handleHistorySearchKey(msg)
 	}
@@ -985,8 +996,22 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "/quit", "/exit":
 			return m, tea.Quit
 		case "/help":
-			m.appendSystem("# Commands\n\n`! <command>` `/always-approve` `/compact` `/context` `/copy [N]` `/dream` `/exit` `/find` `/flush` `/help` `/history` `/loop` `/memory` `/multiline` `/plan [description]` `/remember` `/session-info`")
+			m.appendSystem("# Commands\n\n`! <command>` `/always-approve` `/compact` `/context` `/copy [N]` `/dream` `/exit` `/find` `/flush` `/help` `/history` `/loop` `/memory` `/multiline` `/plan [description]` `/remember` `/session-info` `/view-plan`")
 			m.status = "commands"
+			return m, nil
+		case "/view-plan", "/show-plan", "/plan-view":
+			if m.runner == nil || m.runner.Tools == nil {
+				m.status = "plan preview unavailable"
+				return m, nil
+			}
+			content, err := m.runner.Tools.CurrentPlan()
+			if err != nil {
+				m.status = "plan preview failed: " + err.Error()
+				return m, nil
+			}
+			m.planPreview = &content
+			m.status = "plan preview"
+			m.scroll = 0
 			return m, nil
 		case "/plan":
 			if err := m.setPlanMode(true); err != nil {
@@ -1931,6 +1956,11 @@ func (m *model) View() tea.View {
 	content := m.transcript.String()
 	if m.planReview != nil {
 		content = "# Review implementation plan\n\n" + m.planReview.event.event.PlanContent
+	} else if m.planPreview != nil {
+		content = "# Current plan\n\n" + strings.TrimSpace(*m.planPreview)
+		if strings.TrimSpace(*m.planPreview) == "" {
+			content += "No plan content."
+		}
 	} else if m.remember != nil {
 		label, note := "Raw", m.remember.raw
 		if m.remember.showEnhanced && m.remember.enhanced != "" {

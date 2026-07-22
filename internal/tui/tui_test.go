@@ -293,6 +293,32 @@ func TestPlanSlashCommandEntersModeAndStartsDescription(t *testing.T) {
 	}
 }
 
+func TestViewPlanCommandsOpenReadOnlyPreview(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.Write(".grok/plan.md", "# Plan\n\n1. Refactor auth.\n", true); err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	for _, prompt := range []string{"/view-plan ignored", "/show-plan", "/plan-view"} {
+		m := &model{ctx: context.Background(), runner: &agent.Runner{Tools: registry}, width: 60, height: 16}
+		m.setInput(prompt)
+		updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+		m = updated.(*model)
+		if command != nil || m.running || m.planPreview == nil || m.status != "plan preview" || !strings.Contains(m.View().Content, "Refactor auth") {
+			t.Fatalf("prompt=%q command=%v running=%v preview=%v status=%q view=%q", prompt, command != nil, m.running, m.planPreview != nil, m.status, m.View().Content)
+		}
+		updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
+		m = updated.(*model)
+		if m.planPreview != nil || m.status != "ready" {
+			t.Fatalf("preview did not close: preview=%v status=%q", m.planPreview != nil, m.status)
+		}
+	}
+}
+
 func TestExitSlashCommandsQuitWithoutModelTurn(t *testing.T) {
 	for _, prompt := range []string{"/quit ignored", "/exit"} {
 		m := &model{ctx: context.Background(), runner: &agent.Runner{}}

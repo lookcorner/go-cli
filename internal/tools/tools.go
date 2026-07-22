@@ -655,6 +655,14 @@ func (r *Registry) PlanModeActive() bool {
 	return r != nil && r.plan != nil && r.plan.Active()
 }
 
+func (r *Registry) CurrentPlan() (string, error) {
+	if r == nil || r.plan == nil {
+		return "", errors.New("plan mode unavailable")
+	}
+	_, content, err := r.plan.readPlan()
+	return content, err
+}
+
 func (r *Registry) ModeInstructions() string {
 	if r == nil || r.plan == nil {
 		return ""
