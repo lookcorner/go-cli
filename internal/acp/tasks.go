@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lookcorner/go-cli/internal/api"
 	sessionlog "github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/subagent"
 	"github.com/lookcorner/go-cli/internal/tools"
@@ -277,8 +278,49 @@ func dropMonitorEvents(queue []syntheticWake, taskID string) []syntheticWake {
 
 func (s *Server) startNextWake(current *session) {
 	current.mu.Lock()
-	if current.closed || current.ctx == nil || current.ctx.Err() != nil || current.running || len(current.wakeQueue) == 0 {
+	if current.closed || current.ctx == nil || current.ctx.Err() != nil || current.running || len(current.interjectionQueue) == 0 && len(current.wakeQueue) == 0 {
 		current.mu.Unlock()
+		return
+	}
+	if len(current.interjectionQueue) > 0 {
+		interjection := current.interjectionQueue[0]
+		current.interjectionQueue = current.interjectionQueue[1:]
+		runCtx, cancel := context.WithCancel(current.ctx)
+		runDone := make(chan struct{})
+		current.cancel, current.running, current.runDone = cancel, true, runDone
+		current.activePrompt = current.promptIndex
+		current.promptIndex++
+		current.updated = time.Now().UTC()
+		previous, mode := current.previous, current.mode
+		current.mu.Unlock()
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			baseInstructions := current.runner.Instructions
+			current.runner.Instructions = turnInstructionsForMode(baseInstructions, mode)
+			content := append([]api.ContentPart{{Type: "input_text", Text: interjection.Text}}, interjection.Content...)
+			turn, err := current.runner.RunTurnParts(runCtx, interjection.Text, content, previous)
+			current.runner.Instructions = baseInstructions
+			points, pointsErr := sessionlog.RewindPoints(current.logPath)
+			current.mu.Lock()
+			if err == nil {
+				current.previous = turn.ResponseID
+			}
+			if runCtx.Err() == nil {
+				current.interjectionQueue = append(current.interjectionQueue, current.runner.TakeInterjections()...)
+			} else {
+				current.runner.ClearInterjections()
+				current.interjectionQueue = nil
+			}
+			current.running, current.activePrompt, current.cancel, current.runDone = false, -1, nil, nil
+			if pointsErr == nil {
+				current.promptIndex = len(points)
+			}
+			current.updated = time.Now().UTC()
+			close(runDone)
+			current.mu.Unlock()
+			s.startNextWake(current)
+		}()
 		return
 	}
 	wake := current.wakeQueue[0]
@@ -305,6 +347,12 @@ func (s *Server) startNextWake(current *session) {
 		current.mu.Lock()
 		if err == nil {
 			current.previous = turn.ResponseID
+		}
+		if runCtx.Err() == nil {
+			current.interjectionQueue = append(current.interjectionQueue, current.runner.TakeInterjections()...)
+		} else {
+			current.runner.ClearInterjections()
+			current.interjectionQueue = nil
 		}
 		current.running, current.activePrompt, current.cancel, current.activeWakeID = false, -1, nil, ""
 		if pointsErr == nil {

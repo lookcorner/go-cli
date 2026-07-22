@@ -194,6 +194,18 @@ func (f failingStreamer) StreamResponse(context.Context, api.ResponseRequest, fu
 	return api.StreamResult{}, f.err
 }
 
+type interjectionFailingStreamer struct {
+	requests []api.ResponseRequest
+}
+
+func (f *interjectionFailingStreamer) StreamResponse(_ context.Context, request api.ResponseRequest, _ func(string)) (api.StreamResult, error) {
+	f.requests = append(f.requests, request)
+	if len(f.requests) == 1 {
+		return api.StreamResult{ResponseID: "resp_1", Text: "initial"}, nil
+	}
+	return api.StreamResult{}, errors.New("network unavailable")
+}
+
 func (p *denyingHookPolicy) SessionStarted(context.Context) { p.started++ }
 func (p *denyingHookPolicy) UserPromptSubmitted(_ context.Context, prompt string) {
 	p.prompts = append(p.prompts, prompt)
@@ -709,6 +721,115 @@ func TestRunnerExecutesToolLoop(t *testing.T) {
 	}
 	if second.Input[0].Type != "function_call_output" || second.Input[0].CallID != "call_1" {
 		t.Fatalf("unexpected tool output item: %#v", second.Input[0])
+	}
+}
+
+func TestRunnerContinuesFinalResponseWithQueuedInterjections(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamer := &fakeStreamer{results: []api.StreamResult{
+		{ResponseID: "resp_1", Text: "initial answer"},
+		{ResponseID: "resp_2", Text: "steered answer"},
+	}}
+	sessionDir := t.TempDir()
+	logger, err := session.NewLoggerWithID(sessionDir, "interjection")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := Runner{Client: streamer, Tools: tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto}), Logger: logger, Model: "test", MaxSteps: 2}
+	defer runner.Tools.Close()
+	runner.QueueInterjection("first steer", nil)
+	runner.QueueInterjection("inspect this image", []api.ContentPart{{Type: "input_image", ImageURL: "https://example.com/image.png"}})
+
+	result, err := runner.Run(context.Background(), "start")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ResponseID != "resp_2" || len(streamer.requests) != 2 {
+		t.Fatalf("result=%#v requests=%#v", result, streamer.requests)
+	}
+	request := streamer.requests[1]
+	if request.PreviousResponseID != "resp_1" || len(request.Input) != 2 {
+		t.Fatalf("interjection continuation=%#v", request)
+	}
+	first := request.Input[0].Content.([]api.ContentPart)
+	second := request.Input[1].Content.([]api.ContentPart)
+	if !strings.Contains(first[0].Text, "<user_query>\nfirst steer\n</user_query>") || len(second) != 2 || second[1].ImageURL != "https://example.com/image.png" {
+		t.Fatalf("interjections lost order or content: %#v", request.Input)
+	}
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(sessionDir, "interjection.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(data), `"synthetic":true`) != 2 || !strings.Contains(string(data), `"uri":"https://example.com/image.png"`) {
+		t.Fatalf("interjections were not persisted as synthetic prompts: %s", data)
+	}
+}
+
+func TestRunnerLeavesLastStepInterjectionForFallback(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamer := &fakeStreamer{results: []api.StreamResult{{ResponseID: "resp_1", Text: "done"}}}
+	runner := Runner{Client: streamer, Tools: tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto}), Model: "test", MaxSteps: 1}
+	defer runner.Tools.Close()
+	runner.QueueInterjection("late steer", nil)
+	result, err := runner.Run(context.Background(), "start")
+	if err != nil || result.ResponseID != "resp_1" {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	pending := runner.TakeInterjections()
+	if len(pending) != 1 || pending[0].Text != "late steer" {
+		t.Fatalf("fallback interjection=%#v", pending)
+	}
+}
+
+func TestRunnerRequeuesInterjectionAfterModelFailure(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamer := &interjectionFailingStreamer{}
+	runner := Runner{Client: streamer, Tools: tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto}), Model: "test", MaxSteps: 2}
+	defer runner.Tools.Close()
+	runner.QueueInterjection("do not lose this", nil)
+	if _, err := runner.Run(context.Background(), "start"); err == nil {
+		t.Fatal("model failure was lost")
+	}
+	pending := runner.TakeInterjections()
+	if len(pending) != 1 || pending[0].Text != "do not lose this" {
+		t.Fatalf("requeued interjection=%#v", pending)
+	}
+}
+
+func TestRunnerAppendsInterjectionAfterToolResult(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamer := &fakeStreamer{results: []api.StreamResult{
+		{ResponseID: "resp_1", ToolCalls: []api.ToolCall{{CallID: "call_1", Name: "shell", Arguments: json.RawMessage(`{"command":"printf ok"}`)}}},
+		{ResponseID: "resp_2", Text: "done"},
+	}}
+	runner := Runner{Client: streamer, Tools: tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto}), Model: "test", MaxSteps: 2}
+	defer runner.Tools.Close()
+	runner.QueueInterjection("also explain it", nil)
+	if _, err := runner.Run(context.Background(), "run command"); err != nil {
+		t.Fatal(err)
+	}
+	input := streamer.requests[1].Input
+	if len(input) != 2 || input[0].Type != "function_call_output" || input[1].Type != "message" {
+		t.Fatalf("interjection did not follow tool result: %#v", input)
+	}
+	parts := input[1].Content.([]api.ContentPart)
+	if !strings.Contains(parts[0].Text, "also explain it") {
+		t.Fatalf("interjection content=%#v", parts)
 	}
 }
 

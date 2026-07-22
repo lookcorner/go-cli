@@ -86,29 +86,30 @@ type message struct {
 }
 
 type session struct {
-	id           string
-	ctx          context.Context
-	cwd          string
-	title        string
-	updated      time.Time
-	runner       *agent.Runner
-	close        func()
-	mu           sync.Mutex
-	previous     string
-	cancel       context.CancelFunc
-	running      bool
-	runDone      chan struct{}
-	btwCancel    context.CancelFunc
-	btwDone      chan struct{}
-	promptIndex  int
-	activePrompt int
-	rewind       *workspace.RewindStore
-	logPath      string
-	mode         string
-	mcpServers   []MCPServer
-	wakeQueue    []syntheticWake
-	activeWakeID string
-	closed       bool
+	id                string
+	ctx               context.Context
+	cwd               string
+	title             string
+	updated           time.Time
+	runner            *agent.Runner
+	close             func()
+	mu                sync.Mutex
+	previous          string
+	cancel            context.CancelFunc
+	running           bool
+	runDone           chan struct{}
+	btwCancel         context.CancelFunc
+	btwDone           chan struct{}
+	promptIndex       int
+	activePrompt      int
+	rewind            *workspace.RewindStore
+	logPath           string
+	mode              string
+	mcpServers        []MCPServer
+	wakeQueue         []syntheticWake
+	interjectionQueue []agent.Interjection
+	activeWakeID      string
+	closed            bool
 }
 
 type syntheticWake struct {
@@ -254,6 +255,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleMemoryExtension(ctx, incoming)
 		case "x.ai/btw":
 			s.handleBtw(ctx, incoming)
+		case "x.ai/interject":
+			s.handleInterject(incoming)
 		case "x.ai/skills/list", "x.ai/skills/config", "x.ai/skills/add", "x.ai/skills/remove", "x.ai/skills/reset", "x.ai/skills/toggle":
 			s.handleSkills(ctx, incoming)
 		case "x.ai/plugins/list", "x.ai/plugins/action":
@@ -1687,6 +1690,12 @@ func (s *Server) handlePrompt(parent context.Context, incoming message) {
 		if err == nil {
 			current.previous = result.ResponseID
 		}
+		if stopReason == "cancelled" {
+			current.runner.ClearInterjections()
+			current.interjectionQueue = nil
+		} else {
+			current.interjectionQueue = append(current.interjectionQueue, current.runner.TakeInterjections()...)
+		}
 		current.running = false
 		current.runDone = nil
 		current.activePrompt = -1
@@ -2237,6 +2246,10 @@ func (s *Server) closeSession(id string) bool {
 	current.mu.Lock()
 	current.closed = true
 	current.wakeQueue = nil
+	current.interjectionQueue = nil
+	if current.runner != nil {
+		current.runner.ClearInterjections()
+	}
 	if current.cancel != nil {
 		current.cancel()
 	}
@@ -2404,6 +2417,10 @@ func (s *Server) handleCancel(raw json.RawMessage) {
 	}
 	current.mu.Lock()
 	current.wakeQueue = nil
+	current.interjectionQueue = nil
+	if current.runner != nil {
+		current.runner.ClearInterjections()
+	}
 	if current.cancel != nil {
 		current.cancel()
 	}

@@ -872,6 +872,14 @@ func (l *Logger) Append(kind string, data any) error {
 }
 
 func (l *Logger) AppendPrompt(text string, content []Content) error {
+	return l.appendPrompt(text, content, false)
+}
+
+func (l *Logger) AppendSyntheticPrompt(text string, content []Content) error {
+	return l.appendPrompt(text, content, true)
+}
+
+func (l *Logger) appendPrompt(text string, content []Content, synthetic bool) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.file == nil {
@@ -901,9 +909,10 @@ func (l *Logger) AppendPrompt(text string, content []Content) error {
 		}
 	}
 	data := struct {
-		Text    string    `json:"text"`
-		Content []Content `json:"content,omitempty"`
-	}{Text: text, Content: persisted}
+		Text      string    `json:"text"`
+		Content   []Content `json:"content,omitempty"`
+		Synthetic bool      `json:"synthetic,omitempty"`
+	}{Text: text, Content: persisted, Synthetic: synthetic}
 	if err := l.appendLocked("user_prompt", data); err != nil {
 		removeFiles(created)
 		return err
@@ -1070,6 +1079,11 @@ func validImage(mediaType string, data []byte) bool {
 	default:
 		return false
 	}
+}
+
+func ValidImage(mediaType string, data []byte) bool {
+	_, supported := imageExtension(mediaType)
+	return supported && validImage(mediaType, data)
 }
 
 func removeFiles(paths []string) {

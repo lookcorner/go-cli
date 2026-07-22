@@ -525,6 +525,12 @@ snapshot without interrupting an active prompt, and returns
 `{"result":{"answer":"..."}}`. Closing the session cancels and waits for the
 side question without changing the main response chain.
 
+`x.ai/interject` accepts text and optional image content while a turn is
+running. Interjections enter the model loop as FIFO user messages at the next
+safe point, are broadcast through `x.ai/session/interjection`, and fall back to
+standalone prompt turns ahead of background wakes if they arrive after the
+turn's final drain.
+
 `x.ai/workspaces/list` returns the reference-compatible partial `no_oauth`
 response because this local build has no cloud workspace backend.
 

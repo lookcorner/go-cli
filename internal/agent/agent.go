@@ -54,6 +54,7 @@ type ResponseStreamer = api.Streamer
 type EventLogger interface {
 	Append(kind string, data any) error
 	AppendPrompt(text string, content []session.Content) error
+	AppendSyntheticPrompt(text string, content []session.Content) error
 }
 
 type ToolObserver interface {
@@ -137,6 +138,13 @@ type Runner struct {
 	promptEpoch             atomic.Uint64
 	recapRunning            atomic.Bool
 	btwRunning              atomic.Bool
+	interjectionMu          sync.Mutex
+	interjections           []Interjection
+}
+
+type Interjection struct {
+	Text    string
+	Content []api.ContentPart
 }
 
 type compactionPrefire struct {
@@ -275,6 +283,32 @@ func (r *Runner) RunTurnParts(ctx context.Context, prompt string, parts []api.Co
 		return Result{}, errors.New("prompt content must not be empty")
 	}
 	return r.runTurn(ctx, prompt, parts, previousResponseID, false)
+}
+
+func (r *Runner) QueueInterjection(text string, content []api.ContentPart) {
+	r.interjectionMu.Lock()
+	r.interjections = append(r.interjections, Interjection{Text: text, Content: append([]api.ContentPart(nil), content...)})
+	r.interjectionMu.Unlock()
+}
+
+func (r *Runner) TakeInterjections() []Interjection {
+	r.interjectionMu.Lock()
+	pending := r.interjections
+	r.interjections = nil
+	r.interjectionMu.Unlock()
+	return pending
+}
+
+func (r *Runner) prependInterjections(pending []Interjection) {
+	r.interjectionMu.Lock()
+	r.interjections = append(pending, r.interjections...)
+	r.interjectionMu.Unlock()
+}
+
+func (r *Runner) ClearInterjections() {
+	r.interjectionMu.Lock()
+	r.interjections = nil
+	r.interjectionMu.Unlock()
 }
 
 // Recap generates a display-only summary without changing model or session history.
@@ -535,6 +569,7 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 
 	input := []api.InputItem{{Type: "message", Role: "user", Content: content}}
 	progress := Progress{}
+	var inFlightInterjections []Interjection
 	seenTools := make(map[string]bool)
 	publish := func() {
 		final.Steps, final.ToolCalls = progress.Turns, progress.ToolCalls
@@ -576,11 +611,15 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 			}
 		})
 		if err != nil {
+			if len(inFlightInterjections) > 0 {
+				r.prependInterjections(inFlightInterjections)
+			}
 			progress.Turns, progress.ErrorCount = step, progress.ErrorCount+1
 			publish()
 			r.log("model_error", map[string]any{"step": step, "error": err.Error()})
 			return final, err
 		}
+		inFlightInterjections = nil
 		final = Result{
 			ResponseID: streamed.ResponseID, Text: streamed.Text, Steps: step,
 			InputTokens: streamed.Usage.InputTokens, ContextWindow: r.ContextWindow,
@@ -604,6 +643,24 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 		}
 
 		if len(streamed.ToolCalls) == 0 {
+			pending := r.TakeInterjections()
+			if len(pending) > 0 {
+				if step == r.MaxSteps || streamed.ResponseID == "" {
+					r.prependInterjections(pending)
+					if streamed.ResponseID == "" {
+						return final, errors.New("model returned without a response ID before an interjection")
+					}
+					return final, nil
+				}
+				previousResponseID = streamed.ResponseID
+				input = nil
+				if err := r.appendInterjections(&input, pending); err != nil {
+					r.prependInterjections(pending)
+					return final, err
+				}
+				inFlightInterjections = pending
+				continue
+			}
 			r.scheduleMemoryIdleFlush(ctx, final.ResponseID)
 			r.scheduleMemoryDreamCheck(ctx)
 			return final, nil
@@ -685,10 +742,30 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 		if len(imageParts) > 0 {
 			input = append(input, api.InputItem{Type: "message", Role: "user", Content: imageParts})
 		}
+		if step < r.MaxSteps {
+			pending := r.TakeInterjections()
+			if err := r.appendInterjections(&input, pending); err != nil {
+				r.prependInterjections(pending)
+				return final, err
+			}
+			inFlightInterjections = pending
+		}
 	}
 	progress.ErrorCount++
 	publish()
 	return final, fmt.Errorf("agent reached maximum of %d model steps", r.MaxSteps)
+}
+
+func (r *Runner) appendInterjections(input *[]api.InputItem, pending []Interjection) error {
+	for _, interjection := range pending {
+		text := "<user_query>\n" + interjection.Text + "\n</user_query>"
+		content := append([]api.ContentPart{{Type: "input_text", Text: text}}, interjection.Content...)
+		if err := r.logSyntheticPrompt(interjection.Text, content); err != nil {
+			return fmt.Errorf("persist interjection: %w", err)
+		}
+		*input = append(*input, api.InputItem{Type: "message", Role: "user", Content: content})
+	}
+	return nil
 }
 
 func (r *Runner) shouldCompact(previousResponseID string) bool {
@@ -964,6 +1041,24 @@ func (r *Runner) logPrompt(text string, value any, synthetic bool) error {
 		}
 	}
 	return r.Logger.AppendPrompt(text, content)
+}
+
+func (r *Runner) logSyntheticPrompt(text string, parts []api.ContentPart) error {
+	if r.Logger == nil {
+		return nil
+	}
+	content := make([]session.Content, 0, len(parts))
+	for _, part := range parts {
+		switch part.Type {
+		case "input_text":
+			content = append(content, session.Content{Type: "text", Text: part.Text})
+		case "input_image":
+			content = append(content, session.Content{Type: "image", URI: part.ImageURL})
+		default:
+			return fmt.Errorf("unsupported interjection content type %q", part.Type)
+		}
+	}
+	return r.Logger.AppendSyntheticPrompt(text, content)
 }
 
 func (r *Runner) status(format string, args ...any) {
