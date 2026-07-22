@@ -1599,16 +1599,16 @@ func TestWakeCancellationRemovesPendingSyntheticTurn(t *testing.T) {
 }
 
 func TestRenderMarkdownStylesAndWrapsVisibleText(t *testing.T) {
-	lines := renderMarkdown("# Heading\n\n- **bold** and `code`\n> quoted\n[docs](https://example.com)\n```go\n你好abc\n```", 6)
+	lines := renderMarkdown("# Heading\n\n- **bold** and `code`\n12) ordered\n> quoted\n[docs](https://example.com)\n```go\n你好abc\n```", 6)
 	rendered := strings.Join(lines, "\n")
-	for _, expected := range []string{ansiBold, ansiCyan, ansiYellow, ansiUnderline, "• ", "bold", "│ ", "docs", "你好"} {
+	for _, expected := range []string{ansiBold, ansiCyan, ansiYellow, ansiUnderline, "• ", "bold", "12)", "│ ", "docs", "你好"} {
 		if !strings.Contains(rendered, expected) {
 			t.Fatalf("rendered markdown missing %q:\n%s", expected, rendered)
 		}
 	}
 	plain := stripMarkdownANSI(rendered)
 	flat := strings.ReplaceAll(plain, "\n", "")
-	for _, expected := range []string{"Heading", "code", "https://example.com", "你好abc"} {
+	for _, expected := range []string{"Heading", "ordered", "code", "https://example.com", "你好abc"} {
 		if !strings.Contains(flat, expected) {
 			t.Fatalf("rendered markdown lost %q: %q", expected, plain)
 		}
@@ -1616,6 +1616,22 @@ func TestRenderMarkdownStylesAndWrapsVisibleText(t *testing.T) {
 	for _, line := range lines {
 		if markdownVisibleWidth(line) > 6 {
 			t.Fatalf("line exceeded visible width: %q", line)
+		}
+	}
+}
+
+func TestRenderMarkdownOrderedListMarkers(t *testing.T) {
+	raw := strings.Join(renderMarkdown("1. first\n42) second\n1.2 release\n1234567890. plain", 80), "\n")
+	if !strings.Contains(raw, ansiYellow+"1.") || !strings.Contains(raw, ansiYellow+"42)") {
+		t.Fatalf("ordered markers were not styled: %q", raw)
+	}
+	rendered := stripMarkdownANSI(raw)
+	if !strings.Contains(rendered, "1. first\n42) second") {
+		t.Fatalf("ordered markers were not preserved: %q", rendered)
+	}
+	for _, plain := range []string{"1.2 release", "1234567890. plain"} {
+		if !strings.Contains(rendered, plain) {
+			t.Fatalf("non-list text changed: %q", rendered)
 		}
 	}
 }

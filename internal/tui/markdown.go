@@ -246,6 +246,9 @@ func markdownLine(raw string) []markdownSpan {
 	} else if strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "* ") || strings.HasPrefix(trimmed, "+ ") {
 		trimmed = "• " + strings.TrimSpace(trimmed[2:])
 		style += ansiYellow
+	} else if marker, content, ok := orderedListItem(trimmed); ok {
+		trimmed = marker + " " + content
+		style += ansiYellow
 	}
 	spans := inlineMarkdown(trimmed)
 	if style != "" {
@@ -254,6 +257,17 @@ func markdownLine(raw string) []markdownSpan {
 		}
 	}
 	return spans
+}
+
+func orderedListItem(value string) (string, string, bool) {
+	end := 0
+	for end < len(value) && end < 9 && value[end] >= '0' && value[end] <= '9' {
+		end++
+	}
+	if end == 0 || end+1 >= len(value) || (value[end] != '.' && value[end] != ')') || value[end+1] != ' ' {
+		return "", "", false
+	}
+	return value[:end+1], strings.TrimSpace(value[end+2:]), true
 }
 
 func inlineMarkdown(value string) []markdownSpan {
