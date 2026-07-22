@@ -350,6 +350,27 @@ func TestTranscriptCommandsUseCompletedSession(t *testing.T) {
 	}
 }
 
+func TestRenameCommandsPersistWithoutModelTurn(t *testing.T) {
+	for _, prompt := range []string{"/rename Release work", "/title Release work"} {
+		logger, err := session.NewLoggerWithID(t.TempDir(), "rename-session")
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := &model{ctx: context.Background(), runner: &agent.Runner{Logger: logger, SessionID: logger.ID()}}
+		m.setInput(prompt)
+		updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+		m = updated.(*model)
+		if command != nil || m.running || !strings.Contains(m.status, "Release work") {
+			t.Fatalf("prompt=%q command=%v running=%v status=%q", prompt, command != nil, m.running, m.status)
+		}
+		info, err := session.InfoByID(filepath.Dir(logger.Path()), logger.ID())
+		if err != nil || info.Title != "Release work" {
+			t.Fatalf("prompt=%q title=%q err=%v", prompt, info.Title, err)
+		}
+		logger.Close()
+	}
+}
+
 func TestExitSlashCommandsQuitWithoutModelTurn(t *testing.T) {
 	for _, prompt := range []string{"/quit ignored", "/exit"} {
 		m := &model{ctx: context.Background(), runner: &agent.Runner{}}

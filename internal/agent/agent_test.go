@@ -219,6 +219,28 @@ func TestRunnerRunShell(t *testing.T) {
 	}
 }
 
+func TestRunnerRenameSessionUsesActiveLogger(t *testing.T) {
+	logger, err := session.NewLoggerWithID(t.TempDir(), "rename-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logger.Close()
+	runner := Runner{Logger: logger, SessionID: logger.ID()}
+	if err := runner.RenameSession("  Release work  "); err != nil {
+		t.Fatal(err)
+	}
+	info, err := session.InfoByID(filepath.Dir(logger.Path()), logger.ID())
+	if err != nil || info.Title != "Release work" {
+		t.Fatalf("title=%q err=%v", info.Title, err)
+	}
+	if err := (&Runner{}).RenameSession("title"); err == nil {
+		t.Fatal("rename without an active session was accepted")
+	}
+	if err := runner.RenameSession(" "); err == nil {
+		t.Fatal("blank title was accepted")
+	}
+}
+
 func TestRunnerReportsFailureAndCompactionHookLifecycle(t *testing.T) {
 	ws, err := workspace.Open(t.TempDir())
 	if err != nil {

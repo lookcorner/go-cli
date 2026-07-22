@@ -168,6 +168,17 @@ func (r *Runner) RunShell(ctx context.Context, command string) (string, error) {
 	return r.Tools.Execute(ctx, "shell", arguments)
 }
 
+func (r *Runner) RenameSession(title string) error {
+	if r.Logger == nil || strings.TrimSpace(r.SessionID) == "" {
+		return errors.New("no active session")
+	}
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return errors.New("usage: /rename <new title>")
+	}
+	return r.Logger.Append("session_title", map[string]any{"title": title})
+}
+
 func (r *Runner) RunTurn(ctx context.Context, prompt, previousResponseID string) (Result, error) {
 	return r.runTurn(ctx, prompt, prompt, previousResponseID, false)
 }

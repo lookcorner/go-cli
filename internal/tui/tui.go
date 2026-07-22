@@ -1001,8 +1001,16 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "/quit", "/exit":
 			return m, tea.Quit
 		case "/help":
-			m.appendSystem("# Commands\n\n`! <command>` `/always-approve` `/compact` `/context` `/copy [N]` `/dream` `/exit` `/find` `/flush` `/help` `/history` `/loop` `/memory` `/multiline` `/plan [description]` `/remember` `/session-info` `/transcript` `/view-plan`")
+			m.appendSystem("# Commands\n\n`! <command>` `/always-approve` `/compact` `/context` `/copy [N]` `/dream` `/exit` `/find` `/flush` `/help` `/history` `/loop` `/memory` `/multiline` `/plan [description]` `/remember` `/rename <title>` `/session-info` `/transcript` `/view-plan`")
 			m.status = "commands"
+			return m, nil
+		case "/rename", "/title":
+			title := strings.TrimSpace(strings.TrimPrefix(prompt, fields[0]))
+			if err := m.runner.RenameSession(title); err != nil {
+				m.status = "rename failed: " + err.Error()
+				return m, nil
+			}
+			m.status = fmt.Sprintf("session renamed to %q", title)
 			return m, nil
 		case "/transcript", "/log":
 			if m.runner == nil || strings.TrimSpace(m.runner.SessionPath) == "" {

@@ -305,6 +305,8 @@ starts a planning turn. `/quit` and `/exit` close the TUI without a model turn.
 in a read-only preview; Esc returns to the conversation.
 `/transcript` and `/log` open the completed persisted conversation in the same
 read-only viewer, including resumed sessions.
+`/rename <title>` and `/title <title>` append a durable title update to the
+active session without creating a model turn.
 Left/Right, Home/End, Delete, Backspace, Ctrl-A,
 Ctrl-E, Ctrl-U, and Ctrl/Cmd-Z edit or undo the active prompt and structured
 response input. Shift/Alt-Enter inserts a newline; Ctrl-M, `/multiline`, or `/ml`
