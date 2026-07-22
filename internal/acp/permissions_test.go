@@ -17,12 +17,16 @@ func permissionRegistry(t *testing.T, mode tools.PermissionMode) *tools.Registry
 }
 
 func permissionRegistryWithAutoLock(t *testing.T, mode tools.PermissionMode, autoLocked bool) *tools.Registry {
+	return permissionRegistryWithLocks(t, mode, autoLocked, false)
+}
+
+func permissionRegistryWithLocks(t *testing.T, mode tools.PermissionMode, alwaysApproveLocked, autoModeLocked bool) *tools.Registry {
 	t.Helper()
 	ws, err := workspace.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	controller, err := tools.NewModeApproverWithAutoLock(mode, tools.PromptApprover{Mode: tools.PermissionAuto}, autoLocked)
+	controller, err := tools.NewModeApproverWithLocks(mode, tools.PromptApprover{Mode: tools.PermissionAuto}, alwaysApproveLocked, autoModeLocked)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,15 +42,18 @@ func TestYoloModeChangedUpdatesAllMutableSessions(t *testing.T) {
 	second := permissionRegistry(t, tools.PermissionPrompt)
 	locked := permissionRegistry(t, tools.PermissionDeny)
 	managed := permissionRegistryWithAutoLock(t, tools.PermissionPrompt, true)
+	autoDisabled := permissionRegistryWithLocks(t, tools.PermissionPrompt, false, true)
 	defer first.Close()
 	defer second.Close()
 	defer locked.Close()
 	defer managed.Close()
+	defer autoDisabled.Close()
 	server := &Server{sessions: map[string]*session{
-		"first":   {runner: &agent.Runner{Tools: first}},
-		"second":  {runner: &agent.Runner{Tools: second}},
-		"locked":  {runner: &agent.Runner{Tools: locked}},
-		"managed": {runner: &agent.Runner{Tools: managed}},
+		"first":         {runner: &agent.Runner{Tools: first}},
+		"second":        {runner: &agent.Runner{Tools: second}},
+		"locked":        {runner: &agent.Runner{Tools: locked}},
+		"managed":       {runner: &agent.Runner{Tools: managed}},
+		"auto-disabled": {runner: &agent.Runner{Tools: autoDisabled}},
 	}}
 	server.handleYoloModeChanged([]byte(`{"yolo_mode":true,"permission_mode":"always-approve"}`))
 	for name, registry := range map[string]*tools.Registry{"first": first, "second": second} {
@@ -66,13 +73,61 @@ func TestYoloModeChangedUpdatesAllMutableSessions(t *testing.T) {
 			t.Fatalf("%s mode=%q", name, mode)
 		}
 	}
-	server.handleYoloModeChanged([]byte(`{"auto_mode":true,"permission_mode":"auto"}`))
-	if mode, _ := first.PermissionMode(); mode != tools.PermissionPrompt {
-		t.Fatalf("unsupported auto mode changed permission to %q", mode)
+	server.handleYoloModeChanged([]byte(`{"auto_mode":true,"permission_mode":"ask"}`))
+	for name, registry := range map[string]*tools.Registry{"first": first, "second": second, "managed": managed} {
+		if mode, _ := registry.PermissionMode(); mode != tools.PermissionAuto {
+			t.Fatalf("%s explicit auto mode=%q", name, mode)
+		}
 	}
-	server.handleYoloModeChanged([]byte(`{"yolo_mode":false,"auto_mode":true,"permission_mode":"auto"}`))
+	if mode, _ := autoDisabled.PermissionMode(); mode != tools.PermissionPrompt {
+		t.Fatalf("disabled auto gate changed permission to %q", mode)
+	}
+	server.handleYoloModeChanged([]byte(`{"auto_mode":false,"permission_mode":"auto"}`))
 	if mode, _ := first.PermissionMode(); mode != tools.PermissionPrompt {
-		t.Fatalf("disabled yolo mode did not keep prompt mode: %q", mode)
+		t.Fatalf("explicit auto false did not win: %q", mode)
+	}
+	server.handleYoloModeChanged([]byte(`{"permission_mode":"auto"}`))
+	if mode, _ := first.PermissionMode(); mode != tools.PermissionAuto {
+		t.Fatalf("permission_mode auto=%q", mode)
+	}
+	server.handleYoloModeChanged([]byte(`{"yolo_mode":true,"auto_mode":true}`))
+	if mode, _ := first.PermissionMode(); mode != tools.PermissionAlwaysApprove {
+		t.Fatalf("explicit yolo did not win: %q", mode)
+	}
+	server.handleYoloModeChanged([]byte(`{"auto_mode":true}`))
+	if mode, _ := first.PermissionMode(); mode != tools.PermissionAuto {
+		t.Fatalf("auto did not clear yolo: %q", mode)
+	}
+	if err := second.SetPermissionMode(tools.PermissionAlwaysApprove); err != nil {
+		t.Fatal(err)
+	}
+	server.handleYoloModeChanged([]byte(`{"permission_mode":"default"}`))
+	if mode, _ := first.PermissionMode(); mode != tools.PermissionPrompt {
+		t.Fatalf("default did not clear auto: %q", mode)
+	}
+	if mode, _ := second.PermissionMode(); mode != tools.PermissionAlwaysApprove {
+		t.Fatalf("clearing auto disturbed always-approve: %q", mode)
+	}
+	for _, permissionMode := range []string{"ask", "always-approve", "default"} {
+		if err := first.SetPermissionMode(tools.PermissionAuto); err != nil {
+			t.Fatal(err)
+		}
+		server.handleYoloModeChanged([]byte(`{"permission_mode":"` + permissionMode + `"}`))
+		if mode, _ := first.PermissionMode(); mode != tools.PermissionPrompt {
+			t.Fatalf("permission_mode %s did not clear auto: %q", permissionMode, mode)
+		}
+	}
+	server.handleYoloModeChanged([]byte(`{"yolo_mode":true,"auto_mode":"invalid"}`))
+	if mode, _ := first.PermissionMode(); mode != tools.PermissionAlwaysApprove {
+		t.Fatalf("malformed auto poisoned yolo: %q", mode)
+	}
+	server.handleYoloModeChanged([]byte(`{"yolo_mode":"invalid","auto_mode":true}`))
+	if mode, _ := first.PermissionMode(); mode != tools.PermissionAuto {
+		t.Fatalf("malformed yolo poisoned auto: %q", mode)
+	}
+	server.handleYoloModeChanged([]byte(`{"auto_mode":false,"permission_mode":42}`))
+	if mode, _ := first.PermissionMode(); mode != tools.PermissionPrompt {
+		t.Fatalf("malformed permission mode poisoned auto: %q", mode)
 	}
 }
 
@@ -98,14 +153,15 @@ func TestYoloModeChangedServeRouteIsFireAndForget(t *testing.T) {
 	}}
 	input := bytes.NewBufferString(
 		`{"jsonrpc":"2.0","id":1,"method":"session/new","params":{"cwd":` + quoteJSON(root) + `,"mcpServers":[]}}` + "\n" +
-			`{"jsonrpc":"2.0","method":"x.ai/yolo_mode_changed","params":{"yolo_mode":true}}` + "\n",
+			`{"jsonrpc":"2.0","method":"x.ai/yolo_mode_changed","params":{"yolo_mode":true}}` + "\n" +
+			`{"jsonrpc":"2.0","method":"x.ai/yolo_mode_changed","params":{"auto_mode":true}}` + "\n",
 	)
 	var output bytes.Buffer
 	if err := server.Serve(context.Background(), input, &output); err != nil {
 		t.Fatal(err)
 	}
 	registry := <-registries
-	if mode, ok := registry.PermissionMode(); !ok || mode != tools.PermissionAlwaysApprove {
+	if mode, ok := registry.PermissionMode(); !ok || mode != tools.PermissionAuto {
 		t.Fatalf("mode=%q ok=%v output=%s", mode, ok, output.String())
 	}
 	if messages := decodeACPOutput(t, output.Bytes()); len(messages) != 1 || messages[0]["id"] != float64(1) {

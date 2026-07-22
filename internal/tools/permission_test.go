@@ -299,6 +299,23 @@ func TestModeApproverManagedAutoLock(t *testing.T) {
 	}
 }
 
+func TestModeApproverAutoModeLock(t *testing.T) {
+	prompt := &recordingApprover{}
+	mode, err := NewModeApproverWithLocks(PermissionAuto, prompt, false, true)
+	if err != nil || mode.PermissionMode() != PermissionPrompt {
+		t.Fatalf("initial mode=%q err=%v", mode.PermissionMode(), err)
+	}
+	if err := mode.SetPermissionMode(PermissionAuto); err == nil || mode.PermissionMode() != PermissionPrompt {
+		t.Fatalf("enable auto err=%v mode=%q", err, mode.PermissionMode())
+	}
+	if err := mode.SetPermissionMode(PermissionAlwaysApprove); err != nil || mode.PermissionMode() != PermissionAlwaysApprove {
+		t.Fatalf("set always-approve err=%v mode=%q", err, mode.PermissionMode())
+	}
+	if _, err := NewModeApproverWithLocks(PermissionAuto, nil, false, true); err == nil {
+		t.Fatal("auto-mode lock accepted fallback to prompt without a prompt approver")
+	}
+}
+
 func TestPermissionBypassSkipsPromptsButNotDenials(t *testing.T) {
 	prompt := &recordingApprover{}
 	mode, err := NewModeApprover(PermissionPrompt, prompt)

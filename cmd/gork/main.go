@@ -371,7 +371,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			approver = permissionPrompts
 		}
 	} else {
-		approver, err = tools.NewModeApproverWithAutoLock(mode, permissionPrompts, cfg.DisableBypassPermissionsMode)
+		approver, err = tools.NewModeApproverWithLocks(mode, permissionPrompts, cfg.DisableBypassPermissionsMode, !cfg.AutoModeEnabled())
 		if err != nil {
 			return err
 		}
@@ -1627,7 +1627,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		if sessionMode == tools.PermissionAuto && !sessionCfg.AutoModeEnabled() {
 			sessionMode = tools.PermissionPrompt
 		}
-		modeApprover, err := tools.NewModeApproverWithAutoLock(sessionMode, permissionPrompts, sessionCfg.DisableBypassPermissionsMode)
+		modeApprover, err := tools.NewModeApproverWithLocks(sessionMode, permissionPrompts, sessionCfg.DisableBypassPermissionsMode, !sessionCfg.AutoModeEnabled())
 		if err != nil {
 			return nil, nil, err
 		}

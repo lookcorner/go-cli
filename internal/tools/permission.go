@@ -11,11 +11,12 @@ import (
 )
 
 type ModeApprover struct {
-	mu         sync.RWMutex
-	mode       PermissionMode
-	prompt     Approver
-	lockedDeny bool
-	autoLocked bool
+	mu                  sync.RWMutex
+	mode                PermissionMode
+	prompt              Approver
+	lockedDeny          bool
+	alwaysApproveLocked bool
+	autoModeLocked      bool
 }
 
 type permissionModeController interface {
@@ -55,20 +56,27 @@ func ClassifyPermission(ctx context.Context, action, detail string) (allowed, av
 }
 
 func NewModeApprover(mode PermissionMode, prompt Approver) (*ModeApprover, error) {
-	return NewModeApproverWithAutoLock(mode, prompt, false)
+	return NewModeApproverWithLocks(mode, prompt, false, false)
 }
 
 func NewModeApproverWithAutoLock(mode PermissionMode, prompt Approver, autoLocked bool) (*ModeApprover, error) {
+	return NewModeApproverWithLocks(mode, prompt, autoLocked, false)
+}
+
+func NewModeApproverWithLocks(mode PermissionMode, prompt Approver, alwaysApproveLocked, autoModeLocked bool) (*ModeApprover, error) {
 	if mode != PermissionPrompt && mode != PermissionAuto && mode != PermissionAlwaysApprove && mode != PermissionDeny {
 		return nil, fmt.Errorf("unknown permission mode %q", mode)
 	}
-	if autoLocked && mode == PermissionAlwaysApprove {
+	if alwaysApproveLocked && mode == PermissionAlwaysApprove || autoModeLocked && mode == PermissionAuto {
 		mode = PermissionPrompt
 	}
 	if (mode == PermissionPrompt || mode == PermissionAuto) && prompt == nil {
 		return nil, errors.New("prompt approver is required")
 	}
-	return &ModeApprover{mode: mode, prompt: prompt, lockedDeny: mode == PermissionDeny, autoLocked: autoLocked}, nil
+	return &ModeApprover{
+		mode: mode, prompt: prompt, lockedDeny: mode == PermissionDeny,
+		alwaysApproveLocked: alwaysApproveLocked, autoModeLocked: autoModeLocked,
+	}, nil
 }
 
 func (a *ModeApprover) Approve(ctx context.Context, action, detail string) error {
@@ -113,8 +121,11 @@ func (a *ModeApprover) SetPermissionMode(mode PermissionMode) error {
 	if a.lockedDeny && mode != PermissionDeny {
 		return errors.New("permission mode is locked to deny")
 	}
-	if a.autoLocked && mode == PermissionAlwaysApprove {
+	if a.alwaysApproveLocked && mode == PermissionAlwaysApprove {
 		return errors.New("always-approve is disabled by managed policy")
+	}
+	if a.autoModeLocked && mode == PermissionAuto {
+		return errors.New("auto permission mode is disabled")
 	}
 	if (mode == PermissionPrompt || mode == PermissionAuto) && a.prompt == nil {
 		return errors.New("prompt approver is required")

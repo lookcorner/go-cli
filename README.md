@@ -34,10 +34,12 @@ history mutation. `GROK_PROMPT_SUGGESTIONS_MODEL` overrides the request model
 hint; otherwise the dedicated `grok-build-0.1` suggestion model is used.
 
 The fire-and-forget `x.ai/yolo_mode_changed` notification switches every live
-session on the ACP connection between ask and always-approve behavior. Explicit
-deny mode and deny/ask/allow permission rules remain authoritative; the distinct
-reference `auto_mode` policy is not treated as always-approve. A managed
-always-approve lock prevents the notification from enabling automatic approval.
+session on the ACP connection among ask, always-approve, and classifier-based
+auto behavior. Explicit `auto_mode` wins over the compatible `permission_mode`
+hint, while an explicitly enabled yolo mode wins over auto. Explicit deny mode
+and deny/ask/allow permission rules remain authoritative. Managed
+always-approve locks and the `auto_mode.enabled` gate remain enforced during
+live switches.
 
 Completed ACP prompts publish `x.ai/session/prompt_complete` before their RPC
 response. Prompt responses include `_meta` correlation for the session,
