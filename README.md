@@ -706,6 +706,8 @@ restarts the session MCP runtime, preserves project/plugin base servers, and
 restores the previous runtime if replacement fails. Sessionless agent-level MCP
 pools and OAuth enrollment are not yet available. Local MCP configuration files
 reload automatically without dropping client-provided session servers.
+The internal global and project-scoped MCP reload endpoints refresh matching
+live sessions from disk while preserving those client-provided overrides.
 For local-only sessions, `x.ai/mcp/auth_status` reports no pending authentication
 and `x.ai/mcp/auth_trigger` returns an explicit unsupported result.
 

@@ -605,12 +605,15 @@ func TestSessionMCPRuntimeMergesAndRestoresConfiguration(t *testing.T) {
 		}
 	}))
 	defer server.Close()
+	if err := live.Update(context.Background(), []mcp.ServerConfig{{Name: "client-only", Type: "http", URL: server.URL}}); err != nil {
+		t.Fatal(err)
+	}
 	if err := live.UpdateBase(context.Background(), config.Config{MCPServers: map[string]config.MCPServerConfig{
 		"hot-base": {Type: "http", URL: server.URL},
 	}, DisabledMCPTools: map[string][]string{"hot-base": {"hidden"}}}); err != nil {
 		t.Fatal(err)
 	}
-	if configs := live.Configs(); len(configs) != 1 || configs[0].Name != "hot-base" {
+	if configs := live.Configs(); len(configs) != 2 || configs[0].Name != "client-only" || configs[1].Name != "hot-base" {
 		t.Fatalf("hot base was not applied: %#v", configs)
 	}
 	var mcpTools []string
@@ -625,8 +628,8 @@ func TestSessionMCPRuntimeMergesAndRestoresConfiguration(t *testing.T) {
 	if err := live.UpdateBase(context.Background(), config.Config{}); err != nil {
 		t.Fatal(err)
 	}
-	if configs := live.Configs(); len(configs) != 0 {
-		t.Fatalf("hot base was not removed: %#v", configs)
+	if configs := live.Configs(); len(configs) != 1 || configs[0].Name != "client-only" {
+		t.Fatalf("hot base removal did not preserve client configuration: %#v", configs)
 	}
 	err = live.UpdateBase(context.Background(), config.Config{MCPServers: map[string]config.MCPServerConfig{
 		"broken-base": {Command: filepath.Join(root, "missing-base-server")},
@@ -634,7 +637,7 @@ func TestSessionMCPRuntimeMergesAndRestoresConfiguration(t *testing.T) {
 	if err == nil {
 		t.Fatal("invalid MCP base update unexpectedly succeeded")
 	}
-	if len(live.base.MCPServers) != 0 || len(live.Configs()) != 0 {
+	if configs := live.Configs(); len(live.base.MCPServers) != 0 || len(configs) != 1 || configs[0].Name != "client-only" {
 		t.Fatalf("failed base update was not rolled back: base=%#v effective=%#v", live.base.MCPServers, live.Configs())
 	}
 }

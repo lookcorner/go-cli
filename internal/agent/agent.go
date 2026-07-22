@@ -154,6 +154,7 @@ type Runner struct {
 	Memory                  *memory.Store
 	MemoryConfig            memory.Config
 	OpenMemory              func() (*memory.Store, error)
+	ReloadMCPBase           func(context.Context) error
 	UpdateMCPServers        func(context.Context, []mcp.ServerConfig) error
 	MCPServers              func() []mcp.ServerConfig
 	MCPServerCatalog        func() []mcp.ServerConfig
