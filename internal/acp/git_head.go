@@ -35,12 +35,16 @@ func (s *Server) startGitHeadNotifications(current *session) {
 	if current == nil || !current.gitHeadEnabled {
 		return
 	}
-	s.notifyGitHead(current)
+	current.mu.Lock()
+	if current.gitWatchCancel != nil {
+		current.mu.Unlock()
+		return
+	}
 	ctx, cancel := context.WithCancel(current.ctx)
 	done := make(chan struct{})
-	current.mu.Lock()
 	current.gitWatchCancel, current.gitWatchDone = cancel, done
 	current.mu.Unlock()
+	s.notifyGitHead(current)
 	go func() {
 		defer close(done)
 		_ = worktrees.WatchHead(ctx, current.cwd, nil, func() { s.notifyGitHead(current) })

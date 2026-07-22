@@ -123,6 +123,13 @@ func TestStartGitHeadNotificationsOwnsWatcherLifecycle(t *testing.T) {
 	if watchCancel == nil || watchDone == nil || len(decodeACPBytes(t, output.snapshot())) != 1 {
 		t.Fatal("git head watcher or initial notification missing")
 	}
+	server.startGitHeadNotifications(current)
+	current.mu.Lock()
+	secondCancel, secondDone := current.gitWatchCancel, current.gitWatchDone
+	current.mu.Unlock()
+	if secondCancel == nil || secondDone != watchDone || len(decodeACPBytes(t, output.snapshot())) != 1 {
+		t.Fatal("starting Git HEAD notifications twice replaced the active watcher")
+	}
 	watchCancel()
 	select {
 	case <-watchDone:
