@@ -184,6 +184,8 @@ type UIConfig struct {
 	WordSeparators       *string `json:"word_separators,omitempty"`
 	MouseReportingToggle bool    `json:"mouse_reporting_toggle,omitempty"`
 	VimMode              bool    `json:"vim_mode,omitempty"`
+	ScrollLines          *uint8  `json:"scroll_lines,omitempty"`
+	InvertScroll         bool    `json:"invert_scroll,omitempty"`
 }
 
 type GoalConfig struct {
@@ -406,6 +408,8 @@ type fileUIConfig struct {
 	WordSeparators       *string `json:"word_separators,omitempty" toml:"word_separators"`
 	MouseReportingToggle *bool   `json:"mouse_reporting_toggle,omitempty" toml:"mouse_reporting_toggle"`
 	VimMode              *bool   `json:"vim_mode,omitempty" toml:"vim_mode"`
+	ScrollLines          *uint8  `json:"scroll_lines,omitempty" toml:"scroll_lines"`
+	InvertScroll         *bool   `json:"invert_scroll,omitempty" toml:"invert_scroll"`
 }
 
 type fileFolderTrustConfig struct {
@@ -818,6 +822,12 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.UI.VimMode != nil {
 		cfg.UI.VimMode = *disk.UI.VimMode
+	}
+	if disk.UI.ScrollLines != nil {
+		cfg.UI.ScrollLines = normalizedScrollLines(*disk.UI.ScrollLines)
+	}
+	if disk.UI.InvertScroll != nil {
+		cfg.UI.InvertScroll = *disk.UI.InvertScroll
 	}
 	if disk.Goal.VerifierCount != nil {
 		cfg.Goal.VerifierCount = normalizedGoalVerifierCount(*disk.Goal.VerifierCount)
@@ -1480,6 +1490,16 @@ func applyEnv(cfg *Config) {
 	if value, ok := envBool("GROK_MOUSE_REPORTING_TOGGLE"); ok {
 		cfg.UI.MouseReportingToggle = value
 	}
+	if raw := strings.TrimSpace(os.Getenv("GROK_SCROLL_LINES")); raw != "" {
+		if value, err := strconv.ParseUint(raw, 10, 8); err == nil {
+			cfg.UI.ScrollLines = normalizedScrollLines(uint8(value))
+		}
+	}
+	if raw := strings.TrimSpace(os.Getenv("GROK_INVERT_SCROLL")); raw == "1" || raw == "true" {
+		cfg.UI.InvertScroll = true
+	} else if raw == "0" || raw == "false" {
+		cfg.UI.InvertScroll = false
+	}
 	if value := os.Getenv("GORK_WEB_SEARCH_API_KEY"); value != "" {
 		cfg.WebSearch.Enabled = true
 		cfg.WebSearch.APIKey = value
@@ -1603,6 +1623,14 @@ func applyEnv(cfg *Config) {
 	if value, ok := envBool("GROK_OFFICIAL_MARKETPLACE_AUTO_REGISTER"); ok {
 		cfg.OfficialMarketplaceAutoRegister = value
 	}
+}
+
+func normalizedScrollLines(value uint8) *uint8 {
+	if value == 0 {
+		return nil
+	}
+	value = min(value, 10)
+	return &value
 }
 
 func (c Config) ManagedPolicyURL() string {

@@ -143,6 +143,8 @@ keep_text_selection = "word_select"
 word_separators = "./"
 mouse_reporting_toggle = true
 vim_mode = true
+scroll_lines = 5
+invert_scroll = true
 
 [[permission.rules]]
 action = "allow"
@@ -223,7 +225,7 @@ pattern = ".env*"
 	if len(cfg.Permission.Rules) != 2 || cfg.Permission.Rules[0].Action != "allow" || *cfg.Permission.Rules[1].Pattern != ".env*" {
 		t.Fatalf("unexpected permission config: %#v", cfg.Permission)
 	}
-	if cfg.UI.KeepTextSelection != "word_select" || cfg.UI.WordSeparators == nil || *cfg.UI.WordSeparators != "./" || !cfg.UI.MouseReportingToggle || !cfg.UI.VimMode {
+	if cfg.UI.KeepTextSelection != "word_select" || cfg.UI.WordSeparators == nil || *cfg.UI.WordSeparators != "./" || !cfg.UI.MouseReportingToggle || !cfg.UI.VimMode || cfg.UI.ScrollLines == nil || *cfg.UI.ScrollLines != 5 || !cfg.UI.InvertScroll {
 		t.Fatalf("unexpected UI config: %#v", cfg.UI)
 	}
 	if strings.Join(cfg.Skills.Paths, ",") != "~/shared-skills,project-skills" || strings.Join(cfg.Skills.Ignore, ",") != "~/shared-skills/ignored" || strings.Join(cfg.Skills.Disabled, ",") != "manual-only" {
@@ -240,8 +242,8 @@ func TestVimModeDefaultsToFalse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.UI.VimMode {
-		t.Fatal("vim mode should be disabled by default")
+	if cfg.UI.VimMode || cfg.UI.ScrollLines != nil || cfg.UI.InvertScroll {
+		t.Fatalf("unexpected UI defaults: %#v", cfg.UI)
 	}
 }
 
@@ -909,6 +911,39 @@ func TestMouseReportingToggleEnvironmentOverridesConfig(t *testing.T) {
 	}
 	if !cfg.UI.MouseReportingToggle {
 		t.Fatalf("invalid environment value did not preserve config=%#v", cfg.UI)
+	}
+}
+
+func TestScrollEnvironmentOverridesConfig(t *testing.T) {
+	t.Setenv("GROK_SCROLL_LINES", "12")
+	t.Setenv("GROK_INVERT_SCROLL", "true")
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[ui]\nscroll_lines = 4\ninvert_scroll = false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.UI.ScrollLines == nil || *cfg.UI.ScrollLines != 10 || !cfg.UI.InvertScroll {
+		t.Fatalf("environment override=%#v", cfg.UI)
+	}
+	t.Setenv("GROK_SCROLL_LINES", "fast")
+	t.Setenv("GROK_INVERT_SCROLL", "sometimes")
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.UI.ScrollLines == nil || *cfg.UI.ScrollLines != 4 || cfg.UI.InvertScroll {
+		t.Fatalf("invalid environment value did not preserve config=%#v", cfg.UI)
+	}
+	t.Setenv("GROK_SCROLL_LINES", "0")
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.UI.ScrollLines != nil {
+		t.Fatalf("zero environment value did not clear override=%#v", cfg.UI)
 	}
 }
 

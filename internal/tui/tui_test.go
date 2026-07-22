@@ -1605,6 +1605,19 @@ func TestMouseWheelScrollsOnlyTheTranscriptPane(t *testing.T) {
 	if command := view.OnMouse(tea.MouseClickMsg(tea.Mouse{Y: 1, Button: tea.MouseLeft})); command == nil {
 		t.Fatal("mouse click did not start transcript selection")
 	}
+
+	m = &model{width: 60, height: 16, scroll: 10, scrollLines: 5, invertScroll: true}
+	view = m.View()
+	updated, _ = m.Update(view.OnMouse(tea.MouseWheelMsg(tea.Mouse{Y: 1, Button: tea.MouseWheelUp}))())
+	m = updated.(*model)
+	if m.scroll != 5 {
+		t.Fatalf("inverted wheel-up scroll=%d", m.scroll)
+	}
+	updated, _ = m.Update(m.View().OnMouse(tea.MouseWheelMsg(tea.Mouse{Y: 1, Button: tea.MouseWheelDown}))())
+	m = updated.(*model)
+	if m.scroll != 10 {
+		t.Fatalf("inverted wheel-down scroll=%d", m.scroll)
+	}
 }
 
 func TestTextSelectionCopiesRenderedTranscript(t *testing.T) {

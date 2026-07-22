@@ -366,6 +366,8 @@ type model struct {
 	wordSeparators string
 	mouseToggle    bool
 	vimMode        bool
+	scrollLines    int
+	invertScroll   bool
 	mouseReleased  bool
 	hyperlinks     bool
 	scrollFocused  bool
@@ -441,6 +443,8 @@ type UIOptions struct {
 	WordSeparators       *string
 	MouseReportingToggle bool
 	VimMode              bool
+	ScrollLines          *uint8
+	InvertScroll         bool
 }
 
 func parseTextSelectionMode(value string) textSelectionMode {
@@ -498,10 +502,14 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		status: "ready", initial: strings.TrimSpace(initialPrompt), historyIndex: -1,
 		history: loadPromptHistory(runner, workspace), selectionMode: parseTextSelectionMode(options.Mode),
 		wordSeparators: defaultWordSeparators, mouseToggle: options.MouseReportingToggle, vimMode: options.VimMode,
+		scrollLines: mouseWheelScrollLines, invertScroll: options.InvertScroll,
 		hyperlinks: detectTerminalHyperlinks(),
 	}
 	if options.WordSeparators != nil {
 		m.wordSeparators = *options.WordSeparators
+	}
+	if options.ScrollLines != nil {
+		m.scrollLines = int(*options.ScrollLines)
 	}
 	if runner.Tools != nil {
 		m.planMode = runner.Tools.PlanModeActive()
@@ -2492,12 +2500,19 @@ func (m *model) View() tea.View {
 			if mouse.Y < 1 || mouse.Y > contentHeight {
 				return nil
 			}
+			scrollLines := m.scrollLines
+			if scrollLines == 0 {
+				scrollLines = mouseWheelScrollLines
+			}
+			if m.invertScroll {
+				scrollLines = -scrollLines
+			}
 			lines := 0
 			switch mouse.Button {
 			case tea.MouseWheelUp:
-				lines = mouseWheelScrollLines
+				lines = scrollLines
 			case tea.MouseWheelDown:
-				lines = -mouseWheelScrollLines
+				lines = -scrollLines
 			default:
 				return nil
 			}
