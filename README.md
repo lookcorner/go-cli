@@ -259,11 +259,16 @@ Fresh reference-compatible `models_cache.json` catalogs are loaded from
 `$GROK_HOME` or `~/.grok` and can be refreshed through
 `x.ai/internal/reload_models_cache`. Version, five-minute TTL, authentication
 method and models-list origin must all match before cached endpoints are used.
+On an ACP cache miss, Gork Go fetches the active authentication route's
+`/models` catalog, skips malformed entries, and atomically stores a private
+cache without replacing a previously usable file on fetch or decode failure.
 Connected clients receive `x.ai/models/update`; idle sessions switch when an
 explicit default changes or their current model disappears, while busy sessions
 defer that switch until the next prompt. Future subagents use the refreshed
-catalog. A removed local filter is cleared, but an externally supplied filter
-that is not owned by local config remains fail-closed.
+catalog. Clearing the active OAuth session also clears its catalog, while
+static API-key and deployment catalogs are preserved. A removed local filter
+is cleared, but an externally supplied filter that is not owned by local config
+remains fail-closed.
 
 Gork-style `[model.<name>]` custom providers and `[mcp_servers.<name>]` tables
 are supported. The earlier JSON format remains accepted when passed with

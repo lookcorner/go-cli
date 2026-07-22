@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -654,6 +655,68 @@ func TestModelCacheIdentityFollowsAuthenticationRoute(t *testing.T) {
 	provider := func(context.Context, string) (string, error) { return "token", nil }
 	if auth, origin := modelCacheIdentity(cfg, provider); auth != "session" || origin != "https://proxy.example/v1/models" {
 		t.Fatalf("session identity=%q %q", auth, origin)
+	}
+}
+
+func TestFetchACPModelCacheUsesSelectedCredentials(t *testing.T) {
+	tests := []struct {
+		name       string
+		authMethod string
+		apiKey     string
+		deployment string
+		wantToken  string
+		wantHeader string
+		wantUser   string
+	}{
+		{name: "deployment", authMethod: "deployment", apiKey: "api-key", deployment: "deployment-key", wantToken: "deployment-key"},
+		{name: "session", authMethod: "session", apiKey: "session-token", wantToken: "session-token", wantHeader: auth.DefaultTokenHeader, wantUser: "user-1"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("GROK_HOME", t.TempDir())
+			authPath := filepath.Join(t.TempDir(), "auth.json")
+			scope := "issuer::client"
+			if test.authMethod == "session" {
+				if err := auth.Save(authPath, scope, auth.Credential{Key: "stored-token", UserID: "user-1", Email: "user@example.com"}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				if got := request.Header.Get("Authorization"); got != "Bearer "+test.wantToken {
+					t.Errorf("authorization=%q", got)
+				}
+				if got := request.Header.Get("X-XAI-Token-Auth"); got != test.wantHeader {
+					t.Errorf("token auth=%q", got)
+				}
+				if got := request.Header.Get("x-userid"); got != test.wantUser {
+					t.Errorf("user=%q", got)
+				}
+				fmt.Fprint(writer, `{"data":[{"id":"grok","model":"grok"}]}`)
+			}))
+			defer server.Close()
+			cfg := config.Config{APIKey: test.apiKey, DeploymentKey: test.deployment, BaseURL: server.URL + "/v1", HTTPTimeout: time.Second}
+			if _, err := fetchACPModelCache(context.Background(), cfg, test.authMethod, server.URL+"/models", authPath, scope); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestShouldClearACPModelCacheOnlyForCurrentSessionLogout(t *testing.T) {
+	if !shouldClearACPModelCache("session", auth.LogoutResult{ClearedCurrent: true}) {
+		t.Fatal("current session logout did not clear cache")
+	}
+	for _, test := range []struct {
+		authMethod string
+		result     auth.LogoutResult
+	}{
+		{authMethod: "session", result: auth.LogoutResult{}},
+		{authMethod: "api_key", result: auth.LogoutResult{ClearedCurrent: true}},
+		{authMethod: "deployment", result: auth.LogoutResult{ClearedCurrent: true}},
+	} {
+		if shouldClearACPModelCache(test.authMethod, test.result) {
+			t.Fatalf("cache cleared for auth=%q result=%#v", test.authMethod, test.result)
+		}
 	}
 }
 

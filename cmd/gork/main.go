@@ -1253,6 +1253,26 @@ func modelCacheIdentity(cfg config.Config, tokenProvider api.TokenProvider) (str
 	return authMethod, strings.TrimRight(baseURL, "/") + "/models"
 }
 
+func fetchACPModelCache(ctx context.Context, cfg config.Config, authMethod, origin, authPath, scope string) (config.ModelCache, error) {
+	token := cfg.APIKey
+	if authMethod == "deployment" {
+		token = cfg.DeploymentKey
+	}
+	credential := auth.Credential{}
+	if authMethod == "session" {
+		credential, _ = auth.Load(authPath, scope)
+	}
+	return config.FetchModelCache(ctx, config.ModelFetchRequest{
+		AuthMethod: authMethod, Origin: origin, InferenceBaseURL: cfg.BaseURL, Token: token,
+		TokenHeader: auth.DefaultTokenHeader, UserID: credential.UserID, Email: credential.Email,
+		HTTP: &http.Client{Timeout: cfg.HTTPTimeout},
+	})
+}
+
+func shouldClearACPModelCache(authMethod string, result auth.LogoutResult) bool {
+	return authMethod == "session" && result.ClearedCurrent
+}
+
 func newModelClient(cfg config.Config, tokenProvider api.TokenProvider) (agent.ResponseStreamer, error) {
 	httpClient := &http.Client{Timeout: cfg.HTTPTimeout}
 	switch cfg.Backend {
@@ -1733,7 +1753,12 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		authMethodID = "xai.api_key"
 	}
 	cacheAuth, cacheOrigin := modelCacheIdentity(cfg, tokenProvider)
-	modelCache, _ := config.LoadModelCache(cacheAuth, cacheOrigin)
+	modelCache, cacheLoaded := config.LoadModelCache(cacheAuth, cacheOrigin)
+	if !cacheLoaded {
+		if fetched, err := fetchACPModelCache(ctx, cfg, cacheAuth, cacheOrigin, authPath, authConfig.Scope()); err == nil {
+			modelCache = fetched
+		}
+	}
 	var modelCacheMu sync.RWMutex
 	modelCacheSnapshot := func() config.ModelCache {
 		modelCacheMu.RLock()
@@ -1741,11 +1766,10 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		return modelCache
 	}
 	refreshModelCache := func() {
-		if refreshed, ok := config.LoadModelCache(cacheAuth, cacheOrigin); ok {
-			modelCacheMu.Lock()
-			modelCache = refreshed
-			modelCacheMu.Unlock()
-		}
+		refreshed, _ := config.LoadModelCache(cacheAuth, cacheOrigin)
+		modelCacheMu.Lock()
+		modelCache = refreshed
+		modelCacheMu.Unlock()
 	}
 	var extensionsMu sync.Mutex
 	dynamicSkills := cloneSkillsConfig(cfg.Skills)
@@ -1786,6 +1810,14 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 	}, AuthChanged: func(authCtx context.Context, result auth.LogoutResult) error {
 		if err := clearACPLogoutPolicy(authCtx, cfg, result); err != nil {
 			return err
+		}
+		if shouldClearACPModelCache(cacheAuth, result) {
+			if err := config.ClearModelCache(); err != nil {
+				return err
+			}
+			modelCacheMu.Lock()
+			modelCache = config.ModelCache{}
+			modelCacheMu.Unlock()
 		}
 		return server.ReloadModels()
 	}, Factory: func(
