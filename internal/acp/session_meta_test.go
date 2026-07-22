@@ -66,6 +66,43 @@ func TestSessionStartResponseMetadata(t *testing.T) {
 	}
 }
 
+func TestNewSessionReturnsWorkspaceMetadata(t *testing.T) {
+	for _, gitRepo := range []bool{false, true} {
+		t.Run(map[bool]string{false: "non-git", true: "git"}[gitRepo], func(t *testing.T) {
+			dir, cwd := t.TempDir(), t.TempDir()
+			if gitRepo {
+				runACPGit(t, cwd, "init", "-q")
+			}
+			var output bytes.Buffer
+			server := &Server{SessionDir: dir, output: &output, sessions: make(map[string]*session), Factory: func(_ context.Context, cfg SessionConfig, approver tools.Approver, _, _ io.Writer) (*agent.Runner, func(), error) {
+				ws, err := workspace.Open(cfg.CWD)
+				if err != nil {
+					return nil, nil, err
+				}
+				registry := tools.NewRegistry(ws, approver)
+				return &agent.Runner{Tools: registry, ModelID: "grok-build"}, func() { _ = registry.Close() }, nil
+			}}
+			server.handleNewSession(context.Background(), message{ID: json.RawMessage("1"), Params: mustJSON(t, map[string]any{"cwd": cwd, "mcpServers": []any{}})})
+			response := decodeACP(t, json.NewDecoder(&output))
+			result := response["result"].(map[string]any)
+			meta := result["_meta"].(map[string]any)
+			if meta["currentWorkingDirectory"] != cwd || meta["isGitRepo"] != gitRepo {
+				t.Fatalf("workspace metadata=%#v", meta)
+			}
+			expectedRoot, err := filepath.EvalSymlinks(cwd)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if gitRepo && meta["gitRoot"] != expectedRoot || !gitRepo && meta["gitRoot"] != nil {
+				t.Fatalf("git root=%#v", meta["gitRoot"])
+			}
+			if !server.closeSession(result["sessionId"].(string)) {
+				t.Fatal("new session did not close")
+			}
+		})
+	}
+}
+
 func TestRestoreSessionReturnsStoredSessionMetadata(t *testing.T) {
 	dir, cwd := t.TempDir(), t.TempDir()
 	runACPGit(t, cwd, "init", "-q")
@@ -113,7 +150,10 @@ func TestRestoreSessionReturnsStoredSessionMetadata(t *testing.T) {
 		return &agent.Runner{Tools: registry, ModelID: "grok-build", ModelOptions: []agent.ModelOption{{ID: "grok-build", Name: "Grok Build"}}}, func() { _ = registry.Close() }, nil
 	}}
 	server.handleRestoreSession(context.Background(), message{
-		ID: json.RawMessage("1"), Params: json.RawMessage(`{"sessionId":"stored-metadata","cwd":` + quoteJSON(cwd) + `,"mcpServers":[]}`),
+		ID: json.RawMessage("1"), Params: mustJSON(t, map[string]any{
+			"sessionId": "stored-metadata", "cwd": cwd, "mcpServers": []any{},
+			"_meta": map[string]any{"x.ai/persist": map[string]any{"leader": "desktop", "generation": 2}},
+		}),
 	}, false)
 	response := decodeACP(t, json.NewDecoder(&output))
 	result, ok := response["result"].(map[string]any)
@@ -122,7 +162,8 @@ func TestRestoreSessionReturnsStoredSessionMetadata(t *testing.T) {
 	}
 	meta := result["_meta"].(map[string]any)
 	detail := meta["x.ai/sessionDetail"].(map[string]any)
-	if detail["title"] != "Restored title" || detail["sessionId"] != "stored-metadata" || len(meta["x.ai/sessionConfig"].(map[string]any)["options"].([]any)) != 1 {
+	persist := meta["x.ai/persist"].(map[string]any)
+	if meta["sessionId"] != "stored-metadata" || persist["leader"] != "desktop" || persist["generation"] != float64(2) || detail["title"] != "Restored title" || detail["sessionId"] != "stored-metadata" || len(meta["x.ai/sessionConfig"].(map[string]any)["options"].([]any)) != 1 {
 		t.Fatalf("restored metadata=%#v", meta)
 	}
 	divergence := meta["gitDivergence"].(map[string]any)

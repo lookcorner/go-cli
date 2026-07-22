@@ -1497,7 +1497,17 @@ func (s *Server) handleNewSession(ctx context.Context, incoming message) {
 		s.respondError(incoming.ID, -32000, err.Error())
 		return
 	}
-	s.respond(incoming.ID, sessionStartResponse(created, "default"))
+	response := sessionStartResponse(created, "default")
+	meta := response["_meta"].(map[string]any)
+	meta["currentWorkingDirectory"] = params.CWD
+	gitRoot, gitErr := worktrees.GitRoot(ctx, params.CWD)
+	meta["isGitRepo"] = gitErr == nil
+	if gitErr == nil {
+		meta["gitRoot"] = gitRoot
+	} else {
+		meta["gitRoot"] = nil
+	}
+	s.respond(incoming.ID, response)
 	s.startFolderTrustPrompt(created)
 }
 
@@ -2328,9 +2338,14 @@ func (s *Server) handleRestoreSession(ctx context.Context, incoming message, rep
 		current.mu.Unlock()
 	}
 	response := sessionStartResponse(created, mode)
+	meta := response["_meta"].(map[string]any)
+	meta["sessionId"] = params.SessionID
+	if persist, ok := params.Meta["x.ai/persist"]; ok {
+		meta["x.ai/persist"] = persist
+	}
 	if currentHead, headErr := worktrees.Head(ctx, params.CWD); headErr == nil {
 		if divergence := worktrees.DetectHeadDivergence(sessionHead, sessionBranch, currentHead); divergence != nil {
-			response["_meta"].(map[string]any)["gitDivergence"] = divergence
+			meta["gitDivergence"] = divergence
 		}
 	}
 	s.respond(incoming.ID, response)
