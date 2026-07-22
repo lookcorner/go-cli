@@ -33,6 +33,11 @@ is available, and samples a bounded text-only transcript without tools or parent
 history mutation. `GROK_PROMPT_SUGGESTIONS_MODEL` overrides the request model
 hint; otherwise the dedicated `grok-build-0.1` suggestion model is used.
 
+The fire-and-forget `x.ai/yolo_mode_changed` notification switches every live
+session on the ACP connection between ask and always-approve behavior. Explicit
+deny mode and deny/ask/allow permission rules remain authoritative; the distinct
+reference `auto_mode` policy is not treated as always-approve.
+
 Completed ACP prompts publish `x.ai/session/prompt_complete` before their RPC
 response. Prompt responses include `_meta` correlation for the session,
 request/prompt, model, token usage, optional turn, and cancellation trigger;

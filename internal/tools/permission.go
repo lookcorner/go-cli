@@ -7,7 +7,68 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 )
+
+type ModeApprover struct {
+	mu         sync.RWMutex
+	mode       PermissionMode
+	prompt     Approver
+	lockedDeny bool
+}
+
+type permissionModeController interface {
+	SetPermissionMode(PermissionMode) error
+	PermissionMode() PermissionMode
+}
+
+func NewModeApprover(mode PermissionMode, prompt Approver) (*ModeApprover, error) {
+	if mode != PermissionPrompt && mode != PermissionAuto && mode != PermissionDeny {
+		return nil, fmt.Errorf("unknown permission mode %q", mode)
+	}
+	if mode == PermissionPrompt && prompt == nil {
+		return nil, errors.New("prompt approver is required")
+	}
+	return &ModeApprover{mode: mode, prompt: prompt, lockedDeny: mode == PermissionDeny}, nil
+}
+
+func (a *ModeApprover) Approve(ctx context.Context, action, detail string) error {
+	a.mu.RLock()
+	mode, prompt := a.mode, a.prompt
+	a.mu.RUnlock()
+	switch mode {
+	case PermissionAuto:
+		return nil
+	case PermissionDeny:
+		return &PermissionDeniedError{Action: action}
+	case PermissionPrompt:
+		return prompt.Approve(ctx, action, detail)
+	default:
+		return fmt.Errorf("unknown permission mode %q", mode)
+	}
+}
+
+func (a *ModeApprover) SetPermissionMode(mode PermissionMode) error {
+	if mode != PermissionPrompt && mode != PermissionAuto && mode != PermissionDeny {
+		return fmt.Errorf("unknown permission mode %q", mode)
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.lockedDeny && mode != PermissionDeny {
+		return errors.New("permission mode is locked to deny")
+	}
+	if mode == PermissionPrompt && a.prompt == nil {
+		return errors.New("prompt approver is required")
+	}
+	a.mode = mode
+	return nil
+}
+
+func (a *ModeApprover) PermissionMode() PermissionMode {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.mode
+}
 
 type permissionRule struct {
 	action  string
@@ -86,6 +147,22 @@ func (a *RuleApprover) Approve(ctx context.Context, action, detail string) error
 		}
 	}
 	return a.base.Approve(ctx, action, detail)
+}
+
+func (a *RuleApprover) SetPermissionMode(mode PermissionMode) error {
+	controller, ok := a.base.(permissionModeController)
+	if !ok {
+		return errors.New("permission mode cannot be changed")
+	}
+	return controller.SetPermissionMode(mode)
+}
+
+func (a *RuleApprover) PermissionMode() PermissionMode {
+	controller, ok := a.base.(permissionModeController)
+	if !ok {
+		return ""
+	}
+	return controller.PermissionMode()
 }
 
 func compilePermissionRules(values []string) ([]permissionRule, error) {

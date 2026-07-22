@@ -110,3 +110,51 @@ func TestPermissionDenialsAreTyped(t *testing.T) {
 		t.Fatalf("rule denial type: %v", err)
 	}
 }
+
+func TestModeApproverSwitchesWithoutBypassingRules(t *testing.T) {
+	prompt := &recordingApprover{}
+	mode, err := NewModeApprover(PermissionPrompt, prompt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := NewPolicyApprover(mode, prompt,
+		[]string{"Bash(git status)"}, []string{"Bash(git push *)"}, []string{"Bash(rm *)"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := policy.Approve(context.Background(), "shell", "go test ./..."); err != nil || prompt.calls != 1 {
+		t.Fatalf("prompt mode err=%v calls=%d", err, prompt.calls)
+	}
+	if err := policy.SetPermissionMode(PermissionAuto); err != nil || policy.PermissionMode() != PermissionAuto {
+		t.Fatalf("enable auto err=%v mode=%q", err, policy.PermissionMode())
+	}
+	if err := policy.Approve(context.Background(), "shell", "go test ./..."); err != nil || prompt.calls != 1 {
+		t.Fatalf("auto mode err=%v calls=%d", err, prompt.calls)
+	}
+	if err := policy.Approve(context.Background(), "shell", "git push origin main"); err != nil || prompt.calls != 2 {
+		t.Fatalf("explicit ask err=%v calls=%d", err, prompt.calls)
+	}
+	if err := policy.Approve(context.Background(), "shell", "rm file"); !IsPermissionDenied(err) {
+		t.Fatalf("deny rule was bypassed: %v", err)
+	}
+	if err := policy.SetPermissionMode(PermissionPrompt); err != nil || policy.PermissionMode() != PermissionPrompt {
+		t.Fatalf("restore prompt err=%v mode=%q", err, policy.PermissionMode())
+	}
+}
+
+func TestModeApproverKeepsExplicitDenyLocked(t *testing.T) {
+	mode, err := NewModeApprover(PermissionDeny, &recordingApprover{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mode.SetPermissionMode(PermissionAuto); err == nil || mode.PermissionMode() != PermissionDeny {
+		t.Fatalf("deny lock err=%v mode=%q", err, mode.PermissionMode())
+	}
+	if err := mode.Approve(context.Background(), "shell", "true"); !IsPermissionDenied(err) {
+		t.Fatalf("deny mode approved: %v", err)
+	}
+	if _, err := NewModeApprover("invalid", nil); err == nil {
+		t.Fatal("invalid mode was accepted")
+	}
+}

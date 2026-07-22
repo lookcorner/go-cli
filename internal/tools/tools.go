@@ -716,6 +716,29 @@ func (r *Registry) SetReadPolicy(approver Approver) {
 	r.mu.Unlock()
 }
 
+func (r *Registry) SetPermissionMode(mode PermissionMode) error {
+	r.mu.RLock()
+	approver := r.approver
+	r.mu.RUnlock()
+	controller, ok := approver.(permissionModeController)
+	if !ok {
+		return errors.New("permission mode cannot be changed")
+	}
+	return controller.SetPermissionMode(mode)
+}
+
+func (r *Registry) PermissionMode() (PermissionMode, bool) {
+	r.mu.RLock()
+	approver := r.approver
+	r.mu.RUnlock()
+	controller, ok := approver.(permissionModeController)
+	if !ok {
+		return "", false
+	}
+	mode := controller.PermissionMode()
+	return mode, mode != ""
+}
+
 func (r *Registry) Close() error {
 	var stateErr, processErr, schedulerErr error
 	if r.hunks != nil {

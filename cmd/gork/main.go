@@ -1582,11 +1582,11 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		}
 		instructions := joinInstructions(cfg.SystemPrompt, workspace.FormatInstructions(instructionFiles), catalog.Summary())
 		permissionPrompts := &permissionPromptApprover{base: protocolApprover}
-		var approver tools.Approver = permissionPrompts
-		if mode != tools.PermissionPrompt {
-			approver = tools.PromptApprover{Mode: mode}
+		modeApprover, err := tools.NewModeApprover(mode, permissionPrompts)
+		if err != nil {
+			return nil, nil, err
 		}
-		approver, err = tools.NewPolicyApprover(approver, permissionPrompts, allowRules, askRules, denyRules)
+		approver, err := tools.NewPolicyApprover(modeApprover, permissionPrompts, allowRules, askRules, denyRules)
 		if err != nil {
 			return nil, nil, err
 		}

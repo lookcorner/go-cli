@@ -223,6 +223,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleSetMode(incoming)
 		case "x.ai/toggle_plan_mode":
 			s.handleTogglePlanMode(incoming.Params)
+		case "x.ai/yolo_mode_changed":
+			s.handleYoloModeChanged(incoming.Params)
 		case "session/cancel":
 			s.handleCancel(incoming.Params)
 		case "session/close":
