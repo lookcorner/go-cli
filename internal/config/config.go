@@ -183,6 +183,7 @@ type UIConfig struct {
 	KeepTextSelection    string  `json:"keep_text_selection"`
 	WordSeparators       *string `json:"word_separators,omitempty"`
 	MouseReportingToggle bool    `json:"mouse_reporting_toggle,omitempty"`
+	VimMode              bool    `json:"vim_mode,omitempty"`
 }
 
 type GoalConfig struct {
@@ -404,6 +405,7 @@ type fileUIConfig struct {
 	KeepTextSelection    *string `json:"keep_text_selection,omitempty" toml:"keep_text_selection"`
 	WordSeparators       *string `json:"word_separators,omitempty" toml:"word_separators"`
 	MouseReportingToggle *bool   `json:"mouse_reporting_toggle,omitempty" toml:"mouse_reporting_toggle"`
+	VimMode              *bool   `json:"vim_mode,omitempty" toml:"vim_mode"`
 }
 
 type fileFolderTrustConfig struct {
@@ -813,6 +815,9 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.UI.MouseReportingToggle != nil {
 		cfg.UI.MouseReportingToggle = *disk.UI.MouseReportingToggle
+	}
+	if disk.UI.VimMode != nil {
+		cfg.UI.VimMode = *disk.UI.VimMode
 	}
 	if disk.Goal.VerifierCount != nil {
 		cfg.Goal.VerifierCount = normalizedGoalVerifierCount(*disk.Goal.VerifierCount)

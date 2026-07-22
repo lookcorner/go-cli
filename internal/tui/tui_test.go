@@ -900,7 +900,7 @@ func TestMouseReportingToggle(t *testing.T) {
 }
 
 func TestScrollbackFocusAndNavigation(t *testing.T) {
-	m := &model{runner: &agent.Runner{}, width: 80, height: 12, status: "ready", history: []string{"old prompt"}, historyIndex: -1}
+	m := &model{runner: &agent.Runner{}, width: 80, height: 12, status: "ready", history: []string{"old prompt"}, historyIndex: -1, vimMode: true}
 	for line := 0; line < 40; line++ {
 		fmt.Fprintf(&m.transcript, "line %02d\n", line)
 	}
@@ -945,6 +945,14 @@ func TestScrollbackFocusAndNavigation(t *testing.T) {
 	press(tea.Key{Code: tea.KeyPgDown})
 	if m.scroll != 0 {
 		t.Fatalf("page-down scroll=%d", m.scroll)
+	}
+	press(tea.Key{Code: 'k', Text: "k"})
+	if m.scroll != 1 {
+		t.Fatalf("vim k scroll=%d", m.scroll)
+	}
+	press(tea.Key{Code: 'j', Text: "j"})
+	if m.scroll != 0 {
+		t.Fatalf("vim j scroll=%d", m.scroll)
 	}
 	m.selection = &textSelection{}
 	press(tea.Key{Code: 'g', Text: "g"})
@@ -991,6 +999,20 @@ func TestScrollbackFocusAndNavigation(t *testing.T) {
 	m = updated.(*model)
 	if !m.scrollFocused {
 		t.Fatal("transcript click did not focus scrollback")
+	}
+}
+
+func TestSimpleScrollbackKeysReturnToPrompt(t *testing.T) {
+	for _, key := range []rune{'g', 'G', 'j', 'k', '/'} {
+		t.Run(string(key), func(t *testing.T) {
+			m := &model{width: 80, height: 12, status: "ready", scrollFocused: true}
+			m.transcript.WriteString("line\n")
+			updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: key, Text: string(key)}))
+			m = updated.(*model)
+			if m.scrollFocused || string(m.input) != string(key) || m.scrollSearch != nil {
+				t.Fatalf("key=%q focus=%v input=%q search=%#v", key, m.scrollFocused, m.input, m.scrollSearch)
+			}
+		})
 	}
 }
 

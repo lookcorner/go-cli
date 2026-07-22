@@ -365,6 +365,7 @@ type model struct {
 	selectionMode  textSelectionMode
 	wordSeparators string
 	mouseToggle    bool
+	vimMode        bool
 	mouseReleased  bool
 	hyperlinks     bool
 	scrollFocused  bool
@@ -439,6 +440,7 @@ type UIOptions struct {
 	Mode                 string
 	WordSeparators       *string
 	MouseReportingToggle bool
+	VimMode              bool
 }
 
 func parseTextSelectionMode(value string) textSelectionMode {
@@ -495,7 +497,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		modelName: modelName, previousID: previousID, width: 80, height: 24,
 		status: "ready", initial: strings.TrimSpace(initialPrompt), historyIndex: -1,
 		history: loadPromptHistory(runner, workspace), selectionMode: parseTextSelectionMode(options.Mode),
-		wordSeparators: defaultWordSeparators, mouseToggle: options.MouseReportingToggle,
+		wordSeparators: defaultWordSeparators, mouseToggle: options.MouseReportingToggle, vimMode: options.VimMode,
 		hyperlinks: detectTerminalHyperlinks(),
 	}
 	if options.WordSeparators != nil {
@@ -1598,11 +1600,15 @@ func (m *model) handleScrollbackKey(msg tea.KeyPressMsg) bool {
 		m.scrollTranscript(max(m.contentHeight(), 1))
 	case stroke == "pgdown":
 		m.scrollTranscript(-max(m.contentHeight(), 1))
-	case key.Mod == 0 && key.Text == "g":
+	case m.vimMode && key.Mod == 0 && key.Text == "k":
+		m.scrollTranscript(1)
+	case m.vimMode && key.Mod == 0 && key.Text == "j":
+		m.scrollTranscript(-1)
+	case m.vimMode && key.Mod == 0 && key.Text == "g":
 		m.scrollTranscript(m.maxTranscriptScroll())
-	case key.Mod == 0 && key.Text == "G":
+	case m.vimMode && key.Mod == 0 && key.Text == "G":
 		m.scrollTranscript(-m.scroll)
-	case key.Mod == 0 && key.Text == "/":
+	case m.vimMode && key.Mod == 0 && key.Text == "/":
 		m.openScrollSearch("")
 	default:
 		if key.Mod != 0 || len(key.Text) != 1 || !isASCIILetterOrSlash(key.Text[0]) {

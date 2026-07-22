@@ -480,8 +480,10 @@ a cell copies that cell, while triple-clicking a table border copies the whole t
 `[ui] word_separators` overrides the default separator set,
 including an explicit empty string.
 Tab focuses the transcript scrollback; Ctrl-K/Ctrl-J move one line, Ctrl-U/Ctrl-D
-move half a page, Page Up/Page Down move a page, and g/G jump to the top/bottom.
-Tab or Space returns to the prompt, while typing a letter or `/` returns and forwards it.
+move half a page, and Page Up/Page Down move a page. By default, typing a letter or
+`/` returns to the prompt and forwards it. Set `[ui] vim_mode = true` to use j/k for
+line movement, g/G for the top/bottom, and `/` for search while scrollback is focused.
+Tab or Space always returns to the prompt.
 Set `[ui] mouse_reporting_toggle = true` (or `GROK_MOUSE_REPORTING_TOGGLE=true`)
 to let Ctrl-R release mouse capture while scrollback is focused and press Ctrl-R again
 to restore it.
@@ -492,7 +494,7 @@ the selected prompt to the composer without submitting it.
 transcript to the terminal clipboard.
 `/help` lists local commands, `/session-info` shows the active session, workspace,
 and model, and `/context` reports the latest available context-window usage.
-While scrollback is focused, `/` opens incremental regular-expression search; Enter
+In Vim mode, `/` opens incremental regular-expression search while scrollback is focused; Enter
 accepts the query, Up/Down or `n`/`N` navigates matches, and Esc closes it. `/find <pattern>`
 opens the same search directly from the prompt without sending a model turn.
 Plan exits open a dedicated full-plan review with approve, revision-feedback,

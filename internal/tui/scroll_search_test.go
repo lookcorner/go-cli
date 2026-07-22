@@ -44,7 +44,7 @@ func TestScrollSearchRejectsInvalidRegex(t *testing.T) {
 }
 
 func TestTUIScrollbackSearchWorkflow(t *testing.T) {
-	m := &model{width: 40, height: 12, status: "ready"}
+	m := &model{width: 40, height: 12, status: "ready", vimMode: true}
 	for line := 0; line < 30; line++ {
 		text := "ordinary"
 		if line == 3 || line == 25 {
@@ -98,7 +98,7 @@ func TestFindCommandAndStreamingRefresh(t *testing.T) {
 		t.Fatalf("streaming matches=%#v scroll=%d", m.scrollSearch.matches, m.scroll)
 	}
 
-	empty := &model{status: "ready", scrollFocused: true}
+	empty := &model{status: "ready", scrollFocused: true, vimMode: true}
 	updated, _ = empty.Update(tea.KeyPressMsg(tea.Key{Code: '/', Text: "/"}))
 	empty = updated.(*model)
 	if empty.scrollSearch != nil || empty.status != "scrollback is empty" {
