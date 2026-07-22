@@ -689,7 +689,9 @@ Local mutations require confirmation by default:
 - `--approval deny`: allow only read-only tools.
 - `--approval auto`: automatically approve edits, reads, searches, and routine
   local development commands; prompt for unknown, risky, external, or
-  interactive actions.
+  interactive actions. Unknown actions are evaluated by an isolated model call
+  using bounded recent user/tool context and project instructions; unavailable
+  or malformed classifier results fall back to the prompt.
 - `--approval always-approve`: approve every unmatched action. Use only in a
   trusted workspace and environment. Managed requirements may disable this
   mode without disabling classifier-based `auto`.

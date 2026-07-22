@@ -225,8 +225,19 @@ func (b *Bridge) Approve(ctx context.Context, action, detail string) error {
 		if tools.PermissionBypassed(ctx) {
 			return nil
 		}
-		if mode == tools.PermissionAuto && tools.AutoModeAllows(action, detail) {
+		if mode == tools.PermissionAuto && tools.AutoModeFastPath(action, detail) {
 			return nil
+		}
+		if mode == tools.PermissionAuto {
+			if allowed, available := tools.ClassifyPermission(ctx, action, detail); available {
+				if allowed {
+					return nil
+				}
+				return b.prompt(ctx, action, detail)
+			}
+			if tools.AutoModeAllows(action, detail) {
+				return nil
+			}
 		}
 		return b.prompt(ctx, action, detail)
 	default:

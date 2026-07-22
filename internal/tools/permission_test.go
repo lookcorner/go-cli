@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +17,49 @@ type recordingApprover struct{ calls int }
 func (a *recordingApprover) Approve(context.Context, string, string) error {
 	a.calls++
 	return nil
+}
+
+func TestAutoModeUsesLiveClassifierBeforePromptFallback(t *testing.T) {
+	prompt := &recordingApprover{}
+	mode, err := NewModeApprover(PermissionAuto, prompt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	classifierCalls := 0
+	ctx := WithPermissionClassifier(context.Background(), func(context.Context, string, string) (bool, error) {
+		classifierCalls++
+		return true, nil
+	})
+	if err := mode.Approve(ctx, "shell", "touch generated.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if classifierCalls != 1 || prompt.calls != 0 {
+		t.Fatalf("classifier=%d prompts=%d", classifierCalls, prompt.calls)
+	}
+	if err := mode.Approve(ctx, "shell", "go test ./..."); err != nil {
+		t.Fatal(err)
+	}
+	if classifierCalls != 2 {
+		t.Fatalf("context classifier calls=%d", classifierCalls)
+	}
+	blocked := WithPermissionClassifier(context.Background(), func(context.Context, string, string) (bool, error) {
+		return false, nil
+	})
+	if err := mode.Approve(blocked, "shell", "go test ./..."); err != nil {
+		t.Fatal(err)
+	}
+	unavailable := WithPermissionClassifier(context.Background(), func(context.Context, string, string) (bool, error) {
+		return false, errors.New("offline")
+	})
+	if err := mode.Approve(unavailable, "shell", "touch unavailable.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mode.Approve(unavailable, "shell", "go test ./..."); err != nil {
+		t.Fatal(err)
+	}
+	if prompt.calls != 2 {
+		t.Fatalf("fallback prompts=%d", prompt.calls)
+	}
 }
 
 func TestRegistryAppliesReadAndGrepPolicies(t *testing.T) {

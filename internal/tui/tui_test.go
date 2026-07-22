@@ -154,6 +154,17 @@ func TestBridgeAutoModePromptsOnlyForRisk(t *testing.T) {
 		t.Fatalf("bypassed command prompted: %#v", event)
 	default:
 	}
+	classified := tools.WithPermissionClassifier(context.Background(), func(context.Context, string, string) (bool, error) {
+		return true, nil
+	})
+	if err := bridge.Approve(classified, "shell", "touch classified.txt"); err != nil {
+		t.Fatalf("classified command: %v", err)
+	}
+	select {
+	case event := <-bridge.events:
+		t.Fatalf("classified command prompted: %#v", event)
+	default:
+	}
 }
 
 func TestBridgeQuestionSelectionAndPlanClarification(t *testing.T) {

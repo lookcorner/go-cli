@@ -24,6 +24,10 @@ type permissionModeController interface {
 }
 
 type permissionBypassKey struct{}
+type permissionClassifierKey struct{}
+
+// PermissionClassifier decides whether one request may run without prompting.
+type PermissionClassifier func(context.Context, string, string) (bool, error)
 
 func WithPermissionBypass(ctx context.Context) context.Context {
 	return context.WithValue(ctx, permissionBypassKey{}, true)
@@ -33,6 +37,21 @@ func WithPermissionBypass(ctx context.Context) context.Context {
 func PermissionBypassed(ctx context.Context) bool {
 	bypassed, _ := ctx.Value(permissionBypassKey{}).(bool)
 	return bypassed
+}
+
+// WithPermissionClassifier attaches the session's live classifier to one tool request.
+func WithPermissionClassifier(ctx context.Context, classifier PermissionClassifier) context.Context {
+	return context.WithValue(ctx, permissionClassifierKey{}, classifier)
+}
+
+// ClassifyPermission returns available=false when no live classifier produced a verdict.
+func ClassifyPermission(ctx context.Context, action, detail string) (allowed, available bool) {
+	classifier, _ := ctx.Value(permissionClassifierKey{}).(PermissionClassifier)
+	if classifier == nil {
+		return false, false
+	}
+	allowed, err := classifier(ctx, action, detail)
+	return allowed, err == nil
 }
 
 func NewModeApprover(mode PermissionMode, prompt Approver) (*ModeApprover, error) {
@@ -65,8 +84,19 @@ func (a *ModeApprover) Approve(ctx context.Context, action, detail string) error
 		if PermissionBypassed(ctx) {
 			return nil
 		}
-		if mode == PermissionAuto && AutoModeAllows(action, detail) {
+		if mode == PermissionAuto && AutoModeFastPath(action, detail) {
 			return nil
+		}
+		if mode == PermissionAuto {
+			if allowed, available := ClassifyPermission(ctx, action, detail); available {
+				if allowed {
+					return nil
+				}
+				return prompt.Approve(ctx, action, detail)
+			}
+			if AutoModeAllows(action, detail) {
+				return nil
+			}
 		}
 		return prompt.Approve(ctx, action, detail)
 	default:
@@ -99,16 +129,35 @@ func (a *ModeApprover) PermissionMode() PermissionMode {
 	return a.mode
 }
 
-// AutoModeAllows is the deterministic fast path for classifier-based auto
-// mode. Unknown or externally-visible actions return false and still prompt.
+// AutoModeAllows is the deterministic fallback heuristic for auto mode.
+// Unknown or externally-visible actions return false and still prompt.
 func AutoModeAllows(action, detail string) bool {
+	if AutoModeFastPath(action, detail) {
+		return true
+	}
+	action = strings.ToLower(strings.TrimSpace(action))
+	switch action {
+	case "shell", "run terminal command", "start background command":
+		return routineShellCommand(detail)
+	default:
+		return false
+	}
+}
+
+// AutoModeFastPath allows actions that never need transcript classification.
+func AutoModeFastPath(action, detail string) bool {
 	action = strings.ToLower(strings.TrimSpace(action))
 	switch action {
 	case "write_file", "edit_file", "read policy", "grep policy", "web search",
 		"enter plan mode", "exit plan mode":
 		return true
 	case "shell", "run terminal command", "start background command":
-		return routineShellCommand(detail)
+		switch strings.TrimSpace(detail) {
+		case "true", "false", ":":
+			return true
+		default:
+			return false
+		}
 	default:
 		return false
 	}

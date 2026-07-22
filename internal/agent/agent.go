@@ -205,6 +205,7 @@ func (r *Runner) RunShell(ctx context.Context, command string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("encode shell command: %w", err)
 	}
+	ctx = r.permissionContext(ctx, "shell", string(arguments))
 	return r.Tools.Execute(ctx, "shell", arguments)
 }
 
@@ -694,6 +695,7 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 				r.ToolObserver.ToolStarted(call)
 			}
 			toolCtx := tools.WithToolCall(ctx, call.CallID, call.Name)
+			toolCtx = r.permissionContext(toolCtx, call.Name, string(call.Arguments))
 			var toolResult tools.ExecutionResult
 			var toolErr error
 			if r.HookPolicy != nil {
