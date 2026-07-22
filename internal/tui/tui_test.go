@@ -705,6 +705,87 @@ func TestRecapCommandRequiresSessionAndDropsStaleResult(t *testing.T) {
 	}
 }
 
+func TestBtwCommandShowsDisplayOnlyAnswer(t *testing.T) {
+	logger, err := session.NewLoggerWithID(t.TempDir(), "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logger.Close()
+	streamer := &recapTUIStreamer{}
+	m := &model{
+		ctx: context.Background(), runner: &agent.Runner{Client: streamer, SessionID: "session-1", SessionPath: logger.Path()},
+		previousID: "response-1", status: "ready", width: 60, height: 16,
+	}
+	m.setInput("/btw what changed?")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command == nil || m.running || !m.btwRunning || m.status != "asking side question" {
+		t.Fatalf("command=%v running=%v btw=%v status=%q", command != nil, m.running, m.btwRunning, m.status)
+	}
+	updated, followup := m.Update(command())
+	m = updated.(*model)
+	if followup != nil || m.btwRunning || m.viewer == nil || m.viewer.title != "Side question" || m.previousID != "response-1" || m.transcript.Len() != 0 || !strings.Contains(m.View().Content, "what changed?") || !strings.Contains(m.View().Content, "We fixed task rendering") {
+		t.Fatalf("followup=%v btw=%v viewer=%#v previous=%q transcript=%q view=%q", followup != nil, m.btwRunning, m.viewer, m.previousID, m.transcript.String(), m.View().Content)
+	}
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
+	m = updated.(*model)
+	if m.viewer != nil || m.status != "ready" {
+		t.Fatalf("viewer=%#v status=%q", m.viewer, m.status)
+	}
+}
+
+func TestBtwCommandBypassesBusyPromptQueue(t *testing.T) {
+	logger, err := session.NewLoggerWithID(t.TempDir(), "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logger.Close()
+	m := &model{
+		ctx: context.Background(), runner: &agent.Runner{Client: &recapTUIStreamer{}, SessionID: "session-1", SessionPath: logger.Path()},
+		previousID: "response-1", running: true, status: "thinking",
+	}
+	m.setInput("/btw status?")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command == nil || !m.running || !m.btwRunning || len(m.pendingPrompts) != 0 || m.status != "thinking" {
+		t.Fatalf("command=%v running=%v btw=%v queue=%#v status=%q", command != nil, m.running, m.btwRunning, m.pendingPrompts, m.status)
+	}
+	updated, _ = m.Update(command())
+	m = updated.(*model)
+	if m.viewer == nil || !m.running || len(m.pendingPrompts) != 0 {
+		t.Fatalf("viewer=%#v running=%v queue=%#v", m.viewer, m.running, m.pendingPrompts)
+	}
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
+	m = updated.(*model)
+	if m.viewer != nil || m.status != "thinking" {
+		t.Fatalf("viewer=%#v status=%q", m.viewer, m.status)
+	}
+}
+
+func TestBtwCommandValidatesSessionQuestionAndScrollsViewer(t *testing.T) {
+	m := &model{ctx: context.Background(), runner: &agent.Runner{}}
+	m.setInput("/btw question")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.status != "no active session" {
+		t.Fatalf("command=%v status=%q", command != nil, m.status)
+	}
+	m.runner.SessionID, m.runner.SessionPath = "session-1", "/tmp/session-1.jsonl"
+	m.setInput("/btw")
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.status != "usage: /btw <question>" {
+		t.Fatalf("command=%v status=%q", command != nil, m.status)
+	}
+	m.width, m.height = 30, 10
+	m.viewer = &readOnlyViewer{title: "Side question", content: strings.Repeat("long answer line\n", 30)}
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
+	m = updated.(*model)
+	if m.scroll == 0 || m.scroll > m.maxViewerScroll() {
+		t.Fatalf("scroll=%d max=%d", m.scroll, m.maxViewerScroll())
+	}
+}
+
 func TestModelShellCommandDoesNotStartModelTurn(t *testing.T) {
 	ws, err := workspace.Open(t.TempDir())
 	if err != nil {

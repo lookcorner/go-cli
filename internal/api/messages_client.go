@@ -74,8 +74,38 @@ func (c *MessagesClient) CloneForCompaction(includeHistory bool) Streamer {
 		for index, message := range c.history {
 			clone.history[index] = messagesMessage{Role: message.Role, Content: append([]messagesBlock(nil), message.Content...)}
 		}
+		for len(clone.history) > 0 {
+			last := clone.history[len(clone.history)-1]
+			incomplete := last.Role == "assistant" && messagesContain(last.Content, "tool_use")
+			incomplete = incomplete || last.Role == "user" && messagesOnlyContain(last.Content, "tool_result")
+			if !incomplete {
+				break
+			}
+			clone.history = clone.history[:len(clone.history)-1]
+		}
 	}
 	return clone
+}
+
+func messagesContain(blocks []messagesBlock, kind string) bool {
+	for _, block := range blocks {
+		if block.Type == kind {
+			return true
+		}
+	}
+	return false
+}
+
+func messagesOnlyContain(blocks []messagesBlock, kind string) bool {
+	if len(blocks) == 0 {
+		return false
+	}
+	for _, block := range blocks {
+		if block.Type != kind {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *MessagesClient) ResetHistory(summary string) {

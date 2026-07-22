@@ -316,6 +316,11 @@ without creating a model turn.
 `/recap` makes a tool-free, display-only model call against the current
 conversation. It can run beside an active turn, never enters the prompt queue or
 changes conversation history, and discards its result if a newer prompt starts.
+`/btw <question>` asks one display-only side question from an isolated snapshot
+of the current conversation, including the active prompt. It can run beside the
+main turn, exposes tool definitions for context but never executes returned tool
+calls, leaves the main history unchanged, and records success or failure in the
+session artifact directory.
 Left/Right, Home/End, Delete, Backspace, Ctrl-A,
 Ctrl-E, Ctrl-U, and Ctrl/Cmd-Z edit or undo the active prompt and structured
 response input. Shift/Alt-Enter inserts a newline; Ctrl-M, `/multiline`, or `/ml`

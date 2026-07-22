@@ -53,3 +53,25 @@ func TestLocalBackendCompactionClonesIsolateHistory(t *testing.T) {
 		t.Fatalf("messages clones leaked history: source=%#v with=%#v without=%#v", messages.history, messagesWithHistory.history, messagesWithoutHistory.history)
 	}
 }
+
+func TestLocalBackendCompactionClonesDropIncompleteToolTail(t *testing.T) {
+	chat := &ChatClient{history: []chatMessage{
+		{Role: "user", Content: "task"},
+		{Role: "assistant", ToolCalls: []chatToolCall{{ID: "call-1"}}},
+		{Role: "tool", ToolCallID: "call-1", Content: "partial"},
+	}}
+	chatClone := chat.CloneForCompaction(true).(*ChatClient)
+	if len(chatClone.history) != 1 || len(chat.history) != 3 {
+		t.Fatalf("chat clone=%#v source=%#v", chatClone.history, chat.history)
+	}
+
+	messages := &MessagesClient{history: []messagesMessage{
+		{Role: "user", Content: []messagesBlock{{Type: "text", Text: "task"}}},
+		{Role: "assistant", Content: []messagesBlock{{Type: "tool_use", ID: "call-1"}}},
+		{Role: "user", Content: []messagesBlock{{Type: "tool_result", ToolUseID: "call-1", Content: "partial"}}},
+	}}
+	messagesClone := messages.CloneForCompaction(true).(*MessagesClient)
+	if len(messagesClone.history) != 1 || len(messages.history) != 3 {
+		t.Fatalf("messages clone=%#v source=%#v", messagesClone.history, messages.history)
+	}
+}

@@ -593,6 +593,54 @@ func Transcript(path string) ([]Message, error) {
 	return transcriptFromEvents(path, events, rewound)
 }
 
+// PendingPrompt returns the latest real user prompt that has no completed model response.
+func PendingPrompt(path string) (Message, bool, error) {
+	events, _, _, err := liveTimeline(path)
+	if err != nil {
+		return Message{}, false, err
+	}
+	var pending *Message
+	for index, event := range events {
+		switch event.Kind {
+		case "user_prompt":
+			var data struct {
+				Text      string    `json:"text"`
+				Content   []Content `json:"content"`
+				Synthetic bool      `json:"synthetic"`
+			}
+			if err := json.Unmarshal(event.Data, &data); err != nil {
+				return Message{}, false, fmt.Errorf("parse user prompt on session line %d: %w", index+1, err)
+			}
+			if !data.Synthetic {
+				value := Message{Role: "user", Text: data.Text, Content: data.Content}
+				pending = &value
+			}
+		case "model_response":
+			var data struct {
+				ResponseID    string `json:"response_id"`
+				ToolCallCount int    `json:"tool_call_count"`
+			}
+			if err := json.Unmarshal(event.Data, &data); err != nil {
+				return Message{}, false, fmt.Errorf("parse model response on session line %d: %w", index+1, err)
+			}
+			if data.ResponseID != "" && data.ToolCallCount == 0 {
+				pending = nil
+			}
+		}
+	}
+	if pending == nil {
+		return Message{}, false, nil
+	}
+	for index := range pending.Content {
+		if pending.Content[index].Type == "image" {
+			if err := loadImage(path, &pending.Content[index]); err != nil {
+				return Message{}, false, fmt.Errorf("load pending prompt image: %w", err)
+			}
+		}
+	}
+	return *pending, true, nil
+}
+
 // Events returns selected events from the live timeline after rewinds.
 func Events(path string, kinds ...string) ([]Event, error) {
 	events, _, _, err := liveTimeline(path)

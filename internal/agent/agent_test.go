@@ -47,7 +47,9 @@ func (s *recapStreamer) StreamResponse(ctx context.Context, request api.Response
 	s.requests = append(s.requests, request)
 	s.mu.Unlock()
 	content, _ := request.Input[0].Content.(string)
-	if strings.Contains(content, "ONE sentence recap body") {
+	isRecap := strings.Contains(content, "ONE sentence recap body")
+	isBtw := strings.Contains(content, "side question from the user")
+	if isRecap || isBtw {
 		if s.started != nil {
 			close(s.started)
 		}
@@ -57,6 +59,9 @@ func (s *recapStreamer) StreamResponse(ctx context.Context, request api.Response
 				return api.StreamResult{}, ctx.Err()
 			case <-s.release:
 			}
+		}
+		if isBtw {
+			return api.StreamResult{Text: "The parser changed."}, nil
 		}
 		return api.StreamResult{Text: "  Recap:  We fixed\n the parser.  "}, nil
 	}
@@ -427,6 +432,158 @@ func TestCleanRecapTextCapsUTF8Safely(t *testing.T) {
 	text := cleanRecapText("Summary: " + strings.Repeat("\u3042", 500))
 	if !utf8.ValidString(text) || len(text) > 1203 || !strings.HasSuffix(text, "\u2026") {
 		t.Fatalf("invalid capped recap len=%d suffix=%q", len(text), text[len(text)-6:])
+	}
+}
+
+func TestRunnerSideQuestionUsesIsolatedHistoryAndPersistsSuccess(t *testing.T) {
+	logger, err := session.NewLoggerWithID(t.TempDir(), "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logger.Close()
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	streamer := &recapStreamer{}
+	runner := &Runner{Client: streamer, Tools: registry, SessionID: "session-1", SessionPath: logger.Path(), Model: "grok"}
+	answer, err := runner.SideQuestion(context.Background(), " What changed? ", "previous")
+	if err != nil || answer != "The parser changed." {
+		t.Fatalf("answer=%q err=%v", answer, err)
+	}
+	requests, cloned := streamer.snapshot()
+	if !cloned || len(requests) != 1 || requests[0].PreviousResponseID != "previous" || len(requests[0].Tools) == 0 || len(requests[0].Input) != 1 || !strings.Contains(requests[0].Input[0].Content.(string), "What changed?") {
+		t.Fatalf("cloned=%v request=%#v", cloned, requests)
+	}
+	path, _ := session.BtwHistoryPath(logger.Path())
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var entry session.BtwEntry
+	if err := json.Unmarshal(bytes.TrimSpace(data), &entry); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(entry.BtwSessionID, "btw-") || entry.ParentSessionID != "session-1" || entry.Question != "What changed?" || entry.Answer != answer || !entry.Success || entry.Error != "" {
+		t.Fatalf("entry=%#v", entry)
+	}
+}
+
+func TestRunnerSideQuestionIncludesPendingResponsesPrompt(t *testing.T) {
+	logger, err := session.NewLoggerWithID(t.TempDir(), "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logger.Close()
+	if err := logger.AppendPrompt("current main task", nil); err != nil {
+		t.Fatal(err)
+	}
+	streamer := &fakeStreamer{results: []api.StreamResult{{Text: "It updates auth."}}}
+	runner := &Runner{Client: streamer, SessionID: "session-1", SessionPath: logger.Path()}
+	answer, err := runner.SideQuestion(context.Background(), "What is it doing?", "")
+	if err != nil || answer != "It updates auth." {
+		t.Fatalf("answer=%q err=%v", answer, err)
+	}
+	request := streamer.requests[0]
+	if len(request.Input) != 2 || request.Input[0].Content != "current main task" || !strings.Contains(request.Input[1].Content.(string), "What is it doing?") {
+		t.Fatalf("input=%#v", request.Input)
+	}
+}
+
+func TestRunnerSideQuestionIncludesPendingMultimodalPrompt(t *testing.T) {
+	logger, err := session.NewLoggerWithID(t.TempDir(), "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logger.Close()
+	content := []session.Content{
+		{Type: "text", Text: "inspect this"},
+		{Type: "image", URI: "https://example.com/screen.png"},
+	}
+	if err := logger.AppendPrompt("inspect this", content); err != nil {
+		t.Fatal(err)
+	}
+	streamer := &fakeStreamer{results: []api.StreamResult{{Text: "It shows the login screen."}}}
+	runner := &Runner{Client: streamer, SessionID: "session-1", SessionPath: logger.Path()}
+	if _, err := runner.SideQuestion(context.Background(), "What is visible?", ""); err != nil {
+		t.Fatal(err)
+	}
+	parts, ok := streamer.requests[0].Input[0].Content.([]api.ContentPart)
+	if !ok || len(parts) != 2 || parts[0].Text != "inspect this" || parts[1].Type != "input_image" || parts[1].ImageURL != "https://example.com/screen.png" {
+		t.Fatalf("pending content=%#v", streamer.requests[0].Input[0].Content)
+	}
+}
+
+func TestRunnerSideQuestionRejectsConcurrentRequest(t *testing.T) {
+	logger, err := session.NewLoggerWithID(t.TempDir(), "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logger.Close()
+	streamer := &recapStreamer{started: make(chan struct{}), release: make(chan struct{})}
+	runner := &Runner{Client: streamer, SessionID: "session-1", SessionPath: logger.Path()}
+	done := make(chan error, 1)
+	go func() {
+		_, err := runner.SideQuestion(context.Background(), "first?", "previous")
+		done <- err
+	}()
+	<-streamer.started
+	if _, err := runner.SideQuestion(context.Background(), "second?", "previous"); !errors.Is(err, ErrBtwInProgress) {
+		t.Fatalf("concurrent side question error=%v", err)
+	}
+	close(streamer.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunnerSideQuestionDoesNotExecuteReturnedToolCall(t *testing.T) {
+	dir := t.TempDir()
+	logger, err := session.NewLoggerWithID(dir, "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logger.Close()
+	ws, err := workspace.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	marker := filepath.Join(dir, "should-not-exist")
+	streamer := &fakeStreamer{results: []api.StreamResult{{ToolCalls: []api.ToolCall{{CallID: "call-1", Name: "shell", Arguments: json.RawMessage(`{"command":"touch should-not-exist"}`)}}}}}
+	runner := &Runner{Client: streamer, Tools: registry, SessionID: "session-1", SessionPath: logger.Path()}
+	if _, err := runner.SideQuestion(context.Background(), "check it?", "previous"); err == nil || !strings.Contains(err.Error(), "no response") {
+		t.Fatalf("tool-only response error=%v", err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("side question executed a tool: %v", err)
+	}
+}
+
+func TestRunnerSideQuestionPersistsFailure(t *testing.T) {
+	logger, err := session.NewLoggerWithID(t.TempDir(), "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logger.Close()
+	runner := &Runner{Client: failingStreamer{err: errors.New("offline")}, SessionID: "session-1", SessionPath: logger.Path()}
+	if _, err := runner.SideQuestion(context.Background(), "status?", "previous"); err == nil || !strings.Contains(err.Error(), "offline") {
+		t.Fatalf("error=%v", err)
+	}
+	path, _ := session.BtwHistoryPath(logger.Path())
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var entry session.BtwEntry
+	if err := json.Unmarshal(bytes.TrimSpace(data), &entry); err != nil {
+		t.Fatal(err)
+	}
+	if entry.Success || !strings.Contains(entry.Error, "offline") || entry.Answer != "" {
+		t.Fatalf("entry=%#v", entry)
 	}
 }
 

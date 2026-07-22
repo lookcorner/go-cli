@@ -79,6 +79,13 @@ func (c *ChatClient) CloneForCompaction(includeHistory bool) Streamer {
 	}
 	if includeHistory {
 		clone.history = append([]chatMessage(nil), c.history...)
+		for len(clone.history) > 0 {
+			last := clone.history[len(clone.history)-1]
+			if last.Role != "tool" && (last.Role != "assistant" || len(last.ToolCalls) == 0) {
+				break
+			}
+			clone.history = clone.history[:len(clone.history)-1]
+		}
 	}
 	return clone
 }

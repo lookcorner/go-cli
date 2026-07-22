@@ -50,6 +50,29 @@ func TestResumeRejectsSessionWithoutCompletedTurn(t *testing.T) {
 	}
 }
 
+func TestPendingPromptTracksOnlyUncompletedRealPrompt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	content := "" +
+		`{"kind":"user_prompt","data":{"text":"finished"}}` + "\n" +
+		`{"kind":"model_response","data":{"response_id":"r1","tool_call_count":0}}` + "\n" +
+		`{"kind":"user_prompt","data":{"text":"synthetic","synthetic":true}}` + "\n" +
+		`{"kind":"user_prompt","data":{"text":"current"}}` + "\n" +
+		`{"kind":"model_response","data":{"response_id":"r2","tool_call_count":1}}` + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	prompt, ok, err := PendingPrompt(path)
+	if err != nil || !ok || prompt.Text != "current" {
+		t.Fatalf("prompt=%#v ok=%v err=%v", prompt, ok, err)
+	}
+	if err := os.WriteFile(path, []byte(content+`{"kind":"model_response","data":{"response_id":"r3","tool_call_count":0}}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if prompt, ok, err := PendingPrompt(path); err != nil || ok {
+		t.Fatalf("completed prompt=%#v ok=%v err=%v", prompt, ok, err)
+	}
+}
+
 func TestTranscriptSkipsMalformedJSONLLine(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "session.jsonl")
 	content := "" +

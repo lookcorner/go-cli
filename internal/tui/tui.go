@@ -115,6 +115,11 @@ type recapDoneEvent struct {
 	err    error
 	serial uint64
 }
+type btwDoneEvent struct {
+	question string
+	answer   string
+	err      error
+}
 type scheduledFiredEvent struct{ event tools.ScheduledTaskFired }
 type wakeCancelledEvent struct{ id string }
 type mouseScrollEvent struct{ lines int }
@@ -357,6 +362,7 @@ type model struct {
 	promptSerial   uint64
 	recapRunning   bool
 	pendingRecap   string
+	btwRunning     bool
 	questionClick  struct {
 		option int
 		at     time.Time
@@ -881,6 +887,18 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.appendSystem(recapLabel + msg.text)
 			m.status = "recap"
 		}
+	case btwDoneEvent:
+		m.btwRunning = false
+		content := "**Question:** " + msg.question + "\n\n"
+		if msg.err != nil {
+			content += "**Error:** " + msg.err.Error()
+			m.status = "side question failed"
+		} else {
+			content += "**Answer:** " + msg.answer
+			m.status = "side question"
+		}
+		m.viewer = &readOnlyViewer{title: "Side question", content: content}
+		m.scroll = 0
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
@@ -927,9 +945,23 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if stroke == "ctrl+q" {
 			return m, tea.Quit
 		}
-		if key.Code == tea.KeyEsc {
+		switch {
+		case key.Code == tea.KeyEsc:
 			m.viewer = nil
-			m.status = "ready"
+			m.scroll = 0
+			if m.running {
+				m.status = "thinking"
+			} else {
+				m.status = "ready"
+			}
+		case stroke == "up" || stroke == "ctrl+k" || stroke == "pgup":
+			m.scroll = min(m.scroll+max(m.contentHeight()/2, 1), m.maxViewerScroll())
+		case stroke == "down" || stroke == "ctrl+j" || stroke == "pgdown":
+			m.scroll = max(m.scroll-max(m.contentHeight()/2, 1), 0)
+		case key.Code == tea.KeyHome:
+			m.scroll = m.maxViewerScroll()
+		case key.Code == tea.KeyEnd:
+			m.scroll = 0
 		}
 		return m, nil
 	}
@@ -1053,7 +1085,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "/quit", "/exit":
 			return m, tea.Quit
 		case "/help":
-			m.appendSystem("# Commands\n\n`! <command>` `/always-approve` `/compact` `/context` `/copy [N]` `/dream` `/exit` `/export [filename]` `/find` `/flush` `/help` `/history` `/loop` `/memory` `/multiline` `/plan [description]` `/queue` `/recap` `/remember` `/rename <title>` `/session-info` `/tasks` `/transcript` `/view-plan`")
+			m.appendSystem("# Commands\n\n`! <command>` `/always-approve` `/btw <question>` `/compact` `/context` `/copy [N]` `/dream` `/exit` `/export [filename]` `/find` `/flush` `/help` `/history` `/loop` `/memory` `/multiline` `/plan [description]` `/queue` `/recap` `/remember` `/rename <title>` `/session-info` `/tasks` `/transcript` `/view-plan`")
 			m.status = "commands"
 			return m, nil
 		case "/queue":
@@ -1065,6 +1097,8 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "/recap":
 			return m, m.startRecap()
+		case "/btw":
+			return m, m.startBtw(strings.TrimSpace(strings.TrimPrefix(prompt, "/btw")))
 		case "/export":
 			filename := strings.TrimSpace(strings.TrimPrefix(prompt, "/export"))
 			m.running = true
@@ -1278,6 +1312,9 @@ func (m *model) handleRunningKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "/recap":
 			m.clearInput()
 			return m, m.startRecap()
+		case "/btw":
+			m.clearInput()
+			return m, m.startBtw(strings.TrimSpace(strings.TrimPrefix(prompt, "/btw")))
 		}
 		if strings.HasPrefix(prompt, "/") || strings.HasPrefix(prompt, "!") {
 			m.status = "only prompts can be queued while a turn is running"
@@ -1319,6 +1356,28 @@ func (m *model) startRecap() tea.Cmd {
 		m.status = "generating recap"
 	}
 	return runRecap(m.ctx, m.runner, m.previousID, m.promptSerial)
+}
+
+func (m *model) startBtw(question string) tea.Cmd {
+	if m.runner == nil || strings.TrimSpace(m.runner.SessionID) == "" || strings.TrimSpace(m.runner.SessionPath) == "" {
+		m.status = "no active session"
+		return nil
+	}
+	if strings.TrimSpace(question) == "" {
+		m.status = "usage: /btw <question>"
+		return nil
+	}
+	if m.btwRunning {
+		if !m.running {
+			m.status = "side question already in progress"
+		}
+		return nil
+	}
+	m.btwRunning = true
+	if !m.running {
+		m.status = "asking side question"
+	}
+	return runBtw(m.ctx, m.runner, question, m.previousID)
 }
 
 func (m *model) insertNewlineForEnter(key tea.Key) bool {
@@ -2154,6 +2213,13 @@ func runRecap(ctx context.Context, runner *agent.Runner, previousID string, seri
 	}
 }
 
+func runBtw(ctx context.Context, runner *agent.Runner, question, previousID string) tea.Cmd {
+	return func() tea.Msg {
+		answer, err := runner.SideQuestion(ctx, question, previousID)
+		return btwDoneEvent{question: question, answer: answer, err: err}
+	}
+}
+
 func runShell(ctx context.Context, runner *agent.Runner, command string) tea.Cmd {
 	return func() tea.Msg {
 		output, err := runner.RunShell(ctx, command)
@@ -2295,7 +2361,7 @@ func (m *model) View() tea.View {
 	if m.planReview != nil {
 		content = "# Review implementation plan\n\n" + m.planReview.event.event.PlanContent
 	} else if m.viewer != nil {
-		content = "# " + m.viewer.title + "\n\n" + strings.TrimSpace(m.viewer.content)
+		content = m.viewerContent()
 	} else if m.remember != nil {
 		label, note := "Raw", m.remember.raw
 		if m.remember.showEnhanced && m.remember.enhanced != "" {
@@ -2425,6 +2491,17 @@ func (m *model) View() tea.View {
 		return nil
 	}
 	return view
+}
+
+func (m *model) viewerContent() string {
+	if m.viewer == nil {
+		return ""
+	}
+	return "# " + m.viewer.title + "\n\n" + strings.TrimSpace(m.viewer.content)
+}
+
+func (m *model) maxViewerScroll() int {
+	return max(len(renderMarkdown(m.viewerContent(), max(m.width, 20)))-m.contentHeight(), 0)
 }
 
 func (m *model) footerClick(x, y, width int) (mouseClickEvent, bool) {

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -36,10 +37,16 @@ Lead with "You asked ..." when the session was mainly questions or review with n
 
 Include concrete file, behavior, endpoint, flag, or command details from this session in about 25-40 words. Do not add a label, bullets, markdown, extra sentences, or invent work.</system-reminder>`
 
+const sideQuestionInstruction = `<system-reminder>This is a side question from the user. Answer it directly in a single response.
+
+You are a separate lightweight agent. The main agent continues independently. You share its conversation context, but you have no tools and cannot read files, run commands, search, or take actions. There will be no follow-up turn. Never promise to check or do something later. If the answer is not present in the conversation context, say so.</system-reminder>`
+
 var (
 	ErrRecapUnavailable = errors.New("no conversation to recap")
 	ErrRecapInProgress  = errors.New("recap already in progress")
 	ErrRecapSuperseded  = errors.New("recap superseded by a new prompt")
+	ErrBtwInProgress    = errors.New("side question already in progress")
+	ErrBtwUnavailable   = errors.New("side question requires an active conversation")
 )
 
 type ResponseStreamer = api.Streamer
@@ -129,6 +136,7 @@ type Runner struct {
 	hookStart               sync.Once
 	promptEpoch             atomic.Uint64
 	recapRunning            atomic.Bool
+	btwRunning              atomic.Bool
 }
 
 type compactionPrefire struct {
@@ -282,16 +290,17 @@ func (r *Runner) Recap(ctx context.Context, previousResponseID string) (string, 
 		return "", ErrRecapInProgress
 	}
 	defer r.recapRunning.Store(false)
-	streamer := r.Client
-	if cloner, ok := r.Client.(api.CompactionCloner); ok {
-		streamer = cloner.CloneForCompaction(true)
-	} else if previousResponseID == "" {
+	streamer, input, history, err := r.auxiliaryInput(recapInstruction, previousResponseID)
+	if err != nil {
+		return "", err
+	}
+	if !history {
 		return "", ErrRecapUnavailable
 	}
 
 	request := api.ResponseRequest{
 		Model: r.Model, Instructions: r.resolvedInstructions(),
-		Input:              []api.InputItem{{Type: "message", Role: "user", Content: recapInstruction}},
+		Input:              input,
 		PreviousResponseID: previousResponseID, Stream: true,
 	}
 	response, err := streamer.StreamResponse(ctx, request, nil)
@@ -306,6 +315,112 @@ func (r *Runner) Recap(ctx context.Context, previousResponseID string) (string, 
 		return "", ErrRecapUnavailable
 	}
 	return text, nil
+}
+
+// SideQuestion answers one question from an isolated history snapshot and never executes tools.
+func (r *Runner) SideQuestion(ctx context.Context, question, previousResponseID string) (string, error) {
+	question = strings.TrimSpace(question)
+	if r == nil || r.Client == nil || strings.TrimSpace(r.SessionID) == "" || strings.TrimSpace(r.SessionPath) == "" {
+		return "", ErrBtwUnavailable
+	}
+	if question == "" {
+		return "", errors.New("side question must not be empty")
+	}
+	if !r.btwRunning.CompareAndSwap(false, true) {
+		return "", ErrBtwInProgress
+	}
+	defer r.btwRunning.Store(false)
+	id, err := newBtwID()
+	if err != nil {
+		return "", err
+	}
+	entry := session.BtwEntry{
+		BtwSessionID: id, ParentSessionID: r.SessionID, AskedAt: time.Now().UTC(),
+		Question: question, Model: r.Model,
+	}
+	streamer, input, history, err := r.auxiliaryInput(sideQuestionInstruction+"\n\n"+question, previousResponseID)
+	if err != nil || !history {
+		if err == nil {
+			err = ErrBtwUnavailable
+		}
+		entry.Error = err.Error()
+		_ = session.AppendBtw(r.SessionPath, entry)
+		return "", err
+	}
+	definitions := []api.ToolDefinition(nil)
+	if r.Tools != nil {
+		definitions = r.Tools.Definitions()
+	}
+	request := api.ResponseRequest{
+		Model: r.Model, Instructions: r.resolvedInstructions(), Input: input, Tools: definitions,
+		ToolChoice: "auto", PreviousResponseID: previousResponseID, Stream: true,
+	}
+	response, err := streamer.StreamResponse(ctx, request, nil)
+	answer := strings.TrimSpace(response.Text)
+	if err != nil {
+		err = fmt.Errorf("side question model call failed: %w", err)
+	} else if answer == "" {
+		err = errors.New("no response from model")
+	}
+	if err != nil {
+		entry.Error = err.Error()
+		_ = session.AppendBtw(r.SessionPath, entry)
+		return "", err
+	}
+	entry.Answer, entry.Success = answer, true
+	_ = session.AppendBtw(r.SessionPath, entry)
+	return answer, nil
+}
+
+func (r *Runner) auxiliaryInput(prompt, previousResponseID string) (ResponseStreamer, []api.InputItem, bool, error) {
+	streamer := r.Client
+	input := make([]api.InputItem, 0, 2)
+	history := previousResponseID != ""
+	if cloner, ok := r.Client.(api.CompactionCloner); ok {
+		streamer = cloner.CloneForCompaction(true)
+		history = true
+	} else if strings.TrimSpace(r.SessionPath) != "" {
+		pending, ok, err := session.PendingPrompt(r.SessionPath)
+		if err != nil {
+			return nil, nil, false, err
+		}
+		if ok {
+			input = append(input, api.InputItem{Type: "message", Role: "user", Content: sessionMessageInput(pending)})
+			history = true
+		}
+	}
+	input = append(input, api.InputItem{Type: "message", Role: "user", Content: prompt})
+	return streamer, input, history, nil
+}
+
+func sessionMessageInput(message session.Message) any {
+	if len(message.Content) == 0 {
+		return message.Text
+	}
+	parts := make([]api.ContentPart, 0, len(message.Content))
+	for _, content := range message.Content {
+		switch content.Type {
+		case "text":
+			parts = append(parts, api.ContentPart{Type: "input_text", Text: content.Text})
+		case "image":
+			uri := content.URI
+			if content.Data != "" {
+				uri = "data:" + content.MimeType + ";base64," + content.Data
+			}
+			parts = append(parts, api.ContentPart{Type: "input_image", ImageURL: uri})
+		}
+	}
+	return parts
+}
+
+func newBtwID() (string, error) {
+	var value [16]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return "", fmt.Errorf("generate side question id: %w", err)
+	}
+	value[6] = value[6]&0x0f | 0x40
+	value[8] = value[8]&0x3f | 0x80
+	return fmt.Sprintf("btw-%x-%x-%x-%x-%x", value[:4], value[4:6], value[6:8], value[8:10], value[10:]), nil
 }
 
 func (r *Runner) resolvedInstructions() string {
