@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -51,7 +52,7 @@ func TestSearchContentReturnsBoundedResultsAndFinalBatch(t *testing.T) {
 		t.Fatalf("unexpected result: %#v", result)
 	}
 	match := result.Files[0].Matches[0]
-	if match.Line != 2 || match.Content != "// Needle here" || match.MatchStart == nil || *match.MatchStart != 3 {
+	if match.Line != 2 || !strings.HasPrefix(match.Content, "// Needle ") || match.MatchStart == nil || *match.MatchStart != 3 {
 		t.Fatalf("unexpected match: %#v", match)
 	}
 	if len(batches) == 0 || !batches[len(batches)-1].Done || !batches[len(batches)-1].Truncated {

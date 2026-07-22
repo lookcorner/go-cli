@@ -55,6 +55,16 @@ func TestContentSearchExtensionRequiresRoot(t *testing.T) {
 	}
 }
 
+func TestContentSearchExtensionRequiresPatternField(t *testing.T) {
+	var output bytes.Buffer
+	server := &Server{output: &output, sessions: map[string]*session{}}
+	server.handleContentSearch(context.Background(), message{ID: json.RawMessage("1"), Params: json.RawMessage(`{"cwd":"/tmp"}`)})
+	response := decodeACPOutput(t, output.Bytes())[0]
+	if response["error"].(map[string]any)["code"].(float64) != -32602 {
+		t.Fatalf("missing pattern was accepted: %#v", response)
+	}
+}
+
 func TestContentSearchExtensionEncodesEmptyFilesAsArray(t *testing.T) {
 	if _, err := exec.LookPath("rg"); err != nil {
 		t.Skip("ripgrep is not installed")

@@ -107,6 +107,7 @@ type Server struct {
 	wg              sync.WaitGroup
 	worktrees       *worktrees.Manager
 	terminals       *terminalManager
+	fuzzySearch     *workspace.FuzzySearchManager
 }
 
 type message struct {
@@ -302,6 +303,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleExtensionSessionClose(incoming)
 		case "x.ai/search/content":
 			s.handleContentSearch(ctx, incoming)
+		case "x.ai/search/fuzzy/open", "x.ai/search/fuzzy/change", "x.ai/search/fuzzy/close":
+			s.handleFuzzySearch(ctx, incoming)
 		case "x.ai/mcp/list", "x.ai/mcp/call", "x.ai/mcp/read_resource", "x.ai/mcp/auth_status", "x.ai/mcp/auth_trigger":
 			s.handleMCP(ctx, incoming)
 		case "x.ai/commands/list", "x.ai/workspaces/list":
@@ -2816,6 +2819,8 @@ func (s *Server) closeAll() {
 		s.terminals.closeAll()
 	}
 	s.mu.Lock()
+	fuzzySearch := s.fuzzySearch
+	s.fuzzySearch = nil
 	sessions := make([]*session, 0, len(s.sessions))
 	for _, current := range s.sessions {
 		sessions = append(sessions, current)
@@ -2840,6 +2845,9 @@ func (s *Server) closeAll() {
 		}
 	}
 	s.mu.Unlock()
+	if fuzzySearch != nil {
+		fuzzySearch.CloseAll()
+	}
 	for _, current := range sessions {
 		current.mu.Lock()
 		current.closed = true

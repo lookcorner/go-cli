@@ -635,6 +635,13 @@ case-insensitive, include/exclude-glob, ignore-file, file-limit, and match-limit
 options, streams `x.ai/search/content/status` batches, and returns the complete
 reference-shaped result.
 
+ACP file pickers can open, change, and close stateful searches through
+`x.ai/search/fuzzy/open`, `x.ai/search/fuzzy/change`, and
+`x.ai/search/fuzzy/close`. Searches use smart-case subsequence ranking, honor
+ignore and hidden-file modes, filter directories, preserve client request IDs,
+cancel superseded queries, and publish bounded `x.ai/search/fuzzy/status`
+notifications with relay routing metadata.
+
 The `x.ai/session_summaries/session_list`, `workspace_list`, and
 `workspace_list_recent` extensions expose the same logs as reference-shaped
 summary snapshots for workspace history and recent-session views.
