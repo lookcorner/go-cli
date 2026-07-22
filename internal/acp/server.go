@@ -34,6 +34,22 @@ type SessionConfig struct {
 	MCPServers []MCPServer
 	SessionID  string
 	ResumePath string
+	YoloMode   *bool
+	AutoMode   *bool
+}
+
+func sessionPermissionModeOverrides(meta map[string]any) (yoloMode, autoMode *bool) {
+	if value, ok := meta["yoloMode"].(bool); ok {
+		yoloMode = &value
+	}
+	value, exists := meta["autoMode"]
+	if !exists {
+		value = meta["auto_mode"]
+	}
+	if value, ok := value.(bool); ok {
+		autoMode = &value
+	}
+	return yoloMode, autoMode
 }
 
 type MCPServer = mcppkg.ServerConfig
@@ -1368,6 +1384,7 @@ func (s *Server) handleNewSession(ctx context.Context, incoming message) {
 	var params struct {
 		CWD        string           `json:"cwd"`
 		MCPServers []mcpServerParam `json:"mcpServers"`
+		Meta       map[string]any   `json:"_meta"`
 	}
 	if json.Unmarshal(incoming.Params, &params) != nil || params.CWD == "" {
 		s.respondError(incoming.ID, -32602, "cwd is required")
@@ -1379,7 +1396,8 @@ func (s *Server) handleNewSession(ctx context.Context, incoming message) {
 		s.respondError(incoming.ID, -32602, err.Error())
 		return
 	}
-	sessionConfig := SessionConfig{CWD: params.CWD, SessionID: id, MCPServers: servers}
+	yoloMode, autoMode := sessionPermissionModeOverrides(params.Meta)
+	sessionConfig := SessionConfig{CWD: params.CWD, SessionID: id, MCPServers: servers, YoloMode: yoloMode, AutoMode: autoMode}
 	_, err = s.startSession(ctx, id, sessionConfig, "")
 	if err != nil {
 		s.respondError(incoming.ID, -32000, err.Error())
@@ -2071,6 +2089,7 @@ func (s *Server) handleRestoreSession(ctx context.Context, incoming message, rep
 		SessionID  string           `json:"sessionId"`
 		CWD        string           `json:"cwd"`
 		MCPServers []mcpServerParam `json:"mcpServers"`
+		Meta       map[string]any   `json:"_meta"`
 	}
 	if json.Unmarshal(incoming.Params, &params) != nil || params.SessionID == "" || params.CWD == "" {
 		s.respondError(incoming.ID, -32602, "sessionId and cwd are required")
@@ -2119,7 +2138,8 @@ func (s *Server) handleRestoreSession(ctx context.Context, incoming message, rep
 			return
 		}
 	}
-	config := SessionConfig{CWD: params.CWD, Model: model, SessionID: params.SessionID, ResumePath: path, MCPServers: servers}
+	yoloMode, autoMode := sessionPermissionModeOverrides(params.Meta)
+	config := SessionConfig{CWD: params.CWD, Model: model, SessionID: params.SessionID, ResumePath: path, MCPServers: servers, YoloMode: yoloMode, AutoMode: autoMode}
 	if _, err := s.startSession(ctx, params.SessionID, config, previous); err != nil {
 		s.respondError(incoming.ID, -32000, err.Error())
 		return

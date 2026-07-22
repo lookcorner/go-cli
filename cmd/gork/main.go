@@ -1568,6 +1568,30 @@ func formatLocalTaskWake(snapshot tools.ProcessSnapshot) string {
 	return fmt.Sprintf("<system-reminder>\nBackground task %q completed %s.\nCommand: %s\nUse get_task_output with task_ids [%q] to retrieve the full output.\n</system-reminder>", snapshot.TaskID, status, snapshot.Command, snapshot.TaskID)
 }
 
+func resolveACPSessionPermissionMode(defaultMode tools.PermissionMode, yoloMode, autoMode *bool, disableBypass, autoEnabled bool) tools.PermissionMode {
+	if defaultMode == tools.PermissionDeny {
+		return defaultMode
+	}
+	yolo := defaultMode == tools.PermissionAlwaysApprove
+	if yoloMode != nil {
+		yolo = *yoloMode
+	}
+	auto := defaultMode == tools.PermissionAuto && !yolo
+	if autoMode != nil {
+		auto = *autoMode
+	}
+	mode := tools.PermissionPrompt
+	if yolo {
+		mode = tools.PermissionAlwaysApprove
+	} else if auto {
+		mode = tools.PermissionAuto
+	}
+	if disableBypass && mode == tools.PermissionAlwaysApprove || !autoEnabled && mode == tools.PermissionAuto {
+		return tools.PermissionPrompt
+	}
+	return mode
+}
+
 func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []string, tokenProvider api.TokenProvider, stdin io.Reader, stdout, stderr io.Writer) error {
 	mode := tools.PermissionMode(opts.approval)
 	if mode != tools.PermissionPrompt && mode != tools.PermissionAuto && mode != tools.PermissionAlwaysApprove && mode != tools.PermissionDeny {
@@ -1623,10 +1647,10 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		}
 		instructions := joinInstructions(cfg.SystemPrompt, workspace.FormatInstructions(instructionFiles), catalog.Summary())
 		permissionPrompts := &permissionPromptApprover{base: protocolApprover}
-		sessionMode := mode
-		if sessionMode == tools.PermissionAuto && !sessionCfg.AutoModeEnabled() {
-			sessionMode = tools.PermissionPrompt
-		}
+		sessionMode := resolveACPSessionPermissionMode(
+			mode, sessionConfig.YoloMode, sessionConfig.AutoMode,
+			sessionCfg.DisableBypassPermissionsMode, sessionCfg.AutoModeEnabled(),
+		)
 		modeApprover, err := tools.NewModeApproverWithLocks(sessionMode, permissionPrompts, sessionCfg.DisableBypassPermissionsMode, !sessionCfg.AutoModeEnabled())
 		if err != nil {
 			return nil, nil, err

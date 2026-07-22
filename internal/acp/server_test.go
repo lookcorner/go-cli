@@ -2396,7 +2396,8 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 		t.Fatalf("session list capability missing: %#v", sessionCapabilities)
 	}
 	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 2, "method": "session/new", "params": map[string]any{
-		"cwd": root, "mcpServers": []any{map[string]any{
+		"_meta": map[string]any{"yoloMode": true, "autoMode": true},
+		"cwd":   root, "mcpServers": []any{map[string]any{
 			"name": "client-tools", "command": "/fixture-mcp", "args": []string{"--stdio"},
 			"env": []any{map[string]any{"name": "TOKEN", "value": "secret"}},
 		}, map[string]any{
@@ -2408,6 +2409,9 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 	}})
 	created := decodeACP(t, decoder)
 	receivedConfig := <-factoryConfigs
+	if receivedConfig.YoloMode == nil || !*receivedConfig.YoloMode || receivedConfig.AutoMode == nil || !*receivedConfig.AutoMode {
+		t.Fatalf("session permission metadata was not forwarded: %#v", receivedConfig)
+	}
 	if len(receivedConfig.MCPServers) != 3 || receivedConfig.MCPServers[0].Env["TOKEN"] != "secret" ||
 		receivedConfig.MCPServers[1].Type != "http" || receivedConfig.MCPServers[1].Headers["Authorization"] != "Bearer token" ||
 		receivedConfig.MCPServers[2].Type != "sse" {
@@ -3174,7 +3178,9 @@ func TestACPLoadReplaysAndResumeReconnectsPersistedSession(t *testing.T) {
 	if err := logger.Close(); err != nil {
 		t.Fatal(err)
 	}
+	factoryConfigs := make(chan SessionConfig, 2)
 	server := &Server{SessionDir: sessionDir, Factory: func(_ context.Context, cfg SessionConfig, approver tools.Approver, text, status io.Writer) (*agent.Runner, func(), error) {
+		factoryConfigs <- cfg
 		ws, err := workspace.Open(cfg.CWD)
 		if err != nil {
 			return nil, nil, err
@@ -3196,7 +3202,10 @@ func TestACPLoadReplaysAndResumeReconnectsPersistedSession(t *testing.T) {
 	go func() { done <- server.Serve(context.Background(), inputR, outputW) }()
 	encoder := json.NewEncoder(inputW)
 	decoder := json.NewDecoder(outputR)
-	loadParams := map[string]any{"sessionId": "persisted-1", "cwd": workspaceRoot, "mcpServers": []any{}}
+	loadParams := map[string]any{
+		"sessionId": "persisted-1", "cwd": workspaceRoot, "mcpServers": []any{},
+		"_meta": map[string]any{"yoloMode": true, "auto_mode": false},
+	}
 	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "session/load", "params": loadParams})
 	userTextReplay := decodeACP(t, decoder)
 	userImageReplay := decodeACP(t, decoder)
@@ -3211,8 +3220,13 @@ func TestACPLoadReplaysAndResumeReconnectsPersistedSession(t *testing.T) {
 	if loaded["result"].(map[string]any)["modes"].(map[string]any)["currentModeId"] != "plan" {
 		t.Fatalf("loaded mode was not restored: %#v", loaded)
 	}
+	loadedConfig := <-factoryConfigs
+	if loadedConfig.YoloMode == nil || !*loadedConfig.YoloMode || loadedConfig.AutoMode == nil || *loadedConfig.AutoMode {
+		t.Fatalf("load permission metadata was not forwarded: %#v", loadedConfig)
+	}
 	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 2, "method": "session/close", "params": map[string]any{"sessionId": "persisted-1"}})
 	_ = decodeACP(t, decoder)
+	loadParams["_meta"] = map[string]any{"yoloMode": "invalid", "auto_mode": true}
 	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 3, "method": "session/resume", "params": loadParams})
 	resumed := decodeACP(t, decoder)
 	if int(resumed["id"].(float64)) != 3 || resumed["result"].(map[string]any)["sessionId"] != "persisted-1" {
@@ -3220,6 +3234,10 @@ func TestACPLoadReplaysAndResumeReconnectsPersistedSession(t *testing.T) {
 	}
 	if resumed["result"].(map[string]any)["modes"].(map[string]any)["currentModeId"] != "plan" {
 		t.Fatalf("resumed mode was not restored: %#v", resumed)
+	}
+	resumedConfig := <-factoryConfigs
+	if resumedConfig.YoloMode != nil || resumedConfig.AutoMode == nil || !*resumedConfig.AutoMode {
+		t.Fatalf("resume permission metadata was not parsed tolerantly: %#v", resumedConfig)
 	}
 	_ = inputW.Close()
 	select {
@@ -3230,6 +3248,35 @@ func TestACPLoadReplaysAndResumeReconnectsPersistedSession(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("ACP server did not stop")
 	}
+}
+
+func TestSessionPermissionModeOverrides(t *testing.T) {
+	tests := []struct {
+		name     string
+		meta     map[string]any
+		wantYolo *bool
+		wantAuto *bool
+	}{
+		{name: "empty"},
+		{name: "camel case", meta: map[string]any{"yoloMode": true, "autoMode": false}, wantYolo: boolPointer(true), wantAuto: boolPointer(false)},
+		{name: "snake case", meta: map[string]any{"auto_mode": true}, wantAuto: boolPointer(true)},
+		{name: "camel case takes precedence", meta: map[string]any{"autoMode": false, "auto_mode": true}, wantAuto: boolPointer(false)},
+		{name: "invalid values ignored", meta: map[string]any{"yoloMode": "true", "autoMode": 1}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			yolo, auto := sessionPermissionModeOverrides(test.meta)
+			if !equalOptionalBool(yolo, test.wantYolo) || !equalOptionalBool(auto, test.wantAuto) {
+				t.Fatalf("got yolo=%v auto=%v, want yolo=%v auto=%v", yolo, auto, test.wantYolo, test.wantAuto)
+			}
+		})
+	}
+}
+
+func boolPointer(value bool) *bool { return &value }
+
+func equalOptionalBool(left, right *bool) bool {
+	return left == nil && right == nil || left != nil && right != nil && *left == *right
 }
 
 func encodeACP(t *testing.T, encoder *json.Encoder, value any) {

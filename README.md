@@ -39,7 +39,10 @@ auto behavior. Explicit `auto_mode` wins over the compatible `permission_mode`
 hint, while an explicitly enabled yolo mode wins over auto. Explicit deny mode
 and deny/ask/allow permission rules remain authoritative. Managed
 always-approve locks and the `auto_mode.enabled` gate remain enforced during
-live switches.
+live switches. ACP `session/new`, `session/load`, and `session/resume` also honor
+boolean `_meta.yoloMode` and `_meta.autoMode` (or `_meta.auto_mode`) overrides;
+invalid metadata falls back to startup defaults, and the same managed gates
+remain authoritative.
 
 Completed ACP prompts publish `x.ai/session/prompt_complete` before their RPC
 response. Prompt responses include `_meta` correlation for the session,

@@ -1284,3 +1284,34 @@ func TestSessionProcessObserverDelegatesDedicatedPlanUI(t *testing.T) {
 		t.Fatalf("decision=%#v entered=%d exited=%d err=%v", decision, reviewer.entered, reviewer.exited, err)
 	}
 }
+
+func TestResolveACPSessionPermissionMode(t *testing.T) {
+	tests := []struct {
+		name                    string
+		defaultMode             tools.PermissionMode
+		yoloMode, autoMode      *bool
+		disableBypass, autoGate bool
+		want                    tools.PermissionMode
+	}{
+		{name: "default prompt", defaultMode: tools.PermissionPrompt, autoGate: true, want: tools.PermissionPrompt},
+		{name: "default auto", defaultMode: tools.PermissionAuto, autoGate: true, want: tools.PermissionAuto},
+		{name: "default always approve", defaultMode: tools.PermissionAlwaysApprove, autoGate: true, want: tools.PermissionAlwaysApprove},
+		{name: "session yolo", defaultMode: tools.PermissionPrompt, yoloMode: testBoolPointer(true), autoMode: testBoolPointer(true), autoGate: true, want: tools.PermissionAlwaysApprove},
+		{name: "disable default yolo", defaultMode: tools.PermissionAlwaysApprove, yoloMode: testBoolPointer(false), autoGate: true, want: tools.PermissionPrompt},
+		{name: "session auto", defaultMode: tools.PermissionPrompt, autoMode: testBoolPointer(true), autoGate: true, want: tools.PermissionAuto},
+		{name: "disable default auto", defaultMode: tools.PermissionAuto, autoMode: testBoolPointer(false), autoGate: true, want: tools.PermissionPrompt},
+		{name: "auto gate", defaultMode: tools.PermissionPrompt, autoMode: testBoolPointer(true), want: tools.PermissionPrompt},
+		{name: "managed bypass lock", defaultMode: tools.PermissionPrompt, yoloMode: testBoolPointer(true), disableBypass: true, autoGate: true, want: tools.PermissionPrompt},
+		{name: "deny remains locked", defaultMode: tools.PermissionDeny, yoloMode: testBoolPointer(true), autoMode: testBoolPointer(true), autoGate: true, want: tools.PermissionDeny},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := resolveACPSessionPermissionMode(test.defaultMode, test.yoloMode, test.autoMode, test.disableBypass, test.autoGate)
+			if got != test.want {
+				t.Fatalf("got %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func testBoolPointer(value bool) *bool { return &value }
