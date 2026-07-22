@@ -221,15 +221,14 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		if authErr == nil {
 			cfg.APIKey = token
 			tokenProvider = resolveToken
+			settingsCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			credential, _ := auth.Load(path, authConfig.Scope())
+			remote := config.FetchRemoteSettingsForSession(settingsCtx, cfg.ProxyBaseURL, cfg.APIKey, credential.UserID, credential.Email, &http.Client{Timeout: 3 * time.Second})
+			cancel()
+			cfg.ApplyRemoteSettings(remote)
 		} else if !errors.Is(authErr, os.ErrNotExist) {
 			return fmt.Errorf("load dynamic credentials: %w", authErr)
 		}
-	}
-	if tokenProvider != nil {
-		settingsCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		remote := config.FetchRemoteSettings(settingsCtx, cfg.ProxyBaseURL, cfg.APIKey, &http.Client{Timeout: 3 * time.Second})
-		cancel()
-		cfg.ApplyRemoteSettings(remote)
 	}
 	_ = marketplace.AutoRegisterOfficial(opts.configPath, cfg.OfficialMarketplaceAutoRegister)
 	allowRules, askRules, denyRules, err := permissionRules(cfg.Permission, opts.allow, opts.deny)
@@ -1803,10 +1802,38 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		return onDemand, tier
 	}
 	setBillingMeta(cfg)
+	var runtimeConfigMu sync.RWMutex
+	runtimeConfig := cfg
+	runtimeConfigSnapshot := func() config.Config {
+		runtimeConfigMu.RLock()
+		defer runtimeConfigMu.RUnlock()
+		return runtimeConfig
+	}
+	applyRemoteSettings := func(remote *config.RemoteSettings) {
+		runtimeConfigMu.Lock()
+		runtimeConfig.ApplyRemoteSettings(remote)
+		current := runtimeConfig
+		runtimeConfigMu.Unlock()
+		setBillingMeta(current)
+	}
+	subscriptionHTTP := &http.Client{Timeout: cfg.HTTPTimeout}
 	var server *acp.Server
+	catalogRefresher := &acpSubscriptionCatalogRefresher{
+		ctx: ctx, config: runtimeConfigSnapshot, authPath: authPath, scope: authConfig.Scope(), tokenProvider: tokenProvider,
+		reload: func() error {
+			if server == nil {
+				return nil
+			}
+			return server.ReloadModelCache()
+		},
+	}
+	subscriptionChecker := &acpSubscriptionChecker{
+		authPath: authPath, scope: authConfig.Scope(), tokenProvider: tokenProvider, http: subscriptionHTTP,
+		config: runtimeConfigSnapshot, applySettings: applyRemoteSettings, refreshModels: catalogRefresher.Start,
+	}
 	server = &acp.Server{SessionDir: opts.sessionDir, FolderTrustEnabled: cfg.FolderTrustEnabled, BillingMeta: getBillingMeta, Auth: acp.AuthConfig{
 		Path: authPath, Scope: authConfig.Scope(), MethodID: authMethodID, Token: cfg.APIKey, TokenProvider: tokenProvider,
-		ProxyBaseURL: cfg.ProxyBaseURL, HTTP: &http.Client{Timeout: cfg.HTTPTimeout},
+		ProxyBaseURL: cfg.ProxyBaseURL, HTTP: &http.Client{Timeout: cfg.HTTPTimeout}, CheckSubscription: subscriptionChecker.Check,
 	}, AuthChanged: func(authCtx context.Context, result auth.LogoutResult) error {
 		if err := clearACPLogoutPolicy(authCtx, cfg, result); err != nil {
 			return err
@@ -1827,7 +1854,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		textOutput io.Writer,
 		statusOutput io.Writer,
 	) (*agent.Runner, func(), error) {
-		cfg := cfg
+		cfg := runtimeConfigSnapshot()
 		if key, ok := auth.ReadAPIKeyEnvironment(); ok && !cfg.DisableAPIKeyAuth && !cfg.ForceLoginTeamConfigured && cfg.PreferredAuthMethod != "oidc" {
 			cfg.APIKey = key
 		}
@@ -1837,11 +1864,13 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			if refreshErr == nil && refreshed != "" {
 				cfg.APIKey = refreshed
 				settingsCtx, cancel := context.WithTimeout(sessionCtx, 5*time.Second)
-				remote := config.FetchRemoteSettings(settingsCtx, cfg.ProxyBaseURL, refreshed, &http.Client{Timeout: 3 * time.Second})
+				credential, _ := auth.Load(authPath, authConfig.Scope())
+				remote := config.FetchRemoteSettingsForSession(settingsCtx, cfg.ProxyBaseURL, refreshed, credential.UserID, credential.Email, &http.Client{Timeout: 3 * time.Second})
 				cancel()
 				if remote != nil {
-					cfg.ApplyRemoteSettings(remote)
-					setBillingMeta(cfg)
+					applyRemoteSettings(remote)
+					cfg = runtimeConfigSnapshot()
+					cfg.APIKey = refreshed
 				}
 			}
 		}

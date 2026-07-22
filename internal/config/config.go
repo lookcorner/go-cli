@@ -53,6 +53,11 @@ type Config struct {
 	SubscriptionTier                *string                    `json:"-"`
 	SubscriptionTierDisplay         *string                    `json:"-"`
 	OnDemandEnabled                 *bool                      `json:"-"`
+	AllowAccess                     *bool                      `json:"-"`
+	GateMessage                     *string                    `json:"-"`
+	GateURL                         *string                    `json:"-"`
+	GateLabel                       *string                    `json:"-"`
+	ShowResolvedModel               *bool                      `json:"-"`
 	HTTPTimeout                     time.Duration              `json:"-"`
 	WebSearch                       WebSearchConfig            `json:"web_search,omitempty"`
 	WebFetch                        WebFetchConfig             `json:"web_fetch,omitempty"`

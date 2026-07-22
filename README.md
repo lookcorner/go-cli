@@ -651,6 +651,14 @@ preserving deployment-managed policy and static API-key authentication. Legacy c
 can read and update the environment-backed
 API key through `x.ai/getApiKey` and `x.ai/setApiKey`; updates are stored in the
 `xai::api_key` scope of `auth.json` and apply to newly created sessions. Clients can
+re-check a paywall through `x.ai/auth/check_subscription`. The check reads the
+live `/user?include=subscription` tier, accepts only exact paid-tier values,
+refreshes OAuth and identity-targeted remote settings, and lifts the returned
+AuthMeta gate only when settings explicitly grant `allow_access`. Tier-targeted
+models refresh immediately when the new JWT claim matches, or through a bounded
+single-flight retry when the claim is still stale. Static API-key, deployment,
+and external credentials bypass the OAuth subscription gate.
+Clients can
 also enforce the privacy build's coding-data-retention opt-out through
 `x.ai/privacy/setCodingDataRetention`, including refresh-aware authentication and
 local profile synchronization. Authenticated clients can fetch reference-shaped

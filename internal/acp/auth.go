@@ -13,13 +13,38 @@ import (
 )
 
 type AuthConfig struct {
-	Path          string
-	Scope         string
-	MethodID      string
-	Token         string
-	TokenProvider api.TokenProvider
-	ProxyBaseURL  string
-	HTTP          *http.Client
+	Path              string
+	Scope             string
+	MethodID          string
+	Token             string
+	TokenProvider     api.TokenProvider
+	ProxyBaseURL      string
+	HTTP              *http.Client
+	CheckSubscription func(context.Context) SubscriptionCheckResult
+}
+
+type AuthGate struct {
+	Message string  `json:"message"`
+	URL     *string `json:"url"`
+	Label   *string `json:"label"`
+}
+
+type AuthMeta struct {
+	Email                     *string   `json:"email"`
+	AuthMode                  *string   `json:"auth_mode"`
+	TeamID                    *string   `json:"team_id"`
+	TeamName                  *string   `json:"team_name"`
+	IsZDR                     bool      `json:"is_zdr"`
+	TeamRole                  *string   `json:"team_role"`
+	CodingDataRetentionOptOut bool      `json:"coding_data_retention_opt_out"`
+	ShowResolvedModel         *bool     `json:"show_resolved_model"`
+	Gate                      *AuthGate `json:"gate"`
+	SubscriptionTier          *string   `json:"subscription_tier"`
+}
+
+type SubscriptionCheckResult struct {
+	Authenticated bool      `json:"authenticated"`
+	Meta          *AuthMeta `json:"meta"`
 }
 
 type authInfoResponse struct {
@@ -126,6 +151,13 @@ func (s *Server) handleAuth(ctx context.Context, incoming message) {
 			}
 		}
 		s.respond(incoming.ID, map[string]any{"token": optionalString(token)})
+		return
+	case "x.ai/auth/check_subscription":
+		result := SubscriptionCheckResult{}
+		if s.Auth.CheckSubscription != nil {
+			result = s.Auth.CheckSubscription(ctx)
+		}
+		s.respond(incoming.ID, result)
 		return
 	}
 

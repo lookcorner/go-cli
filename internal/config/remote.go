@@ -9,12 +9,18 @@ import (
 	"time"
 
 	"github.com/lookcorner/go-cli/internal/compat"
+	"github.com/lookcorner/go-cli/internal/version"
 )
 
 type RemoteSettings struct {
 	SubscriptionTier                *string         `json:"subscription_tier"`
 	SubscriptionTierDisplay         *string         `json:"subscription_tier_display"`
 	OnDemandEnabled                 *bool           `json:"on_demand_enabled"`
+	AllowAccess                     *bool           `json:"allow_access"`
+	GateMessage                     *string         `json:"gate_message"`
+	GateURL                         *string         `json:"gate_url"`
+	GateLabel                       *string         `json:"gate_label"`
+	ShowResolvedModel               *bool           `json:"show_resolved_model"`
 	AutoMode                        *AutoModeConfig `json:"auto_mode"`
 	OfficialMarketplaceAutoRegister *bool           `json:"official_marketplace_auto_register"`
 	WebFetchEnabled                 *bool           `json:"web_fetch_enabled"`
@@ -81,6 +87,10 @@ func (r *RemoteSettings) UnmarshalJSON(data []byte) error {
 }
 
 func FetchRemoteSettings(ctx context.Context, baseURL, token string, client *http.Client) *RemoteSettings {
+	return FetchRemoteSettingsForSession(ctx, baseURL, token, "", "", client)
+}
+
+func FetchRemoteSettingsForSession(ctx context.Context, baseURL, token, userID, email string, client *http.Client) *RemoteSettings {
 	if strings.TrimSpace(token) == "" {
 		return nil
 	}
@@ -94,6 +104,16 @@ func FetchRemoteSettings(ctx context.Context, baseURL, token string, client *htt
 			return nil
 		}
 		request.Header.Set("Authorization", "Bearer "+token)
+		request.Header.Set("X-XAI-Token-Auth", "xai-grok-cli")
+		request.Header.Set("x-grok-client-version", version.Current)
+		request.Header.Set("x-grok-client-identifier", "gork-go")
+		request.Header.Set("x-grok-client-mode", "interactive")
+		if userID != "" {
+			request.Header.Set("x-userid", userID)
+		}
+		if email != "" {
+			request.Header.Set("x-email", email)
+		}
 		response, err := client.Do(request)
 		if err == nil && response.StatusCode >= 200 && response.StatusCode < 300 {
 			var settings RemoteSettings
@@ -129,6 +149,11 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 	c.SubscriptionTier = remote.SubscriptionTier
 	c.SubscriptionTierDisplay = remote.SubscriptionTierDisplay
 	c.OnDemandEnabled = remote.OnDemandEnabled
+	c.AllowAccess = remote.AllowAccess
+	c.GateMessage = remote.GateMessage
+	c.GateURL = remote.GateURL
+	c.GateLabel = remote.GateLabel
+	c.ShowResolvedModel = remote.ShowResolvedModel
 	if remote.OfficialMarketplaceAutoRegister != nil {
 		c.OfficialMarketplaceAutoRegister = *remote.OfficialMarketplaceAutoRegister
 	}

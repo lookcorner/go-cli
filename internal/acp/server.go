@@ -347,7 +347,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleModelReload(incoming)
 		case "x.ai/internal/evict_sessions":
 			s.handleEvictSessions(incoming.Params)
-		case "x.ai/auth/info", "x.ai/auth/getBearerToken", "x.ai/auth/logout", "x.ai/internal/auth_cleared", "x.ai/getApiKey", "x.ai/setApiKey":
+		case "x.ai/auth/info", "x.ai/auth/getBearerToken", "x.ai/auth/logout", "x.ai/auth/check_subscription", "x.ai/internal/auth_cleared", "x.ai/getApiKey", "x.ai/setApiKey":
 			s.handleAuth(ctx, incoming)
 		case "x.ai/privacy/setCodingDataRetention":
 			s.handlePrivacy(ctx, incoming)

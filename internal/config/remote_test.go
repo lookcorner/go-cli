@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -20,7 +21,7 @@ func TestFetchRemoteSettingsRetriesAndAuthenticates(t *testing.T) {
 	attempts := 0
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		attempts++
-		if request.URL.Path != "/v1/settings" || request.Header.Get("Authorization") != "Bearer session-token" {
+		if request.URL.Path != "/v1/settings" || request.Header.Get("Authorization") != "Bearer session-token" || request.Header.Get("X-XAI-Token-Auth") != "xai-grok-cli" || request.Header.Get("x-grok-client-version") == "" || request.Header.Get("x-grok-client-identifier") != "gork-go" || request.Header.Get("x-grok-client-mode") != "interactive" {
 			t.Fatalf("request path=%q authorization=%q", request.URL.Path, request.Header.Get("Authorization"))
 		}
 		if attempts == 1 {
@@ -33,6 +34,19 @@ func TestFetchRemoteSettingsRetriesAndAuthenticates(t *testing.T) {
 	settings := FetchRemoteSettings(context.Background(), server.URL+"/v1", "session-token", server.Client())
 	if settings == nil || settings.WebFetchEnabled == nil || !*settings.WebFetchEnabled || settings.GoalVerifierCount == nil || *settings.GoalVerifierCount != 4 || settings.GoalClassifierMaxRuns == nil || *settings.GoalClassifierMaxRuns != 7 || attempts != 2 {
 		t.Fatalf("settings=%#v attempts=%d", settings, attempts)
+	}
+}
+
+func TestFetchRemoteSettingsIncludesSessionIdentity(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("x-userid") != "user-1" || request.Header.Get("x-email") != "user@example.com" {
+			t.Fatalf("identity headers=%#v", request.Header)
+		}
+		fmt.Fprint(writer, `{}`)
+	}))
+	defer server.Close()
+	if settings := FetchRemoteSettingsForSession(context.Background(), server.URL, "token", "user-1", "user@example.com", server.Client()); settings == nil {
+		t.Fatal("settings fetch failed")
 	}
 }
 
@@ -49,6 +63,22 @@ func TestBillingRemoteMetadataRefreshesAndClears(t *testing.T) {
 	cfg.ApplyRemoteSettings(&RemoteSettings{})
 	if cfg.SubscriptionTier != nil || cfg.SubscriptionTierDisplay != nil || cfg.OnDemandEnabled != nil {
 		t.Fatalf("stale billing metadata survived refresh: %#v", cfg)
+	}
+}
+
+func TestAccessGateRemoteMetadataRefreshesAndClears(t *testing.T) {
+	var remote RemoteSettings
+	if err := json.Unmarshal([]byte(`{"allow_access":true,"gate_message":"Upgrade","gate_url":"https://example.com/upgrade","gate_label":"Subscribe","show_resolved_model":false}`), &remote); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{}
+	cfg.ApplyRemoteSettings(&remote)
+	if cfg.AllowAccess == nil || !*cfg.AllowAccess || cfg.GateMessage == nil || *cfg.GateMessage != "Upgrade" || cfg.GateURL == nil || cfg.GateLabel == nil || cfg.ShowResolvedModel == nil || *cfg.ShowResolvedModel {
+		t.Fatalf("gate metadata=%#v", cfg)
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{})
+	if cfg.AllowAccess != nil || cfg.GateMessage != nil || cfg.GateURL != nil || cfg.GateLabel != nil || cfg.ShowResolvedModel != nil {
+		t.Fatalf("stale gate metadata survived refresh: %#v", cfg)
 	}
 }
 

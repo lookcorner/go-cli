@@ -76,6 +76,37 @@ func TestAuthReadFallbacks(t *testing.T) {
 	}
 }
 
+func TestCheckSubscriptionReturnsApplicationAuthMeta(t *testing.T) {
+	var output bytes.Buffer
+	called := 0
+	gateURL, gateLabel := "https://example.com/subscribe", "Subscribe"
+	showResolvedModel := false
+	server := &Server{output: &output, Auth: AuthConfig{CheckSubscription: func(context.Context) SubscriptionCheckResult {
+		called++
+		email, mode, tier := "user@example.com", "Oidc", "SuperGrok"
+		return SubscriptionCheckResult{Authenticated: true, Meta: &AuthMeta{
+			Email: &email, AuthMode: &mode, IsZDR: true, CodingDataRetentionOptOut: true,
+			ShowResolvedModel: &showResolvedModel,
+			Gate:              &AuthGate{Message: "Upgrade", URL: &gateURL, Label: &gateLabel}, SubscriptionTier: &tier,
+		}}
+	}}}
+	server.handleAuth(context.Background(), message{ID: json.RawMessage("1"), Method: "x.ai/auth/check_subscription", Params: json.RawMessage(`{}`)})
+	result := decodeACP(t, json.NewDecoder(&output))["result"].(map[string]any)
+	meta := result["meta"].(map[string]any)
+	gate := meta["gate"].(map[string]any)
+	if called != 1 || result["authenticated"] != true || meta["email"] != "user@example.com" || meta["auth_mode"] != "Oidc" || meta["is_zdr"] != true || meta["coding_data_retention_opt_out"] != true || meta["show_resolved_model"] != false || meta["subscription_tier"] != "SuperGrok" || gate["message"] != "Upgrade" || gate["url"] != gateURL || gate["label"] != gateLabel {
+		t.Fatalf("called=%d result=%#v", called, result)
+	}
+
+	output.Reset()
+	server.Auth.CheckSubscription = nil
+	server.handleAuth(context.Background(), message{ID: json.RawMessage("2"), Method: "x.ai/auth/check_subscription", Params: json.RawMessage(`{}`)})
+	result = decodeACP(t, json.NewDecoder(&output))["result"].(map[string]any)
+	if result["authenticated"] != false || result["meta"] != nil {
+		t.Fatalf("unsupported result=%#v", result)
+	}
+}
+
 func TestAuthLogoutClearsCurrentCredentialAndCachedState(t *testing.T) {
 	withoutAuthEnvironment(t)
 	path, scope := filepath.Join(t.TempDir(), "auth.json"), "issuer::client"
@@ -327,12 +358,15 @@ func TestAuthExtensionsRouteThroughServer(t *testing.T) {
 			`{"jsonrpc":"2.0","id":2,"method":"x.ai/auth/getBearerToken","params":{}}` + "\n" +
 			`{"jsonrpc":"2.0","id":3,"method":"x.ai/getApiKey","params":{}}` + "\n" +
 			`{"jsonrpc":"2.0","id":4,"method":"x.ai/setApiKey","params":{"key":"updated-key"}}` + "\n" +
-			`{"jsonrpc":"2.0","id":5,"method":"x.ai/auth/logout","params":{}}` + "\n" +
-			`{"jsonrpc":"2.0","id":6,"method":"x.ai/internal/auth_cleared","params":{}}` + "\n",
+			`{"jsonrpc":"2.0","id":5,"method":"x.ai/auth/check_subscription","params":{}}` + "\n" +
+			`{"jsonrpc":"2.0","id":6,"method":"x.ai/auth/logout","params":{}}` + "\n" +
+			`{"jsonrpc":"2.0","id":7,"method":"x.ai/internal/auth_cleared","params":{}}` + "\n",
 	)
 	var output bytes.Buffer
 	server := &Server{
-		Auth: AuthConfig{Path: path, MethodID: "xai.api_key", Token: "api-key"},
+		Auth: AuthConfig{Path: path, MethodID: "xai.api_key", Token: "api-key", CheckSubscription: func(context.Context) SubscriptionCheckResult {
+			return SubscriptionCheckResult{Authenticated: true, Meta: &AuthMeta{}}
+		}},
 		Factory: func(context.Context, SessionConfig, tools.Approver, io.Writer, io.Writer) (*agent.Runner, func(), error) {
 			return nil, nil, nil
 		},
@@ -345,9 +379,10 @@ func TestAuthExtensionsRouteThroughServer(t *testing.T) {
 	bearer := decodeACP(t, decoder)
 	getAPIKey := decodeACP(t, decoder)
 	setAPIKey := decodeACP(t, decoder)
+	checkSubscription := decodeACP(t, decoder)
 	logout := decodeACP(t, decoder)
 	authCleared := decodeACP(t, decoder)
-	if info["id"] != float64(1) || info["result"].(map[string]any)["methodId"] != "xai.api_key" || bearer["id"] != float64(2) || bearer["result"].(map[string]any)["token"] != "api-key" || getAPIKey["result"].(map[string]any)["key"] != "environment-key" || setAPIKey["result"].(map[string]any)["ok"] != true || logout["result"].(map[string]any)["ok"] != true || authCleared["result"].(map[string]any)["ok"] != true {
-		t.Fatalf("info=%#v bearer=%#v get=%#v set=%#v logout=%#v cleared=%#v", info, bearer, getAPIKey, setAPIKey, logout, authCleared)
+	if info["id"] != float64(1) || info["result"].(map[string]any)["methodId"] != "xai.api_key" || bearer["id"] != float64(2) || bearer["result"].(map[string]any)["token"] != "api-key" || getAPIKey["result"].(map[string]any)["key"] != "environment-key" || setAPIKey["result"].(map[string]any)["ok"] != true || checkSubscription["result"].(map[string]any)["authenticated"] != true || logout["result"].(map[string]any)["ok"] != true || authCleared["result"].(map[string]any)["ok"] != true {
+		t.Fatalf("info=%#v bearer=%#v get=%#v set=%#v check=%#v logout=%#v cleared=%#v", info, bearer, getAPIKey, setAPIKey, checkSubscription, logout, authCleared)
 	}
 }

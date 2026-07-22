@@ -169,6 +169,11 @@ func (s *Server) ReloadModels() error {
 	return err
 }
 
+func (s *Server) ReloadModelCache() error {
+	_, err := s.reloadModels(true)
+	return err
+}
+
 func (s *Server) handleModelReload(incoming message) {
 	cache := incoming.Method == "x.ai/internal/reload_models_cache"
 	count, err := s.reloadModels(cache)
