@@ -393,6 +393,7 @@ func wrapMarkdownSpans(spans []markdownSpan, width int, links bool) []string {
 		used = 0
 	}
 	for _, span := range spans {
+		span.text = sanitizeTerminalText(span.text)
 		for len(span.text) > 0 {
 			if used == width {
 				flush()
@@ -425,6 +426,19 @@ func wrapMarkdownSpans(spans []markdownSpan, width int, links bool) []string {
 		flush()
 	}
 	return lines
+}
+
+func sanitizeTerminalText(value string) string {
+	return strings.Map(func(char rune) rune {
+		switch {
+		case char == '\n':
+			return char
+		case char == '\t' || char < 0x20 || char == 0x7f || char >= 0x80 && char <= 0x9f:
+			return ' '
+		default:
+			return char
+		}
+	}, value)
 }
 
 func isAbsoluteDisplayPath(path string) bool {

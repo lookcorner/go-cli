@@ -133,6 +133,16 @@ func TestRenderMarkdownRejectsUnsafeHyperlinks(t *testing.T) {
 		if strings.Contains(raw, "\x1b]8;") {
 			t.Fatalf("unsafe target emitted OSC 8 for %q: %q", input, raw)
 		}
+		if strings.Contains(raw, "\x1bpayload") || strings.Contains(raw, "\x07") {
+			t.Fatalf("terminal control leaked for %q: %q", input, raw)
+		}
+	}
+}
+
+func TestSanitizeTerminalTextPreservesLineBreaks(t *testing.T) {
+	input := "a\tb\r\x00\x1b\x7f\u0080c\nd"
+	if got, want := sanitizeTerminalText(input), "a b     c\nd"; got != want {
+		t.Fatalf("sanitized text=%q want=%q", got, want)
 	}
 }
 
