@@ -5,6 +5,11 @@ This file tracks behavioral compatibility against
 
 Status values: **done**, **partial**, **planned**.
 
+ACP prompt queuing includes server-authoritative busy-turn FIFO execution,
+`x.ai/queue/changed` snapshots, versioned owner-aware remove/reorder/clear/edit
+and send-now operations, user-prompt priority over automatic wakes, and
+close-time cancellation of queued requests. ACP remains **partial** overall.
+
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |
 | Responses API streaming | done | SSE text deltas, terminal response IDs, function calls and JSON fallback |

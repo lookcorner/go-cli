@@ -56,7 +56,7 @@ func (s *Server) NotifySubagentEnded(sessionID string, result tools.SubagentResu
 	s.notifySubagent(sessionID, SubagentFinishedUpdate(result))
 	if result.WillWake {
 		if current := s.lookupSession(sessionID); current != nil {
-			s.startNextWake(current)
+			s.startNext(current)
 		}
 	}
 }
@@ -129,7 +129,7 @@ func (s *Server) NotifyMonitorEvent(sessionID string, event tools.MonitorEvent) 
 		current.wakeQueue = append(current.wakeQueue, syntheticWake{monitorEvents: []tools.MonitorEvent{event}})
 	}
 	current.mu.Unlock()
-	time.AfterFunc(200*time.Millisecond, func() { s.startNextWake(current) })
+	time.AfterFunc(200*time.Millisecond, func() { s.startNext(current) })
 }
 
 func MonitorEventUpdate(event tools.MonitorEvent) map[string]any {
@@ -160,7 +160,7 @@ func (s *Server) NotifyScheduledTaskFired(sessionID string, event tools.Schedule
 	})
 	if s.QueueScheduledWake(sessionID, event) {
 		if current := s.lookupSession(sessionID); current != nil {
-			s.startNextWake(current)
+			s.startNext(current)
 		}
 	}
 }
@@ -319,7 +319,7 @@ func (s *Server) startNextWake(current *session) {
 			current.updated = time.Now().UTC()
 			close(runDone)
 			current.mu.Unlock()
-			s.startNextWake(current)
+			s.startNext(current)
 		}()
 		return
 	}
@@ -360,7 +360,7 @@ func (s *Server) startNextWake(current *session) {
 		}
 		current.updated = time.Now().UTC()
 		current.mu.Unlock()
-		s.startNextWake(current)
+		s.startNext(current)
 	}()
 }
 
@@ -470,7 +470,7 @@ func (s *Server) NotifyTaskCompleted(sessionID string, snapshot tools.ProcessSna
 	})
 	if willWake {
 		if current := s.lookupSession(sessionID); current != nil {
-			s.startNextWake(current)
+			s.startNext(current)
 		}
 	}
 }

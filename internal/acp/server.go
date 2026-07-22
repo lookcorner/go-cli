@@ -111,6 +111,9 @@ type session struct {
 	mcpServers        []MCPServer
 	wakeQueue         []syntheticWake
 	interjectionQueue []agent.Interjection
+	promptQueue       []queuedPrompt
+	runningPromptID   string
+	startingPromptID  string
 	activeWakeID      string
 	closed            bool
 }
@@ -140,12 +143,13 @@ type userQuestionResult struct {
 func (s *Server) WorktreeManager() *worktrees.Manager { return s.worktrees }
 
 type promptBlock struct {
-	Type     string `json:"type"`
-	Text     string `json:"text"`
-	Data     string `json:"data"`
-	MimeType string `json:"mimeType"`
-	URI      string `json:"uri"`
-	Name     string `json:"name"`
+	Type     string         `json:"type"`
+	Text     string         `json:"text"`
+	Data     string         `json:"data"`
+	MimeType string         `json:"mimeType"`
+	URI      string         `json:"uri"`
+	Name     string         `json:"name"`
+	Meta     map[string]any `json:"_meta,omitempty"`
 	Resource struct {
 		URI      string `json:"uri"`
 		MimeType string `json:"mimeType"`
@@ -262,6 +266,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleInterject(incoming)
 		case "x.ai/recap":
 			s.handleRecap(ctx, incoming)
+		case "x.ai/queue/remove", "x.ai/queue/reorder", "x.ai/queue/clear", "x.ai/queue/edit", "x.ai/queue/interject":
+			s.handleQueueUpdate(incoming)
 		case "x.ai/skills/list", "x.ai/skills/config", "x.ai/skills/add", "x.ai/skills/remove", "x.ai/skills/reset", "x.ai/skills/toggle":
 			s.handleSkills(ctx, incoming)
 		case "x.ai/plugins/list", "x.ai/plugins/action":
@@ -1598,11 +1604,14 @@ func (s *Server) startSession(ctx context.Context, id string, sessionConfig Sess
 	return created, nil
 }
 
+type promptRequest struct {
+	SessionID string         `json:"sessionId"`
+	Prompt    []promptBlock  `json:"prompt"`
+	Meta      map[string]any `json:"_meta,omitempty"`
+}
+
 func (s *Server) handlePrompt(parent context.Context, incoming message) {
-	var params struct {
-		SessionID string        `json:"sessionId"`
-		Prompt    []promptBlock `json:"prompt"`
-	}
+	var params promptRequest
 	if err := json.Unmarshal(incoming.Params, &params); err != nil {
 		s.respondError(incoming.ID, -32602, "invalid prompt parameters")
 		return
@@ -1612,6 +1621,10 @@ func (s *Server) handlePrompt(parent context.Context, incoming message) {
 		s.respondError(incoming.ID, -32602, "unknown session")
 		return
 	}
+	s.handlePromptRequest(parent, incoming, current, params)
+}
+
+func (s *Server) handlePromptRequest(parent context.Context, incoming message, current *session, params promptRequest) {
 	prompt, content, err := renderPrompt(params.Prompt)
 	if err != nil {
 		s.respondError(incoming.ID, -32602, err.Error())
@@ -1624,16 +1637,22 @@ func (s *Server) handlePrompt(parent context.Context, incoming message) {
 	if prompt == "" {
 		prompt = "Image prompt"
 	}
+	if s.queuePrompt(current, incoming, &params, prompt) {
+		return
+	}
 	if strings.TrimSpace(prompt) == "/compact" {
 		s.handleCompactPrompt(parent, incoming, current)
+		s.markRunningPrompt(current, promptID(params.Meta))
 		return
 	}
 	if strings.TrimSpace(prompt) == "/flush" {
 		s.handleMemoryFlush(parent, incoming, current, false)
+		s.markRunningPrompt(current, promptID(params.Meta))
 		return
 	}
 	if strings.TrimSpace(prompt) == "/dream" {
 		s.handleMemoryDream(parent, incoming, current)
+		s.markRunningPrompt(current, promptID(params.Meta))
 		return
 	}
 	if action, ok := tools.ParseMemoryCommand(prompt); ok {
@@ -1642,6 +1661,7 @@ func (s *Server) handlePrompt(parent context.Context, incoming message) {
 		} else {
 			s.handleMemoryToggle(parent, incoming, current, action == "enable")
 		}
+		s.markRunningPrompt(current, promptID(params.Meta))
 		return
 	}
 	if expanded, ok := tools.ExpandLoopCommand(prompt); ok {
@@ -1664,6 +1684,7 @@ func (s *Server) handlePrompt(parent context.Context, incoming message) {
 	current.cancel = cancel
 	current.running = true
 	current.runDone = runDone
+	current.runningPromptID = promptID(params.Meta)
 	current.activePrompt = current.promptIndex
 	current.promptIndex++
 	if current.title == "" {
@@ -1714,8 +1735,9 @@ func (s *Server) handlePrompt(parent context.Context, incoming message) {
 		if err == nil || stopReason == "cancelled" {
 			s.respond(incoming.ID, map[string]any{"stopReason": stopReason})
 		}
-		s.startNextWake(current)
+		s.startNext(current)
 	}()
+	s.broadcastQueue(current)
 }
 
 func (s *Server) handleCompactPrompt(parent context.Context, incoming message, current *session) {
@@ -1766,7 +1788,7 @@ func (s *Server) handleCompactPrompt(parent context.Context, incoming message, c
 		if err == nil || stopReason == "cancelled" {
 			s.respond(incoming.ID, map[string]any{"stopReason": stopReason})
 		}
-		s.startNextWake(current)
+		s.startNext(current)
 	}()
 }
 
@@ -1839,7 +1861,7 @@ func (s *Server) handleMemoryRewriteExtension(parent context.Context, incoming m
 		} else {
 			s.respond(incoming.ID, map[string]any{"rewritten": rewritten})
 		}
-		s.startNextWake(current)
+		s.startNext(current)
 	}()
 }
 
@@ -1899,7 +1921,7 @@ func (s *Server) handleMemoryDream(parent context.Context, incoming message, cur
 		} else {
 			s.respond(incoming.ID, map[string]any{"stopReason": "end_turn"})
 		}
-		s.startNextWake(current)
+		s.startNext(current)
 	}()
 }
 
@@ -1933,7 +1955,7 @@ func (s *Server) handleMemoryToggle(parent context.Context, incoming message, cu
 			s.notify(current.id, map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": text}})
 			s.respond(incoming.ID, map[string]any{"stopReason": "end_turn"})
 		}
-		s.startNextWake(current)
+		s.startNext(current)
 	}()
 }
 
@@ -1989,7 +2011,7 @@ func (s *Server) handleMemoryFlush(parent context.Context, incoming message, cur
 				s.respond(incoming.ID, map[string]any{"stopReason": stopReason})
 			}
 		}
-		s.startNextWake(current)
+		s.startNext(current)
 	}()
 }
 
@@ -2252,6 +2274,8 @@ func (s *Server) closeSession(id string) bool {
 	current.closed = true
 	current.wakeQueue = nil
 	current.interjectionQueue = nil
+	queued := current.promptQueue
+	current.promptQueue = nil
 	if current.runner != nil {
 		current.runner.ClearInterjections()
 	}
@@ -2266,6 +2290,9 @@ func (s *Server) closeSession(id string) bool {
 	}
 	runDone, btwDone, recapDone := current.runDone, current.btwDone, current.recapDone
 	current.mu.Unlock()
+	for _, item := range queued {
+		s.respond(item.incoming.ID, map[string]any{"stopReason": "cancelled"})
+	}
 	if runDone != nil {
 		<-runDone
 	}
@@ -2619,6 +2646,8 @@ func (s *Server) closeAll() {
 		current.mu.Lock()
 		current.closed = true
 		current.wakeQueue = nil
+		queued := current.promptQueue
+		current.promptQueue = nil
 		if current.cancel != nil {
 			current.cancel()
 		}
@@ -2630,6 +2659,9 @@ func (s *Server) closeAll() {
 		}
 		runDone, btwDone, recapDone := current.runDone, current.btwDone, current.recapDone
 		current.mu.Unlock()
+		for _, item := range queued {
+			s.respond(item.incoming.ID, map[string]any{"stopReason": "cancelled"})
+		}
 		if runDone != nil {
 			<-runDone
 		}

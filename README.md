@@ -489,6 +489,16 @@ to the actual tool call, so protocol stdin is never consumed by a CLI prompt.
 `--approval auto` and `--approval deny` remain available for clients that
 intentionally want a fixed policy.
 
+When a turn is busy, additional `session/prompt` requests remain pending in a
+server-authoritative FIFO queue and run before interjection fallbacks or
+scheduled/background wake-ups. Clients receive `x.ai/queue/changed` snapshots
+with prompt IDs, positions, versions, ownership and the running prompt ID. The
+fire-and-forget `x.ai/queue/remove`, `reorder`, `clear`, `edit`, and `interject`
+notifications support owner-aware reconciliation, in-place text edits and
+send-now promotion; stale versions are benign no-ops. Cancelling the active turn
+continues with the next queued prompt, while closing a session resolves every
+queued prompt request as cancelled.
+
 `x.ai/session/fork` creates a persisted child session without starting it. It
 supports client-provided IDs, model overrides, a new working directory, and
 inclusive `targetPromptIndex` truncation; later load/resume uses the stored

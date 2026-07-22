@@ -675,10 +675,13 @@ func TestStaticExtensionsAndCompactCommand(t *testing.T) {
 	params, _ := json.Marshal(map[string]any{"sessionId": "compact-session", "prompt": []any{map[string]any{"type": "text", "text": "/compact"}}})
 	server.handlePrompt(context.Background(), message{ID: json.RawMessage("3"), Method: "session/prompt", Params: params})
 	server.wg.Wait()
-	if err := json.NewDecoder(&output).Decode(&response); err != nil {
-		t.Fatal(err)
+	for _, item := range decodeACPOutput(t, output.Bytes()) {
+		if item["id"] == float64(3) {
+			response = item
+			break
+		}
 	}
-	if response["result"].(map[string]any)["stopReason"] != "end_turn" {
+	if result, ok := response["result"].(map[string]any); !ok || result["stopReason"] != "end_turn" {
 		t.Fatalf("unexpected compact response: %#v", response)
 	}
 	current.mu.Lock()
@@ -2276,12 +2279,12 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 	if infoUpdate["sessionUpdate"] != "session_info_update" || infoUpdate["title"] != "create the file" {
 		t.Fatalf("unexpected session info update: %#v", titleUpdate)
 	}
-	toolStarted := decodeACP(t, decoder)
+	toolStarted := decodeACPNonQueue(t, decoder)
 	startedUpdate := toolStarted["params"].(map[string]any)["update"].(map[string]any)
 	if startedUpdate["sessionUpdate"] != "tool_call" || startedUpdate["toolCallId"] != "tool-1" {
 		t.Fatalf("unexpected tool start: %#v", toolStarted)
 	}
-	permission := decodeACP(t, decoder)
+	permission := decodeACPNonQueue(t, decoder)
 	if permission["method"] != "session/request_permission" {
 		t.Fatalf("unexpected permission request: %#v", permission)
 	}
@@ -2293,16 +2296,16 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 		"jsonrpc": "2.0", "id": permission["id"],
 		"result": map[string]any{"outcome": map[string]any{"outcome": "selected", "optionId": "allow_once"}},
 	})
-	toolFinished := decodeACP(t, decoder)
+	toolFinished := decodeACPNonQueue(t, decoder)
 	finishedUpdate := toolFinished["params"].(map[string]any)["update"].(map[string]any)
 	if finishedUpdate["sessionUpdate"] != "tool_call_update" || finishedUpdate["status"] != "completed" {
 		t.Fatalf("unexpected tool finish: %#v", toolFinished)
 	}
-	textUpdate := decodeACP(t, decoder)
+	textUpdate := decodeACPNonQueue(t, decoder)
 	if textUpdate["method"] != "session/update" {
 		t.Fatalf("unexpected stream update: %#v", textUpdate)
 	}
-	completed := decodeACP(t, decoder)
+	completed := decodeACPNonQueue(t, decoder)
 	if int(completed["id"].(float64)) != 3 || completed["result"].(map[string]any)["stopReason"] != "end_turn" {
 		t.Fatalf("unexpected prompt response: %#v", completed)
 	}
@@ -2314,7 +2317,7 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 		"jsonrpc": "2.0", "id": 33, "method": "x.ai/hunk-tracker/get-hunks",
 		"params": map[string]any{"sessionId": sessionID, "path": "made.txt", "source": "agent"},
 	})
-	hunkResponse := decodeACP(t, decoder)
+	hunkResponse := decodeACPNonQueue(t, decoder)
 	hunkResult := hunkResponse["result"].(map[string]any)
 	hunks := hunkResult["hunks"].([]any)
 	if len(hunks) != 1 {
@@ -2454,11 +2457,11 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 		"jsonrpc": "2.0", "id": 39, "method": "session/prompt",
 		"params": map[string]any{"sessionId": sessionID, "prompt": []any{map[string]any{"type": "text", "text": "replacement"}}},
 	})
-	replacementUpdate := decodeACP(t, decoder)
+	replacementUpdate := decodeACPNonQueue(t, decoder)
 	if replacementUpdate["method"] != "session/update" {
 		t.Fatalf("missing replacement stream update: %#v", replacementUpdate)
 	}
-	replacementDone := decodeACP(t, decoder)
+	replacementDone := decodeACPNonQueue(t, decoder)
 	if int(replacementDone["id"].(float64)) != 39 {
 		t.Fatalf("unexpected replacement completion: %#v", replacementDone)
 	}
@@ -2468,7 +2471,7 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 	}
 	streamer.mu.Unlock()
 	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 4, "method": "session/close", "params": map[string]any{"sessionId": sessionID}})
-	closed := decodeACP(t, decoder)
+	closed := decodeACPNonQueue(t, decoder)
 	if int(closed["id"].(float64)) != 4 {
 		t.Fatalf("unexpected close response: %#v", closed)
 	}
@@ -2907,10 +2910,18 @@ func TestACPCancelReturnsCancelledStopReason(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("prompt did not start")
 	}
+	queueUpdate := decodeACP(t, decoder)
+	if queueUpdate["method"] != "x.ai/queue/changed" {
+		t.Fatalf("unexpected queue update: %#v", queueUpdate)
+	}
 	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "method": "session/cancel", "params": map[string]any{"sessionId": sessionID}})
-	response := decodeACP(t, decoder)
+	response := decodeACPNonQueue(t, decoder)
 	if response["result"].(map[string]any)["stopReason"] != "cancelled" {
 		t.Fatalf("unexpected cancel response: %#v", response)
+	}
+	emptyQueue := decodeACP(t, decoder)
+	if emptyQueue["method"] != "x.ai/queue/changed" || len(emptyQueue["params"].(map[string]any)["entries"].([]any)) != 0 {
+		t.Fatalf("unexpected final queue update: %#v", emptyQueue)
 	}
 	_ = inputW.Close()
 	select {
@@ -3021,4 +3032,14 @@ func decodeACP(t *testing.T, decoder *json.Decoder) map[string]any {
 		t.Fatal(err)
 	}
 	return value
+}
+
+func decodeACPNonQueue(t *testing.T, decoder *json.Decoder) map[string]any {
+	t.Helper()
+	for {
+		value := decodeACP(t, decoder)
+		if value["method"] != "x.ai/queue/changed" {
+			return value
+		}
+	}
 }

@@ -53,7 +53,7 @@ func (s *Server) handleInterject(incoming message) {
 	}
 	s.write(map[string]any{"jsonrpc": "2.0", "method": "x.ai/session/interjection", "params": payload})
 	s.respond(incoming.ID, map[string]any{"result": map[string]any{"status": "queued"}})
-	s.startNextWake(current)
+	s.startNext(current)
 }
 
 func interjectionContent(fallback string, blocks []promptBlock) (string, []api.ContentPart, error) {
