@@ -285,7 +285,7 @@ Use `--tui` for the full-screen interface:
 
 The TUI streams model output as it arrives, renders headings, emphasis, links,
 lists, quotes, pipe tables, and inline or fenced code, and keeps a scrollable transcript.
-On directly supported terminals, Markdown links, bare web/email URLs, and quoted
+On directly supported terminals, Markdown links, bare HTTP(S)/FTP/email URLs, and quoted
 absolute file paths use safe OSC 8 targets; spaces in file paths are preserved and
 percent-encoded. The same links remain available through tmux 3.4 or newer when
 the outer terminal supports OSC 8.

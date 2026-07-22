@@ -28,7 +28,7 @@ type markdownSpan struct {
 	link  string
 }
 
-var bareHyperlinkPattern = regexp.MustCompile(`(?i)(?:https?://[^\s\x00-\x1f]+|mailto:[^\s\x00-\x1f]+)`)
+var bareHyperlinkPattern = regexp.MustCompile(`(?i)(?:https?://[^\s\x00-\x1f]+|ftp://[^\s\x00-\x1f]+|mailto:[^\s\x00-\x1f]+)`)
 
 func renderMarkdown(value string, width int) []string {
 	return renderMarkdownWithLinks(value, width, false)
@@ -441,7 +441,7 @@ func safeHyperlinkTarget(value string) string {
 		return ""
 	}
 	switch strings.ToLower(target.Scheme) {
-	case "http", "https":
+	case "http", "https", "ftp":
 		if target.Host == "" {
 			return ""
 		}

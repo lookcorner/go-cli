@@ -95,9 +95,9 @@ func TestRenderMarkdownEmitsSafeOSC8Links(t *testing.T) {
 }
 
 func TestRenderMarkdownLinkifiesBareURLs(t *testing.T) {
-	input := "See https://example.com/a_(b), then mailto:dev@example.com."
+	input := "See https://example.com/a_(b), ftp://files.example.com/archive.tar.gz, then mailto:dev@example.com."
 	raw := strings.Join(renderMarkdownWithLinks(input, 18, true), "\n")
-	for _, target := range []string{"https://example.com/a_(b)", "mailto:dev@example.com"} {
+	for _, target := range []string{"https://example.com/a_(b)", "ftp://files.example.com/archive.tar.gz", "mailto:dev@example.com"} {
 		if !strings.Contains(raw, ansi.SetHyperlink(target, "id="+hyperlinkID(target))) {
 			t.Fatalf("missing bare hyperlink %q in %q", target, raw)
 		}
@@ -107,6 +107,7 @@ func TestRenderMarkdownLinkifiesBareURLs(t *testing.T) {
 		t.Fatalf("visible bare URLs changed: %q", plain)
 	}
 	if strings.Contains(raw, ansi.SetHyperlink("https://example.com/a_(b),")) ||
+		strings.Contains(raw, ansi.SetHyperlink("ftp://files.example.com/archive.tar.gz,")) ||
 		strings.Contains(raw, ansi.SetHyperlink("mailto:dev@example.com.")) {
 		t.Fatalf("trailing punctuation entered hyperlink: %q", raw)
 	}
@@ -118,6 +119,7 @@ func TestRenderMarkdownLinkifiesBareURLs(t *testing.T) {
 func TestRenderMarkdownRejectsUnsafeHyperlinks(t *testing.T) {
 	for _, input := range []string{
 		`http://`,
+		`ftp://`,
 		`mailto:`,
 		`[script](javascript:alert)`,
 		"[control](https://example.com/\x1bpayload)",
