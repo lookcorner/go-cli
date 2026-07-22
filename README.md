@@ -277,6 +277,9 @@ conversation:
 ./gork --interactive --workspace .
 ```
 
+Interactive prompts beginning with `!` run a workspace-scoped Shell command
+directly, for example `! git status`; they do not create a model turn.
+
 Use `--tui` for the full-screen interface:
 
 ```sh

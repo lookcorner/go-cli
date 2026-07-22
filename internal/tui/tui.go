@@ -70,6 +70,11 @@ type turnDoneEvent struct {
 	result agent.Result
 	err    error
 }
+type shellDoneEvent struct {
+	command string
+	output  string
+	err     error
+}
 type compactDoneEvent struct{ err error }
 type memoryFlushDoneEvent struct {
 	result agent.MemoryFlushResult
@@ -648,6 +653,21 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if command := m.startScheduled(); command != nil {
 			return m, command
 		}
+	case shellDoneEvent:
+		m.running = false
+		m.turnCancel = nil
+		if msg.output != "" {
+			m.transcript.WriteString(strings.TrimRight(msg.output, "\n") + "\n")
+		}
+		if msg.err != nil {
+			m.status = "shell failed: " + msg.err.Error()
+			m.transcript.WriteString("[error] " + msg.err.Error() + "\n")
+		} else {
+			m.status = "shell completed"
+		}
+		if command := m.startScheduled(); command != nil {
+			return m, command
+		}
 	case scheduledFiredEvent:
 		if msg.event.TaskID != m.activeTask {
 			duplicate := false
@@ -938,6 +958,23 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if prompt == "/dream" {
 			m.status = "consolidating memory"
 			return m, runMemoryDream(turnCtx, m.runner)
+		}
+		if strings.HasPrefix(prompt, "!") {
+			command := strings.TrimSpace(strings.TrimPrefix(prompt, "!"))
+			if command == "" {
+				m.running = false
+				m.turnCancel = nil
+				m.status = "shell command is empty"
+				return m, nil
+			}
+			m.rememberPrompt(prompt)
+			if m.transcript.Len() > 0 {
+				m.transcript.WriteString("\n")
+			}
+			fmt.Fprintf(&m.transcript, "[Shell] $ %s\n", command)
+			m.status = "running shell command"
+			m.scroll = 0
+			return m, runShell(turnCtx, m.runner, command)
 		}
 		prompt, _ = tools.ExpandLoopCommand(prompt)
 		m.rememberPrompt(prompt)
@@ -1613,6 +1650,13 @@ func runTurn(ctx context.Context, runner *agent.Runner, prompt, previousID strin
 	return func() tea.Msg {
 		result, err := runner.RunTurn(ctx, prompt, previousID)
 		return turnDoneEvent{result: result, err: err}
+	}
+}
+
+func runShell(ctx context.Context, runner *agent.Runner, command string) tea.Cmd {
+	return func() tea.Msg {
+		output, err := runner.RunShell(ctx, command)
+		return shellDoneEvent{command: command, output: output, err: err}
 	}
 }
 

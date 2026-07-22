@@ -199,6 +199,26 @@ func TestRunnerHookPolicyCanDenyBeforeToolExecution(t *testing.T) {
 	}
 }
 
+func TestRunnerRunShell(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	runner := Runner{Tools: registry}
+	output, err := runner.RunShell(context.Background(), "printf shell-output")
+	if err != nil || output != "shell-output" {
+		t.Fatalf("output=%q err=%v", output, err)
+	}
+	if _, err := runner.RunShell(context.Background(), " "); err == nil {
+		t.Fatal("empty shell command was accepted")
+	}
+	if _, err := (&Runner{}).RunShell(context.Background(), "printf nope"); err == nil {
+		t.Fatal("shell ran without tools")
+	}
+}
+
 func TestRunnerReportsFailureAndCompactionHookLifecycle(t *testing.T) {
 	ws, err := workspace.Open(t.TempDir())
 	if err != nil {

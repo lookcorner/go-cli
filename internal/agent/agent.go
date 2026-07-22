@@ -153,6 +153,21 @@ func (r *Runner) Run(ctx context.Context, prompt string) (Result, error) {
 	return r.RunTurn(ctx, prompt, "")
 }
 
+func (r *Runner) RunShell(ctx context.Context, command string) (string, error) {
+	if r.Tools == nil {
+		return "", errors.New("agent tools are required")
+	}
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return "", errors.New("shell command must not be empty")
+	}
+	arguments, err := json.Marshal(map[string]string{"command": command})
+	if err != nil {
+		return "", fmt.Errorf("encode shell command: %w", err)
+	}
+	return r.Tools.Execute(ctx, "shell", arguments)
+}
+
 func (r *Runner) RunTurn(ctx context.Context, prompt, previousResponseID string) (Result, error) {
 	return r.runTurn(ctx, prompt, prompt, previousResponseID, false)
 }

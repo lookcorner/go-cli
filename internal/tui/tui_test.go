@@ -302,6 +302,30 @@ func TestModelInputAndView(t *testing.T) {
 	}
 }
 
+func TestModelShellCommandDoesNotStartModelTurn(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	bridge := NewBridge(context.Background(), tools.PermissionAuto)
+	defer bridge.Close()
+	m := &model{ctx: context.Background(), runner: &agent.Runner{Tools: registry}, bridge: bridge, width: 60, height: 16, status: "ready"}
+	m.setInput("! printf shell-output")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command == nil || !m.running || m.previousID != "" {
+		t.Fatalf("shell did not start correctly: running=%v previous=%q command=%v", m.running, m.previousID, command != nil)
+	}
+	message := command()
+	updated, _ = m.Update(message)
+	m = updated.(*model)
+	if m.running || m.status != "shell completed" || !strings.Contains(m.transcript.String(), "shell-output") {
+		t.Fatalf("shell result not rendered: running=%v status=%q transcript=%q", m.running, m.status, m.transcript.String())
+	}
+}
+
 func TestMouseReportingToggle(t *testing.T) {
 	m := &model{width: 60, height: 16, status: "ready", mouseToggle: true}
 	if m.View().MouseMode != tea.MouseModeCellMotion {

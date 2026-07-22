@@ -2549,7 +2549,7 @@ func interactiveLoop(
 			case "/exit", "/quit":
 				return nil
 			case "/help":
-				fmt.Fprintln(stderr, "Commands: /compact, /flush, /dream, /remember [text], /memory [on|off], /loop, /help, /exit. Every other line is sent as a prompt.")
+				fmt.Fprintln(stderr, "Commands: ! <command>, /compact, /flush, /dream, /remember [text], /memory [on|off], /loop, /help, /exit. Every other line is sent as a prompt.")
 				prompt = ""
 				continue
 			case "/compact":
@@ -2575,6 +2575,25 @@ func interactiveLoop(
 					fmt.Fprintln(stderr, "[gork] memory dream failed:", err)
 				} else {
 					fmt.Fprintln(stderr, "[gork] memory dream:", result.Outcome)
+				}
+				prompt = ""
+				continue
+			}
+			if strings.HasPrefix(prompt, "!") {
+				command := strings.TrimSpace(strings.TrimPrefix(prompt, "!"))
+				if command == "" {
+					fmt.Fprintln(stderr, "[gork] shell command is empty")
+				} else {
+					output, err := runner.RunShell(ctx, command)
+					if output != "" {
+						fmt.Fprint(stdout, output)
+						if !strings.HasSuffix(output, "\n") {
+							fmt.Fprintln(stdout)
+						}
+					}
+					if err != nil {
+						fmt.Fprintln(stderr, "[gork] shell failed:", err)
+					}
 				}
 				prompt = ""
 				continue
