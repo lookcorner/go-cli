@@ -158,3 +158,27 @@ func TestModeApproverKeepsExplicitDenyLocked(t *testing.T) {
 		t.Fatal("invalid mode was accepted")
 	}
 }
+
+func TestPermissionBypassSkipsPromptsButNotDenials(t *testing.T) {
+	prompt := &recordingApprover{}
+	mode, err := NewModeApprover(PermissionPrompt, prompt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := NewPolicyApprover(mode, prompt,
+		nil, []string{"Bash(git *)"}, []string{"Bash(git push *)"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := WithPermissionBypass(context.Background())
+	if err := policy.Approve(ctx, "shell", "git status"); err != nil || prompt.calls != 0 {
+		t.Fatalf("bypass prompted: err=%v calls=%d", err, prompt.calls)
+	}
+	if err := policy.Approve(ctx, "shell", "git push origin main"); !IsPermissionDenied(err) {
+		t.Fatalf("bypass ignored deny rule: %v", err)
+	}
+	if err := (PromptApprover{Mode: PermissionDeny}).Approve(ctx, "shell", "git status"); !IsPermissionDenied(err) {
+		t.Fatalf("bypass ignored explicit deny mode: %v", err)
+	}
+}

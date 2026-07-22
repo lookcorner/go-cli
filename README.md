@@ -1032,7 +1032,9 @@ are coordinated so `will_wake` reflects an accepted queue entry.
 User and trusted-project agent
 definitions may attach named or inline `mcpServers`; owned servers override an
 inherited server with the same name and remain private to that subagent.
-`bypassPermissions` execution is not implemented yet.
+Non-plugin agents may set `permissionMode: bypassPermissions` to skip interactive
+approval, including after resume. Explicit deny mode and deny rules remain
+authoritative, and plugin agents cannot enable the bypass.
 
 The same direct-install lifecycle is available outside ACP:
 

@@ -1388,13 +1388,18 @@ func TestTaskToolExecutesUserAgentDefinition(t *testing.T) {
 	}
 }
 
-func TestBypassPermissionsAgentFailsExplicitly(t *testing.T) {
+func TestBypassPermissionsAgentSkipsPromptsAndKeepsDenyRulesOnResume(t *testing.T) {
 	root := t.TempDir()
 	ws, err := workspace.Open(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	prompt := tools.PromptApprover{Mode: tools.PermissionPrompt}
+	policy, err := tools.NewPolicyApprover(prompt, prompt, nil, []string{"Edit(*)"}, []string{"Edit(blocked.txt)"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, policy)
 	defer registry.Close()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -1404,20 +1409,68 @@ func TestBypassPermissionsAgentFailsExplicitly(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(agentDir, "unsafe.md")
-	if err := os.WriteFile(path, []byte("---\nname: unsafe\ndescription: unsafe\npermissionMode: bypassPermissions\n---\nUnsafe"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("---\nname: unsafe\ndescription: unsafe\ntools: [write_file]\npermissionMode: bypassPermissions\n---\nUnsafe"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	catalog, loadErrors := agents.Discover(agents.Config{})
+	pluginDir := filepath.Join(t.TempDir(), "agents")
+	if err := os.MkdirAll(pluginDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginDir, "worker.md"), []byte("---\nname: worker\ndescription: worker\ntools: [write_file]\npermissionMode: bypassPermissions\n---\nPlugin"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	catalog, loadErrors := agents.Discover(agents.Config{Plugins: []plugin.Plugin{{Name: "fixture", AgentDirs: []string{pluginDir}, Executable: true}}})
 	if len(loadErrors) != 0 {
 		t.Fatal(loadErrors)
 	}
-	manager, err := New(Config{Catalog: catalog, Tools: registry, WorkspaceRoot: root, NewClient: func(ModelRuntime) (agent.ResponseStreamer, error) { return &sequenceClient{}, nil }})
+	client := &sequenceClient{results: []api.StreamResult{
+		{ResponseID: "bypass-1", ToolCalls: []api.ToolCall{
+			{CallID: "allowed", Name: "write_file", Arguments: json.RawMessage(`{"path":"allowed.txt","content":"allowed"}`)},
+			{CallID: "blocked", Name: "write_file", Arguments: json.RawMessage(`{"path":"blocked.txt","content":"blocked"}`)},
+		}},
+		{ResponseID: "bypass-2", Text: "first"},
+		{ResponseID: "bypass-3", ToolCalls: []api.ToolCall{
+			{CallID: "resumed", Name: "write_file", Arguments: json.RawMessage(`{"path":"resumed.txt","content":"resumed"}`)},
+		}},
+		{ResponseID: "bypass-4", Text: "second"},
+		{ResponseID: "plugin-1", ToolCalls: []api.ToolCall{
+			{CallID: "plugin", Name: "write_file", Arguments: json.RawMessage(`{"path":"plugin.txt","content":"plugin"}`)},
+		}},
+		{ResponseID: "plugin-2", Text: "plugin"},
+	}}
+	sessionDir := t.TempDir()
+	manager, err := New(Config{Catalog: catalog, Tools: registry, WorkspaceRoot: root, SessionDir: sessionDir, ParentSessionID: "parent", NewClient: func(ModelRuntime) (agent.ResponseStreamer, error) { return client, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer manager.Close()
-	if _, err := manager.Start(context.Background(), tools.SubagentRequest{Prompt: "x", Description: "x", Type: "unsafe"}); err == nil || !strings.Contains(err.Error(), "not enabled") {
-		t.Fatalf("bypass result=%v", err)
+	first, err := manager.Start(context.Background(), tools.SubagentRequest{Prompt: "x", Description: "x", Type: "unsafe", BackgroundSet: true})
+	if err != nil || first.Status != "completed" {
+		t.Fatalf("first=%#v err=%v", first, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "allowed.txt")); err != nil {
+		t.Fatalf("bypassed write: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "blocked.txt")); !os.IsNotExist(err) {
+		t.Fatalf("deny rule was bypassed: %v", err)
+	}
+	meta, err := os.ReadFile(filepath.Join(sessionDir, "subagents", "parent", first.ID, "meta.json"))
+	if err != nil || !strings.Contains(string(meta), `"bypass_permissions": true`) {
+		t.Fatalf("bypass metadata=%q err=%v", meta, err)
+	}
+	second, err := manager.Start(context.Background(), tools.SubagentRequest{Prompt: "again", Description: "again", Type: "unsafe", ResumeFrom: first.ID, BackgroundSet: true})
+	if err != nil || second.Status != "completed" {
+		t.Fatalf("second=%#v err=%v", second, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "resumed.txt")); err != nil {
+		t.Fatalf("resume lost bypass: %v", err)
+	}
+	pluginResult, err := manager.Start(context.Background(), tools.SubagentRequest{Prompt: "plugin", Description: "plugin", Type: "fixture:worker", BackgroundSet: true})
+	if err != nil || pluginResult.Status != "completed" {
+		t.Fatalf("plugin=%#v err=%v", pluginResult, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "plugin.txt")); !os.IsNotExist(err) {
+		t.Fatalf("plugin bypassPermissions was honored: %v", err)
 	}
 }
 

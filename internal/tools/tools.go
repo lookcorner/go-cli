@@ -50,13 +50,16 @@ type PromptApprover struct {
 	Output io.Writer
 }
 
-func (a PromptApprover) Approve(_ context.Context, action, detail string) error {
+func (a PromptApprover) Approve(ctx context.Context, action, detail string) error {
 	switch a.Mode {
 	case PermissionAuto:
 		return nil
 	case PermissionDeny:
 		return &PermissionDeniedError{Action: action}
 	case PermissionPrompt:
+		if permissionBypassed(ctx) {
+			return nil
+		}
 		if a.Input == nil || a.Output == nil {
 			return &PermissionDeniedError{Action: action, Reason: fmt.Sprintf("permission prompt unavailable for %s", action)}
 		}

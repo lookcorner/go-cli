@@ -22,6 +22,17 @@ type permissionModeController interface {
 	PermissionMode() PermissionMode
 }
 
+type permissionBypassKey struct{}
+
+func WithPermissionBypass(ctx context.Context) context.Context {
+	return context.WithValue(ctx, permissionBypassKey{}, true)
+}
+
+func permissionBypassed(ctx context.Context) bool {
+	bypassed, _ := ctx.Value(permissionBypassKey{}).(bool)
+	return bypassed
+}
+
 func NewModeApprover(mode PermissionMode, prompt Approver) (*ModeApprover, error) {
 	if mode != PermissionPrompt && mode != PermissionAuto && mode != PermissionDeny {
 		return nil, fmt.Errorf("unknown permission mode %q", mode)
@@ -42,6 +53,9 @@ func (a *ModeApprover) Approve(ctx context.Context, action, detail string) error
 	case PermissionDeny:
 		return &PermissionDeniedError{Action: action}
 	case PermissionPrompt:
+		if permissionBypassed(ctx) {
+			return nil
+		}
 		return prompt.Approve(ctx, action, detail)
 	default:
 		return fmt.Errorf("unknown permission mode %q", mode)
@@ -135,6 +149,9 @@ func (a *RuleApprover) Approve(ctx context.Context, action, detail string) error
 		if rule.matches(action, detail) {
 			return &PermissionDeniedError{Action: action, Reason: fmt.Sprintf("permission denied by rule %s", rule.raw)}
 		}
+	}
+	if permissionBypassed(ctx) {
+		return a.base.Approve(ctx, action, detail)
 	}
 	for _, rule := range a.ask {
 		if rule.matches(action, detail) {
