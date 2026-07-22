@@ -173,6 +173,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 	if opts.model != "" {
 		cfg.Model = opts.model
+		cfg.DefaultModelID = ""
+		cfg.ReasoningEffort = ""
+		cfg.ModelSupportsReasoningEffort = false
+		cfg.ModelReasoningEfforts = nil
 	}
 	if opts.baseURL != "" {
 		cfg.BaseURL = strings.TrimRight(opts.baseURL, "/")
@@ -320,7 +324,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return err
 	}
 	if opts.resume == "" {
-		if err := logger.Append("session_metadata", sessionMetadata(context.Background(), ws.Root(), cfg.Model)); err != nil {
+		if err := logger.Append("session_metadata", sessionMetadata(context.Background(), ws.Root(), cfg.Model, cfg.ReasoningEffort)); err != nil {
 			return err
 		}
 	}
@@ -1593,6 +1597,12 @@ func resolveACPSessionPermissionMode(defaultMode tools.PermissionMode, yoloMode,
 }
 
 func resolveACPSessionModel(cfg config.Config, requested string) config.Config {
+	if strings.TrimSpace(requested) == "" {
+		requested = cfg.DefaultModelID
+		if requested == "" {
+			requested = cfg.Model
+		}
+	}
 	if resolved, ok := cfg.ResolveModel(requested); ok {
 		return resolved
 	}
@@ -1603,17 +1613,58 @@ func acpModelOptions(cfg config.Config) []agent.ModelOption {
 	seen := make(map[string]bool)
 	options := make([]agent.ModelOption, 0, len(cfg.ModelProfiles)+1)
 	for _, name := range cfg.ModelSlugs() {
-		resolved, ok := cfg.ResolveModel(name)
-		if !ok || resolved.Model == "" || seen[resolved.Model] {
+		id, resolved, ok := cfg.ResolveModelEntry(name)
+		if !ok || resolved.Model == "" || !cfg.ModelSelectable(id, resolved.Model) {
 			continue
 		}
-		seen[resolved.Model] = true
-		options = append(options, agent.ModelOption{ID: resolved.Model, Name: name})
+		profile := cfg.ModelProfiles[id]
+		displayName := profile.Name
+		if displayName == "" {
+			displayName = resolved.Model
+		}
+		options = append(options, agent.ModelOption{
+			ID: id, Name: displayName, Description: profile.Description,
+			ContextWindow: resolved.ContextWindow, ReasoningEffort: profile.ReasoningEffort,
+			SupportsReasoningEffort: profile.SupportsReasoningEffort, ReasoningEfforts: acpReasoningEffortOptions(profile.ReasoningEfforts),
+		})
+		seen[id] = true
 	}
-	if cfg.Model != "" && !seen[cfg.Model] {
-		options = append(options, agent.ModelOption{ID: cfg.Model, Name: cfg.Model})
+	currentID := acpSessionModelID(cfg, "")
+	if currentID != "" && !seen[currentID] && cfg.ModelSelectable(currentID, cfg.Model) {
+		options = append(options, agent.ModelOption{
+			ID: currentID, Name: cfg.Model, ContextWindow: cfg.ContextWindow,
+			ReasoningEffort: cfg.ReasoningEffort, SupportsReasoningEffort: cfg.ModelSupportsReasoningEffort,
+			ReasoningEfforts: acpReasoningEffortOptions(cfg.ModelReasoningEfforts),
+		})
 	}
 	return options
+}
+
+func acpReasoningEffortOptions(options []config.ReasoningEffortOption) []agent.ReasoningEffortOption {
+	result := make([]agent.ReasoningEffortOption, 0, len(options))
+	for _, option := range options {
+		result = append(result, agent.ReasoningEffortOption{
+			ID: option.ID, Value: option.Value, Label: option.Label,
+			Description: option.Description, Default: option.Default,
+		})
+	}
+	return result
+}
+
+func acpSessionModelID(cfg config.Config, requested string) string {
+	if strings.TrimSpace(requested) == "" {
+		requested = cfg.DefaultModelID
+		if requested == "" {
+			requested = cfg.Model
+		}
+	}
+	if id, _, ok := cfg.ResolveModelEntry(requested); ok {
+		return id
+	}
+	if id, _, ok := cfg.ResolveModelEntry(cfg.Model); ok {
+		return id
+	}
+	return cfg.Model
 }
 
 func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []string, tokenProvider api.TokenProvider, stdin io.Reader, stdout, stderr io.Writer) error {
@@ -1670,7 +1721,12 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			return nil, nil, err
 		}
 		modelCatalog := sessionCfg
+		modelID := acpSessionModelID(modelCatalog, sessionConfig.Model)
 		sessionCfg = resolveACPSessionModel(sessionCfg, sessionConfig.Model)
+		reasoningEffort := sessionCfg.ReasoningEffort
+		if sessionConfig.ReasoningEffort != "" && sessionCfg.ModelSupportsReasoningEffort {
+			reasoningEffort = sessionConfig.ReasoningEffort
+		}
 		instructions := joinInstructions(cfg.SystemPrompt, workspace.FormatInstructions(instructionFiles), catalog.Summary())
 		permissionPrompts := &permissionPromptApprover{base: protocolApprover}
 		sessionMode := resolveACPSessionPermissionMode(
@@ -1755,7 +1811,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		registry.SetGoalObserver(&sessionGoalObserver{server: server, sessionID: logger.ID(), logger: logger})
 		registry.SetWebFetchEnabled(cfg.WebFetch.Enabled)
 		if sessionConfig.ResumePath == "" {
-			if err := logger.Append("session_metadata", sessionMetadata(ctx, ws.Root(), sessionCfg.Model)); err != nil {
+			if err := logger.Append("session_metadata", sessionMetadata(ctx, ws.Root(), modelID, reasoningEffort)); err != nil {
 				_ = logger.Close()
 				_ = registry.Close()
 				return nil, nil, err
@@ -2072,7 +2128,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 				pluginState.hooks.Reconfigure(pluginState.hookCfg)
 				return nil
 			},
-			ModelID: sessionCfg.Model, Model: sessionCfg.Model, ModelOptions: acpModelOptions(modelCatalog),
+			ModelID: modelID, Model: sessionCfg.Model, ModelOptions: acpModelOptions(modelCatalog), ReasoningEffort: reasoningEffort,
 			Instructions: instructions, MaxSteps: cfg.MaxSteps,
 			PermissionClassifier: permissionClassifier,
 			TextOutput:           textOutput, StatusOutput: statusOutput,
@@ -2088,7 +2144,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			SessionPath:       logger.Path(),
 		}
 		runner.ResolveModel = func(id string) (agent.ModelRuntime, error) {
-			resolved, ok := modelCatalog.ResolveModel(id)
+			resolvedID, resolved, ok := modelCatalog.ResolveModelEntry(id)
 			if !ok {
 				return agent.ModelRuntime{}, fmt.Errorf("unknown model id %q", id)
 			}
@@ -2097,13 +2153,14 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 				return agent.ModelRuntime{}, err
 			}
 			return agent.ModelRuntime{
-				ID: resolved.Model, Client: client, Model: resolved.Model,
+				ID: resolvedID, Client: client, Model: resolved.Model,
 				ContextWindow: resolved.ContextWindow, CompactThresholdPercent: resolved.AutoCompactThresholdPercent,
+				ReasoningEffort: resolved.ReasoningEffort, SupportsReasoningEffort: resolved.ModelSupportsReasoningEffort,
 			}, nil
 		}
 		runner.OnModelChanged = func(runtime agent.ModelRuntime) {
 			subagentManager.SetParentModel(runtime.Model, runtime.ContextWindow, runtime.CompactThresholdPercent)
-			if resolved, ok := modelCatalog.ResolveModel(runtime.ID); ok {
+			if _, resolved, ok := modelCatalog.ResolveModelEntry(runtime.ID); ok {
 				registry.ConfigureGoalRoles(goalRoleConfig(resolved, true))
 			}
 		}
@@ -2285,8 +2342,11 @@ func terminalIO(value any) bool {
 	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
-func sessionMetadata(ctx context.Context, cwd, model string) map[string]any {
+func sessionMetadata(ctx context.Context, cwd, model, reasoningEffort string) map[string]any {
 	metadata := map[string]any{"cwd": cwd, "modelId": model}
+	if reasoningEffort != "" {
+		metadata["reasoningEffort"] = reasoningEffort
+	}
 	if head, err := worktrees.Head(ctx, cwd); err == nil && head != "" {
 		metadata["headCommit"] = head
 	}

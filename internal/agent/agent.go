@@ -52,8 +52,21 @@ var (
 type ResponseStreamer = api.Streamer
 
 type ModelOption struct {
-	ID   string
-	Name string
+	ID                      string
+	Name                    string
+	Description             string
+	ContextWindow           int
+	ReasoningEffort         string
+	SupportsReasoningEffort bool
+	ReasoningEfforts        []ReasoningEffortOption
+}
+
+type ReasoningEffortOption struct {
+	ID          string
+	Value       string
+	Label       string
+	Description string
+	Default     bool
 }
 
 type ModelRuntime struct {
@@ -62,6 +75,8 @@ type ModelRuntime struct {
 	Model                   string
 	ContextWindow           int
 	CompactThresholdPercent int
+	ReasoningEffort         string
+	SupportsReasoningEffort bool
 }
 
 type EventLogger interface {
@@ -1031,20 +1046,22 @@ func (r *Runner) RewindHistory(messages []session.Message) {
 	}
 }
 
+func (r *Runner) RestoreHistory(messages []session.Message) {
+	r.RewindHistory(messages)
+	r.modelHistory = nil
+	if _, ok := r.Client.(HistoryRewinder); !ok {
+		r.modelHistory = modelHistoryInput(messages)
+	}
+}
+
 func (r *Runner) ApplyModel(runtime ModelRuntime, messages []session.Message) error {
 	if runtime.Client == nil || strings.TrimSpace(runtime.Model) == "" {
 		return errors.New("resolved model runtime is incomplete")
 	}
 	r.Client, r.Model, r.ModelID = runtime.Client, runtime.Model, runtime.ID
 	r.ContextWindow, r.CompactThresholdPercent = runtime.ContextWindow, runtime.CompactThresholdPercent
-	r.lastInputTokens, r.pendingSummary = 0, ""
-	r.clearCompactionPrefire()
-	if rewinder, ok := runtime.Client.(HistoryRewinder); ok {
-		rewinder.RewindHistory(messages)
-		r.modelHistory = nil
-	} else {
-		r.modelHistory = modelHistoryInput(messages)
-	}
+	r.ReasoningEffort = runtime.ReasoningEffort
+	r.RestoreHistory(messages)
 	if r.OnModelChanged != nil {
 		r.OnModelChanged(runtime)
 	}

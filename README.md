@@ -49,7 +49,8 @@ client already owns the transcript and only needs the persisted runtime state.
 New and loaded sessions return the active and available model state. An idle
 session accepts `session/set_model`, persists the selection, rebuilds backend
 history from the completed transcript, updates future subagent and goal-role
-defaults, and broadcasts `model_changed` before replying. Busy sessions reject
+defaults, and broadcasts `model_changed` before replying. The broadcast is live
+only and intentionally has no replay cursor. Busy sessions reject
 the switch so an in-flight turn cannot cross model backends.
 
 Completed ACP prompts publish `x.ai/session/prompt_complete` before their RPC
@@ -168,12 +169,18 @@ Build: `~/.grok/config.toml`.
 ```toml
 [models]
 default = "gork-default"
+allowed_models = ["gork-*"]
 
 [model.gork-default]
 model = "YOUR_RESPONSES_API_MODEL"
+name = "Gork Default"
 base_url = "https://api.x.ai/v1"
 backend = "responses"
 env_key = ["GORK_API_KEY", "XAI_API_KEY"]
+context_window = 131072
+supports_reasoning_effort = true
+reasoning_effort = "high"
+reasoning_efforts = ["low", "medium", "high", { id = "max", value = "xhigh", label = "Max" }]
 
 [auto_mode]
 enabled = true
@@ -181,6 +188,12 @@ prompt_type = "full"
 classifier_model = "gork-default"
 reasoning_effort = "low"
 ```
+
+`models.allowed_models`, `hidden_models`, and `disabled_models` accept glob
+patterns matched against both catalog keys and provider model IDs. Allowed
+models remain available internally but are omitted from user switching when
+they do not match; hidden models are omitted from ACP model pickers, while
+disabled models cannot be resolved.
 
 Gork-style `[model.<name>]` custom providers and `[mcp_servers.<name>]` tables
 are supported. The earlier JSON format remains accepted when passed with

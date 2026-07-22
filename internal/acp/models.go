@@ -15,8 +15,10 @@ type sessionModelState struct {
 }
 
 type modelInfo struct {
-	ModelID string `json:"modelId"`
-	Name    string `json:"name"`
+	ModelID     string         `json:"modelId"`
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	Meta        map[string]any `json:"_meta,omitempty"`
 }
 
 func modelState(runner *agent.Runner) sessionModelState {
@@ -29,7 +31,35 @@ func modelState(runner *agent.Runner) sessionModelState {
 	}
 	available := make([]modelInfo, 0, len(runner.ModelOptions))
 	for _, option := range runner.ModelOptions {
-		available = append(available, modelInfo{ModelID: option.ID, Name: option.Name})
+		meta := map[string]any{}
+		if option.ContextWindow > 0 {
+			meta["totalContextTokens"] = option.ContextWindow
+		}
+		if option.SupportsReasoningEffort {
+			meta["supportsReasoningEffort"] = true
+			effort := option.ReasoningEffort
+			if option.ID == current && strings.TrimSpace(runner.ReasoningEffort) != "" {
+				effort = runner.ReasoningEffort
+			}
+			if effort != "" {
+				meta["reasoningEffort"] = effort
+			}
+		}
+		if len(option.ReasoningEfforts) > 0 {
+			efforts := make([]map[string]any, 0, len(option.ReasoningEfforts))
+			for _, effort := range option.ReasoningEfforts {
+				item := map[string]any{"id": effort.ID, "value": effort.Value, "label": effort.Label, "default": effort.Default}
+				if effort.Description != "" {
+					item["description"] = effort.Description
+				}
+				efforts = append(efforts, item)
+			}
+			meta["reasoningEfforts"] = efforts
+		}
+		if len(meta) == 0 {
+			meta = nil
+		}
+		available = append(available, modelInfo{ModelID: option.ID, Name: option.Name, Description: option.Description, Meta: meta})
 	}
 	if len(available) == 0 && current != "" {
 		available = append(available, modelInfo{ModelID: current, Name: current})
@@ -39,8 +69,9 @@ func modelState(runner *agent.Runner) sessionModelState {
 
 func (s *Server) handleSetSessionModel(incoming message) {
 	var params struct {
-		SessionID string `json:"sessionId"`
-		ModelID   string `json:"modelId"`
+		SessionID string         `json:"sessionId"`
+		ModelID   string         `json:"modelId"`
+		Meta      map[string]any `json:"_meta"`
 	}
 	if json.Unmarshal(incoming.Params, &params) != nil || params.SessionID == "" || params.ModelID == "" {
 		s.respondError(incoming.ID, -32602, "sessionId and modelId are required")
@@ -90,8 +121,15 @@ func (s *Server) handleSetSessionModel(incoming message) {
 		s.respondError(incoming.ID, -32000, "resolved model runtime is incomplete")
 		return
 	}
+	if runtime.SupportsReasoningEffort {
+		if effort := reasoningEffortOverride(params.Meta); effort != "" {
+			runtime.ReasoningEffort = effort
+		}
+	} else {
+		runtime.ReasoningEffort = ""
+	}
 	if current.runner.Logger != nil {
-		if err := current.runner.Logger.Append("session_model", map[string]any{"model_id": runtime.ID}); err != nil {
+		if err := current.runner.Logger.Append("session_model", map[string]any{"model_id": runtime.ID, "reasoning_effort": runtime.ReasoningEffort}); err != nil {
 			s.respondError(incoming.ID, -32000, err.Error())
 			return
 		}
@@ -106,6 +144,21 @@ func (s *Server) handleSetSessionModel(incoming message) {
 	if effort := strings.TrimSpace(current.runner.ReasoningEffort); effort != "" {
 		update["reasoning_effort"] = effort
 	}
-	s.notifyXAI(current, update)
+	s.write(map[string]any{
+		"jsonrpc": "2.0", "method": "x.ai/session_notification",
+		"params": map[string]any{"sessionId": current.id, "update": update},
+	})
 	s.respond(incoming.ID, map[string]any{"_meta": map[string]any{"model": runtime.Model}})
+}
+
+func reasoningEffortOverride(meta map[string]any) string {
+	value, _ := meta["reasoningEffort"].(string)
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "none", "minimal", "low", "medium", "high", "xhigh":
+		return strings.ToLower(strings.TrimSpace(value))
+	case "max":
+		return "xhigh"
+	default:
+		return ""
+	}
 }

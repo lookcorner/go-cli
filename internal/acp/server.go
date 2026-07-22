@@ -32,13 +32,14 @@ const ProtocolVersion = 1
 var clientSessionIDPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 type SessionConfig struct {
-	CWD        string
-	Model      string
-	MCPServers []MCPServer
-	SessionID  string
-	ResumePath string
-	YoloMode   *bool
-	AutoMode   *bool
+	CWD             string
+	Model           string
+	ReasoningEffort string
+	MCPServers      []MCPServer
+	SessionID       string
+	ResumePath      string
+	YoloMode        *bool
+	AutoMode        *bool
 }
 
 func sessionPermissionModeOverrides(meta map[string]any) (yoloMode, autoMode *bool) {
@@ -1639,6 +1640,14 @@ func (s *Server) startSession(ctx context.Context, id string, sessionConfig Sess
 	}
 	runner.SessionID = id
 	runner.SessionPath = sessionPath
+	if sessionConfig.ResumePath != "" && previous == "" {
+		messages, historyErr := sessionlog.TranscriptOrEmpty(sessionPath)
+		if historyErr != nil {
+			closeRuntime()
+			return nil, historyErr
+		}
+		runner.RestoreHistory(messages)
+	}
 	runner.ToolObserver = &sessionToolObserver{server: s, sessionID: id}
 	runner.Tools.SetRewindStore(rewind, func() int {
 		created.mu.Lock()
@@ -2132,10 +2141,12 @@ func (s *Server) handleRestoreSession(ctx context.Context, incoming message, rep
 	}
 	found := false
 	model := ""
+	reasoningEffort := ""
 	for _, item := range items {
 		if item.SessionID == params.SessionID {
 			found = true
 			model = item.ModelID
+			reasoningEffort = item.ReasoningEffort
 			if item.CWD != params.CWD {
 				s.respondError(incoming.ID, -32602, "cwd does not match the stored session")
 				return
@@ -2165,7 +2176,7 @@ func (s *Server) handleRestoreSession(ctx context.Context, incoming message, rep
 		}
 	}
 	yoloMode, autoMode := sessionPermissionModeOverrides(params.Meta)
-	config := SessionConfig{CWD: params.CWD, Model: model, SessionID: params.SessionID, ResumePath: path, MCPServers: servers, YoloMode: yoloMode, AutoMode: autoMode}
+	config := SessionConfig{CWD: params.CWD, Model: model, ReasoningEffort: reasoningEffort, SessionID: params.SessionID, ResumePath: path, MCPServers: servers, YoloMode: yoloMode, AutoMode: autoMode}
 	created, err := s.startSession(ctx, params.SessionID, config, previous)
 	if err != nil {
 		s.respondError(incoming.ID, -32000, err.Error())

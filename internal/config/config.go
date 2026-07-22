@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -29,6 +30,7 @@ type Config struct {
 	APIKey                          string                     `json:"api_key,omitempty"`
 	BaseURL                         string                     `json:"base_url,omitempty"`
 	Model                           string                     `json:"model,omitempty"`
+	DefaultModelID                  string                     `json:"-"`
 	Backend                         string                     `json:"backend,omitempty"`
 	SystemPrompt                    string                     `json:"system_prompt,omitempty"`
 	MaxSteps                        int                        `json:"max_steps,omitempty"`
@@ -67,6 +69,12 @@ type Config struct {
 	FolderTrustEnabled              bool                       `json:"folder_trust_enabled"`
 	AutoWakeEnabled                 bool                       `json:"-"`
 	ModelProfiles                   map[string]ModelProfile    `json:"-"`
+	AllowedModels                   []string                   `json:"-"`
+	HiddenModels                    []string                   `json:"-"`
+	DisabledModels                  []string                   `json:"-"`
+	ReasoningEffort                 string                     `json:"-"`
+	ModelSupportsReasoningEffort    bool                       `json:"-"`
+	ModelReasoningEfforts           []ReasoningEffortOption    `json:"-"`
 	compatConfigured                compat.Config
 	autoWakeConfigured              bool
 	twoPassCompactionConfigured     bool
@@ -108,11 +116,24 @@ func (c Config) AutoModePromptType() string {
 
 type ModelProfile struct {
 	Model                       string
+	Name                        string
+	Description                 string
 	BaseURL                     string
 	APIKey                      string
 	Backend                     string
 	ContextWindow               int
 	AutoCompactThresholdPercent *int
+	ReasoningEffort             string
+	SupportsReasoningEffort     bool
+	ReasoningEfforts            []ReasoningEffortOption
+}
+
+type ReasoningEffortOption struct {
+	ID          string `json:"id" toml:"id"`
+	Value       string `json:"value" toml:"value"`
+	Label       string `json:"label" toml:"label"`
+	Description string `json:"description,omitempty" toml:"description"`
+	Default     bool   `json:"default" toml:"default"`
 }
 
 type WebSearchConfig struct {
@@ -330,8 +351,11 @@ type fileConfig struct {
 	GrokComConfig       fileGrokComConfig `json:"grok_com_config,omitempty" toml:"grok_com_config"`
 	Auth                fileAuthConfig    `json:"auth,omitempty" toml:"auth"`
 	Models              struct {
-		Default   string `toml:"default"`
-		WebSearch string `toml:"web_search"`
+		Default        string   `toml:"default"`
+		WebSearch      string   `toml:"web_search"`
+		AllowedModels  []string `toml:"allowed_models"`
+		HiddenModels   []string `toml:"hidden_models"`
+		DisabledModels []string `toml:"disabled_models"`
 	} `json:"-" toml:"models"`
 	ModelEntries map[string]modelConfig `json:"-" toml:"model"`
 	Toolset      struct {
@@ -429,12 +453,17 @@ type fileGoalConfig struct {
 
 type modelConfig struct {
 	Model                       string `toml:"model"`
+	Name                        string `toml:"name"`
+	Description                 string `toml:"description"`
 	BaseURL                     string `toml:"base_url"`
 	APIKey                      string `toml:"api_key"`
 	Backend                     string `toml:"backend"`
 	EnvKey                      any    `toml:"env_key"`
 	ContextWindow               int    `toml:"context_window"`
 	AutoCompactThresholdPercent *int   `toml:"auto_compact_threshold_percent"`
+	ReasoningEffort             string `toml:"reasoning_effort"`
+	SupportsReasoningEffort     *bool  `toml:"supports_reasoning_effort"`
+	ReasoningEfforts            []any  `toml:"reasoning_efforts"`
 }
 
 type sessionConfig struct {
@@ -602,7 +631,30 @@ func Load(path string) (Config, error) {
 }
 
 func applyFileConfig(cfg *Config, disk *fileConfig) error {
-	mergeModelProfiles(cfg, disk.ModelEntries)
+	if err := mergeModelProfiles(cfg, disk.ModelEntries); err != nil {
+		return err
+	}
+	if err := validateModelPatterns("allowed_models", disk.Models.AllowedModels); err != nil {
+		return err
+	}
+	if err := validateModelPatterns("hidden_models", disk.Models.HiddenModels); err != nil {
+		return err
+	}
+	if err := validateModelPatterns("disabled_models", disk.Models.DisabledModels); err != nil {
+		return err
+	}
+	if disk.Models.AllowedModels != nil {
+		cfg.AllowedModels = append([]string(nil), disk.Models.AllowedModels...)
+	}
+	if disk.Models.HiddenModels != nil {
+		cfg.HiddenModels = append([]string(nil), disk.Models.HiddenModels...)
+	}
+	if disk.Models.DisabledModels != nil {
+		cfg.DisabledModels = append([]string(nil), disk.Models.DisabledModels...)
+	}
+	if disk.Models.Default != "" {
+		cfg.DefaultModelID = disk.Models.Default
+	}
 	applyModelConfig(disk)
 	if disk.Models.WebSearch != "" {
 		entry, ok := disk.ModelEntries[disk.Models.WebSearch]
@@ -628,6 +680,11 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.Backend != "" {
 		cfg.Backend = disk.Backend
+	}
+	if profile, ok := cfg.ModelProfiles[cfg.DefaultModelID]; ok {
+		cfg.ReasoningEffort = profile.ReasoningEffort
+		cfg.ModelSupportsReasoningEffort = profile.SupportsReasoningEffort
+		cfg.ModelReasoningEfforts = append([]ReasoningEffortOption(nil), profile.ReasoningEfforts...)
 	}
 	if disk.SystemPrompt != "" {
 		cfg.SystemPrompt = disk.SystemPrompt
@@ -817,9 +874,9 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	return nil
 }
 
-func mergeModelProfiles(cfg *Config, entries map[string]modelConfig) {
+func mergeModelProfiles(cfg *Config, entries map[string]modelConfig) error {
 	if len(entries) == 0 {
-		return
+		return nil
 	}
 	if cfg.ModelProfiles == nil {
 		cfg.ModelProfiles = make(map[string]ModelProfile)
@@ -828,6 +885,12 @@ func mergeModelProfiles(cfg *Config, entries map[string]modelConfig) {
 		profile := cfg.ModelProfiles[name]
 		if entry.Model != "" {
 			profile.Model = entry.Model
+		}
+		if entry.Name != "" {
+			profile.Name = entry.Name
+		}
+		if entry.Description != "" {
+			profile.Description = entry.Description
 		}
 		if entry.BaseURL != "" {
 			profile.BaseURL = entry.BaseURL
@@ -847,23 +910,57 @@ func mergeModelProfiles(cfg *Config, entries map[string]modelConfig) {
 			value := *entry.AutoCompactThresholdPercent
 			profile.AutoCompactThresholdPercent = &value
 		}
-		cfg.ModelProfiles[name] = profile
+		if entry.ReasoningEffort != "" {
+			profile.ReasoningEffort = entry.ReasoningEffort
+		}
+		if entry.SupportsReasoningEffort != nil {
+			profile.SupportsReasoningEffort = *entry.SupportsReasoningEffort
+		}
+		if entry.ReasoningEfforts != nil {
+			options, err := parseReasoningEffortOptions(entry.ReasoningEfforts)
+			if err != nil {
+				return fmt.Errorf("invalid model.%s reasoning_efforts: %w", name, err)
+			}
+			profile.ReasoningEfforts = options
+		}
+		normalized, err := normalizeModelProfile(name, profile)
+		if err != nil {
+			return err
+		}
+		cfg.ModelProfiles[name] = normalized
 	}
+	return nil
 }
 
 func (c Config) ResolveModel(slug string) (Config, bool) {
+	_, resolved, ok := c.ResolveModelEntry(slug)
+	return resolved, ok
+}
+
+func (c Config) ResolveModelEntry(slug string) (string, Config, bool) {
 	slug = strings.TrimSpace(slug)
 	if slug == "" {
-		return Config{}, false
+		return "", Config{}, false
 	}
-	name, profile, ok := c.modelProfile(slug)
+	name, profile, ok := c.modelProfileWithDefault(slug)
 	if !ok {
 		if slug == c.Model {
-			return c, true
+			id := c.DefaultModelID
+			if id == "" {
+				id = slug
+			}
+			if c.modelFiltered(c.DisabledModels, id, slug) {
+				return "", Config{}, false
+			}
+			return id, c, true
 		}
-		return Config{}, false
+		return "", Config{}, false
+	}
+	if c.modelFiltered(c.DisabledModels, name, profile.Model) {
+		return "", Config{}, false
 	}
 	result := c
+	result.DefaultModelID = name
 	result.Model = profile.Model
 	if result.Model == "" {
 		result.Model = name
@@ -883,7 +980,10 @@ func (c Config) ResolveModel(slug string) (Config, bool) {
 	if profile.AutoCompactThresholdPercent != nil {
 		result.AutoCompactThresholdPercent = *profile.AutoCompactThresholdPercent
 	}
-	return result, true
+	result.ReasoningEffort = profile.ReasoningEffort
+	result.ModelSupportsReasoningEffort = profile.SupportsReasoningEffort
+	result.ModelReasoningEfforts = append([]ReasoningEffortOption(nil), profile.ReasoningEfforts...)
+	return name, result, true
 }
 
 func (c Config) ModelSlugs() []string {
@@ -898,9 +998,14 @@ func (c Config) ModelSlugs() []string {
 	return names
 }
 
-func (c Config) modelProfile(slug string) (string, ModelProfile, bool) {
+func (c Config) modelProfileWithDefault(slug string) (string, ModelProfile, bool) {
 	if profile, ok := c.ModelProfiles[slug]; ok {
 		return slug, profile, true
+	}
+	if slug == c.Model && c.DefaultModelID != "" {
+		if profile, ok := c.ModelProfiles[c.DefaultModelID]; ok {
+			return c.DefaultModelID, profile, true
+		}
 	}
 	names := make([]string, 0, len(c.ModelProfiles))
 	for name := range c.ModelProfiles {
@@ -914,6 +1019,91 @@ func (c Config) modelProfile(slug string) (string, ModelProfile, bool) {
 		}
 	}
 	return "", ModelProfile{}, false
+}
+
+func (c Config) ModelSelectable(id, model string) bool {
+	return !c.modelFiltered(c.DisabledModels, id, model) &&
+		!c.modelFiltered(c.HiddenModels, id, model) &&
+		(len(c.AllowedModels) == 0 || c.modelFiltered(c.AllowedModels, id, model))
+}
+
+func (c Config) modelFiltered(patterns []string, id, model string) bool {
+	for _, pattern := range patterns {
+		matchedID, _ := path.Match(pattern, id)
+		matchedModel, _ := path.Match(pattern, model)
+		if matchedID || matchedModel {
+			return true
+		}
+	}
+	return false
+}
+
+func validateModelPatterns(name string, patterns []string) error {
+	for _, pattern := range patterns {
+		if _, err := path.Match(pattern, ""); err != nil {
+			return fmt.Errorf("invalid models.%s pattern %q: %w", name, pattern, err)
+		}
+	}
+	return nil
+}
+
+func normalizeModelProfile(name string, profile ModelProfile) (ModelProfile, error) {
+	profile.ReasoningEffort = normalizeReasoningEffort(profile.ReasoningEffort)
+	if profile.ReasoningEffort == "invalid" {
+		return ModelProfile{}, fmt.Errorf("invalid model.%s reasoning_effort", name)
+	}
+	for index := range profile.ReasoningEfforts {
+		option := &profile.ReasoningEfforts[index]
+		option.Value = normalizeReasoningEffort(option.Value)
+		if option.Value == "" || option.Value == "invalid" {
+			return ModelProfile{}, fmt.Errorf("invalid model.%s reasoning_efforts value", name)
+		}
+		if option.ID == "" {
+			option.ID = option.Value
+		}
+		if option.Label == "" {
+			option.Label = strings.ToUpper(option.ID[:1]) + option.ID[1:]
+		}
+		if profile.ReasoningEffort == "" && option.Default {
+			profile.ReasoningEffort = option.Value
+		}
+	}
+	profile.SupportsReasoningEffort = profile.SupportsReasoningEffort || profile.ReasoningEffort != "" || len(profile.ReasoningEfforts) > 0
+	return profile, nil
+}
+
+func parseReasoningEffortOptions(raw []any) ([]ReasoningEffortOption, error) {
+	options := make([]ReasoningEffortOption, 0, len(raw))
+	for _, item := range raw {
+		switch value := item.(type) {
+		case string:
+			options = append(options, ReasoningEffortOption{Value: value})
+		case map[string]any:
+			option := ReasoningEffortOption{}
+			option.ID, _ = value["id"].(string)
+			option.Value, _ = value["value"].(string)
+			option.Label, _ = value["label"].(string)
+			option.Description, _ = value["description"].(string)
+			option.Default, _ = value["default"].(bool)
+			options = append(options, option)
+		default:
+			return nil, errors.New("option must be a string or table")
+		}
+	}
+	return options, nil
+}
+
+func normalizeReasoningEffort(value string) string {
+	switch value = strings.ToLower(strings.TrimSpace(value)); value {
+	case "":
+		return ""
+	case "none", "minimal", "low", "medium", "high", "xhigh":
+		return value
+	case "max":
+		return "xhigh"
+	default:
+		return "invalid"
+	}
 }
 
 func applyCompatConfig(target *compat.Config, source fileCompatConfig) {
@@ -1146,6 +1336,10 @@ func applyEnv(cfg *Config) {
 	}
 	if value := os.Getenv("GORK_MODEL"); value != "" {
 		cfg.Model = value
+		cfg.DefaultModelID = ""
+		cfg.ReasoningEffort = ""
+		cfg.ModelSupportsReasoningEffort = false
+		cfg.ModelReasoningEfforts = nil
 	}
 	if value := os.Getenv("GORK_BACKEND"); value != "" {
 		cfg.Backend = value

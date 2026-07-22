@@ -1347,18 +1347,38 @@ func TestACPModelOptions(t *testing.T) {
 	cfg := config.Config{
 		Model: "default-model",
 		ModelProfiles: map[string]config.ModelProfile{
-			"fast":  {Model: "shared-model", ContextWindow: 2000, AutoCompactThresholdPercent: &threshold},
+			"fast":  {Model: "shared-model", Name: "Fast", Description: "Low latency", ContextWindow: 2000, AutoCompactThresholdPercent: &threshold, SupportsReasoningEffort: true, ReasoningEffort: "high"},
 			"quick": {Model: "shared-model"},
 			"smart": {Model: "smart-model"},
 		},
+		AllowedModels: []string{"fast", "smart", "default-model"},
 	}
 	got := acpModelOptions(cfg)
 	want := []agent.ModelOption{
-		{ID: "shared-model", Name: "fast"},
-		{ID: "smart-model", Name: "smart"},
-		{ID: "default-model", Name: "default-model"},
+		{ID: "fast", Name: "Fast", Description: "Low latency", ContextWindow: 2000, ReasoningEffort: "high", SupportsReasoningEffort: true, ReasoningEfforts: []agent.ReasoningEffortOption{}},
+		{ID: "smart", Name: "smart-model", ReasoningEfforts: []agent.ReasoningEffortOption{}},
+		{ID: "default-model", Name: "default-model", ReasoningEfforts: []agent.ReasoningEffortOption{}},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("options=%#v want=%#v", got, want)
+	}
+}
+
+func TestACPSessionModelID(t *testing.T) {
+	cfg := config.Config{
+		Model: "shared", DefaultModelID: "default",
+		ModelProfiles: map[string]config.ModelProfile{
+			"default": {Model: "shared"},
+			"other":   {Model: "shared"},
+		},
+	}
+	if got := acpSessionModelID(cfg, ""); got != "default" {
+		t.Fatalf("default id=%q", got)
+	}
+	if got := acpSessionModelID(cfg, "other"); got != "other" {
+		t.Fatalf("requested id=%q", got)
+	}
+	if got := acpSessionModelID(cfg, "missing"); got != "default" {
+		t.Fatalf("fallback id=%q", got)
 	}
 }

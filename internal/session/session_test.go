@@ -281,7 +281,41 @@ func TestListUsesLatestSessionModel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := logger.Append("session_metadata", map[string]any{"cwd": "/workspace", "modelId": "old", "reasoningEffort": "high"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append("session_model", map[string]any{"model_id": "new", "reasoning_effort": "low"}); err != nil {
+		t.Fatal(err)
+	}
+	items, err := List(dir, "/workspace")
+	if err != nil || len(items) != 1 || items[0].ModelID != "new" || items[0].ReasoningEffort != "low" {
+		t.Fatalf("items=%#v err=%v", items, err)
+	}
+	if err := logger.Append("session_model", map[string]any{"model_id": "plain", "reasoning_effort": ""}); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	items, err = List(dir, "/workspace")
+	if err != nil || len(items) != 1 || items[0].ModelID != "plain" || items[0].ReasoningEffort != "" {
+		t.Fatalf("cleared effort items=%#v err=%v", items, err)
+	}
+}
+
+func TestModelSwitchStartsFreshResponseChain(t *testing.T) {
+	dir := t.TempDir()
+	logger, err := NewLoggerWithID(dir, "model-chain")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := logger.Append("session_metadata", map[string]any{"cwd": "/workspace", "modelId": "old"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.AppendPrompt("before", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append("model_response", map[string]any{"response_id": "old-response", "text": "answer", "tool_call_count": 0}); err != nil {
 		t.Fatal(err)
 	}
 	if err := logger.Append("session_model", map[string]any{"model_id": "new"}); err != nil {
@@ -290,9 +324,13 @@ func TestListUsesLatestSessionModel(t *testing.T) {
 	if err := logger.Close(); err != nil {
 		t.Fatal(err)
 	}
-	items, err := List(dir, "/workspace")
-	if err != nil || len(items) != 1 || items[0].ModelID != "new" {
-		t.Fatalf("items=%#v err=%v", items, err)
+	responseID, err := CompletedResponseID(filepath.Join(dir, "model-chain.jsonl"))
+	if err != nil || responseID != "" {
+		t.Fatalf("response id=%q err=%v", responseID, err)
+	}
+	messages, err := Transcript(filepath.Join(dir, "model-chain.jsonl"))
+	if err != nil || len(messages) != 2 || messages[1].Text != "answer" {
+		t.Fatalf("transcript=%#v err=%v", messages, err)
 	}
 }
 

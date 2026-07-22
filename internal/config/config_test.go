@@ -255,6 +255,85 @@ func TestResolveModelPrefersExactProfileKey(t *testing.T) {
 	}
 }
 
+func TestLoadModelCatalogFiltersAndReasoning(t *testing.T) {
+	t.Setenv("GROK_HOME", t.TempDir())
+	t.Setenv("GORK_MODEL", "")
+	path := filepath.Join(t.TempDir(), "config.toml")
+	data := []byte(`
+[models]
+default = "smart"
+allowed_models = ["fast-*", "smart", "shared-api"]
+hidden_models = ["fast-hidden"]
+disabled_models = ["gone"]
+
+[model.smart]
+model = "shared-api"
+name = "Smart"
+description = "Deep reasoning"
+context_window = 200000
+reasoning_effort = "high"
+supports_reasoning_effort = true
+reasoning_efforts = [
+  "low",
+  { id = "max", value = "xhigh", label = "Max", description = "Deepest", default = true },
+]
+
+[model.fast-one]
+model = "fast-api"
+
+[model.fast-hidden]
+model = "hidden-api"
+
+[model.gone]
+model = "gone-api"
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DefaultModelID != "smart" || cfg.Model != "shared-api" || cfg.ReasoningEffort != "high" || !cfg.ModelSupportsReasoningEffort {
+		t.Fatalf("default model config=%#v", cfg)
+	}
+	id, resolved, ok := cfg.ResolveModelEntry("shared-api")
+	if !ok || id != "smart" || resolved.Model != "shared-api" || len(resolved.ModelReasoningEfforts) != 2 {
+		t.Fatalf("resolved id=%q config=%#v ok=%v", id, resolved, ok)
+	}
+	options := resolved.ModelReasoningEfforts
+	if options[0].ID != "low" || options[0].Label != "Low" || options[1].ID != "max" || options[1].Value != "xhigh" || !options[1].Default {
+		t.Fatalf("reasoning options=%#v", options)
+	}
+	if !cfg.ModelSelectable("fast-one", "fast-api") || cfg.ModelSelectable("fast-hidden", "hidden-api") || cfg.ModelSelectable("other", "other-api") {
+		t.Fatalf("model filters were not applied")
+	}
+	if _, _, ok := cfg.ResolveModelEntry("gone"); ok {
+		t.Fatal("disabled model remained resolvable")
+	}
+}
+
+func TestLoadRejectsInvalidModelCatalogValues(t *testing.T) {
+	t.Setenv("GROK_HOME", t.TempDir())
+	for _, test := range []struct {
+		name, content, want string
+	}{
+		{name: "glob", content: "[models]\nallowed_models = [\"grok[\"]\n", want: "allowed_models"},
+		{name: "effort", content: "[model.bad]\nmodel = \"bad\"\nreasoning_effort = \"ultra\"\n", want: "reasoning_effort"},
+		{name: "effort option", content: "[model.bad]\nmodel = \"bad\"\nreasoning_efforts = [\"ultra\"]\n", want: "reasoning_efforts"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, []byte(test.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(path); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error=%v", err)
+			}
+		})
+	}
+}
+
 func TestLoadWebFetchEnvAndExplicitEmptyDomains(t *testing.T) {
 	t.Setenv("GROK_WEB_FETCH_PROXY", "http://127.0.0.1:8080")
 	path := filepath.Join(t.TempDir(), "config.toml")

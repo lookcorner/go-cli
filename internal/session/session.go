@@ -232,12 +232,13 @@ func PathForID(dir, id string) (string, error) {
 }
 
 type Info struct {
-	SessionID  string    `json:"sessionId"`
-	CWD        string    `json:"cwd"`
-	HeadCommit string    `json:"headCommit,omitempty"`
-	ModelID    string    `json:"modelId,omitempty"`
-	Title      string    `json:"title,omitempty"`
-	UpdatedAt  time.Time `json:"updatedAt"`
+	SessionID       string    `json:"sessionId"`
+	CWD             string    `json:"cwd"`
+	HeadCommit      string    `json:"headCommit,omitempty"`
+	ModelID         string    `json:"modelId,omitempty"`
+	ReasoningEffort string    `json:"reasoningEffort,omitempty"`
+	Title           string    `json:"title,omitempty"`
+	UpdatedAt       time.Time `json:"updatedAt"`
 }
 
 func List(dir, cwd string) ([]Info, error) {
@@ -306,9 +307,10 @@ func readInfo(path, id string) (Info, error) {
 		switch event.Kind {
 		case "session_metadata":
 			var data struct {
-				CWD        string `json:"cwd"`
-				HeadCommit string `json:"headCommit"`
-				ModelID    string `json:"modelId"`
+				CWD             string `json:"cwd"`
+				HeadCommit      string `json:"headCommit"`
+				ModelID         string `json:"modelId"`
+				ReasoningEffort string `json:"reasoningEffort"`
 			}
 			if json.Unmarshal(event.Data, &data) == nil && data.CWD != "" {
 				info.CWD = data.CWD
@@ -318,13 +320,16 @@ func readInfo(path, id string) (Info, error) {
 				if data.ModelID != "" {
 					info.ModelID = data.ModelID
 				}
+				info.ReasoningEffort = data.ReasoningEffort
 			}
 		case "session_model":
 			var data struct {
-				ModelID string `json:"model_id"`
+				ModelID         string `json:"model_id"`
+				ReasoningEffort string `json:"reasoning_effort"`
 			}
 			if json.Unmarshal(event.Data, &data) == nil && data.ModelID != "" {
 				info.ModelID = data.ModelID
+				info.ReasoningEffort = data.ReasoningEffort
 			}
 		case "user_prompt":
 			if info.Title == "" {
@@ -462,7 +467,7 @@ func PreviewRewind(path string, target int) (RewindResult, error) {
 	if err != nil {
 		return RewindResult{}, err
 	}
-	previous, err := completedResponseID(events[:cut])
+	previous, _, err := completedResponseID(events[:cut])
 	if err != nil {
 		return RewindResult{}, err
 	}
@@ -798,12 +803,12 @@ func lastCompletedResponseID(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	last, err := completedResponseID(events)
+	last, reset, err := completedResponseID(events)
 	if err != nil {
 		return "", err
 	}
 	if last == "" {
-		if rewound {
+		if rewound || reset {
 			return "", nil
 		}
 		return "", errors.New("session has no completed model response to resume")
@@ -811,9 +816,14 @@ func lastCompletedResponseID(path string) (string, error) {
 	return last, nil
 }
 
-func completedResponseID(events []storedEvent) (string, error) {
+func completedResponseID(events []storedEvent) (string, bool, error) {
 	last := ""
+	reset := false
 	for index, event := range events {
+		if event.Kind == "session_model" {
+			last, reset = "", true
+			continue
+		}
 		if event.Kind != "model_response" {
 			continue
 		}
@@ -822,13 +832,14 @@ func completedResponseID(events []storedEvent) (string, error) {
 			ToolCallCount int    `json:"tool_call_count"`
 		}
 		if err := json.Unmarshal(event.Data, &data); err != nil {
-			return "", fmt.Errorf("parse model response on live event %d: %w", index+1, err)
+			return "", false, fmt.Errorf("parse model response on live event %d: %w", index+1, err)
 		}
 		if data.ResponseID != "" && data.ToolCallCount == 0 {
 			last = data.ResponseID
+			reset = false
 		}
 	}
-	return last, nil
+	return last, reset, nil
 }
 
 func CompletedResponseID(path string) (string, error) { return lastCompletedResponseID(path) }
