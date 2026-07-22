@@ -1751,8 +1751,36 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 	dynamicSkills := cloneSkillsConfig(cfg.Skills)
 	dynamicPlugins := clonePluginsConfig(cfg.Plugins)
 	pluginStates := make(map[*sessionPluginState]bool)
+	var billingMetaMu sync.RWMutex
+	var billingOnDemand *bool
+	var billingTier *string
+	setBillingMeta := func(current config.Config) {
+		billingMetaMu.Lock()
+		defer billingMetaMu.Unlock()
+		billingOnDemand = current.OnDemandEnabled
+		billingTier = current.SubscriptionTierDisplay
+		if billingTier == nil {
+			billingTier = current.SubscriptionTier
+		}
+	}
+	getBillingMeta := func() (*bool, *string) {
+		billingMetaMu.RLock()
+		defer billingMetaMu.RUnlock()
+		var onDemand *bool
+		if billingOnDemand != nil {
+			value := *billingOnDemand
+			onDemand = &value
+		}
+		var tier *string
+		if billingTier != nil {
+			value := *billingTier
+			tier = &value
+		}
+		return onDemand, tier
+	}
+	setBillingMeta(cfg)
 	var server *acp.Server
-	server = &acp.Server{SessionDir: opts.sessionDir, FolderTrustEnabled: cfg.FolderTrustEnabled, Auth: acp.AuthConfig{
+	server = &acp.Server{SessionDir: opts.sessionDir, FolderTrustEnabled: cfg.FolderTrustEnabled, BillingMeta: getBillingMeta, Auth: acp.AuthConfig{
 		Path: authPath, Scope: authConfig.Scope(), MethodID: authMethodID, Token: cfg.APIKey, TokenProvider: tokenProvider,
 		ProxyBaseURL: cfg.ProxyBaseURL, HTTP: &http.Client{Timeout: cfg.HTTPTimeout},
 	}, Factory: func(
@@ -1772,8 +1800,12 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 				token = refreshed
 			}
 			settingsCtx, cancel := context.WithTimeout(sessionCtx, 5*time.Second)
-			cfg.ApplyRemoteSettings(config.FetchRemoteSettings(settingsCtx, cfg.ProxyBaseURL, token, &http.Client{Timeout: 3 * time.Second}))
+			remote := config.FetchRemoteSettings(settingsCtx, cfg.ProxyBaseURL, token, &http.Client{Timeout: 3 * time.Second})
 			cancel()
+			if remote != nil {
+				cfg.ApplyRemoteSettings(remote)
+				setBillingMeta(cfg)
+			}
 		}
 		ws, err := workspace.Open(sessionConfig.CWD)
 		if err != nil {

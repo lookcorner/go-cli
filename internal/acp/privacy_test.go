@@ -101,7 +101,10 @@ func TestSetCodingDataRetentionErrors(t *testing.T) {
 		if code := errorValue["code"]; code != float64(-32602) {
 			t.Fatalf("params=%s code=%v", params, code)
 		}
-		if strings.Contains(params, "false") && errorValue["message"] != retentionLockedMessage {
+		if errorValue["message"] != "Invalid params" {
+			t.Fatalf("params=%s response=%#v", params, errorValue)
+		}
+		if strings.Contains(params, "false") && errorValue["data"] != retentionLockedMessage {
 			t.Fatalf("locked response=%#v", errorValue)
 		}
 	}
@@ -111,8 +114,9 @@ func TestSetCodingDataRetentionErrors(t *testing.T) {
 
 	output.Reset()
 	server.handlePrivacy(context.Background(), message{ID: json.RawMessage("2"), Params: json.RawMessage(`{"codingDataRetentionOptOut":true}`)})
-	if code := decodeACP(t, json.NewDecoder(&output))["error"].(map[string]any)["code"]; code != float64(-32000) {
-		t.Fatalf("missing auth code=%v", code)
+	errorValue := decodeACP(t, json.NewDecoder(&output))["error"].(map[string]any)
+	if errorValue["code"] != float64(-32000) || errorValue["message"] != "Authentication required" || !strings.Contains(errorValue["data"].(string), "gork login") {
+		t.Fatalf("missing auth=%#v", errorValue)
 	}
 
 	if err := auth.Save(path, scope, auth.Credential{Key: "token", AuthMode: "oidc"}); err != nil {
@@ -120,8 +124,8 @@ func TestSetCodingDataRetentionErrors(t *testing.T) {
 	}
 	output.Reset()
 	server.handlePrivacy(context.Background(), message{ID: json.RawMessage("3"), Params: json.RawMessage(`{"codingDataRetentionOptOut":true}`)})
-	errorValue := decodeACP(t, json.NewDecoder(&output))["error"].(map[string]any)
-	if errorValue["code"] != float64(-32000) || errorValue["message"] != "privacy unavailable" {
+	errorValue = decodeACP(t, json.NewDecoder(&output))["error"].(map[string]any)
+	if errorValue["code"] != float64(-32603) || errorValue["message"] != "Internal error" || errorValue["data"] != "privacy unavailable" {
 		t.Fatalf("upstream error=%#v", errorValue)
 	}
 }
@@ -148,7 +152,7 @@ func TestSetCodingDataRetentionProviderAndTransportErrors(t *testing.T) {
 	}}
 	server.handlePrivacy(context.Background(), message{ID: json.RawMessage("1"), Params: json.RawMessage(`{"codingDataRetentionOptOut":true}`)})
 	errorValue := decodeACP(t, json.NewDecoder(&output))["error"].(map[string]any)
-	if errorValue["code"] != float64(-32000) || !strings.Contains(errorValue["message"].(string), "Authentication required") {
+	if errorValue["code"] != float64(-32000) || errorValue["message"] != "Authentication required" || !strings.Contains(errorValue["data"].(string), "gork login") {
 		t.Fatalf("provider error=%#v", errorValue)
 	}
 
@@ -159,7 +163,7 @@ func TestSetCodingDataRetentionProviderAndTransportErrors(t *testing.T) {
 	})}
 	server.handlePrivacy(context.Background(), message{ID: json.RawMessage("2"), Params: json.RawMessage(`{"codingDataRetentionOptOut":true}`)})
 	errorValue = decodeACP(t, json.NewDecoder(&output))["error"].(map[string]any)
-	if errorValue["code"] != float64(-32000) || !strings.Contains(errorValue["message"].(string), "offline") {
+	if errorValue["code"] != float64(-32603) || errorValue["message"] != "Internal error" || !strings.Contains(errorValue["data"].(string), "offline") {
 		t.Fatalf("transport error=%#v", errorValue)
 	}
 }

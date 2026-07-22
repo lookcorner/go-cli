@@ -95,6 +95,7 @@ type Factory func(context.Context, SessionConfig, tools.Approver, io.Writer, io.
 type Server struct {
 	Factory            Factory
 	Auth               AuthConfig
+	BillingMeta        func() (*bool, *string)
 	SessionDir         string
 	FolderTrustEnabled bool
 	input              io.Reader
@@ -348,6 +349,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleAuth(ctx, incoming)
 		case "x.ai/privacy/setCodingDataRetention":
 			s.handlePrivacy(ctx, incoming)
+		case "x.ai/billing", "x.ai/auto-topup-rule":
+			s.handleBilling(ctx, incoming)
 		case "x.ai/session_summaries/session_list", "x.ai/session_summaries/workspace_list", "x.ai/session_summaries/workspace_list_recent":
 			s.handleSessionSummaries(incoming)
 		case "x.ai/sessions/list":
@@ -3170,6 +3173,10 @@ func (s *Server) respond(id json.RawMessage, result any) {
 
 func (s *Server) respondError(id json.RawMessage, code int, message string) {
 	s.write(map[string]any{"jsonrpc": "2.0", "id": id, "error": map[string]any{"code": code, "message": message}})
+}
+
+func (s *Server) respondErrorData(id json.RawMessage, code int, message string, data any) {
+	s.write(map[string]any{"jsonrpc": "2.0", "id": id, "error": map[string]any{"code": code, "message": message, "data": data}})
 }
 
 func (s *Server) notify(sessionID string, update any) {

@@ -36,6 +36,22 @@ func TestFetchRemoteSettingsRetriesAndAuthenticates(t *testing.T) {
 	}
 }
 
+func TestBillingRemoteMetadataRefreshesAndClears(t *testing.T) {
+	var remote RemoteSettings
+	if err := json.Unmarshal([]byte(`{"subscription_tier":"supergrok","subscription_tier_display":"SuperGrok","on_demand_enabled":true}`), &remote); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{}
+	cfg.ApplyRemoteSettings(&remote)
+	if cfg.SubscriptionTier == nil || *cfg.SubscriptionTier != "supergrok" || cfg.SubscriptionTierDisplay == nil || *cfg.SubscriptionTierDisplay != "SuperGrok" || cfg.OnDemandEnabled == nil || !*cfg.OnDemandEnabled {
+		t.Fatalf("billing metadata=%#v", cfg)
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{})
+	if cfg.SubscriptionTier != nil || cfg.SubscriptionTierDisplay != nil || cfg.OnDemandEnabled != nil {
+		t.Fatalf("stale billing metadata survived refresh: %#v", cfg)
+	}
+}
+
 func TestGoalClassifierMaxRunsRemoteAndLocalPrecedence(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("GROK_HOME", home)

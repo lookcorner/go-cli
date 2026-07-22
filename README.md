@@ -643,7 +643,12 @@ API key through `x.ai/getApiKey` and `x.ai/setApiKey`; updates are stored in the
 `xai::api_key` scope of `auth.json` and apply to newly created sessions. Clients can
 also enforce the privacy build's coding-data-retention opt-out through
 `x.ai/privacy/setCodingDataRetention`, including refresh-aware authentication and
-local profile synchronization. Clients can fetch rewind-filtered history through
+local profile synchronization. Authenticated clients can fetch reference-shaped
+credit usage through `x.ai/billing` and the current automatic top-up rule through
+`x.ai/auto-topup-rule`; both include the expected identity/client headers, retry
+once after an unauthorized response, and use live remote-settings metadata for
+on-demand availability and the displayed subscription tier. Clients can fetch
+rewind-filtered history through
 `x.ai/session/updates`, with positive or tail offsets, limits, last-N-turn
 selection, prompt boundaries, event cursors, and conversation/tool/lifecycle
 ACP envelopes. Large histories can be delivered through ordered

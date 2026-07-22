@@ -12,6 +12,9 @@ import (
 )
 
 type RemoteSettings struct {
+	SubscriptionTier                *string         `json:"subscription_tier"`
+	SubscriptionTierDisplay         *string         `json:"subscription_tier_display"`
+	OnDemandEnabled                 *bool           `json:"on_demand_enabled"`
 	AutoMode                        *AutoModeConfig `json:"auto_mode"`
 	OfficialMarketplaceAutoRegister *bool           `json:"official_marketplace_auto_register"`
 	WebFetchEnabled                 *bool           `json:"web_fetch_enabled"`
@@ -123,6 +126,9 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 	if remote == nil {
 		return
 	}
+	c.SubscriptionTier = remote.SubscriptionTier
+	c.SubscriptionTierDisplay = remote.SubscriptionTierDisplay
+	c.OnDemandEnabled = remote.OnDemandEnabled
 	if remote.OfficialMarketplaceAutoRegister != nil {
 		c.OfficialMarketplaceAutoRegister = *remote.OfficialMarketplaceAutoRegister
 	}

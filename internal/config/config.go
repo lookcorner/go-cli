@@ -50,6 +50,9 @@ type Config struct {
 	Plugins                         PluginsConfig              `json:"plugins,omitempty"`
 	Marketplace                     MarketplaceConfig          `json:"marketplace,omitempty"`
 	OfficialMarketplaceAutoRegister bool                       `json:"-"`
+	SubscriptionTier                *string                    `json:"-"`
+	SubscriptionTierDisplay         *string                    `json:"-"`
+	OnDemandEnabled                 *bool                      `json:"-"`
 	HTTPTimeout                     time.Duration              `json:"-"`
 	WebSearch                       WebSearchConfig            `json:"web_search,omitempty"`
 	WebFetch                        WebFetchConfig             `json:"web_fetch,omitempty"`

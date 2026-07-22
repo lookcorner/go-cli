@@ -19,17 +19,17 @@ func (s *Server) handlePrivacy(ctx context.Context, incoming message) {
 		OptOut *bool `json:"codingDataRetentionOptOut"`
 	}
 	if json.Unmarshal(incoming.Params, &params) != nil || params.OptOut == nil {
-		s.respondError(incoming.ID, -32602, "codingDataRetentionOptOut is required")
+		s.respondErrorData(incoming.ID, -32602, "Invalid params", "codingDataRetentionOptOut is required")
 		return
 	}
 	if !*params.OptOut {
-		s.respondError(incoming.ID, -32602, retentionLockedMessage)
+		s.respondErrorData(incoming.ID, -32602, "Invalid params", retentionLockedMessage)
 		return
 	}
 
 	credential, err := auth.Load(s.Auth.Path, s.Auth.Scope)
 	if err != nil {
-		s.respondError(incoming.ID, -32000, "Authentication required. Run `gork login` to re-authenticate.")
+		s.respondErrorData(incoming.ID, -32000, "Authentication required", "Authentication required. Run `gork login` to re-authenticate.")
 		return
 	}
 	token := credential.Key
@@ -37,13 +37,13 @@ func (s *Server) handlePrivacy(ctx context.Context, incoming message) {
 		token, err = s.Auth.TokenProvider(ctx, "")
 	}
 	if err != nil || token == "" {
-		s.respondError(incoming.ID, -32000, "Authentication required. Run `gork login` to re-authenticate.")
+		s.respondErrorData(incoming.ID, -32000, "Authentication required", "Authentication required. Run `gork login` to re-authenticate.")
 		return
 	}
 
 	response, err := s.setCodingDataRetention(ctx, token)
 	if err != nil {
-		s.respondError(incoming.ID, -32000, "HTTP request failed: "+err.Error())
+		s.respondErrorData(incoming.ID, -32603, "Internal error", "HTTP request failed: "+err.Error())
 		return
 	}
 	if response.StatusCode == http.StatusUnauthorized && s.Auth.TokenProvider != nil {
@@ -51,18 +51,18 @@ func (s *Server) handlePrivacy(ctx context.Context, incoming message) {
 		response.Body.Close()
 		token, err = s.Auth.TokenProvider(ctx, token)
 		if err != nil || token == "" {
-			s.respondError(incoming.ID, -32000, "Authentication required. Run `gork login` to re-authenticate.")
+			s.respondErrorData(incoming.ID, -32000, "Authentication required", "Authentication required. Run `gork login` to re-authenticate.")
 			return
 		}
 		response, err = s.setCodingDataRetention(ctx, token)
 		if err != nil {
-			s.respondError(incoming.ID, -32000, "HTTP request failed: "+err.Error())
+			s.respondErrorData(incoming.ID, -32603, "Internal error", "HTTP request failed: "+err.Error())
 			return
 		}
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		s.respondError(incoming.ID, -32000, privacyResponseError(response))
+		s.respondErrorData(incoming.ID, -32603, "Internal error", privacyResponseError(response))
 		return
 	}
 
