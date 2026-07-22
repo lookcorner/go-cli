@@ -74,6 +74,44 @@ func Remove(path, scope string) error {
 	return writeStore(path, store)
 }
 
+func SetCodingDataRetention(path, scope string, optOut bool) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	lock, err := acquireFileLock(ctx, path)
+	if err != nil {
+		return err
+	}
+	defer lock.release()
+
+	storeMu.Lock()
+	defer storeMu.Unlock()
+	store, err := readStore(path)
+	if err != nil {
+		return err
+	}
+	raw, ok := store[scope]
+	if !ok {
+		return os.ErrNotExist
+	}
+	fields := make(map[string]json.RawMessage)
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return fmt.Errorf("decode OAuth credential: %w", err)
+	}
+	if fields == nil {
+		return os.ErrNotExist
+	}
+	value, err := json.Marshal(optOut)
+	if err != nil {
+		return err
+	}
+	fields["coding_data_retention_opt_out"] = value
+	store[scope], err = json.Marshal(fields)
+	if err != nil {
+		return err
+	}
+	return writeStore(path, store)
+}
+
 func saveCredential(path, scope string, credential Credential) error {
 	storeMu.Lock()
 	defer storeMu.Unlock()

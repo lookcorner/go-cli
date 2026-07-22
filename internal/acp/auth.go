@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"os"
 	"strings"
 
@@ -17,6 +18,8 @@ type AuthConfig struct {
 	MethodID      string
 	Token         string
 	TokenProvider api.TokenProvider
+	ProxyBaseURL  string
+	HTTP          *http.Client
 }
 
 type authInfoResponse struct {

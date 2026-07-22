@@ -1754,6 +1754,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 	var server *acp.Server
 	server = &acp.Server{SessionDir: opts.sessionDir, FolderTrustEnabled: cfg.FolderTrustEnabled, Auth: acp.AuthConfig{
 		Path: authPath, Scope: authConfig.Scope(), MethodID: authMethodID, Token: cfg.APIKey, TokenProvider: tokenProvider,
+		ProxyBaseURL: cfg.ProxyBaseURL, HTTP: &http.Client{Timeout: cfg.HTTPTimeout},
 	}, Factory: func(
 		sessionCtx context.Context,
 		sessionConfig acp.SessionConfig,

@@ -11,7 +11,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/version"
 )
 
-const defaultTokenHeader = "xai-grok-cli"
+const DefaultTokenHeader = "xai-grok-cli"
 
 type userInfo struct {
 	UserID                    string    `json:"userId"`
@@ -38,7 +38,7 @@ func (c *Client) Enrich(ctx context.Context, baseURL, tokenHeader string, creden
 		return credential
 	}
 	if tokenHeader == "" {
-		tokenHeader = defaultTokenHeader
+		tokenHeader = DefaultTokenHeader
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()

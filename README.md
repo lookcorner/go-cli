@@ -641,7 +641,9 @@ replay. Local ACP clients can inspect the active authentication profile through
 `x.ai/auth/getBearerToken`. Legacy clients can read and update the environment-backed
 API key through `x.ai/getApiKey` and `x.ai/setApiKey`; updates are stored in the
 `xai::api_key` scope of `auth.json` and apply to newly created sessions. Clients can
-also fetch rewind-filtered history through
+also enforce the privacy build's coding-data-retention opt-out through
+`x.ai/privacy/setCodingDataRetention`, including refresh-aware authentication and
+local profile synchronization. Clients can fetch rewind-filtered history through
 `x.ai/session/updates`, with positive or tail offsets, limits, last-N-turn
 selection, prompt boundaries, event cursors, and conversation/tool/lifecycle
 ACP envelopes. Large histories can be delivered through ordered
