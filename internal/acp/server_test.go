@@ -695,6 +695,155 @@ func TestStaticExtensionsAndCompactCommand(t *testing.T) {
 	}
 }
 
+func TestBtwExtensionRunsBesideMainTurnAndPreservesSessionState(t *testing.T) {
+	sessionDir, cwd := t.TempDir(), t.TempDir()
+	logger, err := sessionlog.NewLoggerWithID(sessionDir, "btw-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logger.Close()
+	ws, err := workspace.Open(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	streamer := &fixtureStreamer{results: []api.StreamResult{{Text: "The parser is being updated."}}}
+	runner := &agent.Runner{
+		Client: streamer, Tools: registry, Model: "test-model",
+		SessionID: "btw-session", SessionPath: logger.Path(),
+	}
+	current := &session{
+		id: "btw-session", runner: runner, previous: "response-1", running: true,
+		activePrompt: -1, close: func() {},
+	}
+	var output bytes.Buffer
+	server := &Server{output: &output, sessions: map[string]*session{"btw-session": current}}
+	server.handleBtw(context.Background(), message{
+		ID: json.RawMessage("1"), Method: "x.ai/btw",
+		Params: json.RawMessage(`{"sessionId":"btw-session","question":"What is happening?"}`),
+	})
+	server.wg.Wait()
+	messages := decodeACPOutput(t, output.Bytes())
+	if len(messages) != 1 {
+		t.Fatalf("messages=%#v", messages)
+	}
+	result := messages[0]["result"].(map[string]any)["result"].(map[string]any)
+	if result["answer"] != "The parser is being updated." {
+		t.Fatalf("messages=%#v", messages)
+	}
+	current.mu.Lock()
+	previous, running, btwDone := current.previous, current.running, current.btwDone
+	current.mu.Unlock()
+	if previous != "response-1" || !running || btwDone != nil {
+		t.Fatalf("previous=%q running=%v btwDone=%v", previous, running, btwDone)
+	}
+	streamer.mu.Lock()
+	request := streamer.requests[0]
+	streamer.mu.Unlock()
+	if request.PreviousResponseID != "response-1" || len(request.Tools) == 0 || !strings.Contains(request.Input[0].Content.(string), "What is happening?") {
+		t.Fatalf("request=%#v", request)
+	}
+	history, _ := sessionlog.BtwHistoryPath(logger.Path())
+	data, err := os.ReadFile(history)
+	if err != nil || !bytes.Contains(data, []byte(`"success":true`)) {
+		t.Fatalf("history=%q err=%v", data, err)
+	}
+}
+
+func TestBtwExtensionCloseCancelsAndWaitsForRequest(t *testing.T) {
+	sessionDir := t.TempDir()
+	logger, err := sessionlog.NewLoggerWithID(sessionDir, "btw-close")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logger.Close()
+	streamer := &blockingStreamer{started: make(chan struct{})}
+	closed := make(chan struct{})
+	current := &session{
+		id: "btw-close", previous: "response-1", activePrompt: -1,
+		runner: &agent.Runner{Client: streamer, SessionID: "btw-close", SessionPath: logger.Path()},
+		close:  func() { close(closed) },
+	}
+	var output bytes.Buffer
+	server := &Server{output: &output, sessions: map[string]*session{"btw-close": current}}
+	server.handleBtw(context.Background(), message{
+		ID: json.RawMessage("1"), Method: "x.ai/btw",
+		Params: json.RawMessage(`{"sessionId":"btw-close","question":"status?"}`),
+	})
+	select {
+	case <-streamer.started:
+	case <-time.After(time.Second):
+		t.Fatal("side question did not start")
+	}
+	server.handleBtw(context.Background(), message{
+		ID: json.RawMessage("2"), Method: "x.ai/btw",
+		Params: json.RawMessage(`{"sessionId":"btw-close","question":"again?"}`),
+	})
+	if !server.closeSession("btw-close") {
+		t.Fatal("session was not closed")
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("session close did not wait for side question cancellation")
+	}
+	server.wg.Wait()
+	messages := decodeACPOutput(t, output.Bytes())
+	if len(messages) != 2 || messages[0]["error"] == nil || messages[1]["error"] == nil {
+		t.Fatalf("messages=%#v", messages)
+	}
+}
+
+func TestBtwExtensionRejectsInvalidRequests(t *testing.T) {
+	logger, err := sessionlog.NewLoggerWithID(t.TempDir(), "btw-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logger.Close()
+	streamer := &fixtureStreamer{results: []api.StreamResult{{Text: "unused"}}}
+	current := &session{
+		id: "btw-session", activePrompt: -1, close: func() {},
+		runner: &agent.Runner{Client: streamer, SessionID: "btw-session", SessionPath: logger.Path()},
+	}
+	for _, params := range []string{
+		`{"sessionId":"btw-session"}`,
+		`{"sessionId":"missing","question":"status?"}`,
+		`{"sessionId":"btw-session","question":"   "}`,
+	} {
+		var output bytes.Buffer
+		server := &Server{output: &output, sessions: map[string]*session{"btw-session": current}}
+		server.handleBtw(context.Background(), message{ID: json.RawMessage("1"), Method: "x.ai/btw", Params: json.RawMessage(params)})
+		server.wg.Wait()
+		messages := decodeACPOutput(t, output.Bytes())
+		if len(messages) != 1 || messages[0]["error"] == nil {
+			t.Fatalf("params=%s messages=%#v", params, messages)
+		}
+	}
+	current.mu.Lock()
+	current.closed = true
+	current.mu.Unlock()
+	var output bytes.Buffer
+	server := &Server{output: &output, sessions: map[string]*session{"btw-session": current}}
+	server.handleBtw(context.Background(), message{
+		ID: json.RawMessage("1"), Method: "x.ai/btw",
+		Params: json.RawMessage(`{"sessionId":"btw-session","question":"status?"}`),
+	})
+	messages := decodeACPOutput(t, output.Bytes())
+	if len(messages) != 1 || messages[0]["error"] == nil {
+		t.Fatalf("closed messages=%#v", messages)
+	}
+	streamer.mu.Lock()
+	requests := len(streamer.requests)
+	streamer.mu.Unlock()
+	current.mu.Lock()
+	btwDone := current.btwDone
+	current.mu.Unlock()
+	if requests != 0 || btwDone != nil {
+		t.Fatalf("requests=%d btwDone=%v", requests, btwDone)
+	}
+}
+
 func TestMemoryFlushExtensionAndSlashCommand(t *testing.T) {
 	root, cwd := t.TempDir(), t.TempDir()
 	store, err := memory.Open(root, cwd, "memory-session")

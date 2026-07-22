@@ -520,6 +520,11 @@ has no cloud conversations backend.
 `x.ai/session/close` performs idempotent live-session shutdown using the same
 runtime and cancellation cleanup as the standard ACP close method.
 
+`x.ai/btw` accepts a `sessionId` and `question`, answers from an isolated
+snapshot without interrupting an active prompt, and returns
+`{"result":{"answer":"..."}}`. Closing the session cancels and waits for the
+side question without changing the main response chain.
+
 `x.ai/workspaces/list` returns the reference-compatible partial `no_oauth`
 response because this local build has no cloud workspace backend.
 
