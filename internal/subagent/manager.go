@@ -696,6 +696,9 @@ func (m *Manager) startPersistence(current *task, prompt, resumedFrom string) er
 		return fmt.Errorf("persist subagent session: %w", err)
 	}
 	current.logger, current.runner.Logger = logger, logger
+	if current.hookRuntime != nil {
+		current.hookRuntime.TranscriptPath = logger.Path()
+	}
 	if resumedFrom == "" {
 		if err := logger.Append("session_metadata", map[string]any{
 			"cwd": current.cwd, "modelId": current.model, "parentSessionId": m.parentSessionID,

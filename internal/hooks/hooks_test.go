@@ -2,6 +2,7 @@ package hooks
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -324,6 +325,100 @@ func TestCustomHookPathsAreConfinedAndReloadable(t *testing.T) {
 	catalog.Reconfigure(Config{WorkspaceRoot: t.TempDir(), Compat: compat.Default()})
 	if len(catalog.Snapshot().Hooks) != 0 {
 		t.Fatalf("removed custom hook remained: %#v", catalog.Snapshot())
+	}
+}
+
+func TestClientHooksGateObserveTimeoutAndInherit(t *testing.T) {
+	pre, ok := NewClientHookGroup("PreToolUse", "shell|write_file", []string{"allow", "deny"}, time.Second)
+	if !ok {
+		t.Fatal("valid pre-tool client hook rejected")
+	}
+	post, ok := NewClientHookGroup("post_tool_use", "*", []string{"observe"}, 0)
+	if !ok {
+		t.Fatal("valid post-tool client hook rejected")
+	}
+	notification, ok := NewClientHookGroup("Notification", "does-not-match", []string{"lifecycle"}, 0)
+	if !ok {
+		t.Fatal("valid notification client hook rejected")
+	}
+	type dispatch struct {
+		id       string
+		blocking bool
+		envelope map[string]any
+	}
+	calls := make(chan dispatch, 8)
+	catalog := AttachClient(nil, []ClientHookGroup{pre, post, notification}, func(_ context.Context, id string, envelope map[string]any, blocking bool) (string, string) {
+		calls <- dispatch{id: id, blocking: blocking, envelope: envelope}
+		if id == "deny" {
+			return "deny", "policy rejected write"
+		}
+		return "continue", ""
+	})
+	runtime := &Runtime{Catalog: catalog, WorkspaceRoot: "/work", SessionID: "parent", TranscriptPath: "/sessions/parent.jsonl"}
+	ctx := WithPromptID(context.Background(), "prompt-1")
+	err := runtime.BeforeTool(ctx, api.ToolCall{CallID: "call-1", Name: "write_file", Arguments: json.RawMessage(`{"path":"a.go"}`)})
+	var denied *DeniedError
+	if !errors.As(err, &denied) || denied.Hook != "client:deny" || denied.Reason != "policy rejected write" {
+		t.Fatalf("denial=%#v err=%v", denied, err)
+	}
+	runtime.AfterTool(ctx, api.ToolCall{CallID: "call-1", Name: "write_file", Arguments: json.RawMessage(`{}`)}, tools.ExecutionResult{Output: "done"}, nil)
+
+	seenObserve := false
+	for range 3 {
+		call := <-calls
+		if call.id == "observe" {
+			seenObserve = true
+			if call.blocking || call.envelope["sessionId"] != "parent" || call.envelope["promptId"] != "prompt-1" || call.envelope["transcriptPath"] != "/sessions/parent.jsonl" || call.envelope["toolResult"] != "done" {
+				t.Fatalf("observe dispatch=%#v", call)
+			}
+		}
+	}
+	if !seenObserve {
+		t.Fatal("post-tool observer was not called")
+	}
+	runtime.Notification(context.Background(), "idle_prompt", "done", "", "info")
+	if call := <-calls; call.id != "lifecycle" || call.envelope["notificationType"] != "idle_prompt" {
+		t.Fatalf("lifecycle matcher dispatch=%#v", call)
+	}
+
+	inherited := catalog.WithInline([]byte(`{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"noop"}]}]}}`), "/work", "agent/test/", "agent test")
+	child := &Runtime{Catalog: inherited, WorkspaceRoot: "/work", SessionID: "child"}
+	child.AfterTool(context.Background(), api.ToolCall{CallID: "child-call", Name: "shell", Arguments: json.RawMessage(`{}`)}, tools.ExecutionResult{}, nil)
+	if call := <-calls; call.id != "observe" || call.envelope["sessionId"] != "child" {
+		t.Fatalf("inherited dispatch=%#v", call)
+	}
+
+	late, _ := NewClientHookGroup("PreToolUse", "", []string{"late"}, 5*time.Millisecond)
+	timed := AttachClient(nil, []ClientHookGroup{late}, func(ctx context.Context, _ string, _ map[string]any, _ bool) (string, string) {
+		<-ctx.Done()
+		return "deny", "too late"
+	})
+	if err := (&Runtime{Catalog: timed}).BeforeTool(context.Background(), api.ToolCall{Name: "shell"}); err != nil {
+		t.Fatalf("timed-out client hook did not fail open: %v", err)
+	}
+	if _, ok := NewClientHookGroup("Unknown", "", []string{"x"}, 0); ok {
+		t.Fatal("unknown event accepted")
+	}
+	if _, ok := NewClientHookGroup("PreToolUse", "[", []string{"x"}, 0); ok {
+		t.Fatal("invalid matcher accepted")
+	}
+}
+
+func TestHookPayloadsUseReferenceSizeBound(t *testing.T) {
+	post, _ := NewClientHookGroup("PostToolUse", "", []string{"observe"}, 0)
+	dispatched := make(chan map[string]any, 1)
+	catalog := AttachClient(nil, []ClientHookGroup{post}, func(_ context.Context, _ string, envelope map[string]any, _ bool) (string, string) {
+		dispatched <- envelope
+		return "", ""
+	})
+	large := strings.Repeat("€", maxHookPayloadSize)
+	arguments, _ := json.Marshal(map[string]string{"value": large})
+	(&Runtime{Catalog: catalog}).AfterTool(context.Background(), api.ToolCall{Name: "shell", Arguments: arguments}, tools.ExecutionResult{Output: large}, nil)
+	envelope := <-dispatched
+	input, inputOK := envelope["toolInput"].(string)
+	output, outputOK := envelope["toolResult"].(string)
+	if envelope["toolInputTruncated"] != true || envelope["toolResultTruncated"] != true || !inputOK || !outputOK || !strings.HasSuffix(input, " [truncated]") || !strings.HasSuffix(output, " [truncated]") || len(input) > maxHookPayloadSize+len(" [truncated]") || len(output) > maxHookPayloadSize+len(" [truncated]") {
+		t.Fatalf("input bytes=%d output bytes=%d envelope=%#v", len(input), len(output), envelope)
 	}
 }
 

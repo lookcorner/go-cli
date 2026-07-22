@@ -20,6 +20,7 @@ import (
 
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/api"
+	"github.com/lookcorner/go-cli/internal/hooks"
 	mcppkg "github.com/lookcorner/go-cli/internal/mcp"
 	sessionlog "github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/tools"
@@ -40,6 +41,7 @@ type SessionConfig struct {
 	ResumePath      string
 	YoloMode        *bool
 	AutoMode        *bool
+	ClientHooks     []hooks.ClientHookGroup
 }
 
 func sessionPermissionModeOverrides(meta map[string]any) (yoloMode, autoMode *bool) {
@@ -100,6 +102,7 @@ type Server struct {
 	pending         map[string]chan permissionResult
 	pendingPlan     map[string]chan planApprovalResult
 	pendingQuestion map[string]chan userQuestionResult
+	pendingHook     map[string]chan clientHookResult
 	nextSession     atomic.Uint64
 	nextRequest     atomic.Uint64
 	closing         atomic.Bool
@@ -207,6 +210,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 	s.pending = make(map[string]chan permissionResult)
 	s.pendingPlan = make(map[string]chan planApprovalResult)
 	s.pendingQuestion = make(map[string]chan userQuestionResult)
+	s.pendingHook = make(map[string]chan clientHookResult)
 	manager, err := worktrees.NewManager(s.SessionDir)
 	if err != nil {
 		return err
@@ -1453,7 +1457,10 @@ func (s *Server) handleNewSession(ctx context.Context, incoming message) {
 		return
 	}
 	yoloMode, autoMode := sessionPermissionModeOverrides(params.Meta)
-	sessionConfig := SessionConfig{CWD: params.CWD, Model: model, SessionID: id, MCPServers: servers, YoloMode: yoloMode, AutoMode: autoMode}
+	sessionConfig := SessionConfig{
+		CWD: params.CWD, Model: model, SessionID: id, MCPServers: servers,
+		YoloMode: yoloMode, AutoMode: autoMode, ClientHooks: parseClientHooks(params.Meta),
+	}
 	created, err := s.startSession(ctx, id, sessionConfig, "")
 	if err != nil {
 		s.respondError(incoming.ID, -32000, err.Error())
@@ -1682,6 +1689,7 @@ func (s *Server) startSession(ctx context.Context, id string, sessionConfig Sess
 	}
 	runner.SessionID = id
 	runner.SessionPath = sessionPath
+	s.attachClientHooks(runner, sessionConfig.ClientHooks, sessionPath, sessionConfig.CWD, id)
 	if sessionConfig.ResumePath != "" && previous == "" {
 		messages, historyErr := sessionlog.TranscriptOrEmpty(sessionPath)
 		if historyErr != nil {
@@ -1710,6 +1718,11 @@ func (s *Server) startSession(ctx context.Context, id string, sessionConfig Sess
 	}
 	s.sessions[id] = created
 	s.mu.Unlock()
+	startSource := "new"
+	if sessionConfig.ResumePath != "" {
+		startSource = "load"
+	}
+	runner.StartHooks(hooks.WithSessionStartSource(ctx, startSource))
 	if fellBack {
 		newModel, reason := runner.ModelID, fmt.Sprintf("Model %q is no longer available; using %q.", fallbackFrom, runner.ModelID)
 		if blocked {
@@ -1809,6 +1822,7 @@ func (s *Server) handlePromptRequest(parent context.Context, incoming message, c
 		return
 	}
 	runCtx, cancel := context.WithCancel(parent)
+	runCtx = hooks.WithPromptID(runCtx, promptID(params.Meta))
 	runDone := make(chan struct{})
 	current.cancel = cancel
 	current.running = true
@@ -2244,7 +2258,11 @@ func (s *Server) handleRestoreSession(ctx context.Context, incoming message, rep
 		}
 	}
 	yoloMode, autoMode := sessionPermissionModeOverrides(params.Meta)
-	config := SessionConfig{CWD: params.CWD, Model: model, ReasoningEffort: reasoningEffort, SessionID: params.SessionID, ResumePath: path, MCPServers: servers, YoloMode: yoloMode, AutoMode: autoMode}
+	config := SessionConfig{
+		CWD: params.CWD, Model: model, ReasoningEffort: reasoningEffort, SessionID: params.SessionID,
+		ResumePath: path, MCPServers: servers, YoloMode: yoloMode, AutoMode: autoMode,
+		ClientHooks: parseClientHooks(params.Meta),
+	}
 	created, err := s.startSession(ctx, params.SessionID, config, previous)
 	if err != nil {
 		s.respondError(incoming.ID, -32000, err.Error())
@@ -3213,8 +3231,13 @@ func (s *Server) handleClientResponse(incoming message) {
 	s.mu.Lock()
 	planPending := s.pendingPlan[key]
 	questionPending := s.pendingQuestion[key]
+	hookPending := s.pendingHook[key]
 	pending := s.pending[key]
 	s.mu.Unlock()
+	if hookPending != nil {
+		handleClientHookResponse(hookPending, incoming)
+		return
+	}
 	if planPending != nil {
 		if len(incoming.Error) > 0 && string(incoming.Error) != "null" {
 			planPending <- planApprovalResult{err: errors.New("ACP plan approval request failed")}

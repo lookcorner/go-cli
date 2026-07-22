@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/compat"
@@ -79,10 +80,23 @@ type Catalog struct {
 	disabled     map[string]bool
 	disabledPath string
 	config       Config
+	clientHooks  map[Event][]ClientHookGroup
+	client       ClientDispatcher
 }
+
+type ClientHookGroup struct {
+	Event       Event
+	CallbackIDs []string
+	Timeout     time.Duration
+	matcher     *regexp.Regexp
+}
+
+type ClientDispatcher func(context.Context, string, map[string]any, bool) (string, string)
 
 var disabledFileMu sync.Mutex
 var hookPathsMu sync.Mutex
+
+const maxHookPayloadSize = 128 << 10
 
 func Discover(config Config) *Catalog {
 	home := os.Getenv("GROK_HOME")
@@ -270,6 +284,7 @@ func (c *Catalog) WithInline(data []byte, sourceDir, prefix, label string) *Cata
 		result.specs = append(result.specs, c.specs...)
 		result.loadErrors = append(result.loadErrors, c.loadErrors...)
 		result.disabledPath, result.config = c.disabledPath, c.config
+		result.clientHooks, result.client = cloneClientHooks(c.clientHooks), c.client
 		for name, disabled := range c.disabled {
 			result.disabled[name] = disabled
 		}
@@ -278,6 +293,54 @@ func (c *Catalog) WithInline(data []byte, sourceDir, prefix, label string) *Cata
 	result.specs = append(result.specs, loaded...)
 	result.loadErrors = append(result.loadErrors, warnings...)
 	return result
+}
+
+func AttachClient(catalog *Catalog, groups []ClientHookGroup, dispatcher ClientDispatcher) *Catalog {
+	if catalog == nil {
+		catalog = &Catalog{disabled: make(map[string]bool)}
+	}
+	registered := make(map[Event][]ClientHookGroup)
+	for _, group := range groups {
+		if group.Event != "" && len(group.CallbackIDs) > 0 {
+			registered[group.Event] = append(registered[group.Event], group)
+		}
+	}
+	catalog.mu.Lock()
+	catalog.clientHooks, catalog.client = registered, dispatcher
+	catalog.mu.Unlock()
+	return catalog
+}
+
+func NewClientHookGroup(eventName, matcher string, callbackIDs []string, timeout time.Duration) (ClientHookGroup, bool) {
+	event, ok := eventNames[eventName]
+	if !ok || len(callbackIDs) == 0 {
+		return ClientHookGroup{}, false
+	}
+	var compiled *regexp.Regexp
+	if matcher != "" && matcher != "*" {
+		var err error
+		compiled, err = regexp.Compile(matcher)
+		if err != nil {
+			return ClientHookGroup{}, false
+		}
+	}
+	if timeout < 0 {
+		timeout = 0
+	} else if timeout > 300*time.Second {
+		timeout = 300 * time.Second
+	}
+	return ClientHookGroup{Event: event, CallbackIDs: append([]string(nil), callbackIDs...), Timeout: timeout, matcher: compiled}, true
+}
+
+func cloneClientHooks(source map[Event][]ClientHookGroup) map[Event][]ClientHookGroup {
+	if len(source) == 0 {
+		return nil
+	}
+	cloned := make(map[Event][]ClientHookGroup, len(source))
+	for event, groups := range source {
+		cloned[event] = append([]ClientHookGroup(nil), groups...)
+	}
+	return cloned
 }
 
 func (c *Catalog) SetDisabled(ctx context.Context, names []string, disabled bool) error {
@@ -310,14 +373,15 @@ func (c *Catalog) SetDisabled(ctx context.Context, names []string, disabled bool
 }
 
 type Runtime struct {
-	Catalog       *Catalog
-	WorkspaceRoot string
-	SessionID     string
-	Model         string
-	SubagentType  string
-	idleMu        sync.Mutex
-	idleTimer     *time.Timer
-	closed        bool
+	Catalog        *Catalog
+	WorkspaceRoot  string
+	SessionID      string
+	TranscriptPath string
+	Model          string
+	SubagentType   string
+	idleMu         sync.Mutex
+	idleTimer      *time.Timer
+	closed         bool
 }
 
 type DeniedError struct {
@@ -330,7 +394,18 @@ func (e *DeniedError) Error() string {
 }
 
 func (r *Runtime) SessionStarted(ctx context.Context) {
-	r.dispatch(ctx, SessionStart, "", map[string]any{"source": "startup", "modelId": r.Model, "agentType": r.SubagentType}, false)
+	source := sessionStartSource(ctx)
+	if source == "" {
+		source = "startup"
+	}
+	payload := map[string]any{"source": source}
+	if r.Model != "" {
+		payload["modelId"] = r.Model
+	}
+	if r.SubagentType != "" {
+		payload["agentType"] = r.SubagentType
+	}
+	r.dispatch(ctx, SessionStart, "", payload, false)
 }
 
 func (r *Runtime) UserPromptSubmitted(ctx context.Context, prompt string) {
@@ -353,30 +428,47 @@ func (r *Runtime) Notification(ctx context.Context, notificationType, message, t
 }
 
 func (r *Runtime) BeforeTool(ctx context.Context, call api.ToolCall) error {
-	return r.dispatch(ctx, PreToolUse, call.Name, map[string]any{
-		"toolName": call.Name, "toolUseId": call.CallID, "toolInput": validJSON(call.Arguments), "toolInputTruncated": false, "subagentType": r.SubagentType,
-	}, true)
+	input, inputTruncated := truncatePayload(validJSON(call.Arguments))
+	payload := map[string]any{
+		"toolName": call.Name, "toolUseId": call.CallID, "toolInput": input, "toolInputTruncated": inputTruncated,
+	}
+	if r.SubagentType != "" {
+		payload["subagentType"] = r.SubagentType
+	}
+	return r.dispatch(ctx, PreToolUse, call.Name, payload, true)
 }
 
 func (r *Runtime) AfterTool(ctx context.Context, call api.ToolCall, result tools.ExecutionResult, toolErr error) {
 	if toolErr != nil {
 		if tools.IsPermissionDenied(toolErr) {
+			input, inputTruncated := truncatePayload(validJSON(call.Arguments))
 			r.dispatch(ctx, PermissionDenied, call.Name, map[string]any{
-				"toolName": call.Name, "toolUseId": call.CallID, "toolInput": validJSON(call.Arguments),
-				"toolInputTruncated": false,
+				"toolName": call.Name, "toolUseId": call.CallID, "toolInput": input,
+				"toolInputTruncated": inputTruncated,
 			}, false)
 			return
 		}
-		r.dispatch(ctx, PostToolFailure, call.Name, map[string]any{
-			"toolName": call.Name, "toolUseId": call.CallID, "toolInput": validJSON(call.Arguments),
-			"toolInputTruncated": false, "error": toolErr.Error(), "subagentType": r.SubagentType,
-		}, false)
+		input, inputTruncated := truncatePayload(validJSON(call.Arguments))
+		payload := map[string]any{
+			"toolName": call.Name, "toolUseId": call.CallID, "toolInput": input,
+			"toolInputTruncated": inputTruncated, "error": toolErr.Error(),
+		}
+		if r.SubagentType != "" {
+			payload["subagentType"] = r.SubagentType
+		}
+		r.dispatch(ctx, PostToolFailure, call.Name, payload, false)
 		return
 	}
-	r.dispatch(ctx, PostToolUse, call.Name, map[string]any{
-		"toolName": call.Name, "toolUseId": call.CallID, "toolInput": json.RawMessage(call.Arguments),
-		"toolResult": result.Output, "toolInputTruncated": false, "toolResultTruncated": false, "isBackgrounded": false, "subagentType": r.SubagentType,
-	}, false)
+	input, inputTruncated := truncatePayload(validJSON(call.Arguments))
+	output, outputTruncated := truncatePayload(result.Output)
+	payload := map[string]any{
+		"toolName": call.Name, "toolUseId": call.CallID, "toolInput": input,
+		"toolResult": output, "toolInputTruncated": inputTruncated, "toolResultTruncated": outputTruncated, "isBackgrounded": false,
+	}
+	if r.SubagentType != "" {
+		payload["subagentType"] = r.SubagentType
+	}
+	r.dispatch(ctx, PostToolUse, call.Name, payload, false)
 }
 
 func validJSON(value []byte) json.RawMessage {
@@ -384,6 +476,18 @@ func validJSON(value []byte) json.RawMessage {
 		return json.RawMessage(value)
 	}
 	return json.RawMessage("null")
+}
+
+func truncatePayload(value any) (any, bool) {
+	serialized, err := json.Marshal(value)
+	if err != nil || len(serialized) <= maxHookPayloadSize {
+		return value, false
+	}
+	end := maxHookPayloadSize
+	for end > 0 && !utf8.Valid(serialized[:end]) {
+		end--
+	}
+	return string(serialized[:end]) + " [truncated]", true
 }
 
 func (r *Runtime) Stopped(ctx context.Context, reason string, runErr error) {
@@ -469,16 +573,38 @@ func (r *Runtime) dispatch(ctx context.Context, event Event, toolName string, pa
 		return nil
 	}
 	snapshot := r.Catalog.Snapshot()
+	r.Catalog.mu.RLock()
+	clientGroups := append([]ClientHookGroup(nil), r.Catalog.clientHooks[event]...)
+	client := r.Catalog.client
+	r.Catalog.mu.RUnlock()
+	if len(snapshot.Hooks) == 0 && (len(clientGroups) == 0 || client == nil) {
+		return nil
+	}
+	envelope := map[string]any{
+		"hookEventName": event, "sessionId": r.SessionID, "cwd": r.WorkspaceRoot,
+		"workspaceRoot": r.WorkspaceRoot, "timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	if r.TranscriptPath != "" {
+		envelope["transcriptPath"] = r.TranscriptPath
+	}
+	if promptID := PromptID(ctx); promptID != "" {
+		envelope["promptId"] = promptID
+	}
+	for key, value := range payload {
+		envelope[key] = value
+	}
+	if client != nil {
+		clientToolName := ""
+		if event == PreToolUse || event == PostToolUse || event == PostToolFailure || event == PermissionDenied {
+			clientToolName = toolName
+		}
+		if err := dispatchClientHooks(ctx, client, clientGroups, clientToolName, envelope, blocking); err != nil {
+			return err
+		}
+	}
 	for _, spec := range snapshot.Hooks {
 		if spec.Disabled || spec.Event != event || spec.matcher != nil && !spec.matcher.MatchString(toolName) {
 			continue
-		}
-		envelope := map[string]any{
-			"hookEventName": event, "sessionId": r.SessionID, "cwd": r.WorkspaceRoot,
-			"workspaceRoot": r.WorkspaceRoot, "timestamp": time.Now().UTC().Format(time.RFC3339Nano),
-		}
-		for key, value := range payload {
-			envelope[key] = value
 		}
 		decision, reason, err := run(ctx, spec, envelope, r.WorkspaceRoot, r.SessionID)
 		if err == nil && blocking && decision == "deny" {
@@ -489,6 +615,97 @@ func (r *Runtime) dispatch(ctx context.Context, event Event, toolName string, pa
 		}
 	}
 	return nil
+}
+
+func dispatchClientHooks(ctx context.Context, dispatcher ClientDispatcher, groups []ClientHookGroup, toolName string, envelope map[string]any, blocking bool) error {
+	type callback struct {
+		id      string
+		timeout time.Duration
+	}
+	var callbacks []callback
+	for _, group := range groups {
+		if group.matcher != nil && toolName != "" && !group.matcher.MatchString(toolName) {
+			continue
+		}
+		for _, id := range group.CallbackIDs {
+			if strings.TrimSpace(id) != "" {
+				callbacks = append(callbacks, callback{id: id, timeout: group.Timeout})
+			}
+		}
+	}
+	if !blocking {
+		for _, item := range callbacks {
+			dispatcher(ctx, item.id, envelope, false)
+		}
+		return nil
+	}
+	type outcome struct {
+		id, decision, reason string
+	}
+	gateCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	results := make(chan outcome, len(callbacks))
+	for _, item := range callbacks {
+		go func(item callback) {
+			timeout := item.timeout
+			if timeout <= 0 {
+				timeout = 30 * time.Second
+			}
+			callCtx, callCancel := context.WithTimeout(gateCtx, timeout)
+			defer callCancel()
+			decision, reason := dispatcher(callCtx, item.id, envelope, true)
+			if callCtx.Err() != nil {
+				decision, reason = "", ""
+			}
+			results <- outcome{id: item.id, decision: decision, reason: reason}
+		}(item)
+	}
+	for range callbacks {
+		result := <-results
+		if result.decision == "deny" {
+			if strings.TrimSpace(result.reason) == "" {
+				result.reason = "blocked by client hook"
+			}
+			return &DeniedError{Hook: "client:" + result.id, Reason: result.reason}
+		}
+	}
+	return nil
+}
+
+type promptIDKey struct{}
+
+type sessionStartSourceKey struct{}
+
+func WithSessionStartSource(ctx context.Context, source string) context.Context {
+	if strings.TrimSpace(source) == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, sessionStartSourceKey{}, source)
+}
+
+func sessionStartSource(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	value, _ := ctx.Value(sessionStartSourceKey{}).(string)
+	return value
+}
+
+func WithPromptID(ctx context.Context, id string) context.Context {
+	if strings.TrimSpace(id) == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, promptIDKey{}, id)
+}
+
+func PromptID(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	if value, _ := ctx.Value(promptIDKey{}).(string); value != "" {
+		return value
+	}
+	return ""
 }
 
 type fileConfig struct {

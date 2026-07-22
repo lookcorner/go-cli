@@ -1142,7 +1142,13 @@ redirect targets. Hook names disabled through ACP persist one per line in
 
 ACP `x.ai/hooks/list` exposes loaded hook metadata and parse warnings;
 `x.ai/hooks/action` supports reload, enable, disable, source toggles, and folder
-trust changes plus confined custom-path add/remove. Global discovery reads
+trust changes plus confined custom-path add/remove. ACP sessions may also register
+callbacks through `_meta["x.ai/hooks"]`: matching `PreToolUse` callbacks receive
+concurrent, timeout-bounded `x.ai/hooks/run` reverse requests and may explicitly
+deny the tool, while other events receive fire-and-forget `x.ai/hooks/event`
+notifications. Missing, late, malformed, or unknown replies fail open; callback
+envelopes include prompt and transcript correlation, bound tool payloads to
+128 KiB, and registrations propagate to child agents. Global discovery reads
 Claude settings, `$GROK_HOME/hooks`, `$GROK_HOME/hooks-paths`, and Cursor hooks;
 trusted projects contribute the corresponding repo settings and `.grok/hooks`.
 Vendor sources honor the `compat.<vendor>.hooks` gate. The runtime fires

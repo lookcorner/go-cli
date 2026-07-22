@@ -554,7 +554,7 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 	r.cancelMemoryIdleFlush()
 	r.cancelMemoryDreamCheck()
 	if r.HookPolicy != nil {
-		r.hookStart.Do(func() { r.HookPolicy.SessionStarted(ctx) })
+		r.StartHooks(ctx)
 		r.HookPolicy.UserPromptSubmitted(ctx, prompt)
 		defer func() {
 			reason := "completed"
@@ -813,6 +813,12 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 	progress.ErrorCount++
 	publish()
 	return final, fmt.Errorf("agent reached maximum of %d model steps", r.MaxSteps)
+}
+
+func (r *Runner) StartHooks(ctx context.Context) {
+	if r.HookPolicy != nil {
+		r.hookStart.Do(func() { r.HookPolicy.SessionStarted(ctx) })
+	}
 }
 
 func (r *Runner) appendInterjections(input *[]api.InputItem, pending []Interjection) error {
