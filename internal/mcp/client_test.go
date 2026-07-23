@@ -100,6 +100,73 @@ func TestStdioLifecycleAndToolCall(t *testing.T) {
 	}
 }
 
+func TestACPClientLifecycleAndErrors(t *testing.T) {
+	var methods []string
+	reverse := func(_ context.Context, payload json.RawMessage) (json.RawMessage, error) {
+		var request struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+			Params map[string]any  `json:"params"`
+		}
+		if err := json.Unmarshal(payload, &request); err != nil {
+			return nil, err
+		}
+		methods = append(methods, request.Method)
+		var result any
+		switch request.Method {
+		case "initialize":
+			result = map[string]any{
+				"protocolVersion": protocolVersion,
+				"capabilities":    map[string]any{"tools": map[string]any{}},
+				"serverInfo":      map[string]any{"name": "sdk-tools", "version": "1"},
+			}
+		case "tools/list":
+			result = map[string]any{"tools": []any{map[string]any{
+				"name": "echo", "inputSchema": map[string]any{"type": "object"},
+			}}}
+		case "tools/call":
+			result = map[string]any{"content": []any{map[string]any{"type": "text", "text": request.Params["name"]}}}
+		case "fixture/error":
+			return json.Marshal(map[string]any{
+				"jsonrpc": "2.0", "id": request.ID,
+				"error": map[string]any{"code": -32000, "message": "sdk failed"},
+			})
+		case "fixture/malformed":
+			return json.RawMessage(`[]`), nil
+		default:
+			return nil, fmt.Errorf("unexpected method %q", request.Method)
+		}
+		return json.Marshal(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": result})
+	}
+	client, initialized, err := StartACP(context.Background(), "sdk-tools", reverse)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if initialized.ServerInfo.Name != "sdk-tools" {
+		t.Fatalf("initialize result=%#v", initialized)
+	}
+	listed, err := client.ListTools(context.Background())
+	if err != nil || len(listed) != 1 || listed[0].Name != "echo" {
+		t.Fatalf("tools=%#v err=%v", listed, err)
+	}
+	called, err := client.CallTool(context.Background(), "echo", map[string]any{"message": "hello"})
+	if err != nil || len(called.Content) != 1 || called.Content[0].Text != "echo" {
+		t.Fatalf("tool result=%#v err=%v", called, err)
+	}
+	if err := client.call(context.Background(), "fixture/error", nil, nil); err == nil || !strings.Contains(err.Error(), "sdk failed") {
+		t.Fatalf("MCP error=%v", err)
+	}
+	if err := client.call(context.Background(), "fixture/malformed", nil, nil); err == nil || !strings.Contains(err.Error(), "decode MCP") {
+		t.Fatalf("malformed response error=%v", err)
+	}
+	for _, method := range methods {
+		if method == "notifications/initialized" {
+			t.Fatal("ACP transport forwarded an id-less initialized notification")
+		}
+	}
+}
+
 func TestModelToolNameIsValidAndBounded(t *testing.T) {
 	name := modelToolName(strings.Repeat("server name ", 10), strings.Repeat("tool/name ", 10))
 	if len(name) > 64 {

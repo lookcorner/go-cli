@@ -2757,13 +2757,18 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 	}
 	authMethods := initialize["result"].(map[string]any)["authMethods"].([]any)
 	initializeMeta := initialize["result"].(map[string]any)["_meta"].(map[string]any)
-	if len(authMethods) != 2 || authMethods[0].(map[string]any)["id"] != "cached_token" || authMethods[1].(map[string]any)["id"] != "grok.com" || initializeMeta["defaultAuthMethodId"] != "cached_token" {
+	if len(authMethods) != 2 || authMethods[0].(map[string]any)["id"] != "cached_token" || authMethods[1].(map[string]any)["id"] != "grok.com" || initializeMeta["defaultAuthMethodId"] != "cached_token" || initializeMeta["x.ai/mcp/sdk"] != true {
 		t.Fatalf("auth initialization=%#v meta=%#v", authMethods, initializeMeta)
 	}
 	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 2, "method": "session/new", "params": map[string]any{
 		"_meta": map[string]any{
 			"sessionId": clientSessionID, "modelId": "client-model",
 			"yoloMode": true, "autoMode": true,
+			"x.ai/mcp/servers": []any{
+				map[string]any{"name": "sdk-tools", "serverId": "srv-0"},
+				map[string]any{"name": "sdk-tools", "serverId": "ignored"},
+				map[string]any{"name": "broken"},
+			},
 		},
 		"cwd": root, "mcpServers": []any{map[string]any{
 			"name": "client-tools", "command": "/fixture-mcp", "args": []string{"--stdio"},
@@ -2787,6 +2792,9 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 		receivedConfig.MCPServers[1].Type != "http" || receivedConfig.MCPServers[1].Headers["Authorization"] != "Bearer token" ||
 		receivedConfig.MCPServers[2].Type != "sse" {
 		t.Fatalf("client MCP config was not forwarded: %#v", receivedConfig)
+	}
+	if len(receivedConfig.MCPSDKServers) != 1 || receivedConfig.MCPSDKServers[0].Name != "sdk-tools" || receivedConfig.MCPSDKServers[0].ServerID != "srv-0" || receivedConfig.MCPReverseCall == nil {
+		t.Fatalf("SDK MCP config was not forwarded: %#v", receivedConfig.MCPSDKServers)
 	}
 	sessionID := created["result"].(map[string]any)["sessionId"].(string)
 	if sessionID != clientSessionID {
@@ -3102,6 +3110,95 @@ func TestParseMCPServersRejectsInvalidWireValues(t *testing.T) {
 			t.Errorf("invalid MCP servers were accepted: %s", raw)
 		}
 	}
+}
+
+func TestParseMCPSDKServers(t *testing.T) {
+	servers := parseMCPSDKServers(map[string]any{"x.ai/mcp/servers": []any{
+		map[string]any{"name": " sdk-tools ", "serverId": " srv-0 "},
+		map[string]any{"name": "sdk-tools", "serverId": "duplicate"},
+		map[string]any{"name": "missing-id"},
+		map[string]any{"name": 1, "serverId": "wrong-type"},
+		"wrong-shape",
+	}})
+	if len(servers) != 1 || servers[0].Type != "acp" || servers[0].Name != "sdk-tools" || servers[0].ServerID != "srv-0" {
+		t.Fatalf("SDK MCP servers=%#v", servers)
+	}
+	if servers := parseMCPSDKServers(nil); len(servers) != 0 {
+		t.Fatalf("nil metadata produced SDK servers: %#v", servers)
+	}
+}
+
+func TestMCPSDKReverseCall(t *testing.T) {
+	reader, writer := io.Pipe()
+	server := &Server{output: writer, pendingMCP: make(map[string]chan mcpReverseResult)}
+	result := make(chan struct {
+		payload json.RawMessage
+		err     error
+	}, 1)
+	go func() {
+		payload, err := server.callMCPSDK(context.Background(), "srv-0", json.RawMessage(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+		result <- struct {
+			payload json.RawMessage
+			err     error
+		}{payload, err}
+	}()
+	var request struct {
+		ID     json.RawMessage `json:"id"`
+		Method string          `json:"method"`
+		Params struct {
+			ServerID string          `json:"serverId"`
+			Message  json.RawMessage `json:"message"`
+		} `json:"params"`
+	}
+	if err := json.NewDecoder(reader).Decode(&request); err != nil {
+		t.Fatal(err)
+	}
+	if request.Method != "x.ai/mcp/sdk_call" || request.Params.ServerID != "srv-0" || !strings.Contains(string(request.Params.Message), "tools/list") {
+		t.Fatalf("reverse request=%#v", request)
+	}
+	want := json.RawMessage(`{"jsonrpc":"2.0","id":1,"result":{"tools":[]}}`)
+	server.handleClientResponse(message{ID: request.ID, Result: want})
+	got := <-result
+	if got.err != nil || string(got.payload) != string(want) {
+		t.Fatalf("reverse result=%s err=%v", got.payload, got.err)
+	}
+
+	go func() {
+		_, err := server.callMCPSDK(context.Background(), "srv-0", json.RawMessage(`{"jsonrpc":"2.0","id":2,"method":"tools/call"}`))
+		result <- struct {
+			payload json.RawMessage
+			err     error
+		}{err: err}
+	}()
+	if err := json.NewDecoder(reader).Decode(&request); err != nil {
+		t.Fatal(err)
+	}
+	server.handleClientResponse(message{ID: request.ID, Error: json.RawMessage(`{"code":-32000,"message":"client failed"}`)})
+	if got := <-result; got.err == nil || got.err.Error() != "client failed" {
+		t.Fatalf("reverse ACP error=%v", got.err)
+	}
+
+	_ = reader.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := server.callMCPSDK(ctx, "srv-0", json.RawMessage(`{"jsonrpc":"2.0","id":3,"method":"tools/list"}`)); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancel error=%v", err)
+	}
+	server.mu.Lock()
+	pending := len(server.pendingMCP)
+	server.mu.Unlock()
+	if pending != 0 {
+		t.Fatalf("cancelled reverse calls still pending: %d", pending)
+	}
+	_ = writer.Close()
+
+	closedReader, closedWriter := io.Pipe()
+	_ = closedReader.Close()
+	closedServer := &Server{output: closedWriter}
+	if _, err := closedServer.callMCPSDK(context.Background(), "srv-0", json.RawMessage(`{"jsonrpc":"2.0","id":4,"method":"tools/list"}`)); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("closed reverse transport error=%v", err)
+	}
+	_ = closedWriter.Close()
 }
 
 func TestRenderPromptSupportsEmbeddedTextAndImages(t *testing.T) {

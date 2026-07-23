@@ -735,7 +735,13 @@ MCP servers supplied by the client in `session/new`, `session/load`, or
 `session/resume` are validated and merged with configured servers for that
 session. Stdio and standalone SSE servers may request permission-gated MCP
 sampling through the configured model without modifying the main conversation
-history. Default
+history. ACP initialization advertises `_meta["x.ai/mcp/sdk"]`; clients may
+also supply in-process SDK MCP servers through `_meta["x.ai/mcp/servers"]`.
+Their handshake, discovery, adapters, disabled-tool policy, and live catalog
+behavior reuse the normal MCP runtime over reverse `x.ai/mcp/sdk_call`
+requests. This transport is half-duplex: server notifications and
+server-initiated sampling, roots, and elicitation requests are not delivered.
+Default
 prompt approvals use ACP's bidirectional `session/request_permission`, linked
 to the actual tool call, so protocol stdin is never consumed by a CLI prompt.
 `--approval auto`, `--approval always-approve`, and `--approval deny` remain

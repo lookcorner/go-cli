@@ -3,8 +3,11 @@ package acp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"reflect"
 	"sort"
+	"strings"
 
 	mcppkg "github.com/lookcorner/go-cli/internal/mcp"
 )
@@ -17,6 +20,57 @@ type callableMCPTool interface {
 type readableMCPResource interface {
 	MCPResourceReader() (string, bool)
 	ReadMCPResource(context.Context, string) ([]mcppkg.ResourceContents, error)
+}
+
+func parseMCPSDKServers(meta map[string]any) []MCPServer {
+	entries, _ := meta["x.ai/mcp/servers"].([]any)
+	servers := make([]MCPServer, 0, len(entries))
+	seen := make(map[string]bool, len(entries))
+	for _, raw := range entries {
+		entry, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, nameOK := entry["name"].(string)
+		serverID, idOK := entry["serverId"].(string)
+		name, serverID = strings.TrimSpace(name), strings.TrimSpace(serverID)
+		if !nameOK || !idOK || name == "" || serverID == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		servers = append(servers, MCPServer{Type: "acp", Name: name, ServerID: serverID})
+	}
+	return servers
+}
+
+func (s *Server) callMCPSDK(ctx context.Context, serverID string, payload json.RawMessage) (json.RawMessage, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	id := fmt.Sprintf("gork-mcp-%d", s.nextRequest.Add(1))
+	result := make(chan mcpReverseResult, 1)
+	s.mu.Lock()
+	if s.pendingMCP == nil {
+		s.pendingMCP = make(map[string]chan mcpReverseResult)
+	}
+	s.pendingMCP[id] = result
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		delete(s.pendingMCP, id)
+		s.mu.Unlock()
+	}()
+	if !s.writeResult(map[string]any{"jsonrpc": "2.0", "id": id, "method": "x.ai/mcp/sdk_call", "params": map[string]any{
+		"serverId": serverID, "message": payload,
+	}}) {
+		return nil, io.ErrClosedPipe
+	}
+	select {
+	case response := <-result:
+		return response.result, response.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 // NotifyMCPServerChanges publishes the state transitions caused by a

@@ -2152,6 +2152,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			return nil, nil, err
 		}
 		mcpRuntime = newSessionMCPRuntime(sessionCtx, sessionCfg, ws.Root(), registry, approver, sessionTokenProvider, statusOutput)
+		mcpRuntime.SetSDKServers(sessionConfig.MCPSDKServers, sessionConfig.MCPReverseCall)
 		mcpRuntime.SetProgress(sessionConfig.MCPInitProgress)
 		mcpRuntime.SetToolsChanged(func(name string, tools []mcp.ToolInfo) {
 			if mcpRuntime.toolsReady.Load() {
@@ -3445,86 +3446,138 @@ func startMCPServers(
 			return nil, err
 		}
 		clients = append(clients, client)
-		var remoteTools []mcp.ToolInfo
-		if initialized.Capabilities.Tools != nil {
-			listCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-			remoteTools, err = client.ListTools(listCtx)
-			cancel()
-			if err != nil {
-				closeClients()
-				return nil, fmt.Errorf("list tools from MCP server %q: %w", name, err)
-			}
+		if err = registerMCPClient(ctx, name, client, initialized, cfg.DisabledMCPTools[name], registry, approver, stderr, toolsChanged); err != nil {
+			closeClients()
+			return nil, err
 		}
-		disabledTools := make(map[string]bool, len(cfg.DisabledMCPTools[name]))
-		for _, toolName := range cfg.DisabledMCPTools[name] {
-			disabledTools[toolName] = true
-		}
-		remoteTools = slices.DeleteFunc(remoteTools, func(tool mcp.ToolInfo) bool { return disabledTools[tool.Name] })
-		toolAdapters := mcp.NewToolAdapters(client, name, remoteTools, approver)
-		remoteNames := make([]string, 0, len(toolAdapters))
-		for _, adapter := range toolAdapters {
-			if err := registry.Register(adapter); err != nil {
-				closeClients()
-				return nil, fmt.Errorf("register MCP tool from %q: %w", name, err)
-			}
-			remoteNames = append(remoteNames, adapter.Definition().Name)
-		}
-		if initialized.Capabilities.Tools != nil && initialized.Capabilities.Tools.ListChanged {
-			var reloadMu sync.Mutex
-			client.SetNotificationHandler(func(method string) {
-				if method != "notifications/tools/list_changed" {
-					return
-				}
-				reloadMu.Lock()
-				defer reloadMu.Unlock()
-				reloadCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-				updated, listErr := client.ListTools(reloadCtx)
-				cancel()
-				if listErr != nil {
-					fmt.Fprintf(stderr, "[gork] MCP %s tool reload failed: %v\n", name, listErr)
-					return
-				}
-				updated = slices.DeleteFunc(updated, func(tool mcp.ToolInfo) bool { return disabledTools[tool.Name] })
-				updatedAdapters := mcp.NewToolAdapters(client, name, updated, approver)
-				replacements := make([]tools.Tool, 0, len(updatedAdapters))
-				for _, adapter := range updatedAdapters {
-					replacements = append(replacements, adapter)
-				}
-				newNames, replaceErr := registry.Replace(remoteNames, replacements)
-				if replaceErr != nil {
-					fmt.Fprintf(stderr, "[gork] MCP %s tool reload failed: %v\n", name, replaceErr)
-					return
-				}
-				remoteNames = newNames
-				fmt.Fprintf(stderr, "[gork] MCP %s tools reloaded: %d tool(s)\n", name, len(newNames))
-				if toolsChanged != nil {
-					toolsChanged(name, updated)
-				}
-			})
-		}
-		if initialized.Capabilities.Resources != nil {
-			for _, adapter := range mcp.NewResourceAdapters(client, name) {
-				if err := registry.Register(adapter); err != nil {
-					closeClients()
-					return nil, fmt.Errorf("register MCP resource tool from %q: %w", name, err)
-				}
-			}
-		}
-		if initialized.Capabilities.Prompts != nil {
-			for _, adapter := range mcp.NewPromptAdapters(client, name) {
-				if err := registry.Register(adapter); err != nil {
-					closeClients()
-					return nil, fmt.Errorf("register MCP prompt tool from %q: %w", name, err)
-				}
-			}
-		}
-		serverLabel := initialized.ServerInfo.Name
-		if serverLabel == "" {
-			serverLabel = name
-		}
-		fmt.Fprintf(stderr, "[gork] MCP %s ready: %d tool(s)\n", serverLabel, len(remoteTools))
 		if progress != nil {
 			progress(len(names), len(clients))
+		}
+	}
+	return clients, nil
+}
+
+func registerMCPClient(
+	ctx context.Context,
+	name string,
+	client *mcp.Client,
+	initialized mcp.InitializeResult,
+	disabled []string,
+	registry *tools.Registry,
+	approver tools.Approver,
+	stderr io.Writer,
+	toolsChanged func(string, []mcp.ToolInfo),
+) error {
+	var remoteTools []mcp.ToolInfo
+	if initialized.Capabilities.Tools != nil {
+		listCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		var err error
+		remoteTools, err = client.ListTools(listCtx)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("list tools from MCP server %q: %w", name, err)
+		}
+	}
+	disabledTools := make(map[string]bool, len(disabled))
+	for _, toolName := range disabled {
+		disabledTools[toolName] = true
+	}
+	remoteTools = slices.DeleteFunc(remoteTools, func(tool mcp.ToolInfo) bool { return disabledTools[tool.Name] })
+	toolAdapters := mcp.NewToolAdapters(client, name, remoteTools, approver)
+	remoteNames := make([]string, 0, len(toolAdapters))
+	for _, adapter := range toolAdapters {
+		if err := registry.Register(adapter); err != nil {
+			return fmt.Errorf("register MCP tool from %q: %w", name, err)
+		}
+		remoteNames = append(remoteNames, adapter.Definition().Name)
+	}
+	if initialized.Capabilities.Tools != nil && initialized.Capabilities.Tools.ListChanged {
+		var reloadMu sync.Mutex
+		client.SetNotificationHandler(func(method string) {
+			if method != "notifications/tools/list_changed" {
+				return
+			}
+			reloadMu.Lock()
+			defer reloadMu.Unlock()
+			reloadCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			updated, listErr := client.ListTools(reloadCtx)
+			cancel()
+			if listErr != nil {
+				fmt.Fprintf(stderr, "[gork] MCP %s tool reload failed: %v\n", name, listErr)
+				return
+			}
+			updated = slices.DeleteFunc(updated, func(tool mcp.ToolInfo) bool { return disabledTools[tool.Name] })
+			updatedAdapters := mcp.NewToolAdapters(client, name, updated, approver)
+			replacements := make([]tools.Tool, 0, len(updatedAdapters))
+			for _, adapter := range updatedAdapters {
+				replacements = append(replacements, adapter)
+			}
+			newNames, replaceErr := registry.Replace(remoteNames, replacements)
+			if replaceErr != nil {
+				fmt.Fprintf(stderr, "[gork] MCP %s tool reload failed: %v\n", name, replaceErr)
+				return
+			}
+			remoteNames = newNames
+			fmt.Fprintf(stderr, "[gork] MCP %s tools reloaded: %d tool(s)\n", name, len(newNames))
+			if toolsChanged != nil {
+				toolsChanged(name, updated)
+			}
+		})
+	}
+	if initialized.Capabilities.Resources != nil {
+		for _, adapter := range mcp.NewResourceAdapters(client, name) {
+			if err := registry.Register(adapter); err != nil {
+				return fmt.Errorf("register MCP resource tool from %q: %w", name, err)
+			}
+		}
+	}
+	if initialized.Capabilities.Prompts != nil {
+		for _, adapter := range mcp.NewPromptAdapters(client, name) {
+			if err := registry.Register(adapter); err != nil {
+				return fmt.Errorf("register MCP prompt tool from %q: %w", name, err)
+			}
+		}
+	}
+	serverLabel := initialized.ServerInfo.Name
+	if serverLabel == "" {
+		serverLabel = name
+	}
+	fmt.Fprintf(stderr, "[gork] MCP %s ready: %d tool(s)\n", serverLabel, len(remoteTools))
+	return nil
+}
+
+func startACPMCPServers(
+	ctx context.Context,
+	servers []mcp.ServerConfig,
+	reverse acp.MCPReverseCall,
+	disabledTools map[string][]string,
+	registry *tools.Registry,
+	approver tools.Approver,
+	stderr io.Writer,
+	toolsChanged func(string, []mcp.ToolInfo),
+	progress func(connected int),
+) ([]*mcp.Client, error) {
+	clients := make([]*mcp.Client, 0, len(servers))
+	for _, server := range servers {
+		server := server
+		client, initialized, err := mcp.StartACP(ctx, server.Name, func(ctx context.Context, payload json.RawMessage) (json.RawMessage, error) {
+			return reverse(ctx, server.ServerID, payload)
+		})
+		if err != nil {
+			for _, client := range clients {
+				_ = client.Close()
+			}
+			return nil, err
+		}
+		clients = append(clients, client)
+		if err := registerMCPClient(ctx, server.Name, client, initialized, disabledTools[server.Name], registry, approver, stderr, toolsChanged); err != nil {
+			for _, client := range clients {
+				_ = client.Close()
+			}
+			return nil, err
+		}
+		if progress != nil {
+			progress(len(clients))
 		}
 	}
 	return clients, nil
@@ -3569,6 +3622,8 @@ type sessionMCPRuntime struct {
 	stderr        io.Writer
 	clients       []*mcp.Client
 	clientConfigs []mcp.ServerConfig
+	sdkServers    []mcp.ServerConfig
+	reverse       acp.MCPReverseCall
 	effective     []mcp.ServerConfig
 	catalog       []mcp.ServerConfig
 	notify        func(before, after []mcp.ServerConfig)
@@ -3666,6 +3721,13 @@ func (r *sessionMCPRuntime) SetProgress(progress func(total, connected int)) {
 	r.mu.Unlock()
 }
 
+func (r *sessionMCPRuntime) SetSDKServers(servers []mcp.ServerConfig, reverse acp.MCPReverseCall) {
+	r.mu.Lock()
+	r.sdkServers = cloneMCPServerConfigs(servers)
+	r.reverse = reverse
+	r.mu.Unlock()
+}
+
 func (r *sessionMCPRuntime) SetToolsChanged(notify func(string, []mcp.ToolInfo)) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -3696,8 +3758,46 @@ func (r *sessionMCPRuntime) Close() {
 
 func (r *sessionMCPRuntime) startLocked(requested []mcp.ServerConfig, progress func(total, connected int)) ([]*mcp.Client, []mcp.ServerConfig, []mcp.ServerConfig, error) {
 	cfg, effective, catalog := r.mergedConfig(requested)
-	clients, err := startMCPServers(r.ctx, cfg, r.workspaceRoot, r.registry, r.approver, r.tokenProvider, r.stderr, r.toolsChanged, progress)
-	return clients, effective, catalog, err
+	sdk := make([]mcp.ServerConfig, 0, len(effective))
+	for _, server := range effective {
+		if server.Type == "acp" {
+			sdk = append(sdk, server)
+		}
+	}
+	total := len(effective)
+	regularProgress := progress
+	if progress != nil {
+		regularProgress = func(_ int, connected int) { progress(total, connected) }
+	}
+	clients, err := startMCPServers(r.ctx, cfg, r.workspaceRoot, r.registry, r.approver, r.tokenProvider, r.stderr, r.toolsChanged, regularProgress)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if len(sdk) == 0 {
+		return clients, effective, catalog, nil
+	}
+	if r.reverse == nil {
+		for _, client := range clients {
+			_ = client.Close()
+		}
+		return nil, nil, nil, errors.New("ACP MCP reverse call is unavailable")
+	}
+	offset := len(clients)
+	acpClients, err := startACPMCPServers(r.ctx, sdk, r.reverse, cfg.DisabledMCPTools, r.registry, r.approver, r.stderr, r.toolsChanged, func(connected int) {
+		if progress != nil {
+			progress(total, offset+connected)
+		}
+	})
+	if err != nil {
+		for _, client := range clients {
+			_ = client.Close()
+		}
+		if progress != nil {
+			progress(total, total)
+		}
+		return nil, nil, nil, err
+	}
+	return append(clients, acpClients...), effective, catalog, nil
 }
 
 func (r *sessionMCPRuntime) restartLocked(requested []mcp.ServerConfig, progress func(total, connected int)) error {
@@ -3759,6 +3859,27 @@ func (r *sessionMCPRuntime) mergedConfig(requested []mcp.ServerConfig) (config.C
 			effective = append(effective, entry)
 		}
 	}
+	disabled := make(map[string]bool, len(cfg.DisabledMCPServers))
+	for _, name := range cfg.DisabledMCPServers {
+		disabled[name] = true
+	}
+	existing := make(map[string]bool, len(catalog))
+	for _, server := range catalog {
+		existing[server.Name] = true
+	}
+	for _, server := range r.sdkServers {
+		if existing[server.Name] {
+			continue
+		}
+		server.Disabled = disabled[server.Name]
+		server.DisabledTools = append([]string(nil), cfg.DisabledMCPTools[server.Name]...)
+		catalog = append(catalog, server)
+		if !server.Disabled {
+			effective = append(effective, server)
+		}
+	}
+	sort.Slice(effective, func(i, j int) bool { return effective[i].Name < effective[j].Name })
+	sort.Slice(catalog, func(i, j int) bool { return catalog[i].Name < catalog[j].Name })
 	return cfg, effective, catalog
 }
 

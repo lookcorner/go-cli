@@ -38,6 +38,8 @@ type ProcessConfig struct {
 
 type SamplingHandler func(context.Context, SamplingRequest) (SamplingResult, error)
 
+type ReverseCall func(context.Context, json.RawMessage) (json.RawMessage, error)
+
 type SamplingRequest struct {
 	Messages     []SamplingMessage `json:"messages"`
 	SystemPrompt string            `json:"systemPrompt,omitempty"`
@@ -99,6 +101,7 @@ type Client struct {
 	ssePostURL        string
 	sseStream         io.ReadCloser
 	httpClient        *http.Client
+	reverse           ReverseCall
 	headers           map[string]string
 	sessionID         string
 	selectedProtocol  string
@@ -250,6 +253,33 @@ func Start(ctx context.Context, cfg ProcessConfig) (*Client, InitializeResult, e
 		_ = client.Close()
 		return nil, InitializeResult{}, err
 	}
+	return client, initialized, nil
+}
+
+// StartACP connects to an in-process SDK MCP server over the ACP reverse channel.
+func StartACP(ctx context.Context, name string, reverse ReverseCall) (*Client, InitializeResult, error) {
+	if strings.TrimSpace(name) == "" || reverse == nil {
+		return nil, InitializeResult{}, errors.New("ACP MCP server name and reverse call are required")
+	}
+	client := &Client{name: name, reverse: reverse, pending: make(map[string]chan response), done: make(chan struct{})}
+	initCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	var initialized InitializeResult
+	if err := client.call(initCtx, "initialize", map[string]any{
+		"protocolVersion": protocolVersion,
+		"capabilities":    map[string]any{},
+		"clientInfo": map[string]any{
+			"name": "gork-go", "title": "Gork Go", "version": "0.1.0",
+		},
+	}, &initialized); err != nil {
+		_ = client.Close()
+		return nil, InitializeResult{}, fmt.Errorf("initialize MCP server %q: %w", name, err)
+	}
+	if !supportedProtocolVersions[initialized.ProtocolVersion] {
+		_ = client.Close()
+		return nil, InitializeResult{}, fmt.Errorf("MCP server %q selected unsupported protocol %q", name, initialized.ProtocolVersion)
+	}
+	client.resourceSubscribe = initialized.Capabilities.Resources != nil && initialized.Capabilities.Resources.Subscribe
 	return client, initialized, nil
 }
 
@@ -408,6 +438,30 @@ func (c *Client) listPages(ctx context.Context, method string, consume func(json
 
 func (c *Client) call(ctx context.Context, method string, params any, out any) error {
 	id := c.nextID.Add(1)
+	if c.reverse != nil {
+		encoded, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params})
+		if err != nil {
+			return fmt.Errorf("encode MCP %s request: %w", method, err)
+		}
+		raw, err := c.reverse(ctx, encoded)
+		if err != nil {
+			return err
+		}
+		var message rpcMessage
+		if err := json.Unmarshal(raw, &message); err != nil {
+			return fmt.Errorf("decode MCP %s response: %w", method, err)
+		}
+		if message.Error != nil {
+			return message.Error
+		}
+		if out == nil {
+			return nil
+		}
+		if err := json.Unmarshal(message.Result, out); err != nil {
+			return fmt.Errorf("decode MCP %s result: %w", method, err)
+		}
+		return nil
+	}
 	if c.httpURL != "" {
 		message, err := c.httpRequest(ctx, map[string]any{
 			"jsonrpc": "2.0", "id": id, "method": method, "params": params,
@@ -462,6 +516,9 @@ func (c *Client) call(ctx context.Context, method string, params any, out any) e
 }
 
 func (c *Client) notify(method string, params any) error {
+	if c.reverse != nil {
+		return nil
+	}
 	message := map[string]any{"jsonrpc": "2.0", "method": method}
 	if params != nil {
 		message["params"] = params
@@ -601,6 +658,10 @@ func (c *Client) failPending(err error) {
 }
 
 func (c *Client) Close() error {
+	if c.reverse != nil {
+		c.failPending(io.EOF)
+		return nil
+	}
 	if c.ssePostURL != "" {
 		if c.sseStream != nil {
 			_ = c.sseStream.Close()

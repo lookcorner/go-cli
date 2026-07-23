@@ -40,12 +40,14 @@ type SessionConfig struct {
 	Model           string
 	ReasoningEffort string
 	MCPServers      []MCPServer
+	MCPSDKServers   []MCPServer
 	SessionID       string
 	ResumePath      string
 	YoloMode        *bool
 	AutoMode        *bool
 	ClientHooks     []hooks.ClientHookGroup
 	MCPInitProgress func(total, connected int)
+	MCPReverseCall  MCPReverseCall
 }
 
 func sessionPermissionModeOverrides(meta map[string]any) (yoloMode, autoMode *bool) {
@@ -81,6 +83,7 @@ func sessionStartupOverrides(meta map[string]any) (sessionID, model string, err 
 }
 
 type MCPServer = mcppkg.ServerConfig
+type MCPReverseCall func(context.Context, string, json.RawMessage) (json.RawMessage, error)
 
 type mcpServerParam struct {
 	Type    string   `json:"type"`
@@ -125,6 +128,7 @@ type Server struct {
 	pendingQuestion    map[string]chan userQuestionResult
 	pendingHook        map[string]chan clientHookResult
 	pendingTrust       map[string]chan folderTrustResult
+	pendingMCP         map[string]chan mcpReverseResult
 	clientFS           *clientFSConfig
 	clientGitHead      bool
 	clientFolderTrust  bool
@@ -222,6 +226,11 @@ type userQuestionResult struct {
 	err      error
 }
 
+type mcpReverseResult struct {
+	result json.RawMessage
+	err    error
+}
+
 func (s *Server) WorktreeManager() *worktrees.Manager { return s.worktrees }
 
 type promptBlock struct {
@@ -252,6 +261,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 	s.pendingQuestion = make(map[string]chan userQuestionResult)
 	s.pendingHook = make(map[string]chan clientHookResult)
 	s.pendingTrust = make(map[string]chan folderTrustResult)
+	s.pendingMCP = make(map[string]chan mcpReverseResult)
 	s.clientFS = nil
 	s.clientGitHead = false
 	s.clientFolderTrust = false
@@ -291,6 +301,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			if authConfig.DefaultMethodID != "" {
 				meta["defaultAuthMethodId"] = authConfig.DefaultMethodID
 			}
+			meta["x.ai/mcp/sdk"] = true
 			s.respond(incoming.ID, map[string]any{
 				"protocolVersion": ProtocolVersion,
 				"agentCapabilities": map[string]any{
@@ -1587,8 +1598,9 @@ func (s *Server) handleNewSession(ctx context.Context, incoming message) {
 	yoloMode, autoMode := sessionPermissionModeOverrides(params.Meta)
 	sessionConfig := SessionConfig{
 		CWD: params.CWD, Model: model, SessionID: id, MCPServers: servers,
-		DisplayCWD: stringMeta(params.Meta, "x.ai/display_cwd"),
-		YoloMode:   yoloMode, AutoMode: autoMode, ClientHooks: parseClientHooks(params.Meta),
+		MCPSDKServers: parseMCPSDKServers(params.Meta),
+		DisplayCWD:    stringMeta(params.Meta, "x.ai/display_cwd"),
+		YoloMode:      yoloMode, AutoMode: autoMode, ClientHooks: parseClientHooks(params.Meta),
 	}
 	mcpStarted := time.Now()
 	created, err := s.startSession(ctx, id, sessionConfig, "")
@@ -1786,6 +1798,7 @@ func (s *Server) startSession(ctx context.Context, id string, sessionConfig Sess
 	sessionConfig.MCPInitProgress = func(total, connected int) {
 		s.NotifyMCPInitProgress(id, total, connected)
 	}
+	sessionConfig.MCPReverseCall = s.callMCPSDK
 	approver := &serverApprover{server: s, sessionID: id}
 	writer := &sessionTextWriter{server: s, sessionID: id}
 	runner, closeRuntime, err := s.Factory(ctx, sessionConfig, approver, writer, io.Discard)
@@ -2498,7 +2511,7 @@ func (s *Server) handleRestoreSession(ctx context.Context, incoming message, rep
 	config := SessionConfig{
 		CWD: params.CWD, Title: title, Model: model, ReasoningEffort: reasoningEffort, SessionID: params.SessionID,
 		DisplayCWD: displayCWD,
-		ResumePath: path, MCPServers: servers, YoloMode: yoloMode, AutoMode: autoMode,
+		ResumePath: path, MCPServers: servers, MCPSDKServers: parseMCPSDKServers(params.Meta), YoloMode: yoloMode, AutoMode: autoMode,
 		ClientHooks: parseClientHooks(params.Meta),
 	}
 	created, err := s.startSession(ctx, params.SessionID, config, previous)
@@ -3280,6 +3293,12 @@ func (s *Server) closeAll() {
 		default:
 		}
 	}
+	for _, pending := range s.pendingMCP {
+		select {
+		case pending <- mcpReverseResult{err: io.EOF}:
+		default:
+		}
+	}
 	s.mu.Unlock()
 	if fuzzySearch != nil {
 		fuzzySearch.CloseAll()
@@ -3574,8 +3593,23 @@ func (s *Server) handleClientResponse(incoming message) {
 	questionPending := s.pendingQuestion[key]
 	hookPending := s.pendingHook[key]
 	trustPending := s.pendingTrust[key]
+	mcpPending := s.pendingMCP[key]
 	pending := s.pending[key]
 	s.mu.Unlock()
+	if mcpPending != nil {
+		result := mcpReverseResult{result: append(json.RawMessage(nil), incoming.Result...)}
+		if len(incoming.Error) > 0 && string(incoming.Error) != "null" {
+			var response struct {
+				Message string `json:"message"`
+			}
+			if json.Unmarshal(incoming.Error, &response) != nil || response.Message == "" {
+				response.Message = "ACP MCP reverse request failed"
+			}
+			result.err = errors.New(response.Message)
+		}
+		mcpPending <- result
+		return
+	}
 	if trustPending != nil {
 		handleFolderTrustResponse(trustPending, incoming)
 		return

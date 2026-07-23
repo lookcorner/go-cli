@@ -714,6 +714,108 @@ func TestSessionMCPRuntimeMergesAndRestoresConfiguration(t *testing.T) {
 	}
 }
 
+func TestSessionMCPRuntimeKeepsSDKServersAcrossUpdates(t *testing.T) {
+	root := t.TempDir()
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, nil)
+	defer registry.Close()
+	initializeCalls := 0
+	failNextList := false
+	reverse := func(_ context.Context, _ string, payload json.RawMessage) (json.RawMessage, error) {
+		var request struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+		}
+		if err := json.Unmarshal(payload, &request); err != nil {
+			return nil, err
+		}
+		var result any
+		switch request.Method {
+		case "initialize":
+			initializeCalls++
+			result = map[string]any{
+				"protocolVersion": "2025-11-25",
+				"capabilities":    map[string]any{"tools": map[string]any{}},
+				"serverInfo":      map[string]any{"name": "sdk-tools", "version": "1"},
+			}
+		case "tools/list":
+			if failNextList {
+				failNextList = false
+				return nil, errors.New("SDK tools unavailable")
+			}
+			result = map[string]any{"tools": []any{map[string]any{
+				"name": "echo", "inputSchema": map[string]any{"type": "object"},
+			}}}
+		case "tools/call":
+			result = map[string]any{"content": []any{map[string]any{"type": "text", "text": "sdk echo"}}}
+		default:
+			return nil, fmt.Errorf("unexpected SDK MCP method %q", request.Method)
+		}
+		return json.Marshal(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": result})
+	}
+	runtime := newSessionMCPRuntime(context.Background(), config.Config{}, root, registry, nil, nil, io.Discard)
+	runtime.SetSDKServers([]mcp.ServerConfig{{Type: "acp", Name: "sdk-tools", ServerID: "srv-0"}}, reverse)
+	var progress [][2]int
+	runtime.SetProgress(func(total, connected int) { progress = append(progress, [2]int{total, connected}) })
+	defer runtime.Close()
+	if err := runtime.Update(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(progress, [][2]int{{1, 0}, {1, 1}}) {
+		t.Fatalf("SDK MCP progress=%#v", progress)
+	}
+	configs, catalog := runtime.Configs(), runtime.Catalog()
+	if len(configs) != 1 || configs[0].Name != "sdk-tools" || configs[0].ServerID != "srv-0" || len(catalog) != 1 {
+		t.Fatalf("SDK MCP effective=%#v catalog=%#v", configs, catalog)
+	}
+	var sdkTool tools.Tool
+	for _, tool := range registry.SnapshotTools() {
+		if marker, ok := tool.(interface{ MCPServerName() string }); ok && marker.MCPServerName() == "sdk-tools" {
+			sdkTool = tool
+			break
+		}
+	}
+	if sdkTool == nil {
+		t.Fatalf("SDK MCP tool was not registered: %#v", registry.SnapshotTools())
+	}
+	output, err := sdkTool.Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil || output != "sdk echo" {
+		t.Fatalf("SDK MCP tool output=%q err=%v", output, err)
+	}
+	progress = nil
+	if err := runtime.Update(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if initializeCalls != 2 || !reflect.DeepEqual(progress, [][2]int{{1, 0}, {1, 1}}) {
+		t.Fatalf("SDK MCP was not rebuilt: initialize=%d progress=%#v", initializeCalls, progress)
+	}
+	progress = nil
+	failNextList = true
+	if err := runtime.Update(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "SDK tools unavailable") {
+		t.Fatalf("SDK MCP discovery error=%v", err)
+	}
+	if !reflect.DeepEqual(progress, [][2]int{{1, 0}, {1, 1}}) || len(runtime.Configs()) != 1 || initializeCalls != 4 {
+		t.Fatalf("failed SDK MCP update was not completed and restored: progress=%#v configs=%#v initialize=%d", progress, runtime.Configs(), initializeCalls)
+	}
+	if err := runtime.UpdateBase(context.Background(), config.Config{DisabledMCPTools: map[string][]string{"sdk-tools": {"echo"}}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range registry.SnapshotTools() {
+		if marker, ok := tool.(interface{ MCPServerName() string }); ok && marker.MCPServerName() == "sdk-tools" {
+			t.Fatalf("disabled SDK MCP tool remains registered: %s", tool.Definition().Name)
+		}
+	}
+	if err := runtime.UpdateBase(context.Background(), config.Config{DisabledMCPServers: []string{"sdk-tools"}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(runtime.Configs()) != 0 || len(runtime.Catalog()) != 1 || !runtime.Catalog()[0].Disabled {
+		t.Fatalf("disabled SDK MCP state effective=%#v catalog=%#v", runtime.Configs(), runtime.Catalog())
+	}
+}
+
 func TestModelCacheIdentityFollowsAuthenticationRoute(t *testing.T) {
 	cfg := config.Config{BaseURL: "https://api.x.ai/v1/", ProxyBaseURL: "https://proxy.example/v1/"}
 	if auth, origin := modelCacheIdentity(cfg, nil); auth != "api_key" || origin != "https://api.x.ai/v1/models" {
