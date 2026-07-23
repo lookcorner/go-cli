@@ -499,6 +499,12 @@ automatically without changing the saved user preference.
 Message timestamps are enabled by default. `/timestamps` hides or restores them
 immediately, atomically saves `[ui].show_timestamps`, and rolls back the display
 state if the configuration write fails.
+`/theme [name]` (alias `/t`) changes the terminal palette immediately and saves
+`[ui].theme`. Supported values are `groknight`, `grokday`, `tokyonight`,
+`rosepine-moon`, `oscura-midnight`, and `auto`; aliases such as `dark`, `light`,
+`tokyo`, `rose-pine`, and `oscura` are accepted. With no name, the command cycles
+through the concrete themes. `auto` follows the terminal background hint, and a
+write failure restores the previous palette.
 When `[ui].mouse_reporting_toggle` is enabled, `/toggle-mouse-reporting` toggles
 terminal mouse capture from any TUI focus, matching scrollback Ctrl-R without
 persisting the current capture state.

@@ -925,6 +925,48 @@ func TestLoadPreservesEmptyWordSeparators(t *testing.T) {
 	}
 }
 
+func TestThemeConfigCanonicalizationAndUpdate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[models]\ndefault = \"local\"\n\n[ui]\ntheme = \"tokyo\"\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil || cfg.UI.Theme != "tokyonight" {
+		t.Fatalf("theme=%q err=%v", cfg.UI.Theme, err)
+	}
+	if err := UpdateTheme(path, "rose-pine"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(path)
+	if err != nil || cfg.UI.Theme != "rosepine-moon" {
+		t.Fatalf("updated theme=%q err=%v", cfg.UI.Theme, err)
+	}
+	if err := UpdateTheme(path, "missing"); err == nil {
+		t.Fatal("unknown theme was accepted")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := toml.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if raw["models"].(map[string]any)["default"] != "local" || raw["ui"].(map[string]any)["theme"] != "rosepine-moon" {
+		t.Fatalf("updated config=%#v", raw)
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o640 {
+		t.Fatalf("mode info=%v err=%v", info, err)
+	}
+	invalidPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(invalidPath, []byte("[ui]\ntheme = \"missing\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(invalidPath); err == nil || !strings.Contains(err.Error(), "ui theme") {
+		t.Fatalf("invalid configured theme error=%v", err)
+	}
+}
+
 func TestLoadTextSelectionCompatibility(t *testing.T) {
 	for _, test := range []struct {
 		name, config, want string

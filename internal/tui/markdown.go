@@ -31,10 +31,14 @@ type markdownSpan struct {
 var bareHyperlinkPattern = regexp.MustCompile(`(?i)(?:https?://[^\s\x00-\x1f]+|ftp://[^\s\x00-\x1f]+|mailto:[^\s\x00-\x1f]+)`)
 
 func renderMarkdown(value string, width int) []string {
-	return renderMarkdownWithLinks(value, width, false)
+	return renderMarkdownTheme(value, width, false, paletteFor("groknight"))
 }
 
 func renderMarkdownWithLinks(value string, width int, links bool) []string {
+	return renderMarkdownTheme(value, width, links, paletteFor("groknight"))
+}
+
+func renderMarkdownTheme(value string, width int, links bool, theme themePalette) []string {
 	if width < 1 {
 		width = 1
 	}
@@ -53,17 +57,17 @@ func renderMarkdownWithLinks(value string, width int, links bool) []string {
 			continue
 		}
 		if inCode {
-			lines = append(lines, wrapMarkdownSpans([]markdownSpan{{text: "  " + raw, style: ansiCyan}}, width, links)...)
+			lines = append(lines, wrapMarkdownSpans([]markdownSpan{{text: "  " + raw, style: theme.code}}, width, links)...)
 			continue
 		}
 		if index+1 < len(rawLines) {
-			if table, consumed := renderMarkdownTable(rawLines[index:], width, links); consumed > 0 {
+			if table, consumed := renderMarkdownTable(rawLines[index:], width, links, theme); consumed > 0 {
 				lines = append(lines, table...)
 				index += consumed - 1
 				continue
 			}
 		}
-		spans := markdownLine(raw)
+		spans := markdownLine(raw, theme)
 		if len(spans) == 0 {
 			lines = append(lines, "")
 			continue
@@ -73,7 +77,7 @@ func renderMarkdownWithLinks(value string, width int, links bool) []string {
 	return lines
 }
 
-func renderMarkdownTable(lines []string, width int, links bool) ([]string, int) {
+func renderMarkdownTable(lines []string, width int, links bool, theme themePalette) ([]string, int) {
 	header, ok := splitMarkdownTableRow(lines[0])
 	if !ok || len(header) < 1 {
 		return nil, 0
@@ -115,7 +119,7 @@ func renderMarkdownTable(lines []string, width int, links bool) ([]string, int) 
 		wrapped := make([][]string, len(row))
 		height := 1
 		for column, cell := range row {
-			wrapped[column] = wrapMarkdownSpans(inlineMarkdown(strings.TrimSpace(cell)), columnWidths[column], links)
+			wrapped[column] = wrapMarkdownSpans(inlineMarkdown(strings.TrimSpace(cell), theme), columnWidths[column], links)
 			height = max(height, len(wrapped[column]))
 		}
 		for line := 0; line < height; line++ {
@@ -223,7 +227,7 @@ func markdownANSIWidth(value string) int {
 	return width
 }
 
-func markdownLine(raw string) []markdownSpan {
+func markdownLine(raw string, theme themePalette) []markdownSpan {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
 		return nil
@@ -236,7 +240,7 @@ func markdownLine(raw string) []markdownSpan {
 		prefix := strings.Repeat("#", level) + " "
 		if strings.HasPrefix(trimmed, prefix) {
 			trimmed = strings.TrimSpace(strings.TrimPrefix(trimmed, prefix))
-			style = ansiBold + ansiCyan
+			style = ansiBold + theme.heading
 			break
 		}
 	}
@@ -245,12 +249,12 @@ func markdownLine(raw string) []markdownSpan {
 		style += ansiDim
 	} else if strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "* ") || strings.HasPrefix(trimmed, "+ ") {
 		trimmed = "• " + strings.TrimSpace(trimmed[2:])
-		style += ansiYellow
+		style += theme.list
 	} else if marker, content, ok := orderedListItem(trimmed); ok {
 		trimmed = marker + " " + content
-		style += ansiYellow
+		style += theme.list
 	}
-	spans := inlineMarkdown(trimmed)
+	spans := inlineMarkdown(trimmed, theme)
 	if style != "" {
 		for index := range spans {
 			spans[index].style = style + spans[index].style
@@ -270,7 +274,7 @@ func orderedListItem(value string) (string, string, bool) {
 	return value[:end+1], strings.TrimSpace(value[end+2:]), true
 }
 
-func inlineMarkdown(value string) []markdownSpan {
+func inlineMarkdown(value string, theme themePalette) []markdownSpan {
 	var spans []markdownSpan
 	for len(value) > 0 {
 		if value[0] == '"' || value[0] == '\'' {
@@ -299,7 +303,7 @@ func inlineMarkdown(value string) []markdownSpan {
 		}
 		if value[0] == '`' {
 			if end := strings.IndexByte(value[1:], '`'); end >= 0 {
-				spans = append(spans, markdownSpan{text: value[1 : end+1], style: ansiCyan})
+				spans = append(spans, markdownSpan{text: value[1 : end+1], style: theme.code})
 				value = value[end+2:]
 				continue
 			}

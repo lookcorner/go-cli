@@ -16,6 +16,7 @@ import (
 
 	"github.com/lookcorner/go-cli/internal/compat"
 	"github.com/lookcorner/go-cli/internal/memory"
+	"github.com/lookcorner/go-cli/internal/theme"
 	"github.com/lookcorner/go-cli/internal/version"
 	"github.com/pelletier/go-toml/v2"
 	"golang.org/x/mod/semver"
@@ -198,6 +199,7 @@ type AskUserQuestionConfig struct {
 }
 
 type UIConfig struct {
+	Theme                string  `json:"theme"`
 	KeepTextSelection    string  `json:"keep_text_selection"`
 	WordSeparators       *string `json:"word_separators,omitempty"`
 	MouseReportingToggle bool    `json:"mouse_reporting_toggle,omitempty"`
@@ -427,6 +429,7 @@ type fileHashlineConfig struct {
 }
 
 type fileUIConfig struct {
+	Theme                        *string `json:"theme,omitempty" toml:"theme"`
 	KeepTextSelection            any     `json:"keep_text_selection,omitempty" toml:"keep_text_selection"`
 	WordSeparators               *string `json:"word_separators,omitempty" toml:"word_separators"`
 	MouseReportingToggle         *bool   `json:"mouse_reporting_toggle,omitempty" toml:"mouse_reporting_toggle"`
@@ -647,7 +650,7 @@ func Load(path string) (Config, error) {
 		AskUserQuestion:             AskUserQuestionConfig{TimeoutEnabled: true, TimeoutSeconds: 30 * 60},
 		Toolset:                     ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}},
 		Goal:                        GoalConfig{VerifierCount: 3, ClassifierMaxRuns: 10, ReverifyAfter: 8},
-		UI:                          UIConfig{KeepTextSelection: "flash", ShowTimestamps: true, PromptSuggestions: true, PermissionMode: "ask"},
+		UI:                          UIConfig{Theme: "groknight", KeepTextSelection: "flash", ShowTimestamps: true, PromptSuggestions: true, PermissionMode: "ask"},
 		Pruning:                     PruningConfig{Enabled: true, KeepLastNTurns: 3, SoftTrimThreshold: 4000, SoftTrimHead: 1500, SoftTrimTail: 1500, HardClearAgeTurns: 10},
 		Memory:                      memory.DefaultConfig(),
 	}
@@ -845,6 +848,13 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.Toolset.Hashline.ChunkSize != nil && cfg.Toolset.Hashline.Scheme == "chunk" && cfg.Toolset.Hashline.ChunkSize < 1 {
 		return errors.New("toolset hashline chunk_size must be greater than zero")
+	}
+	if disk.UI.Theme != nil {
+		canonical, ok := theme.Canonical(*disk.UI.Theme)
+		if !ok {
+			return errors.New("ui theme must be auto, groknight, grokday, tokyonight, rosepine-moon, or oscura-midnight")
+		}
+		cfg.UI.Theme = canonical
 	}
 	if disk.UI.KeepTextSelection != nil {
 		value, err := parseKeepTextSelection(disk.UI.KeepTextSelection)
@@ -2235,6 +2245,11 @@ func (c Config) Validate() error {
 	}
 	if c.UI.KeepTextSelection != "" && c.UI.KeepTextSelection != "flash" && c.UI.KeepTextSelection != "hold" && c.UI.KeepTextSelection != "word_select" {
 		return errors.New("ui keep_text_selection must be flash, hold, or word_select")
+	}
+	if c.UI.Theme != "" {
+		if _, ok := theme.Canonical(c.UI.Theme); !ok {
+			return errors.New("ui theme must be auto, groknight, grokday, tokyonight, rosepine-moon, or oscura-midnight")
+		}
 	}
 	if c.Toolset.FileToolset != "" && c.Toolset.FileToolset != "standard" && c.Toolset.FileToolset != "hashline" {
 		return errors.New("toolset file_toolset must be standard or hashline")

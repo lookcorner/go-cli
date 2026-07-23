@@ -482,6 +482,9 @@ type model struct {
 	persistCompactMode func(bool) error
 	showTimestamps     bool
 	persistTimestamps  func(bool) error
+	themeName          string
+	theme              themePalette
+	persistTheme       func(string) error
 	transcriptMessages []transcriptMessage
 	scrollLines        int
 	invertScroll       bool
@@ -585,6 +588,8 @@ type UIOptions struct {
 	ScrollLines          *uint8
 	InvertScroll         bool
 	PromptSuggestions    bool
+	Theme                string
+	SetTheme             func(string) error
 	ForkSession          func(context.Context, bool) (ForkResult, error)
 	ForkInGit            bool
 }
@@ -700,6 +705,9 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		scrollLines: mouseWheelScrollLines, invertScroll: options.InvertScroll,
 		suggestionsEnabled: options.PromptSuggestions,
 		hyperlinks:         detectTerminalHyperlinks(),
+		themeName:          options.Theme,
+		theme:              paletteFor(options.Theme),
+		persistTheme:       options.SetTheme,
 		forkSession:        options.ForkSession,
 		forkInGit:          options.ForkInGit,
 	}
@@ -770,11 +778,11 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.selectionClick = selectionClickState{}
 		before := 0
 		if m.scroll > 0 {
-			before = len(renderMarkdown(m.transcriptText(), max(m.width, 20)))
+			before = len(renderMarkdownTheme(m.transcriptText(), max(m.width, 20), false, m.colors()))
 		}
 		m.transcript.WriteString(msg.text)
 		if m.scroll > 0 {
-			after := len(renderMarkdown(m.transcriptText(), max(m.width, 20)))
+			after := len(renderMarkdownTheme(m.transcriptText(), max(m.width, 20), false, m.colors()))
 			m.scroll += max(after-before, 0)
 		}
 		m.refreshScrollSearch()
@@ -1604,7 +1612,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if m.runner != nil && m.runner.MCPServerCatalog != nil {
 				mcpCommand = " `/mcps`"
 			}
-			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + announcementCommand + " `/btw <question>` `/compact` `/compact-mode` `/context` `/copy [N]` `/dream` `/effort [level]` `/exit` `/export [filename]`" + feedbackCommand + " `/find` `/flush` `/fork [--worktree|--no-worktree] [directive]` `/help` `/history` `/loop` `/memory`" + mcpCommand + " `/model [name] [effort]` (`/m`) `/multiline` `/new` (`/clear`) `/plan [description]` `/privacy [opt-out]` `/queue` `/recap` `/release-notes` (`/changelog`) `/remember` `/rename <title>` `/resume` `/rewind` `/session-info` (`/status`, `/info`)" + shareCommand + " `/tasks` `/terminal-setup`" + mouseCommand + " `/timestamps` `/transcript` `/usage [show|manage]` (`/cost`) `/view-plan` `/vim-mode`")
+			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + announcementCommand + " `/btw <question>` `/compact` `/compact-mode` `/context` `/copy [N]` `/dream` `/effort [level]` `/exit` `/export [filename]`" + feedbackCommand + " `/find` `/flush` `/fork [--worktree|--no-worktree] [directive]` `/help` `/history` `/loop` `/memory`" + mcpCommand + " `/model [name] [effort]` (`/m`) `/multiline` `/new` (`/clear`) `/plan [description]` `/privacy [opt-out]` `/queue` `/recap` `/release-notes` (`/changelog`) `/remember` `/rename <title>` `/resume` `/rewind` `/session-info` (`/status`, `/info`)" + shareCommand + " `/tasks` `/terminal-setup` `/theme [name]` (`/t`)" + mouseCommand + " `/timestamps` `/transcript` `/usage [show|manage]` (`/cost`) `/view-plan` `/vim-mode`")
 			m.status = "commands"
 			return m, nil
 		case "/mcps":
@@ -1714,6 +1722,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.applyModel(m.runner.ModelID, level)
+			return m, nil
+		case "/theme", "/t":
+			m.applyThemeCommand(strings.TrimSpace(strings.TrimPrefix(prompt, fields[0])))
 			return m, nil
 		case "/btw":
 			return m, m.startBtw(strings.TrimSpace(strings.TrimPrefix(prompt, "/btw")))
@@ -2747,7 +2758,7 @@ func (m *model) refreshScrollSearch() {
 	if m.scrollSearch == nil {
 		return
 	}
-	lines := renderMarkdown(m.transcriptText(), max(m.width, 20))
+	lines := renderMarkdownTheme(m.transcriptText(), max(m.width, 20), false, m.colors())
 	for index := range lines {
 		lines[index] = stripUIANSI(lines[index])
 	}
@@ -2760,7 +2771,7 @@ func (m *model) revealScrollSearch() {
 	if m.scrollSearch == nil || m.scrollSearch.current < 0 {
 		return
 	}
-	lines := renderMarkdown(m.transcriptText(), max(m.width, 20))
+	lines := renderMarkdownTheme(m.transcriptText(), max(m.width, 20), false, m.colors())
 	target := m.scrollSearch.matches[m.scrollSearch.current].line
 	height := m.contentHeight()
 	maxStart := max(len(lines)-height, 0)
@@ -2775,7 +2786,7 @@ func (m *model) scrollTranscript(lines int) {
 }
 
 func (m *model) maxTranscriptScroll() int {
-	return max(len(renderMarkdown(m.transcriptText(), max(m.width, 20)))-m.contentHeight(), 0)
+	return max(len(renderMarkdownTheme(m.transcriptText(), max(m.width, 20), false, m.colors()))-m.contentHeight(), 0)
 }
 
 func isASCIILetterOrSlash(value byte) bool {
@@ -3541,22 +3552,23 @@ func runMemoryNoteSave(runner *agent.Runner, content string) tea.Cmd {
 
 func (m *model) View() tea.View {
 	width := max(m.width, 20)
+	colors := m.colors()
 	mode := ""
 	if m.planMode {
-		mode = "  \x1b[30;43m PLAN \x1b[0m"
+		mode = "  " + colors.warning + "\x1b[7m PLAN " + ansiReset
 	}
 	if m.bridge != nil {
 		switch m.bridge.PermissionMode() {
 		case tools.PermissionAuto:
-			mode += "  \x1b[30;45m AUTO \x1b[0m"
+			mode += "  " + colors.modal + "\x1b[7m AUTO " + ansiReset
 		case tools.PermissionAlwaysApprove:
-			mode += "  \x1b[30;41m ALWAYS \x1b[0m"
+			mode += "  " + colors.error + "\x1b[7m ALWAYS " + ansiReset
 		}
 	}
 	if m.scrollFocused {
-		mode += "  \x1b[30;46m SCROLLBACK \x1b[0m"
+		mode += "  " + colors.heading + "\x1b[7m SCROLLBACK " + ansiReset
 	}
-	header := fmt.Sprintf("\x1b[1m Gork Go\x1b[0m%s  \x1b[2m%s · %s\x1b[0m", mode, truncate(m.modelName, 24), truncate(m.workspace, max(width-45, 10)))
+	header := fmt.Sprintf("%s%s Gork Go%s%s  %s%s · %s%s", ansiBold, colors.title, ansiReset, mode, ansiDim, truncate(m.modelName, 24), truncate(m.workspace, max(width-45, 10)), ansiReset)
 	header = padRight(truncateANSIUnsafe(header, width), width)
 	banner := m.announcementBanner(width)
 	content := m.transcriptText()
@@ -3581,7 +3593,7 @@ func (m *model) View() tea.View {
 		}
 		content = "# Memory Note\n\n**" + label + "**\n\n" + note
 	}
-	contentLines := renderMarkdownWithLinks(content, width, m.hyperlinks)
+	contentLines := renderMarkdownTheme(content, width, m.hyperlinks, m.colors())
 	if m.historySearch != nil {
 		contentLines = m.historySearchLines(width, m.contentHeight())
 	} else if m.scrollSearch != nil {
@@ -3602,15 +3614,15 @@ func (m *model) View() tea.View {
 
 	var footer string
 	if m.mcp != nil {
-		footer = "\x1b[1;33mMCP servers\x1b[0m\n\x1b[2m" + truncate(m.mcpHint(), width) + "\x1b[0m"
+		footer = ansiBold + colors.modal + "MCP servers" + ansiReset + "\n" + ansiDim + truncate(m.mcpHint(), width) + ansiReset
 	} else if m.sessionSelect != nil {
-		footer = "\x1b[1;33mResume session\x1b[0m\n> " + renderInput(m.sessionSelect.query, m.sessionSelect.cursor, max(width-2, 1)) + "\n\x1b[2m" + truncate(m.sessionSelectHint(), width) + "\x1b[0m"
+		footer = ansiBold + colors.modal + "Resume session" + ansiReset + "\n> " + renderInput(m.sessionSelect.query, m.sessionSelect.cursor, max(width-2, 1)) + "\n" + ansiDim + truncate(m.sessionSelectHint(), width) + ansiReset
 	} else if m.forkChoice != nil {
-		footer = "\x1b[1;33mFork session\x1b[0m\n\x1b[2mUp/Down select · Enter confirm · Y/N choose · Esc cancel\x1b[0m"
+		footer = ansiBold + colors.modal + "Fork session" + ansiReset + "\n" + ansiDim + "Up/Down select · Enter confirm · Y/N choose · Esc cancel" + ansiReset
 	} else if m.modelSelect != nil {
-		footer = "\x1b[1;33mModel\x1b[0m\n\x1b[2m" + truncate(m.modelSelectHint(), width) + "\x1b[0m"
+		footer = ansiBold + colors.modal + "Model" + ansiReset + "\n" + ansiDim + truncate(m.modelSelectHint(), width) + ansiReset
 	} else if m.rewind != nil {
-		footer = "\x1b[1;33mRewind\x1b[0m\n\x1b[2m" + truncate(m.rewindHint(), width) + "\x1b[0m"
+		footer = ansiBold + colors.modal + "Rewind" + ansiReset + "\n" + ansiDim + truncate(m.rewindHint(), width) + ansiReset
 	} else if m.remember != nil {
 		tab := "enhancing..."
 		if m.remember.enhanceDone {
@@ -3619,15 +3631,15 @@ func (m *model) View() tea.View {
 		if m.remember.enhanced != "" {
 			tab = "Tab raw/enhanced"
 		}
-		footer = "\x1b[1;32mMemory note review\x1b[0m\n\x1b[2m" + truncate("Enter/Y save · "+tab+" · Esc cancel", width) + "\x1b[0m"
+		footer = ansiBold + colors.positive + "Memory note review" + ansiReset + "\n" + ansiDim + truncate("Enter/Y save · "+tab+" · Esc cancel", width) + ansiReset
 	} else if m.planReview != nil {
 		if m.planReview.editing {
-			footer = fmt.Sprintf("\x1b[1;33m%s\x1b[0m\n> %s\n\x1b[2m%s\x1b[0m", truncate("Request plan changes", width), renderInput(m.input, m.cursor, max(width-2, 1)), truncate("Enter send · Esc back · Ctrl-U clear", width))
+			footer = fmt.Sprintf("%s%s%s%s\n> %s\n%s%s%s", ansiBold, colors.modal, truncate("Request plan changes", width), ansiReset, renderInput(m.input, m.cursor, max(width-2, 1)), ansiDim, truncate("Enter send · Esc back · Ctrl-U clear", width), ansiReset)
 		} else {
-			footer = "\x1b[1;33mPlan review\x1b[0m\n\x1b[2m" + truncate("[Y] approve · [R] request changes · [A] abandon · Esc keep planning", width) + "\x1b[0m"
+			footer = ansiBold + colors.modal + "Plan review" + ansiReset + "\n" + ansiDim + truncate("[Y] approve · [R] request changes · [A] abandon · Esc keep planning", width) + ansiReset
 		}
 	} else if m.approval != nil {
-		footer = fmt.Sprintf("\x1b[1;33mApprove %s?\x1b[0m %s\n\x1b[2m[y] allow  [n/esc] deny\x1b[0m", m.approval.action, truncate(m.approval.detail, width-20))
+		footer = fmt.Sprintf("%s%sApprove %s?%s %s\n%s[y] allow  [n/esc] deny%s", ansiBold, colors.modal, m.approval.action, ansiReset, truncate(m.approval.detail, width-20), ansiDim, ansiReset)
 	} else if m.question != nil {
 		question := m.question.event.request.Questions[m.question.index]
 		labels := make([]string, 0, len(question.Options))
@@ -3638,15 +3650,15 @@ func (m *model) View() tea.View {
 		if m.question.event.request.Mode == "plan" {
 			hint += " · Ctrl-R clarify · Ctrl-S skip"
 		}
-		footer = fmt.Sprintf("\x1b[1;33m%s\x1b[0m\n%s\n> %s\n\x1b[2m%s\x1b[0m",
-			truncate(question.Question, width), truncate(strings.Join(labels, "  ")+"  [Other] type response", width),
-			renderInput(m.input, m.cursor, max(width-2, 1)), truncate(hint, width))
+		footer = fmt.Sprintf("%s%s%s%s\n%s\n> %s\n%s%s%s", ansiBold, colors.modal,
+			truncate(question.Question, width), ansiReset, truncate(strings.Join(labels, "  ")+"  [Other] type response", width),
+			renderInput(m.input, m.cursor, max(width-2, 1)), ansiDim, truncate(hint, width), ansiReset)
 	} else if m.rememberInput {
-		footer = "\x1b[1;32m# Save a memory note\x1b[0m\n> " + renderInput(m.input, m.cursor, max(width-2, 1)) + "\n\x1b[2mEnter review · Esc cancel\x1b[0m"
+		footer = ansiBold + colors.positive + "# Save a memory note" + ansiReset + "\n> " + renderInput(m.input, m.cursor, max(width-2, 1)) + "\n" + ansiDim + "Enter review · Esc cancel" + ansiReset
 	} else if m.historySearch != nil {
-		footer = "\x1b[1;32mPrompt history\x1b[0m\n> " + renderInput(m.input, m.cursor, max(width-2, 1)) + "\n\x1b[2mEnter/Tab restore · Esc cancel · Up/Down select\x1b[0m"
+		footer = ansiBold + colors.positive + "Prompt history" + ansiReset + "\n> " + renderInput(m.input, m.cursor, max(width-2, 1)) + "\n" + ansiDim + "Enter/Tab restore · Esc cancel · Up/Down select" + ansiReset
 	} else if m.scrollSearch != nil {
-		footer = "\x1b[1;32mSearch scrollback\x1b[0m\n> " + renderInput(m.scrollSearch.query, m.scrollSearch.cursor, max(width-2, 1)) + "\n\x1b[2m" + truncate(m.scrollSearch.status(), width) + "\x1b[0m"
+		footer = ansiBold + colors.positive + "Search scrollback" + ansiReset + "\n> " + renderInput(m.scrollSearch.query, m.scrollSearch.cursor, max(width-2, 1)) + "\n" + ansiDim + truncate(m.scrollSearch.status(), width) + ansiReset
 	} else {
 		inputLines := []string{"> "}
 		if m.running {
@@ -3661,9 +3673,9 @@ func (m *model) View() tea.View {
 		if m.multiline {
 			hint = "Shift/Alt-Enter send · Enter newline · Ctrl-M single-line · Ctrl-Z undo"
 		}
-		footer = strings.Join(inputLines, "\n") + "\n\x1b[2m" + truncate(hint, width) + "\x1b[0m"
+		footer = strings.Join(inputLines, "\n") + "\n" + ansiDim + truncate(hint, width) + ansiReset
 	}
-	status := "\x1b[2m" + truncate(m.status, width) + "\x1b[0m"
+	status := ansiDim + truncate(m.status, width) + ansiReset
 	prefix := header + "\n"
 	if len(banner) > 0 {
 		prefix += strings.Join(banner, "\n") + "\n"
@@ -3757,6 +3769,7 @@ func (m *model) announcementBanner(width int) []string {
 		hide = "[hide]"
 	}
 	if value(item.Severity) == "critical" {
+		colors := m.colors()
 		title := value(item.Title)
 		if title == "" {
 			title = "Announcement"
@@ -3768,7 +3781,7 @@ func (m *model) announcementBanner(width int) []string {
 		} else {
 			second = truncate(second, width)
 		}
-		return []string{"\x1b[1;31m" + first + "\x1b[0m", second}
+		return []string{ansiBold + colors.error + first + ansiReset, second}
 	}
 	left := value(item.Message)
 	button, target := "", ""
@@ -3788,7 +3801,7 @@ func (m *model) announcementBanner(width int) []string {
 		link := ansi.SetHyperlink(target, "id="+hyperlinkID(target)) + button + ansi.ResetHyperlink()
 		line = strings.Replace(line, button, link, 1)
 	}
-	return []string{"\x1b[33m" + line + "\x1b[0m"}
+	return []string{m.colors().warning + line + ansiReset}
 }
 
 func (m *model) pinnedAnnouncementURL() string {
@@ -4017,7 +4030,7 @@ func bulletLines(lines []string) string {
 }
 
 func (m *model) maxViewerScroll() int {
-	return max(len(renderMarkdown(m.viewerContent(), max(m.width, 20)))-m.contentHeight(), 0)
+	return max(len(renderMarkdownTheme(m.viewerContent(), max(m.width, 20), false, m.colors()))-m.contentHeight(), 0)
 }
 
 func (m *model) footerClick(x, y, width int) (mouseClickEvent, bool) {

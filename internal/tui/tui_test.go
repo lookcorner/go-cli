@@ -1507,6 +1507,68 @@ func TestMultilineSlashCommandAndAlias(t *testing.T) {
 	}
 }
 
+func TestThemeCommandCanonicalizesCyclesAndRenders(t *testing.T) {
+	var persisted []string
+	m := &model{
+		ctx: context.Background(), runner: &agent.Runner{}, width: 60, height: 16,
+		themeName: "groknight", theme: paletteFor("groknight"),
+		persistTheme: func(value string) error {
+			persisted = append(persisted, value)
+			return nil
+		},
+	}
+	for _, command := range []string{"/theme tokyo", "/t rose-pine", "/theme"} {
+		m.setInput(command)
+		updated, next := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+		m = updated.(*model)
+		if next != nil || m.running {
+			t.Fatalf("command=%q next=%v running=%v", command, next != nil, m.running)
+		}
+	}
+	if got := strings.Join(persisted, ","); got != "tokyonight,rosepine-moon,oscura-midnight" {
+		t.Fatalf("persisted=%q", got)
+	}
+	if m.themeName != "oscura-midnight" || m.theme.name != "oscura-midnight" || m.status != "theme: oscura-midnight" {
+		t.Fatalf("name=%q palette=%q status=%q", m.themeName, m.theme.name, m.status)
+	}
+	m.appendSystem("# Themed heading")
+	if !strings.Contains(m.View().Content, rgb("5ccfe6")) {
+		t.Fatalf("active theme color missing from view: %q", m.View().Content)
+	}
+}
+
+func TestThemeCommandAutoInvalidAndPersistenceFailure(t *testing.T) {
+	t.Setenv("TERM_BACKGROUND", "light")
+	var persisted []string
+	m := &model{
+		ctx: context.Background(), runner: &agent.Runner{}, width: 60, height: 16,
+		themeName: "groknight", theme: paletteFor("groknight"),
+		persistTheme: func(value string) error {
+			persisted = append(persisted, value)
+			return nil
+		},
+	}
+	m.setInput("/theme auto")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.themeName != "auto" || m.theme.name != "grokday" || m.status != "theme: auto (grokday)" || !reflect.DeepEqual(persisted, []string{"auto"}) {
+		t.Fatalf("command=%v name=%q palette=%q status=%q persisted=%v", command != nil, m.themeName, m.theme.name, m.status, persisted)
+	}
+	m.setInput("/theme missing")
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.themeName != "auto" || len(persisted) != 1 || m.status != "theme argument invalid" || !strings.Contains(m.transcript.String(), "Available: auto, groknight") {
+		t.Fatalf("command=%v name=%q status=%q persisted=%v transcript=%q", command != nil, m.themeName, m.status, persisted, m.transcript.String())
+	}
+	m.persistTheme = func(string) error { return errors.New("disk full") }
+	m.setInput("/theme dark")
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.themeName != "auto" || m.theme.name != "grokday" || m.status != "theme update failed" || !strings.Contains(m.transcript.String(), "Couldn't save theme: disk full") {
+		t.Fatalf("command=%v name=%q palette=%q status=%q transcript=%q", command != nil, m.themeName, m.theme.name, m.status, m.transcript.String())
+	}
+}
+
 func TestNewSessionCommandsExitWithoutModelTurn(t *testing.T) {
 	for _, prompt := range []string{"/new", "/clear ignored"} {
 		m := &model{ctx: context.Background(), runner: &agent.Runner{}, width: 60, height: 16, status: "ready"}
