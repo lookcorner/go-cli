@@ -428,60 +428,62 @@ func (w bridgeWriter) Write(data []byte) (int, error) {
 }
 
 type model struct {
-	ctx               context.Context
-	runner            *agent.Runner
-	bridge            *Bridge
-	workspace         string
-	modelName         string
-	previousID        string
-	inputTokens       int
-	contextWindow     int
-	transcript        strings.Builder
-	input             []rune
-	cursor            int
-	inputUndo         []inputSnapshot
-	multiline         bool
-	history           []string
-	historyIndex      int
-	historyActive     bool
-	historySearch     *historySearchState
-	scrollSearch      *scrollSearchState
-	selection         *textSelection
-	selectionNonce    uint64
-	selectionMode     textSelectionMode
-	wordSeparators    string
-	mouseToggle       bool
-	vimMode           bool
-	persistVimMode    func(bool) error
-	showTimestamps    bool
-	persistTimestamps func(bool) error
-	messageTimestamps []transcriptTimestamp
-	scrollLines       int
-	invertScroll      bool
-	mouseReleased     bool
-	hyperlinks        bool
-	scrollFocused     bool
-	selectionClick    selectionClickState
-	width             int
-	height            int
-	scroll            int
-	running           bool
-	status            string
-	approval          *approvalEvent
-	question          *questionState
-	planMode          bool
-	planReview        *planReviewState
-	viewer            *readOnlyViewer
-	remember          *rememberReviewState
-	rememberInput     bool
-	feedbackInput     bool
-	rememberNonce     uint64
-	turnCancel        context.CancelFunc
-	initial           string
-	pendingPrompts    []string
-	scheduled         []tools.ScheduledTaskFired
-	activeTask        string
-	promptSerial      uint64
+	ctx                context.Context
+	runner             *agent.Runner
+	bridge             *Bridge
+	workspace          string
+	modelName          string
+	previousID         string
+	inputTokens        int
+	contextWindow      int
+	transcript         strings.Builder
+	input              []rune
+	cursor             int
+	inputUndo          []inputSnapshot
+	multiline          bool
+	history            []string
+	historyIndex       int
+	historyActive      bool
+	historySearch      *historySearchState
+	scrollSearch       *scrollSearchState
+	selection          *textSelection
+	selectionNonce     uint64
+	selectionMode      textSelectionMode
+	wordSeparators     string
+	mouseToggle        bool
+	vimMode            bool
+	persistVimMode     func(bool) error
+	compactMode        bool
+	persistCompactMode func(bool) error
+	showTimestamps     bool
+	persistTimestamps  func(bool) error
+	transcriptMessages []transcriptMessage
+	scrollLines        int
+	invertScroll       bool
+	mouseReleased      bool
+	hyperlinks         bool
+	scrollFocused      bool
+	selectionClick     selectionClickState
+	width              int
+	height             int
+	scroll             int
+	running            bool
+	status             string
+	approval           *approvalEvent
+	question           *questionState
+	planMode           bool
+	planReview         *planReviewState
+	viewer             *readOnlyViewer
+	remember           *rememberReviewState
+	rememberInput      bool
+	feedbackInput      bool
+	rememberNonce      uint64
+	turnCancel         context.CancelFunc
+	initial            string
+	pendingPrompts     []string
+	scheduled          []tools.ScheduledTaskFired
+	activeTask         string
+	promptSerial       uint64
 
 	promptSuggestion    string
 	suggestionsEnabled  bool
@@ -543,6 +545,8 @@ type UIOptions struct {
 	MouseReportingToggle bool
 	VimMode              bool
 	SetVimMode           func(bool) error
+	CompactMode          bool
+	SetCompactMode       func(bool) error
 	ShowTimestamps       bool
 	SetShowTimestamps    func(bool) error
 	ScrollLines          *uint8
@@ -550,9 +554,11 @@ type UIOptions struct {
 	PromptSuggestions    bool
 }
 
-type transcriptTimestamp struct {
+type transcriptMessage struct {
+	start  int
 	offset int
 	at     time.Time
+	role   string
 }
 
 func parseTextSelectionMode(value string) textSelectionMode {
@@ -654,6 +660,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		status:        "ready", initial: strings.TrimSpace(initialPrompt), historyIndex: -1,
 		history: loadPromptHistory(runner, workspace), selectionMode: parseTextSelectionMode(options.Mode),
 		wordSeparators: defaultWordSeparators, mouseToggle: options.MouseReportingToggle, vimMode: options.VimMode, persistVimMode: options.SetVimMode,
+		compactMode: options.CompactMode, persistCompactMode: options.SetCompactMode,
 		showTimestamps: options.ShowTimestamps, persistTimestamps: options.SetShowTimestamps,
 		scrollLines: mouseWheelScrollLines, invertScroll: options.InvertScroll,
 		suggestionsEnabled: options.PromptSuggestions,
@@ -1415,7 +1422,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if m.runner != nil && m.runner.SubmitFeedback != nil {
 				feedbackCommand = " `/feedback [text]`"
 			}
-			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + " `/btw <question>` `/compact` `/context` `/copy [N]` `/dream` `/effort [level]` `/exit` `/export [filename]`" + feedbackCommand + " `/find` `/flush` `/help` `/history` `/loop` `/memory` `/model [name] [effort]` (`/m`) `/multiline` `/plan [description]` `/queue` `/recap` `/remember` `/rename <title>` `/rewind` `/session-info` (`/status`, `/info`) `/tasks`" + mouseCommand + " `/timestamps` `/transcript` `/view-plan` `/vim-mode`")
+			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + " `/btw <question>` `/compact` `/compact-mode` `/context` `/copy [N]` `/dream` `/effort [level]` `/exit` `/export [filename]`" + feedbackCommand + " `/find` `/flush` `/help` `/history` `/loop` `/memory` `/model [name] [effort]` (`/m`) `/multiline` `/plan [description]` `/queue` `/recap` `/remember` `/rename <title>` `/rewind` `/session-info` (`/status`, `/info`) `/tasks`" + mouseCommand + " `/timestamps` `/transcript` `/view-plan` `/vim-mode`")
 			m.status = "commands"
 			return m, nil
 		case "/queue":
@@ -1480,6 +1487,26 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				state = "on"
 			}
 			message := "Timestamps: " + state
+			m.appendSystem(message)
+			m.status = message
+			return m, nil
+		case "/compact-mode":
+			previous := m.compactMode
+			m.compactMode = !previous
+			if m.persistCompactMode != nil {
+				if err := m.persistCompactMode(m.compactMode); err != nil {
+					m.compactMode = previous
+					m.status = "persist compact mode: " + err.Error()
+					return m, nil
+				}
+			}
+			state := "off"
+			if m.compactMode {
+				state = "on"
+			} else if m.effectiveCompact() {
+				state = "off (auto-compact active on small terminal)"
+			}
+			message := "Compact mode: " + state
 			m.appendSystem(message)
 			m.status = message
 			return m, nil
@@ -2956,7 +2983,7 @@ func (m *model) replaceTranscript(text string, messages []session.Message) {
 	text = strings.TrimSpace(text)
 	m.transcript.Reset()
 	m.transcript.WriteString(text)
-	m.messageTimestamps = nil
+	m.transcriptMessages = nil
 	if text == "" || strings.TrimSpace(session.FormatTranscript(messages)) != text {
 		return
 	}
@@ -2969,30 +2996,40 @@ func (m *model) replaceTranscript(text string, messages []session.Message) {
 		if message.Role == "user" {
 			label = "You"
 		}
-		if !message.Time.IsZero() {
-			m.messageTimestamps = append(m.messageTimestamps, transcriptTimestamp{offset: offset + len(label), at: message.Time})
-		}
+		m.transcriptMessages = append(m.transcriptMessages, transcriptMessage{start: offset, offset: offset + len(label), at: message.Time, role: message.Role})
 		offset += len(session.FormatTranscript([]session.Message{message}))
 	}
 }
 
 func (m *model) transcriptText() string {
 	text := m.transcript.String()
-	if !m.showTimestamps || len(m.messageTimestamps) == 0 {
+	if len(m.transcriptMessages) == 0 || !m.showTimestamps && !m.effectiveCompact() {
 		return text
 	}
 	var rendered strings.Builder
 	start := 0
-	for _, timestamp := range m.messageTimestamps {
-		if timestamp.offset < start || timestamp.offset > len(text) || timestamp.at.IsZero() {
+	for index, message := range m.transcriptMessages {
+		if message.start < start || message.offset < message.start || message.offset > len(text) {
 			continue
 		}
-		rendered.WriteString(text[start:timestamp.offset])
-		rendered.WriteString("  " + timestamp.at.Local().Format("3:04 PM"))
-		start = timestamp.offset
+		previousUser := index > 0 && m.transcriptMessages[index-1].role == "user"
+		if m.effectiveCompact() && (message.role == "user" || previousUser) && message.start >= start+2 && text[message.start-2:message.start] == "\n\n" {
+			rendered.WriteString(text[start : message.start-1])
+		} else {
+			rendered.WriteString(text[start:message.start])
+		}
+		rendered.WriteString(text[message.start:message.offset])
+		if m.showTimestamps && !message.at.IsZero() {
+			rendered.WriteString("  " + message.at.Local().Format("3:04 PM"))
+		}
+		start = message.offset
 	}
 	rendered.WriteString(text[start:])
 	return rendered.String()
+}
+
+func (m *model) effectiveCompact() bool {
+	return m.compactMode || m.height > 0 && m.height <= 20
 }
 
 func (m *model) beginTurn(prompt string) {
@@ -3002,10 +3039,11 @@ func (m *model) beginTurn(prompt string) {
 		m.transcript.WriteString("\n")
 	}
 	now := time.Now()
+	messageStart := m.transcript.Len()
 	m.transcript.WriteString("You")
-	m.messageTimestamps = append(m.messageTimestamps, transcriptTimestamp{offset: m.transcript.Len(), at: now})
+	m.transcriptMessages = append(m.transcriptMessages, transcriptMessage{start: messageStart, offset: m.transcript.Len(), at: now, role: "user"})
 	m.transcript.WriteString("\n" + prompt + "\n\nGork")
-	m.messageTimestamps = append(m.messageTimestamps, transcriptTimestamp{offset: m.transcript.Len(), at: now})
+	m.transcriptMessages = append(m.transcriptMessages, transcriptMessage{start: m.transcript.Len() - len("Gork"), offset: m.transcript.Len(), at: now, role: "assistant"})
 	m.transcript.WriteString("\n")
 	m.status = "thinking"
 	m.scroll = 0

@@ -493,6 +493,9 @@ saved as `[ui].permission_mode` (`ask`, `auto`, or `always-approve`) and restore
 on the next run; a write failure leaves the active mode unchanged.
 `/vim-mode` toggles Vim-style scrollback navigation immediately and atomically
 saves `[ui].vim_mode`; a write failure restores the previous navigation mode.
+`/compact-mode` reduces blank rows between message blocks and atomically saves
+`[ui].compact_mode`. Terminals at 20 rows or fewer use compact rendering
+automatically without changing the saved user preference.
 Message timestamps are enabled by default. `/timestamps` hides or restores them
 immediately, atomically saves `[ui].show_timestamps`, and rolls back the display
 state if the configuration write fails.

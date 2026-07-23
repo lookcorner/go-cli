@@ -600,8 +600,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return tui.Run(ctx, runner, tuiBridge, prompt, opts.previousID, resumedTranscript, ws.Root(), cfg.Model, tui.UIOptions{
 			Mode: cfg.UI.KeepTextSelection, WordSeparators: cfg.UI.WordSeparators, MouseReportingToggle: cfg.UI.MouseReportingToggle, VimMode: cfg.UI.VimMode,
 			ScrollLines: cfg.UI.ScrollLines, InvertScroll: cfg.UI.InvertScroll, PromptSuggestions: cfg.UI.PromptSuggestions,
+			CompactMode:       cfg.UI.CompactMode,
 			ShowTimestamps:    cfg.UI.ShowTimestamps,
 			SetVimMode:        func(enabled bool) error { return config.UpdateVimMode(opts.configPath, enabled) },
+			SetCompactMode:    func(enabled bool) error { return config.UpdateCompactMode(opts.configPath, enabled) },
 			SetShowTimestamps: func(enabled bool) error { return config.UpdateShowTimestamps(opts.configPath, enabled) },
 		})
 	}

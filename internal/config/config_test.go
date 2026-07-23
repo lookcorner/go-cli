@@ -1795,13 +1795,16 @@ func TestUpdatePluginsPreservesOtherConfiguration(t *testing.T) {
 
 func TestUIConfigPersistenceAndPermissionPrecedence(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
-	if err := os.WriteFile(path, []byte("[models]\ndefault = \"local\"\n\n[model.local]\nmodel = \"local-api\"\n\n[ui]\nvim_mode = true\npermission_mode = \"ask\"\n"), 0o640); err != nil {
+	if err := os.WriteFile(path, []byte("[models]\ndefault = \"local\"\n\n[model.local]\nmodel = \"local-api\"\n\n[ui]\nvim_mode = true\ncompact_mode = false\npermission_mode = \"ask\"\n"), 0o640); err != nil {
 		t.Fatal(err)
 	}
 	if err := UpdatePermissionMode(path, "auto"); err != nil {
 		t.Fatal(err)
 	}
 	if err := UpdateVimMode(path, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateCompactMode(path, true); err != nil {
 		t.Fatal(err)
 	}
 	if err := UpdateShowTimestamps(path, false); err != nil {
@@ -1813,7 +1816,7 @@ func TestUIConfigPersistenceAndPermissionPrecedence(t *testing.T) {
 	}
 	remoteMode := "always-approve"
 	cfg.ApplyRemoteSettings(&RemoteSettings{PermissionMode: &remoteMode})
-	if cfg.UI.PermissionMode != "auto" || cfg.UI.VimMode || cfg.UI.ShowTimestamps || cfg.DefaultModelID != "local" || cfg.Model != "local-api" {
+	if cfg.UI.PermissionMode != "auto" || cfg.UI.VimMode || !cfg.UI.CompactMode || cfg.UI.ShowTimestamps || cfg.DefaultModelID != "local" || cfg.Model != "local-api" {
 		t.Fatalf("config=%#v", cfg)
 	}
 	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o640 {
@@ -1823,16 +1826,19 @@ func TestUIConfigPersistenceAndPermissionPrecedence(t *testing.T) {
 	if err := UpdateVimMode(emptyPath, true); err != nil {
 		t.Fatal(err)
 	}
+	if err := UpdateCompactMode(emptyPath, true); err != nil {
+		t.Fatal(err)
+	}
 	if err := UpdateShowTimestamps(emptyPath, false); err != nil {
 		t.Fatal(err)
 	}
 	emptyConfig, err := Load(emptyPath)
-	if err != nil || !emptyConfig.UI.VimMode || emptyConfig.UI.ShowTimestamps {
+	if err != nil || !emptyConfig.UI.VimMode || !emptyConfig.UI.CompactMode || emptyConfig.UI.ShowTimestamps {
 		t.Fatalf("new config=%#v err=%v", emptyConfig, err)
 	}
 
 	jsonPath := filepath.Join(t.TempDir(), "config.json")
-	if err := os.WriteFile(jsonPath, []byte("{\"ui\":{\"vim_mode\":true}}\n"), 0o600); err != nil {
+	if err := os.WriteFile(jsonPath, []byte("{\"ui\":{\"vim_mode\":true,\"compact_mode\":true}}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := UpdatePermissionMode(jsonPath, "always-approve"); err != nil {
@@ -1841,11 +1847,14 @@ func TestUIConfigPersistenceAndPermissionPrecedence(t *testing.T) {
 	if err := UpdateVimMode(jsonPath, false); err != nil {
 		t.Fatal(err)
 	}
+	if err := UpdateCompactMode(jsonPath, false); err != nil {
+		t.Fatal(err)
+	}
 	if err := UpdateShowTimestamps(jsonPath, false); err != nil {
 		t.Fatal(err)
 	}
 	jsonConfig, err := Load(jsonPath)
-	if err != nil || jsonConfig.UI.PermissionMode != "always-approve" || jsonConfig.UI.VimMode || jsonConfig.UI.ShowTimestamps {
+	if err != nil || jsonConfig.UI.PermissionMode != "always-approve" || jsonConfig.UI.VimMode || jsonConfig.UI.CompactMode || jsonConfig.UI.ShowTimestamps {
 		t.Fatalf("JSON config=%#v err=%v", jsonConfig, err)
 	}
 
@@ -1854,7 +1863,7 @@ func TestUIConfigPersistenceAndPermissionPrecedence(t *testing.T) {
 		t.Fatal(err)
 	}
 	defaultConfig, err := Load(defaultPath)
-	if err != nil || defaultConfig.UI.PermissionMode != "ask" || !defaultConfig.UI.ShowTimestamps {
+	if err != nil || defaultConfig.UI.PermissionMode != "ask" || defaultConfig.UI.CompactMode || !defaultConfig.UI.ShowTimestamps {
 		t.Fatalf("default config=%#v err=%v", defaultConfig, err)
 	}
 	remoteConfig := Config{UI: UIConfig{PermissionMode: "ask"}}

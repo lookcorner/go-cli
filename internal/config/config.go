@@ -201,6 +201,7 @@ type UIConfig struct {
 	WordSeparators       *string `json:"word_separators,omitempty"`
 	MouseReportingToggle bool    `json:"mouse_reporting_toggle,omitempty"`
 	VimMode              bool    `json:"vim_mode,omitempty"`
+	CompactMode          bool    `json:"compact_mode,omitempty"`
 	ShowTimestamps       bool    `json:"show_timestamps"`
 	ScrollLines          *uint8  `json:"scroll_lines,omitempty"`
 	InvertScroll         bool    `json:"invert_scroll,omitempty"`
@@ -429,6 +430,7 @@ type fileUIConfig struct {
 	WordSeparators               *string `json:"word_separators,omitempty" toml:"word_separators"`
 	MouseReportingToggle         *bool   `json:"mouse_reporting_toggle,omitempty" toml:"mouse_reporting_toggle"`
 	VimMode                      *bool   `json:"vim_mode,omitempty" toml:"vim_mode"`
+	CompactMode                  *bool   `json:"compact_mode,omitempty" toml:"compact_mode"`
 	ShowTimestamps               *bool   `json:"show_timestamps,omitempty" toml:"show_timestamps"`
 	ScrollLines                  *uint8  `json:"scroll_lines,omitempty" toml:"scroll_lines"`
 	InvertScroll                 *bool   `json:"invert_scroll,omitempty" toml:"invert_scroll"`
@@ -879,6 +881,9 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.UI.VimMode != nil {
 		cfg.UI.VimMode = *disk.UI.VimMode
+	}
+	if disk.UI.CompactMode != nil {
+		cfg.UI.CompactMode = *disk.UI.CompactMode
 	}
 	if disk.UI.ShowTimestamps != nil {
 		cfg.UI.ShowTimestamps = *disk.UI.ShowTimestamps

@@ -1131,7 +1131,7 @@ func TestTimestampsCommandPersistsAndRendersMessages(t *testing.T) {
 	}
 	var persisted []bool
 	m := &model{
-		width: 80, height: 16, showTimestamps: true,
+		width: 80, height: 24, showTimestamps: true,
 		persistTimestamps: func(enabled bool) error {
 			persisted = append(persisted, enabled)
 			return nil
@@ -1175,12 +1175,99 @@ func TestBeginTurnTimestampsOnlyMessages(t *testing.T) {
 	m := &model{showTimestamps: true}
 	m.appendSystem("system")
 	m.beginTurn("hello")
-	if len(m.messageTimestamps) != 2 {
-		t.Fatalf("timestamps=%#v", m.messageTimestamps)
+	if len(m.transcriptMessages) != 2 {
+		t.Fatalf("messages=%#v", m.transcriptMessages)
 	}
 	text := m.transcriptText()
 	if strings.Contains(text, "system  ") || !strings.Contains(text, "You  ") || !strings.Contains(text, "Gork  ") {
 		t.Fatalf("unexpected rendered transcript: %q", text)
+	}
+}
+
+func TestCompactModeCommandPersistsAndChangesMessageSpacing(t *testing.T) {
+	messages := []session.Message{
+		{Role: "user", Text: "first\n\nparagraph"},
+		{Role: "assistant", Text: "answer"},
+		{Role: "user", Text: "second"},
+		{Role: "assistant", Text: "done"},
+	}
+	var persisted []bool
+	m := &model{
+		width: 80, height: 24,
+		persistCompactMode: func(enabled bool) error {
+			persisted = append(persisted, enabled)
+			return nil
+		},
+	}
+	m.replaceTranscript(session.FormatTranscript(messages), messages)
+	if text := m.transcriptText(); !strings.Contains(text, "first\n\nparagraph\n\nGork") {
+		t.Fatalf("expanded transcript=%q", text)
+	}
+	m.setInput("/compact-mode ignored")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	text := m.transcriptText()
+	if command != nil || !m.compactMode || len(persisted) != 1 || !persisted[0] || m.status != "Compact mode: on" || !strings.Contains(text, "first\n\nparagraph\nGork") || strings.Contains(text, "paragraph\n\nGork") || strings.Contains(text, "answer\n\nYou") {
+		t.Fatalf("enabled=%v persisted=%v status=%q text=%q", m.compactMode, persisted, m.status, text)
+	}
+	m.setInput("/compact-mode")
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.compactMode || len(persisted) != 2 || persisted[1] || m.status != "Compact mode: off" || !strings.Contains(m.transcriptText(), "paragraph\n\nGork") {
+		t.Fatalf("disabled=%v persisted=%v status=%q text=%q", !m.compactMode, persisted, m.status, m.transcriptText())
+	}
+	m.setInput("/help")
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if !strings.Contains(m.transcript.String(), "`/compact-mode`") {
+		t.Fatalf("help missing compact-mode command: %q", m.transcript.String())
+	}
+}
+
+func TestCompactModeKeepsSpacingBetweenAssistantBoundaries(t *testing.T) {
+	messages := []session.Message{
+		{Role: "assistant", Text: "first"},
+		{Role: "assistant", Text: "second"},
+	}
+	m := &model{height: 24, compactMode: true}
+	m.replaceTranscript(session.FormatTranscript(messages), messages)
+	if text := m.transcriptText(); !strings.Contains(text, "first\n\nGork\nsecond") {
+		t.Fatalf("assistant boundary was compacted: %q", text)
+	}
+}
+
+func TestCompactModeAutoEnablesForSmallTerminal(t *testing.T) {
+	m := &model{height: 20}
+	if !m.effectiveCompact() {
+		t.Fatal("20-row terminal did not enable auto-compact")
+	}
+	m.height = 21
+	if m.effectiveCompact() {
+		t.Fatal("21-row terminal unexpectedly enabled auto-compact")
+	}
+	m.compactMode = true
+	if !m.effectiveCompact() {
+		t.Fatal("user compact mode was not honored")
+	}
+	m.height = 20
+	m.persistCompactMode = func(bool) error { return nil }
+	m.setInput("/compact-mode")
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if m.compactMode || m.status != "Compact mode: off (auto-compact active on small terminal)" {
+		t.Fatalf("mode=%v status=%q", m.compactMode, m.status)
+	}
+}
+
+func TestCompactModeCommandRollsBackPersistenceFailure(t *testing.T) {
+	for _, initial := range []bool{false, true} {
+		m := &model{height: 24, compactMode: initial, persistCompactMode: func(bool) error { return errors.New("disk full") }}
+		m.setInput("/compact-mode")
+		updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+		m = updated.(*model)
+		if command != nil || m.compactMode != initial || m.transcript.Len() != 0 || m.status != "persist compact mode: disk full" {
+			t.Fatalf("initial=%v mode=%v transcript=%q status=%q", initial, m.compactMode, m.transcript.String(), m.status)
+		}
 	}
 }
 
@@ -2158,7 +2245,7 @@ func TestTUIRewindPickerPreviewsConflictAndRestoresAll(t *testing.T) {
 	}
 	updated, _ = m.Update(command())
 	m = updated.(*model)
-	if m.rewind != nil || m.previousID != "response-1" || string(m.input) != "second request" || strings.Contains(m.transcript.String(), "second request") || len(m.messageTimestamps) != 2 {
+	if m.rewind != nil || m.previousID != "response-1" || string(m.input) != "second request" || strings.Contains(m.transcript.String(), "second request") || len(m.transcriptMessages) != 2 {
 		t.Fatalf("previous=%q input=%q transcript=%q rewind=%#v", m.previousID, m.input, m.transcript.String(), m.rewind)
 	}
 	if current, _ := os.ReadFile(file); string(current) != "first" {
