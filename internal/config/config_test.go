@@ -1852,13 +1852,16 @@ func TestUIConfigPersistenceAndPermissionPrecedence(t *testing.T) {
 	if err := UpdateShowTimestamps(path, false); err != nil {
 		t.Fatal(err)
 	}
+	if err := UpdateShowTimeline(path, true); err != nil {
+		t.Fatal(err)
+	}
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	remoteMode := "always-approve"
 	cfg.ApplyRemoteSettings(&RemoteSettings{PermissionMode: &remoteMode})
-	if cfg.UI.PermissionMode != "auto" || cfg.UI.VimMode || !cfg.UI.CompactMode || cfg.UI.ShowTimestamps || cfg.DefaultModelID != "local" || cfg.Model != "local-api" {
+	if cfg.UI.PermissionMode != "auto" || cfg.UI.VimMode || !cfg.UI.CompactMode || cfg.UI.ShowTimestamps || !cfg.UI.ShowTimeline || cfg.DefaultModelID != "local" || cfg.Model != "local-api" {
 		t.Fatalf("config=%#v", cfg)
 	}
 	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o640 {
@@ -1874,8 +1877,11 @@ func TestUIConfigPersistenceAndPermissionPrecedence(t *testing.T) {
 	if err := UpdateShowTimestamps(emptyPath, false); err != nil {
 		t.Fatal(err)
 	}
+	if err := UpdateShowTimeline(emptyPath, true); err != nil {
+		t.Fatal(err)
+	}
 	emptyConfig, err := Load(emptyPath)
-	if err != nil || !emptyConfig.UI.VimMode || !emptyConfig.UI.CompactMode || emptyConfig.UI.ShowTimestamps {
+	if err != nil || !emptyConfig.UI.VimMode || !emptyConfig.UI.CompactMode || emptyConfig.UI.ShowTimestamps || !emptyConfig.UI.ShowTimeline {
 		t.Fatalf("new config=%#v err=%v", emptyConfig, err)
 	}
 
@@ -1895,8 +1901,11 @@ func TestUIConfigPersistenceAndPermissionPrecedence(t *testing.T) {
 	if err := UpdateShowTimestamps(jsonPath, false); err != nil {
 		t.Fatal(err)
 	}
+	if err := UpdateShowTimeline(jsonPath, true); err != nil {
+		t.Fatal(err)
+	}
 	jsonConfig, err := Load(jsonPath)
-	if err != nil || jsonConfig.UI.PermissionMode != "always-approve" || jsonConfig.UI.VimMode || jsonConfig.UI.CompactMode || jsonConfig.UI.ShowTimestamps {
+	if err != nil || jsonConfig.UI.PermissionMode != "always-approve" || jsonConfig.UI.VimMode || jsonConfig.UI.CompactMode || jsonConfig.UI.ShowTimestamps || !jsonConfig.UI.ShowTimeline {
 		t.Fatalf("JSON config=%#v err=%v", jsonConfig, err)
 	}
 
@@ -1905,7 +1914,7 @@ func TestUIConfigPersistenceAndPermissionPrecedence(t *testing.T) {
 		t.Fatal(err)
 	}
 	defaultConfig, err := Load(defaultPath)
-	if err != nil || defaultConfig.UI.PermissionMode != "ask" || defaultConfig.UI.CompactMode || !defaultConfig.UI.ShowTimestamps {
+	if err != nil || defaultConfig.UI.PermissionMode != "ask" || defaultConfig.UI.CompactMode || !defaultConfig.UI.ShowTimestamps || defaultConfig.UI.ShowTimeline {
 		t.Fatalf("default config=%#v err=%v", defaultConfig, err)
 	}
 	remoteConfig := Config{UI: UIConfig{PermissionMode: "ask"}}

@@ -42,7 +42,7 @@ func TestJumpEntriesAreOldestFirstWithSingleLinePreviews(t *testing.T) {
 	if len(entries) != 3 {
 		t.Fatalf("entries=%#v", entries)
 	}
-	want := []string{"first multiline prompt", "second prompt", "third prompt"}
+	want := []string{"first", "second prompt", "third prompt"}
 	for index := range want {
 		if entries[index].preview != want[index] {
 			t.Fatalf("entry %d preview=%q want=%q", index, entries[index].preview, want[index])
@@ -55,7 +55,7 @@ func TestJumpEntriesAreOldestFirstWithSingleLinePreviews(t *testing.T) {
 		t.Fatalf("jump=%#v", m.jump)
 	}
 	view := stripUIANSI(m.View().Content)
-	if !strings.Contains(view, "Jump to which turn?") || !strings.Contains(view, "1  first multiline prom") {
+	if !strings.Contains(view, "Jump to which turn?") || !strings.Contains(view, "1  first") {
 		t.Fatalf("picker not rendered:\n%s", view)
 	}
 }

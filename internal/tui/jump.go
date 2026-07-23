@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -13,9 +14,11 @@ type jumpEntry struct {
 }
 
 type jumpState struct {
-	entries  []jumpEntry
-	selected int
-	restore  int
+	entries       []jumpEntry
+	selected      int
+	restore       int
+	restoreTail   int
+	restoreAnchor *int
 }
 
 func (m *model) openJump() {
@@ -33,7 +36,10 @@ func (m *model) openJump() {
 	m.scrollSearch = nil
 	m.historySearch = nil
 	selected := m.activeJumpEntry(entries)
-	m.jump = &jumpState{entries: entries, selected: selected, restore: m.scroll}
+	m.jump = &jumpState{
+		entries: entries, selected: selected, restore: m.scroll, restoreTail: m.scrollTail,
+		restoreAnchor: cloneInt(m.scrollAnchor),
+	}
 	m.syncJumpPreview()
 	m.status = "choose a turn"
 }
@@ -52,25 +58,18 @@ func (m *model) jumpEntries() []jumpEntry {
 		if end < message.offset || end > len(text) {
 			continue
 		}
-		entries = append(entries, jumpEntry{
-			message: index,
-			preview: strings.Join(strings.Fields(text[message.offset:end]), " "),
-		})
+		entries = append(entries, jumpEntry{message: index, preview: turnPreview(text[message.offset:end])})
 	}
 	return entries
 }
 
 func (m *model) activeJumpEntry(entries []jumpEntry) int {
-	lines := renderMarkdownTheme(m.transcriptText(), max(m.width, 20), false, m.colors())
-	viewportTop := max(len(lines)-m.contentHeight()-m.scroll, 0)
-	selected := 0
-	for index, entry := range entries {
-		if m.jumpLine(entry.message) > viewportTop {
-			break
-		}
-		selected = index
-	}
-	return selected
+	lines := renderMarkdownTheme(m.transcriptText(), m.transcriptRenderWidth(), false, m.colors())
+	viewportTop := max(len(lines)+m.scrollTail-m.contentHeight()-m.scroll, 0)
+	firstBelow := sort.Search(len(entries), func(index int) bool {
+		return m.jumpLine(entries[index].message) > viewportTop
+	})
+	return max(firstBelow-1, 0)
 }
 
 func (m *model) handleJumpKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -79,7 +78,7 @@ func (m *model) handleJumpKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Code == tea.KeyEsc:
 		m.jump = nil
-		m.scroll = min(state.restore, m.maxTranscriptScroll())
+		m.scroll, m.scrollTail, m.scrollAnchor = state.restore, state.restoreTail, cloneInt(state.restoreAnchor)
 		m.status = "ready"
 	case key.Code == tea.KeyEnter:
 		m.jump = nil
@@ -98,10 +97,7 @@ func (m *model) syncJumpPreview() {
 	if m.jump == nil || len(m.jump.entries) == 0 {
 		return
 	}
-	lines := renderMarkdownTheme(m.transcriptText(), max(m.width, 20), false, m.colors())
-	target := m.jumpLine(m.jump.entries[m.jump.selected].message)
-	maxStart := max(len(lines)-m.contentHeight(), 0)
-	m.scroll = maxStart - min(target, maxStart)
+	m.anchorTranscriptMessage(m.jump.entries[m.jump.selected].message)
 }
 
 func (m *model) jumpLine(messageIndex int) int {
@@ -127,8 +123,37 @@ func (m *model) jumpLine(messageIndex int) int {
 		}
 		start = message.offset
 	}
-	transformed = min(max(transformed, 0), len(m.transcriptText()))
-	return max(len(renderMarkdownTheme(m.transcriptText()[:transformed], max(m.width, 20), false, m.colors()))-1, 0)
+	rendered := m.transcriptText()
+	transformed = min(max(transformed, 0), len(rendered))
+	return max(len(renderMarkdownTheme(rendered[:transformed], m.transcriptRenderWidth(), false, m.colors()))-1, 0)
+}
+
+func turnPreview(value string) string {
+	line := ""
+	for {
+		candidate, rest, found := strings.Cut(value, "\n")
+		if candidate = strings.TrimSpace(candidate); candidate != "" {
+			line = candidate
+			break
+		}
+		if !found {
+			break
+		}
+		value = rest
+	}
+	runes := []rune(line)
+	if len(runes) <= 120 {
+		return line
+	}
+	return string(runes[:119]) + "…"
+}
+
+func cloneInt(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
 }
 
 func (m *model) jumpOverlay(lines []string, width int) []string {

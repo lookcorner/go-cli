@@ -509,6 +509,10 @@ automatically without changing the saved user preference.
 Message timestamps are enabled by default. `/timestamps` hides or restores them
 immediately, atomically saves `[ui].show_timestamps`, and rolls back the display
 state if the configuration write fails.
+`/timeline` toggles and persists `[ui].show_timeline`. On terminals at least 60
+columns wide, conversations with two or more turns reserve a two-column rail:
+the highlighted tick follows the turn at the viewport top, chevrons step between
+turns, clicking a tick top-aligns it, and hovering shows the prompt preview.
 `/theme [name]` (alias `/t`) changes the terminal palette immediately and saves
 `[ui].theme`. Supported values are `groknight`, `grokday`, `tokyonight`,
 `rosepine-moon`, `oscura-midnight`, and `auto`; aliases such as `dark`, `light`,

@@ -484,6 +484,8 @@ type model struct {
 	persistCompactMode func(bool) error
 	showTimestamps     bool
 	persistTimestamps  func(bool) error
+	showTimeline       bool
+	persistTimeline    func(bool) error
 	themeName          string
 	theme              themePalette
 	persistTheme       func(string) error
@@ -497,6 +499,8 @@ type model struct {
 	width              int
 	height             int
 	scroll             int
+	scrollTail         int
+	scrollAnchor       *int
 	running            bool
 	status             string
 	approval           *approvalEvent
@@ -529,6 +533,7 @@ type model struct {
 	btwRunning    bool
 	rewind        *rewindState
 	jump          *jumpState
+	timelineHover *timelineHit
 	modelSelect   *modelSelectState
 	sessionSelect *sessionSelectState
 	forkChoice    *forkChoiceState
@@ -588,6 +593,8 @@ type UIOptions struct {
 	SetCompactMode       func(bool) error
 	ShowTimestamps       bool
 	SetShowTimestamps    func(bool) error
+	ShowTimeline         bool
+	SetShowTimeline      func(bool) error
 	ScrollLines          *uint8
 	InvertScroll         bool
 	PromptSuggestions    bool
@@ -705,6 +712,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		wordSeparators: defaultWordSeparators, mouseToggle: options.MouseReportingToggle, vimMode: options.VimMode, persistVimMode: options.SetVimMode,
 		compactMode: options.CompactMode, persistCompactMode: options.SetCompactMode,
 		showTimestamps: options.ShowTimestamps, persistTimestamps: options.SetShowTimestamps,
+		showTimeline: options.ShowTimeline, persistTimeline: options.SetShowTimeline,
 		scrollLines: mouseWheelScrollLines, invertScroll: options.InvertScroll,
 		suggestionsEnabled: options.PromptSuggestions,
 		hyperlinks:         detectTerminalHyperlinks(),
@@ -775,17 +783,23 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.selectionClick = selectionClickState{}
 		m.width = max(msg.Width, 20)
 		m.height = max(msg.Height, 10)
+		if m.timelineWidth() == 0 {
+			m.timelineHover = nil
+		}
+		if m.scrollAnchor != nil {
+			m.anchorTranscriptMessage(*m.scrollAnchor)
+		}
 		m.refreshScrollSearch()
 	case textEvent:
 		m.selection = nil
 		m.selectionClick = selectionClickState{}
 		before := 0
 		if m.scroll > 0 {
-			before = len(renderMarkdownTheme(m.transcriptText(), max(m.width, 20), false, m.colors()))
+			before = len(renderMarkdownTheme(m.transcriptText(), m.transcriptRenderWidth(), false, m.colors()))
 		}
 		m.transcript.WriteString(msg.text)
 		if m.scroll > 0 {
-			after := len(renderMarkdownTheme(m.transcriptText(), max(m.width, 20), false, m.colors()))
+			after := len(renderMarkdownTheme(m.transcriptText(), m.transcriptRenderWidth(), false, m.colors()))
 			m.scroll += max(after-before, 0)
 		}
 		m.refreshScrollSearch()
@@ -793,7 +807,15 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case mouseScrollEvent:
 		m.selection = nil
 		m.selectionClick = selectionClickState{}
+		m.timelineHover = nil
+		m.clearTranscriptAnchor()
 		m.scroll = max(0, m.scroll+msg.lines)
+		return m, nil
+	case timelineHoverEvent:
+		m.timelineHover = msg.hit
+		return m, nil
+	case timelineJumpEvent:
+		m.jumpTimeline(msg.turn)
 		return m, nil
 	case mouseSelectionEvent:
 		switch msg.phase {
@@ -1640,7 +1662,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 					imagineCommands += " `/imagine-video <description>`"
 				}
 			}
-			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + announcementCommand + " `/btw <question>` `/compact` `/compact-mode` `/context` `/copy [N]` `/dream` `/effort [level]` `/exit` `/export [filename]`" + feedbackCommand + " `/find` `/flush` `/fork [--worktree|--no-worktree] [directive]` `/help` `/history`" + imagineCommands + " `/jump` `/loop` `/memory`" + mcpCommand + " `/model [name] [effort]` (`/m`) `/multiline` `/new` (`/clear`) `/plan [description]` `/privacy [opt-out]` `/queue` `/recap` `/release-notes` (`/changelog`) `/remember` `/rename <title>` `/resume` `/rewind` `/session-info` (`/status`, `/info`)" + shareCommand + " `/tasks` `/terminal-setup` `/theme [name]` (`/t`)" + mouseCommand + " `/timestamps` `/transcript` `/usage [show|manage]` (`/cost`) `/view-plan` `/vim-mode`")
+			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + announcementCommand + " `/btw <question>` `/compact` `/compact-mode` `/context` `/copy [N]` `/dream` `/effort [level]` `/exit` `/export [filename]`" + feedbackCommand + " `/find` `/flush` `/fork [--worktree|--no-worktree] [directive]` `/help` `/history`" + imagineCommands + " `/jump` `/loop` `/memory`" + mcpCommand + " `/model [name] [effort]` (`/m`) `/multiline` `/new` (`/clear`) `/plan [description]` `/privacy [opt-out]` `/queue` `/recap` `/release-notes` (`/changelog`) `/remember` `/rename <title>` `/resume` `/rewind` `/session-info` (`/status`, `/info`)" + shareCommand + " `/tasks` `/terminal-setup` `/theme [name]` (`/t`)" + mouseCommand + " `/timeline` `/timestamps` `/transcript` `/usage [show|manage]` (`/cost`) `/view-plan` `/vim-mode`")
 			m.status = "commands"
 			return m, nil
 		case "/mcps":
@@ -1737,6 +1759,28 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, m.openRewind(false)
 		case "/jump":
 			m.openJump()
+			return m, nil
+		case "/timeline":
+			previous := m.showTimeline
+			entries := m.jumpEntries()
+			selected := m.activeJumpEntry(entries)
+			m.showTimeline = !previous
+			m.timelineHover = nil
+			if m.persistTimeline != nil {
+				if err := m.persistTimeline(m.showTimeline); err != nil {
+					m.showTimeline = previous
+					m.status = "persist timeline: " + err.Error()
+					return m, nil
+				}
+			}
+			if len(entries) > 0 {
+				m.anchorTranscriptMessage(entries[selected].message)
+			}
+			state := "off"
+			if m.showTimeline {
+				state = "on"
+			}
+			m.status = "Timeline sidebar: " + state
 			return m, nil
 		case "/model", "/m":
 			arguments := strings.TrimSpace(strings.TrimPrefix(prompt, fields[0]))
@@ -2044,6 +2088,7 @@ func (m *model) setPlanMode(active bool) error {
 }
 
 func (m *model) appendSystem(text string) {
+	m.clearTranscriptAnchor()
 	if m.transcript.Len() > 0 {
 		m.transcript.WriteString("\n")
 	}
@@ -2789,7 +2834,7 @@ func (m *model) refreshScrollSearch() {
 	if m.scrollSearch == nil {
 		return
 	}
-	lines := renderMarkdownTheme(m.transcriptText(), max(m.width, 20), false, m.colors())
+	lines := renderMarkdownTheme(m.transcriptText(), m.transcriptRenderWidth(), false, m.colors())
 	for index := range lines {
 		lines[index] = stripUIANSI(lines[index])
 	}
@@ -2802,7 +2847,7 @@ func (m *model) revealScrollSearch() {
 	if m.scrollSearch == nil || m.scrollSearch.current < 0 {
 		return
 	}
-	lines := renderMarkdownTheme(m.transcriptText(), max(m.width, 20), false, m.colors())
+	lines := renderMarkdownTheme(m.transcriptText(), m.transcriptRenderWidth(), false, m.colors())
 	target := m.scrollSearch.matches[m.scrollSearch.current].line
 	height := m.contentHeight()
 	maxStart := max(len(lines)-height, 0)
@@ -2813,11 +2858,12 @@ func (m *model) revealScrollSearch() {
 func (m *model) scrollTranscript(lines int) {
 	m.selection = nil
 	m.selectionClick = selectionClickState{}
+	m.clearTranscriptAnchor()
 	m.scroll = min(max(m.scroll+lines, 0), m.maxTranscriptScroll())
 }
 
 func (m *model) maxTranscriptScroll() int {
-	return max(len(renderMarkdownTheme(m.transcriptText(), max(m.width, 20), false, m.colors()))-m.contentHeight(), 0)
+	return max(len(renderMarkdownTheme(m.transcriptText(), m.transcriptRenderWidth(), false, m.colors()))+m.scrollTail-m.contentHeight(), 0)
 }
 
 func isASCIILetterOrSlash(value byte) bool {
@@ -3288,6 +3334,7 @@ func (m *model) editInput(message tea.KeyPressMsg) {
 }
 
 func (m *model) replaceTranscript(text string, messages []session.Message) {
+	m.clearTranscriptAnchor()
 	text = strings.TrimSpace(text)
 	m.transcript.Reset()
 	m.transcript.WriteString(text)
@@ -3343,6 +3390,7 @@ func (m *model) effectiveCompact() bool {
 func (m *model) beginTurn(prompt string) {
 	m.promptSerial++
 	m.clearPromptSuggestion()
+	m.clearTranscriptAnchor()
 	if m.transcript.Len() > 0 {
 		m.transcript.WriteString("\n")
 	}
@@ -3632,12 +3680,17 @@ func (m *model) View() tea.View {
 		}
 		content = "# Memory Note\n\n**" + label + "**\n\n" + note
 	}
-	contentLines := renderMarkdownTheme(content, width, m.hyperlinks, m.colors())
+	contentLines := renderMarkdownTheme(content, m.transcriptRenderWidth(), m.hyperlinks, m.colors())
 	if m.historySearch != nil {
-		contentLines = m.historySearchLines(width, m.contentHeight())
+		contentLines = m.historySearchLines(m.transcriptRenderWidth(), m.contentHeight())
 	} else if m.scrollSearch != nil {
 		contentLines = m.scrollSearch.highlighted(contentLines)
 	}
+	transcriptLineCount := len(contentLines)
+	if m.transcriptVisible() && m.scrollTail > 0 {
+		contentLines = append(contentLines, make([]string, m.scrollTail)...)
+	}
+	timelineRail := m.computeTimelineRail(transcriptLineCount)
 	visible := sliceFromBottom(contentLines, m.contentHeight(), m.scroll)
 	for len(visible) < m.contentHeight() {
 		visible = append(visible, "")
@@ -3645,6 +3698,7 @@ func (m *model) View() tea.View {
 	if m.jump != nil {
 		visible = m.jumpOverlay(visible, width)
 	}
+	visible = m.renderTimeline(visible, timelineRail)
 	plainVisible := make([]string, len(visible))
 	for index, line := range visible {
 		plainVisible[index] = stripUIANSI(line)
@@ -3735,6 +3789,7 @@ func (m *model) View() tea.View {
 	bodyEnd := bannerHeight + contentHeight
 	view.OnMouse = func(message tea.MouseMsg) tea.Cmd {
 		mouse := message.Mouse()
+		bodyRow := mouse.Y - bannerHeight - 1
 		switch message.(type) {
 		case tea.MouseWheelMsg:
 			if mouse.Y < bannerHeight+1 || mouse.Y > bodyEnd {
@@ -3761,6 +3816,14 @@ func (m *model) View() tea.View {
 			if mouse.Button != tea.MouseLeft {
 				return nil
 			}
+			if m.jump == nil && timelineRail != nil {
+				if hit := timelineRail.hit(mouse.X, bodyRow); hit != nil {
+					if hit.turn >= 0 {
+						return func() tea.Msg { return timelineJumpEvent{turn: hit.turn} }
+					}
+					return nil
+				}
+			}
 			if mouse.Y >= bannerHeight+1 && mouse.Y <= bodyEnd {
 				adjusted := mouse
 				adjusted.Y -= bannerHeight
@@ -3779,6 +3842,15 @@ func (m *model) View() tea.View {
 				adjusted.Y -= bannerHeight
 				event := mouseSelectionEvent{phase: selectionMove, point: selectionPointForMouse(adjusted, m.selection.lines)}
 				return func() tea.Msg { return event }
+			}
+			if m.jump == nil && timelineRail != nil {
+				hit := timelineRail.hit(mouse.X, bodyRow)
+				if hit == nil || hit.kind != timelineTick {
+					hit = nil
+				}
+				if !timelineHitsEqual(m.timelineHover, hit) {
+					return func() tea.Msg { return timelineHoverEvent{hit: hit} }
+				}
 			}
 		case tea.MouseReleaseMsg:
 			if (mouse.Button == tea.MouseLeft || mouse.Button == tea.MouseNone) && m.selection != nil {

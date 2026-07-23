@@ -206,6 +206,7 @@ type UIConfig struct {
 	VimMode              bool    `json:"vim_mode,omitempty"`
 	CompactMode          bool    `json:"compact_mode,omitempty"`
 	ShowTimestamps       bool    `json:"show_timestamps"`
+	ShowTimeline         bool    `json:"show_timeline,omitempty"`
 	ScrollLines          *uint8  `json:"scroll_lines,omitempty"`
 	InvertScroll         bool    `json:"invert_scroll,omitempty"`
 	PromptSuggestions    bool    `json:"prompt_suggestions"`
@@ -436,6 +437,7 @@ type fileUIConfig struct {
 	VimMode                      *bool   `json:"vim_mode,omitempty" toml:"vim_mode"`
 	CompactMode                  *bool   `json:"compact_mode,omitempty" toml:"compact_mode"`
 	ShowTimestamps               *bool   `json:"show_timestamps,omitempty" toml:"show_timestamps"`
+	ShowTimeline                 *bool   `json:"show_timeline,omitempty" toml:"show_timeline"`
 	ScrollLines                  *uint8  `json:"scroll_lines,omitempty" toml:"scroll_lines"`
 	InvertScroll                 *bool   `json:"invert_scroll,omitempty" toml:"invert_scroll"`
 	PromptSuggestions            *bool   `json:"prompt_suggestions,omitempty" toml:"prompt_suggestions"`
@@ -898,6 +900,9 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.UI.ShowTimestamps != nil {
 		cfg.UI.ShowTimestamps = *disk.UI.ShowTimestamps
+	}
+	if disk.UI.ShowTimeline != nil {
+		cfg.UI.ShowTimeline = *disk.UI.ShowTimeline
 	}
 	if disk.UI.ScrollLines != nil {
 		cfg.UI.ScrollLines = normalizedScrollLines(*disk.UI.ScrollLines)
