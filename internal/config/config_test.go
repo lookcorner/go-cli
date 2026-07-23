@@ -233,6 +233,38 @@ pattern = ".env*"
 	}
 }
 
+func TestFeedbackConfigPrecedence(t *testing.T) {
+	t.Setenv("GROK_FEEDBACK_ENABLED", "")
+	cfg, err := Load(filepath.Join(t.TempDir(), "missing.toml"))
+	if err != nil || !cfg.FeedbackEnabled {
+		t.Fatalf("default config=%#v err=%v", cfg, err)
+	}
+
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[features]\nfeedback = false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(path)
+	if err != nil || cfg.FeedbackEnabled {
+		t.Fatalf("local config=%#v err=%v", cfg, err)
+	}
+
+	t.Setenv("GROK_FEEDBACK_ENABLED", "true")
+	cfg, err = Load(path)
+	if err != nil || !cfg.FeedbackEnabled || !cfg.feedbackEnvConfigured {
+		t.Fatalf("environment config=%#v err=%v", cfg, err)
+	}
+	if err := applyRequirementsData(&cfg, []byte("[features]\nfeedback = false\n"), "test", false, false); err != nil || !cfg.FeedbackEnabled {
+		t.Fatalf("requirements overrode environment: config=%#v err=%v", cfg, err)
+	}
+
+	t.Setenv("GROK_FEEDBACK_ENABLED", "")
+	cfg = Config{FeedbackEnabled: true}
+	if err := applyRequirementsData(&cfg, []byte("[features]\nfeedback = false\n"), "test", false, false); err != nil || cfg.FeedbackEnabled || !cfg.feedbackConfigured {
+		t.Fatalf("requirements config=%#v err=%v", cfg, err)
+	}
+}
+
 func TestVimModeDefaultsToFalse(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte("[ui]\n"), 0o600); err != nil {

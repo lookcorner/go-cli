@@ -2519,6 +2519,14 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			MarketplaceAction: marketplaceAction,
 			SessionID:         logger.ID(), SessionPath: logger.Path(), Workspace: ws.Root(),
 		}
+		if cfg.FeedbackEnabled {
+			runner.SubmitFeedback = func(text string) error {
+				return logger.Append("user_feedback", session.UserFeedback{
+					SessionID: logger.ID(), Text: text, ModelID: modelID,
+					ResolvedModelID: sessionCfg.Model, ClientVersion: version.Current, CWD: ws.Root(),
+				})
+			}
+		}
 		runner.ResolveModel = func(id string) (agent.ModelRuntime, error) {
 			modelCatalogMu.RLock()
 			catalog := modelCatalog

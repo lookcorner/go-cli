@@ -1922,6 +1922,11 @@ func (s *Server) handlePromptRequest(parent context.Context, incoming message, c
 		s.markRunningPrompt(current, promptID(params.Meta))
 		return
 	}
+	if text, ok := parseFeedbackCommand(prompt); ok && current.runner != nil && current.runner.SubmitFeedback != nil {
+		s.handleFeedbackSlashPrompt(incoming, current, newPromptLifecycle(params), text)
+		s.markRunningPrompt(current, promptID(params.Meta))
+		return
+	}
 	if command, ok := parseGoalCommand(prompt); ok {
 		var handled bool
 		prompt, content, handled = s.handleLocalGoalPrompt(incoming, current, newPromptLifecycle(params), command)

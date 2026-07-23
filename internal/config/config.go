@@ -79,6 +79,7 @@ type Config struct {
 	DeploymentKey                   string                     `json:"deployment_key,omitempty"`
 	FolderTrustEnabled              bool                       `json:"folder_trust_enabled"`
 	AutoWakeEnabled                 bool                       `json:"-"`
+	FeedbackEnabled                 bool                       `json:"-"`
 	ModelProfiles                   map[string]ModelProfile    `json:"-"`
 	AllowedModels                   []string                   `json:"-"`
 	HiddenModels                    []string                   `json:"-"`
@@ -88,6 +89,8 @@ type Config struct {
 	ModelReasoningEfforts           []ReasoningEffortOption    `json:"-"`
 	compatConfigured                compat.Config
 	autoWakeConfigured              bool
+	feedbackConfigured              bool
+	feedbackEnvConfigured           bool
 	twoPassCompactionConfigured     bool
 	memoryConfigured                bool
 	memoryInjectionConfigured       bool
@@ -383,6 +386,7 @@ type fileConfig struct {
 	Features           struct {
 		WebFetch          *bool `json:"web_fetch,omitempty" toml:"web_fetch"`
 		AutoWake          *bool `json:"auto_wake,omitempty" toml:"auto_wake"`
+		Feedback          *bool `json:"feedback,omitempty" toml:"feedback"`
 		TwoPassCompaction *bool `json:"two_pass_compaction,omitempty" toml:"two_pass_compaction"`
 	} `json:"features,omitempty" toml:"features"`
 	AuthProviderCommand string            `json:"auth_provider_command,omitempty" toml:"auth_provider_command"`
@@ -441,8 +445,11 @@ type fileAuthConfig struct {
 }
 
 type requirementsFile struct {
-	Permission    *PermissionConfig       `toml:"permission"`
-	AutoMode      *AutoModeConfig         `toml:"auto_mode"`
+	Permission *PermissionConfig `toml:"permission"`
+	AutoMode   *AutoModeConfig   `toml:"auto_mode"`
+	Features   struct {
+		Feedback *bool `toml:"feedback"`
+	} `toml:"features"`
 	GrokComConfig *requirementsGrokConfig `toml:"grok_com_config"`
 	Auth          *requirementsAuthConfig `toml:"auth"`
 	Toolset       struct {
@@ -625,6 +632,7 @@ func Load(path string) (Config, error) {
 		Compat:                      compat.Default(),
 		FolderTrustEnabled:          true,
 		AutoWakeEnabled:             true,
+		FeedbackEnabled:             true,
 		AskUserQuestion:             AskUserQuestionConfig{TimeoutEnabled: true, TimeoutSeconds: 30 * 60},
 		Toolset:                     ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}},
 		Goal:                        GoalConfig{VerifierCount: 3, ClassifierMaxRuns: 10, ReverifyAfter: 8},
@@ -794,6 +802,9 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.Features.AutoWake != nil {
 		cfg.AutoWakeEnabled, cfg.autoWakeConfigured = *disk.Features.AutoWake, true
+	}
+	if disk.Features.Feedback != nil {
+		cfg.FeedbackEnabled, cfg.feedbackConfigured = *disk.Features.Feedback, true
 	}
 	if disk.Toolset.WebFetch.AllowedDomains != nil {
 		cfg.WebFetch.AllowedDomains = append([]string(nil), disk.Toolset.WebFetch.AllowedDomains...)
@@ -1658,6 +1669,9 @@ func applyEnv(cfg *Config) {
 	if value, ok := envBool("GROK_AUTO_WAKE"); ok {
 		cfg.AutoWakeEnabled, cfg.autoWakeConfigured = value, true
 	}
+	if value, ok := envBool("GROK_FEEDBACK_ENABLED"); ok {
+		cfg.FeedbackEnabled, cfg.feedbackConfigured, cfg.feedbackEnvConfigured = value, true, true
+	}
 	if value, ok := envBool("GROK_OFFICIAL_MARKETPLACE_AUTO_REGISTER"); ok {
 		cfg.OfficialMarketplaceAutoRegister = value
 	}
@@ -1916,6 +1930,9 @@ func applyRequirementsData(cfg *Config, data []byte, source string, envFailClose
 		value := *requirement.AutoMode.Enabled
 		cfg.AutoMode.Enabled = &value
 		cfg.autoModeEnabledConfigured = true
+	}
+	if requirement.Features.Feedback != nil && !cfg.feedbackEnvConfigured {
+		cfg.FeedbackEnabled, cfg.feedbackConfigured = *requirement.Features.Feedback, true
 	}
 	if requirement.Auth != nil && requirement.Auth.PreferredMethod != nil {
 		cfg.PreferredAuthMethod = strings.ToLower(strings.TrimSpace(*requirement.Auth.PreferredMethod))

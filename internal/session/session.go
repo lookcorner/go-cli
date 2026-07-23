@@ -31,6 +31,15 @@ type Event struct {
 	Data any       `json:"data,omitempty"`
 }
 
+type UserFeedback struct {
+	SessionID       string `json:"sessionId"`
+	Text            string `json:"text"`
+	ModelID         string `json:"modelId,omitempty"`
+	ResolvedModelID string `json:"resolvedModelId,omitempty"`
+	ClientVersion   string `json:"clientVersion,omitempty"`
+	CWD             string `json:"cwd,omitempty"`
+}
+
 type storedEvent struct {
 	Time time.Time       `json:"time"`
 	Kind string          `json:"kind"`

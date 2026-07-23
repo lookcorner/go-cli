@@ -199,6 +199,24 @@ func TestApplyRemoteSettingsUsesLocalAndEnvironmentPrecedence(t *testing.T) {
 	}
 }
 
+func TestFeedbackRemoteRefreshAndLocalPrecedence(t *testing.T) {
+	cfg := Config{FeedbackEnabled: true}
+	cfg.ApplyRemoteSettings(&RemoteSettings{FeedbackEnabled: boolPointer(false)})
+	if cfg.FeedbackEnabled {
+		t.Fatalf("remote disable=%#v", cfg)
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{})
+	if !cfg.FeedbackEnabled {
+		t.Fatalf("omitted remote flag did not restore default: %#v", cfg)
+	}
+
+	cfg = Config{FeedbackEnabled: false, feedbackConfigured: true}
+	cfg.ApplyRemoteSettings(&RemoteSettings{FeedbackEnabled: boolPointer(true)})
+	if cfg.FeedbackEnabled {
+		t.Fatalf("remote overrode local config: %#v", cfg)
+	}
+}
+
 func TestAutoModeRemoteRefreshAndFieldPrecedence(t *testing.T) {
 	cfg, err := Load(filepath.Join(t.TempDir(), "missing.toml"))
 	if err != nil {

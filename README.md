@@ -33,6 +33,12 @@ not emit a prompt-completion event. Successful manual compaction first publishes
 a persisted `x.ai/session_notification` with `auto_compact_completed` so live
 and resumed clients reset context state consistently.
 
+ACP sessions also accept `/feedback <text>` without invoking the model. Feedback
+is stored only in the private session JSONL as a `user_feedback` event; this
+privacy build never uploads it. The command defaults on and follows the reference
+configuration precedence across `[features] feedback`, remote settings, managed
+requirements, and `GROK_FEEDBACK_ENABLED`.
+
 ACP clients can request turn-end ghost text through `x.ai/suggestPrompt`. The
 extension echoes the client generation, returns `null` when no safe suggestion
 is available, and samples a bounded text-only transcript without tools or parent
@@ -1419,7 +1425,8 @@ Gork Go does not include product analytics, research trace uploads, repository
 packaging uploads, or vendor auto-update code. Prompts and tool results used by
 the agent are sent to the configured model endpoint because remote inference
 requires them. Session records stay local unless the user moves or uploads
-them.
+them. User-invoked `/feedback` entries are part of those local session records
+and are never submitted to a feedback server.
 
 ## License and attribution
 

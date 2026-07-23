@@ -26,6 +26,7 @@ func TestCommandsListAdvertisesCapabilitiesAndSkills(t *testing.T) {
 	writeCommandSkill(t, root, "deploy", "---\nname: deploy\ndescription: Deploy the service\nuser-invocable: true\nargument-hint: environment\nmetadata:\n  short-description: Safe deploy\n---\nDeploy it.\n")
 	writeCommandSkill(t, root, "compact", "---\nname: compact\ndescription: Skill compact\nuser-invocable: true\n---\nCompact it.\n")
 	writeCommandSkill(t, root, "plugins", "---\nname: plugins\ndescription: Skill plugins\nuser-invocable: true\n---\nPlugin skill.\n")
+	writeCommandSkill(t, root, "feedback", "---\nname: feedback\ndescription: Skill feedback\nuser-invocable: true\n---\nFeedback skill.\n")
 	writeCommandSkill(t, root, "hidden", "---\nname: hidden\ndescription: Hidden command\nuser-invocable: false\n---\nHidden.\n")
 	writeCommandSkill(t, userRoot, "global", "---\nname: global\ndescription: Global command\nuser-invocable: true\n---\nGlobal.\n")
 	catalog, err := skills.Discover(root, skills.Config{Paths: []string{filepath.Join(userRoot, ".grok", "skills")}})
@@ -38,7 +39,7 @@ func TestCommandsListAdvertisesCapabilitiesAndSkills(t *testing.T) {
 	}
 	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
 	defer registry.Close()
-	runner := &agent.Runner{Tools: registry, Skills: catalog, HookCatalog: hooks.DiscoverPlugins(nil), PluginInventory: func() []plugin.Plugin { return nil }}
+	runner := &agent.Runner{Tools: registry, Skills: catalog, HookCatalog: hooks.DiscoverPlugins(nil), PluginInventory: func() []plugin.Plugin { return nil }, SubmitFeedback: func(string) error { return nil }}
 	var output bytes.Buffer
 	server := &Server{output: &output, sessions: map[string]*session{"commands": {id: "commands", cwd: root, runner: runner}}}
 	server.handleCommands(message{ID: json.RawMessage("1"), Params: json.RawMessage(`{"cwd":` + quoted(root) + `}`)})
@@ -49,7 +50,7 @@ func TestCommandsListAdvertisesCapabilitiesAndSkills(t *testing.T) {
 		command := raw.(map[string]any)
 		byName[command["name"].(string)] = command
 	}
-	for _, name := range []string{"compact", "always-approve", "context", "session-info", "hooks-trust", "hooks-list", "hooks-add", "hooks-remove", "hooks-untrust", "plugins", "reload-plugins", "goal", "loop", "local:compact", "local:plugins", "deploy"} {
+	for _, name := range []string{"compact", "always-approve", "context", "session-info", "hooks-trust", "hooks-list", "hooks-add", "hooks-remove", "hooks-untrust", "plugins", "reload-plugins", "feedback", "goal", "loop", "local:compact", "local:plugins", "local:feedback", "deploy"} {
 		if byName[name] == nil {
 			t.Fatalf("missing command %q in %#v", name, commands)
 		}
@@ -83,20 +84,42 @@ func TestCommandsListAdvertisesCapabilitiesAndSkills(t *testing.T) {
 	}
 }
 
-func TestPluginCommandsFollowReferenceOrderAndCapabilityGate(t *testing.T) {
-	runner := &agent.Runner{HookCatalog: hooks.DiscoverPlugins(nil), PluginInventory: func() []plugin.Plugin { return nil }}
+func TestBuiltinCommandsFollowReferenceOrderAndCapabilityGates(t *testing.T) {
+	runner := &agent.Runner{HookCatalog: hooks.DiscoverPlugins(nil), PluginInventory: func() []plugin.Plugin { return nil }, SubmitFeedback: func(string) error { return nil }}
 	commands := availableCommands(runner, true)
 	names := make([]string, 0, len(commands))
 	for _, command := range commands {
 		names = append(names, command["name"].(string))
 	}
-	want := []string{"compact", "always-approve", "context", "hooks-trust", "hooks-list", "hooks-add", "hooks-remove", "hooks-untrust", "plugins", "reload-plugins", "session-info"}
+	want := []string{"compact", "always-approve", "context", "hooks-trust", "hooks-list", "hooks-add", "hooks-remove", "hooks-untrust", "plugins", "reload-plugins", "session-info", "feedback"}
 	if strings.Join(names, "|") != strings.Join(want, "|") {
 		t.Fatalf("commands=%v want=%v", names, want)
 	}
 	for _, command := range availableCommands(&agent.Runner{}, true) {
 		if name := command["name"].(string); name == "plugins" || name == "reload-plugins" {
 			t.Fatalf("plugin command advertised without capability: %#v", command)
+		}
+	}
+}
+
+func TestFeedbackCommandRequiresCapabilityAndExactPrefix(t *testing.T) {
+	for _, command := range availableCommands(&agent.Runner{}, true) {
+		if command["name"] == "feedback" {
+			t.Fatalf("feedback advertised without capability: %#v", command)
+		}
+	}
+	for _, test := range []struct {
+		prompt, text string
+		ok           bool
+	}{
+		{"/feedback", "", true},
+		{" /feedback useful command ", "useful command", true},
+		{"/feedbacks no", "", false},
+		{"/feedback-now", "", false},
+	} {
+		text, ok := parseFeedbackCommand(test.prompt)
+		if text != test.text || ok != test.ok {
+			t.Errorf("prompt=%q text=%q ok=%v", test.prompt, text, ok)
 		}
 	}
 }

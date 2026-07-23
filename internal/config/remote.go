@@ -33,6 +33,7 @@ type RemoteSettings struct {
 	OfficialMarketplaceAutoRegister  *bool                `json:"official_marketplace_auto_register"`
 	WebFetchEnabled                  *bool                `json:"web_fetch_enabled"`
 	AutoWakeEnabled                  *bool                `json:"auto_wake_enabled"`
+	FeedbackEnabled                  *bool                `json:"feedback_enabled"`
 	TwoPassCompactionEnabled         *bool                `json:"two_pass_compaction_enabled"`
 	MemoryEnabled                    *bool                `json:"memory_enabled"`
 	MemoryInitialInjectionEnabled    *bool                `json:"memory_initial_injection_enabled"`
@@ -211,6 +212,12 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 	}
 	if !c.autoWakeConfigured && remote.AutoWakeEnabled != nil {
 		c.AutoWakeEnabled = *remote.AutoWakeEnabled
+	}
+	if !c.feedbackConfigured {
+		c.FeedbackEnabled = true
+		if remote.FeedbackEnabled != nil {
+			c.FeedbackEnabled = *remote.FeedbackEnabled
+		}
 	}
 	if !c.twoPassCompactionConfigured && remote.TwoPassCompactionEnabled != nil {
 		c.TwoPassCompaction = *remote.TwoPassCompactionEnabled

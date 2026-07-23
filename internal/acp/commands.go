@@ -84,6 +84,9 @@ func availableCommands(runner *agent.Runner, workspaceSkills bool) []map[string]
 	if runner == nil {
 		return commands
 	}
+	if runner.SubmitFeedback != nil {
+		commands = append(commands, availableCommand("feedback", "Send feedback about the current session", "feedback text", nil))
+	}
 	if runner.Tools != nil && runner.Tools.GoalAvailable() {
 		commands = append(commands, availableCommand("goal", "Set, manage, or check an autonomous goal", "<objective> [--budget <tokens>] | status | pause | resume | clear", nil))
 	}
@@ -230,6 +233,17 @@ func parseHookCommand(prompt string) (string, string, bool) {
 	default:
 		return "", "", false
 	}
+}
+
+func parseFeedbackCommand(prompt string) (string, bool) {
+	trimmed := strings.TrimSpace(prompt)
+	if trimmed == "/feedback" {
+		return "", true
+	}
+	if !strings.HasPrefix(trimmed, "/feedback ") {
+		return "", false
+	}
+	return strings.TrimSpace(strings.TrimPrefix(trimmed, "/feedback ")), true
 }
 
 func parseGoalBudget(objective string) (string, int64) {
