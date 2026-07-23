@@ -16,9 +16,12 @@ Interactive REPL, full-screen, and ACP sessions accept `/compact` to summarize
 the current completed response chain and continue from a fresh context. When
 workspace memory is enabled, `/flush` saves reusable context without changing
 that response chain, while `/memory` lists the safe global, workspace, and
-session Markdown sources without invoking the model. They also accept
-`/loop [interval] <prompt>`, which expands to the reference `scheduler_create`
-workflow without inventing a default interval. ACP advertises the enabled
+session Markdown sources without invoking the model. `/session-info` and its
+`/status` and `/info` aliases report the current model, completed turns, and
+latest context usage; ACP also accepts the display-only `/context` command.
+These status commands complete locally without invoking the model. Sessions
+also accept `/loop [interval] <prompt>`, which expands to the reference
+`scheduler_create` workflow without inventing a default interval. ACP advertises the enabled
 commands and user-invocable workspace skills through `x.ai/commands/list`.
 Skill collisions use scope-qualified names with source metadata, argument
 prompts use ACP `input.hint`, and initialization advertises commands that are

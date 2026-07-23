@@ -2,6 +2,7 @@ package acp
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 
@@ -43,7 +44,11 @@ func (s *Server) commandRunner(cwd string) *agent.Runner {
 }
 
 func availableCommands(runner *agent.Runner, workspaceSkills bool) []map[string]any {
-	commands := []map[string]any{availableCommand("compact", "Compress conversation history to save context window", "optional context about what to preserve", nil)}
+	commands := []map[string]any{
+		availableCommand("compact", "Compress conversation history to save context window", "optional context about what to preserve", nil),
+		availableCommand("context", "Show context window usage and session stats", "", nil),
+		availableCommand("session-info", "Show session details (model, turns, context usage)", "", nil),
+	}
 	if runner == nil {
 		return commands
 	}
@@ -99,6 +104,58 @@ func availableCommands(runner *agent.Runner, workspaceSkills bool) []map[string]
 		}))
 	}
 	return commands
+}
+
+func sessionStatusCommand(prompt string) string {
+	fields := strings.Fields(prompt)
+	if len(fields) == 0 {
+		return ""
+	}
+	switch fields[0] {
+	case "/session-info", "/status", "/info":
+		return "session-info"
+	case "/context":
+		return "context"
+	default:
+		return ""
+	}
+}
+
+func (s *Server) handleSessionStatusPrompt(incoming message, current *session, lifecycle promptLifecycle, command string) {
+	current.mu.Lock()
+	if current.closed {
+		current.mu.Unlock()
+		s.failPrompt(incoming, current, lifecycle, "session is closed")
+		return
+	}
+	if current.running {
+		current.mu.Unlock()
+		s.failPrompt(incoming, current, lifecycle, "session already has an active prompt")
+		return
+	}
+	id, cwd, title, turns := current.id, current.cwd, current.title, current.promptIndex
+	used, total := current.inputTokens, current.runner.ContextWindow
+	model := current.runner.ModelID
+	if model == "" {
+		model = current.runner.Model
+	}
+	current.mu.Unlock()
+
+	if command == "session-info" {
+		text := fmt.Sprintf("**Session ID:** %s\n\n**Working directory:** %s\n\n**Model:** %s\n\n**Turn:** %d\n\n**Context:** %d / %d tokens (%d%%)", id, cwd, model, turns, used, total, contextUsagePercent(used, total))
+		if title != "" {
+			text = "**Title:** " + title + "\n\n" + text
+		}
+		s.notify(id, map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": text}})
+	}
+	s.finishPrompt(incoming, current, lifecycle, "end_turn", agent.Result{}, nil, "")
+}
+
+func contextUsagePercent(used, total int) int {
+	if total <= 0 {
+		return 0
+	}
+	return used * 100 / total
 }
 
 func qualifiedCommandName(item skills.Info) string {

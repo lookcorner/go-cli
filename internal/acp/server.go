@@ -171,6 +171,7 @@ type session struct {
 	lastRecapPrompt     int
 	promptIndex         int
 	activePrompt        int
+	inputTokens         int
 	rewind              *workspace.RewindStore
 	logPath             string
 	mode                string
@@ -480,7 +481,7 @@ func (s *Server) handleSessionAdmin(incoming message) {
 		}
 		if current := s.lookupSession(id); current != nil {
 			current.mu.Lock()
-			used, total := 0, current.runner.ContextWindow
+			used, total := current.inputTokens, current.runner.ContextWindow
 			turns, turnIndex := current.promptIndex, current.activePrompt
 			if turnIndex < 0 {
 				turnIndex = turns
@@ -1900,6 +1901,11 @@ func (s *Server) handlePromptRequest(parent context.Context, incoming message, c
 	if s.queuePrompt(current, incoming, &params, prompt) {
 		return
 	}
+	if command := sessionStatusCommand(prompt); command != "" {
+		s.handleSessionStatusPrompt(incoming, current, newPromptLifecycle(params), command)
+		s.markRunningPrompt(current, promptID(params.Meta))
+		return
+	}
 	if strings.TrimSpace(prompt) == "/compact" {
 		s.handleCompactPrompt(parent, incoming, current, newPromptLifecycle(params), "", false)
 		s.markRunningPrompt(current, promptID(params.Meta))
@@ -1975,6 +1981,7 @@ func (s *Server) handlePromptRequest(parent context.Context, incoming message, c
 		current.mu.Lock()
 		if err == nil {
 			current.previous = result.ResponseID
+			current.inputTokens = result.InputTokens
 		}
 		if stopReason == "cancelled" {
 			current.runner.ClearInterjections()

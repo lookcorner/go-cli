@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/lookcorner/go-cli/internal/agent"
+	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/skills"
 	"github.com/lookcorner/go-cli/internal/tools"
 	"github.com/lookcorner/go-cli/internal/workspace"
@@ -44,7 +46,7 @@ func TestCommandsListAdvertisesCapabilitiesAndSkills(t *testing.T) {
 		command := raw.(map[string]any)
 		byName[command["name"].(string)] = command
 	}
-	for _, name := range []string{"compact", "loop", "local:compact", "deploy"} {
+	for _, name := range []string{"compact", "context", "session-info", "loop", "local:compact", "deploy"} {
 		if byName[name] == nil {
 			t.Fatalf("missing command %q in %#v", name, commands)
 		}
@@ -101,12 +103,117 @@ func TestCommandsListValidatesParamsAndInitializeAdvertisesPreSessionCommands(t 
 	messages = decodeACPOutput(t, output.Bytes())
 	meta := messages[0]["result"].(map[string]any)["_meta"].(map[string]any)
 	commands := meta["availableCommands"].([]any)
-	if len(commands) != 1 || commands[0].(map[string]any)["name"] != "compact" || commands[0].(map[string]any)["input"].(map[string]any)["hint"] == "" {
+	if len(commands) != 3 || commands[0].(map[string]any)["name"] != "compact" || commands[0].(map[string]any)["input"].(map[string]any)["hint"] == "" || commands[1].(map[string]any)["name"] != "context" || commands[2].(map[string]any)["name"] != "session-info" {
 		t.Fatalf("available commands=%#v", commands)
 	}
 	routedCommands := messages[1]["result"].(map[string]any)["commands"].([]any)
-	if len(routedCommands) != 1 || routedCommands[0].(map[string]any)["name"] != "compact" {
+	if len(routedCommands) != 3 || routedCommands[2].(map[string]any)["name"] != "session-info" {
 		t.Fatalf("routed commands=%#v", routedCommands)
+	}
+}
+
+func TestSessionStatusSlashCommandsUseLiveStateWithoutModelTurn(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	runner := &agent.Runner{SessionID: "status-session", Workspace: "/work", ModelID: "grok-build", Model: "grok-build", ContextWindow: 1000, Tools: registry}
+	current := &session{
+		id: "status-session", cwd: "/work", title: "Session title", runner: runner,
+		promptIndex: 2, activePrompt: -1, inputTokens: 250,
+	}
+	var output bytes.Buffer
+	server := &Server{output: &output, sessions: map[string]*session{current.id: current}}
+	request := func(id int, prompt string) []map[string]any {
+		t.Helper()
+		output.Reset()
+		params, _ := json.Marshal(map[string]any{
+			"sessionId": current.id,
+			"prompt":    []any{map[string]any{"type": "text", "text": prompt}},
+			"_meta":     map[string]any{"promptId": "status-prompt"},
+		})
+		server.handlePrompt(context.Background(), message{ID: json.RawMessage(fmt.Sprintf("%d", id)), Method: "session/prompt", Params: params})
+		return decodeACPOutput(t, output.Bytes())
+	}
+
+	for id, prompt := range []string{"/session-info", "/status ignored", "/info extra"} {
+		messages := request(id+1, prompt)
+		text, completed, responded := "", false, false
+		for _, item := range messages {
+			params, _ := item["params"].(map[string]any)
+			update, _ := params["update"].(map[string]any)
+			content, _ := update["content"].(map[string]any)
+			if update["sessionUpdate"] == "agent_message_chunk" {
+				text, _ = content["text"].(string)
+			}
+			completed = completed || item["method"] == "x.ai/session/prompt_complete"
+			if result, ok := item["result"].(map[string]any); ok && result["stopReason"] == "end_turn" {
+				responded = true
+			}
+		}
+		for _, want := range []string{"**Title:** Session title", "**Session ID:** status-session", "**Working directory:** /work", "**Model:** grok-build", "**Turn:** 2", "**Context:** 250 / 1000 tokens (25%)"} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("prompt=%q missing %q in messages=%#v", prompt, want, messages)
+			}
+		}
+		if !completed || !responded {
+			t.Fatalf("prompt=%q messages=%#v", prompt, messages)
+		}
+	}
+
+	messages := request(10, "/context ignored")
+	for _, item := range messages {
+		params, _ := item["params"].(map[string]any)
+		update, _ := params["update"].(map[string]any)
+		if update["sessionUpdate"] == "agent_message_chunk" {
+			t.Fatalf("context command emitted text: %#v", messages)
+		}
+	}
+	if result := messages[len(messages)-1]["result"].(map[string]any); result["stopReason"] != "end_turn" {
+		t.Fatalf("context messages=%#v", messages)
+	}
+
+	output.Reset()
+	server.handleSessionAdmin(message{ID: json.RawMessage("20"), Method: "x.ai/session/info", Params: json.RawMessage(`{"sessionId":"status-session"}`)})
+	info := decodeACPOutput(t, output.Bytes())[0]["result"].(map[string]any)["result"].(map[string]any)
+	contextInfo := info["context"].(map[string]any)
+	if contextInfo["used"] != float64(250) || contextInfo["total"] != float64(1000) || contextInfo["usagePct"] != float64(25) || current.promptIndex != 2 {
+		t.Fatalf("info=%#v promptIndex=%d", info, current.promptIndex)
+	}
+
+	current.runner.Client = &fixtureStreamer{results: []api.StreamResult{{ResponseID: "response-3", Text: "done", Usage: api.Usage{InputTokens: 333}}}}
+	current.runner.ContextWindow = 0
+	output.Reset()
+	params, _ := json.Marshal(map[string]any{
+		"sessionId": current.id,
+		"prompt":    []any{map[string]any{"type": "text", "text": "regular model turn"}},
+		"_meta":     map[string]any{"promptId": "regular-prompt"},
+	})
+	server.handlePrompt(context.Background(), message{ID: json.RawMessage("21"), Method: "session/prompt", Params: params})
+	server.wg.Wait()
+	modelMessages := decodeACPOutput(t, output.Bytes())
+	modelResponded := false
+	for _, item := range modelMessages {
+		result, ok := item["result"].(map[string]any)
+		modelResponded = modelResponded || ok && item["id"] == float64(21) && result["stopReason"] == "end_turn"
+	}
+	if !modelResponded {
+		t.Fatalf("model messages=%#v", modelMessages)
+	}
+	current.mu.Lock()
+	used := current.inputTokens
+	current.mu.Unlock()
+	if used != 333 {
+		t.Fatalf("live input tokens=%d", used)
+	}
+	output.Reset()
+	server.handleSessionAdmin(message{ID: json.RawMessage("22"), Method: "x.ai/session/info", Params: json.RawMessage(`{"sessionId":"status-session"}`)})
+	info = decodeACPOutput(t, output.Bytes())[0]["result"].(map[string]any)["result"].(map[string]any)
+	contextInfo = info["context"].(map[string]any)
+	if contextInfo["used"] != float64(333) || contextInfo["total"] != float64(0) || contextInfo["usagePct"] != float64(0) {
+		t.Fatalf("live info=%#v", info)
 	}
 }
 
