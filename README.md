@@ -488,7 +488,9 @@ shows a visible mode badge. `/always-approve` toggles automatic approval for
 otherwise unmatched tool actions while preserving explicit deny and ask rules.
 When `[auto_mode]` is enabled, `/auto` toggles classifier-based approval and
 switches cleanly from always-approve; the command is unavailable when policy
-or configuration disables auto mode.
+or configuration disables auto mode. Successful mode changes are atomically
+saved as `[ui].permission_mode` (`ask`, `auto`, or `always-approve`) and restored
+on the next run; a write failure leaves the active mode unchanged.
 `/plan` idempotently enters Plan mode, while `/plan <description>` enters it and
 starts a planning turn. `/quit` and `/exit` close the TUI without a model turn.
 `/view-plan`, `/show-plan`, and `/plan-view` open the current confined plan file
@@ -999,6 +1001,11 @@ Dirty staged, unstaged, and untracked state in the new worktree is saved to a
 labeled stash before checkout; full archive restoration remains unavailable.
 
 Local mutations require confirmation by default:
+
+`[ui].permission_mode` sets the saved default to `ask`, `auto`, or
+`always-approve` (`default` is equivalent to `ask`). A remote default is used
+only when this local setting is absent. An explicit `--approval` flag overrides
+both saved and remote defaults for the current process.
 
 - `--approval prompt`: ask before every file mutation and shell command.
 - `--approval deny`: allow only read-only tools.

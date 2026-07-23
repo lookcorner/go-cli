@@ -113,6 +113,7 @@ type Config struct {
 	uiTextSelectionInvalid          bool
 	uiSelectionHighlightDuration    *uint64
 	uiDoubleClickAction             *string
+	uiPermissionModeConfigured      bool
 	modelConfigured                 bool
 	defaultModelConfigured          bool
 	allowedModelsConfigured         bool
@@ -203,6 +204,7 @@ type UIConfig struct {
 	ScrollLines          *uint8  `json:"scroll_lines,omitempty"`
 	InvertScroll         bool    `json:"invert_scroll,omitempty"`
 	PromptSuggestions    bool    `json:"prompt_suggestions"`
+	PermissionMode       string  `json:"permission_mode"`
 }
 
 type GoalConfig struct {
@@ -429,6 +431,7 @@ type fileUIConfig struct {
 	ScrollLines                  *uint8  `json:"scroll_lines,omitempty" toml:"scroll_lines"`
 	InvertScroll                 *bool   `json:"invert_scroll,omitempty" toml:"invert_scroll"`
 	PromptSuggestions            *bool   `json:"prompt_suggestions,omitempty" toml:"prompt_suggestions"`
+	PermissionMode               *string `json:"permission_mode,omitempty" toml:"permission_mode"`
 	SelectionHighlightDurationMS *uint64 `json:"selection_highlight_duration_ms,omitempty" toml:"selection_highlight_duration_ms"`
 	DoubleClickAction            *string `json:"double_click_action,omitempty" toml:"double_click_action"`
 }
@@ -639,7 +642,7 @@ func Load(path string) (Config, error) {
 		AskUserQuestion:             AskUserQuestionConfig{TimeoutEnabled: true, TimeoutSeconds: 30 * 60},
 		Toolset:                     ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}},
 		Goal:                        GoalConfig{VerifierCount: 3, ClassifierMaxRuns: 10, ReverifyAfter: 8},
-		UI:                          UIConfig{KeepTextSelection: "flash", PromptSuggestions: true},
+		UI:                          UIConfig{KeepTextSelection: "flash", PromptSuggestions: true, PermissionMode: "ask"},
 		Pruning:                     PruningConfig{Enabled: true, KeepLastNTurns: 3, SoftTrimThreshold: 4000, SoftTrimHead: 1500, SoftTrimTail: 1500, HardClearAgeTurns: 10},
 		Memory:                      memory.DefaultConfig(),
 	}
@@ -883,6 +886,14 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.UI.PromptSuggestions != nil {
 		cfg.UI.PromptSuggestions = *disk.UI.PromptSuggestions
+	}
+	if disk.UI.PermissionMode != nil {
+		mode, err := normalizePermissionMode(*disk.UI.PermissionMode)
+		if err != nil {
+			return err
+		}
+		cfg.UI.PermissionMode = mode
+		cfg.uiPermissionModeConfigured = true
 	}
 	if disk.Goal.VerifierCount != nil {
 		cfg.Goal.VerifierCount = normalizedGoalVerifierCount(*disk.Goal.VerifierCount)
@@ -1705,6 +1716,17 @@ func parseKeepTextSelection(value any) (string, error) {
 		return strings.TrimSpace(value), nil
 	default:
 		return "", errors.New("ui keep_text_selection must be a boolean or string")
+	}
+}
+
+func normalizePermissionMode(value string) (string, error) {
+	switch value = strings.TrimSpace(value); value {
+	case "ask", "auto", "always-approve":
+		return value, nil
+	case "default":
+		return "ask", nil
+	default:
+		return "", errors.New("ui permission_mode must be ask, auto, always-approve, or default")
 	}
 }
 

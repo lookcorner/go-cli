@@ -146,6 +146,7 @@ vim_mode = true
 scroll_lines = 5
 invert_scroll = true
 prompt_suggestions = false
+permission_mode = "auto"
 
 [[permission.rules]]
 action = "allow"
@@ -226,7 +227,7 @@ pattern = ".env*"
 	if len(cfg.Permission.Rules) != 2 || cfg.Permission.Rules[0].Action != "allow" || *cfg.Permission.Rules[1].Pattern != ".env*" {
 		t.Fatalf("unexpected permission config: %#v", cfg.Permission)
 	}
-	if cfg.UI.KeepTextSelection != "word_select" || cfg.UI.WordSeparators == nil || *cfg.UI.WordSeparators != "./" || !cfg.UI.MouseReportingToggle || !cfg.UI.VimMode || cfg.UI.ScrollLines == nil || *cfg.UI.ScrollLines != 5 || !cfg.UI.InvertScroll || cfg.UI.PromptSuggestions {
+	if cfg.UI.KeepTextSelection != "word_select" || cfg.UI.WordSeparators == nil || *cfg.UI.WordSeparators != "./" || !cfg.UI.MouseReportingToggle || !cfg.UI.VimMode || cfg.UI.ScrollLines == nil || *cfg.UI.ScrollLines != 5 || !cfg.UI.InvertScroll || cfg.UI.PromptSuggestions || cfg.UI.PermissionMode != "auto" {
 		t.Fatalf("unexpected UI config: %#v", cfg.UI)
 	}
 	if strings.Join(cfg.Skills.Paths, ",") != "~/shared-skills,project-skills" || strings.Join(cfg.Skills.Ignore, ",") != "~/shared-skills/ignored" || strings.Join(cfg.Skills.Disabled, ",") != "manual-only" {
@@ -1789,6 +1790,74 @@ func TestUpdatePluginsPreservesOtherConfiguration(t *testing.T) {
 	plugins := raw["plugins"].(map[string]any)
 	if raw["model_name"] != "grok" || strings.Join(anyStrings(plugins["paths"]), "|") != "old|new" || strings.Join(anyStrings(plugins["enabled"]), "|") != "review" || strings.Join(anyStrings(plugins["disabled"]), "|") != "legacy" {
 		t.Fatalf("unexpected plugins config: %#v", raw)
+	}
+}
+
+func TestPermissionModeConfigPersistenceAndPrecedence(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[models]\ndefault = \"local\"\n\n[model.local]\nmodel = \"local-api\"\n\n[ui]\nvim_mode = true\npermission_mode = \"ask\"\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdatePermissionMode(path, "auto"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteMode := "always-approve"
+	cfg.ApplyRemoteSettings(&RemoteSettings{PermissionMode: &remoteMode})
+	if cfg.UI.PermissionMode != "auto" || !cfg.UI.VimMode || cfg.DefaultModelID != "local" || cfg.Model != "local-api" {
+		t.Fatalf("config=%#v", cfg)
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o640 {
+		t.Fatalf("mode info=%v err=%v", info, err)
+	}
+
+	jsonPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(jsonPath, []byte("{\"ui\":{\"vim_mode\":true}}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdatePermissionMode(jsonPath, "always-approve"); err != nil {
+		t.Fatal(err)
+	}
+	jsonConfig, err := Load(jsonPath)
+	if err != nil || jsonConfig.UI.PermissionMode != "always-approve" || !jsonConfig.UI.VimMode {
+		t.Fatalf("JSON config=%#v err=%v", jsonConfig, err)
+	}
+
+	defaultPath := filepath.Join(t.TempDir(), "default.toml")
+	if err := os.WriteFile(defaultPath, []byte("[ui]\npermission_mode = \"default\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	defaultConfig, err := Load(defaultPath)
+	if err != nil || defaultConfig.UI.PermissionMode != "ask" {
+		t.Fatalf("default config=%#v err=%v", defaultConfig, err)
+	}
+	remoteConfig := Config{UI: UIConfig{PermissionMode: "ask"}}
+	remoteConfig.ApplyRemoteSettings(&RemoteSettings{PermissionMode: &remoteMode})
+	if remoteConfig.UI.PermissionMode != "always-approve" {
+		t.Fatalf("remote mode=%q", remoteConfig.UI.PermissionMode)
+	}
+	remoteDefault := "default"
+	remoteConfig.ApplyRemoteSettings(&RemoteSettings{PermissionMode: &remoteDefault})
+	if remoteConfig.UI.PermissionMode != "ask" {
+		t.Fatalf("remote default mode=%q", remoteConfig.UI.PermissionMode)
+	}
+	invalidRemote := "deny"
+	remoteConfig.ApplyRemoteSettings(&RemoteSettings{PermissionMode: &invalidRemote})
+	if remoteConfig.UI.PermissionMode != "ask" {
+		t.Fatalf("invalid remote mode=%q", remoteConfig.UI.PermissionMode)
+	}
+	if err := UpdatePermissionMode(path, "deny"); err == nil {
+		t.Fatal("invalid persisted mode was accepted")
+	}
+	invalidPath := filepath.Join(t.TempDir(), "invalid.toml")
+	if err := os.WriteFile(invalidPath, []byte("[ui]\npermission_mode = \"deny\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(invalidPath); err == nil {
+		t.Fatal("invalid configured mode was accepted")
 	}
 }
 

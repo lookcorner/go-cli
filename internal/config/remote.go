@@ -182,6 +182,14 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 	c.GateURL = remote.GateURL
 	c.GateLabel = remote.GateLabel
 	c.ShowResolvedModel = remote.ShowResolvedModel
+	if !c.uiPermissionModeConfigured {
+		c.UI.PermissionMode = "ask"
+		if remote.PermissionMode != nil {
+			if mode, err := normalizePermissionMode(*remote.PermissionMode); err == nil {
+				c.UI.PermissionMode = mode
+			}
+		}
+	}
 	if remote.OfficialMarketplaceAutoRegister != nil {
 		c.OfficialMarketplaceAutoRegister = *remote.OfficialMarketplaceAutoRegister
 	}

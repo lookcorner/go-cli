@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -142,6 +143,11 @@ func TestAlwaysApproveCommandTogglesBridgeMode(t *testing.T) {
 func TestAutoCommandTogglesBridgeMode(t *testing.T) {
 	bridge := NewBridge(context.Background(), tools.PermissionPrompt)
 	defer bridge.Close()
+	var persisted []string
+	bridge.SetPermissionModePersister(func(mode string) error {
+		persisted = append(persisted, mode)
+		return nil
+	})
 	policy, err := tools.NewPolicyApprover(bridge, PromptApprover(bridge), nil, []string{"Bash(git push *)"}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -167,6 +173,9 @@ func TestAutoCommandTogglesBridgeMode(t *testing.T) {
 	if !strings.Contains(m.View().Content, " AUTO ") || strings.Contains(m.View().Content, " ALWAYS ") {
 		t.Fatalf("mode badges=%q", m.View().Content)
 	}
+	if got := strings.Join(persisted, ","); got != "auto,ask,always-approve,auto" {
+		t.Fatalf("persisted modes=%q", got)
+	}
 	if err := policy.Approve(context.Background(), "shell", "go test ./..."); err != nil {
 		t.Fatalf("auto mode did not reach tool policy: %v", err)
 	}
@@ -189,6 +198,8 @@ func TestAutoCommandHonorsFeatureAndDenyGates(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			defer test.bridge.Close()
+			writes := 0
+			test.bridge.SetPermissionModePersister(func(string) error { writes++; return nil })
 			m := &model{bridge: test.bridge, width: 60, height: 16}
 			m.setInput("/help")
 			updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
@@ -205,7 +216,25 @@ func TestAutoCommandHonorsFeatureAndDenyGates(t *testing.T) {
 			if err := test.bridge.SetAutoMode(true); err == nil || !strings.Contains(err.Error(), "disabled") {
 				t.Fatalf("direct auto enable error=%v", err)
 			}
+			if writes != 0 {
+				t.Fatalf("disabled mode persisted %d writes", writes)
+			}
 		})
+	}
+}
+
+func TestPermissionModePersistenceFailureRollsBack(t *testing.T) {
+	bridge := NewBridge(context.Background(), tools.PermissionPrompt)
+	defer bridge.Close()
+	bridge.SetPermissionModePersister(func(string) error { return errors.New("disk full") })
+	m := &model{bridge: bridge, width: 60, height: 16}
+	for _, command := range []string{"/auto", "/always-approve"} {
+		m.setInput(command)
+		updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+		m = updated.(*model)
+		if bridge.PermissionMode() != tools.PermissionPrompt || !strings.Contains(m.status, "persist permission mode: disk full") || strings.Contains(m.View().Content, " AUTO ") || strings.Contains(m.View().Content, " ALWAYS ") {
+			t.Fatalf("command=%q mode=%q status=%q", command, bridge.PermissionMode(), m.status)
+		}
 	}
 }
 

@@ -1665,6 +1665,34 @@ func TestResolveACPSessionPermissionMode(t *testing.T) {
 	}
 }
 
+func TestResolvePermissionModePrecedenceAndGates(t *testing.T) {
+	disabled := false
+	for _, test := range []struct {
+		name      string
+		cfg       config.Config
+		cli       string
+		cliSet    bool
+		want      tools.PermissionMode
+		wantError bool
+	}{
+		{name: "config auto", cfg: config.Config{UI: config.UIConfig{PermissionMode: "auto"}}, want: tools.PermissionAuto},
+		{name: "explicit prompt", cfg: config.Config{UI: config.UIConfig{PermissionMode: "auto"}}, cli: "prompt", cliSet: true, want: tools.PermissionPrompt},
+		{name: "explicit deny", cfg: config.Config{UI: config.UIConfig{PermissionMode: "always-approve"}}, cli: "deny", cliSet: true, want: tools.PermissionDeny},
+		{name: "default is ask", cfg: config.Config{UI: config.UIConfig{PermissionMode: "default"}}, want: tools.PermissionPrompt},
+		{name: "managed always gate", cfg: config.Config{UI: config.UIConfig{PermissionMode: "always-approve"}, DisableBypassPermissionsMode: true}, want: tools.PermissionPrompt},
+		{name: "auto feature gate", cfg: config.Config{UI: config.UIConfig{PermissionMode: "auto"}, AutoMode: config.AutoModeConfig{Enabled: &disabled}}, want: tools.PermissionPrompt},
+		{name: "invalid CLI", cfg: config.Config{UI: config.UIConfig{PermissionMode: "ask"}}, cli: "invalid", cliSet: true, wantError: true},
+		{name: "deny cannot come from config", cfg: config.Config{UI: config.UIConfig{PermissionMode: "deny"}}, wantError: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := resolvePermissionMode(test.cfg, test.cli, test.cliSet)
+			if (err != nil) != test.wantError || got != test.want {
+				t.Fatalf("mode=%q err=%v want=%q wantError=%v", got, err, test.want, test.wantError)
+			}
+		})
+	}
+}
+
 func testBoolPointer(value bool) *bool { return &value }
 
 func TestResolveACPSessionModel(t *testing.T) {

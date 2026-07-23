@@ -56,6 +56,7 @@ type options struct {
 	backend            string
 	system             string
 	approval           string
+	approvalSet        bool
 	sessionDir         string
 	maxSteps           int
 	timeout            time.Duration
@@ -145,6 +146,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
+	flags.Visit(func(flag *flag.Flag) {
+		if flag.Name == "approval" {
+			opts.approvalSet = true
+		}
+	})
 	if opts.showVersion {
 		fmt.Fprintln(stdout, version.Current)
 		return nil
@@ -276,15 +282,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return err
 	}
 	cfg.SystemPrompt = joinInstructions(cfg.SystemPrompt, projectInstructions, skillCatalog.Summary())
-	mode := tools.PermissionMode(opts.approval)
-	if mode != tools.PermissionPrompt && mode != tools.PermissionAuto && mode != tools.PermissionAlwaysApprove && mode != tools.PermissionDeny {
-		return fmt.Errorf("invalid --approval %q", opts.approval)
-	}
-	if cfg.DisableBypassPermissionsMode && mode == tools.PermissionAlwaysApprove {
-		mode = tools.PermissionPrompt
-	}
-	if mode == tools.PermissionAuto && !cfg.AutoModeEnabled() {
-		mode = tools.PermissionPrompt
+	mode, err := resolvePermissionMode(cfg, opts.approval, opts.approvalSet)
+	if err != nil {
+		return err
 	}
 	if opts.resume != "" && opts.previousID != "" {
 		return errors.New("--resume and --previous-response-id cannot be used together")
@@ -350,6 +350,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	statusOutput := stderr
 	if opts.tui {
 		tuiBridge = tui.NewBridgeWithLocks(ctx, mode, cfg.DisableBypassPermissionsMode, !cfg.AutoModeEnabled())
+		tuiBridge.SetPermissionModePersister(func(mode string) error {
+			return config.UpdatePermissionMode(opts.configPath, mode)
+		})
 		defer tuiBridge.Close()
 		approver = tuiBridge
 		askApprover = tui.PromptApprover(tuiBridge)
@@ -1771,12 +1774,9 @@ func modelCatalogChanged(previous, next config.Config) bool {
 }
 
 func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []string, tokenProvider api.TokenProvider, stdin io.Reader, stdout, stderr io.Writer) error {
-	mode := tools.PermissionMode(opts.approval)
-	if mode != tools.PermissionPrompt && mode != tools.PermissionAuto && mode != tools.PermissionAlwaysApprove && mode != tools.PermissionDeny {
-		return fmt.Errorf("invalid --approval %q", opts.approval)
-	}
-	if cfg.DisableBypassPermissionsMode && mode == tools.PermissionAlwaysApprove {
-		mode = tools.PermissionPrompt
+	mode, err := resolvePermissionMode(cfg, opts.approval, opts.approvalSet)
+	if err != nil {
+		return err
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -2655,6 +2655,36 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		return err
 	}
 	return nil
+}
+
+func resolvePermissionMode(cfg config.Config, cliValue string, cliSet bool) (tools.PermissionMode, error) {
+	value := cfg.UI.PermissionMode
+	if cliSet {
+		value = cliValue
+	}
+	var mode tools.PermissionMode
+	switch value {
+	case "", "ask", "default", "prompt":
+		mode = tools.PermissionPrompt
+	case "auto":
+		mode = tools.PermissionAuto
+	case "always-approve":
+		mode = tools.PermissionAlwaysApprove
+	case "deny":
+		if !cliSet {
+			return "", fmt.Errorf("invalid ui permission_mode %q", value)
+		}
+		mode = tools.PermissionDeny
+	default:
+		if cliSet {
+			return "", fmt.Errorf("invalid --approval %q", value)
+		}
+		return "", fmt.Errorf("invalid ui permission_mode %q", value)
+	}
+	if (cfg.DisableBypassPermissionsMode && mode == tools.PermissionAlwaysApprove) || (mode == tools.PermissionAuto && !cfg.AutoModeEnabled()) {
+		mode = tools.PermissionPrompt
+	}
+	return mode, nil
 }
 
 func clearACPLogoutPolicy(ctx context.Context, cfg config.Config, result auth.LogoutResult) error {

@@ -153,16 +153,17 @@ type planReviewEvent struct {
 }
 
 type Bridge struct {
-	ctx                 context.Context
-	cancel              context.CancelFunc
-	modeMu              sync.RWMutex
-	mode                tools.PermissionMode
-	alwaysApproveLocked bool
-	autoModeLocked      bool
-	asker               tools.Approver
-	events              chan tea.Msg
-	once                sync.Once
-	interactionMu       sync.Mutex
+	ctx                   context.Context
+	cancel                context.CancelFunc
+	modeMu                sync.RWMutex
+	mode                  tools.PermissionMode
+	alwaysApproveLocked   bool
+	autoModeLocked        bool
+	asker                 tools.Approver
+	persistPermissionMode func(string) error
+	events                chan tea.Msg
+	once                  sync.Once
+	interactionMu         sync.Mutex
 }
 
 func NewBridge(parent context.Context, mode tools.PermissionMode) *Bridge {
@@ -280,6 +281,12 @@ func (b *Bridge) SetPromptApprover(asker tools.Approver) {
 	b.modeMu.Unlock()
 }
 
+func (b *Bridge) SetPermissionModePersister(persist func(string) error) {
+	b.modeMu.Lock()
+	b.persistPermissionMode = persist
+	b.modeMu.Unlock()
+}
+
 func (b *Bridge) ask(ctx context.Context, action, detail string) error {
 	b.modeMu.RLock()
 	asker := b.asker
@@ -305,12 +312,7 @@ func (b *Bridge) SetAlwaysApprove(enabled bool) error {
 	if enabled && b.alwaysApproveLocked {
 		return errors.New("always-approve is disabled by managed policy")
 	}
-	if enabled {
-		b.mode = tools.PermissionAlwaysApprove
-	} else {
-		b.mode = tools.PermissionPrompt
-	}
-	return nil
+	return b.setPermissionModeLocked(enabled, tools.PermissionAlwaysApprove)
 }
 
 func (b *Bridge) SetAutoMode(enabled bool) error {
@@ -322,10 +324,25 @@ func (b *Bridge) SetAutoMode(enabled bool) error {
 	if enabled && b.autoModeLocked {
 		return errors.New("auto permission mode is disabled")
 	}
+	return b.setPermissionModeLocked(enabled, tools.PermissionAuto)
+}
+
+func (b *Bridge) setPermissionModeLocked(enabled bool, enabledMode tools.PermissionMode) error {
+	previous := b.mode
+	b.mode = tools.PermissionPrompt
 	if enabled {
-		b.mode = tools.PermissionAuto
-	} else {
-		b.mode = tools.PermissionPrompt
+		b.mode = enabledMode
+	}
+	if b.persistPermissionMode == nil {
+		return nil
+	}
+	mode := string(b.mode)
+	if b.mode == tools.PermissionPrompt {
+		mode = "ask"
+	}
+	if err := b.persistPermissionMode(mode); err != nil {
+		b.mode = previous
+		return fmt.Errorf("persist permission mode: %w", err)
 	}
 	return nil
 }
