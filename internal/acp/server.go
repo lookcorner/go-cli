@@ -341,7 +341,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleHunkAction(ctx, incoming)
 		case "x.ai/git/worktree/create", "x.ai/git/worktree/list", "x.ai/git/worktree/show", "x.ai/git/worktree/remove", "x.ai/git/worktree/apply":
 			s.handleWorktree(ctx, incoming)
-		case "x.ai/git/git_repo_root", "x.ai/git/status", "x.ai/git/stage", "x.ai/git/stage/content", "x.ai/git/unstage", "x.ai/git/discard", "x.ai/git/current_commit", "x.ai/git/info", "x.ai/git/branches", "x.ai/git/stash", "x.ai/git/checkout", "x.ai/git/checkout_session_head", "x.ai/git/checkout_commit", "x.ai/git/commit", "x.ai/git/files", "x.ai/git/diffs":
+		case "x.ai/git/git_repo_root", "x.ai/git/status", "x.ai/git/stage", "x.ai/git/stage/content", "x.ai/git/unstage", "x.ai/git/discard", "x.ai/git/current_commit", "x.ai/git/info", "x.ai/git/branches", "x.ai/git/stash", "x.ai/git/checkout", "x.ai/git/checkout_session_head", "x.ai/git/checkout_commit", "x.ai/git/commit", "x.ai/git/files", "x.ai/git/diffs", "x.ai/git/serialize_changes":
 			s.handleGit(ctx, incoming)
 		case "x.ai/pr/status":
 			s.handlePRStatus(ctx, incoming)
@@ -815,6 +815,10 @@ func sessionContextWire(used, total, turns int) map[string]any {
 }
 
 func (s *Server) handleGit(ctx context.Context, incoming message) {
+	if incoming.Method == "x.ai/git/serialize_changes" {
+		s.respond(incoming.ID, map[string]any{"result": nil, "error": "git serialize_changes is unavailable in this build"})
+		return
+	}
 	if incoming.Method == "x.ai/git/git_repo_root" {
 		var req struct {
 			CWD string `json:"currentWorkingDirectory"`

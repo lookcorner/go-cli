@@ -164,6 +164,20 @@ func TestGitExtensionWireContract(t *testing.T) {
 	}
 }
 
+func TestGitSerializeChangesUnavailable(t *testing.T) {
+	var output bytes.Buffer
+	server := &Server{output: &output}
+	server.handleGit(context.Background(), message{ID: json.RawMessage("1"), Method: "x.ai/git/serialize_changes", Params: json.RawMessage(`{"gitRoot":"/tmp"}`)})
+	var response map[string]any
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	extension := response["result"].(map[string]any)
+	if extension["result"] != nil || extension["error"] != "git serialize_changes is unavailable in this build" {
+		t.Fatalf("unexpected serialize_changes response: %#v", response)
+	}
+}
+
 func TestGitDiffPatchLimitsWireContract(t *testing.T) {
 	root := t.TempDir()
 	runACPGit(t, root, "init", "-q")
