@@ -1457,6 +1457,11 @@ then `$GROK_HOME/agents`, legacy/user Claude locations, bundled agents, and
 enabled plugin `agents/*.md`. Trusted project agents may shadow the built-in
 `general-purpose`, `explore`, and `plan` types; user definitions cannot silently
 replace a built-in, and plugin agents use `plugin-name:agent-name` identities.
+The TUI `/config-agents` command (alias `/agents`) lists these live definitions
+with fuzzy search, expandable runtime details, and full source/prompt viewing.
+Its Personas tab, also opened directly with `/personas`, merges read-only bundled
+personas with project `.grok/personas` and `$GROK_HOME/personas`, and supports
+validated user/project creation, source viewing, and confirmation-gated deletion.
 Definitions may set `memory: user`, `memory: project`, or `memory: local`.
 The corresponding `MEMORY.md` is injected at startup with a 200-line/25-KiB
 cap, and that child alone receives standard read/write/replace access to its

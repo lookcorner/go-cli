@@ -148,7 +148,7 @@ func (m *model) extensionRows() []extensionRow {
 	}
 	filtered := rows[:0]
 	for _, row := range rows {
-		if matchesExtensionQuery(row.name+" "+row.detail+" "+row.status, query) {
+		if fuzzyMatch(row.name+" "+row.detail+" "+row.status, query) {
 			filtered = append(filtered, row)
 		}
 	}
@@ -428,7 +428,7 @@ func setDisabled(values []string, name string, disabled bool) []string {
 	return result
 }
 
-func matchesExtensionQuery(value, query string) bool {
+func fuzzyMatch(value, query string) bool {
 	value, query = strings.ToLower(value), strings.ToLower(query)
 	if strings.Contains(value, query) {
 		return true

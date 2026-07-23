@@ -255,6 +255,12 @@ func (m *Manager) SetCatalog(catalog *agents.Catalog) {
 	m.mu.Unlock()
 }
 
+func (m *Manager) Definitions() []agents.Definition {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.catalog.Definitions()
+}
+
 func (m *Manager) SetParentModel(model string, contextWindow, compactThresholdPercent int) {
 	m.mu.Lock()
 	m.parentModel, m.contextWindow, m.compactThresholdPercent = model, contextWindow, compactThresholdPercent

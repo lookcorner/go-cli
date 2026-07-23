@@ -16,12 +16,14 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/lookcorner/go-cli/internal/agents"
 	"github.com/lookcorner/go-cli/internal/announcement"
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/hooks"
 	"github.com/lookcorner/go-cli/internal/marketplace"
 	"github.com/lookcorner/go-cli/internal/mcp"
 	"github.com/lookcorner/go-cli/internal/memory"
+	"github.com/lookcorner/go-cli/internal/personas"
 	"github.com/lookcorner/go-cli/internal/plugin"
 	"github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/skills"
@@ -126,6 +128,8 @@ type Runner struct {
 	Tools                   *tools.Registry
 	Skills                  *skills.Catalog
 	PluginInventory         func() []plugin.Plugin
+	AgentDefinitions        func() []agents.Definition
+	Personas                *personas.Service
 	HookCatalog             *hooks.Catalog
 	ReloadHooks             func() error
 	ListSubagents           func() []tools.SubagentResult

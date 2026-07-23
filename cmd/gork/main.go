@@ -41,6 +41,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/marketplace"
 	"github.com/lookcorner/go-cli/internal/mcp"
 	"github.com/lookcorner/go-cli/internal/memory"
+	"github.com/lookcorner/go-cli/internal/personas"
 	"github.com/lookcorner/go-cli/internal/plugin"
 	"github.com/lookcorner/go-cli/internal/session"
 	sessionshare "github.com/lookcorner/go-cli/internal/share"
@@ -733,7 +734,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			extensionMu.Lock()
 			defer extensionMu.Unlock()
 			return append([]plugin.Plugin(nil), plugins...)
-		}, Logger: logger,
+		}, AgentDefinitions: subagents.Definitions, Personas: personas.New(ws.Root()), Logger: logger,
 		HookCatalog: hookCatalog, HookPolicy: hookRuntime,
 		ReloadHooks: func() error {
 			reloaded, err := config.Load(opts.configPath)
@@ -2883,7 +2884,8 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			return reloadMCPBase(updateCtx)
 		}
 		runner := &agent.Runner{
-			Client: modelClient, Tools: registry, Skills: catalog, PluginInventory: pluginInventory, Logger: logger,
+			Client: modelClient, Tools: registry, Skills: catalog, PluginInventory: pluginInventory,
+			AgentDefinitions: subagentManager.Definitions, Personas: personas.New(pluginState.root), Logger: logger,
 			HookCatalog: pluginState.hooks, HookPolicy: pluginState.hookRun,
 			ListSubagents: subagentManager.List, GetSubagent: subagentManager.Output, KillSubagent: subagentManager.Kill,
 			ListTasks: registry.BackgroundTasks, KillTask: registry.KillBackgroundTask,
