@@ -444,19 +444,27 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return err
 	}
 	defer mcpRuntime.Close()
-	watchMCPConfig(ctx, time.Second, func() ([]string, error) {
-		return config.MCPWatchPaths(ws.Root(), opts.configPath, workspaceSource, plugins, projectTrusted), nil
-	}, func() error {
+	var mcpReloadMu sync.Mutex
+	reloadMCPBase := func(updateCtx context.Context) error {
+		mcpReloadMu.Lock()
+		defer mcpReloadMu.Unlock()
 		reloaded, err := config.Load(opts.configPath)
 		if err != nil {
 			return err
 		}
 		workspaceSource.MCPServers = reloaded.MCPServers
+		workspaceSource.DisabledMCPServers = reloaded.DisabledMCPServers
+		workspaceSource.DisabledMCPTools = reloaded.DisabledMCPTools
 		workspaceSource.Compat = reloaded.Compat
 		base := workspaceSource
 		base.MCPServers = config.DiscoverMCPServers(ws.Root(), base, plugins, projectTrusted)
-		return mcpRuntime.UpdateBase(ctx, base)
-	}, statusOutput)
+		return mcpRuntime.UpdateBase(updateCtx, base)
+	}
+	watchMCPConfig(ctx, time.Second, func() ([]string, error) {
+		mcpReloadMu.Lock()
+		defer mcpReloadMu.Unlock()
+		return config.MCPWatchPaths(ws.Root(), opts.configPath, workspaceSource, plugins, projectTrusted), nil
+	}, func() error { return reloadMCPBase(ctx) }, statusOutput)
 	lspManager, err := startLSPServers(ctx, cfg, ws, registry, statusOutput)
 	if err != nil {
 		return err
@@ -548,6 +556,52 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return err
 	}
 	defer subagents.Close()
+	toggleMCPServer := func(updateCtx context.Context, name string, enabled bool) error {
+		found := false
+		for _, server := range mcpRuntime.Catalog() {
+			found = found || server.Name == name
+		}
+		if !found {
+			return fmt.Errorf("MCP server %q not found in config", name)
+		}
+		if err := config.SetMCPServerEnabled(opts.configPath, name, enabled); err != nil {
+			return err
+		}
+		return reloadMCPBase(updateCtx)
+	}
+	toggleMCPTool := func(updateCtx context.Context, serverName, toolName string, enabled bool) error {
+		found := false
+		for _, server := range mcpRuntime.Catalog() {
+			found = found || server.Name == serverName
+		}
+		if !found {
+			return fmt.Errorf("MCP server %q not found in config", serverName)
+		}
+		if err := config.SetMCPToolEnabled(opts.configPath, serverName, toolName, enabled); err != nil {
+			return err
+		}
+		return reloadMCPBase(updateCtx)
+	}
+	upsertMCPServer := func(updateCtx context.Context, server mcp.ServerConfig) error {
+		enabled := true
+		if err := config.UpsertMCPServer(opts.configPath, server.Name, config.MCPServerConfig{
+			Type: server.Type, Command: server.Command, Args: append([]string(nil), server.Args...), Env: cloneStringsMap(server.Env),
+			URL: server.URL, Headers: cloneStringsMap(server.Headers), Enabled: &enabled,
+		}); err != nil {
+			return err
+		}
+		return reloadMCPBase(updateCtx)
+	}
+	deleteMCPServer := func(updateCtx context.Context, name string) error {
+		existed, err := config.DeleteMCPServer(opts.configPath, name)
+		if err != nil {
+			return err
+		}
+		if !existed {
+			return fmt.Errorf("MCP server %q not found in config.toml", name)
+		}
+		return reloadMCPBase(updateCtx)
+	}
 	runner := &agent.Runner{
 		Client: client, Tools: registry, Skills: skillCatalog, Logger: logger,
 		HookCatalog: hookCatalog, HookPolicy: hookRuntime,
@@ -561,8 +615,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		ContextWindow: cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,
 		TwoPassCompaction: cfg.TwoPassCompaction,
 		Memory:            memoryStore, MemoryConfig: cfg.Memory,
-		OpenMemory:       memoryStoreOpener(cfg.Memory, ws.Root(), logger.ID()),
-		UpdateMCPServers: mcpRuntime.Update, MCPServers: mcpRuntime.Configs,
+		OpenMemory:    memoryStoreOpener(cfg.Memory, ws.Root(), logger.ID()),
+		ReloadMCPBase: reloadMCPBase, UpdateMCPServers: mcpRuntime.Update,
+		MCPServers: mcpRuntime.Configs, MCPServerCatalog: mcpRuntime.Catalog,
+		ToggleMCPServer: toggleMCPServer, ToggleMCPTool: toggleMCPTool,
+		UpsertMCPServer: upsertMCPServer, DeleteMCPServer: deleteMCPServer,
 	}
 	usage := newBillingService(cfg, tokenProvider, nil)
 	runner.FetchUsage, runner.OpenURL = usage.Usage, openBrowser
@@ -3350,7 +3407,7 @@ func interactiveLoop(
 			command := prompt
 			if fields := strings.Fields(prompt); len(fields) > 0 {
 				switch fields[0] {
-				case "/session-info", "/status", "/info", "/context", "/share", "/release-notes", "/changelog", "/announcements":
+				case "/session-info", "/status", "/info", "/context", "/share", "/release-notes", "/changelog", "/announcements", "/mcps":
 					command = fields[0]
 				}
 			}
@@ -3368,7 +3425,15 @@ func interactiveLoop(
 				if runner.Announcements != nil && runner.Announcements.Available() {
 					announcementCommand = ", /announcements hide|show"
 				}
-				fmt.Fprintln(stderr, "Commands: ! <command>"+announcementCommand+", /compact, /context, /flush, /dream, /remember [text], /memory [on|off], /loop, /privacy [opt-out], /release-notes (/changelog), /session-info (/status, /info)"+shareCommand+", /terminal-setup, /usage [show|manage] (/cost), /help, /exit. Every other line is sent as a prompt.")
+				mcpCommand := ""
+				if runner.MCPServerCatalog != nil {
+					mcpCommand = ", /mcps"
+				}
+				fmt.Fprintln(stderr, "Commands: ! <command>"+announcementCommand+", /compact, /context, /flush, /dream, /remember [text], /memory [on|off]"+mcpCommand+", /loop, /privacy [opt-out], /release-notes (/changelog), /session-info (/status, /info)"+shareCommand+", /terminal-setup, /usage [show|manage] (/cost), /help, /exit. Every other line is sent as a prompt.")
+				prompt = ""
+				continue
+			case "/mcps":
+				printMCPServers(stderr, runner)
 				prompt = ""
 				continue
 			case "/announcements":
@@ -3540,6 +3605,29 @@ func sanitizeAnnouncementText(value string) string {
 		}
 		return char
 	}, value)
+}
+
+func printMCPServers(output io.Writer, runner *agent.Runner) {
+	if runner == nil || runner.MCPServerCatalog == nil {
+		fmt.Fprintln(output, "[gork] MCP server catalog is unavailable")
+		return
+	}
+	servers := runner.MCPServerCatalog()
+	if len(servers) == 0 {
+		fmt.Fprintln(output, "[gork] No MCP servers configured")
+		return
+	}
+	for _, server := range servers {
+		status := "enabled"
+		if server.Disabled {
+			status = "disabled"
+		}
+		source := server.URL
+		if source == "" {
+			source = strings.TrimSpace(strings.Join(append([]string{server.Command}, server.Args...), " "))
+		}
+		fmt.Fprintf(output, "[gork] MCP %s [%s] %s\n", sanitizeAnnouncementText(server.Name), status, sanitizeAnnouncementText(source))
+	}
 }
 
 func valueOrUnknown(value string) string {

@@ -17,6 +17,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/announcement"
 	"github.com/lookcorner/go-cli/internal/api"
+	mcppkg "github.com/lookcorner/go-cli/internal/mcp"
 	"github.com/lookcorner/go-cli/internal/memory"
 	"github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/tools"
@@ -1502,6 +1503,155 @@ func TestMultilineSlashCommandAndAlias(t *testing.T) {
 	m = updated.(*model)
 	if command != nil || m.multiline || m.running || m.status != "single-line input" || m.transcript.Len() != 0 {
 		t.Fatalf("disable command=%v multiline=%v running=%v status=%q transcript=%q", command != nil, m.multiline, m.running, m.status, m.transcript.String())
+	}
+}
+
+func TestMCPModalManagesServersWithoutModelTurn(t *testing.T) {
+	catalog := []mcppkg.ServerConfig{{Name: "alpha", Command: "alpha-server"}, {Name: "beta", URL: "https://mcp.example/sse", Disabled: true, DisabledTools: []string{"hidden"}}}
+	var toggled string
+	var toggledEnabled bool
+	var upserted mcppkg.ServerConfig
+	var deleted string
+	runner := &agent.Runner{
+		MCPServerCatalog: func() []mcppkg.ServerConfig { return append([]mcppkg.ServerConfig(nil), catalog...) },
+		ToggleMCPServer: func(_ context.Context, name string, enabled bool) error {
+			toggled, toggledEnabled = name, enabled
+			for index := range catalog {
+				if catalog[index].Name == name {
+					catalog[index].Disabled = !enabled
+				}
+			}
+			return nil
+		},
+		UpsertMCPServer: func(_ context.Context, server mcppkg.ServerConfig) error {
+			upserted = server
+			catalog = append(catalog, server)
+			return nil
+		},
+		DeleteMCPServer: func(_ context.Context, name string) error { deleted = name; return nil },
+	}
+	m := &model{ctx: context.Background(), runner: runner, width: 80, height: 20, status: "ready"}
+	m.setInput("/mcps")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.mcp == nil || m.running || !strings.Contains(stripUIANSI(m.View().Content), "MCP servers") {
+		t.Fatalf("command=%v modal=%v running=%v view=%q", command != nil, m.mcp != nil, m.running, stripUIANSI(m.View().Content))
+	}
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeySpace, Text: " "}))
+	m = updated.(*model)
+	if command == nil || !m.mcp.busy {
+		t.Fatalf("toggle command=%v busy=%v", command != nil, m.mcp.busy)
+	}
+	updated, _ = m.Update(command())
+	m = updated.(*model)
+	if toggled != "alpha" || toggledEnabled || m.mcp.busy || m.status != "server updated" {
+		t.Fatalf("toggle=%q enabled=%v busy=%v status=%q", toggled, toggledEnabled, m.mcp.busy, m.status)
+	}
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: 'a', Text: "a"}))
+	m = updated.(*model)
+	m.mcp.input, m.mcp.cursor = []rune(`npx -y "@scope/server"`), len([]rune(`npx -y "@scope/server"`))
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	m.mcp.input, m.mcp.cursor = []rune("custom"), len([]rune("custom"))
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command == nil || !m.mcp.busy {
+		t.Fatalf("add command=%v busy=%v err=%q", command != nil, m.mcp.busy, m.mcp.err)
+	}
+	updated, _ = m.Update(command())
+	m = updated.(*model)
+	if upserted.Name != "custom" || upserted.Command != "npx" || strings.Join(upserted.Args, "|") != "-y|@scope/server" {
+		t.Fatalf("upserted=%#v", upserted)
+	}
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: 'x', Text: "x"}))
+	m = updated.(*model)
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: 'y', Text: "y"}))
+	m = updated.(*model)
+	if command == nil {
+		t.Fatal("delete command is nil")
+	}
+	updated, _ = m.Update(command())
+	m = updated.(*model)
+	if deleted == "" || m.running {
+		t.Fatalf("deleted=%q running=%v", deleted, m.running)
+	}
+}
+
+func TestMCPModalCapabilityGateAndHelp(t *testing.T) {
+	disabled := &model{ctx: context.Background(), runner: &agent.Runner{}, width: 60, height: 16, status: "ready"}
+	disabled.setInput("/mcps")
+	updated, _ := disabled.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	disabled = updated.(*model)
+	if disabled.mcp != nil || !strings.Contains(disabled.transcript.String(), "unavailable") {
+		t.Fatalf("modal=%v transcript=%q", disabled.mcp != nil, disabled.transcript.String())
+	}
+	disabled.setInput("/help")
+	updated, _ = disabled.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	disabled = updated.(*model)
+	if strings.Contains(disabled.transcript.String(), "`/mcps`") {
+		t.Fatalf("disabled help exposed command: %q", disabled.transcript.String())
+	}
+	enabled := &model{ctx: context.Background(), runner: &agent.Runner{MCPServerCatalog: func() []mcppkg.ServerConfig { return nil }}, width: 60, height: 16}
+	enabled.setInput("/help")
+	updated, _ = enabled.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	enabled = updated.(*model)
+	if !strings.Contains(enabled.transcript.String(), "`/mcps`") {
+		t.Fatalf("enabled help omitted command: %q", enabled.transcript.String())
+	}
+}
+
+func TestMCPModalToolsReloadAndFilter(t *testing.T) {
+	catalog := []mcppkg.ServerConfig{{Name: "fixture", Command: "fixture-server", DisabledTools: []string{"hidden"}}}
+	var serverName, toolName string
+	var enabled bool
+	reloads := 0
+	runner := &agent.Runner{
+		MCPServerCatalog: func() []mcppkg.ServerConfig { return append([]mcppkg.ServerConfig(nil), catalog...) },
+		ToggleMCPTool: func(_ context.Context, server, tool string, value bool) error {
+			serverName, toolName, enabled = server, tool, value
+			catalog[0].DisabledTools = nil
+			return nil
+		},
+		ReloadMCPBase: func(context.Context) error {
+			reloads++
+			return errors.New("reload failed")
+		},
+	}
+	m := &model{ctx: context.Background(), runner: runner, mcp: newMCPModal(runner), width: 80, height: 20}
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if m.mcp.phase != mcpTools || !strings.Contains(stripUIANSI(m.View().Content), "hidden") {
+		t.Fatalf("phase=%d view=%q", m.mcp.phase, stripUIANSI(m.View().Content))
+	}
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeySpace, Text: " "}))
+	m = updated.(*model)
+	if command == nil {
+		t.Fatal("tool toggle command is nil")
+	}
+	updated, _ = m.Update(command())
+	m = updated.(*model)
+	if serverName != "fixture" || toolName != "hidden" || !enabled || m.status != "tool updated" {
+		t.Fatalf("server=%q tool=%q enabled=%v status=%q", serverName, toolName, enabled, m.status)
+	}
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: 'f', Text: "f"}))
+	m = updated.(*model)
+	if m.mcp.filter != 1 || len(m.mcp.servers) != 1 {
+		t.Fatalf("filter=%d servers=%#v", m.mcp.filter, m.mcp.servers)
+	}
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: 'r', Text: "r"}))
+	m = updated.(*model)
+	if command == nil {
+		t.Fatal("reload command is nil")
+	}
+	updated, _ = m.Update(command())
+	m = updated.(*model)
+	if reloads != 1 || m.mcp.err != "reload failed" || m.status != "MCP update failed" {
+		t.Fatalf("reloads=%d err=%q status=%q", reloads, m.mcp.err, m.status)
+	}
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: 'i', Text: "i"}))
+	m = updated.(*model)
+	if !strings.Contains(m.mcp.err, "OAuth") || strings.Contains(mcpText("line\n\x1b"), "\n") || strings.Contains(mcpText("line\n\x1b"), "\x1b") {
+		t.Fatalf("oauth=%q sanitized=%q", m.mcp.err, mcpText("line\n\x1b"))
 	}
 }
 

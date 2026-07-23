@@ -938,6 +938,9 @@ The internal global and project-scoped MCP reload endpoints refresh matching
 live sessions from disk while preserving those client-provided overrides.
 For local-only sessions, `x.ai/mcp/auth_status` reports no pending authentication
 and `x.ai/mcp/auth_trigger` returns an explicit unsupported result.
+ACP sessions advertise `/mcps` when the live catalog is available and complete
+the command locally with enabled server and tool counts rather than sending it
+to the model.
 
 The `x.ai/fs/list`, `exists`, `read_file`, `write_file`, and `delete_file`
 extensions provide workspace-confined file access. Listing supports stable
@@ -1167,6 +1170,14 @@ only model response still has pending tool calls. This prevents a new prompt
 from being attached to a half-finished tool transaction.
 
 ## MCP servers
+
+In the TUI, `/mcps` opens the live server manager. Use Up/Down to select,
+Enter to inspect tools, Space to enable or disable a server or tool, `A` to add
+an HTTP(S) URL or stdio command, `X` to remove a user-configured server, `R` to
+reload, and `F` to filter. The plain interactive REPL prints the same server
+catalog with `/mcps`. These commands are local and never start a model turn.
+OAuth enrollment is reported as unavailable because local sessions do not yet
+provide an OAuth flow.
 
 Stdio MCP servers can be configured in the same JSON file. Gork Go performs the
 MCP initialization handshake, discovers all paginated tools, exposes them to

@@ -15,6 +15,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/hooks"
+	mcppkg "github.com/lookcorner/go-cli/internal/mcp"
 	"github.com/lookcorner/go-cli/internal/plugin"
 	sessionlog "github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/skills"
@@ -41,7 +42,7 @@ func TestCommandsListAdvertisesCapabilitiesAndSkills(t *testing.T) {
 	}
 	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
 	defer registry.Close()
-	runner := &agent.Runner{Tools: registry, Skills: catalog, HookCatalog: hooks.DiscoverPlugins(nil), PluginInventory: func() []plugin.Plugin { return nil }, SubmitFeedback: func(sessionlog.UserFeedback) error { return nil }, SharingEnabled: func() bool { return true }}
+	runner := &agent.Runner{Tools: registry, Skills: catalog, HookCatalog: hooks.DiscoverPlugins(nil), PluginInventory: func() []plugin.Plugin { return nil }, MCPServerCatalog: func() []mcppkg.ServerConfig { return nil }, SubmitFeedback: func(sessionlog.UserFeedback) error { return nil }, SharingEnabled: func() bool { return true }}
 	var output bytes.Buffer
 	server := &Server{output: &output, sessions: map[string]*session{"commands": {id: "commands", cwd: root, runner: runner}}}
 	server.handleCommands(message{ID: json.RawMessage("1"), Params: json.RawMessage(`{"cwd":` + quoted(root) + `}`)})
@@ -52,7 +53,7 @@ func TestCommandsListAdvertisesCapabilitiesAndSkills(t *testing.T) {
 		command := raw.(map[string]any)
 		byName[command["name"].(string)] = command
 	}
-	for _, name := range []string{"compact", "always-approve", "privacy", "terminal-setup", "usage", "release-notes", "share", "context", "session-info", "hooks-trust", "hooks-list", "hooks-add", "hooks-remove", "hooks-untrust", "plugins", "reload-plugins", "feedback", "goal", "loop", "local:compact", "local:plugins", "local:feedback", "deploy"} {
+	for _, name := range []string{"compact", "always-approve", "privacy", "terminal-setup", "usage", "release-notes", "share", "mcps", "context", "session-info", "hooks-trust", "hooks-list", "hooks-add", "hooks-remove", "hooks-untrust", "plugins", "reload-plugins", "feedback", "goal", "loop", "local:compact", "local:plugins", "local:feedback", "deploy"} {
 		if byName[name] == nil {
 			t.Fatalf("missing command %q in %#v", name, commands)
 		}
@@ -87,13 +88,13 @@ func TestCommandsListAdvertisesCapabilitiesAndSkills(t *testing.T) {
 }
 
 func TestBuiltinCommandsFollowReferenceOrderAndCapabilityGates(t *testing.T) {
-	runner := &agent.Runner{HookCatalog: hooks.DiscoverPlugins(nil), PluginInventory: func() []plugin.Plugin { return nil }, SubmitFeedback: func(sessionlog.UserFeedback) error { return nil }}
+	runner := &agent.Runner{HookCatalog: hooks.DiscoverPlugins(nil), PluginInventory: func() []plugin.Plugin { return nil }, MCPServerCatalog: func() []mcppkg.ServerConfig { return nil }, SubmitFeedback: func(sessionlog.UserFeedback) error { return nil }}
 	commands := availableCommands(runner, true)
 	names := make([]string, 0, len(commands))
 	for _, command := range commands {
 		names = append(names, command["name"].(string))
 	}
-	want := []string{"compact", "always-approve", "privacy", "terminal-setup", "usage", "release-notes", "context", "hooks-trust", "hooks-list", "hooks-add", "hooks-remove", "hooks-untrust", "plugins", "reload-plugins", "session-info", "feedback"}
+	want := []string{"compact", "always-approve", "privacy", "terminal-setup", "usage", "release-notes", "mcps", "context", "hooks-trust", "hooks-list", "hooks-add", "hooks-remove", "hooks-untrust", "plugins", "reload-plugins", "session-info", "feedback"}
 	if strings.Join(names, "|") != strings.Join(want, "|") {
 		t.Fatalf("commands=%v want=%v", names, want)
 	}
@@ -273,6 +274,33 @@ func TestPrivacySlashCommandCompletesLocally(t *testing.T) {
 		if !textFound || !completed || len(streamer.requests) != 0 || current.promptIndex != 0 {
 			t.Fatalf("prompt=%q text=%v completed=%v requests=%d promptIndex=%d messages=%#v", test.prompt, textFound, completed, len(streamer.requests), current.promptIndex, messages)
 		}
+	}
+}
+
+func TestMCPSlashCommandCompletesLocally(t *testing.T) {
+	root := t.TempDir()
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, nil)
+	defer registry.Close()
+	streamer := &fixtureStreamer{}
+	current := &session{id: "mcps-command", runner: &agent.Runner{
+		Client: streamer, Model: "test", Tools: registry,
+		MCPServerCatalog: func() []mcppkg.ServerConfig {
+			return []mcppkg.ServerConfig{{Name: "remote`name\x1b", URL: "https://mcp.example/v1"}, {Name: "local", Command: "npx", Args: []string{"server"}, Disabled: true}}
+		},
+	}, activePrompt: -1}
+	var output bytes.Buffer
+	server := &Server{output: &output, sessions: map[string]*session{current.id: current}}
+	params, _ := json.Marshal(map[string]any{"sessionId": current.id, "prompt": []any{map[string]any{"type": "text", "text": "/mcps"}}})
+	server.handlePrompt(context.Background(), message{ID: json.RawMessage("28"), Method: "session/prompt", Params: params})
+	messages := decodeACPOutput(t, output.Bytes())
+	encoded, _ := json.Marshal(messages)
+	text := string(encoded)
+	if !strings.Contains(text, "MCP servers") || !strings.Contains(text, "enabled") || !strings.Contains(text, "disabled") || strings.Contains(text, "\\u001b") || len(streamer.requests) != 0 || current.promptIndex != 0 {
+		t.Fatalf("requests=%d promptIndex=%d messages=%#v", len(streamer.requests), current.promptIndex, messages)
 	}
 }
 

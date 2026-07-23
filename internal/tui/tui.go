@@ -510,6 +510,7 @@ type model struct {
 	btwRunning    bool
 	rewind        *rewindState
 	modelSelect   *modelSelectState
+	mcp           *mcpModal
 	lastEmptyEsc  time.Time
 	questionClick struct {
 		option int
@@ -1232,6 +1233,18 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.viewer = &readOnlyViewer{title: "Side question", content: content, at: time.Now()}
 		m.scroll = 0
+	case mcpDoneEvent:
+		if m.mcp != nil {
+			m.mcp.busy = false
+			if msg.err != nil {
+				m.mcp.err = msg.err.Error()
+				m.status = "MCP update failed"
+			} else {
+				m.mcp.phase, m.mcp.server, m.mcp.input, m.mcp.cursor, m.mcp.err = mcpServers, "", nil, 0, ""
+				m.mcp.refresh(m.runner)
+				m.status = msg.action
+			}
+		}
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
@@ -1267,6 +1280,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.rewind != nil {
 		return m.handleRewindKey(msg)
+	}
+	if m.mcp != nil {
+		return m.handleMCPKey(msg)
 	}
 	if m.modelSelect != nil {
 		return m.handleModelSelectKey(msg)
@@ -1523,8 +1539,15 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if m.runner != nil && m.runner.Announcements != nil && m.runner.Announcements.Available() {
 				announcementCommand = " `/announcements hide|show`"
 			}
-			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + announcementCommand + " `/btw <question>` `/compact` `/compact-mode` `/context` `/copy [N]` `/dream` `/effort [level]` `/exit` `/export [filename]`" + feedbackCommand + " `/find` `/flush` `/help` `/history` `/loop` `/memory` `/model [name] [effort]` (`/m`) `/multiline` `/plan [description]` `/privacy [opt-out]` `/queue` `/recap` `/release-notes` (`/changelog`) `/remember` `/rename <title>` `/rewind` `/session-info` (`/status`, `/info`)" + shareCommand + " `/tasks` `/terminal-setup`" + mouseCommand + " `/timestamps` `/transcript` `/usage [show|manage]` (`/cost`) `/view-plan` `/vim-mode`")
+			mcpCommand := ""
+			if m.runner != nil && m.runner.MCPServerCatalog != nil {
+				mcpCommand = " `/mcps`"
+			}
+			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + announcementCommand + " `/btw <question>` `/compact` `/compact-mode` `/context` `/copy [N]` `/dream` `/effort [level]` `/exit` `/export [filename]`" + feedbackCommand + " `/find` `/flush` `/help` `/history` `/loop` `/memory`" + mcpCommand + " `/model [name] [effort]` (`/m`) `/multiline` `/plan [description]` `/privacy [opt-out]` `/queue` `/recap` `/release-notes` (`/changelog`) `/remember` `/rename <title>` `/rewind` `/session-info` (`/status`, `/info`)" + shareCommand + " `/tasks` `/terminal-setup`" + mouseCommand + " `/timestamps` `/transcript` `/usage [show|manage]` (`/cost`) `/view-plan` `/vim-mode`")
 			m.status = "commands"
+			return m, nil
+		case "/mcps":
+			m.openMCPModal()
 			return m, nil
 		case "/privacy":
 			result, _ := agent.ParsePrivacyCommand(prompt)
@@ -3444,7 +3467,9 @@ func (m *model) View() tea.View {
 	header = padRight(truncateANSIUnsafe(header, width), width)
 	banner := m.announcementBanner(width)
 	content := m.transcriptText()
-	if m.modelSelect != nil {
+	if m.mcp != nil {
+		content = m.mcpContent()
+	} else if m.modelSelect != nil {
 		content = m.modelSelectContent()
 	} else if m.rewind != nil {
 		content = m.rewindContent()
@@ -3479,7 +3504,9 @@ func (m *model) View() tea.View {
 	body := strings.Join(visible, "\n")
 
 	var footer string
-	if m.modelSelect != nil {
+	if m.mcp != nil {
+		footer = "\x1b[1;33mMCP servers\x1b[0m\n\x1b[2m" + truncate(m.mcpHint(), width) + "\x1b[0m"
+	} else if m.modelSelect != nil {
 		footer = "\x1b[1;33mModel\x1b[0m\n\x1b[2m" + truncate(m.modelSelectHint(), width) + "\x1b[0m"
 	} else if m.rewind != nil {
 		footer = "\x1b[1;33mRewind\x1b[0m\n\x1b[2m" + truncate(m.rewindHint(), width) + "\x1b[0m"
@@ -3938,7 +3965,7 @@ func renderedLabelContains(line, label string, x, width int) bool {
 
 func (m *model) contentHeight() int {
 	banner := m.announcementHeight()
-	if m.question != nil || m.planReview != nil || m.remember != nil || m.rememberInput || m.rewind != nil || m.modelSelect != nil {
+	if m.question != nil || m.planReview != nil || m.remember != nil || m.rememberInput || m.rewind != nil || m.modelSelect != nil || m.mcp != nil {
 		return max(m.height-7-banner, 3)
 	}
 	if m.historySearch != nil {

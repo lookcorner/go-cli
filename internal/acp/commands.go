@@ -73,6 +73,9 @@ func availableCommands(runner *agent.Runner, workspaceSkills bool) []map[string]
 		if memoryConfigured {
 			commands = append(commands, availableCommand("memory", "Browse or toggle workspace memory", "on|off", nil))
 		}
+		if runner.MCPServerCatalog != nil {
+			commands = append(commands, availableCommand("mcps", "View MCP servers and tools", "", nil))
+		}
 	}
 	commands = append(commands, availableCommand("context", "Show context window usage and session stats", "", nil))
 	if runner != nil && runner.HookCatalog != nil {
@@ -410,6 +413,46 @@ func (s *Server) handleLocalMessagePrompt(incoming message, current *session, li
 
 	s.sendCommandOutput(id, message)
 	s.finishPrompt(incoming, current, lifecycle, "end_turn", agent.Result{}, nil, "")
+}
+
+func mcpStatusMessage(current *session) string {
+	servers := mcpServerCatalog(current)
+	if len(servers) == 0 {
+		return "No MCP servers configured."
+	}
+	lines := []string{"# MCP servers", ""}
+	for _, server := range servers {
+		name, _ := server["name"].(string)
+		session, _ := server["session"].(map[string]any)
+		enabled, _ := session["enabled"].(bool)
+		status := "disabled"
+		if enabled {
+			status = "enabled"
+		}
+		source, _ := server["url"].(string)
+		if source == "" {
+			source, _ = server["command"].(string)
+		}
+		tools, _ := session["tools"].([]map[string]any)
+		enabledTools := 0
+		for _, tool := range tools {
+			if active, _ := tool["enabled"].(bool); active {
+				enabledTools++
+			}
+		}
+		lines = append(lines, fmt.Sprintf("- `%s` - %s - %d/%d tools - `%s`", acpMarkdownText(name), status, enabledTools, len(tools), acpMarkdownText(source)))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func acpMarkdownText(value string) string {
+	value = strings.Map(func(char rune) rune {
+		if char == '\n' || char == '\t' || char < 0x20 || char == 0x7f || char >= 0x80 && char <= 0x9f {
+			return ' '
+		}
+		return char
+	}, value)
+	return strings.ReplaceAll(value, "`", "'")
 }
 
 func (s *Server) handleUsagePrompt(ctx context.Context, incoming message, current *session, lifecycle promptLifecycle, command billing.Command) {

@@ -224,6 +224,29 @@ func TestInteractiveReleaseNotesCommandsDoNotRunModelTurn(t *testing.T) {
 	}
 }
 
+func TestInteractiveMCPCommandDoesNotRunModelTurn(t *testing.T) {
+	streamer := &interactiveStatusStreamer{}
+	runner := &agent.Runner{Client: streamer, Model: "test", MCPServerCatalog: func() []mcp.ServerConfig {
+		return []mcp.ServerConfig{{Name: "remote\x1b", URL: "https://mcp.example/v1"}, {Name: "local", Command: "npx", Args: []string{"server"}, Disabled: true}}
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	input := newTerminalInput(ctx, bufio.NewReader(strings.NewReader("/mcps ignored\n/help\n/exit\n")))
+	var stderr bytes.Buffer
+	if err := interactiveLoop(ctx, runner, newScheduledWakeQueue(), input, io.Discard, &stderr, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	output := stderr.String()
+	for _, want := range []string{"MCP remote  [enabled] https://mcp.example/v1", "MCP local [disabled] npx server", "/mcps"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("missing %q in %q", want, output)
+		}
+	}
+	if strings.Contains(output, "\x1b") || streamer.calls != 0 {
+		t.Fatalf("model calls=%d output=%q", streamer.calls, output)
+	}
+}
+
 func TestInteractiveAnnouncementCommandsDoNotRunModelTurn(t *testing.T) {
 	text := func(value string) *string { return &value }
 	streamer := &interactiveStatusStreamer{}

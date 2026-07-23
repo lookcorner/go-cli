@@ -34,6 +34,8 @@ implementation.
   state, cancellation, resume, and tool-capability filtering coordination.
 - `internal/compat` owns resolved vendor compatibility values shared by
   configuration, instruction discovery, and skill discovery.
+- `internal/mcp` owns MCP transport types and the small URL/command parsing rule
+  used by interactive server management.
 - `internal/memory` owns workspace-isolated persistence, safe retrieval,
   Markdown chunking, and deterministic text ranking; tool adapters only format
   these domain results.

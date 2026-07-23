@@ -1998,6 +1998,11 @@ func (s *Server) handlePromptRequest(parent context.Context, incoming message, c
 		s.markRunningPrompt(current, promptID(params.Meta))
 		return
 	}
+	if strings.TrimSpace(prompt) == "/mcps" && current.runner != nil && current.runner.MCPServerCatalog != nil {
+		s.handleLocalMessagePrompt(incoming, current, newPromptLifecycle(params), mcpStatusMessage(current))
+		s.markRunningPrompt(current, promptID(params.Meta))
+		return
+	}
 	if command, ok := billing.ParseCommand(prompt); ok {
 		s.handleUsagePrompt(parent, incoming, current, newPromptLifecycle(params), command)
 		s.markRunningPrompt(current, promptID(params.Meta))
