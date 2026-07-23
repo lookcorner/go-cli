@@ -34,6 +34,21 @@ type rememberTUIStreamer struct{}
 type recapTUIStreamer struct{ request api.ResponseRequest }
 type promptSuggestionTUIStreamer struct{ request api.ResponseRequest }
 type modelTUIStreamer struct{ history []session.Message }
+type imagineTUIStreamer struct{ request api.ResponseRequest }
+type imagineTUITool struct{ name string }
+
+func (t imagineTUITool) Definition() api.ToolDefinition {
+	return api.ToolDefinition{Type: "function", Name: t.name, Parameters: map[string]any{"type": "object"}}
+}
+
+func (imagineTUITool) Execute(context.Context, json.RawMessage) (string, error) {
+	return "unused", nil
+}
+
+func (s *imagineTUIStreamer) StreamResponse(_ context.Context, request api.ResponseRequest, _ func(string)) (api.StreamResult, error) {
+	s.request = request
+	return api.StreamResult{ResponseID: "imagine-response", Text: "created"}, nil
+}
 
 func (s *modelTUIStreamer) StreamResponse(context.Context, api.ResponseRequest, func(string)) (api.StreamResult, error) {
 	return api.StreamResult{ResponseID: "new-response", Text: "done"}, nil
@@ -1504,6 +1519,44 @@ func TestMultilineSlashCommandAndAlias(t *testing.T) {
 	m = updated.(*model)
 	if command != nil || m.multiline || m.running || m.status != "single-line input" || m.transcript.Len() != 0 {
 		t.Fatalf("disable command=%v multiline=%v running=%v status=%q transcript=%q", command != nil, m.multiline, m.running, m.status, m.transcript.String())
+	}
+}
+
+func TestImagineCommandExpandsOnlyWithToolAndRequiresDescription(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	if err := registry.Register(imagineTUITool{name: "image_gen"}); err != nil {
+		t.Fatal(err)
+	}
+	streamer := &imagineTUIStreamer{}
+	m := &model{
+		ctx: context.Background(), runner: &agent.Runner{Client: streamer, Tools: registry, Model: "test"},
+		width: 60, height: 16, status: "ready",
+	}
+	m.setInput("/imagine a golden sunset")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command == nil || !m.running || !strings.Contains(m.transcript.String(), "/imagine a golden sunset") {
+		t.Fatalf("command=%v running=%v transcript=%q", command != nil, m.running, m.transcript.String())
+	}
+	if _, ok := command().(turnDoneEvent); !ok {
+		t.Fatal("imagine turn did not complete")
+	}
+	parts, ok := streamer.request.Input[0].Content.([]api.ContentPart)
+	if !ok || len(parts) != 1 || !strings.Contains(parts[0].Text, "Call the image_gen tool immediately") || !strings.HasSuffix(parts[0].Text, "Prompt: a golden sunset") {
+		t.Fatalf("model input=%#v", streamer.request.Input)
+	}
+
+	m.running = false
+	m.setInput("/imagine")
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.running || m.status != "imagine description required" || !strings.Contains(m.transcript.String(), "Usage: /imagine <description>") {
+		t.Fatalf("command=%v running=%v status=%q transcript=%q", command != nil, m.running, m.status, m.transcript.String())
 	}
 }
 

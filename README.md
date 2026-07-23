@@ -466,6 +466,13 @@ directly, for example `! git status`; they do not create a model turn.
 `/session-info` (also `/status` or `/info`) reports the session, workspace,
 model, completed turn count, and latest context usage without a model call;
 `/context` prints just the latest available token usage.
+When the active tool registry provides `image_gen`, `/imagine <description>`
+asks the model to call it immediately with the description unchanged. When it
+provides `image_to_video`, `/imagine-video <description>` injects the reference
+image-first video workflow. Both commands are hidden when their required tool
+is unavailable, and an empty description prints usage without starting a model
+turn. They coordinate dynamically registered tools; this does not add built-in
+media generation or inline terminal media rendering.
 
 Use `--tui` for the full-screen interface:
 

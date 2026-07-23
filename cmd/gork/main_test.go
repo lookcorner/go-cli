@@ -52,6 +52,22 @@ func (s *memoryCommandStreamer) StreamResponse(_ context.Context, request api.Re
 type failingGoalStreamer struct{ err error }
 
 type interactiveStatusStreamer struct{ calls int }
+type imagineInteractiveStreamer struct{ request api.ResponseRequest }
+type imagineInteractiveTool struct{ name string }
+
+func (t imagineInteractiveTool) Definition() api.ToolDefinition {
+	return api.ToolDefinition{Type: "function", Name: t.name, Parameters: map[string]any{"type": "object"}}
+}
+
+func (imagineInteractiveTool) Execute(context.Context, json.RawMessage) (string, error) {
+	return "unused", nil
+}
+
+func (s *imagineInteractiveStreamer) StreamResponse(_ context.Context, request api.ResponseRequest, stream func(string)) (api.StreamResult, error) {
+	s.request = request
+	stream("created")
+	return api.StreamResult{ResponseID: "imagine-response", Text: "created"}, nil
+}
 
 func TestSessionMetadataWithDisplayCWD(t *testing.T) {
 	root := t.TempDir()
@@ -130,6 +146,35 @@ func TestInteractiveSessionInfoAliasesAndContext(t *testing.T) {
 	output := stderr.String()
 	if streamer.calls != 1 || strings.Count(output, "[gork] session: interactive-status") != 2 || !strings.Contains(output, "[gork] workspace: "+root) || !strings.Contains(output, "[gork] model: grok-build") || !strings.Contains(output, "[gork] turn: 0") || !strings.Contains(output, "[gork] turn: 1") || strings.Count(output, "[gork] context: 0 / 1000 tokens (0%)") != 2 || strings.Count(output, "[gork] context: 250 / 1000 tokens (25%)") != 2 {
 		t.Fatalf("calls=%d output=%q", streamer.calls, output)
+	}
+}
+
+func TestInteractiveImagineCommandInjectsWorkflowAndShowsUsage(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	if err := registry.Register(imagineInteractiveTool{name: "image_gen"}); err != nil {
+		t.Fatal(err)
+	}
+	streamer := &imagineInteractiveStreamer{}
+	runner := &agent.Runner{Client: streamer, Tools: registry, Model: "test", MaxSteps: 1}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	input := newTerminalInput(ctx, bufio.NewReader(strings.NewReader("/imagine a golden sunset\n/imagine\n/help\n/exit\n")))
+	var stderr bytes.Buffer
+	if err := interactiveLoop(ctx, runner, newScheduledWakeQueue(), input, io.Discard, &stderr, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	parts, ok := streamer.request.Input[len(streamer.request.Input)-1].Content.([]api.ContentPart)
+	if !ok || len(parts) != 1 || !strings.Contains(parts[0].Text, "Call the image_gen tool immediately") || !strings.HasSuffix(parts[0].Text, "Prompt: a golden sunset") {
+		t.Fatalf("model input=%#v", streamer.request.Input)
+	}
+	output := stderr.String()
+	if !strings.Contains(output, "Usage: /imagine <description>") || !strings.Contains(output, "/imagine <description>") {
+		t.Fatalf("output=%q", output)
 	}
 }
 

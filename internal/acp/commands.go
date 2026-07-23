@@ -13,6 +13,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/billing"
 	"github.com/lookcorner/go-cli/internal/changelog"
+	"github.com/lookcorner/go-cli/internal/imagine"
 	"github.com/lookcorner/go-cli/internal/skills"
 	"github.com/lookcorner/go-cli/internal/tools"
 )
@@ -105,6 +106,12 @@ func availableCommands(runner *agent.Runner, workspaceSkills bool) []map[string]
 	}
 	if runner.Tools != nil && runner.Tools.HasTool("scheduler_create") {
 		commands = append(commands, availableCommand("loop", "Run a prompt on a recurring interval", "[interval] <prompt>", nil))
+	}
+	if runner.Tools != nil && runner.Tools.HasTool(imagine.ImageTool) {
+		commands = append(commands, availableCommand("imagine", "Generate an image from a text description", "description of the image to generate", nil))
+	}
+	if runner.Tools != nil && runner.Tools.HasTool(imagine.VideoTool) {
+		commands = append(commands, availableCommand("imagine-video", "Generate a video from a text description", "description of the video to generate", nil))
 	}
 	if runner.Skills == nil {
 		return commands

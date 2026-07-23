@@ -36,6 +36,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/changelog"
 	"github.com/lookcorner/go-cli/internal/config"
 	"github.com/lookcorner/go-cli/internal/hooks"
+	"github.com/lookcorner/go-cli/internal/imagine"
 	"github.com/lookcorner/go-cli/internal/lsp"
 	"github.com/lookcorner/go-cli/internal/marketplace"
 	"github.com/lookcorner/go-cli/internal/mcp"
@@ -3399,6 +3400,7 @@ func interactiveLoop(
 	var promptRead <-chan terminalReadResult
 	for {
 		scheduledID := ""
+		var turnParts []api.ContentPart
 		if prompt == "" {
 			if inputClosed {
 				return nil
@@ -3519,6 +3521,15 @@ func interactiveLoop(
 				prompt = ""
 				continue
 			}
+			if command, ok := imagine.Parse(prompt); ok && runner.Tools != nil && runner.Tools.HasTool(command.RequiredTool) {
+				if command.Instruction == "" {
+					fmt.Fprintln(stderr, "[gork]", command.Usage)
+					prompt = ""
+					continue
+				}
+				prompt = command.Display
+				turnParts = []api.ContentPart{{Type: "input_text", Text: command.Instruction}}
+			}
 			command := prompt
 			if fields := strings.Fields(prompt); len(fields) > 0 {
 				switch fields[0] {
@@ -3546,7 +3557,16 @@ func interactiveLoop(
 				if runner.MCPServerCatalog != nil {
 					mcpCommand = ", /mcps"
 				}
-				fmt.Fprintln(stderr, "Commands: ! <command>"+announcementCommand+", /compact, /context, /flush, /dream, /remember [text], /memory [on|off]"+mcpCommand+", /new (/clear), /loop, /privacy [opt-out], /release-notes (/changelog), /session-info (/status, /info)"+shareCommand+", /terminal-setup, /usage [show|manage] (/cost), /help, /exit. Every other line is sent as a prompt.")
+				imagineCommands := ""
+				if runner.Tools != nil {
+					if runner.Tools.HasTool(imagine.ImageTool) {
+						imagineCommands += ", /imagine <description>"
+					}
+					if runner.Tools.HasTool(imagine.VideoTool) {
+						imagineCommands += ", /imagine-video <description>"
+					}
+				}
+				fmt.Fprintln(stderr, "Commands: ! <command>"+announcementCommand+", /compact, /context, /flush, /dream, /remember [text], /memory [on|off]"+mcpCommand+", /new (/clear)"+imagineCommands+", /loop, /privacy [opt-out], /release-notes (/changelog), /session-info (/status, /info)"+shareCommand+", /terminal-setup, /usage [show|manage] (/cost), /help, /exit. Every other line is sent as a prompt.")
 				prompt = ""
 				continue
 			case "/mcps":
@@ -3670,6 +3690,8 @@ func interactiveLoop(
 		if scheduledID != "" {
 			result, err = runner.RunSyntheticTurn(ctx, prompt, previousResponseID)
 			scheduled.Done(scheduledID)
+		} else if len(turnParts) > 0 {
+			result, err = runner.RunTurnParts(ctx, prompt, turnParts, previousResponseID)
 		} else {
 			result, err = runner.RunTurn(ctx, prompt, previousResponseID)
 		}

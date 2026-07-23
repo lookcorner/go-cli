@@ -21,8 +21,10 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/lookcorner/go-cli/internal/agent"
+	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/billing"
 	"github.com/lookcorner/go-cli/internal/changelog"
+	"github.com/lookcorner/go-cli/internal/imagine"
 	"github.com/lookcorner/go-cli/internal/memory"
 	"github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/terminaldiag"
@@ -1579,6 +1581,19 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.openScrollSearch(strings.TrimSpace(strings.TrimPrefix(prompt, "/find")))
 			return m, nil
 		}
+		if command, ok := imagine.Parse(prompt); ok && m.runner != nil && m.runner.Tools != nil && m.runner.Tools.HasTool(command.RequiredTool) {
+			if command.Instruction == "" {
+				m.appendSystem(command.Usage)
+				m.status = "imagine description required"
+				return m, nil
+			}
+			m.running = true
+			turnCtx, cancel := context.WithCancel(m.ctx)
+			m.turnCancel = cancel
+			m.rememberPrompt(command.Display)
+			m.beginTurn(command.Display)
+			return m, runTurnParts(turnCtx, m.runner, command.Display, command.Instruction, m.previousID)
+		}
 		fields := strings.Fields(prompt)
 		switch fields[0] {
 		case "/quit", "/exit":
@@ -1612,7 +1627,16 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if m.runner != nil && m.runner.MCPServerCatalog != nil {
 				mcpCommand = " `/mcps`"
 			}
-			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + announcementCommand + " `/btw <question>` `/compact` `/compact-mode` `/context` `/copy [N]` `/dream` `/effort [level]` `/exit` `/export [filename]`" + feedbackCommand + " `/find` `/flush` `/fork [--worktree|--no-worktree] [directive]` `/help` `/history` `/loop` `/memory`" + mcpCommand + " `/model [name] [effort]` (`/m`) `/multiline` `/new` (`/clear`) `/plan [description]` `/privacy [opt-out]` `/queue` `/recap` `/release-notes` (`/changelog`) `/remember` `/rename <title>` `/resume` `/rewind` `/session-info` (`/status`, `/info`)" + shareCommand + " `/tasks` `/terminal-setup` `/theme [name]` (`/t`)" + mouseCommand + " `/timestamps` `/transcript` `/usage [show|manage]` (`/cost`) `/view-plan` `/vim-mode`")
+			imagineCommands := ""
+			if m.runner != nil && m.runner.Tools != nil {
+				if m.runner.Tools.HasTool(imagine.ImageTool) {
+					imagineCommands += " `/imagine <description>`"
+				}
+				if m.runner.Tools.HasTool(imagine.VideoTool) {
+					imagineCommands += " `/imagine-video <description>`"
+				}
+			}
+			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + announcementCommand + " `/btw <question>` `/compact` `/compact-mode` `/context` `/copy [N]` `/dream` `/effort [level]` `/exit` `/export [filename]`" + feedbackCommand + " `/find` `/flush` `/fork [--worktree|--no-worktree] [directive]` `/help` `/history`" + imagineCommands + " `/loop` `/memory`" + mcpCommand + " `/model [name] [effort]` (`/m`) `/multiline` `/new` (`/clear`) `/plan [description]` `/privacy [opt-out]` `/queue` `/recap` `/release-notes` (`/changelog`) `/remember` `/rename <title>` `/resume` `/rewind` `/session-info` (`/status`, `/info`)" + shareCommand + " `/tasks` `/terminal-setup` `/theme [name]` (`/t`)" + mouseCommand + " `/timestamps` `/transcript` `/usage [show|manage]` (`/cost`) `/view-plan` `/vim-mode`")
 			m.status = "commands"
 			return m, nil
 		case "/mcps":
@@ -3340,6 +3364,14 @@ func waitForBridge(bridge *Bridge) tea.Cmd {
 func runTurn(ctx context.Context, runner *agent.Runner, prompt, previousID string) tea.Cmd {
 	return func() tea.Msg {
 		result, err := runner.RunTurn(ctx, prompt, previousID)
+		return turnDoneEvent{result: result, err: err}
+	}
+}
+
+func runTurnParts(ctx context.Context, runner *agent.Runner, display, instruction, previousID string) tea.Cmd {
+	return func() tea.Msg {
+		parts := []api.ContentPart{{Type: "input_text", Text: instruction}}
+		result, err := runner.RunTurnParts(ctx, display, parts, previousID)
 		return turnDoneEvent{result: result, err: err}
 	}
 }

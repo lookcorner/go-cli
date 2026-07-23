@@ -23,6 +23,16 @@ import (
 	"github.com/lookcorner/go-cli/internal/workspace"
 )
 
+type imagineACPTool struct{ name string }
+
+func (t imagineACPTool) Definition() api.ToolDefinition {
+	return api.ToolDefinition{Type: "function", Name: t.name, Parameters: map[string]any{"type": "object"}}
+}
+
+func (imagineACPTool) Execute(context.Context, json.RawMessage) (string, error) {
+	return "unused", nil
+}
+
 func TestCommandsListAdvertisesCapabilitiesAndSkills(t *testing.T) {
 	root := t.TempDir()
 	userRoot := t.TempDir()
@@ -107,6 +117,70 @@ func TestBuiltinCommandsFollowReferenceOrderAndCapabilityGates(t *testing.T) {
 		if command["name"] == "share" {
 			t.Fatalf("share command advertised while disabled: %#v", command)
 		}
+	}
+}
+
+func TestImagineCommandsFollowToolCapabilities(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	if err := registry.Register(imagineACPTool{name: "image_gen"}); err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]map[string]any{}
+	for _, command := range availableCommands(&agent.Runner{Tools: registry}, true) {
+		byName[command["name"].(string)] = command
+	}
+	if byName["imagine"] == nil || byName["imagine-video"] != nil || byName["imagine"]["input"].(map[string]any)["hint"] != "description of the image to generate" {
+		t.Fatalf("image commands=%#v", byName)
+	}
+	if err := registry.Register(imagineACPTool{name: "image_to_video"}); err != nil {
+		t.Fatal(err)
+	}
+	byName = map[string]map[string]any{}
+	for _, command := range availableCommands(&agent.Runner{Tools: registry}, true) {
+		byName[command["name"].(string)] = command
+	}
+	if byName["imagine-video"] == nil {
+		t.Fatalf("video command missing from %#v", byName)
+	}
+}
+
+func TestImagineSlashCommandInjectsWorkflowAndHandlesUsageLocally(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	if err := registry.Register(imagineACPTool{name: "image_gen"}); err != nil {
+		t.Fatal(err)
+	}
+	streamer := &fixtureStreamer{results: []api.StreamResult{{ResponseID: "image-response", Text: "created"}}}
+	current := &session{id: "imagine-command", runner: &agent.Runner{Client: streamer, Tools: registry, Model: "test"}, activePrompt: -1}
+	var output bytes.Buffer
+	server := &Server{output: &output, sessions: map[string]*session{current.id: current}}
+
+	params, _ := json.Marshal(map[string]any{"sessionId": current.id, "prompt": []any{map[string]any{"type": "text", "text": "/imagine a golden sunset"}}})
+	server.handlePrompt(context.Background(), message{ID: json.RawMessage("201"), Method: "session/prompt", Params: params})
+	server.wg.Wait()
+	if len(streamer.requests) != 1 {
+		t.Fatalf("model requests=%d", len(streamer.requests))
+	}
+	parts, ok := streamer.requests[0].Input[len(streamer.requests[0].Input)-1].Content.([]api.ContentPart)
+	if !ok || len(parts) != 1 || !strings.Contains(parts[0].Text, "Call the image_gen tool immediately") || !strings.HasSuffix(parts[0].Text, "Prompt: a golden sunset") {
+		t.Fatalf("model input=%#v", streamer.requests[0].Input)
+	}
+
+	output.Reset()
+	params, _ = json.Marshal(map[string]any{"sessionId": current.id, "prompt": []any{map[string]any{"type": "text", "text": "/imagine"}}})
+	server.handlePrompt(context.Background(), message{ID: json.RawMessage("202"), Method: "session/prompt", Params: params})
+	server.wg.Wait()
+	if len(streamer.requests) != 1 || !bytes.Contains(output.Bytes(), []byte("Usage: /imagine")) {
+		t.Fatalf("requests=%d output=%s", len(streamer.requests), output.Bytes())
 	}
 }
 

@@ -36,6 +36,8 @@ implementation.
   configuration, instruction discovery, and skill discovery.
 - `internal/theme` owns canonical terminal theme identities and aliases shared
   by configuration validation and the TUI adapter.
+- `internal/imagine` owns capability-independent parsing and model-instruction
+  expansion for the image and video slash commands.
 - `internal/mcp` owns MCP transport types and the small URL/command parsing rule
   used by interactive server management.
 - `internal/memory` owns workspace-isolated persistence, safe retrieval,

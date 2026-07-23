@@ -24,6 +24,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/billing"
 	"github.com/lookcorner/go-cli/internal/changelog"
 	"github.com/lookcorner/go-cli/internal/hooks"
+	"github.com/lookcorner/go-cli/internal/imagine"
 	mcppkg "github.com/lookcorner/go-cli/internal/mcp"
 	sessionlog "github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/terminaldiag"
@@ -2040,6 +2041,15 @@ func (s *Server) handlePromptRequest(parent context.Context, incoming message, c
 			s.markRunningPrompt(current, promptID(params.Meta))
 			return
 		}
+	}
+	if command, ok := imagine.Parse(prompt); ok && current.runner != nil && current.runner.Tools != nil && current.runner.Tools.HasTool(command.RequiredTool) {
+		if command.Instruction == "" {
+			s.handleLocalMessagePrompt(incoming, current, newPromptLifecycle(params), command.Usage)
+			s.markRunningPrompt(current, promptID(params.Meta))
+			return
+		}
+		prompt = command.Display
+		content = []api.ContentPart{{Type: "input_text", Text: command.Instruction}}
 	}
 	if strings.TrimSpace(prompt) == "/compact" {
 		s.handleCompactPrompt(parent, incoming, current, newPromptLifecycle(params), "", false)
