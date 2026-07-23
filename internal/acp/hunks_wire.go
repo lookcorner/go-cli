@@ -57,7 +57,7 @@ type hunkSummaryWire struct {
 	UnattributedPending int                    `json:"unattributedPending"`
 }
 
-func hunkWires(hunks []tools.Hunk, tracker *tools.HunkTracker, cwd string, includePatch bool) []hunkWire {
+func hunkWires(hunks []tools.Hunk, tracker *tools.HunkTracker, realCWD, displayCWD string, includePatch bool) []hunkWire {
 	result := make([]hunkWire, 0, len(hunks))
 	for _, hunk := range hunks {
 		sourceType := "external"
@@ -77,7 +77,7 @@ func hunkWires(hunks []tools.Hunk, tracker *tools.HunkTracker, cwd string, inclu
 			patch = &value
 		}
 		result = append(result, hunkWire{
-			ID: hunk.ID, Path: displayHunkPath(cwd, hunk.Path),
+			ID: hunk.ID, Path: displayHunkPath(realCWD, displayCWD, hunk.Path),
 			LineInfo: hunkLineInfoWire{OldStart: hunk.OldStart, OldCount: hunk.OldLines, NewStart: hunk.NewStart, NewCount: hunk.NewLines},
 			Source:   hunkSourceWire{Type: sourceType, PromptIndex: hunk.PromptIndex},
 			OldText:  oldText, NewText: hunk.NewText, Patch: patch, CreatedAt: hunk.CreatedAt,
@@ -86,24 +86,30 @@ func hunkWires(hunks []tools.Hunk, tracker *tools.HunkTracker, cwd string, inclu
 	return result
 }
 
-func hunkTurnWires(turns []tools.HunkTurnSummary, tracker *tools.HunkTracker, cwd string) []hunkTurnWire {
+func hunkTurnWires(turns []tools.HunkTurnSummary, tracker *tools.HunkTracker, realCWD, displayCWD string) []hunkTurnWire {
 	result := make([]hunkTurnWire, 0, len(turns))
 	for _, turn := range turns {
 		files := make([]string, len(turn.Files))
 		for index, path := range turn.Files {
-			files[index] = displayHunkPath(cwd, path)
+			files[index] = displayHunkPath(realCWD, displayCWD, path)
 		}
 		result = append(result, hunkTurnWire{
-			PromptIndex: turn.PromptIndex, Files: files, PendingHunks: hunkWires(turn.PendingHunks, tracker, cwd, false),
+			PromptIndex: turn.PromptIndex, Files: files, PendingHunks: hunkWires(turn.PendingHunks, tracker, realCWD, displayCWD, false),
 			LinesAdded: turn.LinesAdded, LinesRemoved: turn.LinesRemoved,
 		})
 	}
 	return result
 }
 
-func displayHunkPath(cwd, path string) string {
+func displayHunkPath(realCWD, displayCWD, path string) string {
+	if displayCWD == "" {
+		displayCWD = realCWD
+	}
+	if rewriter := newPathRewriter(realCWD, displayCWD); rewriter != nil {
+		return rewriter.rewritePath(path)
+	}
 	if filepath.IsAbs(path) {
 		return filepath.Clean(path)
 	}
-	return filepath.Join(cwd, filepath.FromSlash(path))
+	return filepath.Join(realCWD, filepath.FromSlash(path))
 }

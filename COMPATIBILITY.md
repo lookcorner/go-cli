@@ -42,7 +42,8 @@ differs from the workspace's current HEAD.
 ACP `_meta.x.ai/display_cwd` metadata is persisted across restore and used for
 active or dormant session roster display. Live and replayed ACP updates rewrite
 plain and URL-encoded worktree paths for the client while the real cwd remains
-the execution path.
+the execution path; hunk tracker paths also round-trip between display and real
+workspace roots.
 Authenticated remote-settings refreshes publish reference-shaped
 `x.ai/settings/update` notifications so connected ACP clients receive live access,
 subscription, permission, layout, tip, and announcement state.

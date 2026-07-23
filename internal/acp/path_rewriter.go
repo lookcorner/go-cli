@@ -3,6 +3,7 @@ package acp
 import (
 	"encoding/json"
 	"net/url"
+	"path/filepath"
 	"strings"
 )
 
@@ -27,6 +28,20 @@ func (r *pathRewriter) rewrite(text string) string {
 	}
 	text = strings.ReplaceAll(text, r.real, r.display)
 	return strings.ReplaceAll(text, r.encodedReal, r.encodedDisplay)
+}
+
+func (r *pathRewriter) rewritePath(path string) string {
+	if r == nil || path == "" {
+		return path
+	}
+	if !filepath.IsAbs(path) {
+		return filepath.Join(r.display, filepath.FromSlash(path))
+	}
+	relative, err := filepath.Rel(r.real, filepath.Clean(path))
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return filepath.Clean(path)
+	}
+	return filepath.Join(r.display, relative)
 }
 
 func (r *pathRewriter) rewriteJSON(value any) any {

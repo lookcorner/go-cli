@@ -1460,6 +1460,7 @@ func (s *Server) handleHunkAction(ctx context.Context, incoming message) {
 		return
 	}
 	tracker := current.runner.Tools.HunkTracker()
+	params.Path = newPathRewriter(current.displayCWD, current.cwd).rewritePath(params.Path)
 	var count int
 	var err error
 	switch incoming.Method {
@@ -1502,10 +1503,7 @@ func (s *Server) handleHunkQuery(ctx context.Context, incoming message) {
 		return
 	}
 	tracker := current.runner.Tools.HunkTracker()
-	displayCWD := current.cwd
-	if current.displayCWD != "" {
-		displayCWD = current.displayCWD
-	}
+	params.Path = newPathRewriter(current.displayCWD, current.cwd).rewritePath(params.Path)
 	switch incoming.Method {
 	case "x.ai/hunk-tracker/get-hunks":
 		if params.Path != "" {
@@ -1515,7 +1513,7 @@ func (s *Server) handleHunkQuery(ctx context.Context, incoming message) {
 				return
 			}
 			s.respond(incoming.ID, getHunksWire{
-				Hunks:    hunkWires(data.Hunks, tracker, displayCWD, true),
+				Hunks:    hunkWires(data.Hunks, tracker, current.cwd, current.displayCWD, true),
 				Baseline: &data.Baseline, Current: &data.Current,
 				BaselineContent: data.BaselineContent, CurrentContent: data.CurrentContent,
 			})
@@ -1526,7 +1524,7 @@ func (s *Server) handleHunkQuery(ctx context.Context, incoming message) {
 			s.respondError(incoming.ID, -32000, err.Error())
 			return
 		}
-		s.respond(incoming.ID, getHunksWire{Hunks: hunkWires(hunks, tracker, displayCWD, false)})
+		s.respond(incoming.ID, getHunksWire{Hunks: hunkWires(hunks, tracker, current.cwd, current.displayCWD, false)})
 	case "x.ai/hunk-tracker/get-files":
 		files, err := tracker.Files(ctx)
 		if err != nil {
@@ -1534,7 +1532,7 @@ func (s *Server) handleHunkQuery(ctx context.Context, incoming message) {
 			return
 		}
 		for index := range files {
-			files[index].Path = displayHunkPath(displayCWD, files[index].Path)
+			files[index].Path = displayHunkPath(current.cwd, current.displayCWD, files[index].Path)
 		}
 		s.respond(incoming.ID, map[string]any{"files": files})
 	case "x.ai/hunk-tracker/get-all-file-contents":
@@ -1544,7 +1542,7 @@ func (s *Server) handleHunkQuery(ctx context.Context, incoming message) {
 			return
 		}
 		for index := range files {
-			files[index].Path = displayHunkPath(displayCWD, files[index].Path)
+			files[index].Path = displayHunkPath(current.cwd, current.displayCWD, files[index].Path)
 		}
 		s.respond(incoming.ID, map[string]any{"files": files})
 	case "x.ai/hunk-tracker/get-summary":
@@ -1554,7 +1552,7 @@ func (s *Server) handleHunkQuery(ctx context.Context, incoming message) {
 			return
 		}
 		s.respond(incoming.ID, hunkSummaryWire{
-			Stats: summary.Stats, Turns: hunkTurnWires(summary.Turns, tracker, displayCWD),
+			Stats: summary.Stats, Turns: hunkTurnWires(summary.Turns, tracker, current.cwd, current.displayCWD),
 			FilesModified: summary.FilesModified, FilesWithPending: summary.FilesWithPending,
 			PendingHunks: summary.PendingHunks, PendingLinesAdded: summary.PendingLinesAdded,
 			PendingLinesRemoved: summary.PendingLinesRemoved, UnattributedPending: summary.UnattributedPending,
