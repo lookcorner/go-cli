@@ -771,6 +771,18 @@ func TestMCPConfigExtensions(t *testing.T) {
 	if toggledTool != "disabled/hidden" || toggleEnabled || toolResponse["error"] != nil {
 		t.Fatalf("toggle tool=%q enabled=%v response=%#v", toggledTool, toggleEnabled, toolResponse)
 	}
+	output.Reset()
+	server.handleMCP(context.Background(), message{ID: json.RawMessage("7"), Method: "x.ai/mcp/toggle_tool", Params: json.RawMessage(`{"sessionId":"mcp-config","serverName":"disabled","toolName":"hidden","enabled":true}`)})
+	decoder := json.NewDecoder(&output)
+	toggleResponse := decodeACP(t, decoder)
+	toolsChanged := decodeACP(t, decoder)
+	params := toolsChanged["params"].(map[string]any)
+	if toggleResponse["id"] != float64(7) || toolsChanged["method"] != "x.ai/mcp/tools_changed" || params["sessionId"] != "mcp-config" {
+		t.Fatalf("unexpected toggle notification sequence: response=%#v notification=%#v", toggleResponse, toolsChanged)
+	}
+	if len(params) != 1 {
+		t.Fatalf("toggle notification must request a full catalog refresh: %#v", toolsChanged)
+	}
 	upsertResponse := call(4, "x.ai/mcp/upsert", `{"session_id":"mcp-config","server_name":"remote","url":"https://mcp.example","headers":{"X-Test":"yes"}}`)
 	if upserted.Name != "remote" || upserted.Type != "http" || upserted.Headers["X-Test"] != "yes" || upsertResponse["error"] != nil {
 		t.Fatalf("upsert=%#v response=%#v", upserted, upsertResponse)

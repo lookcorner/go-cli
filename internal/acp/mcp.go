@@ -363,8 +363,6 @@ func (s *Server) handleMCPConfig(ctx context.Context, incoming message, sessionI
 	}
 	s.respond(incoming.ID, map[string]any{"result": map[string]any{"ok": true}, "error": nil})
 	if incoming.Method == "x.ai/mcp/toggle_tool" {
-		s.write(map[string]any{"jsonrpc": "2.0", "method": "x.ai/mcp/tools_changed", "params": map[string]any{
-			"sessionId": sessionID, "serverName": name, "tools": []any{},
-		}})
+		s.write(map[string]any{"jsonrpc": "2.0", "method": "x.ai/mcp/tools_changed", "params": map[string]any{"sessionId": sessionID}})
 	}
 }
