@@ -1445,6 +1445,12 @@ Vendor sources honor the `compat.<vendor>.hooks` gate. The runtime fires
 notifications, subagent start/stop, model/turn `agent_error`, and a cancellable
 60-second post-turn `idle_prompt` notification.
 
+The TUI exposes the same live extension runtime through `/hooks`, `/plugins`,
+`/marketplace`, and `/skills`. The tabbed panel supports keyboard navigation,
+search, reload, hook/plugin/skill enablement, marketplace install/update, and
+confirmation-gated uninstall. Plugin changes refresh skills, MCP and LSP
+servers, hooks, and subagent definitions in the current session.
+
 Custom agent definitions are discovered from trusted project `.grok/agents`
 and `.claude/agents` directories from the current directory to the Git root,
 then `$GROK_HOME/agents`, legacy/user Claude locations, bundled agents, and

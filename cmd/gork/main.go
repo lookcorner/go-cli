@@ -304,6 +304,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	var extensionMu sync.Mutex
 	cfg.SystemPrompt = joinInstructions(cfg.SystemPrompt, projectInstructions, skillCatalog.Summary())
 	mode, err := resolvePermissionMode(cfg, opts.approval, opts.approvalSet)
 	if err != nil {
@@ -467,21 +468,33 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	reloadMCPBase := func(updateCtx context.Context) error {
 		mcpReloadMu.Lock()
 		defer mcpReloadMu.Unlock()
+		extensionMu.Lock()
+		inventory := append([]plugin.Plugin(nil), plugins...)
+		extensionMu.Unlock()
 		reloaded, err := config.Load(opts.configPath)
 		if err != nil {
+			return err
+		}
+		base := workspaceSource
+		base.MCPServers = reloaded.MCPServers
+		base.DisabledMCPServers = reloaded.DisabledMCPServers
+		base.DisabledMCPTools = reloaded.DisabledMCPTools
+		base.Compat = reloaded.Compat
+		base.MCPServers = config.DiscoverMCPServers(ws.Root(), base, enabledPlugins(inventory), projectTrusted)
+		if err := mcpRuntime.UpdateBase(updateCtx, base); err != nil {
 			return err
 		}
 		workspaceSource.MCPServers = reloaded.MCPServers
 		workspaceSource.DisabledMCPServers = reloaded.DisabledMCPServers
 		workspaceSource.DisabledMCPTools = reloaded.DisabledMCPTools
 		workspaceSource.Compat = reloaded.Compat
-		base := workspaceSource
-		base.MCPServers = config.DiscoverMCPServers(ws.Root(), base, plugins, projectTrusted)
-		return mcpRuntime.UpdateBase(updateCtx, base)
+		return nil
 	}
 	watchMCPConfig(ctx, time.Second, func() ([]string, error) {
 		mcpReloadMu.Lock()
 		defer mcpReloadMu.Unlock()
+		extensionMu.Lock()
+		defer extensionMu.Unlock()
 		return config.MCPWatchPaths(ws.Root(), opts.configPath, workspaceSource, plugins, projectTrusted), nil
 	}, func() error { return reloadMCPBase(ctx) }, statusOutput)
 	lspManager, err := startLSPServers(ctx, cfg, ws, registry, statusOutput)
@@ -492,7 +505,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		defer lspManager.Close()
 	}
 	hookCatalog := hooks.Discover(hooks.Config{
-		WorkspaceRoot: ws.Root(), Compat: cfg.Compat, ProjectTrusted: projectTrusted, Plugins: plugins,
+		WorkspaceRoot: ws.Root(), Compat: cfg.Compat, ProjectTrusted: projectTrusted, Plugins: enabledPlugins(plugins),
 	})
 	hookRuntime := &hooks.Runtime{
 		Catalog: hookCatalog, WorkspaceRoot: ws.Root(), SessionID: logger.ID(), Model: cfg.Model,
@@ -522,7 +535,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 	defer hookRuntime.SessionEnded(context.Background(), "closed")
 	agentCatalog, agentErrors := agents.Discover(agents.Config{
-		WorkspaceRoot: ws.Root(), ProjectTrusted: projectTrusted, Compat: cfg.Compat, Plugins: plugins,
+		WorkspaceRoot: ws.Root(), ProjectTrusted: projectTrusted, Compat: cfg.Compat, Plugins: enabledPlugins(plugins),
 	})
 	for _, agentErr := range agentErrors {
 		fmt.Fprintln(statusOutput, "[gork] agent definition:", agentErr)
@@ -621,9 +634,117 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		}
 		return reloadMCPBase(updateCtx)
 	}
+	updateSkills := func(_ context.Context, update func(*skills.Settings)) (skills.Settings, error) {
+		if err := config.UpdateSkills(opts.configPath, func(stored *config.SkillsConfig) {
+			settings := skillSettings(*stored)
+			update(&settings)
+			*stored = storedSkillSettings(settings)
+		}); err != nil {
+			return skills.Settings{}, err
+		}
+		reloaded, err := config.Load(opts.configPath)
+		if err != nil {
+			return skills.Settings{}, err
+		}
+		settings := skillSettings(reloaded.Skills)
+		if err := skillCatalog.Reconfigure(settings); err != nil {
+			return skills.Settings{}, err
+		}
+		return settings, nil
+	}
+	updatePlugins := func(updateCtx context.Context, update func(*plugin.Settings)) ([]plugin.Plugin, error) {
+		mcpReloadMu.Lock()
+		defer mcpReloadMu.Unlock()
+		extensionMu.Lock()
+		defer extensionMu.Unlock()
+		if update != nil {
+			if err := config.UpdatePlugins(opts.configPath, func(stored *config.PluginsConfig) {
+				settings := pluginSettings(*stored)
+				update(&settings)
+				*stored = storedPluginSettings(settings)
+			}); err != nil {
+				return nil, err
+			}
+		}
+		reloaded, err := config.Load(opts.configPath)
+		if err != nil {
+			return nil, err
+		}
+		next, err := plugin.Inventory(ws.Root(), plugin.Config{
+			Paths: reloaded.Plugins.Paths, Enabled: reloaded.Plugins.Enabled, Disabled: reloaded.Plugins.Disabled,
+			ProjectTrusted: projectTrusted,
+		})
+		if err != nil {
+			return nil, err
+		}
+		previous := append([]plugin.Plugin(nil), plugins...)
+		previousEnabled := enabledPlugins(previous)
+		nextEnabled := enabledPlugins(next)
+		if err := skillCatalog.ReconfigurePlugins(nextEnabled); err != nil {
+			return nil, err
+		}
+		base := workspaceSource
+		base.MCPServers = reloaded.MCPServers
+		base.DisabledMCPServers = reloaded.DisabledMCPServers
+		base.DisabledMCPTools = reloaded.DisabledMCPTools
+		base.Compat = reloaded.Compat
+		base.MCPServers = config.DiscoverMCPServers(ws.Root(), base, nextEnabled, projectTrusted)
+		if err := mcpRuntime.UpdateBase(updateCtx, base); err != nil {
+			rollbackErr := skillCatalog.ReconfigurePlugins(previousEnabled)
+			return nil, errors.Join(err, rollbackErr)
+		}
+		lspBase := workspaceSource
+		lspBase.LSPServers = reloaded.LSPServers
+		lspBase.Compat = reloaded.Compat
+		lspBase.LSPServers = config.DiscoverLSPServers(ws.Root(), lspBase, nextEnabled, projectTrusted)
+		clients, err := startLSPClients(updateCtx, lspBase, ws, statusOutput)
+		if err != nil {
+			return nil, errors.Join(err, restorePluginRuntime(updateCtx, ws.Root(), projectTrusted, workspaceSource, previousEnabled, skillCatalog, mcpRuntime))
+		}
+		if err := lspManager.Replace(clients); err != nil {
+			for _, client := range clients {
+				_ = client.Close()
+			}
+			return nil, errors.Join(err, restorePluginRuntime(updateCtx, ws.Root(), projectTrusted, workspaceSource, previousEnabled, skillCatalog, mcpRuntime))
+		}
+		plugins = next
+		workspaceSource.MCPServers = reloaded.MCPServers
+		workspaceSource.DisabledMCPServers = reloaded.DisabledMCPServers
+		workspaceSource.DisabledMCPTools = reloaded.DisabledMCPTools
+		workspaceSource.LSPServers = reloaded.LSPServers
+		workspaceSource.Compat = reloaded.Compat
+		hookCatalog.Reconfigure(hooks.Config{WorkspaceRoot: ws.Root(), Compat: reloaded.Compat, ProjectTrusted: projectTrusted, Plugins: nextEnabled})
+		nextAgents, _ := agents.Discover(agents.Config{WorkspaceRoot: ws.Root(), ProjectTrusted: projectTrusted, Compat: reloaded.Compat, Plugins: nextEnabled})
+		subagents.SetCatalog(nextAgents)
+		return append([]plugin.Plugin(nil), next...), nil
+	}
+	marketplaceAction := func(actionCtx context.Context, action marketplace.Action) (marketplace.Outcome, error) {
+		outcome, err := marketplace.Execute(opts.configPath, ws.Root(), action)
+		if err != nil || outcome.Status != "success" {
+			return outcome, err
+		}
+		if action.Type == "install" || action.Type == "uninstall" || action.Type == "update" || action.Type == "remove_source" {
+			_, err = updatePlugins(actionCtx, func(settings *plugin.Settings) { applyMarketplacePlugins(settings, action.Type, outcome) })
+		}
+		return outcome, err
+	}
 	runner := &agent.Runner{
-		Client: client, Tools: registry, Skills: skillCatalog, Logger: logger,
+		Client: client, Tools: registry, Skills: skillCatalog, PluginInventory: func() []plugin.Plugin {
+			extensionMu.Lock()
+			defer extensionMu.Unlock()
+			return append([]plugin.Plugin(nil), plugins...)
+		}, Logger: logger,
 		HookCatalog: hookCatalog, HookPolicy: hookRuntime,
+		ReloadHooks: func() error {
+			reloaded, err := config.Load(opts.configPath)
+			if err != nil {
+				return err
+			}
+			extensionMu.Lock()
+			defer extensionMu.Unlock()
+			hookCatalog.Reconfigure(hooks.Config{WorkspaceRoot: ws.Root(), Compat: reloaded.Compat, ProjectTrusted: projectTrusted, Plugins: enabledPlugins(plugins)})
+			return nil
+		},
 		ListSubagents: subagents.List, GetSubagent: subagents.Output, KillSubagent: subagents.Kill,
 		ListTasks: registry.BackgroundTasks, KillTask: registry.KillBackgroundTask,
 		SessionID: logger.ID(), SessionPath: logger.Path(), Workspace: ws.Root(),
@@ -639,6 +760,8 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		MCPServers: mcpRuntime.Configs, MCPServerCatalog: mcpRuntime.Catalog,
 		ToggleMCPServer: toggleMCPServer, ToggleMCPTool: toggleMCPTool,
 		UpsertMCPServer: upsertMCPServer, DeleteMCPServer: deleteMCPServer,
+		UpdateSkills: updateSkills, UpdatePlugins: updatePlugins,
+		MarketplaceList: func() ([]marketplace.ScanResult, error) { return marketplace.List(opts.configPath, ws.Root()) }, MarketplaceAction: marketplaceAction,
 	}
 	usage := newBillingService(cfg, tokenProvider, nil)
 	runner.FetchUsage, runner.OpenURL = usage.Usage, openBrowser
@@ -2462,7 +2585,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			inventory: append([]plugin.Plugin(nil), plugins...),
 		}
 		pluginState.hookCfg = hooks.Config{
-			WorkspaceRoot: ws.Root(), Compat: sessionCfg.Compat, ProjectTrusted: projectTrusted, Plugins: plugins,
+			WorkspaceRoot: ws.Root(), Compat: sessionCfg.Compat, ProjectTrusted: projectTrusted, Plugins: enabledPlugins(plugins),
 		}
 		pluginState.hooks = hooks.Discover(pluginState.hookCfg)
 		pluginState.hookRun = &hooks.Runtime{
@@ -2477,7 +2600,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		registry.SetPlanModeObserver(processObserver)
 		registry.SetUserQuestionObserver(processObserver)
 		agentCatalog, agentErrors := agents.Discover(agents.Config{
-			WorkspaceRoot: ws.Root(), ProjectTrusted: projectTrusted, Compat: sessionCfg.Compat, Plugins: plugins,
+			WorkspaceRoot: ws.Root(), ProjectTrusted: projectTrusted, Compat: sessionCfg.Compat, Plugins: enabledPlugins(plugins),
 		})
 		for _, agentErr := range agentErrors {
 			fmt.Fprintln(statusOutput, "[gork] agent definition:", agentErr)
@@ -2680,11 +2803,11 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 				state.inventory = append([]plugin.Plugin(nil), inventory...)
 				state.trusted = trusted
 				extensionsMu.Unlock()
-				state.hookCfg.Plugins = inventory
+				state.hookCfg.Plugins = enabledPlugins(inventory)
 				state.hookCfg.ProjectTrusted = trusted
 				state.hooks.Reconfigure(state.hookCfg)
 				agentCatalog, _ := agents.Discover(agents.Config{
-					WorkspaceRoot: state.root, ProjectTrusted: trusted, Compat: state.hookCfg.Compat, Plugins: inventory,
+					WorkspaceRoot: state.root, ProjectTrusted: trusted, Compat: state.hookCfg.Compat, Plugins: enabledPlugins(inventory),
 				})
 				state.agents = agentCatalog
 				state.subagents.SetCatalog(agentCatalog)
@@ -2767,11 +2890,16 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			ReloadHooks: func() error {
 				pluginState.updateMu.Lock()
 				defer pluginState.updateMu.Unlock()
+				reloaded, err := config.Load(opts.configPath)
+				if err != nil {
+					return err
+				}
 				extensionsMu.Lock()
 				inventory := append([]plugin.Plugin(nil), pluginState.inventory...)
 				extensionsMu.Unlock()
-				pluginState.hookCfg.Plugins = inventory
-				pluginState.hookCfg.ProjectTrusted = workspace.ResolveFolderTrust(pluginState.root, cfg.FolderTrustEnabled, false) == workspace.TrustTrusted
+				pluginState.hookCfg.Plugins = enabledPlugins(inventory)
+				pluginState.hookCfg.Compat = reloaded.Compat
+				pluginState.hookCfg.ProjectTrusted = workspace.ResolveFolderTrust(pluginState.root, reloaded.FolderTrustEnabled, false) == workspace.TrustTrusted
 				pluginState.hooks.Reconfigure(pluginState.hookCfg)
 				return nil
 			},
@@ -3033,6 +3161,26 @@ func enabledPlugins(inventory []plugin.Plugin) []plugin.Plugin {
 		}
 	}
 	return enabled
+}
+
+func restorePluginRuntime(
+	ctx context.Context,
+	root string,
+	projectTrusted bool,
+	source config.Config,
+	plugins []plugin.Plugin,
+	catalog *skills.Catalog,
+	runtime *sessionMCPRuntime,
+) error {
+	var restoreErr error
+	if err := catalog.ReconfigurePlugins(plugins); err != nil {
+		restoreErr = errors.Join(restoreErr, fmt.Errorf("restore previous plugin catalog: %w", err))
+	}
+	source.MCPServers = config.DiscoverMCPServers(root, source, plugins, projectTrusted)
+	if err := runtime.UpdateBase(ctx, source); err != nil {
+		restoreErr = errors.Join(restoreErr, fmt.Errorf("restore previous plugin MCP servers: %w", err))
+	}
+	return restoreErr
 }
 
 func skillSettings(source config.SkillsConfig) skills.Settings {
