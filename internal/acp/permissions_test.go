@@ -182,6 +182,11 @@ func TestYoloModeChangedUpdatesAllMutableSessions(t *testing.T) {
 	if mode, _ := first.PermissionMode(); mode != tools.PermissionAlwaysApprove {
 		t.Fatalf("explicit yolo did not win: %q", mode)
 	}
+	server.handleYoloModeChanged([]byte(`{"yolo_mode":false}`))
+	if mode, _ := first.PermissionMode(); mode != tools.PermissionAuto {
+		t.Fatalf("disabling yolo did not restore auto: %q", mode)
+	}
+	server.handleYoloModeChanged([]byte(`{"yolo_mode":true}`))
 	server.handleYoloModeChanged([]byte(`{"auto_mode":true}`))
 	if mode, _ := first.PermissionMode(); mode != tools.PermissionAuto {
 		t.Fatalf("auto did not clear yolo: %q", mode)

@@ -73,6 +73,10 @@ remain authoritative. `session/new` accepts a validated UUID in `_meta.sessionId
 and a configured profile or underlying model in `_meta.modelId` (unknown models
 fall back to the default); `session/load` accepts `_meta.noReplay=true` when the
 client already owns the transcript and only needs the persisted runtime state.
+ACP also advertises `/always-approve` with the `/yolo` alias. It enables the
+mode by default; `off`, `false`, `0`, `no`, or `disable` turns it off. The
+command completes without invoking the model and cannot bypass deny or managed
+policy locks.
 
 ACP permission prompts also offer an exact-request `allow_always` choice for
 the current session. `x.ai/permissions/reset` clears those remembered grants

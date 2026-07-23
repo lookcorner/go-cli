@@ -46,6 +46,7 @@ func (s *Server) commandRunner(cwd string) *agent.Runner {
 func availableCommands(runner *agent.Runner, workspaceSkills bool) []map[string]any {
 	commands := []map[string]any{
 		availableCommand("compact", "Compress conversation history to save context window", "optional context about what to preserve", nil),
+		availableCommand("always-approve", "Toggle always-approve mode (skip all permission prompts)", "on|off", nil),
 		availableCommand("context", "Show context window usage and session stats", "", nil),
 		availableCommand("session-info", "Show session details (model, turns, context usage)", "", nil),
 	}
@@ -104,6 +105,21 @@ func availableCommands(runner *agent.Runner, workspaceSkills bool) []map[string]
 		}))
 	}
 	return commands
+}
+
+func alwaysApproveCommand(prompt string) (bool, bool) {
+	trimmed := strings.TrimSpace(prompt)
+	fields := strings.Fields(trimmed)
+	if len(fields) == 0 || fields[0] != "/always-approve" && fields[0] != "/yolo" {
+		return false, false
+	}
+	args := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(trimmed, fields[0])))
+	switch args {
+	case "off", "false", "0", "no", "disable":
+		return false, true
+	default:
+		return true, true
+	}
 }
 
 func sessionStatusCommand(prompt string) string {

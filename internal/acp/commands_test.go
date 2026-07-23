@@ -46,7 +46,7 @@ func TestCommandsListAdvertisesCapabilitiesAndSkills(t *testing.T) {
 		command := raw.(map[string]any)
 		byName[command["name"].(string)] = command
 	}
-	for _, name := range []string{"compact", "context", "session-info", "loop", "local:compact", "deploy"} {
+	for _, name := range []string{"compact", "always-approve", "context", "session-info", "loop", "local:compact", "deploy"} {
 		if byName[name] == nil {
 			t.Fatalf("missing command %q in %#v", name, commands)
 		}
@@ -103,12 +103,90 @@ func TestCommandsListValidatesParamsAndInitializeAdvertisesPreSessionCommands(t 
 	messages = decodeACPOutput(t, output.Bytes())
 	meta := messages[0]["result"].(map[string]any)["_meta"].(map[string]any)
 	commands := meta["availableCommands"].([]any)
-	if len(commands) != 3 || commands[0].(map[string]any)["name"] != "compact" || commands[0].(map[string]any)["input"].(map[string]any)["hint"] == "" || commands[1].(map[string]any)["name"] != "context" || commands[2].(map[string]any)["name"] != "session-info" {
+	if len(commands) != 4 || commands[0].(map[string]any)["name"] != "compact" || commands[0].(map[string]any)["input"].(map[string]any)["hint"] == "" || commands[1].(map[string]any)["name"] != "always-approve" || commands[1].(map[string]any)["input"].(map[string]any)["hint"] != "on|off" || commands[2].(map[string]any)["name"] != "context" || commands[3].(map[string]any)["name"] != "session-info" {
 		t.Fatalf("available commands=%#v", commands)
 	}
 	routedCommands := messages[1]["result"].(map[string]any)["commands"].([]any)
-	if len(routedCommands) != 3 || routedCommands[2].(map[string]any)["name"] != "session-info" {
+	if len(routedCommands) != 4 || routedCommands[3].(map[string]any)["name"] != "session-info" {
 		t.Fatalf("routed commands=%#v", routedCommands)
+	}
+}
+
+func TestAlwaysApproveSlashCommandUsesReferenceArgumentsWithoutModelTurn(t *testing.T) {
+	registry := permissionRegistry(t, tools.PermissionPrompt)
+	defer registry.Close()
+	current := &session{id: "permission-command", runner: &agent.Runner{Tools: registry}, activePrompt: -1}
+	var output bytes.Buffer
+	server := &Server{output: &output, sessions: map[string]*session{current.id: current}}
+	request := func(id int, prompt string) []map[string]any {
+		t.Helper()
+		output.Reset()
+		params, _ := json.Marshal(map[string]any{
+			"sessionId": current.id,
+			"prompt":    []any{map[string]any{"type": "text", "text": prompt}},
+		})
+		server.handlePrompt(context.Background(), message{ID: json.RawMessage(fmt.Sprintf("%d", id)), Method: "session/prompt", Params: params})
+		return decodeACPOutput(t, output.Bytes())
+	}
+	assertMode := func(id int, prompt string, want tools.PermissionMode) {
+		t.Helper()
+		messages := request(id, prompt)
+		mode, ok := registry.PermissionMode()
+		responded := false
+		for _, item := range messages {
+			result, isResult := item["result"].(map[string]any)
+			responded = responded || isResult && result["stopReason"] == "end_turn"
+			params, _ := item["params"].(map[string]any)
+			update, _ := params["update"].(map[string]any)
+			if update["sessionUpdate"] == "agent_message_chunk" {
+				t.Fatalf("prompt=%q emitted model text: %#v", prompt, messages)
+			}
+		}
+		if !ok || mode != want || !responded || current.promptIndex != 0 {
+			t.Fatalf("prompt=%q mode=%q ok=%v responded=%v promptIndex=%d messages=%#v", prompt, mode, ok, responded, current.promptIndex, messages)
+		}
+	}
+
+	assertMode(1, "/always-approve", tools.PermissionAlwaysApprove)
+	for id, prompt := range []string{"/yolo off", "/always-approve false", "/always-approve 0", "/always-approve no", "/always-approve disable"} {
+		assertMode(id+2, prompt, tools.PermissionPrompt)
+	}
+	assertMode(7, "/yolo OFF", tools.PermissionPrompt)
+	assertMode(8, "/always-approve false extra", tools.PermissionAlwaysApprove)
+	if err := registry.SetPermissionMode(tools.PermissionAuto); err != nil {
+		t.Fatal(err)
+	}
+	assertMode(9, "/yolo off", tools.PermissionAuto)
+	assertMode(10, "/always-approve", tools.PermissionAlwaysApprove)
+	assertMode(11, "/always-approve off", tools.PermissionAuto)
+
+	for name, test := range map[string]struct {
+		registry *tools.Registry
+		prompt   string
+		want     tools.PermissionMode
+	}{
+		"deny":    {permissionRegistry(t, tools.PermissionDeny), "/always-approve", tools.PermissionDeny},
+		"managed": {permissionRegistryWithAutoLock(t, tools.PermissionPrompt, true), "/always-approve", tools.PermissionPrompt},
+		"initial": {permissionRegistry(t, tools.PermissionAlwaysApprove), "/yolo off", tools.PermissionPrompt},
+	} {
+		t.Run(name, func(t *testing.T) {
+			defer test.registry.Close()
+			current := &session{id: name, runner: &agent.Runner{Tools: test.registry}, activePrompt: -1}
+			var output bytes.Buffer
+			server := &Server{output: &output, sessions: map[string]*session{name: current}}
+			params, _ := json.Marshal(map[string]any{"sessionId": name, "prompt": []any{map[string]any{"type": "text", "text": test.prompt}}})
+			server.handlePrompt(context.Background(), message{ID: json.RawMessage("12"), Method: "session/prompt", Params: params})
+			mode, ok := test.registry.PermissionMode()
+			messages := decodeACPOutput(t, output.Bytes())
+			responded := false
+			for _, item := range messages {
+				result, isResult := item["result"].(map[string]any)
+				responded = responded || isResult && result["stopReason"] == "end_turn"
+			}
+			if !ok || mode != test.want || !responded {
+				t.Fatalf("mode=%q ok=%v responded=%v messages=%#v", mode, ok, responded, messages)
+			}
+		})
 	}
 }
 

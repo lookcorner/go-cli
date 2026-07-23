@@ -175,6 +175,7 @@ type session struct {
 	rewind              *workspace.RewindStore
 	logPath             string
 	mode                string
+	modeBeforeYolo      tools.PermissionMode
 	mcpServers          []MCPServer
 	wakeQueue           []syntheticWake
 	interjectionQueue   []agent.Interjection
@@ -1899,6 +1900,11 @@ func (s *Server) handlePromptRequest(parent context.Context, incoming message, c
 		return
 	}
 	if s.queuePrompt(current, incoming, &params, prompt) {
+		return
+	}
+	if enabled, ok := alwaysApproveCommand(prompt); ok {
+		s.handleAlwaysApprovePrompt(incoming, current, newPromptLifecycle(params), enabled)
+		s.markRunningPrompt(current, promptID(params.Meta))
 		return
 	}
 	if command := sessionStatusCommand(prompt); command != "" {

@@ -3,8 +3,60 @@ package acp
 import (
 	"encoding/json"
 
+	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/tools"
 )
+
+func (s *Server) handleAlwaysApprovePrompt(incoming message, current *session, lifecycle promptLifecycle, enabled bool) {
+	current.mu.Lock()
+	if current.closed {
+		current.mu.Unlock()
+		s.failPrompt(incoming, current, lifecycle, "session is closed")
+		return
+	}
+	if current.running {
+		current.mu.Unlock()
+		s.failPrompt(incoming, current, lifecycle, "session already has an active prompt")
+		return
+	}
+	runner := current.runner
+	current.mu.Unlock()
+
+	if runner == nil || runner.Tools == nil {
+		s.failPrompt(incoming, current, lifecycle, "permission mode cannot be changed")
+		return
+	}
+	setAlwaysApprove(current, enabled)
+	s.finishPrompt(incoming, current, lifecycle, "end_turn", agent.Result{}, nil, "")
+}
+
+func setAlwaysApprove(current *session, enabled bool) {
+	current.mu.Lock()
+	defer current.mu.Unlock()
+	if current.runner == nil || current.runner.Tools == nil {
+		return
+	}
+	mode, ok := current.runner.Tools.PermissionMode()
+	if !ok {
+		return
+	}
+	if enabled {
+		if mode != tools.PermissionAlwaysApprove && current.runner.Tools.SetPermissionMode(tools.PermissionAlwaysApprove) == nil {
+			current.modeBeforeYolo = mode
+		}
+		return
+	}
+	if mode != tools.PermissionAlwaysApprove {
+		return
+	}
+	previous := current.modeBeforeYolo
+	if previous != tools.PermissionPrompt && previous != tools.PermissionAuto {
+		previous = tools.PermissionPrompt
+	}
+	if current.runner.Tools.SetPermissionMode(previous) == nil {
+		current.modeBeforeYolo = ""
+	}
+}
 
 func (s *Server) handleYoloModeChanged(raw json.RawMessage) {
 	var params struct {
@@ -52,11 +104,7 @@ func (s *Server) handleYoloModeChanged(raw json.RawMessage) {
 			continue
 		}
 		if yoloMode != nil {
-			mode := tools.PermissionPrompt
-			if *yoloMode {
-				mode = tools.PermissionAlwaysApprove
-			}
-			_ = runner.Tools.SetPermissionMode(mode)
+			setAlwaysApprove(current, *yoloMode)
 			if *yoloMode {
 				continue
 			}
