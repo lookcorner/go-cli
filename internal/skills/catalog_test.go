@@ -606,6 +606,41 @@ func TestSameScopeSkillCopiesUseDirectoryNames(t *testing.T) {
 	}
 }
 
+func TestBundledSkillsAreDiscoveredAtLowestPriority(t *testing.T) {
+	grokHome := filepath.Join(t.TempDir(), ".grok")
+	t.Setenv("GROK_HOME", grokHome)
+	workspaceRoot := t.TempDir()
+	write := func(path, description string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		content := "---\nname: shared\ndescription: " + description + "\n---\n"
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	catalog, err := Discover(workspaceRoot, Config{Compat: compat.Default()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(filepath.Join(grokHome, "bundled", "skills", "shared", "SKILL.md"), "bundled")
+	if err := catalog.Refresh(); err != nil {
+		t.Fatal(err)
+	}
+	if skill := catalog.byName["shared"]; skill.Description != "bundled" || skill.Source != "bundled" {
+		t.Fatalf("bundled skill=%#v", skill)
+	}
+
+	write(filepath.Join(grokHome, "skills", "shared", "SKILL.md"), "user")
+	if err := catalog.Refresh(); err != nil {
+		t.Fatal(err)
+	}
+	if skill := catalog.byName["shared"]; skill.Description != "user" || skill.Source != "user:grok" {
+		t.Fatalf("user skill did not override bundled skill: %#v", skill)
+	}
+}
+
 func TestCrossScopeSkillCollisionStillOverrides(t *testing.T) {
 	home := t.TempDir()
 	root := t.TempDir()

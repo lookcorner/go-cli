@@ -159,6 +159,9 @@ func discover(workspaceRoot, home, grokHome string, cfg Config) (*Catalog, error
 	_, gitErr := os.Stat(filepath.Join(gitRoot, ".git"))
 	hasGitRoot := gitErr == nil
 	var roots []skillRoot
+	if grokHome != "" {
+		roots = append(roots, skillRoot{path: filepath.Join(grokHome, "bundled", "skills"), source: "bundled", scope: "bundled"})
+	}
 	for index := len(cfg.Paths) - 1; index >= 0; index-- {
 		path := cfg.Paths[index]
 		if path = resolveConfigPath(path, home, workspaceRoot); path != "" {

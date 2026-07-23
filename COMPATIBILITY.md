@@ -44,6 +44,10 @@ ACP announcement updates also use reference-shaped `x.ai/announcements/update`
 notifications with expiry filtering, change deduplication, epoch-seeded monotonic
 generations, initialize/new-session replay semantics, and authenticated periodic
 remote refreshes.
+Authenticated ACP bundle sync/status/entry extensions populate the shared bundled
+persona, role, agent, and skill cache through bounded archives or legacy JSON,
+preserve local modifications, retry refreshed session credentials, and refresh
+live skill catalogs after successful updates.
 
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |

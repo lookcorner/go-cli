@@ -29,6 +29,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/agents"
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/auth"
+	"github.com/lookcorner/go-cli/internal/bundle"
 	"github.com/lookcorner/go-cli/internal/config"
 	"github.com/lookcorner/go-cli/internal/hooks"
 	"github.com/lookcorner/go-cli/internal/lsp"
@@ -1851,6 +1852,35 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		runtimeConfigMu.Unlock()
 	}
 	subscriptionHTTP := &http.Client{Timeout: cfg.HTTPTimeout}
+	bundleRoot, err := bundle.Root()
+	if err != nil {
+		return err
+	}
+	bundleService := &bundle.Service{
+		Root: bundleRoot, BaseURL: cfg.ProxyBaseURL, HTTP: subscriptionHTTP,
+		Credentials: func(bundleCtx context.Context, rejectedToken string) (bundle.Credentials, error) {
+			current := runtimeConfigSnapshot()
+			if current.DeploymentKey != "" {
+				return bundle.Credentials{Token: current.DeploymentKey, Deployment: true}, nil
+			}
+			token := current.APIKey
+			credential := auth.Credential{}
+			if provider := authRuntime.Provider(); provider != nil {
+				var err error
+				token, err = provider(bundleCtx, rejectedToken)
+				if err != nil {
+					return bundle.Credentials{}, err
+				}
+				credential, _ = auth.Load(authPath, authConfig.Scope())
+			}
+			return bundle.Credentials{Token: token, UserID: credential.UserID, Email: credential.Email}, nil
+		},
+	}
+	refreshBundle := func(bundleCtx context.Context) {
+		if result, err := bundleService.MaybeSync(bundleCtx); err == nil && result != nil && server != nil {
+			server.ReloadSkills()
+		}
+	}
 	catalogRefresher := &acpSubscriptionCatalogRefresher{
 		ctx: ctx, config: runtimeConfigSnapshot, authPath: authPath, scope: authConfig.Scope(), tokenProvider: tokenProvider,
 		reload: func() error {
@@ -1886,6 +1916,16 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		}
 		return server.ReloadModels()
 	}}
+	server.Bundle = acp.BundleConfig{
+		Status: bundleService.Status, Entry: bundleService.Entry,
+		Sync: func(bundleCtx context.Context, force bool) (bundle.SyncResult, error) {
+			result, err := bundleService.Sync(bundleCtx, force)
+			if err == nil {
+				server.ReloadSkills()
+			}
+			return result, err
+		},
+	}
 	loginCoordinator := newACPLoginCoordinator(auth.NewClient(&http.Client{Timeout: cfg.HTTPTimeout}), authConfig, authPath)
 	loginCoordinator.appConfig = runtimeConfigSnapshot
 	loginCoordinator.applySettings = applyRemoteSettings
@@ -1901,6 +1941,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 	loginCoordinator.setState = func(methodID, token string) {
 		authRuntime.Set(methodID)
 		server.SetAuthState(methodID, token)
+		go refreshBundle(ctx)
 	}
 	loginCoordinator.refreshModels = func(token string) {
 		current := runtimeConfigSnapshot()
@@ -1914,6 +1955,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 	server.Auth.GetURL = loginCoordinator.GetURL
 	server.Auth.SubmitCode = loginCoordinator.SubmitCode
 	server.Initialized = func() {
+		go refreshBundle(ctx)
 		go watchACPAnnouncements(ctx, acpAnnouncementsRefreshInterval(), func(pollCtx context.Context) *config.RemoteSettings {
 			current := runtimeConfigSnapshot()
 			token := current.APIKey
@@ -1940,6 +1982,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		textOutput io.Writer,
 		statusOutput io.Writer,
 	) (*agent.Runner, func(), error) {
+		go refreshBundle(sessionCtx)
 		cfg := runtimeConfigSnapshot()
 		sessionTokenProvider := authRuntime.Provider()
 		if key, ok := auth.ReadAPIKeyEnvironment(); ok && !cfg.DisableAPIKeyAuth && !cfg.ForceLoginTeamConfigured && cfg.PreferredAuthMethod != "oidc" {

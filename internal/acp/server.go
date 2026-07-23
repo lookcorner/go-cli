@@ -96,6 +96,7 @@ type Factory func(context.Context, SessionConfig, tools.Approver, io.Writer, io.
 type Server struct {
 	Factory            Factory
 	Auth               AuthConfig
+	Bundle             BundleConfig
 	AuthChanged        func(context.Context, auth.LogoutResult) error
 	Initialized        func()
 	BillingMeta        func() (*bool, *string)
@@ -304,6 +305,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			})
 		case "authenticate":
 			s.handleAuthenticate(ctx, incoming)
+		case "x.ai/bundle/sync", "x.ai/bundle/status", "x.ai/bundle/entry/get":
+			s.handleBundle(ctx, incoming)
 		case "session/new":
 			s.handleNewSession(ctx, incoming)
 		case "session/list":

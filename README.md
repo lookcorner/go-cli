@@ -1252,6 +1252,15 @@ agent-memory directory. User memory lives under `$GROK_HOME/agent-memory`;
 project and local memory live under `.grok/agent-memory` and
 `.grok/agent-memory-local` respectively.
 
+Authenticated ACP clients can manage the shared `$GROK_HOME/bundled` cache with
+`x.ai/bundle/sync`, inspect it through `x.ai/bundle/status`, and read cached
+persona, role, or agent definitions through `x.ai/bundle/entry/get`. Sync prefers
+the bounded tar.gz archive endpoint and falls back to the legacy JSON payload,
+retries one rejected session token, and preserves locally modified managed files.
+Initialization, authentication, and new sessions trigger a single-flight
+best-effort refresh when the cache is older than one hour; updated bundled skills
+are refreshed in live ACP sessions.
+
 The `task` tool runs these definitions through the existing Runner and parent
 tool infrastructure. It supports foreground and background execution,
 `get_task_output`, `kill_task`, completed-agent resume, per-agent turn limits,
@@ -1339,9 +1348,10 @@ plugins and clears their enabled/disabled settings. It also imports
 `extraKnownMarketplaces` from `settings.local.json` and `settings.json`, then
 `plugins/known_marketplaces.json`, under both `$GROK_HOME` and `~/.claude`.
 Set `GROK_OFFICIAL_MARKETPLACE_AUTO_REGISTER=true` to register the official xAI
-source once; removing it records that choice. Version 1 `plugin-index.json`
+source once; the authenticated remote setting can enable the same default and the
+environment remains authoritative. Removing it records that choice. Version 1 `plugin-index.json`
 catalogs enrich indexed plugins with sanitized skill, command, agent, MCP, hook,
-and LSP component inventories. The remote feature-flag gate is not yet implemented.
+and LSP component inventories.
 
 The `[skills]` config accepts additional directories or individual `SKILL.md`
 files. Paths support `~`; relative paths resolve from the workspace. `ignore`

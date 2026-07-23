@@ -48,6 +48,16 @@ func (s *Server) handleSkills(ctx context.Context, incoming message) {
 }
 
 func (s *Server) handleSkillRefresh(incoming message) {
+	count := s.ReloadSkills()
+	if incoming.Method == "x.ai/internal/reload_skills" {
+		s.respond(incoming.ID, map[string]any{"reloaded": count})
+		return
+	}
+	s.respond(incoming.ID, map[string]any{"ok": true})
+}
+
+// ReloadSkills refreshes every live session after shared bundled content changes.
+func (s *Server) ReloadSkills() int {
 	s.mu.Lock()
 	sessions := make([]*session, 0, len(s.sessions))
 	for _, current := range s.sessions {
@@ -59,11 +69,7 @@ func (s *Server) handleSkillRefresh(incoming message) {
 			_ = current.runner.Skills.Refresh()
 		}
 	}
-	if incoming.Method == "x.ai/internal/reload_skills" {
-		s.respond(incoming.ID, map[string]any{"reloaded": len(sessions)})
-		return
-	}
-	s.respond(incoming.ID, map[string]any{"ok": true})
+	return len(sessions)
 }
 
 func (s *Server) handleSkillsMutation(ctx context.Context, incoming message, current *session, cwd, path, name string, enabled bool) {
