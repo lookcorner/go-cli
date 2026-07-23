@@ -863,6 +863,9 @@ Core Git extensions are available through `x.ai/git/git_repo_root`, `status`,
 `stage/content`, `checkout`, `checkout_session_head`, `checkout_commit`,
 `commit`, and `files`. Session HEAD checkout restores the commit recorded in a
 persisted session, with optional dirty-state stashing and fetch fallback. Status
+and mutation methods detect colocated Jujutsu repositories: jj supplies status,
+repository info, commits, bookmarks, and restore behavior, while staging is a
+no-op and unsupported checkout/stash requests return explicit errors. Status
 reports repository, branch/upstream, staged, unstaged, untracked, optional
 line-count data, and optional per-file patches with byte and line counts using
 the reference extension result envelope. Nested Git repositories and submodules

@@ -902,6 +902,43 @@ func (s *Server) handleGit(ctx context.Context, incoming message) {
 			s.respond(incoming.ID, map[string]any{"result": value})
 		}
 	}
+	if worktrees.IsJujutsu(root) {
+		switch incoming.Method {
+		case "x.ai/git/status":
+			extResult(worktrees.JJStatus(ctx, root), nil)
+			return
+		case "x.ai/git/info":
+			result, err := worktrees.JJInfo(ctx, root)
+			extResult(result, err)
+			return
+		case "x.ai/git/current_commit":
+			extResult(worktrees.JJCurrentCommit(ctx, root), nil)
+			return
+		case "x.ai/git/branches":
+			result, err := worktrees.JJBranches(ctx, root)
+			extResult(result, err)
+			return
+		case "x.ai/git/stage":
+			extResult(map[string]any{"paths": []string{}}, nil)
+			return
+		case "x.ai/git/stage/content", "x.ai/git/unstage":
+			extResult(map[string]any{}, nil)
+			return
+		case "x.ai/git/discard":
+			extResult(map[string]any{}, worktrees.JJDiscard(ctx, root, req.Paths))
+			return
+		case "x.ai/git/commit":
+			result, err := worktrees.JJCommit(ctx, root, req.Message)
+			extResult(result, err)
+			return
+		case "x.ai/git/checkout":
+			s.respondError(incoming.ID, -32602, "checkout is not supported in jj repos; use `jj new` or `jj edit`")
+			return
+		case "x.ai/git/stash":
+			s.respondError(incoming.ID, -32602, "stash is not supported in jj repos; changes are always committed")
+			return
+		}
+	}
 	switch incoming.Method {
 	case "x.ai/git/status":
 		includeUntracked := true
