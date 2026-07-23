@@ -1020,11 +1020,52 @@ func TestMouseReportingToggle(t *testing.T) {
 		t.Fatalf("enabled mouse state=%#v mode=%v", m, m.View().MouseMode)
 	}
 
+	m.scrollFocused = false
+	m.selection = &textSelection{}
+	m.selectionClick = selectionClickState{count: 2}
+	m.setInput("/toggle-mouse-reporting ignored")
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || !m.mouseReleased || m.View().MouseMode != tea.MouseModeNone || m.status != "mouse reporting disabled" {
+		t.Fatalf("command did not disable mouse state=%#v mode=%v command=%v", m, m.View().MouseMode, command != nil)
+	}
+	if m.selection != nil || m.selectionClick != (selectionClickState{}) {
+		t.Fatalf("command did not clear selection state: selection=%#v click=%#v", m.selection, m.selectionClick)
+	}
+	m.setInput("/toggle-mouse-reporting")
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if m.mouseReleased || m.View().MouseMode != tea.MouseModeCellMotion || m.status != "mouse reporting enabled" {
+		t.Fatalf("command did not enable mouse state=%#v mode=%v", m, m.View().MouseMode)
+	}
+	m.setInput("/help")
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if !strings.Contains(m.transcript.String(), "`/toggle-mouse-reporting`") {
+		t.Fatalf("enabled help omitted mouse command: %q", m.transcript.String())
+	}
+
 	disabled := &model{width: 60, height: 16, status: "ready", scrollFocused: true}
 	updated, _ = disabled.Update(tea.KeyPressMsg(tea.Key{Code: 'r', Mod: tea.ModCtrl}))
 	disabled = updated.(*model)
 	if disabled.mouseReleased || disabled.status != "ready" {
 		t.Fatalf("disabled shortcut changed state=%#v", disabled)
+	}
+	disabled.scrollFocused = false
+	disabled.setInput("/toggle-mouse-reporting ignored")
+	updated, command = disabled.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	disabled = updated.(*model)
+	if command != nil || disabled.mouseReleased || disabled.View().MouseMode != tea.MouseModeCellMotion || disabled.status != "mouse reporting toggle is off" {
+		t.Fatalf("disabled command changed state=%#v mode=%v command=%v", disabled, disabled.View().MouseMode, command != nil)
+	}
+	if !strings.Contains(disabled.transcript.String(), "Mouse reporting toggle is off. Set `[ui] mouse_reporting_toggle = true` in ~/.grok/config.toml to enable it.") {
+		t.Fatalf("disabled command omitted configuration hint: %q", disabled.transcript.String())
+	}
+	disabled.setInput("/help")
+	updated, _ = disabled.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	disabled = updated.(*model)
+	if strings.Contains(disabled.transcript.String(), "`/toggle-mouse-reporting`") {
+		t.Fatalf("disabled help exposed mouse command: %q", disabled.transcript.String())
 	}
 }
 

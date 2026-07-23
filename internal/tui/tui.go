@@ -1359,7 +1359,11 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if m.bridge != nil && m.bridge.AutoModeAvailable() {
 				permissionCommands += " `/auto`"
 			}
-			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + " `/btw <question>` `/compact` `/context` `/copy [N]` `/dream` `/effort [level]` `/exit` `/export [filename]` `/find` `/flush` `/help` `/history` `/loop` `/memory` `/model [name] [effort]` (`/m`) `/multiline` `/plan [description]` `/queue` `/recap` `/remember` `/rename <title>` `/rewind` `/session-info` (`/status`, `/info`) `/tasks` `/transcript` `/view-plan` `/vim-mode`")
+			mouseCommand := ""
+			if m.mouseToggle {
+				mouseCommand = " `/toggle-mouse-reporting`"
+			}
+			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + " `/btw <question>` `/compact` `/context` `/copy [N]` `/dream` `/effort [level]` `/exit` `/export [filename]` `/find` `/flush` `/help` `/history` `/loop` `/memory` `/model [name] [effort]` (`/m`) `/multiline` `/plan [description]` `/queue` `/recap` `/remember` `/rename <title>` `/rewind` `/session-info` (`/status`, `/info`) `/tasks`" + mouseCommand + " `/transcript` `/view-plan` `/vim-mode`")
 			m.status = "commands"
 			return m, nil
 		case "/queue":
@@ -1500,6 +1504,14 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			message := "Vim mode: " + state
 			m.appendSystem(message)
 			m.status = message
+			return m, nil
+		case "/toggle-mouse-reporting":
+			if !m.mouseToggle {
+				m.appendSystem("Mouse reporting toggle is off. Set `[ui] mouse_reporting_toggle = true` in ~/.grok/config.toml to enable it.")
+				m.status = "mouse reporting toggle is off"
+				return m, nil
+			}
+			m.toggleMouseReporting()
 			return m, nil
 		case "/session-info", "/status", "/info":
 			if m.runner == nil || strings.TrimSpace(m.runner.SessionID) == "" {
@@ -2202,6 +2214,17 @@ func copyMessageNumber(args string) (int, error) {
 	return n, nil
 }
 
+func (m *model) toggleMouseReporting() {
+	m.mouseReleased = !m.mouseReleased
+	m.selection = nil
+	m.selectionClick = selectionClickState{}
+	if m.mouseReleased {
+		m.status = "mouse reporting disabled"
+	} else {
+		m.status = "mouse reporting enabled"
+	}
+}
+
 func (m *model) handleScrollbackKey(msg tea.KeyPressMsg) bool {
 	key, stroke := msg.Key(), msg.Keystroke()
 	if stroke == "ctrl+c" || stroke == "ctrl+q" || stroke == "shift+tab" {
@@ -2215,14 +2238,7 @@ func (m *model) handleScrollbackKey(msg tea.KeyPressMsg) bool {
 	case key.Code == tea.KeyEsc:
 		return true
 	case stroke == "ctrl+r" && m.mouseToggle:
-		m.mouseReleased = !m.mouseReleased
-		m.selection = nil
-		m.selectionClick = selectionClickState{}
-		if m.mouseReleased {
-			m.status = "mouse reporting disabled"
-		} else {
-			m.status = "mouse reporting enabled"
-		}
+		m.toggleMouseReporting()
 	case stroke == "ctrl+k":
 		m.scrollTranscript(1)
 	case stroke == "ctrl+j":
