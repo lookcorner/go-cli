@@ -71,6 +71,8 @@ persisted before returning the reference missing-credentials error.
 `x.ai/review/comment` and `x.ai/review/comment/delete` return reference-shaped
 responses with UUIDv7 identities while persisting only local citation/create
 and deletion-tombstone events; cloud review uploads are intentionally absent.
+`x.ai/debug/trigger_feedback` emits the reference feedback-request notification
+and response shapes locally for client integration testing.
 
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |

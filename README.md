@@ -46,6 +46,9 @@ ACP inline-review clients can also create and delete `x.ai/review/comment`
 records. Responses use reference-compatible UUIDv7 comment IDs; an active
 session log keeps the citation and deletion tombstone but deliberately omits
 the comment body and performs no cloud upload.
+Client developers can use `x.ai/debug/trigger_feedback` to emit a synthetic,
+locally recorded feedback-request notification without model inference or a
+remote feedback service.
 
 ACP clients can request turn-end ghost text through `x.ai/suggestPrompt`. The
 extension echoes the client generation, returns `null` when no safe suggestion

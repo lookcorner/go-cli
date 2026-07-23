@@ -148,7 +148,7 @@ func TestReviewCommentWithoutResidentSessionMatchesReferenceSuccess(t *testing.T
 
 func TestNewReviewCommentIDIsUUIDv7WithTimestamp(t *testing.T) {
 	now := time.UnixMilli(1_725_000_123_456)
-	id, err := newReviewCommentID(now)
+	id, err := newUUIDv7(now)
 	if err != nil || !isUUIDv7(id) {
 		t.Fatalf("id=%q err=%v", id, err)
 	}
