@@ -586,6 +586,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	subagents.SetDefaultType(agentSettings.Default)
 	if err := registry.SetSubagentBackend(subagents); err != nil {
 		subagents.Close()
 		return err
@@ -758,7 +759,13 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			subagents.SetCatalog(catalog)
 			return nil
 		},
-		SetDefaultAgent: func(name string) error { return config.UpdateDefaultAgent(opts.configPath, name) },
+		SetDefaultAgent: func(name string) error {
+			if err := config.UpdateDefaultAgent(opts.configPath, name); err != nil {
+				return err
+			}
+			subagents.SetDefaultType(name)
+			return nil
+		},
 		Login: func(context.Context) error {
 			return runLogin([]string{"--config", opts.configPath}, inputReader, stdout, stderr)
 		},
@@ -2709,6 +2716,9 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		if err != nil {
 			cleanup()
 			return nil, nil, err
+		}
+		if settings, loadErr := config.LoadAgentSettings(opts.configPath); loadErr == nil {
+			subagentManager.SetDefaultType(settings.Default)
 		}
 		if err := registry.SetSubagentBackend(subagentManager); err != nil {
 			cleanup()

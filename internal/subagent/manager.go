@@ -103,6 +103,7 @@ type Manager struct {
 	startMCPServers         func(context.Context, string, *tools.Registry, []mcp.ServerConfig) (func(), error)
 	sessionDir              string
 	parentSessionID         string
+	defaultType             string
 	autoWake                func(tools.SubagentResult) bool
 	cancelWake              func(string)
 	disablePermissionBypass bool
@@ -252,6 +253,24 @@ func (m *Manager) SetCatalog(catalog *agents.Catalog) {
 	}
 	m.mu.Lock()
 	m.catalog = catalog
+	m.mu.Unlock()
+}
+
+func (m *Manager) DefaultType() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.defaultType == "" {
+		return "general-purpose"
+	}
+	if definition, ok := m.catalog.ByName(m.defaultType); !ok || !definition.Enabled {
+		return "general-purpose"
+	}
+	return m.defaultType
+}
+
+func (m *Manager) SetDefaultType(name string) {
+	m.mu.Lock()
+	m.defaultType = strings.TrimSpace(name)
 	m.mu.Unlock()
 }
 

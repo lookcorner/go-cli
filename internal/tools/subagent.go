@@ -54,6 +54,10 @@ type SubagentBackend interface {
 	Kill(context.Context, string) (string, error)
 }
 
+type defaultAgentBackend interface {
+	DefaultType() string
+}
+
 type subagentHolder struct {
 	mu      sync.RWMutex
 	backend SubagentBackend
@@ -113,6 +117,9 @@ func (t *subagentTool) Execute(ctx context.Context, raw json.RawMessage) (string
 	}
 	if args.Type == "" {
 		args.Type = "general-purpose"
+		if typed, ok := t.holder.get().(defaultAgentBackend); ok && typed.DefaultType() != "" {
+			args.Type = typed.DefaultType()
+		}
 	}
 	background := true
 	if args.Background != nil {
