@@ -1318,6 +1318,19 @@ LSP processes start.
 
 ## Project instructions and skills
 
+The hidden `/import-claude` command scans user and project Claude settings,
+then opens a selectable import panel. It imports permission rules, environment
+variables, command hooks, MCP servers, skills, and rules into native `.grok`
+storage without overwriting existing entries. Environment values are redacted
+in the panel. After import, native skills, MCP, and hook discovery replaces the
+corresponding Claude fallback; Claude agents and rules compatibility remain
+enabled. Re-running the command is idempotent.
+
+Top-level `[env]` entries in `config.toml` are passed to foreground and
+background shell tools without changing the parent process environment.
+Trusted project `.grok/config.toml` files override user values from the Git
+root through the current workspace; untrusted project environment is ignored.
+
 At startup, Gork Go discovers project instruction files compatible with Gork
 Build (`AGENTS.md`, `Agents.md`, `AGENT.md`, `Claude.md`, `CLAUDE.md`,
 `.claude/CLAUDE.md`, and Markdown files under `.gork/rules`, `.claude/rules`,

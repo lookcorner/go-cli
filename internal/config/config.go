@@ -35,6 +35,7 @@ type Config struct {
 	Backend                         string                     `json:"backend,omitempty"`
 	SystemPrompt                    string                     `json:"system_prompt,omitempty"`
 	MaxSteps                        int                        `json:"max_steps,omitempty"`
+	Env                             map[string]string          `json:"env,omitempty"`
 	MCPServers                      map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
 	DisabledMCPServers              []string                   `json:"disabled_mcp_servers,omitempty"`
 	DisabledMCPTools                map[string][]string        `json:"disabled_mcp_tools,omitempty"`
@@ -378,6 +379,7 @@ type fileConfig struct {
 	Backend            string                     `json:"backend,omitempty" toml:"backend"`
 	SystemPrompt       string                     `json:"system_prompt,omitempty" toml:"system_prompt"`
 	MaxSteps           int                        `json:"max_steps,omitempty" toml:"max_steps"`
+	Env                map[string]string          `json:"env,omitempty" toml:"env"`
 	HTTPTimeout        string                     `json:"http_timeout,omitempty" toml:"http_timeout"`
 	MCPServers         map[string]MCPServerConfig `json:"mcp_servers,omitempty" toml:"mcp_servers"`
 	DisabledMCPServers []string                   `json:"disabled_mcp_servers,omitempty" toml:"disabled_mcp_servers"`
@@ -776,6 +778,14 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.MaxSteps > 0 {
 		cfg.MaxSteps = disk.MaxSteps
+	}
+	if disk.Env != nil {
+		if cfg.Env == nil {
+			cfg.Env = make(map[string]string)
+		}
+		for key, value := range disk.Env {
+			cfg.Env[key] = value
+		}
 	}
 	if disk.MCPServers != nil {
 		if cfg.MCPServers == nil {

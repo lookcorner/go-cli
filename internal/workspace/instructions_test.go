@@ -129,6 +129,7 @@ func TestLoadInstructionsIncludesHomeBeforeProject(t *testing.T) {
 		content string
 	}{
 		{filepath.Join(grokHome, "AGENTS.md"), "grok home"},
+		{filepath.Join(grokHome, "rules", "imported.md"), "grok home rule"},
 		{filepath.Join(home, ".claude", "CLAUDE.md"), "claude home"},
 		{filepath.Join(home, ".cursor", "AGENTS.md"), "cursor home"},
 		{filepath.Join(repo, "AGENTS.md"), "project root"},
@@ -154,10 +155,10 @@ func TestLoadInstructionsIncludesHomeBeforeProject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(loaded) != 3 {
-		t.Fatalf("expected only three non-project home instructions, got %#v", loaded)
+	if len(loaded) != 4 {
+		t.Fatalf("expected four non-project home instructions, got %#v", loaded)
 	}
-	want := []string{"grok home", "claude home", "cursor home"}
+	want := []string{"grok home", "grok home rule", "claude home", "cursor home"}
 	for index, content := range want {
 		if loaded[index].Content != content {
 			t.Fatalf("instruction %d content = %q, want %q; all=%#v", index, loaded[index].Content, content, loaded)

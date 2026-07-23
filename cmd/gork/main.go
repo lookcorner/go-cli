@@ -400,6 +400,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return err
 	}
 	registry := tools.NewRegistry(ws, approver)
+	registry.ConfigureEnvironment(cfg.Env)
 	if err := registry.ConfigureFileToolset(cfg.Toolset.FileToolset, cfg.Toolset.Hashline.Scheme, cfg.Toolset.Hashline.HashLen, cfg.Toolset.Hashline.ChunkSize); err != nil {
 		_ = registry.Close()
 		return err
@@ -2310,6 +2311,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			return nil, nil, err
 		}
 		registry := tools.NewRegistry(ws, approver)
+		registry.ConfigureEnvironment(sessionCfg.Env)
 		if err := registry.ConfigureFileToolset(sessionCfg.Toolset.FileToolset, sessionCfg.Toolset.Hashline.Scheme, sessionCfg.Toolset.Hashline.HashLen, sessionCfg.Toolset.Hashline.ChunkSize); err != nil {
 			_ = registry.Close()
 			return nil, nil, err
@@ -3063,6 +3065,7 @@ func discoverWorkspace(root string, cfg config.Config, projectTrusted bool) (con
 		}
 	}
 	cfg.MCPServers = config.DiscoverMCPServers(root, cfg, plugins, projectTrusted)
+	cfg.Env = config.DiscoverEnvironment(root, cfg, projectTrusted)
 	cfg.LSPServers = config.DiscoverLSPServers(root, cfg, plugins, projectTrusted)
 	catalog, err := skills.Discover(root, workspaceSkillsConfig(cfg, plugins))
 	return cfg, catalog, inventory, err

@@ -143,6 +143,7 @@ type Registry struct {
 	goalRoles     GoalRoleConfig
 	fileToolset   string
 	hashline      hashlineConfig
+	environment   map[string]string
 }
 
 type mutationCheckpoint struct {
@@ -284,9 +285,10 @@ func (r *Registry) ForWorkspace(ws *workspace.Workspace) *Registry {
 		return nil
 	}
 	r.mu.RLock()
-	fileToolset, hashline := r.fileToolset, r.hashline
+	fileToolset, hashline, environment := r.fileToolset, r.hashline, cloneEnvironment(r.environment)
 	r.mu.RUnlock()
 	child := NewRegistry(ws, r.approver)
+	child.ConfigureEnvironment(environment)
 	if fileToolset == "hashline" {
 		_ = child.ConfigureFileToolset(fileToolset, hashline.scheme, hashline.hashLen, hashline.chunkSize)
 	}
@@ -330,6 +332,42 @@ func (r *Registry) ForWorkspace(ws *workspace.Workspace) *Registry {
 	}
 	r.mu.RUnlock()
 	return child
+}
+
+// ConfigureEnvironment overlays variables for commands started by this registry.
+func (r *Registry) ConfigureEnvironment(values map[string]string) {
+	if r == nil {
+		return
+	}
+	values = cloneEnvironment(values)
+	r.mu.Lock()
+	r.environment = values
+	if shell, ok := r.tools["shell"].(*shellTool); ok {
+		shell.setEnvironment(values)
+	}
+	r.mu.Unlock()
+	r.processes.ConfigureEnvironment(values)
+}
+
+func (r *Registry) OverlayEnvironment(values map[string]string) {
+	if r == nil {
+		return
+	}
+	r.mu.RLock()
+	merged := cloneEnvironment(r.environment)
+	r.mu.RUnlock()
+	for key, value := range values {
+		merged[key] = value
+	}
+	r.ConfigureEnvironment(merged)
+}
+
+func cloneEnvironment(source map[string]string) map[string]string {
+	result := make(map[string]string, len(source))
+	for key, value := range source {
+		result[key] = value
+	}
+	return result
 }
 
 type WebFetchConfig struct {
@@ -1546,10 +1584,24 @@ func atomicWrite(path string, data []byte, mode os.FileMode) error {
 }
 
 type shellTool struct {
-	ws       *workspace.Workspace
-	approver Approver
-	timeout  time.Duration
-	rewind   *mutationCheckpoint
+	ws          *workspace.Workspace
+	approver    Approver
+	timeout     time.Duration
+	rewind      *mutationCheckpoint
+	environment map[string]string
+	envMu       sync.RWMutex
+}
+
+func (t *shellTool) setEnvironment(values map[string]string) {
+	t.envMu.Lock()
+	t.environment = values
+	t.envMu.Unlock()
+}
+
+func (t *shellTool) environmentSnapshot() map[string]string {
+	t.envMu.RLock()
+	defer t.envMu.RUnlock()
+	return cloneEnvironment(t.environment)
 }
 
 func (t *shellTool) Definition() api.ToolDefinition {
@@ -1588,6 +1640,7 @@ func (t *shellTool) Execute(ctx context.Context, raw json.RawMessage) (string, e
 		command = exec.CommandContext(commandCtx, "/bin/sh", "-lc", args.Command)
 	}
 	command.Dir = t.ws.Root()
+	command.Env = setEnvironment(os.Environ(), t.environmentSnapshot())
 	var output cappedBuffer
 	command.Stdout = &output
 	command.Stderr = &output

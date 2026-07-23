@@ -24,6 +24,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/billing"
 	"github.com/lookcorner/go-cli/internal/changelog"
+	"github.com/lookcorner/go-cli/internal/claudeimport"
 	guides "github.com/lookcorner/go-cli/internal/docs"
 	"github.com/lookcorner/go-cli/internal/imagine"
 	"github.com/lookcorner/go-cli/internal/memory"
@@ -179,6 +180,11 @@ type planModeEvent struct{ active bool }
 type planReviewEvent struct {
 	event tools.PlanModeEvent
 	reply chan tools.PlanModeDecision
+}
+type claudeImportDoneEvent struct {
+	result claudeimport.Result
+	env    map[string]string
+	err    error
 }
 
 type Bridge struct {
@@ -541,6 +547,7 @@ type model struct {
 	sessionSelect *sessionSelectState
 	forkChoice    *forkChoiceState
 	mcp           *mcpModal
+	claudeImport  *claudeImportState
 	debug         debugState
 	lastEmptyEsc  time.Time
 	questionClick struct {
@@ -552,6 +559,13 @@ type model struct {
 type historySearchState struct {
 	results  []string
 	selected int
+}
+
+type claudeImportState struct {
+	plan     claudeimport.Plan
+	selected map[string]bool
+	current  int
+	busy     bool
 }
 
 type inputSnapshot struct {
@@ -1318,6 +1332,24 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				m.status = msg.action
 			}
 		}
+	case claudeImportDoneEvent:
+		if m.claudeImport != nil {
+			m.claudeImport.busy = false
+			if msg.err != nil {
+				m.status = "Claude import failed: " + msg.err.Error()
+				return m, nil
+			}
+			if m.runner != nil && m.runner.Tools != nil {
+				m.runner.Tools.OverlayEnvironment(msg.env)
+			}
+			m.claudeImport = nil
+			message := fmt.Sprintf("Imported %d Claude setting(s).", msg.result.Imported)
+			if len(msg.result.ModifiedFiles) > 0 {
+				message += "\n\nModified:\n- " + strings.Join(msg.result.ModifiedFiles, "\n- ")
+			}
+			m.appendSystem(message)
+			m.status = "Claude settings imported"
+		}
 	case sessionSelectLoadedEvent:
 		m.finishSessionSelectLoad(msg)
 	case sessionSelectSearchRequestEvent:
@@ -1378,6 +1410,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.mcp != nil {
 		return m.handleMCPKey(msg)
+	}
+	if m.claudeImport != nil {
+		return m.handleClaudeImportKey(msg)
 	}
 	if m.settings != nil {
 		return m.handleSettingsKey(msg)
@@ -1706,6 +1741,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "/debug", "/scroll-debug":
 			m.handleDebugCommand(fields[0], strings.TrimSpace(strings.TrimPrefix(prompt, fields[0])))
+			return m, nil
+		case "/import-claude":
+			m.openClaudeImport()
 			return m, nil
 		case "/mcps":
 			m.openMCPModal()
@@ -3707,6 +3745,8 @@ func (m *model) View() tea.View {
 	content := m.transcriptText()
 	if m.mcp != nil {
 		content = m.mcpContent()
+	} else if m.claudeImport != nil {
+		content = m.claudeImportContent()
 	} else if m.settings != nil {
 		content = m.settingsContent()
 	} else if m.docs != nil {
@@ -3762,6 +3802,8 @@ func (m *model) View() tea.View {
 	var footer string
 	if m.mcp != nil {
 		footer = ansiBold + colors.modal + "MCP servers" + ansiReset + "\n" + ansiDim + truncate(m.mcpHint(), width) + ansiReset
+	} else if m.claudeImport != nil {
+		footer = ansiBold + colors.modal + "Import Claude settings" + ansiReset + "\n" + ansiDim + truncate("Up/Down select | Space toggle | A all | N none | Enter import | Esc cancel", width) + ansiReset
 	} else if m.settings != nil {
 		footer = ansiBold + colors.modal + "Settings" + ansiReset + "\n" + ansiDim + truncate("Up/Down select | Enter/Space change | Esc close", width) + ansiReset
 	} else if m.docs != nil {
@@ -4250,7 +4292,7 @@ func renderedLabelContains(line, label string, x, width int) bool {
 
 func (m *model) contentHeight() int {
 	banner := m.announcementHeight()
-	if m.question != nil || m.planReview != nil || m.remember != nil || m.rememberInput || m.rewind != nil || m.jump != nil || m.modelSelect != nil || m.settings != nil || m.docs != nil || m.sessionSelect != nil || m.forkChoice != nil || m.mcp != nil {
+	if m.question != nil || m.planReview != nil || m.remember != nil || m.rememberInput || m.rewind != nil || m.jump != nil || m.modelSelect != nil || m.settings != nil || m.docs != nil || m.sessionSelect != nil || m.forkChoice != nil || m.mcp != nil || m.claudeImport != nil {
 		return max(m.height-7-banner, 3)
 	}
 	if m.historySearch != nil {

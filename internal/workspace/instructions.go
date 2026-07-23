@@ -70,7 +70,11 @@ func (w *Workspace) loadInstructions(home, grokHome string, cfg compat.Config) (
 		for _, name := range configuredInstructionNames(cfg) {
 			scoped = append(scoped, candidate{path: filepath.Join(scope.path, name), project: scope.project})
 		}
-		for _, relativeDir := range configuredRulesDirectories(cfg) {
+		ruleDirs := configuredRulesDirectories(cfg)
+		if !scope.project {
+			ruleDirs = append([]string{"rules"}, ruleDirs...)
+		}
+		for _, relativeDir := range ruleDirs {
 			dir := filepath.Join(scope.path, relativeDir)
 			entries, err := os.ReadDir(dir)
 			if err != nil {

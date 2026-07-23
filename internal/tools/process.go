@@ -158,6 +158,12 @@ func NewProcessManager(ws *workspace.Workspace, approver Approver) *ProcessManag
 	}
 }
 
+func (m *ProcessManager) ConfigureEnvironment(values map[string]string) {
+	m.stateMu.Lock()
+	m.environment = setEnvironment(os.Environ(), values)
+	m.stateMu.Unlock()
+}
+
 func (m *ProcessManager) Start(ctx context.Context, command string) (string, error) {
 	return m.start(ctx, command, "", 0, "bash")
 }

@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/workspace"
@@ -65,6 +66,37 @@ func TestRegistryForWorkspaceRebindsCoreToolsAndKeepsExternalTools(t *testing.T)
 	}
 	if _, err := os.Stat(filepath.Join(parentRoot, "child.txt")); !os.IsNotExist(err) {
 		t.Fatalf("rebased write touched parent workspace: %v", err)
+	}
+}
+
+func TestRegistryEnvironmentReachesForegroundBackgroundAndChild(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture is Unix-specific")
+	}
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry(ws, PromptApprover{Mode: PermissionAuto})
+	defer registry.Close()
+	registry.ConfigureEnvironment(map[string]string{"GORK_IMPORTED_ENV": "configured"})
+	output, err := registry.Execute(context.Background(), "shell", json.RawMessage(`{"command":"printf %s \"$GORK_IMPORTED_ENV\""}`))
+	if err != nil || output != "configured" {
+		t.Fatalf("foreground=%q err=%v", output, err)
+	}
+	id, err := registry.processes.Start(context.Background(), `printf %s "$GORK_IMPORTED_ENV"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	background, err := registry.processes.WaitOutput(context.Background(), id, time.Second)
+	if err != nil || !strings.Contains(background, "configured") {
+		t.Fatalf("background=%q err=%v", background, err)
+	}
+	child := registry.ForWorkspace(ws)
+	defer child.Close()
+	output, err = child.Execute(context.Background(), "shell", json.RawMessage(`{"command":"printf %s \"$GORK_IMPORTED_ENV\""}`))
+	if err != nil || output != "configured" {
+		t.Fatalf("child=%q err=%v", output, err)
 	}
 }
 
