@@ -102,26 +102,12 @@ func (t *memorySearchTool) Execute(_ context.Context, raw json.RawMessage) (stri
 	fmt.Fprintf(&output, "Found %d memory result(s):\n", len(results))
 	for index, result := range results {
 		fmt.Fprintf(&output, "\n### Result %d (score: %.2f, source: %s)\n**File:** %s (lines %d-%d)\n", index+1, result.Score, result.Source, result.Path, result.StartLine, result.EndLine)
-		if warning := staleWarning(result); warning != "" {
+		if warning := result.StalenessNote(time.Now()); warning != "" {
 			output.WriteString(warning + "\n")
 		}
 		fmt.Fprintf(&output, "```\n%s\n```\n", result.Snippet)
 	}
 	return strings.TrimSpace(output.String()), nil
-}
-
-func staleWarning(result memory.Result) string {
-	if result.Source != "session" || result.CreatedAt <= 0 {
-		return ""
-	}
-	age := time.Since(time.Unix(result.CreatedAt, 0))
-	if age > 7*24*time.Hour {
-		return "**Stale memory:** More than 7 days old; verify before relying on it."
-	}
-	if age > 24*time.Hour {
-		return "**Verification recommended:** This session memory is more than 1 day old."
-	}
-	return ""
 }
 
 type memoryGetTool struct{ store *memory.Store }
@@ -132,8 +118,8 @@ func (t *memoryGetTool) Definition() api.ToolDefinition {
 		Description: "Read a bounded line range from a global, workspace, or current-workspace session memory file.",
 		Parameters: objectSchema(map[string]any{
 			"path":  map[string]any{"type": "string", "description": "Absolute memory file path returned by memory_search."},
-			"from":  map[string]any{"type": "integer", "minimum": 0, "description": "0-based starting line."},
-			"lines": map[string]any{"type": "integer", "minimum": 0, "description": "Maximum number of lines; zero or omitted reads the remainder."},
+			"from":  map[string]any{"type": "integer", "minimum": 0, "description": "0-based start line (default: beginning of file)."},
+			"lines": map[string]any{"type": "integer", "minimum": 0, "description": "Maximum number of lines to return (default: all)."},
 		}, "path"),
 	}
 }
@@ -141,20 +127,38 @@ func (t *memoryGetTool) Definition() api.ToolDefinition {
 func (t *memoryGetTool) Execute(_ context.Context, raw json.RawMessage) (string, error) {
 	var args struct {
 		Path  string `json:"path"`
-		From  int    `json:"from"`
-		Lines int    `json:"lines"`
+		From  *int   `json:"from"`
+		Lines *int   `json:"lines"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return "", fmt.Errorf("decode memory_get arguments: %w", err)
 	}
-	file, err := t.store.Get(args.Path, args.From, args.Lines)
+	from := 0
+	if args.From != nil {
+		from = *args.From
+	}
+	content, err := t.store.Get(args.Path, from, args.Lines)
 	if err != nil {
 		return "", err
 	}
-	var output strings.Builder
-	fmt.Fprintf(&output, "**File:** %s\n**Lines:** %d (from: %d, limit: %d)\n\n", file.Path, len(file.Lines), file.From, args.Lines)
-	for index, line := range file.Lines {
-		fmt.Fprintf(&output, "%d→%s\n", file.From+index+1, line)
+	fromLabel, linesLabel := "start", "all"
+	if args.From != nil {
+		fromLabel = fmt.Sprint(*args.From)
 	}
-	return strings.TrimSuffix(output.String(), "\n"), nil
+	if args.Lines != nil {
+		linesLabel = fmt.Sprint(*args.Lines)
+	}
+	var numbered []string
+	if content != "" {
+		numbered = strings.Split(content, "\n")
+	}
+	lineCount := len(numbered)
+	if strings.HasSuffix(content, "\n") {
+		lineCount--
+	}
+	formatted := make([]string, len(numbered))
+	for index, line := range numbered {
+		formatted[index] = fmt.Sprintf("%d→%s", from+index+1, line)
+	}
+	return fmt.Sprintf("**File:** %s\n**Lines:** %d (from: %s, limit: %s)\n\n%s", args.Path, lineCount, fromLabel, linesLabel, strings.Join(formatted, "\n")), nil
 }

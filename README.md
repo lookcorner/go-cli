@@ -395,6 +395,9 @@ Markdown by headings and bounded overlap, ranks token matches, and decays old
 session notes with a configurable half-life while treating global and workspace
 notes as evergreen. `[memory.search.source_weights]` adjusts source priority;
 optional `[memory.search.mmr]` promotes diverse results over near-duplicates.
+Search output labels stale session results with their age. `memory_get` uses
+0-based ranges, distinguishes omitted `from`/`lines` as `start`/`all`, and
+preserves trailing blank-line numbering on full-file reads.
 It is a deterministic text-only backend; semantic/vector retrieval remains
 pending. Session startup also removes, in the background, empty orphan memory
 workspaces older than `[memory.gc].max_age_days` (30 by default); temporary

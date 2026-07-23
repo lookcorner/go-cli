@@ -337,8 +337,9 @@ func TestOpenWorkspaceSkipsEphemeralPersistenceButKeepsGlobalMemory(t *testing.T
 	if err != nil || len(results) != 1 || results[0].Source != "global" {
 		t.Fatalf("results=%#v err=%v", results, err)
 	}
-	if file, err := store.Get(global, 0, 1); err != nil || len(file.Lines) != 1 {
-		t.Fatalf("file=%#v err=%v", file, err)
+	one := 1
+	if content, err := store.Get(global, 0, &one); err != nil || content != "## global convention" {
+		t.Fatalf("content=%q err=%v", content, err)
 	}
 	if _, result, err := store.PrepareDream(DefaultConfig().Dream, true); err != nil || result.Outcome != "nothing_to_consolidate" {
 		t.Fatalf("prepare dream=%#v err=%v", result, err)

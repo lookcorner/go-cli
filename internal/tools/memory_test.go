@@ -44,8 +44,16 @@ func TestMemoryToolsRegisterOnlyWhenEnabledAndFormatResults(t *testing.T) {
 	}
 	path := strings.Split(strings.Split(search, "**File:** ")[1], " (lines")[0]
 	got, err := registry.Execute(context.Background(), "memory_get", json.RawMessage(`{"path":`+quoted(path)+`,"from":0,"lines":2}`))
-	if err != nil || !strings.Contains(got, "**Lines:** 2 (from: 0, limit: 2)") || !strings.Contains(got, "1→remember release rollback steps") || !strings.HasSuffix(got, "2→") {
+	if err != nil || !strings.Contains(got, "**Lines:** 1 (from: 0, limit: 2)") || !strings.HasSuffix(got, "1→remember release rollback steps") {
 		t.Fatalf("get=%q err=%v", got, err)
+	}
+	got, err = registry.Execute(context.Background(), "memory_get", json.RawMessage(`{"path":`+quoted(path)+`}`))
+	if err != nil || !strings.Contains(got, "**Lines:** 1 (from: start, limit: all)") || !strings.HasSuffix(got, "2→") {
+		t.Fatalf("full get=%q err=%v", got, err)
+	}
+	got, err = registry.Execute(context.Background(), "memory_get", json.RawMessage(`{"path":`+quoted(path)+`,"lines":0}`))
+	if err != nil || !strings.Contains(got, "**Lines:** 0 (from: start, limit: 0)") || strings.Contains(got, "1→") {
+		t.Fatalf("zero get=%q err=%v", got, err)
 	}
 	if noMatch, err := registry.Execute(context.Background(), "memory_search", json.RawMessage(`{"query":"absent"}`)); err != nil || noMatch != "No memory results found for query." {
 		t.Fatalf("noMatch=%q err=%v", noMatch, err)

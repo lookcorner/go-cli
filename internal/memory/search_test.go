@@ -116,7 +116,7 @@ func TestRankChunksUsesTemporalDecaySourceWeightsAndMMR(t *testing.T) {
 	}
 }
 
-func TestStoreGetAllowsOnlyActiveMemoryFilesAndPreservesTrailingLine(t *testing.T) {
+func TestStoreGetAllowsOnlyActiveMemoryFilesAndMatchesOptionalRanges(t *testing.T) {
 	store, err := Open(t.TempDir(), t.TempDir(), "get")
 	if err != nil {
 		t.Fatal(err)
@@ -125,22 +125,33 @@ func TestStoreGetAllowsOnlyActiveMemoryFilesAndPreservesTrailingLine(t *testing.
 	if err := os.WriteFile(path, []byte("one\ntwo\nthree\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	file, err := store.Get(path, 1, 3)
-	if err != nil || len(file.Lines) != 3 || file.Lines[0] != "two" || file.Lines[2] != "" {
-		t.Fatalf("file=%#v err=%v", file, err)
+	three, zero := 3, 0
+	content, err := store.Get(path, 1, &three)
+	if err != nil || content != "two\nthree" {
+		t.Fatalf("content=%q err=%v", content, err)
+	}
+	if content, err = store.Get(path, 0, nil); err != nil || content != "one\ntwo\nthree\n" {
+		t.Fatalf("full content=%q err=%v", content, err)
+	}
+	if content, err = store.Get(path, 0, &zero); err != nil || content != "" {
+		t.Fatalf("zero range content=%q err=%v", content, err)
+	}
+	huge := int(^uint(0) >> 1)
+	if content, err = store.Get(path, 1, &huge); err != nil || content != "two\nthree" {
+		t.Fatalf("huge range content=%q err=%v", content, err)
 	}
 	outside := filepath.Join(t.TempDir(), "MEMORY.md")
 	if err := os.WriteFile(outside, []byte("secret"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Get(outside, 0, 0); err == nil {
+	if _, err := store.Get(outside, 0, nil); err == nil {
 		t.Fatal("outside path was readable")
 	}
 	link := filepath.Join(store.sessionsDir, "link.md")
 	if err := os.Symlink(outside, link); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Get(link, 0, 0); err == nil {
+	if _, err := store.Get(link, 0, nil); err == nil {
 		t.Fatal("symlink was readable")
 	}
 	moved := store.sessionsDir + "-real"
@@ -150,7 +161,29 @@ func TestStoreGetAllowsOnlyActiveMemoryFilesAndPreservesTrailingLine(t *testing.
 	if err := os.Symlink(filepath.Dir(outside), store.sessionsDir); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Get(filepath.Join(store.sessionsDir, filepath.Base(outside)), 0, 0); err == nil {
+	if _, err := store.Get(filepath.Join(store.sessionsDir, filepath.Base(outside)), 0, nil); err == nil {
 		t.Fatal("replaced sessions directory escaped")
+	}
+}
+
+func TestResultStalenessNoteMatchesReferenceAgeLabels(t *testing.T) {
+	now := time.Unix(2_000_000_000, 0)
+	for _, test := range []struct {
+		name   string
+		result Result
+		want   string
+	}{
+		{name: "global evergreen", result: Result{Source: "global", CreatedAt: now.Add(-30 * 24 * time.Hour).Unix()}},
+		{name: "workspace evergreen", result: Result{Source: "workspace", CreatedAt: now.Add(-30 * 24 * time.Hour).Unix()}},
+		{name: "unknown age", result: Result{Source: "session"}},
+		{name: "fresh", result: Result{Source: "session", CreatedAt: now.Add(-12 * time.Hour).Unix()}},
+		{name: "moderate", result: Result{Source: "session", CreatedAt: now.Add(-48 * time.Hour).Unix()}, want: "**Note (2 days ago):** Verify this is still current."},
+		{name: "very stale", result: Result{Source: "session", CreatedAt: now.Add(-10 * 24 * time.Hour).Unix()}, want: "**Stale (1 week ago):** Verify current state before relying on this."},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := test.result.StalenessNote(now); got != test.want {
+				t.Fatalf("note=%q want=%q", got, test.want)
+			}
+		})
 	}
 }

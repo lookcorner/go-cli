@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"math"
 	"path/filepath"
 	"sort"
@@ -24,10 +25,36 @@ type Result struct {
 	CreatedAt int64
 }
 
-type File struct {
-	Path  string
-	From  int
-	Lines []string
+func (r Result) StalenessNote(now time.Time) string {
+	if r.Source == "global" || r.Source == "workspace" || r.CreatedAt <= 0 {
+		return ""
+	}
+	ageDays := max(now.Sub(time.Unix(r.CreatedAt, 0)).Hours()/24, 0)
+	if ageDays > 7 {
+		return fmt.Sprintf("**Stale (%s):** Verify current state before relying on this.", formatAge(ageDays))
+	}
+	if ageDays > 1 {
+		return fmt.Sprintf("**Note (%s):** Verify this is still current.", formatAge(ageDays))
+	}
+	return ""
+}
+
+func formatAge(days float64) string {
+	if days < 1 {
+		return fmt.Sprintf("%.0fh ago", math.Round(days*24))
+	}
+	if days < 7 {
+		count := uint64(math.Floor(days))
+		if count == 1 {
+			return "1 day ago"
+		}
+		return fmt.Sprintf("%d days ago", count)
+	}
+	count := uint64(math.Round(days / 7))
+	if count == 1 {
+		return "1 week ago"
+	}
+	return fmt.Sprintf("%d weeks ago", count)
 }
 
 type chunk struct {
@@ -78,29 +105,44 @@ func (s *Store) Search(query string, index IndexConfig, search SearchConfig) ([]
 	return rankChunks(chunks, terms, search), nil
 }
 
-func (s *Store) Get(path string, from, limit int) (File, error) {
-	if from < 0 || limit < 0 {
-		return File{}, errors.New("memory line range must not be negative")
+func (s *Store) Get(path string, from int, limit *int) (string, error) {
+	if from < 0 || limit != nil && *limit < 0 {
+		return "", errors.New("memory line range must not be negative")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	allowed, err := s.allowedPath(path)
 	if err != nil {
-		return File{}, err
+		return "", err
 	}
 	data, err := readMemoryFile(allowed)
 	if err != nil {
-		return File{}, err
+		return "", err
 	}
-	lines := strings.Split(string(data), "\n")
+	content := string(data)
+	if from == 0 && limit == nil {
+		return content, nil
+	}
+	lines := memoryLines(content)
 	if from > len(lines) {
 		from = len(lines)
 	}
 	end := len(lines)
-	if limit > 0 && from+limit < end {
-		end = from + limit
+	if limit != nil && *limit < end-from {
+		end = from + *limit
 	}
-	return File{Path: allowed, From: from, Lines: lines[from:end]}, nil
+	return strings.Join(lines[from:end], "\n"), nil
+}
+
+func memoryLines(content string) []string {
+	if content == "" {
+		return nil
+	}
+	lines := strings.Split(content, "\n")
+	if strings.HasSuffix(content, "\n") {
+		lines = lines[:len(lines)-1]
+	}
+	return lines
 }
 
 func (s *Store) files() ([]FileInfo, error) {

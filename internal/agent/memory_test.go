@@ -254,7 +254,7 @@ func TestMemoryInjectionHelpersMatchReferenceBounds(t *testing.T) {
 	if strings.Contains(value, strings.Repeat("x", 501)) || !strings.Contains(value, strings.Repeat("x", 500)+"...") || !strings.Contains(value, "lines 2-4") {
 		t.Fatalf("formatted context=%q", value)
 	}
-	if !strings.Contains(value, "Verification recommended") {
+	if !strings.Contains(value, "**Note (2 days ago):** Verify this is still current.") {
 		t.Fatalf("staleness note missing: %q", value)
 	}
 }

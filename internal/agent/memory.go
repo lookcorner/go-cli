@@ -365,7 +365,7 @@ func formatMemorySearchContext(results []memory.Result) string {
 			snippet = snippet[:maxSnippetChars]
 		}
 		fmt.Fprintf(&output, "### Result %d (score: %.2f, source: %s)\n**File:** %s (lines %d-%d)\n", index+1, result.Score, result.Source, result.Path, result.StartLine, result.EndLine)
-		if warning := memoryStalenessNote(result); warning != "" {
+		if warning := result.StalenessNote(time.Now()); warning != "" {
 			output.WriteString(warning + "\n")
 		}
 		fmt.Fprintf(&output, "```\n%s", string(snippet))
@@ -376,20 +376,6 @@ func formatMemorySearchContext(results []memory.Result) string {
 	}
 	output.WriteString("</memory-context>")
 	return output.String()
-}
-
-func memoryStalenessNote(result memory.Result) string {
-	if result.Source != "session" || result.CreatedAt <= 0 {
-		return ""
-	}
-	age := time.Since(time.Unix(result.CreatedAt, 0))
-	if age > 7*24*time.Hour {
-		return "**Stale memory:** More than 7 days old; verify before relying on it."
-	}
-	if age > 24*time.Hour {
-		return "**Verification recommended:** This session memory is more than 1 day old."
-	}
-	return ""
 }
 
 func (r *Runner) maybeStartMemoryFlush(ctx context.Context, previousResponseID string) {
