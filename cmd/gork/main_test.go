@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -34,6 +35,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/tui"
 	"github.com/lookcorner/go-cli/internal/version"
 	"github.com/lookcorner/go-cli/internal/workspace"
+	worktrees "github.com/lookcorner/go-cli/internal/worktree"
 )
 
 type samplingStreamer struct {
@@ -192,6 +194,139 @@ func TestRestartTUITranslatesResumeRequest(t *testing.T) {
 	var restart *sessionRestartRequest
 	if !errors.As(err, &restart) || !reflect.DeepEqual(restart.args, []string{"--tui", "--resume", "/sessions/selected.jsonl", "--workspace", "/selected"}) {
 		t.Fatalf("err=%v restart=%#v", err, restart)
+	}
+}
+
+func TestRestartTUITranslatesForkRequestWithDirective(t *testing.T) {
+	err := restartTUI(&tui.ForkSessionError{
+		Path: "/sessions/child.jsonl", Workspace: "/forked", Directive: "--check this branch",
+	}, []string{"--tui", "old prompt"}, []string{"old prompt"})
+	var restart *sessionRestartRequest
+	want := []string{"--tui", "--resume", "/sessions/child.jsonl", "--workspace", "/forked", "--", "--check this branch"}
+	if !errors.As(err, &restart) || !reflect.DeepEqual(restart.args, want) {
+		t.Fatalf("err=%v restart=%#v", err, restart)
+	}
+}
+
+func TestForkCurrentSessionCopiesParentWithoutChangingIt(t *testing.T) {
+	dir, cwd := t.TempDir(), t.TempDir()
+	logger, err := session.NewLoggerWithID(dir, "parent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []struct {
+		kind string
+		data any
+	}{
+		{kind: "session_metadata", data: map[string]any{"cwd": cwd, "modelId": "old"}},
+		{kind: "user_prompt", data: map[string]any{"text": "hello"}},
+		{kind: "model_response", data: map[string]any{"text": "world", "response_id": "r1", "tool_call_count": 0}},
+	} {
+		if err := logger.Append(event.kind, event.data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	parentBefore, err := os.ReadFile(logger.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := forkCurrentSession(context.Background(), nil, dir, "parent", cwd, "new-model", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentAfter, err := os.ReadFile(logger.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(parentBefore, parentAfter) {
+		t.Fatal("fork changed the parent session")
+	}
+	messages, err := session.Transcript(result.Path)
+	if err != nil || len(messages) != 2 || messages[0].Text != "hello" || messages[1].Text != "world" {
+		t.Fatalf("messages=%#v err=%v", messages, err)
+	}
+	data, err := os.ReadFile(result.Path)
+	if err != nil || !bytes.Contains(data, []byte(`"kind":"session_forked"`)) || !bytes.Contains(data, []byte(`"parent_session_id":"parent"`)) {
+		t.Fatalf("child=%s err=%v", data, err)
+	}
+}
+
+func TestForkCurrentSessionCreatesWorktree(t *testing.T) {
+	root, dir := newGitRepo(t), t.TempDir()
+	logger, err := session.NewLoggerWithID(dir, "parent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append("session_metadata", map[string]any{"cwd": root}); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := worktrees.NewManager(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := forkCurrentSession(context.Background(), manager, dir, "parent", root, "model", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Workspace == root || filepath.Dir(result.Path) != dir {
+		t.Fatalf("result=%#v", result)
+	}
+	if _, err := os.Stat(filepath.Join(result.Workspace, "tracked.txt")); err != nil {
+		t.Fatalf("forked worktree missing tracked file: %v", err)
+	}
+	head, err := worktrees.HeadInfo(context.Background(), result.Workspace)
+	if err != nil || !head.IsWorktree {
+		t.Fatalf("head=%#v err=%v", head, err)
+	}
+}
+
+func TestForkCurrentSessionCleansWorktreeWhenSessionCopyFails(t *testing.T) {
+	root, dir := newGitRepo(t), t.TempDir()
+	manager, err := worktrees.NewManager(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := forkCurrentSession(context.Background(), manager, dir, "missing", root, "model", true); err == nil {
+		t.Fatal("missing parent session was accepted")
+	}
+	if records := manager.List("", nil, true); len(records) != 0 {
+		t.Fatalf("worktree records survived failed fork: %#v", records)
+	}
+	entries, err := os.ReadDir(filepath.Join(dir, "worktrees", filepath.Base(root)))
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("worktree directory survived failed fork: %#v", entries)
+	}
+}
+
+func newGitRepo(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	runGitTest(t, root, "init")
+	runGitTest(t, root, "config", "user.email", "test@example.com")
+	runGitTest(t, root, "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("base\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, root, "add", "tracked.txt")
+	runGitTest(t, root, "commit", "-m", "base")
+	return root
+}
+
+func runGitTest(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	command := exec.Command("git", args...)
+	command.Dir = dir
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v: %s", args, err, output)
 	}
 }
 

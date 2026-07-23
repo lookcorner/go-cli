@@ -82,6 +82,8 @@ type options struct {
 
 type stringListFlag []string
 
+var forkSessionSequence atomic.Uint64
+
 func (f *stringListFlag) String() string { return strings.Join(*f, ",") }
 func (f *stringListFlag) Set(value string) error {
 	*f = append(*f, value)
@@ -684,6 +686,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 	defer waitRunnerMemory(runner)
 	if opts.tui {
+		_, forkGitErr := worktrees.GitRoot(ctx, ws.Root())
 		err := tui.Run(ctx, runner, tuiBridge, prompt, opts.previousID, resumedTranscript, ws.Root(), cfg.Model, tui.UIOptions{
 			Mode: cfg.UI.KeepTextSelection, WordSeparators: cfg.UI.WordSeparators, MouseReportingToggle: cfg.UI.MouseReportingToggle, VimMode: cfg.UI.VimMode,
 			ScrollLines: cfg.UI.ScrollLines, InvertScroll: cfg.UI.InvertScroll, PromptSuggestions: cfg.UI.PromptSuggestions,
@@ -692,6 +695,10 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			SetVimMode:        func(enabled bool) error { return config.UpdateVimMode(opts.configPath, enabled) },
 			SetCompactMode:    func(enabled bool) error { return config.UpdateCompactMode(opts.configPath, enabled) },
 			SetShowTimestamps: func(enabled bool) error { return config.UpdateShowTimestamps(opts.configPath, enabled) },
+			ForkInGit:         forkGitErr == nil,
+			ForkSession: func(forkCtx context.Context, isolated bool) (tui.ForkResult, error) {
+				return forkCurrentSession(forkCtx, worktreeManager, filepath.Dir(logger.Path()), logger.ID(), ws.Root(), runner.ModelID, isolated)
+			},
 		})
 		return restartTUI(err, args, flags.Args())
 	}
@@ -746,7 +753,55 @@ func restartTUI(err error, args, positional []string) error {
 	if errors.As(err, &resume) {
 		return &sessionRestartRequest{args: restartSessionArgs(args, positional, resume.Path, resume.Workspace)}
 	}
+	var fork *tui.ForkSessionError
+	if errors.As(err, &fork) {
+		return &sessionRestartRequest{args: restartForkArgs(args, positional, fork.Path, fork.Workspace, fork.Directive)}
+	}
 	return err
+}
+
+func forkCurrentSession(ctx context.Context, manager *worktrees.Manager, sessionDir, sourceID, cwd, modelID string, isolated bool) (tui.ForkResult, error) {
+	newID := fmt.Sprintf("gork-%s-fork-%d", time.Now().UTC().Format("20060102T150405.000000000Z"), forkSessionSequence.Add(1))
+	workspace := cwd
+	var worktreePath string
+	if isolated {
+		if manager == nil {
+			return tui.ForkResult{}, errors.New("worktree manager is unavailable")
+		}
+		created, _, err := manager.CreateFromWorktree(ctx, worktrees.ForkRequest{
+			SourceWorktreePath: cwd,
+			NewSessionID:       newID,
+			CopyMode:           "dirty",
+		})
+		if err != nil {
+			return tui.ForkResult{}, err
+		}
+		worktreePath = created.WorktreePath
+		workspace, err = worktrees.EffectiveCWD(ctx, cwd, worktreePath)
+		if err != nil {
+			_, _, _ = manager.Remove(context.Background(), worktrees.RemoveRequest{WorktreePath: worktreePath, Force: true})
+			return tui.ForkResult{}, err
+		}
+	}
+	if _, _, err := session.Fork(sessionDir, sourceID, newID, workspace, modelID, nil); err != nil {
+		if worktreePath != "" {
+			_, _, _ = manager.Remove(context.Background(), worktrees.RemoveRequest{WorktreePath: worktreePath, Force: true})
+		}
+		return tui.ForkResult{}, err
+	}
+	path, err := session.PathForID(sessionDir, newID)
+	if err != nil {
+		return tui.ForkResult{}, err
+	}
+	return tui.ForkResult{Path: path, Workspace: workspace}, nil
+}
+
+func restartForkArgs(args, positional []string, resumePath, workspace, directive string) []string {
+	result := restartSessionArgs(args, positional, resumePath, workspace)
+	if strings.TrimSpace(directive) != "" {
+		result = append(result, "--", directive)
+	}
+	return result
 }
 
 func restartSessionArgs(args, positional []string, resumePath, workspace string) []string {

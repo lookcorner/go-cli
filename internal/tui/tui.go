@@ -511,6 +511,9 @@ type model struct {
 	promptSerial       uint64
 	newSession         bool
 	resumeSession      *ResumeSessionError
+	forkResult         *ForkSessionError
+	forkSession        func(context.Context, bool) (ForkResult, error)
+	forkInGit          bool
 
 	promptSuggestion    string
 	suggestionsEnabled  bool
@@ -522,6 +525,7 @@ type model struct {
 	rewind        *rewindState
 	modelSelect   *modelSelectState
 	sessionSelect *sessionSelectState
+	forkChoice    *forkChoiceState
 	mcp           *mcpModal
 	lastEmptyEsc  time.Time
 	questionClick struct {
@@ -581,6 +585,8 @@ type UIOptions struct {
 	ScrollLines          *uint8
 	InvertScroll         bool
 	PromptSuggestions    bool
+	ForkSession          func(context.Context, bool) (ForkResult, error)
+	ForkInGit            bool
 }
 
 type transcriptMessage struct {
@@ -694,6 +700,8 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		scrollLines: mouseWheelScrollLines, invertScroll: options.InvertScroll,
 		suggestionsEnabled: options.PromptSuggestions,
 		hyperlinks:         detectTerminalHyperlinks(),
+		forkSession:        options.ForkSession,
+		forkInGit:          options.ForkInGit,
 	}
 	if options.WordSeparators != nil {
 		m.wordSeparators = *options.WordSeparators
@@ -726,6 +734,9 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 	}
 	if current, ok := final.(*model); ok && current.resumeSession != nil {
 		return current.resumeSession
+	}
+	if current, ok := final.(*model); ok && current.forkResult != nil {
+		return current.forkResult
 	}
 	return nil
 }
@@ -1274,6 +1285,17 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.finishSessionSelectSearch(msg)
 	case sessionSelectDeleteEvent:
 		m.finishSessionSelectDelete(msg)
+	case forkDoneEvent:
+		m.running = false
+		m.turnCancel = nil
+		if msg.err != nil {
+			m.appendSystem("Couldn't fork session: " + msg.err.Error())
+			m.status = "fork failed"
+			return m, nil
+		}
+		m.forkResult = &ForkSessionError{Path: msg.result.Path, Workspace: msg.result.Workspace, Directive: msg.directive}
+		m.status = "opening fork"
+		return m, tea.Quit
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
@@ -1315,6 +1337,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.sessionSelect != nil {
 		return m.handleSessionSelectKey(msg)
+	}
+	if m.forkChoice != nil {
+		return m.handleForkChoiceKey(msg)
 	}
 	if m.modelSelect != nil {
 		return m.handleModelSelectKey(msg)
@@ -1579,7 +1604,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if m.runner != nil && m.runner.MCPServerCatalog != nil {
 				mcpCommand = " `/mcps`"
 			}
-			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + announcementCommand + " `/btw <question>` `/compact` `/compact-mode` `/context` `/copy [N]` `/dream` `/effort [level]` `/exit` `/export [filename]`" + feedbackCommand + " `/find` `/flush` `/help` `/history` `/loop` `/memory`" + mcpCommand + " `/model [name] [effort]` (`/m`) `/multiline` `/new` (`/clear`) `/plan [description]` `/privacy [opt-out]` `/queue` `/recap` `/release-notes` (`/changelog`) `/remember` `/rename <title>` `/resume` `/rewind` `/session-info` (`/status`, `/info`)" + shareCommand + " `/tasks` `/terminal-setup`" + mouseCommand + " `/timestamps` `/transcript` `/usage [show|manage]` (`/cost`) `/view-plan` `/vim-mode`")
+			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + announcementCommand + " `/btw <question>` `/compact` `/compact-mode` `/context` `/copy [N]` `/dream` `/effort [level]` `/exit` `/export [filename]`" + feedbackCommand + " `/find` `/flush` `/fork [--worktree|--no-worktree] [directive]` `/help` `/history` `/loop` `/memory`" + mcpCommand + " `/model [name] [effort]` (`/m`) `/multiline` `/new` (`/clear`) `/plan [description]` `/privacy [opt-out]` `/queue` `/recap` `/release-notes` (`/changelog`) `/remember` `/rename <title>` `/resume` `/rewind` `/session-info` (`/status`, `/info`)" + shareCommand + " `/tasks` `/terminal-setup`" + mouseCommand + " `/timestamps` `/transcript` `/usage [show|manage]` (`/cost`) `/view-plan` `/vim-mode`")
 			m.status = "commands"
 			return m, nil
 		case "/mcps":
@@ -1645,6 +1670,33 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, m.startRecap()
 		case "/resume":
 			return m, m.openSessionSelect()
+		case "/fork":
+			if m.recapRunning || m.btwRunning {
+				m.appendSystem("Cannot fork while a background model request is running.")
+				m.status = "fork busy"
+				return m, nil
+			}
+			arguments := strings.TrimSpace(strings.TrimPrefix(prompt, "/fork"))
+			parsed, err := parseForkArgs(arguments)
+			if err != nil {
+				m.appendSystem("Couldn't fork session: " + err.Error())
+				m.status = "fork argument invalid"
+				return m, nil
+			}
+			if parsed.worktree != nil {
+				if *parsed.worktree && !m.forkInGit {
+					m.appendSystem("Cannot create worktree: not in a Git repository.")
+					m.status = "fork unavailable"
+					return m, nil
+				}
+				return m, m.startFork(*parsed.worktree, parsed.directive)
+			}
+			if !m.forkInGit {
+				return m, m.startFork(false, parsed.directive)
+			}
+			m.forkChoice = &forkChoiceState{directive: parsed.directive}
+			m.status = "choose fork workspace"
+			return m, nil
 		case "/rewind":
 			return m, m.openRewind(false)
 		case "/model", "/m":
@@ -1987,6 +2039,9 @@ func (m *model) handleRunningKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "/btw":
 			m.clearInput()
 			return m, m.startBtw(strings.TrimSpace(strings.TrimPrefix(prompt, "/btw")))
+		case "/fork":
+			m.status = "cannot fork while a request is running"
+			return m, nil
 		}
 		if strings.HasPrefix(prompt, "/") || strings.HasPrefix(prompt, "!") {
 			m.status = "only prompts can be queued while a turn is running"
@@ -3509,6 +3564,8 @@ func (m *model) View() tea.View {
 		content = m.mcpContent()
 	} else if m.sessionSelect != nil {
 		content = m.sessionSelectContent()
+	} else if m.forkChoice != nil {
+		content = m.forkChoiceContent()
 	} else if m.modelSelect != nil {
 		content = m.modelSelectContent()
 	} else if m.rewind != nil {
@@ -3548,6 +3605,8 @@ func (m *model) View() tea.View {
 		footer = "\x1b[1;33mMCP servers\x1b[0m\n\x1b[2m" + truncate(m.mcpHint(), width) + "\x1b[0m"
 	} else if m.sessionSelect != nil {
 		footer = "\x1b[1;33mResume session\x1b[0m\n> " + renderInput(m.sessionSelect.query, m.sessionSelect.cursor, max(width-2, 1)) + "\n\x1b[2m" + truncate(m.sessionSelectHint(), width) + "\x1b[0m"
+	} else if m.forkChoice != nil {
+		footer = "\x1b[1;33mFork session\x1b[0m\n\x1b[2mUp/Down select · Enter confirm · Y/N choose · Esc cancel\x1b[0m"
 	} else if m.modelSelect != nil {
 		footer = "\x1b[1;33mModel\x1b[0m\n\x1b[2m" + truncate(m.modelSelectHint(), width) + "\x1b[0m"
 	} else if m.rewind != nil {
@@ -4007,7 +4066,7 @@ func renderedLabelContains(line, label string, x, width int) bool {
 
 func (m *model) contentHeight() int {
 	banner := m.announcementHeight()
-	if m.question != nil || m.planReview != nil || m.remember != nil || m.rememberInput || m.rewind != nil || m.modelSelect != nil || m.sessionSelect != nil || m.mcp != nil {
+	if m.question != nil || m.planReview != nil || m.remember != nil || m.rememberInput || m.rewind != nil || m.modelSelect != nil || m.sessionSelect != nil || m.forkChoice != nil || m.mcp != nil {
 		return max(m.height-7-banner, 3)
 	}
 	if m.historySearch != nil {

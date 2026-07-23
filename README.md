@@ -516,6 +516,12 @@ workspace without a model turn; selecting the active session is a no-op. Search
 matches session titles and conversation content. `d` in Vim navigation mode or
 Ctrl-D while searching arms deletion, which requires `y` confirmation and cannot
 delete the active session.
+`/fork [--worktree|--no-worktree] [directive]` copies the completed conversation
+into a child session without a model turn, then restarts the TUI in that child.
+The optional directive becomes the child's first prompt after restart. Without a
+flag, Git workspaces ask whether to use an isolated worktree; non-Git workspaces
+use the current directory. A failed fork leaves the parent session open, and
+`/resume` can return to the unchanged parent later. `--at` is not supported yet.
 `/view-plan`, `/show-plan`, and `/plan-view` open the current confined plan file
 in a read-only preview; Esc returns to the conversation.
 `/transcript` and `/log` open the completed persisted conversation in the same
