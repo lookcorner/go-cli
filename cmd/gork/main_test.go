@@ -195,6 +195,43 @@ func TestInteractiveUsageCommandsDoNotRunModelTurn(t *testing.T) {
 	}
 }
 
+func TestInteractiveReleaseNotesCommandsDoNotRunModelTurn(t *testing.T) {
+	streamer := &interactiveStatusStreamer{}
+	requests := 0
+	runner := &agent.Runner{Client: streamer, Model: "test", FetchReleaseNotes: func(context.Context) (string, error) {
+		requests++
+		if requests == 2 {
+			return "", errors.New("No release notes available (offline).")
+		}
+		return "# Release Notes\n\n- Added sessions", nil
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	input := newTerminalInput(ctx, bufio.NewReader(strings.NewReader("/release-notes ignored\n/changelog\n/help\n/exit\n")))
+	var stderr bytes.Buffer
+	if err := interactiveLoop(ctx, runner, newScheduledWakeQueue(), input, io.Discard, &stderr, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	output := stderr.String()
+	for _, want := range []string{"Added sessions", "No release notes available (offline).", "/release-notes (/changelog)"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("missing %q in %q", want, output)
+		}
+	}
+	if streamer.calls != 0 || requests != 2 {
+		t.Fatalf("model calls=%d requests=%d output=%q", streamer.calls, requests, output)
+	}
+}
+
+func TestNewChangelogServiceUsesGrokHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	service := newChangelogService()
+	if service.CachePath != filepath.Join(home, "CHANGELOG.md") || service.HTTP == nil || service.HTTP.Timeout != 3*time.Second {
+		t.Fatalf("service=%#v", service)
+	}
+}
+
 func TestInteractiveShareCommandDoesNotRunModelTurn(t *testing.T) {
 	streamer := &interactiveStatusStreamer{}
 	calls := 0

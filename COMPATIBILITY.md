@@ -95,6 +95,10 @@ Capability-gated `/share` is also available across REPL, TUI, and ACP without
 model inference. It reuses the `x.ai/share_session` domain service, refreshes an
 expired token once, preserves the reference 413 data-upload fallback, and
 enforces authentication, account enablement, and team ZDR restrictions.
+`/release-notes` and its `/changelog` alias fetch the reference per-version
+Markdown changelog with a three-second timeout, cache successful responses under
+`$GROK_HOME`, fall back when offline, and complete locally across REPL, TUI, and
+ACP without model inference.
 
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |

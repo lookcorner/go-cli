@@ -174,6 +174,7 @@ type Runner struct {
 	MarketplaceAction       func(context.Context, marketplace.Action) (marketplace.Outcome, error)
 	SubmitFeedback          func(session.UserFeedback) error
 	FetchUsage              func(context.Context) (string, error)
+	FetchReleaseNotes       func(context.Context) (string, error)
 	OpenURL                 func(string) bool
 	ShareSession            func(context.Context) (string, error)
 	SharingEnabled          func() bool

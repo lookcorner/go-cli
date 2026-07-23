@@ -12,6 +12,7 @@ import (
 
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/billing"
+	"github.com/lookcorner/go-cli/internal/changelog"
 	"github.com/lookcorner/go-cli/internal/skills"
 	"github.com/lookcorner/go-cli/internal/tools"
 )
@@ -56,6 +57,7 @@ func availableCommands(runner *agent.Runner, workspaceSkills bool) []map[string]
 		availableCommand("privacy", "Show privacy status (coding data retention is locked to opt-out)", "opt-out", nil),
 		availableCommand("terminal-setup", "Check terminal, color, and clipboard setup", "", nil),
 		availableCommand("usage", "View credit usage or manage billing", "show | manage", nil),
+		availableCommand("release-notes", "View release notes for the current version", "", nil),
 	}
 	if runner != nil {
 		if runner.SharingEnabled != nil && runner.SharingEnabled() {
@@ -439,6 +441,18 @@ func (s *Server) handleSharePrompt(ctx context.Context, incoming message, curren
 			message = "Couldn't share session: " + err.Error()
 		} else {
 			message = "Session shared: " + url
+		}
+	}
+	s.handleLocalMessagePrompt(incoming, current, lifecycle, message)
+}
+
+func (s *Server) handleReleaseNotesPrompt(ctx context.Context, incoming message, current *session, lifecycle promptLifecycle) {
+	message := changelog.ErrUnavailable.Error()
+	if current.runner.FetchReleaseNotes != nil {
+		if notes, err := current.runner.FetchReleaseNotes(ctx); err != nil {
+			message = err.Error()
+		} else {
+			message = notes
 		}
 	}
 	s.handleLocalMessagePrompt(incoming, current, lifecycle, message)

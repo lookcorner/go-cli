@@ -21,6 +21,7 @@ import (
 
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/billing"
+	"github.com/lookcorner/go-cli/internal/changelog"
 	"github.com/lookcorner/go-cli/internal/memory"
 	"github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/terminaldiag"
@@ -108,6 +109,10 @@ type exportDoneEvent struct {
 }
 type feedbackDoneEvent struct{ err error }
 type usageDoneEvent struct {
+	text string
+	err  error
+}
+type releaseNotesDoneEvent struct {
 	text string
 	err  error
 }
@@ -1068,6 +1073,19 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if command := m.startNext(); command != nil {
 			return m, command
 		}
+	case releaseNotesDoneEvent:
+		m.running = false
+		m.turnCancel = nil
+		if msg.err != nil {
+			m.appendSystem(msg.err.Error())
+			m.status = "release notes unavailable"
+		} else {
+			m.viewer = &readOnlyViewer{title: "Release Notes", content: msg.text, at: time.Now()}
+			m.status = "release notes"
+		}
+		if command := m.startNext(); command != nil {
+			return m, command
+		}
 	case shareDoneEvent:
 		m.running = false
 		m.turnCancel = nil
@@ -1455,6 +1473,13 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
+		if changelog.IsCommand(prompt) {
+			m.running = true
+			turnCtx, cancel := context.WithCancel(m.ctx)
+			m.turnCancel = cancel
+			m.status = "fetching release notes"
+			return m, runReleaseNotes(turnCtx, m.runner)
+		}
 		if prompt == "/history" {
 			m.openHistorySearch()
 			return m, nil
@@ -1484,7 +1509,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if m.runner != nil && m.runner.SharingEnabled != nil && m.runner.SharingEnabled() {
 				shareCommand = " `/share`"
 			}
-			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + " `/btw <question>` `/compact` `/compact-mode` `/context` `/copy [N]` `/dream` `/effort [level]` `/exit` `/export [filename]`" + feedbackCommand + " `/find` `/flush` `/help` `/history` `/loop` `/memory` `/model [name] [effort]` (`/m`) `/multiline` `/plan [description]` `/privacy [opt-out]` `/queue` `/recap` `/remember` `/rename <title>` `/rewind` `/session-info` (`/status`, `/info`)" + shareCommand + " `/tasks` `/terminal-setup`" + mouseCommand + " `/timestamps` `/transcript` `/usage [show|manage]` (`/cost`) `/view-plan` `/vim-mode`")
+			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + " `/btw <question>` `/compact` `/compact-mode` `/context` `/copy [N]` `/dream` `/effort [level]` `/exit` `/export [filename]`" + feedbackCommand + " `/find` `/flush` `/help` `/history` `/loop` `/memory` `/model [name] [effort]` (`/m`) `/multiline` `/plan [description]` `/privacy [opt-out]` `/queue` `/recap` `/release-notes` (`/changelog`) `/remember` `/rename <title>` `/rewind` `/session-info` (`/status`, `/info`)" + shareCommand + " `/tasks` `/terminal-setup`" + mouseCommand + " `/timestamps` `/transcript` `/usage [show|manage]` (`/cost`) `/view-plan` `/vim-mode`")
 			m.status = "commands"
 			return m, nil
 		case "/privacy":
@@ -3175,6 +3200,16 @@ func runUsage(ctx context.Context, runner *agent.Runner) tea.Cmd {
 		}
 		text, err := runner.FetchUsage(ctx)
 		return usageDoneEvent{text: text, err: err}
+	}
+}
+
+func runReleaseNotes(ctx context.Context, runner *agent.Runner) tea.Cmd {
+	return func() tea.Msg {
+		if runner == nil || runner.FetchReleaseNotes == nil {
+			return releaseNotesDoneEvent{err: changelog.ErrUnavailable}
+		}
+		text, err := runner.FetchReleaseNotes(ctx)
+		return releaseNotesDoneEvent{text: text, err: err}
 	}
 }
 

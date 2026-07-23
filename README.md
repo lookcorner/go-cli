@@ -595,6 +595,10 @@ When remote account settings enable session sharing, `/share` uploads the active
 session and prints its public URL without invoking the model. The command is
 hidden when sharing is unavailable, requires xAI authentication, and remains
 blocked for teams whose data-retention policy disables sharing.
+`/release-notes` (or `/changelog`) loads the current version's Markdown notes
+from the xAI changelog endpoint without invoking the model. Successful responses
+are cached at `$GROK_HOME/CHANGELOG.md`; offline and failed requests reuse that
+cache, while the TUI opens the result in a read-only viewer.
 In Vim mode, `/` opens incremental regular-expression search while scrollback is focused; Enter
 accepts the query, Up/Down or `n`/`N` navigates matches, and Esc closes it. `/find <pattern>`
 opens the same search directly from the prompt without sending a model turn.

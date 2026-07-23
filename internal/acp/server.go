@@ -22,6 +22,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/auth"
 	"github.com/lookcorner/go-cli/internal/billing"
+	"github.com/lookcorner/go-cli/internal/changelog"
 	"github.com/lookcorner/go-cli/internal/hooks"
 	mcppkg "github.com/lookcorner/go-cli/internal/mcp"
 	sessionlog "github.com/lookcorner/go-cli/internal/session"
@@ -1999,6 +2000,11 @@ func (s *Server) handlePromptRequest(parent context.Context, incoming message, c
 	}
 	if command, ok := billing.ParseCommand(prompt); ok {
 		s.handleUsagePrompt(parent, incoming, current, newPromptLifecycle(params), command)
+		s.markRunningPrompt(current, promptID(params.Meta))
+		return
+	}
+	if changelog.IsCommand(prompt) {
+		s.handleReleaseNotesPrompt(parent, incoming, current, newPromptLifecycle(params))
 		s.markRunningPrompt(current, promptID(params.Meta))
 		return
 	}

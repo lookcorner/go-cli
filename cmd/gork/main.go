@@ -32,6 +32,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/auth"
 	"github.com/lookcorner/go-cli/internal/billing"
 	"github.com/lookcorner/go-cli/internal/bundle"
+	"github.com/lookcorner/go-cli/internal/changelog"
 	"github.com/lookcorner/go-cli/internal/config"
 	"github.com/lookcorner/go-cli/internal/hooks"
 	"github.com/lookcorner/go-cli/internal/lsp"
@@ -564,6 +565,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 	usage := newBillingService(cfg, tokenProvider, nil)
 	runner.FetchUsage, runner.OpenURL = usage.Usage, openBrowser
+	releaseNotes := newChangelogService()
+	runner.FetchReleaseNotes = releaseNotes.Fetch
 	sharingEnabled := func() bool { return cfg.SharingEnabled }
 	sharing := newShareService(cfg, tokenProvider, opts.sessionDir, sharingEnabled)
 	runner.ShareSession, runner.SharingEnabled = func(ctx context.Context) (string, error) { return sharing.Share(ctx, logger.ID()) }, sharingEnabled
@@ -1369,6 +1372,14 @@ func newShareService(cfg config.Config, tokenProvider api.TokenProvider, session
 		SessionDir: sessionDir, AuthPath: path, AuthScope: authConfig.Scope(),
 		HTTP: &http.Client{Timeout: cfg.HTTPTimeout}, TokenProvider: tokenProvider, Enabled: enabled,
 	}
+}
+
+func newChangelogService() changelog.Service {
+	cachePath := ""
+	if path, err := config.DefaultPath(); err == nil {
+		cachePath = filepath.Join(filepath.Dir(path), "CHANGELOG.md")
+	}
+	return changelog.Service{CachePath: cachePath, HTTP: &http.Client{Timeout: 3 * time.Second}}
 }
 
 func newPermissionClassifierConfig(cfg config.Config, tokenProvider api.TokenProvider) (agent.PermissionClassifierConfig, error) {
@@ -2603,6 +2614,8 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		}
 		usage := newBillingService(cfg, sessionTokenProvider, getBillingMeta)
 		runner.FetchUsage, runner.OpenURL = usage.Usage, openBrowser
+		releaseNotes := newChangelogService()
+		runner.FetchReleaseNotes = releaseNotes.Fetch
 		sharingEnabled := func() bool { return runtimeConfigSnapshot().SharingEnabled }
 		sharing := newShareService(cfg, sessionTokenProvider, opts.sessionDir, sharingEnabled)
 		runner.ShareSession, runner.SharingEnabled = func(ctx context.Context) (string, error) { return sharing.Share(ctx, logger.ID()) }, sharingEnabled
@@ -3332,7 +3345,7 @@ func interactiveLoop(
 			command := prompt
 			if fields := strings.Fields(prompt); len(fields) > 0 {
 				switch fields[0] {
-				case "/session-info", "/status", "/info", "/context", "/share":
+				case "/session-info", "/status", "/info", "/context", "/share", "/release-notes", "/changelog":
 					command = fields[0]
 				}
 			}
@@ -3346,7 +3359,17 @@ func interactiveLoop(
 				if runner.SharingEnabled != nil && runner.SharingEnabled() {
 					shareCommand = ", /share"
 				}
-				fmt.Fprintln(stderr, "Commands: ! <command>, /compact, /context, /flush, /dream, /remember [text], /memory [on|off], /loop, /privacy [opt-out], /session-info (/status, /info)"+shareCommand+", /terminal-setup, /usage [show|manage] (/cost), /help, /exit. Every other line is sent as a prompt.")
+				fmt.Fprintln(stderr, "Commands: ! <command>, /compact, /context, /flush, /dream, /remember [text], /memory [on|off], /loop, /privacy [opt-out], /release-notes (/changelog), /session-info (/status, /info)"+shareCommand+", /terminal-setup, /usage [show|manage] (/cost), /help, /exit. Every other line is sent as a prompt.")
+				prompt = ""
+				continue
+			case "/release-notes", "/changelog":
+				if runner.FetchReleaseNotes == nil {
+					fmt.Fprintln(stderr, "[gork]", changelog.ErrUnavailable)
+				} else if notes, err := runner.FetchReleaseNotes(ctx); err != nil {
+					fmt.Fprintln(stderr, "[gork]", err)
+				} else {
+					fmt.Fprintln(stderr, notes)
+				}
 				prompt = ""
 				continue
 			case "/share":

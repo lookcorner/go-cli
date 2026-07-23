@@ -1824,6 +1824,49 @@ func TestUsageCommandsDoNotRunModelTurn(t *testing.T) {
 	}
 }
 
+func TestReleaseNotesCommandsDoNotRunModelTurn(t *testing.T) {
+	requests := 0
+	m := &model{ctx: context.Background(), runner: &agent.Runner{FetchReleaseNotes: func(context.Context) (string, error) {
+		requests++
+		return "# Version 1\n\n- Added sessions", nil
+	}}}
+	m.setInput("/release-notes ignored")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command == nil || !m.running || m.status != "fetching release notes" {
+		t.Fatalf("command=%v running=%v status=%q", command != nil, m.running, m.status)
+	}
+	updated, next := m.Update(command())
+	m = updated.(*model)
+	if next != nil || m.running || requests != 1 || m.viewer == nil || m.viewer.title != "Release Notes" || !strings.Contains(m.viewer.content, "Added sessions") {
+		t.Fatalf("next=%v running=%v requests=%d viewer=%#v", next != nil, m.running, requests, m.viewer)
+	}
+
+	m = &model{ctx: context.Background(), runner: &agent.Runner{FetchReleaseNotes: func(context.Context) (string, error) {
+		return "", errors.New("No release notes available (offline).")
+	}}}
+	m.setInput("/changelog")
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	updated, _ = updated.(*model).Update(command())
+	m = updated.(*model)
+	if m.status != "release notes unavailable" || !strings.Contains(m.transcript.String(), "No release notes available (offline).") {
+		t.Fatalf("status=%q transcript=%q", m.status, m.transcript.String())
+	}
+
+	m = &model{ctx: context.Background(), runner: &agent.Runner{}}
+	m.setInput("/help")
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if !strings.Contains(updated.(*model).transcript.String(), "/release-notes") {
+		t.Fatalf("help=%q", updated.(*model).transcript.String())
+	}
+	m = &model{ctx: context.Background(), runner: &agent.Runner{}}
+	m.setInput("/release-notesx")
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if command == nil || !updated.(*model).running {
+		t.Fatalf("command=%v running=%v", command != nil, updated.(*model).running)
+	}
+}
+
 func TestShareCommandDoesNotRunModelTurn(t *testing.T) {
 	calls := 0
 	m := &model{ctx: context.Background(), runner: &agent.Runner{
