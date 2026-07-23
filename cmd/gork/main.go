@@ -1913,6 +1913,26 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 	server.Auth.Authenticate = loginCoordinator.Authenticate
 	server.Auth.GetURL = loginCoordinator.GetURL
 	server.Auth.SubmitCode = loginCoordinator.SubmitCode
+	server.Initialized = func() {
+		go watchACPAnnouncements(ctx, acpAnnouncementsRefreshInterval(), func(pollCtx context.Context) *config.RemoteSettings {
+			current := runtimeConfigSnapshot()
+			token := current.APIKey
+			credential := auth.Credential{}
+			if provider := authRuntime.Provider(); provider != nil {
+				var err error
+				token, err = provider(pollCtx, "")
+				if err != nil {
+					return nil
+				}
+				credential, _ = auth.Load(authPath, authConfig.Scope())
+			} else if token == "" {
+				token = current.DeploymentKey
+			}
+			settingsCtx, cancel := context.WithTimeout(pollCtx, 5*time.Second)
+			defer cancel()
+			return config.FetchRemoteSettingsForSession(settingsCtx, current.ProxyBaseURL, token, credential.UserID, credential.Email, subscriptionHTTP)
+		}, applyRemoteSettings, server.NotifyAnnouncements, server.RefreshAnnouncements)
+	}
 	server.Factory = func(
 		sessionCtx context.Context,
 		sessionConfig acp.SessionConfig,

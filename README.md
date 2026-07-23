@@ -667,7 +667,12 @@ single-flight retry when the claim is still stale. Static API-key, deployment,
 and external credentials bypass the OAuth subscription gate. Every successful
 remote-settings refresh also publishes `x.ai/settings/update` with the reference
 nullable payload for access gates, subscription display, permission defaults,
-client layout preferences, tips, and announcements.
+client layout preferences, tips, and announcements. ACP also publishes
+`x.ai/announcements/update` with epoch-seeded, strictly increasing generations,
+filters expired entries, suppresses unchanged snapshots, seeds newly initialized
+clients, and forces a refresh after `session/new`. An authenticated background
+poll checks for announcement changes every five minutes by default; set
+`GROK_ANNOUNCEMENTS_REFRESH_INTERVAL_SECS` to override the interval.
 Clients can
 also enforce the privacy build's coding-data-retention opt-out through
 `x.ai/privacy/setCodingDataRetention`, including refresh-aware authentication and

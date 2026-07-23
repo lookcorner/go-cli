@@ -40,6 +40,10 @@ differs from the workspace's current HEAD.
 Authenticated remote-settings refreshes publish reference-shaped
 `x.ai/settings/update` notifications so connected ACP clients receive live access,
 subscription, permission, layout, tip, and announcement state.
+ACP announcement updates also use reference-shaped `x.ai/announcements/update`
+notifications with expiry filtering, change deduplication, epoch-seeded monotonic
+generations, initialize/new-session replay semantics, and authenticated periodic
+remote refreshes.
 
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |

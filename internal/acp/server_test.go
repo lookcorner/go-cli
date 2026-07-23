@@ -30,6 +30,34 @@ import (
 	"github.com/lookcorner/go-cli/internal/workspace"
 )
 
+func TestInitializeCallbackRunsOnceAfterResponse(t *testing.T) {
+	input := strings.NewReader(
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1}}` + "\n" +
+			`{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":1}}` + "\n",
+	)
+	var output bytes.Buffer
+	calls := 0
+	server := &Server{
+		Initialized: func() { calls++ },
+		Factory: func(context.Context, SessionConfig, tools.Approver, io.Writer, io.Writer) (*agent.Runner, func(), error) {
+			return nil, nil, nil
+		},
+	}
+	if err := server.Serve(context.Background(), input, &output); err != nil {
+		t.Fatal(err)
+	}
+	decoder := json.NewDecoder(&output)
+	for id := 1; id <= 2; id++ {
+		message := decodeACP(t, decoder)
+		if int(message["id"].(float64)) != id {
+			t.Fatalf("message %d=%#v", id, message)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("initialized calls=%d", calls)
+	}
+}
+
 func TestGitExtensionWireContract(t *testing.T) {
 	root := t.TempDir()
 	runACPGit(t, root, "init", "-q")
@@ -2642,6 +2670,10 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 	modes := created["result"].(map[string]any)["modes"].(map[string]any)
 	if modes["currentModeId"] != "default" || len(modes["availableModes"].([]any)) != 3 {
 		t.Fatalf("unexpected session modes: %#v", modes)
+	}
+	announcement := decodeACP(t, decoder)
+	if announcement["method"] != "x.ai/announcements/update" || len(announcement["params"].(map[string]any)["announcements"].([]any)) != 0 {
+		t.Fatalf("unexpected announcement refresh: %#v", announcement)
 	}
 	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 22, "method": "session/list", "params": map[string]any{"cwd": root}})
 	listed := decodeACP(t, decoder)

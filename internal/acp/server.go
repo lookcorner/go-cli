@@ -97,12 +97,16 @@ type Server struct {
 	Factory            Factory
 	Auth               AuthConfig
 	AuthChanged        func(context.Context, auth.LogoutResult) error
+	Initialized        func()
 	BillingMeta        func() (*bool, *string)
 	SessionDir         string
 	FolderTrustEnabled bool
 	input              io.Reader
 	output             io.Writer
 	writeMu            sync.Mutex
+	initializedOnce    sync.Once
+	initialized        atomic.Bool
+	announcements      announcementState
 	authMu             sync.RWMutex
 	mu                 sync.Mutex
 	sessions           map[string]*session
@@ -290,6 +294,13 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				"authMethods": authConfig.Methods,
 				"agentInfo":   map[string]any{"name": "gork-go", "version": "0.1.0-dev"},
 				"_meta":       meta,
+			})
+			s.initializedOnce.Do(func() {
+				s.initialized.Store(true)
+				s.SeedAnnouncements()
+				if s.Initialized != nil {
+					s.Initialized()
+				}
 			})
 		case "authenticate":
 			s.handleAuthenticate(ctx, incoming)
@@ -1526,6 +1537,9 @@ func (s *Server) handleNewSession(ctx context.Context, incoming message) {
 		meta["gitRoot"] = nil
 	}
 	s.respond(incoming.ID, response)
+	if s.initialized.Load() {
+		s.ForceAnnouncements()
+	}
 	s.startFolderTrustPrompt(created)
 }
 
@@ -3208,9 +3222,13 @@ func (s *Server) notifyXAI(current *session, update map[string]any) {
 }
 
 func (s *Server) write(value any) {
+	s.writeResult(value)
+}
+
+func (s *Server) writeResult(value any) bool {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	_ = json.NewEncoder(s.output).Encode(value)
+	return json.NewEncoder(s.output).Encode(value) == nil
 }
 
 type sessionTextWriter struct {
