@@ -40,6 +40,9 @@ differs from the workspace's current HEAD.
 Authenticated remote-settings refreshes publish reference-shaped
 `x.ai/settings/update` notifications so connected ACP clients receive live access,
 subscription, permission, layout, tip, and announcement state.
+Authenticated ACP clients can list, create, update, and delete remote sandbox
+environments and terminate sandbox sessions through the reference cloud extensions.
+Rollout survey submissions validate the reference payload and acknowledge receipt.
 ACP announcement updates also use reference-shaped `x.ai/announcements/update`
 notifications with expiry filtering, change deduplication, epoch-seeded monotonic
 generations, initialize/new-session replay semantics, and authenticated periodic
