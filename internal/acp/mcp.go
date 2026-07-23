@@ -97,6 +97,12 @@ func (s *Server) NotifyMCPToolsChanged(sessionID, serverName string, tools []mcp
 	}})
 }
 
+func (s *Server) NotifyMCPInitialized(sessionID string, toolCount int, elapsedMs uint64) {
+	s.write(map[string]any{"jsonrpc": "2.0", "method": "x.ai/mcp_initialized", "params": map[string]any{
+		"sessionId": sessionID, "mcpToolCount": toolCount, "elapsedMs": elapsedMs,
+	}})
+}
+
 func mcpServerTransportEqual(left, right MCPServer) bool {
 	left.DisabledTools = nil
 	right.DisabledTools = nil

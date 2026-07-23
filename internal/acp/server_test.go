@@ -774,6 +774,17 @@ func TestMCPToolsChangedNotification(t *testing.T) {
 	}
 }
 
+func TestMCPInitializedNotification(t *testing.T) {
+	var output bytes.Buffer
+	server := &Server{output: &output}
+	server.NotifyMCPInitialized("mcp-init", 3, 17)
+	message := decodeACP(t, json.NewDecoder(&output))
+	params := message["params"].(map[string]any)
+	if message["method"] != "x.ai/mcp_initialized" || params["sessionId"] != "mcp-init" || params["mcpToolCount"] != float64(3) || params["elapsedMs"] != float64(17) {
+		t.Fatalf("payload=%#v", message)
+	}
+}
+
 func TestMCPConfigExtensions(t *testing.T) {
 	root := t.TempDir()
 	ws, err := workspace.Open(root)
@@ -2745,6 +2756,10 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 	modes := created["result"].(map[string]any)["modes"].(map[string]any)
 	if modes["currentModeId"] != "default" || len(modes["availableModes"].([]any)) != 3 {
 		t.Fatalf("unexpected session modes: %#v", modes)
+	}
+	initialized := decodeACP(t, decoder)
+	if initialized["method"] != "x.ai/mcp_initialized" {
+		t.Fatalf("unexpected MCP initialization notification: %#v", initialized)
 	}
 	announcement := decodeACP(t, decoder)
 	if announcement["method"] != "x.ai/announcements/update" || len(announcement["params"].(map[string]any)["announcements"].([]any)) != 0 {

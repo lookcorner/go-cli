@@ -1571,6 +1571,7 @@ func (s *Server) handleNewSession(ctx context.Context, incoming message) {
 		CWD: params.CWD, Model: model, SessionID: id, MCPServers: servers,
 		YoloMode: yoloMode, AutoMode: autoMode, ClientHooks: parseClientHooks(params.Meta),
 	}
+	mcpStarted := time.Now()
 	created, err := s.startSession(ctx, id, sessionConfig, "")
 	if err != nil {
 		s.respondError(incoming.ID, -32000, err.Error())
@@ -1587,10 +1588,26 @@ func (s *Server) handleNewSession(ctx context.Context, incoming message) {
 		meta["gitRoot"] = nil
 	}
 	s.respond(incoming.ID, response)
+	if toolCount := countMCPTools(created.runner); toolCount > 0 || len(servers) > 0 {
+		s.NotifyMCPInitialized(id, toolCount, uint64(time.Since(mcpStarted).Milliseconds()))
+	}
 	if s.initialized.Load() {
 		s.ForceAnnouncements()
 	}
 	s.startFolderTrustPrompt(created)
+}
+
+func countMCPTools(runner *agent.Runner) int {
+	if runner == nil || runner.Tools == nil {
+		return 0
+	}
+	count := 0
+	for _, registered := range runner.Tools.SnapshotTools() {
+		if _, ok := registered.(callableMCPTool); ok {
+			count++
+		}
+	}
+	return count
 }
 
 func (s *Server) handleRewind(incoming message) {
