@@ -2453,6 +2453,11 @@ func (s *Server) handleRestoreSession(ctx context.Context, incoming message, rep
 		return
 	}
 	noReplay, _ := params.Meta["noReplay"].(bool)
+	restoreCode, _ := params.Meta["x.ai/restore_code"].(bool)
+	var codeRestore map[string]any
+	if restoreCode && sessionHead != "" {
+		codeRestore = restoreSessionCode(ctx, params.CWD, sessionHead)
+	}
 	if replay && !noReplay {
 		if err := s.replaySession(path, params.SessionID); err != nil {
 			s.respondError(incoming.ID, -32000, err.Error())
@@ -2488,8 +2493,32 @@ func (s *Server) handleRestoreSession(ctx context.Context, incoming message, rep
 			meta["gitDivergence"] = divergence
 		}
 	}
+	if codeRestore != nil {
+		responseMeta := response["_meta"].(map[string]any)
+		responseMeta["codeRestore"] = codeRestore
+	}
 	s.respond(incoming.ID, response)
 	s.startFolderTrustPrompt(created)
+}
+
+func restoreSessionCode(ctx context.Context, cwd, commit string) map[string]any {
+	root, err := worktrees.ValidateGitRoot(ctx, cwd)
+	if err != nil {
+		return map[string]any{"restored": false, "summary": "restore aborted (checkout failed): " + err.Error(), "degree": nil}
+	}
+	outcome := worktrees.CheckoutCommit(ctx, root, commit, true)
+	if outcome.CheckedOut {
+		short := commit
+		if len(short) > 7 {
+			short = short[:7]
+		}
+		return map[string]any{"restored": true, "summary": "checked out " + short + " (session registry disabled — staged/unstaged/untracked not restored)", "degree": "head_only"}
+	}
+	summary := "restore aborted (checkout failed)"
+	if outcome.Error != "" {
+		summary += ": " + outcome.Error
+	}
+	return map[string]any{"restored": false, "summary": summary, "degree": nil}
 }
 
 func (s *Server) replaySession(path, sessionID string) error {

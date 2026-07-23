@@ -3509,11 +3509,21 @@ func TestACPCancelReturnsCancelledStopReason(t *testing.T) {
 func TestACPLoadReplaysAndResumeReconnectsPersistedSession(t *testing.T) {
 	sessionDir := t.TempDir()
 	workspaceRoot := t.TempDir()
+	runACPGit(t, workspaceRoot, "init", "-q")
+	runACPGit(t, workspaceRoot, "config", "user.name", "Fixture")
+	runACPGit(t, workspaceRoot, "config", "user.email", "fixture@example.invalid")
+	tracked := filepath.Join(workspaceRoot, "tracked.txt")
+	if err := os.WriteFile(tracked, []byte("restored\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runACPGit(t, workspaceRoot, "add", "tracked.txt")
+	runACPGit(t, workspaceRoot, "commit", "-qm", "persisted head")
+	persistedHead := strings.TrimSpace(runACPGitOutput(t, workspaceRoot, "rev-parse", "HEAD"))
 	logger, err := sessionlog.NewLoggerWithID(sessionDir, "persisted-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := logger.Append("session_metadata", map[string]any{"cwd": workspaceRoot}); err != nil {
+	if err := logger.Append("session_metadata", map[string]any{"cwd": workspaceRoot, "headCommit": persistedHead}); err != nil {
 		t.Fatal(err)
 	}
 	imageData := base64.StdEncoding.EncodeToString([]byte{137, 80, 78, 71, 13, 10, 26, 10})
@@ -3558,7 +3568,7 @@ func TestACPLoadReplaysAndResumeReconnectsPersistedSession(t *testing.T) {
 	decoder := json.NewDecoder(outputR)
 	loadParams := map[string]any{
 		"sessionId": "persisted-1", "cwd": workspaceRoot, "mcpServers": []any{},
-		"_meta": map[string]any{"yoloMode": true, "auto_mode": false},
+		"_meta": map[string]any{"yoloMode": true, "auto_mode": false, "x.ai/restore_code": true},
 	}
 	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "session/load", "params": loadParams})
 	userTextReplay := decodeACP(t, decoder)
@@ -3573,6 +3583,10 @@ func TestACPLoadReplaysAndResumeReconnectsPersistedSession(t *testing.T) {
 	}
 	if loaded["result"].(map[string]any)["modes"].(map[string]any)["currentModeId"] != "plan" {
 		t.Fatalf("loaded mode was not restored: %#v", loaded)
+	}
+	codeRestore := loaded["result"].(map[string]any)["_meta"].(map[string]any)["codeRestore"].(map[string]any)
+	if codeRestore["restored"] != true || codeRestore["degree"] != "head_only" {
+		t.Fatalf("code restore was not reported: %#v", codeRestore)
 	}
 	loadedConfig := <-factoryConfigs
 	if loadedConfig.YoloMode == nil || !*loadedConfig.YoloMode || loadedConfig.AutoMode == nil || *loadedConfig.AutoMode {
