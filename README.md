@@ -486,6 +486,9 @@ cancels the current turn with Ctrl-C, and presents write/Shell/MCP approval
 prompts inside the alternate screen. Shift-Tab toggles persisted Plan mode and
 shows a visible mode badge. `/always-approve` toggles automatic approval for
 otherwise unmatched tool actions while preserving explicit deny and ask rules.
+When `[auto_mode]` is enabled, `/auto` toggles classifier-based approval and
+switches cleanly from always-approve; the command is unavailable when policy
+or configuration disables auto mode.
 `/plan` idempotently enters Plan mode, while `/plan <description>` enters it and
 starts a planning turn. `/quit` and `/exit` close the TUI without a model turn.
 `/view-plan`, `/show-plan`, and `/plan-view` open the current confined plan file

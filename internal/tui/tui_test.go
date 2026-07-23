@@ -87,6 +87,20 @@ func TestBridgeApproval(t *testing.T) {
 	}
 }
 
+func TestBridgeUsesConfiguredPromptApprover(t *testing.T) {
+	bridge := NewBridge(context.Background(), tools.PermissionPrompt)
+	defer bridge.Close()
+	bridge.SetPromptApprover(tools.PromptApprover{Mode: tools.PermissionDeny})
+	if err := bridge.Approve(context.Background(), "shell", "git push origin main"); err == nil || !tools.IsPermissionDenied(err) {
+		t.Fatalf("configured prompt approver error=%v", err)
+	}
+	select {
+	case event := <-bridge.events:
+		t.Fatalf("bridge prompt bypassed configured approver: %#v", event)
+	default:
+	}
+}
+
 func TestAlwaysApproveCommandTogglesBridgeMode(t *testing.T) {
 	bridge := NewBridge(context.Background(), tools.PermissionPrompt)
 	defer bridge.Close()
@@ -122,6 +136,76 @@ func TestAlwaysApproveCommandTogglesBridgeMode(t *testing.T) {
 	m = updated.(*model)
 	if denied.PermissionMode() != tools.PermissionDeny || !strings.Contains(m.status, "disabled by deny mode") {
 		t.Fatalf("deny mode=%q status=%q", denied.PermissionMode(), m.status)
+	}
+}
+
+func TestAutoCommandTogglesBridgeMode(t *testing.T) {
+	bridge := NewBridge(context.Background(), tools.PermissionPrompt)
+	defer bridge.Close()
+	policy, err := tools.NewPolicyApprover(bridge, PromptApprover(bridge), nil, []string{"Bash(git push *)"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := &model{bridge: bridge, width: 60, height: 16, status: "ready"}
+	for _, test := range []struct {
+		command string
+		want    tools.PermissionMode
+		status  string
+	}{
+		{command: "/auto ignored", want: tools.PermissionAuto, status: "auto permission mode"},
+		{command: "/auto", want: tools.PermissionPrompt, status: "normal mode"},
+		{command: "/always-approve", want: tools.PermissionAlwaysApprove, status: "always-approve mode"},
+		{command: "/auto", want: tools.PermissionAuto, status: "auto permission mode"},
+	} {
+		m.setInput(test.command)
+		updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+		m = updated.(*model)
+		if command != nil || bridge.PermissionMode() != test.want || m.status != test.status {
+			t.Fatalf("input=%q command=%v mode=%q status=%q", test.command, command != nil, bridge.PermissionMode(), m.status)
+		}
+	}
+	if !strings.Contains(m.View().Content, " AUTO ") || strings.Contains(m.View().Content, " ALWAYS ") {
+		t.Fatalf("mode badges=%q", m.View().Content)
+	}
+	if err := policy.Approve(context.Background(), "shell", "go test ./..."); err != nil {
+		t.Fatalf("auto mode did not reach tool policy: %v", err)
+	}
+	asked := make(chan error, 1)
+	go func() { asked <- policy.Approve(context.Background(), "shell", "git push origin main") }()
+	event := (<-bridge.events).(approvalEvent)
+	event.reply <- true
+	if err := <-asked; err != nil {
+		t.Fatalf("explicit ask rule was not preserved: %v", err)
+	}
+}
+
+func TestAutoCommandHonorsFeatureAndDenyGates(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		bridge *Bridge
+	}{
+		{name: "feature disabled", bridge: NewBridgeWithLocks(context.Background(), tools.PermissionAuto, false, true)},
+		{name: "deny mode", bridge: NewBridgeWithLocks(context.Background(), tools.PermissionDeny, false, false)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			defer test.bridge.Close()
+			m := &model{bridge: test.bridge, width: 60, height: 16}
+			m.setInput("/help")
+			updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+			m = updated.(*model)
+			if strings.Contains(m.transcript.String(), "`/auto`") {
+				t.Fatalf("disabled command shown in help: %q", m.transcript.String())
+			}
+			m.setInput("/auto")
+			updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+			m = updated.(*model)
+			if !strings.Contains(m.status, "disabled") || test.bridge.PermissionMode() == tools.PermissionAuto {
+				t.Fatalf("mode=%q status=%q", test.bridge.PermissionMode(), m.status)
+			}
+			if err := test.bridge.SetAutoMode(true); err == nil || !strings.Contains(err.Error(), "disabled") {
+				t.Fatalf("direct auto enable error=%v", err)
+			}
+		})
 	}
 }
 

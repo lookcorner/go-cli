@@ -349,7 +349,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	var terminalPrompts *terminalPrompter
 	statusOutput := stderr
 	if opts.tui {
-		tuiBridge = tui.NewBridgeWithAutoLock(ctx, mode, cfg.DisableBypassPermissionsMode)
+		tuiBridge = tui.NewBridgeWithLocks(ctx, mode, cfg.DisableBypassPermissionsMode, !cfg.AutoModeEnabled())
 		defer tuiBridge.Close()
 		approver = tuiBridge
 		askApprover = tui.PromptApprover(tuiBridge)
@@ -362,9 +362,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	permissionPrompts := &permissionPromptApprover{base: askApprover}
 	askApprover = permissionPrompts
 	if opts.tui {
-		if mode == tools.PermissionPrompt {
-			approver = permissionPrompts
-		}
+		tuiBridge.SetPromptApprover(permissionPrompts)
 	} else {
 		approver, err = tools.NewModeApproverWithLocks(mode, permissionPrompts, cfg.DisableBypassPermissionsMode, !cfg.AutoModeEnabled())
 		if err != nil {

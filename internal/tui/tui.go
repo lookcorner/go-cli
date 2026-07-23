@@ -153,26 +153,36 @@ type planReviewEvent struct {
 }
 
 type Bridge struct {
-	ctx           context.Context
-	cancel        context.CancelFunc
-	modeMu        sync.RWMutex
-	mode          tools.PermissionMode
-	autoLocked    bool
-	events        chan tea.Msg
-	once          sync.Once
-	interactionMu sync.Mutex
+	ctx                 context.Context
+	cancel              context.CancelFunc
+	modeMu              sync.RWMutex
+	mode                tools.PermissionMode
+	alwaysApproveLocked bool
+	autoModeLocked      bool
+	asker               tools.Approver
+	events              chan tea.Msg
+	once                sync.Once
+	interactionMu       sync.Mutex
 }
 
 func NewBridge(parent context.Context, mode tools.PermissionMode) *Bridge {
-	return NewBridgeWithAutoLock(parent, mode, false)
+	return NewBridgeWithLocks(parent, mode, false, false)
 }
 
 func NewBridgeWithAutoLock(parent context.Context, mode tools.PermissionMode, autoLocked bool) *Bridge {
-	if autoLocked && mode == tools.PermissionAlwaysApprove {
+	return NewBridgeWithLocks(parent, mode, autoLocked, false)
+}
+
+func NewBridgeWithLocks(parent context.Context, mode tools.PermissionMode, alwaysApproveLocked, autoModeLocked bool) *Bridge {
+	if alwaysApproveLocked && mode == tools.PermissionAlwaysApprove || autoModeLocked && mode == tools.PermissionAuto {
 		mode = tools.PermissionPrompt
 	}
 	ctx, cancel := context.WithCancel(parent)
-	return &Bridge{ctx: ctx, cancel: cancel, mode: mode, autoLocked: autoLocked, events: make(chan tea.Msg, 1024)}
+	return &Bridge{
+		ctx: ctx, cancel: cancel, mode: mode,
+		alwaysApproveLocked: alwaysApproveLocked, autoModeLocked: autoModeLocked,
+		events: make(chan tea.Msg, 1024),
+	}
 }
 
 func (b *Bridge) Close() { b.once.Do(b.cancel) }
@@ -252,16 +262,32 @@ func (b *Bridge) Approve(ctx context.Context, action, detail string) error {
 				if allowed {
 					return nil
 				}
-				return b.prompt(ctx, action, detail)
+				return b.ask(ctx, action, detail)
 			}
 			if tools.AutoModeAllows(action, detail) {
 				return nil
 			}
 		}
-		return b.prompt(ctx, action, detail)
+		return b.ask(ctx, action, detail)
 	default:
 		return fmt.Errorf("unknown permission mode %q", mode)
 	}
+}
+
+func (b *Bridge) SetPromptApprover(asker tools.Approver) {
+	b.modeMu.Lock()
+	b.asker = asker
+	b.modeMu.Unlock()
+}
+
+func (b *Bridge) ask(ctx context.Context, action, detail string) error {
+	b.modeMu.RLock()
+	asker := b.asker
+	b.modeMu.RUnlock()
+	if asker != nil {
+		return asker.Approve(ctx, action, detail)
+	}
+	return b.prompt(ctx, action, detail)
 }
 
 func (b *Bridge) PermissionMode() tools.PermissionMode {
@@ -276,7 +302,7 @@ func (b *Bridge) SetAlwaysApprove(enabled bool) error {
 	if enabled && b.mode == tools.PermissionDeny {
 		return errors.New("always-approve is disabled by deny mode")
 	}
-	if enabled && b.autoLocked {
+	if enabled && b.alwaysApproveLocked {
 		return errors.New("always-approve is disabled by managed policy")
 	}
 	if enabled {
@@ -285,6 +311,29 @@ func (b *Bridge) SetAlwaysApprove(enabled bool) error {
 		b.mode = tools.PermissionPrompt
 	}
 	return nil
+}
+
+func (b *Bridge) SetAutoMode(enabled bool) error {
+	b.modeMu.Lock()
+	defer b.modeMu.Unlock()
+	if enabled && b.mode == tools.PermissionDeny {
+		return errors.New("auto permission mode is disabled by deny mode")
+	}
+	if enabled && b.autoModeLocked {
+		return errors.New("auto permission mode is disabled")
+	}
+	if enabled {
+		b.mode = tools.PermissionAuto
+	} else {
+		b.mode = tools.PermissionPrompt
+	}
+	return nil
+}
+
+func (b *Bridge) AutoModeAvailable() bool {
+	b.modeMu.RLock()
+	defer b.modeMu.RUnlock()
+	return !b.autoModeLocked && b.mode != tools.PermissionDeny
 }
 
 func (b *Bridge) AskUserQuestion(ctx context.Context, request tools.UserQuestionRequest) (tools.UserQuestionResponse, error) {
@@ -1287,7 +1336,11 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "/quit", "/exit":
 			return m, tea.Quit
 		case "/help":
-			m.appendSystem("# Commands\n\n`! <command>` `/always-approve` `/btw <question>` `/compact` `/context` `/copy [N]` `/dream` `/effort [level]` `/exit` `/export [filename]` `/find` `/flush` `/help` `/history` `/loop` `/memory` `/model [name] [effort]` (`/m`) `/multiline` `/plan [description]` `/queue` `/recap` `/remember` `/rename <title>` `/rewind` `/session-info` (`/status`, `/info`) `/tasks` `/transcript` `/view-plan`")
+			permissionCommands := "`/always-approve`"
+			if m.bridge != nil && m.bridge.AutoModeAvailable() {
+				permissionCommands += " `/auto`"
+			}
+			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + " `/btw <question>` `/compact` `/context` `/copy [N]` `/dream` `/effort [level]` `/exit` `/export [filename]` `/find` `/flush` `/help` `/history` `/loop` `/memory` `/model [name] [effort]` (`/m`) `/multiline` `/plan [description]` `/queue` `/recap` `/remember` `/rename <title>` `/rewind` `/session-info` (`/status`, `/info`) `/tasks` `/transcript` `/view-plan`")
 			m.status = "commands"
 			return m, nil
 		case "/queue":
@@ -1391,6 +1444,22 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			if enabled {
 				m.status = "always-approve mode"
+			} else {
+				m.status = "normal mode"
+			}
+			return m, nil
+		case "/auto":
+			if m.bridge == nil || !m.bridge.AutoModeAvailable() {
+				m.status = "auto permission mode is disabled"
+				return m, nil
+			}
+			enabled := m.bridge.PermissionMode() != tools.PermissionAuto
+			if err := m.bridge.SetAutoMode(enabled); err != nil {
+				m.status = err.Error()
+				return m, nil
+			}
+			if enabled {
+				m.status = "auto permission mode"
 			} else {
 				m.status = "normal mode"
 			}
