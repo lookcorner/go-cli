@@ -1518,26 +1518,34 @@ func TestNewSessionCommandsExitWithoutModelTurn(t *testing.T) {
 	}
 }
 
+func writeResumePickerSession(t *testing.T, dir, id, cwd, title, response string) string {
+	t.Helper()
+	logger, err := session.NewLoggerWithID(dir, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append("session_metadata", map[string]any{"cwd": cwd, "modelId": "test"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append("user_prompt", map[string]any{"text": title}); err != nil {
+		t.Fatal(err)
+	}
+	if response != "" {
+		if err := logger.Append("model_response", map[string]any{"text": response, "response_id": id + "-response", "tool_call_count": 0}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := logger.Path()
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 func TestResumeCommandSelectsPreviousSessionWithoutModelTurn(t *testing.T) {
 	dir, currentWorkspace, previousWorkspace := t.TempDir(), t.TempDir(), t.TempDir()
-	writeSession := func(id, cwd, title string) string {
-		logger, err := session.NewLoggerWithID(dir, id)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := logger.Append("session_metadata", map[string]any{"cwd": cwd, "modelId": "test"}); err != nil {
-			t.Fatal(err)
-		}
-		if err := logger.Append("user_prompt", map[string]any{"text": title}); err != nil {
-			t.Fatal(err)
-		}
-		if err := logger.Close(); err != nil {
-			t.Fatal(err)
-		}
-		return logger.Path()
-	}
-	currentPath := writeSession("current", currentWorkspace, "Current work")
-	previousPath := writeSession("previous", previousWorkspace, "Previous work")
+	currentPath := writeResumePickerSession(t, dir, "current", currentWorkspace, "Current work", "")
+	previousPath := writeResumePickerSession(t, dir, "previous", previousWorkspace, "Previous work", "")
 	m := &model{
 		ctx: context.Background(), runner: &agent.Runner{SessionID: "current", SessionPath: currentPath},
 		workspace: currentWorkspace, width: 100, height: 18, status: "ready",
@@ -1567,7 +1575,7 @@ func TestResumeCommandSelectsPreviousSessionWithoutModelTurn(t *testing.T) {
 func TestResumePickerDoesNotReopenCurrentSession(t *testing.T) {
 	m := &model{
 		runner: &agent.Runner{SessionID: "current"}, status: "select a session",
-		sessionSelect: &sessionSelectState{dir: t.TempDir(), sessions: []session.Info{{SessionID: "current"}}},
+		sessionSelect: &sessionSelectState{dir: t.TempDir(), sessions: []session.Info{{SessionID: "current"}}, searchInput: true},
 	}
 	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)
@@ -1590,7 +1598,7 @@ func TestResumePickerDropsLateLoadAfterCancel(t *testing.T) {
 func TestResumePickerSurfacesListFailure(t *testing.T) {
 	m := &model{sessionSelect: &sessionSelectState{dir: "/sessions", loading: true}}
 	m.finishSessionSelectLoad(sessionSelectLoadedEvent{dir: "/sessions", err: errors.New("disk unavailable")})
-	if m.sessionSelect.loading || m.sessionSelect.err != "disk unavailable" || m.status != "list sessions failed" || !strings.Contains(m.sessionSelectContent(), "disk unavailable") {
+	if m.sessionSelect.loading || m.sessionSelect.err != "disk unavailable" || m.status != "list sessions failed" || !strings.Contains(m.sessionSelectContent(), "Couldn't list sessions: disk unavailable") {
 		t.Fatalf("picker=%#v status=%q content=%q", m.sessionSelect, m.status, m.sessionSelectContent())
 	}
 }
@@ -1601,6 +1609,127 @@ func TestResumePickerKeepsEmptySelectionValid(t *testing.T) {
 	m = updated.(*model)
 	if command != nil || m.sessionSelect.selected != 0 || !strings.Contains(m.sessionSelectContent(), "No sessions found") {
 		t.Fatalf("command=%v picker=%#v content=%q", command != nil, m.sessionSelect, m.sessionSelectContent())
+	}
+}
+
+func TestResumePickerSearchesSessionContentAndDropsStaleResults(t *testing.T) {
+	dir, cwd := t.TempDir(), t.TempDir()
+	currentPath := writeResumePickerSession(t, dir, "current", cwd, "Current", "ordinary response")
+	writeResumePickerSession(t, dir, "target", cwd, "Target", "contains deep needle")
+	items, err := session.List(dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := &model{
+		runner:        &agent.Runner{SessionID: "current", SessionPath: currentPath},
+		sessionSelect: &sessionSelectState{dir: dir, all: items, sessions: items, searchInput: true},
+	}
+	updated, debounce := m.Update(tea.KeyPressMsg(tea.Key{Code: 'n', Text: "needle"}))
+	m = updated.(*model)
+	if debounce == nil || string(m.sessionSelect.query) != "needle" || !m.sessionSelect.searching {
+		t.Fatalf("debounce=%v picker=%#v", debounce != nil, m.sessionSelect)
+	}
+	updated, search := m.Update(debounce())
+	m = updated.(*model)
+	if search == nil {
+		t.Fatal("debounced search did not start")
+	}
+	updated, _ = m.Update(search())
+	m = updated.(*model)
+	if m.sessionSelect.searching || len(m.sessionSelect.sessions) != 1 || m.sessionSelect.sessions[0].SessionID != "target" {
+		t.Fatalf("search results=%#v", m.sessionSelect)
+	}
+	m.sessionSelect.seq++
+	m.sessionSelect.searching = true
+	m.finishSessionSelectSearch(sessionSelectSearchEvent{seq: m.sessionSelect.seq - 1, result: session.SearchResult{Results: []session.SearchHit{{SessionID: "current"}}}})
+	if !m.sessionSelect.searching || m.sessionSelect.sessions[0].SessionID != "target" {
+		t.Fatalf("stale search changed picker=%#v", m.sessionSelect)
+	}
+}
+
+func TestResumePickerSearchAcceptsVimActionCharacters(t *testing.T) {
+	m := &model{sessionSelect: &sessionSelectState{searchInput: true}}
+	for _, char := range []rune{'j', 'k', 'd'} {
+		updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: char, Text: string(char)}))
+		m = updated.(*model)
+		if command == nil {
+			t.Fatalf("character %q did not queue search", char)
+		}
+	}
+	if string(m.sessionSelect.query) != "jkd" || m.sessionSelect.selected != 0 {
+		t.Fatalf("picker=%#v", m.sessionSelect)
+	}
+}
+
+func TestResumePickerConfirmsDeleteAndProtectsActiveSession(t *testing.T) {
+	dir, cwd := t.TempDir(), t.TempDir()
+	currentPath := writeResumePickerSession(t, dir, "current", cwd, "Current", "")
+	targetPath := writeResumePickerSession(t, dir, "target", cwd, "Target", "")
+	items, err := session.List(dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := &model{
+		vimMode: true, runner: &agent.Runner{SessionID: "current", SessionPath: currentPath},
+		sessionSelect: &sessionSelectState{dir: dir, all: items, sessions: items},
+	}
+	m.sessionSelect.resetSelection("current")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: 'd', Text: "d"}))
+	m = updated.(*model)
+	if command != nil || m.sessionSelect.pendingDelete != "target" {
+		t.Fatalf("armed command=%v picker=%#v", command != nil, m.sessionSelect)
+	}
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: 'y', Text: "y"}))
+	m = updated.(*model)
+	if command == nil || !m.sessionSelect.deleting {
+		t.Fatalf("delete command=%v picker=%#v", command != nil, m.sessionSelect)
+	}
+	updated, _ = m.Update(command())
+	m = updated.(*model)
+	if m.sessionSelect.deleting || len(m.sessionSelect.sessions) != 1 || m.sessionSelect.sessions[0].SessionID != "current" {
+		t.Fatalf("deleted picker=%#v", m.sessionSelect)
+	}
+	if _, err := os.Stat(targetPath); !os.IsNotExist(err) {
+		t.Fatalf("target session survived delete: %v", err)
+	}
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: 'd', Text: "d"}))
+	m = updated.(*model)
+	if command != nil || m.sessionSelect.pendingDelete != "" || m.status != "can't delete the active session" {
+		t.Fatalf("active delete command=%v picker=%#v status=%q", command != nil, m.sessionSelect, m.status)
+	}
+}
+
+func TestResumePickerSurfacesDeleteFailure(t *testing.T) {
+	m := &model{
+		vimMode: true, runner: &agent.Runner{SessionID: "current"},
+		sessionSelect: &sessionSelectState{dir: t.TempDir(), sessions: []session.Info{{SessionID: "missing"}}},
+	}
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'd', Text: "d"}))
+	m = updated.(*model)
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: 'y', Text: "y"}))
+	m = updated.(*model)
+	if command == nil {
+		t.Fatal("delete command was not started")
+	}
+	updated, _ = m.Update(command())
+	m = updated.(*model)
+	if m.sessionSelect.deleting || m.sessionSelect.err == "" || m.status != "delete session failed" || !strings.Contains(m.sessionSelectContent(), "Couldn't delete session") {
+		t.Fatalf("picker=%#v status=%q", m.sessionSelect, m.status)
+	}
+}
+
+func TestResumePickerSearchFailureCannotResumeHiddenResult(t *testing.T) {
+	m := &model{
+		runner: &agent.Runner{SessionID: "current"},
+		sessionSelect: &sessionSelectState{
+			sessions: []session.Info{{SessionID: "hidden"}}, searchInput: true, searching: true, seq: 1,
+		},
+	}
+	m.finishSessionSelectSearch(sessionSelectSearchEvent{seq: 1, err: errors.New("index unavailable")})
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.resumeSession != nil || !strings.Contains(m.sessionSelectContent(), "Couldn't search sessions: index unavailable") {
+		t.Fatalf("command=%v resume=%#v content=%q", command != nil, m.resumeSession, m.sessionSelectContent())
 	}
 }
 

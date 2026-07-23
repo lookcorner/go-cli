@@ -1268,6 +1268,12 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case sessionSelectLoadedEvent:
 		m.finishSessionSelectLoad(msg)
+	case sessionSelectSearchRequestEvent:
+		return m, m.startSessionSelectSearch(msg)
+	case sessionSelectSearchEvent:
+		m.finishSessionSelectSearch(msg)
+	case sessionSelectDeleteEvent:
+		m.finishSessionSelectDelete(msg)
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
@@ -3541,7 +3547,7 @@ func (m *model) View() tea.View {
 	if m.mcp != nil {
 		footer = "\x1b[1;33mMCP servers\x1b[0m\n\x1b[2m" + truncate(m.mcpHint(), width) + "\x1b[0m"
 	} else if m.sessionSelect != nil {
-		footer = "\x1b[1;33mResume session\x1b[0m\n\x1b[2mUp/Down select · Enter resume · Esc cancel\x1b[0m"
+		footer = "\x1b[1;33mResume session\x1b[0m\n> " + renderInput(m.sessionSelect.query, m.sessionSelect.cursor, max(width-2, 1)) + "\n\x1b[2m" + truncate(m.sessionSelectHint(), width) + "\x1b[0m"
 	} else if m.modelSelect != nil {
 		footer = "\x1b[1;33mModel\x1b[0m\n\x1b[2m" + truncate(m.modelSelectHint(), width) + "\x1b[0m"
 	} else if m.rewind != nil {

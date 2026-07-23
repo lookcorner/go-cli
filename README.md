@@ -512,7 +512,10 @@ while the previous response chain, resume target, transcript, and initial prompt
 are intentionally discarded. The interactive REPL supports the same command.
 `/resume` opens a newest-first picker for local sessions across workspaces. Enter
 closes the current runtime and resumes the selected JSONL session in its saved
-workspace without a model turn; selecting the active session is a no-op.
+workspace without a model turn; selecting the active session is a no-op. Search
+matches session titles and conversation content. `d` in Vim navigation mode or
+Ctrl-D while searching arms deletion, which requires `y` confirmation and cannot
+delete the active session.
 `/view-plan`, `/show-plan`, and `/plan-view` open the current confined plan file
 in a read-only preview; Esc returns to the conversation.
 `/transcript` and `/log` open the completed persisted conversation in the same
