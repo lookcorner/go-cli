@@ -1235,6 +1235,10 @@ actions manage isolated local/Git snapshots under
 skill/MCP/LSP/hook components. Multi-plugin repositories require explicit uninstall
 confirmation. `x.ai/plugins/reload` forces local snapshot refresh and updates
 all live plugin-backed components without requiring a session ID.
+Plugin-capable ACP sessions also advertise `/plugins` (with `/plugin` as an
+alias) and `/reload-plugins`. These local commands list, reload, add, remove,
+install with explicit `--trust`, update, and confirmation-gated uninstall
+plugins without starting a model turn.
 
 Enabled executable plugins may define `hooks/hooks.json`. Command and HTTPS
 handlers receive the compatible camel-case JSON event envelope on stdin or as

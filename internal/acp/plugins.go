@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/agents"
 	"github.com/lookcorner/go-cli/internal/hooks"
 	"github.com/lookcorner/go-cli/internal/plugin"
@@ -256,6 +257,178 @@ func (s *Server) updatePlugins(ctx context.Context, incoming message, current *s
 		messages = append(messages, outcome.RepoKey+": "+strings.ReplaceAll(outcome.Status, "_", " "))
 	}
 	s.pluginActionOutcome(incoming, "success", strings.Join(messages, "; "), false, false)
+}
+
+func (s *Server) handlePluginSlashPrompt(ctx context.Context, incoming message, current *session, lifecycle promptLifecycle, command pluginCommand) {
+	text := s.pluginSlashText(ctx, current, command)
+	s.sendCommandOutput(current.id, text)
+	s.finishPrompt(incoming, current, lifecycle, "end_turn", agent.Result{}, nil, "")
+}
+
+func (s *Server) pluginSlashText(ctx context.Context, current *session, command pluginCommand) string {
+	if command.action == "list" {
+		return pluginListText(current.runner.PluginInventory())
+	}
+	if command.action == "trust" {
+		return "Trust/untrust has been replaced by enable/disable. Use /plugins enable <id> instead."
+	}
+	if command.action == "install" && !command.confirm {
+		if command.value == "" {
+			return "Usage: /plugins install <source>\nSource can be a git URL or local path.\nExamples:\n  /plugins install https://github.com/user/my-plugin\n  /plugins install https://github.com/user/repo@v1.0\n  /plugins install ./local-plugin"
+		}
+		return fmt.Sprintf("About to install plugin from: %s\n\nThis will clone/link the source and activate all executable surfaces:\n  - Hook scripts will run on tool use events\n  - MCP servers will be started\n  - Skills will be available to the model\n\nTo proceed, re-run with --trust:\n  /plugins install %s --trust", command.value, command.value)
+	}
+	if current.runner.UpdatePlugins == nil {
+		return "Plugin configuration is read-only."
+	}
+	if s.anySessionRunning() {
+		return "Cannot update plugins while a prompt is running."
+	}
+	switch command.action {
+	case "reload":
+		if err := plugin.RefreshLocal(); err != nil {
+			return "Failed to reload plugins: " + err.Error()
+		}
+		if _, err := current.runner.UpdatePlugins(ctx, nil); err != nil {
+			return "Failed to reload plugins: " + err.Error()
+		}
+		return "Plugins reloaded."
+	case "add", "remove":
+		if command.value == "" {
+			return fmt.Sprintf("Usage: /plugins %s <path>\nProvide the path to a plugin directory to %s.", command.action, command.action)
+		}
+		resolved := plugin.ResolvePath(command.value, current.cwd)
+		_, err := current.runner.UpdatePlugins(ctx, func(settings *plugin.Settings) {
+			if command.action == "add" {
+				if !containsString(settings.Paths, resolved) {
+					settings.Paths = append(settings.Paths, resolved)
+				}
+			} else {
+				settings.Paths = removeString(settings.Paths, resolved)
+			}
+		})
+		if err != nil {
+			return fmt.Sprintf("Failed to %s plugin path: %v", command.action, err)
+		}
+		past := map[string]string{"add": "Added", "remove": "Removed"}
+		return fmt.Sprintf("%s plugin path: %s", past[command.action], resolved)
+	case "install":
+		outcome, err := plugin.Install(command.value, current.cwd)
+		if err != nil {
+			return "Failed to install plugin: " + err.Error()
+		}
+		if _, err := current.runner.UpdatePlugins(ctx, func(settings *plugin.Settings) {
+			for _, name := range outcome.Plugins {
+				if !containsString(settings.Enabled, name) {
+					settings.Enabled = append(settings.Enabled, name)
+				}
+				settings.Disabled = removeString(settings.Disabled, name)
+			}
+		}); err != nil {
+			return err.Error()
+		}
+		return fmt.Sprintf("Installed %d plugin(s) from %s: %s\nRun /plugins reload to activate.", len(outcome.Plugins), command.value, strings.Join(outcome.Plugins, ", "))
+	case "uninstall":
+		if command.value == "" {
+			return "Usage: /plugins uninstall <name>\nProvide the name of an installed plugin to remove."
+		}
+		outcome, err := plugin.Uninstall(command.value, command.confirm, false)
+		if err != nil {
+			var confirmation *plugin.ConfirmationError
+			var missing *plugin.NotFoundError
+			switch {
+			case errors.As(err, &confirmation):
+				others := removeString(append([]string(nil), confirmation.Plugins...), command.value)
+				lines := make([]string, 0, len(others))
+				for _, name := range others {
+					lines = append(lines, "  - "+name)
+				}
+				return fmt.Sprintf("Plugin %q belongs to repo %q which also contains:\n%s\n\nUninstalling will remove all %d plugin(s). To proceed:\n  /plugins uninstall %s --confirm\n\nTo disable a single plugin without removing the repo, add to config.toml:\n  [plugins]\n  disabled = [%q]", command.value, confirmation.RepoKey, strings.Join(lines, "\n"), len(confirmation.Plugins), command.value, command.value)
+			case errors.As(err, &missing):
+				return fmt.Sprintf("Plugin %q not found in install registry.\nUse /plugins list to see installed plugins.", command.value)
+			default:
+				return err.Error()
+			}
+		}
+		if _, err := current.runner.UpdatePlugins(ctx, func(settings *plugin.Settings) {
+			for _, name := range outcome.Plugins {
+				settings.Enabled = removeString(settings.Enabled, name)
+				settings.Disabled = removeString(settings.Disabled, name)
+			}
+		}); err != nil {
+			return err.Error()
+		}
+		return fmt.Sprintf("Uninstalled repo %q (%d plugin(s): %s)", outcome.RepoKey, len(outcome.Plugins), strings.Join(outcome.Plugins, ", "))
+	case "update":
+		outcomes, err := plugin.Update(command.value)
+		if err != nil {
+			if strings.Contains(err.Error(), "no installed plugins") {
+				return "No installed plugins to update."
+			}
+			return err.Error()
+		}
+		if _, err := current.runner.UpdatePlugins(ctx, nil); err != nil {
+			return err.Error()
+		}
+		messages := make([]string, 0, len(outcomes))
+		for _, outcome := range outcomes {
+			messages = append(messages, outcome.RepoKey+": "+strings.ReplaceAll(outcome.Status, "_", " "))
+		}
+		return strings.Join(messages, "\n")
+	}
+	return pluginListText(current.runner.PluginInventory())
+}
+
+func pluginListText(inventory []plugin.Plugin) string {
+	if len(inventory) == 0 {
+		return "No plugins installed."
+	}
+	lines := []string{fmt.Sprintf("Installed plugins (%d):", len(inventory))}
+	for _, item := range inventory {
+		status := ""
+		if !item.Enabled {
+			status = " [disabled]"
+		} else if !item.Trusted {
+			status = " [untrusted]"
+		}
+		version := ""
+		if item.Version != "" {
+			version = " v" + item.Version
+		}
+		lines = append(lines, fmt.Sprintf("  %s%s (%s%s)", item.Name, version, item.Scope, status))
+		components := make([]string, 0, 4)
+		if count := len(pluginSkillNames(item.SkillDirs)); count > 0 {
+			components = append(components, fmt.Sprintf("%d skills", count))
+		}
+		if count := len(agents.PluginNames(item)); count > 0 {
+			components = append(components, fmt.Sprintf("%d agents", count))
+		}
+		if item.HooksConfig != "" || len(item.InlineHooks) > 0 {
+			state := "hooks: active"
+			if item.HooksConfig == "" {
+				state = "hooks: active (inline)"
+			} else if !item.Trusted {
+				state = "hooks: blocked"
+			}
+			components = append(components, state)
+		}
+		if count := pluginMCPServerCount(item); count > 0 {
+			state := fmt.Sprintf("%d MCP servers", count)
+			if item.MCPConfig == "" {
+				state += " (inline)"
+			} else if !item.Trusted {
+				state += ": blocked"
+			}
+			components = append(components, state)
+		}
+		if len(components) > 0 {
+			lines = append(lines, "    "+strings.Join(components, ", "))
+		}
+		if !item.Trusted {
+			lines = append(lines, "    Run: /plugins trust "+item.Root)
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (s *Server) anySessionRunning() bool {

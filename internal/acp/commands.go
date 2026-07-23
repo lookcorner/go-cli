@@ -74,6 +74,12 @@ func availableCommands(runner *agent.Runner, workspaceSkills bool) []map[string]
 			availableCommand("hooks-untrust", "Remove trust for the current project", "", nil),
 		)
 	}
+	if runner != nil && runner.PluginInventory != nil {
+		commands = append(commands,
+			availableCommand("plugins", "Manage plugins (list, reload, trust, add, remove)", "list | reload | trust <path> | add <path> | remove <path>", nil),
+			availableCommand("reload-plugins", "Reload plugins from disk (alias for /plugins reload)", "", nil),
+		)
+	}
 	commands = append(commands, availableCommand("session-info", "Show session details (model, turns, context usage)", "", nil))
 	if runner == nil {
 		return commands
@@ -129,6 +135,67 @@ type goalCommand struct {
 	action    string
 	objective string
 	budget    int64
+}
+
+type pluginCommand struct {
+	action  string
+	value   string
+	confirm bool
+}
+
+func parsePluginCommand(prompt string) (pluginCommand, bool) {
+	trimmed := strings.TrimSpace(prompt)
+	if trimmed == "/reload-plugins" {
+		return pluginCommand{action: "reload"}, true
+	}
+	name := ""
+	for _, candidate := range []string{"/plugins", "/plugin"} {
+		if trimmed == candidate || strings.HasPrefix(trimmed, candidate+" ") {
+			name = candidate
+			break
+		}
+	}
+	if name == "" {
+		return pluginCommand{}, false
+	}
+	args := strings.TrimSpace(strings.TrimPrefix(trimmed, name))
+	switch {
+	case args == "", args == "list":
+		return pluginCommand{action: "list"}, true
+	case args == "reload":
+		return pluginCommand{action: "reload"}, true
+	case strings.HasPrefix(args, "trust"):
+		return pluginCommand{action: "trust"}, true
+	case strings.HasPrefix(args, "add "):
+		return pluginCommand{action: "add", value: strings.TrimSpace(strings.TrimPrefix(args, "add "))}, true
+	case strings.HasPrefix(args, "remove "):
+		return pluginCommand{action: "remove", value: strings.TrimSpace(strings.TrimPrefix(args, "remove "))}, true
+	case strings.HasPrefix(args, "install "):
+		value := strings.TrimSpace(strings.TrimPrefix(args, "install "))
+		value, confirm := trimPluginFlag(value, "--trust")
+		return pluginCommand{action: "install", value: value, confirm: confirm}, true
+	case strings.HasPrefix(args, "uninstall "):
+		value := strings.TrimSpace(strings.TrimPrefix(args, "uninstall "))
+		value, confirm := trimPluginFlag(value, "--confirm")
+		return pluginCommand{action: "uninstall", value: value, confirm: confirm}, true
+	case args == "update":
+		return pluginCommand{action: "update"}, true
+	case strings.HasPrefix(args, "update "):
+		return pluginCommand{action: "update", value: strings.TrimSpace(strings.TrimPrefix(args, "update "))}, true
+	default:
+		return pluginCommand{action: "list"}, true
+	}
+}
+
+func trimPluginFlag(value, flag string) (string, bool) {
+	if value == flag {
+		return value, true
+	}
+	suffix := " " + flag
+	if strings.HasSuffix(value, suffix) {
+		return strings.TrimSpace(strings.TrimSuffix(value, suffix)), true
+	}
+	return value, false
 }
 
 func parseGoalCommand(prompt string) (goalCommand, bool) {
