@@ -134,6 +134,7 @@ type Runner struct {
 	SessionID               string
 	SessionPath             string
 	Workspace               string
+	PromptWorkspace         string
 	ModelID                 string
 	Model                   string
 	ModelOptions            []ModelOption
@@ -172,6 +173,7 @@ type Runner struct {
 	lastInputTokens         int
 	pendingSummary          string
 	modelHistory            []api.InputItem
+	promptWorkspaceSent     bool
 	prefireMu               sync.Mutex
 	prefire                 *compactionPrefire
 	memoryMu                sync.Mutex
@@ -539,6 +541,10 @@ func (r *Runner) resolvedInstructions() string {
 	return defaultInstructions + "\n\nAdditional user instructions:\n" + instructions
 }
 
+func workspacePromptPrefix(path string) string {
+	return "<user_info>\nWorkspace Path: " + path + "\nNote: Prefer using relative paths over absolute paths as tool call args when possible.\n</user_info>"
+}
+
 func cleanRecapText(value string) string {
 	value = strings.Join(strings.Fields(value), " ")
 	for _, label := range []string{"Recap \u2014", "Recap\u2014", "Recap -", "Recap:", "recap:", "Session recap:", "Summary:"} {
@@ -641,7 +647,16 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 		}
 	}
 
-	input := append([]api.InputItem(nil), r.modelHistory...)
+	promptWorkspace := strings.TrimSpace(r.PromptWorkspace)
+	if promptWorkspace == "" {
+		promptWorkspace = strings.TrimSpace(r.Workspace)
+	}
+	prefixAdded := !r.promptWorkspaceSent && promptWorkspace != ""
+	input := make([]api.InputItem, 0, len(r.modelHistory)+2)
+	if prefixAdded {
+		input = append(input, api.InputItem{Type: "message", Role: "user", Content: workspacePromptPrefix(promptWorkspace)})
+	}
+	input = append(input, r.modelHistory...)
 	input = append(input, api.InputItem{Type: "message", Role: "user", Content: content})
 	progress := Progress{}
 	var inFlightInterjections []Interjection
@@ -693,6 +708,9 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 			publish()
 			r.log("model_error", map[string]any{"step": step, "error": err.Error()})
 			return final, err
+		}
+		if prefixAdded {
+			r.promptWorkspaceSent = true
 		}
 		r.modelHistory = nil
 		inFlightInterjections = nil
@@ -1117,6 +1135,7 @@ func (r *Runner) ApplyModel(runtime ModelRuntime, messages []session.Message) er
 	r.Client, r.Model, r.ModelID = runtime.Client, runtime.Model, runtime.ID
 	r.ContextWindow, r.CompactThresholdPercent = runtime.ContextWindow, runtime.CompactThresholdPercent
 	r.ReasoningEffort = runtime.ReasoningEffort
+	r.promptWorkspaceSent = false
 	r.RestoreHistory(messages)
 	if r.OnModelChanged != nil {
 		r.OnModelChanged(runtime)

@@ -50,14 +50,14 @@ func TestSessionConfigOptionsMatchModelState(t *testing.T) {
 }
 
 func TestSessionStartResponseMetadata(t *testing.T) {
-	current := &session{id: "detail-session", cwd: "/work/project", title: "Stored title", runner: &agent.Runner{
+	current := &session{id: "detail-session", cwd: "/work/worktree", displayCWD: "/work/project", title: "Stored title", runner: &agent.Runner{
 		ModelID: "grok-build", ModelOptions: []agent.ModelOption{{ID: "grok-build", Name: "Grok Build"}},
 	}}
 	response := sessionStartResponse(current, "plan")
 	meta := response["_meta"].(map[string]any)
 	config := meta["x.ai/sessionConfig"].(map[string]any)
 	detail := meta["x.ai/sessionDetail"].(sessionDetail)
-	if response["sessionId"] != current.id || len(config["options"].([]sessionConfigOption)) != 1 || detail.SessionID != current.id || detail.Kind != "build" || detail.CWD != current.cwd || detail.CurrentModelID != "grok-build" || detail.Title != "Stored title" {
+	if response["sessionId"] != current.id || len(config["options"].([]sessionConfigOption)) != 1 || detail.SessionID != current.id || detail.Kind != "build" || detail.CWD != current.displayCWD || detail.CurrentModelID != "grok-build" || detail.Title != "Stored title" {
 		t.Fatalf("session response=%#v", response)
 	}
 	encoded, err := json.Marshal(detail)
@@ -70,6 +70,7 @@ func TestNewSessionReturnsWorkspaceMetadata(t *testing.T) {
 	for _, gitRepo := range []bool{false, true} {
 		t.Run(map[bool]string{false: "non-git", true: "git"}[gitRepo], func(t *testing.T) {
 			dir, cwd := t.TempDir(), t.TempDir()
+			displayCWD := filepath.Join(t.TempDir(), "project")
 			if gitRepo {
 				runACPGit(t, cwd, "init", "-q")
 			}
@@ -82,19 +83,20 @@ func TestNewSessionReturnsWorkspaceMetadata(t *testing.T) {
 				registry := tools.NewRegistry(ws, approver)
 				return &agent.Runner{Tools: registry, ModelID: "grok-build"}, func() { _ = registry.Close() }, nil
 			}}
-			server.handleNewSession(context.Background(), message{ID: json.RawMessage("1"), Params: mustJSON(t, map[string]any{"cwd": cwd, "mcpServers": []any{}})})
+			server.handleNewSession(context.Background(), message{ID: json.RawMessage("1"), Params: mustJSON(t, map[string]any{"cwd": cwd, "mcpServers": []any{}, "_meta": map[string]any{"x.ai/display_cwd": displayCWD}})})
 			response := decodeACP(t, json.NewDecoder(&output))
 			result := response["result"].(map[string]any)
 			meta := result["_meta"].(map[string]any)
-			if meta["currentWorkingDirectory"] != cwd || meta["isGitRepo"] != gitRepo {
+			if meta["currentWorkingDirectory"] != displayCWD || meta["isGitRepo"] != gitRepo {
 				t.Fatalf("workspace metadata=%#v", meta)
 			}
-			expectedRoot, err := filepath.EvalSymlinks(cwd)
-			if err != nil {
-				t.Fatal(err)
-			}
+			expectedRoot := displayCWD
 			if gitRepo && meta["gitRoot"] != expectedRoot || !gitRepo && meta["gitRoot"] != nil {
 				t.Fatalf("git root=%#v", meta["gitRoot"])
+			}
+			detail := meta["x.ai/sessionDetail"].(map[string]any)
+			if detail["cwd"] != displayCWD {
+				t.Fatalf("session detail=%#v", detail)
 			}
 			if !server.closeSession(result["sessionId"].(string)) {
 				t.Fatal("new session did not close")

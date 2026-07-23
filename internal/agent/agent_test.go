@@ -716,6 +716,52 @@ func TestRunnerApplyModelSeedsStatelessHistoryUntilSuccess(t *testing.T) {
 	}
 }
 
+func TestRunnerSendsPromptWorkspaceOnce(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	streamer := &fakeStreamer{results: []api.StreamResult{
+		{ResponseID: "response-1", Text: "first"},
+		{ResponseID: "response-2", Text: "second"},
+	}}
+	runner := Runner{Client: streamer, Tools: registry, Model: "test", MaxSteps: 1, PromptWorkspace: "/project"}
+	if _, err := runner.Run(context.Background(), "first"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.RunTurn(context.Background(), "second", "response-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(streamer.requests) != 2 || len(streamer.requests[0].Input) != 2 || len(streamer.requests[1].Input) != 1 {
+		t.Fatalf("requests=%#v", streamer.requests)
+	}
+	prefix, _ := streamer.requests[0].Input[0].Content.(string)
+	if !strings.Contains(prefix, "Workspace Path: /project") || strings.Contains(fmt.Sprint(streamer.requests[1].Input[0].Content), "Workspace Path:") {
+		t.Fatalf("first prefix=%q second=%#v", prefix, streamer.requests[1].Input)
+	}
+}
+
+func TestRunnerPromptWorkspacePrecedesRestoredHistory(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	streamer := &fakeStreamer{results: []api.StreamResult{{ResponseID: "response-1", Text: "done"}}}
+	runner := Runner{Client: streamer, Tools: registry, Model: "test", MaxSteps: 1, PromptWorkspace: "/project"}
+	runner.RestoreHistory([]session.Message{{Role: "user", Text: "before"}, {Role: "assistant", Text: "answer"}})
+	if _, err := runner.Run(context.Background(), "continue"); err != nil {
+		t.Fatal(err)
+	}
+	input := streamer.requests[0].Input
+	if len(input) != 4 || !strings.Contains(fmt.Sprint(input[0].Content), "Workspace Path: /project") || input[1].Content != "before" || input[2].Content != "answer" {
+		t.Fatalf("input=%#v", input)
+	}
+}
+
 func TestRunnerApplyModelRewindsStatefulClient(t *testing.T) {
 	ws, err := workspace.Open(t.TempDir())
 	if err != nil {

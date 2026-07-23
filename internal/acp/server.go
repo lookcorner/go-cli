@@ -1597,11 +1597,15 @@ func (s *Server) handleNewSession(ctx context.Context, incoming message) {
 	}
 	response := sessionStartResponse(created, "default")
 	meta := response["_meta"].(map[string]any)
-	meta["currentWorkingDirectory"] = params.CWD
+	clientCWD := params.CWD
+	if created.displayCWD != "" {
+		clientCWD = created.displayCWD
+	}
+	meta["currentWorkingDirectory"] = clientCWD
 	gitRoot, gitErr := worktrees.GitRoot(ctx, params.CWD)
 	meta["isGitRepo"] = gitErr == nil
 	if gitErr == nil {
-		meta["gitRoot"] = gitRoot
+		meta["gitRoot"] = displayEquivalentPath(params.CWD, created.displayCWD, gitRoot)
 	} else {
 		meta["gitRoot"] = nil
 	}

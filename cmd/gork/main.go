@@ -2529,7 +2529,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			UpdatePlugins:     updatePlugins,
 			MarketplaceList:   func() ([]marketplace.ScanResult, error) { return marketplace.List(opts.configPath, ws.Root()) },
 			MarketplaceAction: marketplaceAction,
-			SessionID:         logger.ID(), SessionPath: logger.Path(), Workspace: ws.Root(),
+			SessionID:         logger.ID(), SessionPath: logger.Path(), Workspace: ws.Root(), PromptWorkspace: sessionConfig.DisplayCWD,
 		}
 		if cfg.FeedbackEnabled {
 			runner.SubmitFeedback = func(feedback session.UserFeedback) error {

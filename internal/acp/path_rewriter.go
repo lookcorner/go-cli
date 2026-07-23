@@ -44,6 +44,23 @@ func (r *pathRewriter) rewritePath(path string) string {
 	return filepath.Join(r.display, relative)
 }
 
+func displayEquivalentPath(realCWD, displayCWD, path string) string {
+	if displayCWD == "" || path == "" {
+		return path
+	}
+	if resolved, err := filepath.EvalSymlinks(realCWD); err == nil {
+		realCWD = resolved
+	}
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
+	relative, err := filepath.Rel(realCWD, path)
+	if err != nil {
+		return path
+	}
+	return filepath.Clean(filepath.Join(displayCWD, relative))
+}
+
 func (r *pathRewriter) rewriteJSON(value any) any {
 	if r == nil {
 		return value

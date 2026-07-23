@@ -25,6 +25,9 @@ type sessionDetail struct {
 func sessionStartResponse(current *session, mode string) map[string]any {
 	current.mu.Lock()
 	id, cwd, title, runner := current.id, current.cwd, current.title, current.runner
+	if current.displayCWD != "" {
+		cwd = current.displayCWD
+	}
 	state := modelState(runner)
 	options := sessionConfigOptions(runner, state)
 	current.mu.Unlock()
