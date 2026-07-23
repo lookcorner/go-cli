@@ -51,7 +51,7 @@ func TestCommandsListAdvertisesCapabilitiesAndSkills(t *testing.T) {
 		command := raw.(map[string]any)
 		byName[command["name"].(string)] = command
 	}
-	for _, name := range []string{"compact", "always-approve", "privacy", "context", "session-info", "hooks-trust", "hooks-list", "hooks-add", "hooks-remove", "hooks-untrust", "plugins", "reload-plugins", "feedback", "goal", "loop", "local:compact", "local:plugins", "local:feedback", "deploy"} {
+	for _, name := range []string{"compact", "always-approve", "privacy", "terminal-setup", "context", "session-info", "hooks-trust", "hooks-list", "hooks-add", "hooks-remove", "hooks-untrust", "plugins", "reload-plugins", "feedback", "goal", "loop", "local:compact", "local:plugins", "local:feedback", "deploy"} {
 		if byName[name] == nil {
 			t.Fatalf("missing command %q in %#v", name, commands)
 		}
@@ -92,7 +92,7 @@ func TestBuiltinCommandsFollowReferenceOrderAndCapabilityGates(t *testing.T) {
 	for _, command := range commands {
 		names = append(names, command["name"].(string))
 	}
-	want := []string{"compact", "always-approve", "privacy", "context", "hooks-trust", "hooks-list", "hooks-add", "hooks-remove", "hooks-untrust", "plugins", "reload-plugins", "session-info", "feedback"}
+	want := []string{"compact", "always-approve", "privacy", "terminal-setup", "context", "hooks-trust", "hooks-list", "hooks-add", "hooks-remove", "hooks-untrust", "plugins", "reload-plugins", "session-info", "feedback"}
 	if strings.Join(names, "|") != strings.Join(want, "|") {
 		t.Fatalf("commands=%v want=%v", names, want)
 	}
@@ -226,11 +226,11 @@ func TestCommandsListValidatesParamsAndInitializeAdvertisesPreSessionCommands(t 
 	messages = decodeACPOutput(t, output.Bytes())
 	meta := messages[0]["result"].(map[string]any)["_meta"].(map[string]any)
 	commands := meta["availableCommands"].([]any)
-	if len(commands) != 5 || commands[0].(map[string]any)["name"] != "compact" || commands[0].(map[string]any)["input"].(map[string]any)["hint"] == "" || commands[1].(map[string]any)["name"] != "always-approve" || commands[1].(map[string]any)["input"].(map[string]any)["hint"] != "on|off" || commands[2].(map[string]any)["name"] != "privacy" || commands[2].(map[string]any)["input"].(map[string]any)["hint"] != "opt-out" || commands[3].(map[string]any)["name"] != "context" || commands[4].(map[string]any)["name"] != "session-info" {
+	if len(commands) != 6 || commands[0].(map[string]any)["name"] != "compact" || commands[0].(map[string]any)["input"].(map[string]any)["hint"] == "" || commands[1].(map[string]any)["name"] != "always-approve" || commands[1].(map[string]any)["input"].(map[string]any)["hint"] != "on|off" || commands[2].(map[string]any)["name"] != "privacy" || commands[2].(map[string]any)["input"].(map[string]any)["hint"] != "opt-out" || commands[3].(map[string]any)["name"] != "terminal-setup" || commands[4].(map[string]any)["name"] != "context" || commands[5].(map[string]any)["name"] != "session-info" {
 		t.Fatalf("available commands=%#v", commands)
 	}
 	routedCommands := messages[1]["result"].(map[string]any)["commands"].([]any)
-	if len(routedCommands) != 5 || routedCommands[4].(map[string]any)["name"] != "session-info" {
+	if len(routedCommands) != 6 || routedCommands[5].(map[string]any)["name"] != "session-info" {
 		t.Fatalf("routed commands=%#v", routedCommands)
 	}
 }
@@ -266,6 +266,32 @@ func TestPrivacySlashCommandCompletesLocally(t *testing.T) {
 		}
 		if !textFound || !completed || len(streamer.requests) != 0 || current.promptIndex != 0 {
 			t.Fatalf("prompt=%q text=%v completed=%v requests=%d promptIndex=%d messages=%#v", test.prompt, textFound, completed, len(streamer.requests), current.promptIndex, messages)
+		}
+	}
+}
+
+func TestTerminalSetupSlashCommandCompletesLocally(t *testing.T) {
+	streamer := &fixtureStreamer{}
+	current := &session{id: "terminal-setup-command", runner: &agent.Runner{Client: streamer, Model: "test"}, activePrompt: -1}
+	var output bytes.Buffer
+	server := &Server{output: &output, sessions: map[string]*session{current.id: current}}
+	for id, prompt := range []string{"/terminal-setup", "/terminal-check ignored", "/terminal-info"} {
+		output.Reset()
+		params, _ := json.Marshal(map[string]any{"sessionId": current.id, "prompt": []any{map[string]any{"type": "text", "text": prompt}}})
+		server.handlePrompt(context.Background(), message{ID: json.RawMessage(fmt.Sprintf("%d", id+30)), Method: "session/prompt", Params: params})
+		messages := decodeACPOutput(t, output.Bytes())
+		textFound, completed := false, false
+		for _, item := range messages {
+			result, ok := item["result"].(map[string]any)
+			completed = completed || ok && result["stopReason"] == "end_turn"
+			params, _ := item["params"].(map[string]any)
+			update, _ := params["update"].(map[string]any)
+			content, _ := update["content"].(map[string]any)
+			text, _ := content["text"].(string)
+			textFound = textFound || strings.Contains(text, "Environment\n") && strings.Contains(text, "Clipboard routes")
+		}
+		if !textFound || !completed || len(streamer.requests) != 0 || current.promptIndex != 0 {
+			t.Fatalf("prompt=%q text=%v completed=%v requests=%d promptIndex=%d messages=%#v", prompt, textFound, completed, len(streamer.requests), current.promptIndex, messages)
 		}
 	}
 }

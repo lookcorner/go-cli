@@ -1724,6 +1724,35 @@ func TestPrivacyCommandsDoNotRunModelTurn(t *testing.T) {
 	}
 }
 
+func TestTerminalSetupCommandsDoNotRunModelTurn(t *testing.T) {
+	for _, prompt := range []string{"/terminal-setup", "/terminal-check ignored", "/terminal-info"} {
+		t.Run(prompt, func(t *testing.T) {
+			m := &model{ctx: context.Background(), runner: &agent.Runner{}}
+			m.setInput(prompt)
+			updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+			m = updated.(*model)
+			if command != nil || m.running || m.status != "terminal setup" || !strings.Contains(m.transcript.String(), "Environment\n") || !strings.Contains(m.transcript.String(), "Clipboard routes") {
+				t.Fatalf("command=%v running=%v status=%q transcript=%q", command != nil, m.running, m.status, m.transcript.String())
+			}
+		})
+	}
+
+	m := &model{ctx: context.Background(), runner: &agent.Runner{}}
+	m.setInput("/help")
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if !strings.Contains(updated.(*model).transcript.String(), "/terminal-setup") {
+		t.Fatalf("help=%q", updated.(*model).transcript.String())
+	}
+
+	m = &model{ctx: context.Background(), runner: &agent.Runner{}}
+	m.setInput("/terminal-setupx")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command == nil || !m.running {
+		t.Fatalf("/terminal-setupx command=%v running=%v", command != nil, m.running)
+	}
+}
+
 func TestMultilineCursorNavigationAndUndo(t *testing.T) {
 	m := &model{}
 	press := func(key tea.Key) {

@@ -584,6 +584,9 @@ context-window usage; `/context` reports only the context usage. `/privacy`
 reports the build's enforced privacy state without calling the model.
 `/privacy opt-out`, `/privacy out`, and `/privacy private` confirm the locked
 state; opt-in aliases and ambiguous values such as `on` or `off` are rejected.
+`/terminal-setup` (also `/terminal-check` or `/terminal-info`) reports the
+detected terminal, multiplexer, SSH and color state, available clipboard routes,
+and actionable setup warnings without calling the model.
 In Vim mode, `/` opens incremental regular-expression search while scrollback is focused; Enter
 accepts the query, Up/Down or `n`/`N` navigates matches, and Esc closes it. `/find <pattern>`
 opens the same search directly from the prompt without sending a model turn.

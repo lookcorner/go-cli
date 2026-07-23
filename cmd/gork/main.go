@@ -41,6 +41,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/skills"
 	"github.com/lookcorner/go-cli/internal/subagent"
+	"github.com/lookcorner/go-cli/internal/terminaldiag"
 	"github.com/lookcorner/go-cli/internal/tools"
 	"github.com/lookcorner/go-cli/internal/tui"
 	"github.com/lookcorner/go-cli/internal/version"
@@ -3237,6 +3238,11 @@ func interactiveLoop(
 				prompt = ""
 				continue
 			}
+			if terminaldiag.IsCommand(prompt) {
+				fmt.Fprintln(stderr, "[gork]", terminaldiag.Report())
+				prompt = ""
+				continue
+			}
 			if note, ok := tools.ParseRememberCommand(prompt); ok {
 				if note == "" {
 					rememberMode = true
@@ -3284,7 +3290,7 @@ func interactiveLoop(
 			case "/exit", "/quit":
 				return nil
 			case "/help":
-				fmt.Fprintln(stderr, "Commands: ! <command>, /compact, /context, /flush, /dream, /remember [text], /memory [on|off], /loop, /privacy [opt-out], /session-info (/status, /info), /help, /exit. Every other line is sent as a prompt.")
+				fmt.Fprintln(stderr, "Commands: ! <command>, /compact, /context, /flush, /dream, /remember [text], /memory [on|off], /loop, /privacy [opt-out], /session-info (/status, /info), /terminal-setup, /help, /exit. Every other line is sent as a prompt.")
 				prompt = ""
 				continue
 			case "/session-info", "/status", "/info":

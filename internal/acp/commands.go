@@ -52,6 +52,7 @@ func availableCommands(runner *agent.Runner, workspaceSkills bool) []map[string]
 		availableCommand("compact", "Compress conversation history to save context window", "optional context about what to preserve", nil),
 		availableCommand("always-approve", "Toggle always-approve mode (skip all permission prompts)", "on|off", nil),
 		availableCommand("privacy", "Show privacy status (coding data retention is locked to opt-out)", "opt-out", nil),
+		availableCommand("terminal-setup", "Check terminal, color, and clipboard setup", "", nil),
 	}
 	if runner != nil {
 		memoryConfigured, memoryEnabled := runner.MemoryAvailability()
@@ -384,7 +385,7 @@ func (s *Server) handleSessionStatusPrompt(incoming message, current *session, l
 	s.finishPrompt(incoming, current, lifecycle, "end_turn", agent.Result{}, nil, "")
 }
 
-func (s *Server) handlePrivacySlashPrompt(incoming message, current *session, lifecycle promptLifecycle, result agent.PrivacyResult) {
+func (s *Server) handleLocalMessagePrompt(incoming message, current *session, lifecycle promptLifecycle, message string) {
 	current.mu.Lock()
 	if current.closed {
 		current.mu.Unlock()
@@ -399,7 +400,7 @@ func (s *Server) handlePrivacySlashPrompt(incoming message, current *session, li
 	id := current.id
 	current.mu.Unlock()
 
-	s.sendCommandOutput(id, result.Message)
+	s.sendCommandOutput(id, message)
 	s.finishPrompt(incoming, current, lifecycle, "end_turn", agent.Result{}, nil, "")
 }
 

@@ -24,6 +24,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/hooks"
 	mcppkg "github.com/lookcorner/go-cli/internal/mcp"
 	sessionlog "github.com/lookcorner/go-cli/internal/session"
+	"github.com/lookcorner/go-cli/internal/terminaldiag"
 	"github.com/lookcorner/go-cli/internal/tools"
 	"github.com/lookcorner/go-cli/internal/workspace"
 	worktrees "github.com/lookcorner/go-cli/internal/worktree"
@@ -1986,7 +1987,12 @@ func (s *Server) handlePromptRequest(parent context.Context, incoming message, c
 		return
 	}
 	if result, ok := agent.ParsePrivacyCommand(prompt); ok {
-		s.handlePrivacySlashPrompt(incoming, current, newPromptLifecycle(params), result)
+		s.handleLocalMessagePrompt(incoming, current, newPromptLifecycle(params), result.Message)
+		s.markRunningPrompt(current, promptID(params.Meta))
+		return
+	}
+	if terminaldiag.IsCommand(prompt) {
+		s.handleLocalMessagePrompt(incoming, current, newPromptLifecycle(params), terminaldiag.Report())
 		s.markRunningPrompt(current, promptID(params.Meta))
 		return
 	}
