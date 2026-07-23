@@ -30,6 +30,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/agents"
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/auth"
+	"github.com/lookcorner/go-cli/internal/billing"
 	"github.com/lookcorner/go-cli/internal/bundle"
 	"github.com/lookcorner/go-cli/internal/config"
 	"github.com/lookcorner/go-cli/internal/hooks"
@@ -560,6 +561,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		OpenMemory:       memoryStoreOpener(cfg.Memory, ws.Root(), logger.ID()),
 		UpdateMCPServers: mcpRuntime.Update, MCPServers: mcpRuntime.Configs,
 	}
+	usage := newBillingService(cfg, tokenProvider, nil)
+	runner.FetchUsage, runner.OpenURL = usage.Usage, openBrowser
 	if cfg.FeedbackEnabled {
 		runner.SubmitFeedback = feedbackSubmitter(logger, runner.ModelID, runner.Model, ws.Root())
 	}
@@ -1341,6 +1344,16 @@ func newModelClient(cfg config.Config, tokenProvider api.TokenProvider) (agent.R
 		return client, nil
 	default:
 		return nil, fmt.Errorf("unsupported backend %q", cfg.Backend)
+	}
+}
+
+func newBillingService(cfg config.Config, tokenProvider api.TokenProvider, metadata func() (*bool, *string)) billing.Service {
+	path, _ := auth.DefaultPath()
+	authConfig := auth.DefaultConfig()
+	applyAuthPolicy(&authConfig, cfg)
+	return billing.Service{
+		AuthPath: path, AuthScope: authConfig.Scope(), BaseURL: cfg.ProxyBaseURL,
+		HTTP: &http.Client{Timeout: cfg.HTTPTimeout}, TokenProvider: tokenProvider, Metadata: metadata,
 	}
 }
 
@@ -2574,6 +2587,8 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			MarketplaceAction: marketplaceAction,
 			SessionID:         logger.ID(), SessionPath: logger.Path(), Workspace: ws.Root(), PromptWorkspace: sessionConfig.DisplayCWD,
 		}
+		usage := newBillingService(cfg, sessionTokenProvider, getBillingMeta)
+		runner.FetchUsage, runner.OpenURL = usage.Usage, openBrowser
 		if cfg.FeedbackEnabled {
 			runner.SubmitFeedback = feedbackSubmitter(logger, modelID, sessionCfg.Model, ws.Root())
 		}
@@ -3253,6 +3268,26 @@ func interactiveLoop(
 				prompt = ""
 				continue
 			}
+			if command, ok := billing.ParseCommand(prompt); ok {
+				switch command.Action {
+				case billing.ShowUsage:
+					if runner.FetchUsage == nil {
+						fmt.Fprintln(stderr, "[gork] billing usage is unavailable")
+					} else if text, err := runner.FetchUsage(ctx); err != nil {
+						fmt.Fprintln(stderr, "[gork] usage failed:", err)
+					} else {
+						fmt.Fprintln(stderr, "[gork]", text)
+					}
+				case billing.ManageUsage:
+					if runner.OpenURL == nil || !runner.OpenURL(billing.ManageURL) {
+						fmt.Fprintln(stderr, "[gork] Open:", billing.ManageURL)
+					}
+				default:
+					fmt.Fprintln(stderr, "[gork]", command.Message)
+				}
+				prompt = ""
+				continue
+			}
 			if action, ok := tools.ParseMemoryCommand(prompt); ok {
 				switch action {
 				case "enable", "disable":
@@ -3290,7 +3325,7 @@ func interactiveLoop(
 			case "/exit", "/quit":
 				return nil
 			case "/help":
-				fmt.Fprintln(stderr, "Commands: ! <command>, /compact, /context, /flush, /dream, /remember [text], /memory [on|off], /loop, /privacy [opt-out], /session-info (/status, /info), /terminal-setup, /help, /exit. Every other line is sent as a prompt.")
+				fmt.Fprintln(stderr, "Commands: ! <command>, /compact, /context, /flush, /dream, /remember [text], /memory [on|off], /loop, /privacy [opt-out], /session-info (/status, /info), /terminal-setup, /usage [show|manage] (/cost), /help, /exit. Every other line is sent as a prompt.")
 				prompt = ""
 				continue
 			case "/session-info", "/status", "/info":

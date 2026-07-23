@@ -1753,6 +1753,77 @@ func TestTerminalSetupCommandsDoNotRunModelTurn(t *testing.T) {
 	}
 }
 
+func TestUsageCommandsDoNotRunModelTurn(t *testing.T) {
+	for _, prompt := range []string{"/usage", "/cost show"} {
+		t.Run(prompt, func(t *testing.T) {
+			m := &model{ctx: context.Background(), runner: &agent.Runner{FetchUsage: func(context.Context) (string, error) {
+				return "Weekly limit: 42%", nil
+			}}}
+			m.setInput(prompt)
+			updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+			m = updated.(*model)
+			if command == nil || !m.running || m.status != "fetching usage" {
+				t.Fatalf("command=%v running=%v status=%q", command != nil, m.running, m.status)
+			}
+			updated, next := m.Update(command())
+			m = updated.(*model)
+			if next != nil || m.running || m.status != "usage" || !strings.Contains(m.transcript.String(), "Weekly limit: 42%") {
+				t.Fatalf("next=%v running=%v status=%q transcript=%q", next != nil, m.running, m.status, m.transcript.String())
+			}
+		})
+	}
+
+	m := &model{ctx: context.Background(), runner: &agent.Runner{FetchUsage: func(context.Context) (string, error) {
+		return "", errors.New("offline")
+	}}}
+	m.setInput("/usage")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	updated, _ = updated.(*model).Update(command())
+	m = updated.(*model)
+	if m.status != "usage failed" || !strings.Contains(m.transcript.String(), "offline") {
+		t.Fatalf("status=%q transcript=%q", m.status, m.transcript.String())
+	}
+
+	opened := ""
+	m = &model{ctx: context.Background(), runner: &agent.Runner{OpenURL: func(url string) bool { opened = url; return true }}}
+	m.setInput("/cost manage")
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.running || opened != "https://grok.com/?_s=usage" || m.status != "usage management opened" {
+		t.Fatalf("command=%v running=%v opened=%q status=%q", command != nil, m.running, opened, m.status)
+	}
+
+	m = &model{ctx: context.Background(), runner: &agent.Runner{}}
+	m.setInput("/usage manage")
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.status != "usage management link" || !strings.Contains(m.transcript.String(), "https://grok.com/?_s=usage") {
+		t.Fatalf("command=%v status=%q transcript=%q", command != nil, m.status, m.transcript.String())
+	}
+
+	m = &model{ctx: context.Background(), runner: &agent.Runner{}}
+	m.setInput("/usage BAD")
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.status != "usage argument invalid" || !strings.Contains(m.transcript.String(), "Unknown argument: BAD") {
+		t.Fatalf("command=%v status=%q transcript=%q", command != nil, m.status, m.transcript.String())
+	}
+
+	m = &model{ctx: context.Background(), runner: &agent.Runner{}}
+	m.setInput("/help")
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if !strings.Contains(updated.(*model).transcript.String(), "/usage [show|manage]") {
+		t.Fatalf("help=%q", updated.(*model).transcript.String())
+	}
+
+	m = &model{ctx: context.Background(), runner: &agent.Runner{}}
+	m.setInput("/usagex")
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if command == nil || !updated.(*model).running {
+		t.Fatalf("/usagex command=%v running=%v", command != nil, updated.(*model).running)
+	}
+}
+
 func TestMultilineCursorNavigationAndUndo(t *testing.T) {
 	m := &model{}
 	press := func(key tea.Key) {

@@ -173,6 +173,8 @@ type Runner struct {
 	MarketplaceList         func() ([]marketplace.ScanResult, error)
 	MarketplaceAction       func(context.Context, marketplace.Action) (marketplace.Outcome, error)
 	SubmitFeedback          func(session.UserFeedback) error
+	FetchUsage              func(context.Context) (string, error)
+	OpenURL                 func(string) bool
 	lastInputTokens         int
 	pendingSummary          string
 	modelHistory            []api.InputItem

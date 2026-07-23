@@ -166,6 +166,35 @@ func TestInteractiveTerminalSetupCommandsDoNotRunModelTurn(t *testing.T) {
 	}
 }
 
+func TestInteractiveUsageCommandsDoNotRunModelTurn(t *testing.T) {
+	streamer := &interactiveStatusStreamer{}
+	fetches, opened := 0, ""
+	runner := &agent.Runner{
+		Client: streamer, Model: "test",
+		FetchUsage: func(context.Context) (string, error) {
+			fetches++
+			return "Weekly limit: 42%", nil
+		},
+		OpenURL: func(url string) bool { opened = url; return false },
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	input := newTerminalInput(ctx, bufio.NewReader(strings.NewReader("/usage\n/cost show\n/usage manage\n/usage BAD\n/help\n/exit\n")))
+	var stderr bytes.Buffer
+	if err := interactiveLoop(ctx, runner, newScheduledWakeQueue(), input, io.Discard, &stderr, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	output := stderr.String()
+	for _, want := range []string{"Weekly limit: 42%", "https://grok.com/?_s=usage", "Unknown argument: BAD", "/usage [show|manage]"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("missing %q in %q", want, output)
+		}
+	}
+	if streamer.calls != 0 || fetches != 2 || opened != "https://grok.com/?_s=usage" {
+		t.Fatalf("model calls=%d fetches=%d opened=%q output=%q", streamer.calls, fetches, opened, output)
+	}
+}
+
 func TestInteractiveRememberModeTreatsPrivacyAsNoteText(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("GROK_HOME", root)

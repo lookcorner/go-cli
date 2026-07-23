@@ -88,6 +88,10 @@ and deletion-tombstone events; cloud review uploads are intentionally absent.
 `x.ai/debug/trigger_feedback` emits the reference feedback-request notification
 and response shapes locally for client integration testing.
 
+REPL, TUI, and ACP sessions support shared `/usage` and `/cost` billing metrics
+plus management links as local commands that never invoke model inference. ACP
+also advertises `/usage` with `show | manage` argument guidance.
+
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |
 | Responses API streaming | done | SSE text deltas, terminal response IDs, function calls and JSON fallback |

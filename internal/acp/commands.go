@@ -1,6 +1,7 @@
 package acp
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -10,6 +11,7 @@ import (
 	"unicode"
 
 	"github.com/lookcorner/go-cli/internal/agent"
+	"github.com/lookcorner/go-cli/internal/billing"
 	"github.com/lookcorner/go-cli/internal/skills"
 	"github.com/lookcorner/go-cli/internal/tools"
 )
@@ -53,6 +55,7 @@ func availableCommands(runner *agent.Runner, workspaceSkills bool) []map[string]
 		availableCommand("always-approve", "Toggle always-approve mode (skip all permission prompts)", "on|off", nil),
 		availableCommand("privacy", "Show privacy status (coding data retention is locked to opt-out)", "opt-out", nil),
 		availableCommand("terminal-setup", "Check terminal, color, and clipboard setup", "", nil),
+		availableCommand("usage", "View credit usage or manage billing", "show | manage", nil),
 	}
 	if runner != nil {
 		memoryConfigured, memoryEnabled := runner.MemoryAvailability()
@@ -402,6 +405,26 @@ func (s *Server) handleLocalMessagePrompt(incoming message, current *session, li
 
 	s.sendCommandOutput(id, message)
 	s.finishPrompt(incoming, current, lifecycle, "end_turn", agent.Result{}, nil, "")
+}
+
+func (s *Server) handleUsagePrompt(ctx context.Context, incoming message, current *session, lifecycle promptLifecycle, command billing.Command) {
+	message := command.Message
+	switch command.Action {
+	case billing.ShowUsage:
+		if current.runner.FetchUsage == nil {
+			message = "Usage could not be loaded: billing usage is unavailable"
+		} else if text, err := current.runner.FetchUsage(ctx); err != nil {
+			message = "Usage could not be loaded: " + err.Error()
+		} else {
+			message = text
+		}
+	case billing.ManageUsage:
+		message = billing.ManageURL
+		if current.runner.OpenURL != nil && current.runner.OpenURL(billing.ManageURL) {
+			message = "Opened usage management: " + billing.ManageURL
+		}
+	}
+	s.handleLocalMessagePrompt(incoming, current, lifecycle, message)
 }
 
 func contextUsagePercent(used, total int) int {

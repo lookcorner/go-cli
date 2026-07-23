@@ -20,6 +20,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/lookcorner/go-cli/internal/agent"
+	"github.com/lookcorner/go-cli/internal/billing"
 	"github.com/lookcorner/go-cli/internal/memory"
 	"github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/terminaldiag"
@@ -106,6 +107,10 @@ type exportDoneEvent struct {
 	err  error
 }
 type feedbackDoneEvent struct{ err error }
+type usageDoneEvent struct {
+	text string
+	err  error
+}
 type compactDoneEvent struct{ err error }
 type memoryFlushDoneEvent struct {
 	result agent.MemoryFlushResult
@@ -1046,6 +1051,19 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if command := m.startNext(); command != nil {
 			return m, command
 		}
+	case usageDoneEvent:
+		m.running = false
+		m.turnCancel = nil
+		if msg.err != nil {
+			m.appendSystem("Usage could not be loaded: " + msg.err.Error())
+			m.status = "usage failed"
+		} else {
+			m.appendSystem(msg.text)
+			m.status = "usage"
+		}
+		if command := m.startNext(); command != nil {
+			return m, command
+		}
 	case scheduledFiredEvent:
 		if msg.event.TaskID != m.activeTask {
 			duplicate := false
@@ -1398,6 +1416,28 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			return m.startRememberReview(note)
 		}
+		if command, ok := billing.ParseCommand(prompt); ok {
+			switch command.Action {
+			case billing.ShowUsage:
+				m.running = true
+				turnCtx, cancel := context.WithCancel(m.ctx)
+				m.turnCancel = cancel
+				m.status = "fetching usage"
+				return m, runUsage(turnCtx, m.runner)
+			case billing.ManageUsage:
+				if m.runner == nil || m.runner.OpenURL == nil || !m.runner.OpenURL(billing.ManageURL) {
+					m.appendSystem("Open: " + billing.ManageURL)
+					m.status = "usage management link"
+				} else {
+					m.status = "usage management opened"
+				}
+				return m, nil
+			default:
+				m.appendSystem(command.Message)
+				m.status = "usage argument invalid"
+				return m, nil
+			}
+		}
 		if prompt == "/history" {
 			m.openHistorySearch()
 			return m, nil
@@ -1423,7 +1463,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if m.runner != nil && m.runner.SubmitFeedback != nil {
 				feedbackCommand = " `/feedback [text]`"
 			}
-			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + " `/btw <question>` `/compact` `/compact-mode` `/context` `/copy [N]` `/dream` `/effort [level]` `/exit` `/export [filename]`" + feedbackCommand + " `/find` `/flush` `/help` `/history` `/loop` `/memory` `/model [name] [effort]` (`/m`) `/multiline` `/plan [description]` `/privacy [opt-out]` `/queue` `/recap` `/remember` `/rename <title>` `/rewind` `/session-info` (`/status`, `/info`) `/tasks` `/terminal-setup`" + mouseCommand + " `/timestamps` `/transcript` `/view-plan` `/vim-mode`")
+			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + " `/btw <question>` `/compact` `/compact-mode` `/context` `/copy [N]` `/dream` `/effort [level]` `/exit` `/export [filename]`" + feedbackCommand + " `/find` `/flush` `/help` `/history` `/loop` `/memory` `/model [name] [effort]` (`/m`) `/multiline` `/plan [description]` `/privacy [opt-out]` `/queue` `/recap` `/remember` `/rename <title>` `/rewind` `/session-info` (`/status`, `/info`) `/tasks` `/terminal-setup`" + mouseCommand + " `/timestamps` `/transcript` `/usage [show|manage]` (`/cost`) `/view-plan` `/vim-mode`")
 			m.status = "commands"
 			return m, nil
 		case "/privacy":
@@ -3088,6 +3128,16 @@ func runFeedback(runner *agent.Runner, text string) tea.Cmd {
 			ModelID: runner.ModelID, ResolvedModelID: runner.Model,
 		})
 		return feedbackDoneEvent{err: err}
+	}
+}
+
+func runUsage(ctx context.Context, runner *agent.Runner) tea.Cmd {
+	return func() tea.Msg {
+		if runner == nil || runner.FetchUsage == nil {
+			return usageDoneEvent{err: errors.New("billing usage is unavailable")}
+		}
+		text, err := runner.FetchUsage(ctx)
+		return usageDoneEvent{text: text, err: err}
 	}
 }
 
