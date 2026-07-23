@@ -499,7 +499,8 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 	m := &model{
 		ctx: ctx, runner: runner, bridge: bridge, workspace: workspace,
 		modelName: modelName, previousID: previousID, width: 80, height: 24,
-		status: "ready", initial: strings.TrimSpace(initialPrompt), historyIndex: -1,
+		contextWindow: runner.ContextWindow,
+		status:        "ready", initial: strings.TrimSpace(initialPrompt), historyIndex: -1,
 		history: loadPromptHistory(runner, workspace), selectionMode: parseTextSelectionMode(options.Mode),
 		wordSeparators: defaultWordSeparators, mouseToggle: options.MouseReportingToggle, vimMode: options.VimMode,
 		scrollLines: mouseWheelScrollLines, invertScroll: options.InvertScroll,
@@ -1123,7 +1124,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "/quit", "/exit":
 			return m, tea.Quit
 		case "/help":
-			m.appendSystem("# Commands\n\n`! <command>` `/always-approve` `/btw <question>` `/compact` `/context` `/copy [N]` `/dream` `/exit` `/export [filename]` `/find` `/flush` `/help` `/history` `/loop` `/memory` `/multiline` `/plan [description]` `/queue` `/recap` `/remember` `/rename <title>` `/session-info` `/tasks` `/transcript` `/view-plan`")
+			m.appendSystem("# Commands\n\n`! <command>` `/always-approve` `/btw <question>` `/compact` `/context` `/copy [N]` `/dream` `/exit` `/export [filename]` `/find` `/flush` `/help` `/history` `/loop` `/memory` `/multiline` `/plan [description]` `/queue` `/recap` `/remember` `/rename <title>` `/session-info` (`/status`, `/info`) `/tasks` `/transcript` `/view-plan`")
 			m.status = "commands"
 			return m, nil
 		case "/queue":
@@ -1213,12 +1214,16 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.status = "normal mode"
 			}
 			return m, nil
-		case "/session-info":
+		case "/session-info", "/status", "/info":
 			if m.runner == nil || strings.TrimSpace(m.runner.SessionID) == "" {
 				m.status = "no active session"
 				return m, nil
 			}
-			m.appendSystem(fmt.Sprintf("# Session info\n\n- Session: `%s`\n- Workspace: `%s`\n- Model: `%s`", m.runner.SessionID, m.workspace, m.modelName))
+			text := fmt.Sprintf("# Session info\n\n- Session: `%s`\n- Workspace: `%s`\n- Model: `%s`\n- Turn: %d", m.runner.SessionID, m.workspace, m.modelName, m.runner.SessionTurnCount())
+			if m.contextWindow > 0 {
+				text += fmt.Sprintf("\n- Context: %d / %d tokens (%d%%)", m.inputTokens, m.contextWindow, m.inputTokens*100/m.contextWindow)
+			}
+			m.appendSystem(text)
 			m.status = "session info"
 			return m, nil
 		case "/context":
@@ -1226,7 +1231,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.status = "no active session"
 				return m, nil
 			}
-			if m.inputTokens <= 0 || m.contextWindow <= 0 {
+			if m.contextWindow <= 0 {
 				m.status = "context usage unavailable"
 				return m, nil
 			}

@@ -133,6 +133,7 @@ type Runner struct {
 	Logger                  EventLogger
 	SessionID               string
 	SessionPath             string
+	Workspace               string
 	ModelID                 string
 	Model                   string
 	ModelOptions            []ModelOption
@@ -193,6 +194,23 @@ type Runner struct {
 	btwRunning              atomic.Bool
 	interjectionMu          sync.Mutex
 	interjections           []Interjection
+}
+
+func (r *Runner) SessionTurnCount() int {
+	if r == nil || strings.TrimSpace(r.SessionPath) == "" {
+		return 0
+	}
+	messages, err := session.Transcript(r.SessionPath)
+	if err != nil {
+		return 0
+	}
+	count := 0
+	for _, message := range messages {
+		if message.Role == "user" {
+			count++
+		}
+	}
+	return count
 }
 
 type Interjection struct {

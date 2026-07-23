@@ -427,6 +427,9 @@ conversation:
 
 Interactive prompts beginning with `!` run a workspace-scoped Shell command
 directly, for example `! git status`; they do not create a model turn.
+`/session-info` (also `/status` or `/info`) reports the session, workspace,
+model, completed turn count, and latest context usage without a model call;
+`/context` prints just the latest available token usage.
 
 Use `--tui` for the full-screen interface:
 
@@ -502,8 +505,9 @@ opens fuzzy search over the same workspace-scoped history; Enter or Tab restores
 the selected prompt to the composer without submitting it.
 `/copy [N]` copies the latest (or Nth-latest) assistant response from the session
 transcript to the terminal clipboard.
-`/help` lists local commands, `/session-info` shows the active session, workspace,
-and model, and `/context` reports the latest available context-window usage.
+`/help` lists local commands, `/session-info` (also `/status` or `/info`) shows
+the active session, workspace, model, completed turns, and latest available
+context-window usage; `/context` reports only the context usage.
 In Vim mode, `/` opens incremental regular-expression search while scrollback is focused; Enter
 accepts the query, Up/Down or `n`/`N` navigates matches, and Esc closes it. `/find <pattern>`
 opens the same search directly from the prompt without sending a model turn.

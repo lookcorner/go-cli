@@ -47,8 +47,47 @@ func (s *memoryCommandStreamer) StreamResponse(_ context.Context, request api.Re
 
 type failingGoalStreamer struct{ err error }
 
+type interactiveStatusStreamer struct{ calls int }
+
 func (s failingGoalStreamer) StreamResponse(context.Context, api.ResponseRequest, func(string)) (api.StreamResult, error) {
 	return api.StreamResult{}, s.err
+}
+
+func (s *interactiveStatusStreamer) StreamResponse(_ context.Context, _ api.ResponseRequest, stream func(string)) (api.StreamResult, error) {
+	s.calls++
+	stream("done")
+	return api.StreamResult{ResponseID: "response-1", Text: "done", Usage: api.Usage{InputTokens: 250}}, nil
+}
+
+func TestInteractiveSessionInfoAliasesAndContext(t *testing.T) {
+	root := t.TempDir()
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	logger, err := session.NewLoggerWithID(t.TempDir(), "interactive-status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logger.Close()
+	streamer := &interactiveStatusStreamer{}
+	runner := &agent.Runner{
+		Client: streamer, Tools: registry, Logger: logger, SessionID: logger.ID(), SessionPath: logger.Path(),
+		Workspace: root, ModelID: "grok-build", Model: "model-id", ContextWindow: 1000, MaxSteps: 1,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	input := newTerminalInput(ctx, bufio.NewReader(strings.NewReader("/status before\n/context before\nhello\n/info extra\n/context now\n/exit\n")))
+	var stderr bytes.Buffer
+	if err := interactiveLoop(ctx, runner, newScheduledWakeQueue(), input, io.Discard, &stderr, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	output := stderr.String()
+	if streamer.calls != 1 || strings.Count(output, "[gork] session: interactive-status") != 2 || !strings.Contains(output, "[gork] workspace: "+root) || !strings.Contains(output, "[gork] model: grok-build") || !strings.Contains(output, "[gork] turn: 0") || !strings.Contains(output, "[gork] turn: 1") || strings.Count(output, "[gork] context: 0 / 1000 tokens (0%)") != 2 || strings.Count(output, "[gork] context: 250 / 1000 tokens (25%)") != 2 {
+		t.Fatalf("calls=%d output=%q", streamer.calls, output)
+	}
 }
 
 func TestNewPermissionClassifierConfig(t *testing.T) {

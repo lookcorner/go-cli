@@ -546,7 +546,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		HookCatalog: hookCatalog, HookPolicy: hookRuntime,
 		ListSubagents: subagents.List, GetSubagent: subagents.Output, KillSubagent: subagents.Kill,
 		ListTasks: registry.BackgroundTasks, KillTask: registry.KillBackgroundTask,
-		SessionID: logger.ID(), SessionPath: logger.Path(),
+		SessionID: logger.ID(), SessionPath: logger.Path(), Workspace: ws.Root(),
 		Model: cfg.Model, Instructions: cfg.SystemPrompt, MaxSteps: cfg.MaxSteps,
 		PermissionClassifier: permissionClassifier,
 		TextOutput:           stdout, StatusOutput: stderr,
@@ -2517,7 +2517,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			UpdatePlugins:     updatePlugins,
 			MarketplaceList:   func() ([]marketplace.ScanResult, error) { return marketplace.List(opts.configPath, ws.Root()) },
 			MarketplaceAction: marketplaceAction,
-			SessionPath:       logger.Path(),
+			SessionID:         logger.ID(), SessionPath: logger.Path(), Workspace: ws.Root(),
 		}
 		runner.ResolveModel = func(id string) (agent.ModelRuntime, error) {
 			modelCatalogMu.RLock()
@@ -3060,6 +3060,8 @@ func interactiveLoop(
 	rememberMode := false
 	inputClosed := false
 	promptShown := false
+	inputTokens := 0
+	contextWindow := runner.ContextWindow
 	var promptRead <-chan terminalReadResult
 	for {
 		scheduledID := ""
@@ -3153,13 +3155,39 @@ func interactiveLoop(
 				prompt = ""
 				continue
 			}
-			switch prompt {
+			command := prompt
+			if fields := strings.Fields(prompt); len(fields) > 0 {
+				switch fields[0] {
+				case "/session-info", "/status", "/info", "/context":
+					command = fields[0]
+				}
+			}
+			switch command {
 			case "":
 				continue
 			case "/exit", "/quit":
 				return nil
 			case "/help":
-				fmt.Fprintln(stderr, "Commands: ! <command>, /compact, /flush, /dream, /remember [text], /memory [on|off], /loop, /help, /exit. Every other line is sent as a prompt.")
+				fmt.Fprintln(stderr, "Commands: ! <command>, /compact, /context, /flush, /dream, /remember [text], /memory [on|off], /loop, /session-info (/status, /info), /help, /exit. Every other line is sent as a prompt.")
+				prompt = ""
+				continue
+			case "/session-info", "/status", "/info":
+				model := runner.ModelID
+				if model == "" {
+					model = runner.Model
+				}
+				fmt.Fprintf(stderr, "[gork] session: %s\n[gork] workspace: %s\n[gork] model: %s\n[gork] turn: %d\n", valueOrUnknown(runner.SessionID), valueOrUnknown(runner.Workspace), valueOrUnknown(model), runner.SessionTurnCount())
+				if contextWindow > 0 {
+					fmt.Fprintf(stderr, "[gork] context: %d / %d tokens (%d%%)\n", inputTokens, contextWindow, inputTokens*100/contextWindow)
+				}
+				prompt = ""
+				continue
+			case "/context":
+				if contextWindow <= 0 {
+					fmt.Fprintln(stderr, "[gork] context usage unavailable")
+				} else {
+					fmt.Fprintf(stderr, "[gork] context: %d / %d tokens (%d%%)\n", inputTokens, contextWindow, inputTokens*100/contextWindow)
+				}
 				prompt = ""
 				continue
 			case "/compact":
@@ -3225,6 +3253,9 @@ func interactiveLoop(
 			}
 		} else {
 			previousResponseID = result.ResponseID
+			if result.InputTokens > 0 && result.ContextWindow > 0 {
+				inputTokens, contextWindow = result.InputTokens, result.ContextWindow
+			}
 			if result.Text != "" && !strings.HasSuffix(result.Text, "\n") {
 				fmt.Fprintln(stdout)
 			}
@@ -3234,6 +3265,13 @@ func interactiveLoop(
 			return nil
 		}
 	}
+}
+
+func valueOrUnknown(value string) string {
+	if value = strings.TrimSpace(value); value != "" {
+		return value
+	}
+	return "unknown"
 }
 
 func reviewMemoryNoteTerminal(ctx context.Context, runner *agent.Runner, input *terminalInput, output io.Writer, raw string) error {

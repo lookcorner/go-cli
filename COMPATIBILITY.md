@@ -48,6 +48,9 @@ Authenticated ACP bundle sync/status/entry extensions populate the shared bundle
 persona, role, agent, and skill cache through bounded archives or legacy JSON,
 preserve local modifications, retry refreshed session credentials, and refresh
 live skill catalogs after successful updates.
+TUI and interactive REPL sessions expose the always-on `/session-info` command
+with reference `/status` and `/info` aliases, completed-turn counts, and latest
+context usage without starting a model turn.
 
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |
