@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1684,6 +1685,233 @@ func TestTurnCompletionFetchesPromptSuggestion(t *testing.T) {
 	content, _ := streamer.request.Input[0].Content.(string)
 	if streamer.request.Model != "grok-build-0.1" || !strings.Contains(content, "CWD: /work/project") {
 		t.Fatalf("request=%#v", streamer.request)
+	}
+}
+
+func rewindTUIFixture(t *testing.T) (*model, string) {
+	t.Helper()
+	root := t.TempDir()
+	file := filepath.Join(root, "state.txt")
+	if err := os.WriteFile(file, []byte("first"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	t.Cleanup(func() { _ = registry.Close() })
+	logger, err := session.NewLoggerWithID(t.TempDir(), "tui-rewind")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = logger.Close() })
+	for index, prompt := range []string{"first request", "second request"} {
+		if err := logger.AppendPrompt(prompt, nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := logger.Append("model_response", map[string]any{"response_id": fmt.Sprintf("response-%d", index+1), "text": fmt.Sprintf("answer %d", index+1), "tool_call_count": 0}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store, err := workspace.NewRewindStore(ws, filepath.Join(t.TempDir(), "rewind.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CaptureBefore(1, "state.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte("second"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CaptureAfter(1, "state.txt"); err != nil {
+		t.Fatal(err)
+	}
+	runner := &agent.Runner{Tools: registry, Logger: logger, SessionID: logger.ID(), SessionPath: logger.Path(), Workspace: root}
+	if err := runner.EnableRewind(store, 2); err != nil {
+		t.Fatal(err)
+	}
+	m := &model{ctx: context.Background(), runner: runner, workspace: root, previousID: "response-2", width: 60, height: 18, status: "ready", historyIndex: -1}
+	m.transcript.WriteString("You\nfirst request\n\nGork\nanswer 1\n\nYou\nsecond request\n\nGork\nanswer 2")
+	return m, file
+}
+
+func TestTUIRewindPickerPreviewsConflictAndRestoresAll(t *testing.T) {
+	m, file := rewindTUIFixture(t)
+	m.setInput("/rewind")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command == nil || m.rewind == nil || m.rewind.phase != rewindLoading {
+		t.Fatalf("command=%v rewind=%#v", command != nil, m.rewind)
+	}
+	updated, _ = m.Update(command())
+	m = updated.(*model)
+	if m.rewind.phase != rewindPicker || len(m.rewind.points) != 2 || m.rewind.points[0].PromptIndex != 1 || !strings.Contains(stripUIANSI(m.View().Content), "Turn 2") {
+		t.Fatalf("rewind=%#v view=%q", m.rewind, stripUIANSI(m.View().Content))
+	}
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if m.rewind.phase != rewindModeSelect || len(rewindModes(m.rewind.points, m.rewind.target)) != 3 {
+		t.Fatalf("mode state=%#v", m.rewind)
+	}
+	if err := os.WriteFile(file, []byte("external"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command == nil || m.rewind.phase != rewindPreviewing {
+		t.Fatalf("preview command=%v state=%#v", command != nil, m.rewind)
+	}
+	updated, _ = m.Update(command())
+	m = updated.(*model)
+	if m.rewind.phase != rewindConfirm || len(m.rewind.preview.Conflicts) != 1 || !strings.Contains(stripUIANSI(m.View().Content), "External changes will be overwritten") {
+		t.Fatalf("confirm state=%#v view=%q", m.rewind, stripUIANSI(m.View().Content))
+	}
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: 'y', Text: "y"}))
+	m = updated.(*model)
+	if command == nil || m.rewind.phase != rewindExecuting {
+		t.Fatalf("execute command=%v state=%#v", command != nil, m.rewind)
+	}
+	updated, _ = m.Update(command())
+	m = updated.(*model)
+	if m.rewind != nil || m.previousID != "response-1" || string(m.input) != "second request" || strings.Contains(m.transcript.String(), "second request") {
+		t.Fatalf("previous=%q input=%q transcript=%q rewind=%#v", m.previousID, m.input, m.transcript.String(), m.rewind)
+	}
+	if current, _ := os.ReadFile(file); string(current) != "first" {
+		t.Fatalf("restored file=%q", current)
+	}
+}
+
+func TestTUIRewindCanCancelRunningTurn(t *testing.T) {
+	m, _ := rewindTUIFixture(t)
+	cancelled := false
+	_, cancel := context.WithCancel(context.Background())
+	m.turnCancel = func() {
+		cancelled = true
+		cancel()
+	}
+	m.running = true
+	m.setInput("/rewind")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.rewind == nil || m.rewind.phase != rewindCancelOffer {
+		t.Fatalf("command=%v state=%#v", command != nil, m.rewind)
+	}
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: 'y', Text: "y"}))
+	m = updated.(*model)
+	if !cancelled || m.rewind.phase != rewindCancelling {
+		t.Fatalf("cancelled=%v state=%#v", cancelled, m.rewind)
+	}
+	updated, command = m.Update(turnDoneEvent{err: context.Canceled})
+	m = updated.(*model)
+	if command == nil || m.running || m.rewind.phase != rewindLoading {
+		t.Fatalf("command=%v running=%v state=%#v", command != nil, m.running, m.rewind)
+	}
+	updated, _ = m.Update(command())
+	m = updated.(*model)
+	if m.rewind.phase != rewindPicker {
+		t.Fatalf("state=%#v", m.rewind)
+	}
+}
+
+func TestTUIRewindDoubleEscapeAndStaleEvents(t *testing.T) {
+	m, _ := rewindTUIFixture(t)
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
+	m = updated.(*model)
+	if command != nil || m.rewind != nil {
+		t.Fatalf("first escape command=%v rewind=%#v", command != nil, m.rewind)
+	}
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
+	m = updated.(*model)
+	if command == nil || m.rewind == nil || m.rewind.phase != rewindLoading {
+		t.Fatalf("second escape command=%v rewind=%#v", command != nil, m.rewind)
+	}
+	serial := m.promptSerial
+	updated, _ = m.Update(rewindPointsEvent{points: []session.RewindPoint{{PromptIndex: 99}}, serial: serial - 1})
+	m = updated.(*model)
+	if m.rewind.phase != rewindLoading {
+		t.Fatalf("stale event changed state=%#v", m.rewind)
+	}
+	updated, _ = m.Update(command())
+	m = updated.(*model)
+	if m.rewind.phase != rewindPicker {
+		t.Fatalf("current event state=%#v", m.rewind)
+	}
+}
+
+func TestTUIRewindNavigationBackAndEmptyState(t *testing.T) {
+	first, second := "first", "second"
+	m := &model{status: "ready", promptSerial: 3, rewind: &rewindState{
+		phase: rewindPicker,
+		points: []session.RewindPoint{
+			{PromptIndex: 1, PromptPreview: &second, HasFileChanges: true},
+			{PromptIndex: 0, PromptPreview: &first},
+		},
+	}}
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	m = updated.(*model)
+	if m.rewind.selected != 1 {
+		t.Fatalf("selected=%d", m.rewind.selected)
+	}
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
+	m = updated.(*model)
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if m.rewind.phase != rewindModeSelect || m.rewind.target != 1 {
+		t.Fatalf("state=%#v", m.rewind)
+	}
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	m = updated.(*model)
+	if m.rewind.selected != 1 {
+		t.Fatalf("mode selected=%d", m.rewind.selected)
+	}
+	m.rewind.phase = rewindConfirm
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: 'n', Text: "n"}))
+	m = updated.(*model)
+	if m.rewind.phase != rewindModeSelect {
+		t.Fatalf("confirm back state=%#v", m.rewind)
+	}
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
+	m = updated.(*model)
+	if m.rewind.phase != rewindPicker {
+		t.Fatalf("mode back state=%#v", m.rewind)
+	}
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
+	m = updated.(*model)
+	if m.rewind != nil {
+		t.Fatalf("picker was not dismissed=%#v", m.rewind)
+	}
+
+	m.rewind = &rewindState{phase: rewindLoading}
+	updated, _ = m.Update(rewindPointsEvent{serial: m.promptSerial})
+	m = updated.(*model)
+	if m.rewind.phase != rewindError || !strings.Contains(m.rewind.err, "No turns") {
+		t.Fatalf("empty state=%#v", m.rewind)
+	}
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if updated.(*model).rewind != nil {
+		t.Fatal("error state was not dismissed")
+	}
+}
+
+func TestSelectedWindowKeepsCurrentRewindPointVisible(t *testing.T) {
+	lines := []string{"zero", "one", "two", "three", "four", "five"}
+	for selected := range lines {
+		window := selectedWindow(lines, selected, 3)
+		if !strings.Contains(window, "> "+lines[selected]) || strings.Count(window, "\n") > 2 {
+			t.Fatalf("selected=%d window=%q", selected, window)
+		}
+	}
+}
+
+func TestRewindModesAlwaysOfferConversationAndCombinedRewind(t *testing.T) {
+	withoutFiles := rewindModes([]session.RewindPoint{{PromptIndex: 0}}, 0)
+	if !slices.Equal(withoutFiles, []agent.RewindMode{agent.RewindAll, agent.RewindConversationOnly}) {
+		t.Fatalf("modes without files=%#v", withoutFiles)
+	}
+	withFiles := rewindModes([]session.RewindPoint{{PromptIndex: 0, HasFileChanges: true}}, 0)
+	if !slices.Equal(withFiles, []agent.RewindMode{agent.RewindAll, agent.RewindConversationOnly, agent.RewindFilesOnly}) {
+		t.Fatalf("modes with files=%#v", withFiles)
 	}
 }
 

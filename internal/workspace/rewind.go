@@ -266,6 +266,24 @@ func (s *RewindStore) Restore(target int) ([]string, FileRewindPreview, error) {
 	return reverted, preview, err
 }
 
+// MergeFrom preserves current files after a conversation-only rewind by
+// folding later snapshots into the preceding checkpoint.
+func (s *RewindStore) MergeFrom(target int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if target < 0 {
+		return errors.New("rewind target must not be negative")
+	}
+	if err := s.appendLocked(rewindEvent{Time: time.Now().UTC(), Kind: "merge", PromptIndex: target}); err != nil {
+		return err
+	}
+	events, err := s.loadLocked()
+	if err == nil {
+		s.rebuildCaptured(events)
+	}
+	return err
+}
+
 func (s *RewindStore) planLocked(target int) (map[string]rewindFilePlan, FileRewindPreview, error) {
 	if target < 0 {
 		return nil, FileRewindPreview{}, errors.New("rewind target must not be negative")
@@ -492,6 +510,10 @@ func (s *RewindStore) loadLocked() ([]rewindEvent, error) {
 			events = kept
 			continue
 		}
+		if event.Kind == "merge" {
+			events = mergeRewindEvents(events, event.PromptIndex)
+			continue
+		}
 		if event.Kind == "cancel" {
 			kept := events[:0]
 			for _, previous := range events {
@@ -511,6 +533,48 @@ func (s *RewindStore) loadLocked() ([]rewindEvent, error) {
 		return nil, err
 	}
 	return events, nil
+}
+
+func mergeRewindEvents(events []rewindEvent, target int) []rewindEvent {
+	if target == 0 {
+		return nil
+	}
+	kept := make([]rewindEvent, 0, len(events))
+	merged := make(map[string]rewindFilePlan)
+	times := make(map[string][2]time.Time)
+	beforeSeen := make(map[string]bool)
+	for _, event := range events {
+		if event.PromptIndex < target-1 {
+			kept = append(kept, event)
+			continue
+		}
+		item := merged[event.Path]
+		stamp := times[event.Path]
+		if event.Kind == "before" && !beforeSeen[event.Path] {
+			item.before = event.State
+			stamp[0] = event.Time
+			beforeSeen[event.Path] = true
+		}
+		if event.Kind == "after" {
+			state := event.State
+			item.after = &state
+			stamp[1] = event.Time
+		}
+		merged[event.Path], times[event.Path] = item, stamp
+	}
+	paths := make([]string, 0, len(merged))
+	for path := range merged {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	for _, path := range paths {
+		item, stamp := merged[path], times[path]
+		kept = append(kept, rewindEvent{Time: stamp[0], Kind: "before", PromptIndex: target - 1, Path: path, State: item.before})
+		if item.after != nil {
+			kept = append(kept, rewindEvent{Time: stamp[1], Kind: "after", PromptIndex: target - 1, Path: path, State: *item.after})
+		}
+	}
+	return kept
 }
 
 func (s *RewindStore) rebuildCaptured(events []rewindEvent) {

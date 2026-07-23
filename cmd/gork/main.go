@@ -557,6 +557,17 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		OpenMemory:       memoryStoreOpener(cfg.Memory, ws.Root(), logger.ID()),
 		UpdateMCPServers: mcpRuntime.Update, MCPServers: mcpRuntime.Configs,
 	}
+	rewindStore, err := workspace.NewRewindStore(ws, filepath.Join(filepath.Dir(logger.Path()), "rewind", logger.ID()+".jsonl"))
+	if err != nil {
+		return err
+	}
+	rewindPoints, err := session.RewindPoints(logger.Path())
+	if err != nil {
+		return err
+	}
+	if err := runner.EnableRewind(rewindStore, len(rewindPoints)); err != nil {
+		return err
+	}
 	defer waitRunnerMemory(runner)
 	if opts.tui {
 		return tui.Run(ctx, runner, tuiBridge, prompt, opts.previousID, resumedTranscript, ws.Root(), cfg.Model, tui.UIOptions{

@@ -75,6 +75,21 @@ type promptSuggestionEvent struct {
 	text   string
 	serial uint64
 }
+type rewindPointsEvent struct {
+	points []session.RewindPoint
+	err    error
+	serial uint64
+}
+type rewindPreviewEvent struct {
+	preview agent.RewindPreview
+	err     error
+	serial  uint64
+}
+type rewindDoneEvent struct {
+	result agent.RewindResult
+	err    error
+	serial uint64
+}
 type shellDoneEvent struct {
 	command string
 	output  string
@@ -403,6 +418,8 @@ type model struct {
 	recapRunning  bool
 	pendingRecap  string
 	btwRunning    bool
+	rewind        *rewindState
+	lastEmptyEsc  time.Time
 	questionClick struct {
 		option int
 		at     time.Time
@@ -492,6 +509,30 @@ type rememberReviewState struct {
 	enhanceDone  bool
 	showEnhanced bool
 	nonce        uint64
+}
+
+type rewindPhase uint8
+
+const (
+	rewindLoading rewindPhase = iota
+	rewindPicker
+	rewindCancelOffer
+	rewindCancelling
+	rewindModeSelect
+	rewindPreviewing
+	rewindConfirm
+	rewindExecuting
+	rewindError
+)
+
+type rewindState struct {
+	phase    rewindPhase
+	points   []session.RewindPoint
+	selected int
+	target   int
+	mode     agent.RewindMode
+	preview  agent.RewindPreview
+	err      string
 }
 
 type questionState struct {
@@ -759,6 +800,9 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.activeTask = ""
+		if m.rewind != nil && m.rewind.phase == rewindCancelling {
+			return m, m.loadRewindPoints()
+		}
 		if m.pendingRecap != "" {
 			m.appendSystem(recapLabel + m.pendingRecap)
 			m.pendingRecap = ""
@@ -774,6 +818,52 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.promptSuggestion = msg.text
 			m.suggestionDismissed = false
 		}
+	case rewindPointsEvent:
+		if m.rewind == nil || msg.serial != m.promptSerial || m.rewind.phase != rewindLoading {
+			return m, nil
+		}
+		if msg.err != nil || len(msg.points) == 0 {
+			m.rewind.phase = rewindError
+			if msg.err != nil {
+				m.rewind.err = msg.err.Error()
+			} else {
+				m.rewind.err = "No turns are available to rewind."
+			}
+			return m, nil
+		}
+		slices.Reverse(msg.points)
+		m.rewind.points, m.rewind.phase, m.rewind.selected = msg.points, rewindPicker, 0
+		m.status = "select a turn to rewind"
+	case rewindPreviewEvent:
+		if m.rewind == nil || msg.serial != m.promptSerial || m.rewind.phase != rewindPreviewing {
+			return m, nil
+		}
+		if msg.err != nil {
+			m.rewind.phase, m.rewind.err = rewindError, msg.err.Error()
+			return m, nil
+		}
+		m.rewind.preview, m.rewind.phase = msg.preview, rewindConfirm
+		m.status = "confirm rewind"
+	case rewindDoneEvent:
+		if m.rewind == nil || msg.serial != m.promptSerial || m.rewind.phase != rewindExecuting {
+			return m, nil
+		}
+		if msg.err != nil {
+			m.rewind.phase, m.rewind.err = rewindError, msg.err.Error()
+			return m, nil
+		}
+		mode := msg.result.Mode
+		if mode == agent.RewindAll || mode == agent.RewindConversationOnly {
+			m.previousID = msg.result.PreviousResponseID
+			m.transcript.Reset()
+			m.transcript.WriteString(strings.TrimSpace(session.FormatTranscript(msg.result.Messages)))
+			m.setInput(msg.result.PromptText)
+			m.history = loadPromptHistory(m.runner, m.workspace)
+			m.historyActive, m.historyIndex = false, -1
+		}
+		m.rewind = nil
+		m.scroll = 0
+		m.status = fmt.Sprintf("rewound %s to turn %d", strings.ReplaceAll(string(mode), "_", " "), msg.result.Target+1)
 	case shellDoneEvent:
 		m.running = false
 		m.turnCancel = nil
@@ -990,6 +1080,12 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+	if m.rewind != nil {
+		return m.handleRewindKey(msg)
+	}
+	if key.Code != tea.KeyEsc {
+		m.lastEmptyEsc = time.Time{}
+	}
 	if m.planReview != nil {
 		return m.handlePlanReviewKey(msg)
 	}
@@ -1062,6 +1158,16 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		if key.Code == tea.KeyEsc && len(m.input) == 0 && m.promptSuggestion != "" {
 			m.suggestionDismissed = true
+			return m, nil
+		}
+		if key.Code == tea.KeyEsc && len(m.input) == 0 {
+			now := time.Now()
+			if !m.lastEmptyEsc.IsZero() && now.Sub(m.lastEmptyEsc) <= 800*time.Millisecond {
+				m.lastEmptyEsc = time.Time{}
+				return m, m.openRewind(false)
+			}
+			m.lastEmptyEsc = now
+			m.status = "press Esc again to rewind"
 			return m, nil
 		}
 	}
@@ -1156,7 +1262,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "/quit", "/exit":
 			return m, tea.Quit
 		case "/help":
-			m.appendSystem("# Commands\n\n`! <command>` `/always-approve` `/btw <question>` `/compact` `/context` `/copy [N]` `/dream` `/exit` `/export [filename]` `/find` `/flush` `/help` `/history` `/loop` `/memory` `/multiline` `/plan [description]` `/queue` `/recap` `/remember` `/rename <title>` `/session-info` (`/status`, `/info`) `/tasks` `/transcript` `/view-plan`")
+			m.appendSystem("# Commands\n\n`! <command>` `/always-approve` `/btw <question>` `/compact` `/context` `/copy [N]` `/dream` `/exit` `/export [filename]` `/find` `/flush` `/help` `/history` `/loop` `/memory` `/multiline` `/plan [description]` `/queue` `/recap` `/remember` `/rename <title>` `/rewind` `/session-info` (`/status`, `/info`) `/tasks` `/transcript` `/view-plan`")
 			m.status = "commands"
 			return m, nil
 		case "/queue":
@@ -1168,6 +1274,8 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "/recap":
 			return m, m.startRecap()
+		case "/rewind":
+			return m, m.openRewind(false)
 		case "/btw":
 			return m, m.startBtw(strings.TrimSpace(strings.TrimPrefix(prompt, "/btw")))
 		case "/export":
@@ -1387,6 +1495,9 @@ func (m *model) handleRunningKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "/recap":
 			m.clearInput()
 			return m, m.startRecap()
+		case "/rewind":
+			m.clearInput()
+			return m, m.openRewind(true)
 		case "/btw":
 			m.clearInput()
 			return m, m.startBtw(strings.TrimSpace(strings.TrimPrefix(prompt, "/btw")))
@@ -1414,6 +1525,147 @@ func (m *model) showTasks() {
 	}
 	m.appendSystem(formatTaskSnapshot(m.runner.TaskSnapshot(), time.Now()))
 	m.status = "tasks"
+}
+
+func (m *model) openRewind(cancelTurn bool) tea.Cmd {
+	if m.runner == nil {
+		m.status = "rewind unavailable"
+		return nil
+	}
+	if m.btwRunning {
+		m.status = "wait for the side question before rewinding"
+		return nil
+	}
+	m.promptSerial++
+	m.clearPromptSuggestion()
+	m.lastEmptyEsc = time.Time{}
+	if cancelTurn && m.running {
+		m.rewind = &rewindState{phase: rewindCancelOffer}
+		m.status = "cancel the current turn to rewind?"
+		return nil
+	}
+	if m.running {
+		m.status = "cancel the current turn before rewinding"
+		return nil
+	}
+	m.rewind = &rewindState{phase: rewindLoading}
+	m.status = "loading rewind points"
+	return runRewindPoints(m.runner, m.promptSerial)
+}
+
+func (m *model) loadRewindPoints() tea.Cmd {
+	if m.rewind == nil {
+		m.rewind = &rewindState{}
+	}
+	m.rewind.phase = rewindLoading
+	m.status = "loading rewind points"
+	return runRewindPoints(m.runner, m.promptSerial)
+}
+
+func (m *model) handleRewindKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	key := msg.Key()
+	state := m.rewind
+	dismiss := func() (tea.Model, tea.Cmd) {
+		m.rewind = nil
+		if m.running {
+			m.status = "thinking"
+		} else {
+			m.status = "ready"
+		}
+		return m, nil
+	}
+	if key.Code == tea.KeyEsc {
+		switch state.phase {
+		case rewindModeSelect:
+			state.phase, state.selected = rewindPicker, 0
+			return m, nil
+		case rewindConfirm:
+			state.phase, state.selected = rewindModeSelect, 0
+			return m, nil
+		case rewindCancelling, rewindExecuting:
+			return m, nil
+		default:
+			return dismiss()
+		}
+	}
+	switch state.phase {
+	case rewindCancelOffer:
+		switch {
+		case strings.EqualFold(key.Text, "y"):
+			state.selected = 0
+		case strings.EqualFold(key.Text, "n"):
+			return dismiss()
+		case key.Code == tea.KeyUp || key.Code == tea.KeyDown:
+			state.selected = 1 - state.selected
+			return m, nil
+		case key.Code != tea.KeyEnter:
+			return m, nil
+		}
+		if state.selected == 1 {
+			return dismiss()
+		}
+		m.pendingPrompts = nil
+		state.phase = rewindCancelling
+		m.status = "cancelling turn before rewind"
+		if m.turnCancel != nil {
+			m.turnCancel()
+			return m, nil
+		}
+		return m, m.loadRewindPoints()
+	case rewindPicker:
+		if key.Code == tea.KeyUp || key.Text == "k" {
+			state.selected = max(0, state.selected-1)
+			return m, nil
+		}
+		if key.Code == tea.KeyDown || key.Text == "j" {
+			state.selected = min(len(state.points)-1, state.selected+1)
+			return m, nil
+		}
+		if key.Code == tea.KeyEnter && len(state.points) > 0 {
+			state.target = state.points[state.selected].PromptIndex
+			state.phase, state.selected = rewindModeSelect, 0
+		}
+	case rewindModeSelect:
+		modes := rewindModes(state.points, state.target)
+		if key.Code == tea.KeyUp || key.Text == "k" {
+			state.selected = max(0, state.selected-1)
+			return m, nil
+		}
+		if key.Code == tea.KeyDown || key.Text == "j" {
+			state.selected = min(len(modes)-1, state.selected+1)
+			return m, nil
+		}
+		if key.Code == tea.KeyEnter && len(modes) > 0 {
+			state.mode = modes[state.selected]
+			state.phase = rewindPreviewing
+			m.status = "previewing rewind"
+			return m, runRewindPreview(m.runner, state.target, state.mode, m.promptSerial)
+		}
+	case rewindConfirm:
+		if strings.EqualFold(key.Text, "n") {
+			state.phase, state.selected = rewindModeSelect, 0
+			return m, nil
+		}
+		if key.Code == tea.KeyEnter || strings.EqualFold(key.Text, "y") {
+			state.phase = rewindExecuting
+			m.status = "rewinding"
+			return m, runRewind(m.runner, state.target, state.mode, m.promptSerial)
+		}
+	case rewindError:
+		if key.Code == tea.KeyEnter {
+			return dismiss()
+		}
+	}
+	return m, nil
+}
+
+func rewindModes(points []session.RewindPoint, target int) []agent.RewindMode {
+	for _, point := range points {
+		if point.PromptIndex == target && point.HasFileChanges {
+			return []agent.RewindMode{agent.RewindAll, agent.RewindConversationOnly, agent.RewindFilesOnly}
+		}
+	}
+	return []agent.RewindMode{agent.RewindAll, agent.RewindConversationOnly}
 }
 
 func (m *model) startRecap() tea.Cmd {
@@ -2301,6 +2553,27 @@ func runPromptSuggestion(ctx context.Context, runner *agent.Runner, cwd string, 
 	}
 }
 
+func runRewindPoints(runner *agent.Runner, serial uint64) tea.Cmd {
+	return func() tea.Msg {
+		points, err := runner.RewindPoints()
+		return rewindPointsEvent{points: points, err: err, serial: serial}
+	}
+}
+
+func runRewindPreview(runner *agent.Runner, target int, mode agent.RewindMode, serial uint64) tea.Cmd {
+	return func() tea.Msg {
+		preview, err := runner.PreviewRewind(target, mode)
+		return rewindPreviewEvent{preview: preview, err: err, serial: serial}
+	}
+}
+
+func runRewind(runner *agent.Runner, target int, mode agent.RewindMode, serial uint64) tea.Cmd {
+	return func() tea.Msg {
+		result, err := runner.ExecuteRewind(target, mode)
+		return rewindDoneEvent{result: result, err: err, serial: serial}
+	}
+}
+
 func runBtw(ctx context.Context, runner *agent.Runner, question, previousID string) tea.Cmd {
 	return func() tea.Msg {
 		answer, err := runner.SideQuestion(ctx, question, previousID)
@@ -2451,7 +2724,9 @@ func (m *model) View() tea.View {
 	header := fmt.Sprintf("\x1b[1m Gork Go\x1b[0m%s  \x1b[2m%s · %s\x1b[0m", mode, truncate(m.modelName, 24), truncate(m.workspace, max(width-45, 10)))
 	header = padRight(truncateANSIUnsafe(header, width), width)
 	content := m.transcript.String()
-	if m.planReview != nil {
+	if m.rewind != nil {
+		content = m.rewindContent()
+	} else if m.planReview != nil {
 		content = "# Review implementation plan\n\n" + m.planReview.event.event.PlanContent
 	} else if m.viewer != nil {
 		content = m.viewerContent()
@@ -2482,7 +2757,9 @@ func (m *model) View() tea.View {
 	body := strings.Join(visible, "\n")
 
 	var footer string
-	if m.remember != nil {
+	if m.rewind != nil {
+		footer = "\x1b[1;33mRewind\x1b[0m\n\x1b[2m" + truncate(m.rewindHint(), width) + "\x1b[0m"
+	} else if m.remember != nil {
 		tab := "enhancing..."
 		if m.remember.enhanceDone {
 			tab = "raw only"
@@ -2600,6 +2877,107 @@ func (m *model) viewerContent() string {
 	return "# " + m.viewer.title + "\n\n" + strings.TrimSpace(m.viewer.content)
 }
 
+func (m *model) rewindContent() string {
+	state := m.rewind
+	if state == nil {
+		return ""
+	}
+	switch state.phase {
+	case rewindLoading:
+		return "# Rewind\n\nLoading turns..."
+	case rewindCancelOffer:
+		options := []string{"Stop the current turn and rewind", "Keep the current turn running"}
+		return "# Rewind\n\nA turn is still running.\n\n" + selectedLines(options, state.selected)
+	case rewindCancelling:
+		return "# Rewind\n\nCancelling the current turn..."
+	case rewindPicker:
+		lines := make([]string, 0, len(state.points))
+		for _, point := range state.points {
+			preview := "(empty prompt)"
+			if point.PromptPreview != nil {
+				preview = strings.ReplaceAll(*point.PromptPreview, "\n", " ")
+			}
+			files := ""
+			if point.NumFileSnapshots > 0 {
+				files = fmt.Sprintf(" · %d file(s)", point.NumFileSnapshots)
+			}
+			lines = append(lines, fmt.Sprintf("Turn %d%s · %s", point.PromptIndex+1, files, preview))
+		}
+		return "# Select a turn\n\n" + selectedWindow(lines, state.selected, max(m.contentHeight()-4, 1))
+	case rewindModeSelect:
+		modes := rewindModes(state.points, state.target)
+		labels := make([]string, 0, len(modes))
+		for _, mode := range modes {
+			labels = append(labels, strings.ReplaceAll(string(mode), "_", " "))
+		}
+		return fmt.Sprintf("# Rewind turn %d\n\nChoose what to restore.\n\n%s", state.target+1, selectedLines(labels, state.selected))
+	case rewindPreviewing:
+		return "# Rewind\n\nChecking file changes..."
+	case rewindConfirm:
+		var details strings.Builder
+		fmt.Fprintf(&details, "# Confirm rewind\n\nRewind %s to turn %d?", strings.ReplaceAll(string(state.mode), "_", " "), state.target+1)
+		if len(state.preview.CleanFiles) > 0 {
+			fmt.Fprintf(&details, "\n\nFiles to restore:\n%s", bulletLines(state.preview.CleanFiles))
+		}
+		if len(state.preview.Conflicts) > 0 {
+			details.WriteString("\n\nExternal changes will be overwritten:\n")
+			for _, conflict := range state.preview.Conflicts {
+				fmt.Fprintf(&details, "- %s (%s)\n", conflict.Path, strings.ReplaceAll(conflict.ConflictType, "_", " "))
+			}
+		}
+		return strings.TrimSpace(details.String())
+	case rewindExecuting:
+		return "# Rewind\n\nRestoring the selected state..."
+	case rewindError:
+		return "# Rewind failed\n\n" + state.err
+	default:
+		return "# Rewind"
+	}
+}
+
+func (m *model) rewindHint() string {
+	switch m.rewind.phase {
+	case rewindPicker, rewindModeSelect:
+		return "Up/Down select · Enter continue · Esc back"
+	case rewindCancelOffer:
+		return "Y stop and rewind · N keep running · Esc cancel"
+	case rewindConfirm:
+		return "Y/Enter confirm · N/Esc back"
+	case rewindError:
+		return "Enter/Esc close"
+	default:
+		return "Esc cancel"
+	}
+}
+
+func selectedLines(lines []string, selected int) string {
+	var result strings.Builder
+	for index, line := range lines {
+		prefix := "  "
+		if index == selected {
+			prefix = "> "
+		}
+		result.WriteString(prefix + line + "\n")
+	}
+	return strings.TrimSpace(result.String())
+}
+
+func selectedWindow(lines []string, selected, size int) string {
+	size = max(size, 1)
+	start := max(0, selected-size/2)
+	start = min(start, max(len(lines)-size, 0))
+	end := min(len(lines), start+size)
+	return selectedLines(lines[start:end], selected-start)
+}
+
+func bulletLines(lines []string) string {
+	var result strings.Builder
+	for _, line := range lines {
+		result.WriteString("- " + line + "\n")
+	}
+	return strings.TrimSpace(result.String())
+}
+
 func (m *model) maxViewerScroll() int {
 	return max(len(renderMarkdown(m.viewerContent(), max(m.width, 20)))-m.contentHeight(), 0)
 }
@@ -2649,7 +3027,7 @@ func renderedLabelContains(line, label string, x, width int) bool {
 }
 
 func (m *model) contentHeight() int {
-	if m.question != nil || m.planReview != nil || m.remember != nil || m.rememberInput {
+	if m.question != nil || m.planReview != nil || m.remember != nil || m.rememberInput || m.rewind != nil {
 		return max(m.height-7, 3)
 	}
 	if m.historySearch != nil {

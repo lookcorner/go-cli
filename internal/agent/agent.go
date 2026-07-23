@@ -188,15 +188,18 @@ type Runner struct {
 	memoryIdleDone          chan struct{}
 	memoryDreamCheckCancel  context.CancelFunc
 	memoryDreamCheckDone    chan struct{}
-	memoryDreamRunning      bool
-	memoryDreamDone         chan struct{}
-	memorySessionSaved      bool
-	hookStart               sync.Once
-	promptEpoch             atomic.Uint64
-	recapRunning            atomic.Bool
-	btwRunning              atomic.Bool
-	interjectionMu          sync.Mutex
-	interjections           []Interjection
+
+	rewind rewindRuntime
+
+	memoryDreamRunning bool
+	memoryDreamDone    chan struct{}
+	memorySessionSaved bool
+	hookStart          sync.Once
+	promptEpoch        atomic.Uint64
+	recapRunning       atomic.Bool
+	btwRunning         atomic.Bool
+	interjectionMu     sync.Mutex
+	interjections      []Interjection
 }
 
 func (r *Runner) SessionTurnCount() int {
@@ -573,6 +576,11 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 	if strings.TrimSpace(prompt) == "" {
 		return Result{}, errors.New("prompt must not be empty")
 	}
+	if r.rewind.enabled.Load() {
+		active := r.rewind.next.Load()
+		r.rewind.active.Store(active)
+		defer r.rewind.active.Store(-1)
+	}
 	if !synthetic {
 		r.promptEpoch.Add(1)
 	}
@@ -621,6 +629,9 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 	}
 	if err := r.logPrompt(prompt, content, synthetic); err != nil {
 		return Result{}, fmt.Errorf("persist user prompt: %w", err)
+	}
+	if r.rewind.enabled.Load() {
+		r.rewind.next.Add(1)
 	}
 	content = r.injectMemoryContext(content, prompt, previousResponseID)
 	if r.Skills != nil {
@@ -1122,6 +1133,7 @@ func (r *Runner) RewindHistory(messages []session.Message) {
 
 func (r *Runner) RestoreHistory(messages []session.Message) {
 	r.RewindHistory(messages)
+	r.promptWorkspaceSent = false
 	r.modelHistory = nil
 	if _, ok := r.Client.(HistoryRewinder); !ok {
 		r.modelHistory = modelHistoryInput(messages)

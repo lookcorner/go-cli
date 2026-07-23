@@ -494,6 +494,12 @@ in a read-only preview; Esc returns to the conversation.
 read-only viewer, including resumed sessions.
 `/rename <title>` and `/title <title>` append a durable title update to the
 active session without creating a model turn.
+`/rewind` opens a newest-first turn picker. Pressing Esc twice within 800 ms
+while the composer is empty opens the same picker; when a turn is active, the
+TUI first asks whether to cancel it. Rewind can restore the conversation and
+files together, the conversation only, or files only. File restores preview
+external conflicts before confirmation, conversation rewinds preserve an
+append-only branch, and the removed prompt is returned to the composer.
 `/export` copies the completed conversation as Markdown; `/export <filename>`
 writes it to disk with `~`, spaces, relative paths, and parent creation supported.
 While a turn is running, additional prompts are queued FIFO; `/queue` prints a
@@ -897,7 +903,8 @@ the selected Responses continuation ID, and rebuild visible Chat Completions or
 Anthropic history. Before/after snapshots for `write_file`, `edit_file`, and
 `search_replace` are persisted with each prompt. Preview reports external file
 conflicts; `force: true` restores the earliest content and removes files created
-after the target checkpoint. Shell-created file changes are not checkpointed.
+after the target checkpoint. Shell-command workspace changes use the same
+prompt-indexed checkpoints.
 
 Unix ACP clients may also create interactive terminals through
 `x.ai/terminal/pty/create`, stream base64 input and output, resize or reconnect

@@ -130,6 +130,83 @@ func TestRewindStoreCapturesFirstBeforeAndRejectsEscape(t *testing.T) {
 	}
 }
 
+func TestRewindStoreMergeFromPreservesFilesAndRearmsNewBranch(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "file.txt")
+	if err := os.WriteFile(path, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewRewindStore(ws, filepath.Join(t.TempDir(), "rewind.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, content := range []string{"first", "second", "third"} {
+		if err := store.CaptureBefore(index, "file.txt"); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.CaptureAfter(index, "file.txt"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.MergeFrom(1); err != nil {
+		t.Fatal(err)
+	}
+	counts, err := store.Counts()
+	if err != nil || len(counts) != 1 || counts[0] != 1 {
+		t.Fatalf("merged counts=%#v err=%v", counts, err)
+	}
+	if current, _ := os.ReadFile(path); string(current) != "third" {
+		t.Fatalf("conversation-only merge changed current file=%q", current)
+	}
+	if err := store.CaptureBefore(1, "file.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("new branch"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CaptureAfter(1, "file.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.Restore(1); err != nil {
+		t.Fatal(err)
+	}
+	if current, _ := os.ReadFile(path); string(current) != "third" {
+		t.Fatalf("new branch checkpoint restored=%q", current)
+	}
+	if _, _, err := store.Restore(0); err != nil {
+		t.Fatal(err)
+	}
+	if current, _ := os.ReadFile(path); string(current) != "original" {
+		t.Fatalf("merged checkpoint restored=%q", current)
+	}
+	if err := store.CaptureBefore(0, "file.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("kept"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CaptureAfter(0, "file.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MergeFrom(0); err != nil {
+		t.Fatal(err)
+	}
+	counts, err = store.Counts()
+	if err != nil || len(counts) != 0 {
+		t.Fatalf("zero-target merge counts=%#v err=%v", counts, err)
+	}
+	if current, _ := os.ReadFile(path); string(current) != "kept" {
+		t.Fatalf("zero-target merge changed current file=%q", current)
+	}
+}
+
 func TestRewindStoreCapturesShellWorkspaceChanges(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "modified.txt"), []byte("before"), 0o640); err != nil {

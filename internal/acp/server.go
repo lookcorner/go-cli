@@ -1763,6 +1763,9 @@ func (s *Server) handleRewind(incoming message) {
 		}
 		response["reverted_files"] = reverted
 		response["conflicts"] = latestPreview.Conflicts
+	} else if mergeErr := current.rewind.MergeFrom(*req.Target); mergeErr != nil {
+		s.respondError(incoming.ID, -32000, mergeErr.Error())
+		return
 	}
 	if wantsConversation {
 		result, rewindErr := sessionlog.Rewind(path, *req.Target)
@@ -1771,7 +1774,7 @@ func (s *Server) handleRewind(incoming message) {
 			return
 		}
 		current.previous = result.PreviousResponseID
-		current.runner.RewindHistory(result.Messages)
+		current.runner.RestoreHistory(result.Messages)
 		current.promptIndex = *req.Target
 		response["prompt_text"] = preview.PromptText
 		s.notify(sessionID, map[string]any{"sessionUpdate": "rewind_marker", "target_prompt_index": *req.Target})
