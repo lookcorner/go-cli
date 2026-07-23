@@ -2153,6 +2153,9 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			cleanup()
 			return nil, nil, err
 		}
+		mcpRuntime.SetNotify(func(before, after []mcp.ServerConfig) {
+			server.NotifyMCPServerChanges(logger.ID(), before, after)
+		})
 		lspManager, err = startLSPServers(sessionCtx, sessionCfg, ws, registry, statusOutput)
 		if err != nil {
 			cleanup()
@@ -3536,6 +3539,7 @@ type sessionMCPRuntime struct {
 	clientConfigs []mcp.ServerConfig
 	effective     []mcp.ServerConfig
 	catalog       []mcp.ServerConfig
+	notify        func(before, after []mcp.ServerConfig)
 	closed        bool
 }
 
@@ -3560,17 +3564,25 @@ func (r *sessionMCPRuntime) Update(ctx context.Context, requested []mcp.ServerCo
 		return err
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if r.closed {
+		r.mu.Unlock()
 		return errors.New("MCP runtime is closed")
 	}
 	previous := cloneMCPServerConfigs(r.clientConfigs)
+	previousEffective := cloneMCPServerConfigs(r.effective)
 	if err := r.restartLocked(requested); err == nil {
 		r.clientConfigs = cloneMCPServerConfigs(requested)
+		before, after, notify := previousEffective, cloneMCPServerConfigs(r.effective), r.notify
+		r.mu.Unlock()
+		if notify != nil && !reflect.DeepEqual(before, after) {
+			notify(before, after)
+		}
 		return nil
 	} else if restoreErr := r.restartLocked(previous); restoreErr == nil {
+		r.mu.Unlock()
 		return err
 	} else {
+		r.mu.Unlock()
 		return errors.Join(err, fmt.Errorf("restore previous MCP configuration: %w", restoreErr))
 	}
 }
@@ -3580,23 +3592,37 @@ func (r *sessionMCPRuntime) UpdateBase(ctx context.Context, base config.Config) 
 		return err
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if r.closed {
+		r.mu.Unlock()
 		return errors.New("MCP runtime is closed")
 	}
 	previous := r.base
+	previousEffective := cloneMCPServerConfigs(r.effective)
 	base.MCPServers = cloneMCPConfigMap(base.MCPServers)
 	r.base = base
 	if err := r.restartLocked(r.clientConfigs); err == nil {
+		before, after, notify := previousEffective, cloneMCPServerConfigs(r.effective), r.notify
+		r.mu.Unlock()
+		if notify != nil && !reflect.DeepEqual(before, after) {
+			notify(before, after)
+		}
 		return nil
 	} else {
 		r.base = previous
 		if restoreErr := r.restartLocked(r.clientConfigs); restoreErr == nil {
+			r.mu.Unlock()
 			return err
 		} else {
+			r.mu.Unlock()
 			return errors.Join(err, fmt.Errorf("restore previous MCP base configuration: %w", restoreErr))
 		}
 	}
+}
+
+func (r *sessionMCPRuntime) SetNotify(notify func(before, after []mcp.ServerConfig)) {
+	r.mu.Lock()
+	r.notify = notify
+	r.mu.Unlock()
 }
 
 func (r *sessionMCPRuntime) Configs() []mcp.ServerConfig {

@@ -855,7 +855,8 @@ permission path used by model tool calls. `x.ai/mcp/read_resource` returns raw
 text or base64 resource contents. Local servers and individual tools can be
 persistently enabled or disabled with `x.ai/mcp/toggle` and
 `x.ai/mcp/toggle_tool`; tool changes emit `x.ai/mcp/tools_changed` so clients
-refetch the catalog. `x.ai/mcp/upsert` and `x.ai/mcp/delete` atomically update
+refetch the catalog. Successful live server additions, removals, and transport
+replacements emit `x.ai/mcp/server_status` transitions. `x.ai/mcp/upsert` and `x.ai/mcp/delete` atomically update
 the user config and hot-reload the live session. Disabled entries remain visible
 in `x.ai/mcp/list`. `x.ai/session/update_mcp_servers` safely
 restarts the session MCP runtime, preserves project/plugin base servers, and

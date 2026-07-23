@@ -3,6 +3,7 @@ package acp
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"sort"
 
 	mcppkg "github.com/lookcorner/go-cli/internal/mcp"
@@ -16,6 +17,68 @@ type callableMCPTool interface {
 type readableMCPResource interface {
 	MCPResourceReader() (string, bool)
 	ReadMCPResource(context.Context, string) ([]mcppkg.ResourceContents, error)
+}
+
+// NotifyMCPServerChanges publishes the state transitions caused by a
+// successfully applied MCP configuration replacement. The runtime calls this
+// only after the new clients are ready, so the ready transition is authoritative.
+func (s *Server) NotifyMCPServerChanges(sessionID string, before, after []MCPServer) {
+	previous := make(map[string]MCPServer, len(before))
+	next := make(map[string]MCPServer, len(after))
+	for _, server := range before {
+		previous[server.Name] = server
+	}
+	for _, server := range after {
+		next[server.Name] = server
+	}
+	names := make([]string, 0, len(previous)+len(next))
+	seen := make(map[string]bool, len(previous)+len(next))
+	for name := range previous {
+		seen[name] = true
+		names = append(names, name)
+	}
+	for name := range next {
+		if !seen[name] {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		old, hadOld := previous[name]
+		current, hasCurrent := next[name]
+		if hadOld && hasCurrent && mcpServerTransportEqual(old, current) {
+			continue
+		}
+		switch {
+		case !hasCurrent:
+			s.notifyMCPServerStatus(sessionID, name, "unavailable", "config_removed")
+		case current.Disabled:
+			reason := "disabled"
+			if !hadOld {
+				reason = "config_added"
+			}
+			s.notifyMCPServerStatus(sessionID, name, "unavailable", reason)
+		case !hadOld || old.Disabled:
+			s.notifyMCPServerStatus(sessionID, name, "initializing", "config_added")
+			s.notifyMCPServerStatus(sessionID, name, "ready", "initialized")
+		default:
+			s.notifyMCPServerStatus(sessionID, name, "unavailable", "config_removed")
+			s.notifyMCPServerStatus(sessionID, name, "initializing", "config_added")
+			s.notifyMCPServerStatus(sessionID, name, "ready", "initialized")
+		}
+	}
+}
+
+func (s *Server) notifyMCPServerStatus(sessionID, name, status, reason string) {
+	s.write(map[string]any{"jsonrpc": "2.0", "method": "x.ai/mcp/server_status", "params": map[string]any{
+		"sessionId": sessionID, "name": name, "source": "local", "status": status, "reason": reason, "tools": nil,
+	}})
+}
+
+func mcpServerTransportEqual(left, right MCPServer) bool {
+	left.DisabledTools = nil
+	right.DisabledTools = nil
+	return reflect.DeepEqual(left, right)
 }
 
 func (s *Server) handleMCP(ctx context.Context, incoming message) {

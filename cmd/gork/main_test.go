@@ -593,6 +593,10 @@ func TestSessionMCPRuntimeMergesAndRestoresConfiguration(t *testing.T) {
 	}
 	registry := tools.NewRegistry(ws, nil)
 	live := newSessionMCPRuntime(context.Background(), config.Config{}, root, registry, nil, nil, io.Discard)
+	var changes [][2][]mcp.ServerConfig
+	live.SetNotify(func(before, after []mcp.ServerConfig) {
+		changes = append(changes, [2][]mcp.ServerConfig{before, after})
+	})
 	defer func() {
 		live.Close()
 		_ = registry.Close()
@@ -648,6 +652,9 @@ func TestSessionMCPRuntimeMergesAndRestoresConfiguration(t *testing.T) {
 	if err := live.Update(context.Background(), []mcp.ServerConfig{{Name: "client-only", Type: "http", URL: server.URL}}); err != nil {
 		t.Fatal(err)
 	}
+	if len(changes) != 1 || len(changes[0][0]) != 0 || len(changes[0][1]) != 1 || changes[0][1][0].Name != "client-only" {
+		t.Fatalf("unexpected MCP runtime change callback: %#v", changes)
+	}
 	if err := live.UpdateBase(context.Background(), config.Config{MCPServers: map[string]config.MCPServerConfig{
 		"hot-base": {Type: "http", URL: server.URL},
 	}, DisabledMCPTools: map[string][]string{"hot-base": {"hidden"}}}); err != nil {
@@ -667,6 +674,9 @@ func TestSessionMCPRuntimeMergesAndRestoresConfiguration(t *testing.T) {
 	}
 	if err := live.UpdateBase(context.Background(), config.Config{}); err != nil {
 		t.Fatal(err)
+	}
+	if len(changes) != 3 || len(changes[2][0]) != 2 || len(changes[2][1]) != 1 || changes[2][1][0].Name != "client-only" {
+		t.Fatalf("MCP base removal callback=%#v", changes)
 	}
 	if configs := live.Configs(); len(configs) != 1 || configs[0].Name != "client-only" {
 		t.Fatalf("hot base removal did not preserve client configuration: %#v", configs)

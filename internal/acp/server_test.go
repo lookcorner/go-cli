@@ -711,6 +711,37 @@ func TestMCPAuthExtensionsForLocalServers(t *testing.T) {
 	}
 }
 
+func TestMCPServerChangeNotifications(t *testing.T) {
+	var output bytes.Buffer
+	server := &Server{output: &output}
+	server.NotifyMCPServerChanges("mcp-status", []MCPServer{
+		{Name: "changed", Command: "old"},
+		{Name: "removed", Command: "server"},
+	}, []MCPServer{
+		{Name: "changed", Command: "new"},
+		{Name: "added", Command: "server"},
+	})
+	decoder := json.NewDecoder(&output)
+	want := []struct{ name, status, reason string }{
+		{"added", "initializing", "config_added"},
+		{"added", "ready", "initialized"},
+		{"changed", "unavailable", "config_removed"},
+		{"changed", "initializing", "config_added"},
+		{"changed", "ready", "initialized"},
+		{"removed", "unavailable", "config_removed"},
+	}
+	for _, expected := range want {
+		message := decodeACP(t, decoder)
+		if message["method"] != "x.ai/mcp/server_status" {
+			t.Fatalf("unexpected MCP status method: %#v", message)
+		}
+		params := message["params"].(map[string]any)
+		if params["sessionId"] != "mcp-status" || params["name"] != expected.name || params["source"] != "local" || params["status"] != expected.status || params["reason"] != expected.reason || params["tools"] != nil {
+			t.Fatalf("unexpected MCP status payload: %#v", params)
+		}
+	}
+}
+
 func TestMCPConfigExtensions(t *testing.T) {
 	root := t.TempDir()
 	ws, err := workspace.Open(root)
