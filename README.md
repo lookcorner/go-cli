@@ -42,6 +42,10 @@ The matching `x.ai/feedback` extension accepts the reference simple text and
 structured rating payloads, including per-turn context and request metadata.
 `x.ai/feedback/dismiss` records the dismissal locally, then reports that no
 feedback credentials exist because this build has no remote feedback client.
+ACP inline-review clients can also create and delete `x.ai/review/comment`
+records. Responses use reference-compatible UUIDv7 comment IDs; an active
+session log keeps the citation and deletion tombstone but deliberately omits
+the comment body and performs no cloud upload.
 
 ACP clients can request turn-end ghost text through `x.ai/suggestPrompt`. The
 extension echoes the client generation, returns `null` when no safe suggestion
@@ -1430,7 +1434,8 @@ packaging uploads, or vendor auto-update code. Prompts and tool results used by
 the agent are sent to the configured model endpoint because remote inference
 requires them. Session records stay local unless the user moves or uploads
 them. User-invoked `/feedback` entries are part of those local session records
-and are never submitted to a feedback server.
+and are never submitted to a feedback server. Inline review citations remain
+local as well; review comment bodies are not retained or uploaded.
 
 ## License and attribution
 

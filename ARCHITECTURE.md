@@ -7,8 +7,9 @@ implementation.
 ## Bounded contexts
 
 - `internal/session` owns session identity, JSONL events (including explicit
-  local user feedback and structured rating/dismissal records), transcript
-  recovery, metadata, artifact namespaces, and session forking.
+  local user feedback, structured rating/dismissal records, and privacy-safe
+  review citation events), transcript recovery, metadata, artifact namespaces,
+  and session forking.
 - `internal/worktree` owns worktree identity, lifecycle, Git state transfer,
   conflict rules, registry maintenance, and historical code restoration.
 - `internal/workspace` owns confined paths, instruction discovery, release-build
@@ -40,7 +41,8 @@ implementation.
 ## Adapters
 
 - `internal/acp` translates ACP JSON-RPC requests and responses; feedback slash
-  and extension inputs share one application persistence port.
+  and extension inputs share one application persistence port, while review
+  comments reuse the existing session event logger.
 - `cmd/gork` wires configuration, domains, and interactive or ACP transports.
 - `internal/api`, `internal/mcp`, and `internal/lsp` adapt external protocols.
 - `internal/tools` adapts domain-safe workspace operations to model tools. It

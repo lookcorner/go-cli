@@ -51,6 +51,22 @@ type UserFeedback struct {
 	CWD             string          `json:"cwd,omitempty"`
 }
 
+type ReviewCitation struct {
+	Path      string  `json:"path"`
+	StartLine uint32  `json:"startLine"`
+	EndLine   uint32  `json:"endLine"`
+	Text      string  `json:"text"`
+	Side      *string `json:"side,omitempty"`
+}
+
+type ReviewEvent struct {
+	Event       string          `json:"event"`
+	CommentID   string          `json:"commentId"`
+	SessionID   string          `json:"sessionId"`
+	PromptIndex *uint32         `json:"promptIndex,omitempty"`
+	Citation    *ReviewCitation `json:"citation,omitempty"`
+}
+
 type storedEvent struct {
 	Time time.Time       `json:"time"`
 	Kind string          `json:"kind"`

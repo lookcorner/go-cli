@@ -403,6 +403,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleBtw(ctx, incoming)
 		case "x.ai/feedback", "x.ai/feedback/dismiss":
 			s.handleFeedback(incoming)
+		case "x.ai/review/comment", "x.ai/review/comment/delete":
+			s.handleReview(incoming)
 		case "x.ai/interject":
 			s.handleInterject(incoming)
 		case "x.ai/recap":

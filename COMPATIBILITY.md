@@ -68,6 +68,9 @@ privacy build does not configure a feedback upload service.
 The corresponding `x.ai/feedback` extension accepts simple and structured
 rating submissions with reference clamping and turn fallback. Dismissals are
 persisted before returning the reference missing-credentials error.
+`x.ai/review/comment` and `x.ai/review/comment/delete` return reference-shaped
+responses with UUIDv7 identities while persisting only local citation/create
+and deletion-tombstone events; cloud review uploads are intentionally absent.
 
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |
@@ -95,7 +98,7 @@ persisted before returning the reference missing-credentials error.
 | OS sandbox | planned | Landlock/Seatbelt, child seccomp and network policy remain |
 | Workspace server | planned | Hub server, previews, remote workspaces and supervision remain |
 | Markdown/media/Mermaid | partial | TUI headings, emphasis, links, ordered/unordered lists, quotes, pipe tables, inline code and fenced code render with streaming-safe markers and visible-width wrapping; inline media and Mermaid remain |
-| Telemetry/privacy hard-offs | done | No analytics, research uploads, feedback uploads, auto-update or retention opt-in code exists; explicit `/feedback` text is stored only in the local session log |
+| Telemetry/privacy hard-offs | done | No analytics, research uploads, feedback/review uploads, auto-update or retention opt-in code exists; explicit `/feedback` text and review citation events are stored only in the local session log, while review comment bodies are discarded |
 
 Compatibility is verified with Go unit/integration tests and will additionally
 use captured protocol fixtures from the Rust implementation. A status is only
