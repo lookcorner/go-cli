@@ -181,6 +181,79 @@ func (s *Service) Delete(path string) error {
 	return nil
 }
 
+// Update edits the user/project persona fields while preserving other TOML data.
+func (s *Service) Update(path string, draft Draft) (Persona, error) {
+	clean, scope, err := s.validatePath(path, true)
+	if err != nil {
+		return Persona{}, err
+	}
+	if scope == ScopeBundled {
+		return Persona{}, errors.New("cannot edit bundled personas")
+	}
+	name, err := sanitizeName(draft.Name)
+	if err != nil {
+		return Persona{}, err
+	}
+	data, err := os.ReadFile(clean)
+	if err != nil {
+		return Persona{}, fmt.Errorf("read persona: %w", err)
+	}
+	values := map[string]any{}
+	if err := toml.Unmarshal(data, &values); err != nil {
+		return Persona{}, fmt.Errorf("parse persona: %w", err)
+	}
+	values["name"] = name
+	values["description"] = strings.TrimSpace(draft.Description)
+	values["instructions"] = strings.TrimSpace(draft.Instructions)
+	encoded, err := toml.Marshal(values)
+	if err != nil {
+		return Persona{}, fmt.Errorf("encode persona: %w", err)
+	}
+	dir := filepath.Dir(clean)
+	tmp, err := os.CreateTemp(dir, ".persona-*.toml")
+	if err != nil {
+		return Persona{}, fmt.Errorf("create persona temporary file: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if err := tmp.Chmod(0o600); err == nil {
+		_, err = tmp.Write(encoded)
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return Persona{}, fmt.Errorf("write persona: %w", err)
+	}
+	target := filepath.Join(dir, name+".toml")
+	if target != clean {
+		if _, err := os.Stat(target); err == nil {
+			return Persona{}, fmt.Errorf("persona %q already exists", name)
+		} else if !os.IsNotExist(err) {
+			return Persona{}, fmt.Errorf("check persona target: %w", err)
+		}
+	}
+	backupFile, err := os.CreateTemp(dir, ".persona-backup-*")
+	if err != nil {
+		return Persona{}, fmt.Errorf("create persona backup: %w", err)
+	}
+	backup := backupFile.Name()
+	if err := backupFile.Close(); err != nil {
+		_ = os.Remove(backup)
+		return Persona{}, fmt.Errorf("close persona backup: %w", err)
+	}
+	_ = os.Remove(backup)
+	if err := os.Rename(clean, backup); err != nil {
+		return Persona{}, fmt.Errorf("stage persona replacement: %w", err)
+	}
+	if err := os.Rename(tmpName, target); err != nil {
+		_ = os.Rename(backup, clean)
+		return Persona{}, fmt.Errorf("replace persona: %w", err)
+	}
+	_ = os.Remove(backup)
+	return readPersona(target, name, scope)
+}
+
 func (s *Service) writableDir(scope Scope) (string, error) {
 	switch scope {
 	case ScopeUser:

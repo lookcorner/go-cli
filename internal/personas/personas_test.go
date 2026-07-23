@@ -150,6 +150,33 @@ func TestCreateAndDeleteRejectWritableDirectorySymlinkEscape(t *testing.T) {
 	}
 }
 
+func TestUpdatePreservesUnknownFieldsAndRenamesSafely(t *testing.T) {
+	home, workspace := t.TempDir(), t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	path := filepath.Join(workspace, ".grok", "personas", "old.toml")
+	writePersona(t, path, "name = \"old\"\ndescription = \"old description\"\ninstructions = \"old instructions\"\nmodel = \"grok\"\n[[inputs]]\nname = \"topic\"\n")
+	updated, err := New(workspace).Update(path, Draft{Name: "new", Description: "new description", Instructions: "new instructions", Scope: ScopeProject})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Name != "new" || updated.Description != "new description" || updated.Model != "grok" || !updated.HasInputs {
+		t.Fatalf("updated=%#v", updated)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("old path still exists: %v", err)
+	}
+}
+
+func TestUpdateRejectsBundledPersona(t *testing.T) {
+	home, workspace := t.TempDir(), t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	path := filepath.Join(home, "bundled", "personas", "built-in.toml")
+	writePersona(t, path, "description = \"read only\"\n")
+	if _, err := New(workspace).Update(path, Draft{Name: "built-in", Description: "changed"}); err == nil {
+		t.Fatal("bundled persona was edited")
+	}
+}
+
 func writePersona(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {

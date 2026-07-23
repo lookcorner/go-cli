@@ -1462,6 +1462,8 @@ with fuzzy search, expandable runtime details, and full source/prompt viewing.
 Its Personas tab, also opened directly with `/personas`, merges read-only bundled
 personas with project `.grok/personas` and `$GROK_HOME/personas`, and supports
 validated user/project creation, source viewing, and confirmation-gated deletion.
+Editable user/project personas can also be updated in place with `E` while
+bundled personas remain read-only.
 The TUI also supports `/home` (return to a fresh welcome session), `/login`, and
 `/logout`; authentication reuses the existing OAuth and credential services, and
 a successful change restarts the session so the new credential state is loaded.

@@ -133,3 +133,31 @@ func TestPersonaCreateDeleteAndBundledGuard(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestPersonaEditUpdatesLocalFields(t *testing.T) {
+	home, workspace := t.TempDir(), t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	service := personas.New(workspace)
+	local, err := service.Create(personas.Draft{Name: "reviewer", Description: "Old", Instructions: "Old instructions", Scope: personas.ScopeProject})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := &model{runner: &agent.Runner{Personas: service}}
+	m.openAgentConfig(agentConfigPersonas)
+	updated, _ := m.handleAgentConfigKey(tea.KeyPressMsg(tea.Key{Code: 'e', Text: "e"}))
+	m = updated.(*model)
+	if m.agentConfig.form == nil || !m.agentConfig.form.editing || m.agentConfig.form.path != local.Path {
+		t.Fatalf("edit form=%#v", m.agentConfig.form)
+	}
+	m.agentConfig.form.description = []rune("New")
+	m.agentConfig.form.instructions = []rune("New instructions")
+	updated, _ = m.handlePersonaFormKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if m.agentConfig.form != nil || m.status != "updated persona reviewer" {
+		t.Fatalf("state=%#v status=%q", m.agentConfig.form, m.status)
+	}
+	items := m.agentConfigPersonas()
+	if len(items) != 1 || items[0].Description != "New" || items[0].Instructions != "New instructions" {
+		t.Fatalf("items=%#v", items)
+	}
+}

@@ -34,6 +34,8 @@ type personaForm struct {
 	field                           int
 	name, description, instructions []rune
 	scope                           personas.Scope
+	path                            string
+	editing                         bool
 }
 
 func (m *model) openAgentConfig(tab agentConfigTab) {
@@ -192,7 +194,7 @@ func (m *model) agentConfigHint() string {
 		return "Y confirm delete | N/Esc cancel"
 	}
 	if state.tab == agentConfigPersonas {
-		return "Enter view | N new | D delete | Left/Right tabs | / search | R refresh | Esc close"
+		return "Enter view | E edit | N new | D delete | Left/Right tabs | / search | R refresh | Esc close"
 	}
 	return "Enter view | E expand | Left/Right tabs | / search | R refresh | Esc close"
 }
@@ -273,6 +275,18 @@ func (m *model) handleAgentConfigKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			state.form = &personaForm{scope: personas.ScopeUser}
 			state.err = ""
 		}
+	case rows > 0 && state.tab == agentConfigPersonas && text == "e":
+		persona := m.agentConfigPersonas()[state.selected]
+		if !persona.Editable() {
+			state.err = "Cannot edit bundled personas"
+		} else {
+			state.form = &personaForm{
+				name: []rune(persona.Name), description: []rune(persona.Description),
+				instructions: []rune(persona.Instructions), scope: persona.Scope,
+				path: persona.Path, editing: true,
+			}
+			state.err = ""
+		}
 	case rows > 0 && state.tab == agentConfigPersonas && (stroke == "enter" || text == "o"):
 		m.viewPersona(m.agentConfigPersonas()[state.selected])
 	case rows > 0 && state.tab == agentConfigPersonas && text == "d":
@@ -321,7 +335,11 @@ func (m *model) personaFormContent() string {
 		{"Instructions", string(form.instructions)}, {"Scope", string(form.scope)},
 	}
 	var out strings.Builder
-	out.WriteString("# Create persona\n\n")
+	if form.editing {
+		out.WriteString("# Edit persona\n\n")
+	} else {
+		out.WriteString("# Create persona\n\n")
+	}
 	for index, field := range fields {
 		cursor := "  "
 		if index == form.field {
@@ -339,6 +357,9 @@ func (m *model) handlePersonaFormKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	state, form := m.agentConfig, m.agentConfig.form
 	stroke := msg.Keystroke()
 	if form.field == 3 && (stroke == "left" || stroke == "right" || stroke == "space") {
+		if form.editing {
+			return m, nil
+		}
 		if form.scope == personas.ScopeUser {
 			form.scope = personas.ScopeProject
 		} else {
@@ -361,16 +382,27 @@ func (m *model) handlePersonaFormKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case "enter":
-		created, err := m.runner.Personas.Create(personas.Draft{
+		draft := personas.Draft{
 			Name: string(form.name), Description: string(form.description), Instructions: string(form.instructions), Scope: form.scope,
-		})
+		}
+		var saved personas.Persona
+		var err error
+		if form.editing {
+			saved, err = m.runner.Personas.Update(form.path, draft)
+		} else {
+			saved, err = m.runner.Personas.Create(draft)
+		}
 		if err != nil {
 			state.err = err.Error()
 			return m, nil
 		}
 		state.form = nil
 		m.refreshAgentConfig()
-		m.status = "created persona " + created.Name
+		if form.editing {
+			m.status = "updated persona " + saved.Name
+		} else {
+			m.status = "created persona " + saved.Name
+		}
 	default:
 		if form.field < 3 && msg.Key().Text != "" {
 			value := personaFormField(form)
