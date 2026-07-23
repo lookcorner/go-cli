@@ -643,7 +643,14 @@ methods are supported. Persisted sessions use stable, path-safe IDs; load
 replays completed user/agent text and image history while resume reconnects without
 replay. Local ACP clients can inspect the active authentication profile through
 `x.ai/auth/info` and request a refresh-aware bearer token through
-`x.ai/auth/getBearerToken`. They can clear the current or a named OAuth scope through
+`x.ai/auth/getBearerToken`. ACP initialization advertises available API-key,
+cached-session, and interactive authentication methods plus the preferred default.
+The standard `authenticate` request supports API keys, cached credentials, browser
+OIDC, headless device login, and configured external providers. Interactive clients
+receive the mode and URL through `x.ai/auth/get_url` and may return a pasted callback
+URL or authorization code through `x.ai/auth/submit_code`. Completed login updates
+credentials, remote settings, model-cache identity, and subsequent sessions without
+restarting the server. Clients can clear the current or a named OAuth scope through
 `x.ai/auth/logout`; `x.ai/internal/auth_cleared` applies the same runtime cleanup when
 the credential store changes externally. Both paths refresh live model state, prevent
 new sessions from reusing the removed token, and remove orphaned team policy while

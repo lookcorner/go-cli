@@ -2550,7 +2550,10 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 	}}
 	factoryConfigs := make(chan SessionConfig, 1)
 	sessionDir := t.TempDir()
-	server := &Server{SessionDir: sessionDir, Factory: func(_ context.Context, cfg SessionConfig, approver tools.Approver, text, status io.Writer) (*agent.Runner, func(), error) {
+	server := &Server{SessionDir: sessionDir, Auth: AuthConfig{
+		Methods:         []AuthMethod{{ID: "cached_token", Name: "cached_token", Description: "Cached token"}, {ID: "grok.com", Name: "Grok"}},
+		DefaultMethodID: "cached_token",
+	}, Factory: func(_ context.Context, cfg SessionConfig, approver tools.Approver, text, status io.Writer) (*agent.Runner, func(), error) {
 		factoryConfigs <- cfg
 		ws, err := workspace.Open(cfg.CWD)
 		if err != nil {
@@ -2598,6 +2601,11 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 	capabilityMeta := initialize["result"].(map[string]any)["agentCapabilities"].(map[string]any)["_meta"].(map[string]any)
 	if capabilityMeta["x.ai/fs_notify"] != true || capabilityMeta["x.ai/hooks"].(map[string]any)["blockingEvents"].([]any)[0] != "pre_tool_use" {
 		t.Fatalf("extension capabilities missing: %#v", capabilityMeta)
+	}
+	authMethods := initialize["result"].(map[string]any)["authMethods"].([]any)
+	initializeMeta := initialize["result"].(map[string]any)["_meta"].(map[string]any)
+	if len(authMethods) != 2 || authMethods[0].(map[string]any)["id"] != "cached_token" || authMethods[1].(map[string]any)["id"] != "grok.com" || initializeMeta["defaultAuthMethodId"] != "cached_token" {
+		t.Fatalf("auth initialization=%#v meta=%#v", authMethods, initializeMeta)
 	}
 	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 2, "method": "session/new", "params": map[string]any{
 		"_meta": map[string]any{

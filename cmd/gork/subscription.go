@@ -20,6 +20,7 @@ type acpSubscriptionChecker struct {
 	scope         string
 	tokenProvider api.TokenProvider
 	http          *http.Client
+	authMethod    func() string
 	config        func() config.Config
 	applySettings func(*config.RemoteSettings)
 	refreshModels func(string, string)
@@ -29,7 +30,11 @@ func (c *acpSubscriptionChecker) Check(ctx context.Context) acp.SubscriptionChec
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	cfg := c.config()
-	if c.tokenProvider == nil {
+	methodID := ""
+	if c.authMethod != nil {
+		methodID = c.authMethod()
+	}
+	if c.tokenProvider == nil || methodID == "xai.api_key" {
 		credential := auth.Credential{Key: cfg.APIKey, AuthMode: "api_key", CodingDataRetentionOptOut: true}
 		if credential.Key == "" && cfg.DeploymentKey != "" {
 			credential.Key, credential.AuthMode = cfg.DeploymentKey, "external"

@@ -76,6 +76,23 @@ func TestAuthReadFallbacks(t *testing.T) {
 	}
 }
 
+func TestBearerTokenHonorsActiveAPIKeyMethod(t *testing.T) {
+	var output bytes.Buffer
+	providerCalls := 0
+	server := &Server{output: &output, Auth: AuthConfig{
+		MethodID: "xai.api_key", Token: "api-key",
+		TokenProvider: func(context.Context, string) (string, error) {
+			providerCalls++
+			return "oauth-token", nil
+		},
+	}}
+	server.handleAuth(context.Background(), message{ID: json.RawMessage("1"), Method: "x.ai/auth/getBearerToken"})
+	response := decodeACP(t, json.NewDecoder(&output))["result"].(map[string]any)
+	if response["token"] != "api-key" || providerCalls != 0 {
+		t.Fatalf("response=%#v providerCalls=%d", response, providerCalls)
+	}
+}
+
 func TestCheckSubscriptionReturnsApplicationAuthMeta(t *testing.T) {
 	var output bytes.Buffer
 	called := 0
@@ -104,6 +121,65 @@ func TestCheckSubscriptionReturnsApplicationAuthMeta(t *testing.T) {
 	result = decodeACP(t, json.NewDecoder(&output))["result"].(map[string]any)
 	if result["authenticated"] != false || result["meta"] != nil {
 		t.Fatalf("unsupported result=%#v", result)
+	}
+}
+
+func TestAuthenticateAndInteractiveAuthExtensions(t *testing.T) {
+	var output bytes.Buffer
+	code := make(chan string, 1)
+	url, mode := "https://auth.example/authorize", "loopback"
+	server := &Server{output: &output, Auth: AuthConfig{
+		Methods: []AuthMethod{{ID: "grok.com", Name: "Grok", Interactive: true}},
+		Authenticate: func(_ context.Context, request AuthRequest) (*AuthMeta, error) {
+			if request.MethodID != "grok.com" || request.Meta["reauth"] != true {
+				t.Fatalf("request=%#v", request)
+			}
+			if submitted := <-code; submitted != "callback-code" {
+				t.Fatalf("code=%q", submitted)
+			}
+			email := "user@example.com"
+			return &AuthMeta{Email: &email}, nil
+		},
+		GetURL: func(context.Context) (AuthURLResult, error) {
+			return AuthURLResult{AuthURL: &url, Mode: &mode}, nil
+		},
+		SubmitCode: func(value string) error { code <- value; return nil },
+	}}
+	server.handleAuthenticate(context.Background(), message{ID: json.RawMessage("1"), Params: json.RawMessage(`{"methodId":"grok.com","_meta":{"reauth":true}}`)})
+	server.handleAuth(context.Background(), message{ID: json.RawMessage("2"), Method: "x.ai/auth/get_url"})
+	server.handleAuth(context.Background(), message{ID: json.RawMessage("3"), Method: "x.ai/auth/submit_code", Params: json.RawMessage(`{"code":"callback-code"}`)})
+	server.wg.Wait()
+	responses := map[float64]map[string]any{}
+	decoder := json.NewDecoder(&output)
+	for range 3 {
+		response := decodeACP(t, decoder)
+		responses[response["id"].(float64)] = response["result"].(map[string]any)
+	}
+	if responses[2]["auth_url"] != url || responses[2]["mode"] != mode || responses[2]["external_provider"] != false || responses[3]["submitted"] != true {
+		t.Fatalf("responses=%#v", responses)
+	}
+	meta := responses[1]["_meta"].(map[string]any)
+	if meta["email"] != "user@example.com" {
+		t.Fatalf("authenticate meta=%#v", meta)
+	}
+}
+
+func TestAuthenticateAndAuthExtensionErrors(t *testing.T) {
+	var output bytes.Buffer
+	server := &Server{output: &output, Auth: AuthConfig{Authenticate: func(context.Context, AuthRequest) (*AuthMeta, error) {
+		return nil, errors.New("denied")
+	}}}
+	server.handleAuthenticate(context.Background(), message{ID: json.RawMessage("1"), Params: json.RawMessage(`{}`)})
+	server.handleAuthenticate(context.Background(), message{ID: json.RawMessage("2"), Params: json.RawMessage(`{"methodId":"unknown"}`)})
+	server.handleAuth(context.Background(), message{ID: json.RawMessage("3"), Method: "x.ai/auth/submit_code", Params: json.RawMessage(`{"code":""}`)})
+	server.handleAuth(context.Background(), message{ID: json.RawMessage("4"), Method: "x.ai/auth/submit_code", Params: json.RawMessage(`{"code":"value"}`)})
+	decoder := json.NewDecoder(&output)
+	for id, code := range []float64{-32602, -32000, -32602, -32602} {
+		response := decodeACP(t, decoder)
+		errorValue := response["error"].(map[string]any)
+		if response["id"] != float64(id+1) || errorValue["code"] != code {
+			t.Fatalf("response=%#v", response)
+		}
 	}
 }
 
@@ -157,6 +233,20 @@ func TestAuthLogoutClearsCurrentCredentialAndCachedState(t *testing.T) {
 	response = decodeACP(t, json.NewDecoder(&output))["result"].(map[string]any)
 	if response["methodId"] != nil || response["email"] != nil {
 		t.Fatalf("stale auth info=%#v", response)
+	}
+}
+
+func TestAuthLogoutClearsInteractiveState(t *testing.T) {
+	path, scope := filepath.Join(t.TempDir(), "auth.json"), "issuer::client"
+	if err := auth.Save(path, scope, auth.Credential{Key: "oauth-token"}); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	server := &Server{output: &output, Auth: AuthConfig{Path: path, Scope: scope, MethodID: "grok.com", Token: "oauth-token"}}
+	server.handleAuth(context.Background(), message{ID: json.RawMessage("1"), Method: "x.ai/auth/logout", Params: json.RawMessage(`{}`)})
+	response := decodeACP(t, json.NewDecoder(&output))["result"].(map[string]any)
+	if response["ok"] != true || server.Auth.MethodID != "" || server.Auth.Token != "" {
+		t.Fatalf("response=%#v auth=%#v", response, server.Auth)
 	}
 }
 

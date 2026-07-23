@@ -151,6 +151,54 @@ func TestBrowserLoginAcceptsAllowedTeamWithoutIDToken(t *testing.T) {
 	}
 }
 
+func TestBrowserLoginAcceptsSubmittedAuthorizationCode(t *testing.T) {
+	var issuer string
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/.well-known/openid-configuration":
+			_ = json.NewEncoder(writer).Encode(map[string]string{
+				"issuer": issuer, "authorization_endpoint": issuer + "/authorize",
+				"token_endpoint": issuer + "/token", "jwks_uri": issuer + "/jwks",
+			})
+		case "/token":
+			if err := request.ParseForm(); err != nil || request.Form.Get("code") != "submitted-code" {
+				t.Fatalf("token form=%#v err=%v", request.Form, err)
+			}
+			_ = json.NewEncoder(writer).Encode(map[string]any{
+				"access_token":  testJWT(map[string]string{"principal_type": "Team", "principal_id": "team-1"}),
+				"refresh_token": "refresh-1", "expires_in": 3600, "token_type": "Bearer",
+			})
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	issuer = "http://" + server.Listener.Addr().String()
+	server.Start()
+	defer server.Close()
+	login, err := NewClient(server.Client()).StartBrowserLogin(context.Background(), Config{
+		Issuer: issuer, ClientID: "client-1", Scopes: []string{"profile"},
+		PrincipalType: "Team", PrincipalID: "team-1", AllowedTeams: []string{"team-1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, completeErr := login.Complete(context.Background(), nil)
+		result <- completeErr
+	}()
+	if err := login.Submit("submitted-code"); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-result; err != nil {
+		t.Fatal(err)
+	}
+	if err := login.Submit("another-code"); err == nil {
+		t.Fatal("completed login accepted another code")
+	}
+}
+
 func TestBrowserLoginRejectsMismatchedState(t *testing.T) {
 	issuer := ""
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

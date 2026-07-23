@@ -103,6 +103,7 @@ type Server struct {
 	input              io.Reader
 	output             io.Writer
 	writeMu            sync.Mutex
+	authMu             sync.RWMutex
 	mu                 sync.Mutex
 	sessions           map[string]*session
 	pending            map[string]chan permissionResult
@@ -268,6 +269,11 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.clientFS = parseClientFS(incoming.Params)
 			s.clientGitHead = parseClientGitHead(incoming.Params)
 			s.clientFolderTrust = parseClientFolderTrust(incoming.Params)
+			authConfig := s.authSnapshot()
+			meta := map[string]any{"availableCommands": availableCommands(nil, false)}
+			if authConfig.DefaultMethodID != "" {
+				meta["defaultAuthMethodId"] = authConfig.DefaultMethodID
+			}
 			s.respond(incoming.ID, map[string]any{
 				"protocolVersion": ProtocolVersion,
 				"agentCapabilities": map[string]any{
@@ -281,10 +287,12 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 						"x.ai/hooks":     map[string]any{"blockingEvents": []any{"pre_tool_use"}, "decisions": []any{"deny"}},
 					},
 				},
-				"authMethods": []any{},
+				"authMethods": authConfig.Methods,
 				"agentInfo":   map[string]any{"name": "gork-go", "version": "0.1.0-dev"},
-				"_meta":       map[string]any{"availableCommands": availableCommands(nil, false)},
+				"_meta":       meta,
 			})
+		case "authenticate":
+			s.handleAuthenticate(ctx, incoming)
 		case "session/new":
 			s.handleNewSession(ctx, incoming)
 		case "session/list":
@@ -347,7 +355,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleModelReload(incoming)
 		case "x.ai/internal/evict_sessions":
 			s.handleEvictSessions(incoming.Params)
-		case "x.ai/auth/info", "x.ai/auth/getBearerToken", "x.ai/auth/logout", "x.ai/auth/check_subscription", "x.ai/internal/auth_cleared", "x.ai/getApiKey", "x.ai/setApiKey":
+		case "x.ai/auth/info", "x.ai/auth/getBearerToken", "x.ai/auth/get_url", "x.ai/auth/submit_code", "x.ai/auth/logout", "x.ai/auth/check_subscription", "x.ai/internal/auth_cleared", "x.ai/getApiKey", "x.ai/setApiKey":
 			s.handleAuth(ctx, incoming)
 		case "x.ai/privacy/setCodingDataRetention":
 			s.handlePrivacy(ctx, incoming)

@@ -17,10 +17,34 @@ type AuthConfig struct {
 	Scope             string
 	MethodID          string
 	Token             string
+	Methods           []AuthMethod
+	DefaultMethodID   string
 	TokenProvider     api.TokenProvider
 	ProxyBaseURL      string
 	HTTP              *http.Client
+	Authenticate      func(context.Context, AuthRequest) (*AuthMeta, error)
+	GetURL            func(context.Context) (AuthURLResult, error)
+	SubmitCode        func(string) error
 	CheckSubscription func(context.Context) SubscriptionCheckResult
+}
+
+type AuthMethod struct {
+	ID          string         `json:"id"`
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	Meta        map[string]any `json:"_meta,omitempty"`
+	Interactive bool           `json:"-"`
+}
+
+type AuthRequest struct {
+	MethodID string         `json:"methodId"`
+	Meta     map[string]any `json:"_meta,omitempty"`
+}
+
+type AuthURLResult struct {
+	AuthURL          *string `json:"auth_url"`
+	ExternalProvider bool    `json:"external_provider"`
+	Mode             *string `json:"mode"`
 }
 
 type AuthGate struct {
@@ -47,6 +71,67 @@ type SubscriptionCheckResult struct {
 	Meta          *AuthMeta `json:"meta"`
 }
 
+func (s *Server) authSnapshot() AuthConfig {
+	s.authMu.RLock()
+	defer s.authMu.RUnlock()
+	result := s.Auth
+	result.Methods = append([]AuthMethod(nil), s.Auth.Methods...)
+	return result
+}
+
+// SetAuthState publishes a completed authentication to subsequent ACP calls.
+func (s *Server) SetAuthState(methodID, token string) {
+	s.authMu.Lock()
+	s.Auth.MethodID = methodID
+	s.Auth.Token = token
+	s.authMu.Unlock()
+}
+
+func isSessionAuthMethod(methodID string) bool {
+	return methodID == "cached_token" || methodID == "grok.com" || methodID == "oidc"
+}
+
+func (s *Server) handleAuthenticate(ctx context.Context, incoming message) {
+	var request AuthRequest
+	if json.Unmarshal(incoming.Params, &request) != nil || strings.TrimSpace(request.MethodID) == "" {
+		s.respondError(incoming.ID, -32602, "methodId is required")
+		return
+	}
+	config := s.authSnapshot()
+	if config.Authenticate == nil {
+		s.respondErrorData(incoming.ID, -32000, "Authentication required", "authentication is not configured")
+		return
+	}
+	run := func() {
+		meta, err := config.Authenticate(ctx, request)
+		if err != nil {
+			s.respondErrorData(incoming.ID, -32000, "Authentication required", err.Error())
+			return
+		}
+		result := map[string]any{}
+		if meta != nil {
+			result["_meta"] = meta
+		}
+		s.respond(incoming.ID, result)
+	}
+	async := request.MethodID == "cached_token"
+	for _, method := range config.Methods {
+		if method.ID == request.MethodID && method.Interactive {
+			async = true
+			break
+		}
+	}
+	if async {
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			run()
+		}()
+		return
+	}
+	run()
+}
+
 type authInfoResponse struct {
 	MethodID                  *string  `json:"methodId"`
 	Email                     *string  `json:"email"`
@@ -67,6 +152,7 @@ type authInfoResponse struct {
 }
 
 func (s *Server) handleAuth(ctx context.Context, incoming message) {
+	config := s.authSnapshot()
 	switch incoming.Method {
 	case "x.ai/auth/logout":
 		var params struct {
@@ -76,14 +162,13 @@ func (s *Server) handleAuth(ctx context.Context, incoming message) {
 			s.respondErrorData(incoming.ID, -32602, "Invalid params", "invalid params")
 			return
 		}
-		result, err := auth.Logout(s.Auth.Path, s.Auth.Scope, params.Scope)
+		result, err := auth.Logout(config.Path, config.Scope, params.Scope)
 		if err != nil {
 			s.respondErrorData(incoming.ID, -32603, "Internal error", "failed to logout: "+err.Error())
 			return
 		}
-		if result.ClearedCurrent && s.Auth.MethodID == "cached_token" {
-			s.Auth.MethodID = ""
-			s.Auth.Token = ""
+		if result.ClearedCurrent && isSessionAuthMethod(config.MethodID) {
+			s.SetAuthState("", "")
 		}
 		if s.AuthChanged != nil {
 			if err := s.AuthChanged(ctx, result); err != nil {
@@ -97,9 +182,8 @@ func (s *Server) handleAuth(ctx context.Context, incoming message) {
 		})
 		return
 	case "x.ai/internal/auth_cleared":
-		if s.Auth.MethodID == "cached_token" {
-			s.Auth.MethodID = ""
-			s.Auth.Token = ""
+		if isSessionAuthMethod(config.MethodID) {
+			s.SetAuthState("", "")
 		}
 		if s.AuthChanged != nil {
 			if err := s.AuthChanged(ctx, auth.LogoutResult{ClearedCurrent: true}); err != nil {
@@ -127,7 +211,7 @@ func (s *Server) handleAuth(ctx context.Context, incoming message) {
 		if fields, ok := params.(map[string]any); ok {
 			key, _ = fields["key"].(string)
 		}
-		if err := auth.StoreAPIKey(s.Auth.Path, key); err != nil {
+		if err := auth.StoreAPIKey(config.Path, key); err != nil {
 			s.respondError(incoming.ID, -32000, err.Error())
 			return
 		}
@@ -144,27 +228,57 @@ func (s *Server) handleAuth(ctx context.Context, incoming message) {
 		s.respond(incoming.ID, map[string]any{"ok": true})
 		return
 	case "x.ai/auth/getBearerToken":
-		token := s.Auth.Token
-		if s.Auth.TokenProvider != nil {
-			if refreshed, err := s.Auth.TokenProvider(ctx, ""); err == nil {
+		token := config.Token
+		if config.MethodID != "xai.api_key" && config.TokenProvider != nil {
+			if refreshed, err := config.TokenProvider(ctx, ""); err == nil {
 				token = refreshed
 			}
 		}
 		s.respond(incoming.ID, map[string]any{"token": optionalString(token)})
 		return
+	case "x.ai/auth/get_url":
+		result := AuthURLResult{}
+		var err error
+		if config.GetURL != nil {
+			result, err = config.GetURL(ctx)
+		}
+		if err != nil {
+			s.respondErrorData(incoming.ID, -32603, "Internal error", err.Error())
+			return
+		}
+		s.respond(incoming.ID, result)
+		return
+	case "x.ai/auth/submit_code":
+		var params struct {
+			Code string `json:"code"`
+		}
+		if json.Unmarshal(incoming.Params, &params) != nil || strings.TrimSpace(params.Code) == "" {
+			s.respondError(incoming.ID, -32602, "code is required")
+			return
+		}
+		if config.SubmitCode == nil {
+			s.respondErrorData(incoming.ID, -32602, "Invalid params", "no pending auth session")
+			return
+		}
+		if err := config.SubmitCode(params.Code); err != nil {
+			s.respondErrorData(incoming.ID, -32602, "Invalid params", err.Error())
+			return
+		}
+		s.respond(incoming.ID, map[string]any{"submitted": true})
+		return
 	case "x.ai/auth/check_subscription":
 		result := SubscriptionCheckResult{}
-		if s.Auth.CheckSubscription != nil {
-			result = s.Auth.CheckSubscription(ctx)
+		if config.CheckSubscription != nil {
+			result = config.CheckSubscription(ctx)
 		}
 		s.respond(incoming.ID, result)
 		return
 	}
 
 	credential := auth.Credential{}
-	methodID := s.Auth.MethodID
-	if s.Auth.Path != "" && s.Auth.Scope != "" {
-		loaded, err := auth.Load(s.Auth.Path, s.Auth.Scope)
+	methodID := config.MethodID
+	if config.Path != "" && config.Scope != "" {
+		loaded, err := auth.Load(config.Path, config.Scope)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			s.respondError(incoming.ID, -32000, err.Error())
 			return

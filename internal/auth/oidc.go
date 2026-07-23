@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -22,7 +23,9 @@ import (
 
 type BrowserLogin struct {
 	AuthorizationURL string
+	mu               sync.Mutex
 	listener         net.Listener
+	callback         chan loginCallback
 	oauth            oauth2.Config
 	verifier         *oidc.IDTokenVerifier
 	state            string
@@ -104,6 +107,7 @@ func (c *Client) StartBrowserLogin(ctx context.Context, cfg Config) (*BrowserLog
 	parsed.RawQuery = query.Encode()
 	return &BrowserLogin{
 		AuthorizationURL: parsed.String(), listener: listener, oauth: oauthConfig,
+		callback: make(chan loginCallback, 1),
 		verifier: provider.Verifier(&oidc.Config{
 			ClientID: cfg.ClientID,
 			SupportedSigningAlgs: []string{
@@ -115,7 +119,12 @@ func (c *Client) StartBrowserLogin(ctx context.Context, cfg Config) (*BrowserLog
 }
 
 func (l *BrowserLogin) Close() error {
-	if l == nil || l.listener == nil {
+	if l == nil {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.listener == nil {
 		return nil
 	}
 	err := l.listener.Close()
@@ -123,21 +132,50 @@ func (l *BrowserLogin) Close() error {
 	return err
 }
 
+// Submit delivers a callback URL or authorization code to an active browser
+// login. It is used by clients that cannot reach the loopback callback.
+func (l *BrowserLogin) Submit(value string) error {
+	if l == nil {
+		return errors.New("OIDC browser login is not active")
+	}
+	l.mu.Lock()
+	active, callback := l.listener != nil, l.callback
+	l.mu.Unlock()
+	if !active || callback == nil {
+		return errors.New("OIDC browser login is not active")
+	}
+	select {
+	case callback <- parseCallback(value):
+		return nil
+	default:
+		return errors.New("OIDC authorization code was already submitted")
+	}
+}
+
 func (l *BrowserLogin) Complete(ctx context.Context, pastedInput io.Reader) (Credential, error) {
-	if l == nil || l.listener == nil {
+	if l == nil {
 		return Credential{}, errors.New("OIDC browser login is not active")
 	}
-	callback := make(chan loginCallback, 1)
+	l.mu.Lock()
+	listener, callback := l.listener, l.callback
+	l.mu.Unlock()
+	if listener == nil || callback == nil {
+		return Credential{}, errors.New("OIDC browser login is not active")
+	}
 	server := &http.Server{ReadHeaderTimeout: 5 * time.Second, Handler: callbackHandler(callback)}
 	serveDone := make(chan struct{})
 	go func() {
-		_ = server.Serve(l.listener)
+		_ = server.Serve(listener)
 		close(serveDone)
 	}()
 	defer func() {
 		_ = server.Close()
 		<-serveDone
-		l.listener = nil
+		l.mu.Lock()
+		if l.listener == listener {
+			l.listener = nil
+		}
+		l.mu.Unlock()
 	}()
 	if pastedInput != nil {
 		go readPastedCallback(pastedInput, callback)

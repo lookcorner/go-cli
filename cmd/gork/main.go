@@ -203,24 +203,13 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		if pathErr != nil {
 			return pathErr
 		}
-		authClient := auth.NewClient(&http.Client{Timeout: cfg.HTTPTimeout})
 		authConfig := auth.DefaultConfig()
 		applyAuthPolicy(&authConfig, cfg)
-		external := auth.ExternalProvider{
-			Command: cfg.AuthProviderCommand, Path: path, Scope: authConfig.Scope(),
-			TokenTTL: cfg.AuthTokenTTL, Stderr: stderr, AllowedTeams: authConfig.AllowedTeams,
-		}
-		resolveToken := func(ctx context.Context, rejectedToken string) (string, error) {
-			token, err := authClient.ResolveRejected(ctx, path, authConfig, rejectedToken)
-			if err == nil || external.Command == "" {
-				return token, err
-			}
-			return external.Resolve(ctx, rejectedToken)
-		}
+		resolveToken := newAuthTokenProvider(cfg, path, authConfig, stderr)
 		token, authErr := resolveToken(context.Background(), "")
 		if authErr == nil {
-			cfg.APIKey = token
 			tokenProvider = resolveToken
+			cfg.APIKey = token
 			settingsCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			credential, _ := auth.Load(path, authConfig.Scope())
 			remote := config.FetchRemoteSettingsForSession(settingsCtx, cfg.ProxyBaseURL, cfg.APIKey, credential.UserID, credential.Email, &http.Client{Timeout: 3 * time.Second})
@@ -613,6 +602,21 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return goalLoop(ctx, runner, registry, stdout, stderr, prompt, opts.previousID, opts.goalRuns, cfg.Goal.VerifierCount, cfg.Goal.ClassifierMaxRuns, cfg.Goal.ReverifyAfter)
 	}
 	return runHeadless(ctx, runner, scheduledQueue, stdout, stderr, prompt, opts.previousID)
+}
+
+func newAuthTokenProvider(cfg config.Config, path string, authConfig auth.Config, stderr io.Writer) api.TokenProvider {
+	authClient := auth.NewClient(&http.Client{Timeout: cfg.HTTPTimeout})
+	external := auth.ExternalProvider{
+		Command: cfg.AuthProviderCommand, Path: path, Scope: authConfig.Scope(),
+		TokenTTL: cfg.AuthTokenTTL, Stderr: stderr, AllowedTeams: authConfig.AllowedTeams,
+	}
+	return func(ctx context.Context, rejectedToken string) (string, error) {
+		token, err := authClient.ResolveRejected(ctx, path, authConfig, rejectedToken)
+		if err == nil || external.Command == "" {
+			return token, err
+		}
+		return external.Resolve(ctx, rejectedToken)
+	}
 }
 
 func runMemory(args []string, cwd string, stdin io.Reader, stdout, stderr io.Writer) error {
@@ -1745,13 +1749,33 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 	authPath, _ := auth.DefaultPath()
 	authConfig := auth.DefaultConfig()
 	applyAuthPolicy(&authConfig, cfg)
+	if tokenProvider == nil && cfg.PreferredAuthMethod != "api_key" && isXAIBaseURL(cfg.BaseURL) {
+		tokenProvider = newAuthTokenProvider(cfg, authPath, authConfig, stderr)
+	}
+	apiKeyConfig := cfg
+	if tokenProvider != nil {
+		apiKeyConfig.APIKey = ""
+	}
 	authMethodID := ""
 	if tokenProvider != nil {
-		authMethodID = "cached_token"
+		if _, err := auth.Load(authPath, authConfig.Scope()); err == nil {
+			authMethodID = "cached_token"
+		}
 	} else if cfg.APIKey != "" {
 		authMethodID = "xai.api_key"
 	}
-	cacheAuth, cacheOrigin := modelCacheIdentity(cfg, tokenProvider)
+	authMethods, defaultAuthMethodID := buildACPAuthMethods(apiKeyConfig, authPath, authConfig.Scope())
+	authRuntime := &acpAuthRuntime{methodID: authMethodID, provider: tokenProvider}
+	if defaultAuthMethodID != "" && authMethodID == "" {
+		authRuntime.Set(defaultAuthMethodID)
+	}
+	if authMethodID == "" {
+		authMethodID = defaultAuthMethodID
+	}
+	if authMethodID == "xai.api_key" {
+		cfg.APIKey = resolveACPAPIKey(apiKeyConfig, authPath)
+	}
+	cacheAuth, cacheOrigin := modelCacheIdentity(cfg, authRuntime.Provider())
 	modelCache, cacheLoaded := config.LoadModelCache(cacheAuth, cacheOrigin)
 	if !cacheLoaded {
 		if fetched, err := fetchACPModelCache(ctx, cfg, cacheAuth, cacheOrigin, authPath, authConfig.Scope()); err == nil {
@@ -1765,7 +1789,8 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		return modelCache
 	}
 	refreshModelCache := func() {
-		refreshed, _ := config.LoadModelCache(cacheAuth, cacheOrigin)
+		currentAuth, currentOrigin := modelCacheIdentity(cfg, authRuntime.Provider())
+		refreshed, _ := config.LoadModelCache(currentAuth, currentOrigin)
 		modelCacheMu.Lock()
 		modelCache = refreshed
 		modelCacheMu.Unlock()
@@ -1816,6 +1841,11 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		runtimeConfigMu.Unlock()
 		setBillingMeta(current)
 	}
+	setSessionKey := func(token string) {
+		runtimeConfigMu.Lock()
+		runtimeConfig.APIKey = token
+		runtimeConfigMu.Unlock()
+	}
 	subscriptionHTTP := &http.Client{Timeout: cfg.HTTPTimeout}
 	var server *acp.Server
 	catalogRefresher := &acpSubscriptionCatalogRefresher{
@@ -1828,17 +1858,18 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		},
 	}
 	subscriptionChecker := &acpSubscriptionChecker{
-		authPath: authPath, scope: authConfig.Scope(), tokenProvider: tokenProvider, http: subscriptionHTTP,
+		authPath: authPath, scope: authConfig.Scope(), tokenProvider: tokenProvider, http: subscriptionHTTP, authMethod: authRuntime.Method,
 		config: runtimeConfigSnapshot, applySettings: applyRemoteSettings, refreshModels: catalogRefresher.Start,
 	}
 	server = &acp.Server{SessionDir: opts.sessionDir, FolderTrustEnabled: cfg.FolderTrustEnabled, BillingMeta: getBillingMeta, Auth: acp.AuthConfig{
-		Path: authPath, Scope: authConfig.Scope(), MethodID: authMethodID, Token: cfg.APIKey, TokenProvider: tokenProvider,
+		Path: authPath, Scope: authConfig.Scope(), MethodID: authMethodID, Token: cfg.APIKey, Methods: authMethods, DefaultMethodID: defaultAuthMethodID, TokenProvider: tokenProvider,
 		ProxyBaseURL: cfg.ProxyBaseURL, HTTP: &http.Client{Timeout: cfg.HTTPTimeout}, CheckSubscription: subscriptionChecker.Check,
 	}, AuthChanged: func(authCtx context.Context, result auth.LogoutResult) error {
 		if err := clearACPLogoutPolicy(authCtx, cfg, result); err != nil {
 			return err
 		}
-		if shouldClearACPModelCache(cacheAuth, result) {
+		currentAuth, _ := modelCacheIdentity(runtimeConfigSnapshot(), authRuntime.Provider())
+		if shouldClearACPModelCache(currentAuth, result) {
 			if err := config.ClearModelCache(); err != nil {
 				return err
 			}
@@ -1846,8 +1877,40 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			modelCache = config.ModelCache{}
 			modelCacheMu.Unlock()
 		}
+		if result.ClearedCurrent && authRuntime.Provider() != nil {
+			setSessionKey("")
+			authRuntime.Set("")
+		}
 		return server.ReloadModels()
-	}, Factory: func(
+	}}
+	loginCoordinator := newACPLoginCoordinator(auth.NewClient(&http.Client{Timeout: cfg.HTTPTimeout}), authConfig, authPath)
+	loginCoordinator.appConfig = runtimeConfigSnapshot
+	loginCoordinator.applySettings = applyRemoteSettings
+	loginCoordinator.setSessionKey = setSessionKey
+	loginCoordinator.resolveAPIKey = func() (string, bool) {
+		current := runtimeConfigSnapshot()
+		current.APIKey = apiKeyConfig.APIKey
+		key := resolveACPAPIKey(current, authPath)
+		return key, key != "" || hasModelAPIKey(current)
+	}
+	loginCoordinator.tokenProvider = tokenProvider
+	loginCoordinator.stderr = stderr
+	loginCoordinator.setState = func(methodID, token string) {
+		authRuntime.Set(methodID)
+		server.SetAuthState(methodID, token)
+	}
+	loginCoordinator.refreshModels = func(token string) {
+		current := runtimeConfigSnapshot()
+		current.APIKey = token
+		method, origin := modelCacheIdentity(current, authRuntime.Provider())
+		if _, err := fetchACPModelCache(ctx, current, method, origin, authPath, authConfig.Scope()); err == nil {
+			_ = server.ReloadModelCache()
+		}
+	}
+	server.Auth.Authenticate = loginCoordinator.Authenticate
+	server.Auth.GetURL = loginCoordinator.GetURL
+	server.Auth.SubmitCode = loginCoordinator.SubmitCode
+	server.Factory = func(
 		sessionCtx context.Context,
 		sessionConfig acp.SessionConfig,
 		protocolApprover tools.Approver,
@@ -1855,11 +1918,12 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		statusOutput io.Writer,
 	) (*agent.Runner, func(), error) {
 		cfg := runtimeConfigSnapshot()
+		sessionTokenProvider := authRuntime.Provider()
 		if key, ok := auth.ReadAPIKeyEnvironment(); ok && !cfg.DisableAPIKeyAuth && !cfg.ForceLoginTeamConfigured && cfg.PreferredAuthMethod != "oidc" {
 			cfg.APIKey = key
 		}
-		if tokenProvider != nil {
-			refreshed, refreshErr := tokenProvider(sessionCtx, "")
+		if sessionTokenProvider != nil {
+			refreshed, refreshErr := sessionTokenProvider(sessionCtx, "")
 			cfg.APIKey = ""
 			if refreshErr == nil && refreshed != "" {
 				cfg.APIKey = refreshed
@@ -2018,7 +2082,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			cleanup()
 			return nil, nil, err
 		}
-		mcpRuntime = newSessionMCPRuntime(sessionCtx, sessionCfg, ws.Root(), registry, approver, tokenProvider, statusOutput)
+		mcpRuntime = newSessionMCPRuntime(sessionCtx, sessionCfg, ws.Root(), registry, approver, sessionTokenProvider, statusOutput)
 		if err = mcpRuntime.Update(sessionCtx, sessionConfig.MCPServers); err != nil {
 			cleanup()
 			return nil, nil, err
@@ -2028,12 +2092,12 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			cleanup()
 			return nil, nil, err
 		}
-		modelClient, err := newModelClient(sessionCfg, tokenProvider)
+		modelClient, err := newModelClient(sessionCfg, sessionTokenProvider)
 		if err != nil {
 			cleanup()
 			return nil, nil, err
 		}
-		permissionClassifier, err := newPermissionClassifierConfig(sessionCfg, tokenProvider)
+		permissionClassifier, err := newPermissionClassifierConfig(sessionCfg, sessionTokenProvider)
 		if err != nil {
 			cleanup()
 			return nil, nil, err
@@ -2101,7 +2165,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			DisablePermissionBypass: sessionCfg.DisableBypassPermissionsMode,
 			ParentMCPServers:        mcpRuntime.Configs(),
 			StartMCPServers: func(childCtx context.Context, root string, childTools *tools.Registry, servers []mcp.ServerConfig) (func(), error) {
-				return startSubagentMCPServers(childCtx, sessionCfg, root, childTools, approver, tokenProvider, statusOutput, servers)
+				return startSubagentMCPServers(childCtx, sessionCfg, root, childTools, approver, sessionTokenProvider, statusOutput, servers)
 			},
 			NewClient: func(model subagent.ModelRuntime) (agent.ResponseStreamer, error) {
 				modelCatalogMu.RLock()
@@ -2112,7 +2176,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 				} else {
 					child.Model = model.Model
 				}
-				return newModelClient(child, tokenProvider)
+				return newModelClient(child, sessionTokenProvider)
 			}, Hooks: pluginState.hooks,
 		})
 		if err != nil {
@@ -2397,7 +2461,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			if !ok {
 				return agent.ModelRuntime{}, fmt.Errorf("unknown model id %q", id)
 			}
-			client, err := newModelClient(resolved, tokenProvider)
+			client, err := newModelClient(resolved, sessionTokenProvider)
 			if err != nil {
 				return agent.ModelRuntime{}, err
 			}
@@ -2460,7 +2524,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			waitRunnerMemory(runner)
 			closeRuntime()
 		}, nil
-	}}
+	}
 	watchModelConfig(ctx, time.Second, config.ModelWatchPaths(opts.configPath), server.ReloadModels, stderr)
 	if err := server.Serve(ctx, stdin, stdout); err != nil {
 		fmt.Fprintln(stderr, "[gork] ACP server failed:", err)
