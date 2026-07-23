@@ -166,23 +166,32 @@ func TestInteractiveNewSessionCommandsDoNotRunModelTurn(t *testing.T) {
 	}
 }
 
-func TestFreshSessionArgsDropsConversationState(t *testing.T) {
+func TestRestartSessionArgsDropsConversationState(t *testing.T) {
 	tests := []struct {
-		name       string
-		args       []string
-		positional []string
-		want       []string
+		name                  string
+		args, positional      []string
+		resumePath, workspace string
+		want                  []string
 	}{
-		{"separate values", []string{"--tui", "--workspace", "/project", "--resume", "latest", "--model", "grok", "continue", "work"}, []string{"continue", "work"}, []string{"--tui", "--workspace", "/project", "--model", "grok"}},
-		{"equals values", []string{"-interactive", "-resume=/tmp/old.jsonl", "-previous-response-id=old", "-approval=auto"}, nil, []string{"-interactive", "-approval=auto"}},
-		{"separator", []string{"--tui", "--", "/new should be text"}, []string{"/new should be text"}, []string{"--tui"}},
+		{name: "separate values", args: []string{"--tui", "--workspace", "/project", "--resume", "latest", "--model", "grok", "continue", "work"}, positional: []string{"continue", "work"}, want: []string{"--tui", "--workspace", "/project", "--model", "grok"}},
+		{name: "equals values", args: []string{"-interactive", "-resume=/tmp/old.jsonl", "-previous-response-id=old", "-approval=auto"}, want: []string{"-interactive", "-approval=auto"}},
+		{name: "separator", args: []string{"--tui", "--", "/new should be text"}, positional: []string{"/new should be text"}, want: []string{"--tui"}},
+		{name: "selected session", args: []string{"--tui", "--workspace=/old", "--resume", "/old/session.jsonl", "old prompt"}, positional: []string{"old prompt"}, resumePath: "/sessions/selected.jsonl", workspace: "/selected", want: []string{"--tui", "--resume", "/sessions/selected.jsonl", "--workspace", "/selected"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := freshSessionArgs(test.args, test.positional); !reflect.DeepEqual(got, test.want) {
+			if got := restartSessionArgs(test.args, test.positional, test.resumePath, test.workspace); !reflect.DeepEqual(got, test.want) {
 				t.Fatalf("got=%#v want=%#v", got, test.want)
 			}
 		})
+	}
+}
+
+func TestRestartTUITranslatesResumeRequest(t *testing.T) {
+	err := restartTUI(&tui.ResumeSessionError{Path: "/sessions/selected.jsonl", Workspace: "/selected"}, []string{"--tui", "old prompt"}, []string{"old prompt"})
+	var restart *sessionRestartRequest
+	if !errors.As(err, &restart) || !reflect.DeepEqual(restart.args, []string{"--tui", "--resume", "/sessions/selected.jsonl", "--workspace", "/selected"}) {
+		t.Fatalf("err=%v restart=%#v", err, restart)
 	}
 }
 

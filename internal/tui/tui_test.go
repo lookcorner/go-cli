@@ -1518,6 +1518,92 @@ func TestNewSessionCommandsExitWithoutModelTurn(t *testing.T) {
 	}
 }
 
+func TestResumeCommandSelectsPreviousSessionWithoutModelTurn(t *testing.T) {
+	dir, currentWorkspace, previousWorkspace := t.TempDir(), t.TempDir(), t.TempDir()
+	writeSession := func(id, cwd, title string) string {
+		logger, err := session.NewLoggerWithID(dir, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := logger.Append("session_metadata", map[string]any{"cwd": cwd, "modelId": "test"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := logger.Append("user_prompt", map[string]any{"text": title}); err != nil {
+			t.Fatal(err)
+		}
+		if err := logger.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return logger.Path()
+	}
+	currentPath := writeSession("current", currentWorkspace, "Current work")
+	previousPath := writeSession("previous", previousWorkspace, "Previous work")
+	m := &model{
+		ctx: context.Background(), runner: &agent.Runner{SessionID: "current", SessionPath: currentPath},
+		workspace: currentWorkspace, width: 100, height: 18, status: "ready",
+	}
+	m.setInput("/resume")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command == nil || m.running || m.sessionSelect == nil || !m.sessionSelect.loading {
+		t.Fatalf("command=%v running=%v picker=%#v", command != nil, m.running, m.sessionSelect)
+	}
+	updated, _ = m.Update(command())
+	m = updated.(*model)
+	if m.sessionSelect.loading || len(m.sessionSelect.sessions) != 2 {
+		t.Fatalf("loaded picker=%#v", m.sessionSelect)
+	}
+	selected := m.sessionSelect.sessions[m.sessionSelect.selected]
+	if selected.SessionID != "previous" || !strings.Contains(stripUIANSI(m.View().Content), "Previous work") {
+		t.Fatalf("selected=%#v view=%q", selected, stripUIANSI(m.View().Content))
+	}
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command == nil || m.resumeSession == nil || m.resumeSession.Path != previousPath || m.resumeSession.Workspace != previousWorkspace || m.transcript.Len() != 0 {
+		t.Fatalf("command=%v resume=%#v transcript=%q", command != nil, m.resumeSession, m.transcript.String())
+	}
+}
+
+func TestResumePickerDoesNotReopenCurrentSession(t *testing.T) {
+	m := &model{
+		runner: &agent.Runner{SessionID: "current"}, status: "select a session",
+		sessionSelect: &sessionSelectState{dir: t.TempDir(), sessions: []session.Info{{SessionID: "current"}}},
+	}
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.sessionSelect != nil || m.resumeSession != nil || m.status != "session already active" {
+		t.Fatalf("command=%v picker=%#v resume=%#v status=%q", command != nil, m.sessionSelect, m.resumeSession, m.status)
+	}
+}
+
+func TestResumePickerDropsLateLoadAfterCancel(t *testing.T) {
+	m := &model{status: "loading sessions", sessionSelect: &sessionSelectState{dir: "/sessions", loading: true}}
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
+	m = updated.(*model)
+	updated, _ = m.Update(sessionSelectLoadedEvent{dir: "/sessions", sessions: []session.Info{{SessionID: "late"}}})
+	m = updated.(*model)
+	if m.sessionSelect != nil || m.status != "ready" {
+		t.Fatalf("picker=%#v status=%q", m.sessionSelect, m.status)
+	}
+}
+
+func TestResumePickerSurfacesListFailure(t *testing.T) {
+	m := &model{sessionSelect: &sessionSelectState{dir: "/sessions", loading: true}}
+	m.finishSessionSelectLoad(sessionSelectLoadedEvent{dir: "/sessions", err: errors.New("disk unavailable")})
+	if m.sessionSelect.loading || m.sessionSelect.err != "disk unavailable" || m.status != "list sessions failed" || !strings.Contains(m.sessionSelectContent(), "disk unavailable") {
+		t.Fatalf("picker=%#v status=%q content=%q", m.sessionSelect, m.status, m.sessionSelectContent())
+	}
+}
+
+func TestResumePickerKeepsEmptySelectionValid(t *testing.T) {
+	m := &model{sessionSelect: &sessionSelectState{}}
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	m = updated.(*model)
+	if command != nil || m.sessionSelect.selected != 0 || !strings.Contains(m.sessionSelectContent(), "No sessions found") {
+		t.Fatalf("command=%v picker=%#v content=%q", command != nil, m.sessionSelect, m.sessionSelectContent())
+	}
+}
+
 func TestMCPModalManagesServersWithoutModelTurn(t *testing.T) {
 	catalog := []mcppkg.ServerConfig{{Name: "alpha", Command: "alpha-server"}, {Name: "beta", URL: "https://mcp.example/sse", Disabled: true, DisabledTools: []string{"hidden"}}}
 	var toggled string

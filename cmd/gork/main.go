@@ -101,7 +101,7 @@ func main() {
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	for {
 		err := runOnce(args, stdin, stdout, stderr)
-		var restart *newSessionRequest
+		var restart *sessionRestartRequest
 		if !errors.As(err, &restart) {
 			return err
 		}
@@ -109,9 +109,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 }
 
-type newSessionRequest struct{ args []string }
+type sessionRestartRequest struct{ args []string }
 
-func (r *newSessionRequest) Error() string { return "start a new session" }
+func (r *sessionRestartRequest) Error() string { return "restart session" }
 
 func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if len(args) > 0 && args[0] == "login" {
@@ -693,10 +693,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			SetCompactMode:    func(enabled bool) error { return config.UpdateCompactMode(opts.configPath, enabled) },
 			SetShowTimestamps: func(enabled bool) error { return config.UpdateShowTimestamps(opts.configPath, enabled) },
 		})
-		if errors.Is(err, tui.ErrNewSession) {
-			return &newSessionRequest{args: freshSessionArgs(args, flags.Args())}
-		}
-		return err
+		return restartTUI(err, args, flags.Args())
 	}
 	fmt.Fprintf(stderr, "[gork] workspace: %s\n[gork] session: %s\n", ws.Root(), displayPath(logger.Path()))
 	if opts.interactive {
@@ -704,10 +701,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			fmt.Fprintln(stdout, resumedTranscript)
 		}
 		err := interactiveLoop(ctx, runner, scheduledQueue, terminalLines, stdout, stderr, prompt, opts.previousID)
-		if errors.Is(err, tui.ErrNewSession) {
-			return &newSessionRequest{args: freshSessionArgs(args, flags.Args())}
-		}
-		return err
+		return restartTUI(err, args, flags.Args())
 	}
 	if opts.goal {
 		snapshot := registry.GoalSnapshot()
@@ -744,7 +738,18 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	return runHeadless(ctx, runner, scheduledQueue, stdout, stderr, prompt, opts.previousID)
 }
 
-func freshSessionArgs(args, positional []string) []string {
+func restartTUI(err error, args, positional []string) error {
+	if errors.Is(err, tui.ErrNewSession) {
+		return &sessionRestartRequest{args: restartSessionArgs(args, positional, "", "")}
+	}
+	var resume *tui.ResumeSessionError
+	if errors.As(err, &resume) {
+		return &sessionRestartRequest{args: restartSessionArgs(args, positional, resume.Path, resume.Workspace)}
+	}
+	return err
+}
+
+func restartSessionArgs(args, positional []string, resumePath, workspace string) []string {
 	flagCount := len(args) - len(positional)
 	if flagCount < 0 {
 		flagCount = 0
@@ -754,14 +759,22 @@ func freshSessionArgs(args, positional []string) []string {
 	for index := 0; index < len(flags); index++ {
 		arg := flags[index]
 		name := strings.TrimLeft(arg, "-")
-		if name == "resume" || name == "previous-response-id" {
+		dropValue := name == "resume" || name == "previous-response-id" || workspace != "" && name == "workspace"
+		if dropValue {
 			index++
 			continue
 		}
-		if strings.HasPrefix(name, "resume=") || strings.HasPrefix(name, "previous-response-id=") || arg == "--" {
+		dropInline := strings.HasPrefix(name, "resume=") || strings.HasPrefix(name, "previous-response-id=") || workspace != "" && strings.HasPrefix(name, "workspace=")
+		if dropInline || arg == "--" {
 			continue
 		}
 		result = append(result, arg)
+	}
+	if resumePath != "" {
+		result = append(result, "--resume", resumePath)
+	}
+	if workspace != "" {
+		result = append(result, "--workspace", workspace)
 	}
 	return result
 }

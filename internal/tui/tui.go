@@ -46,6 +46,13 @@ var selectionURLPattern = regexp.MustCompile(`(?i)\b(?:https?|ftp|file)://[^\s\x
 
 var ErrNewSession = errors.New("start a new session")
 
+type ResumeSessionError struct {
+	Path      string
+	Workspace string
+}
+
+func (e *ResumeSessionError) Error() string { return "resume session " + e.Path }
+
 type textEvent struct{ text string }
 type statusEvent struct{ text string }
 type mouseSelectionPhase uint8
@@ -503,6 +510,7 @@ type model struct {
 	activeTask         string
 	promptSerial       uint64
 	newSession         bool
+	resumeSession      *ResumeSessionError
 
 	promptSuggestion    string
 	suggestionsEnabled  bool
@@ -513,6 +521,7 @@ type model struct {
 	btwRunning    bool
 	rewind        *rewindState
 	modelSelect   *modelSelectState
+	sessionSelect *sessionSelectState
 	mcp           *mcpModal
 	lastEmptyEsc  time.Time
 	questionClick struct {
@@ -714,6 +723,9 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 	}
 	if current, ok := final.(*model); ok && current.newSession {
 		return ErrNewSession
+	}
+	if current, ok := final.(*model); ok && current.resumeSession != nil {
+		return current.resumeSession
 	}
 	return nil
 }
@@ -1254,6 +1266,8 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				m.status = msg.action
 			}
 		}
+	case sessionSelectLoadedEvent:
+		m.finishSessionSelectLoad(msg)
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
@@ -1292,6 +1306,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.mcp != nil {
 		return m.handleMCPKey(msg)
+	}
+	if m.sessionSelect != nil {
+		return m.handleSessionSelectKey(msg)
 	}
 	if m.modelSelect != nil {
 		return m.handleModelSelectKey(msg)
@@ -1556,7 +1573,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if m.runner != nil && m.runner.MCPServerCatalog != nil {
 				mcpCommand = " `/mcps`"
 			}
-			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + announcementCommand + " `/btw <question>` `/compact` `/compact-mode` `/context` `/copy [N]` `/dream` `/effort [level]` `/exit` `/export [filename]`" + feedbackCommand + " `/find` `/flush` `/help` `/history` `/loop` `/memory`" + mcpCommand + " `/model [name] [effort]` (`/m`) `/multiline` `/new` (`/clear`) `/plan [description]` `/privacy [opt-out]` `/queue` `/recap` `/release-notes` (`/changelog`) `/remember` `/rename <title>` `/rewind` `/session-info` (`/status`, `/info`)" + shareCommand + " `/tasks` `/terminal-setup`" + mouseCommand + " `/timestamps` `/transcript` `/usage [show|manage]` (`/cost`) `/view-plan` `/vim-mode`")
+			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + announcementCommand + " `/btw <question>` `/compact` `/compact-mode` `/context` `/copy [N]` `/dream` `/effort [level]` `/exit` `/export [filename]`" + feedbackCommand + " `/find` `/flush` `/help` `/history` `/loop` `/memory`" + mcpCommand + " `/model [name] [effort]` (`/m`) `/multiline` `/new` (`/clear`) `/plan [description]` `/privacy [opt-out]` `/queue` `/recap` `/release-notes` (`/changelog`) `/remember` `/rename <title>` `/resume` `/rewind` `/session-info` (`/status`, `/info`)" + shareCommand + " `/tasks` `/terminal-setup`" + mouseCommand + " `/timestamps` `/transcript` `/usage [show|manage]` (`/cost`) `/view-plan` `/vim-mode`")
 			m.status = "commands"
 			return m, nil
 		case "/mcps":
@@ -1620,6 +1637,8 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "/recap":
 			return m, m.startRecap()
+		case "/resume":
+			return m, m.openSessionSelect()
 		case "/rewind":
 			return m, m.openRewind(false)
 		case "/model", "/m":
@@ -3482,6 +3501,8 @@ func (m *model) View() tea.View {
 	content := m.transcriptText()
 	if m.mcp != nil {
 		content = m.mcpContent()
+	} else if m.sessionSelect != nil {
+		content = m.sessionSelectContent()
 	} else if m.modelSelect != nil {
 		content = m.modelSelectContent()
 	} else if m.rewind != nil {
@@ -3519,6 +3540,8 @@ func (m *model) View() tea.View {
 	var footer string
 	if m.mcp != nil {
 		footer = "\x1b[1;33mMCP servers\x1b[0m\n\x1b[2m" + truncate(m.mcpHint(), width) + "\x1b[0m"
+	} else if m.sessionSelect != nil {
+		footer = "\x1b[1;33mResume session\x1b[0m\n\x1b[2mUp/Down select · Enter resume · Esc cancel\x1b[0m"
 	} else if m.modelSelect != nil {
 		footer = "\x1b[1;33mModel\x1b[0m\n\x1b[2m" + truncate(m.modelSelectHint(), width) + "\x1b[0m"
 	} else if m.rewind != nil {
@@ -3978,7 +4001,7 @@ func renderedLabelContains(line, label string, x, width int) bool {
 
 func (m *model) contentHeight() int {
 	banner := m.announcementHeight()
-	if m.question != nil || m.planReview != nil || m.remember != nil || m.rememberInput || m.rewind != nil || m.modelSelect != nil || m.mcp != nil {
+	if m.question != nil || m.planReview != nil || m.remember != nil || m.rememberInput || m.rewind != nil || m.modelSelect != nil || m.sessionSelect != nil || m.mcp != nil {
 		return max(m.height-7-banner, 3)
 	}
 	if m.historySearch != nil {

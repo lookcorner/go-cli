@@ -510,6 +510,9 @@ starts a planning turn. `/quit` and `/exit` close the TUI without a model turn.
 without a model turn. Workspace, model, permission, and UI flags are preserved,
 while the previous response chain, resume target, transcript, and initial prompt
 are intentionally discarded. The interactive REPL supports the same command.
+`/resume` opens a newest-first picker for local sessions across workspaces. Enter
+closes the current runtime and resumes the selected JSONL session in its saved
+workspace without a model turn; selecting the active session is a no-op.
 `/view-plan`, `/show-plan`, and `/plan-view` open the current confined plan file
 in a read-only preview; Esc returns to the conversation.
 `/transcript` and `/log` open the completed persisted conversation in the same

@@ -46,6 +46,9 @@ implementation.
   and extension inputs share one application persistence port, while review
   comments reuse the existing session event logger.
 - `cmd/gork` wires configuration, domains, and interactive or ACP transports.
+- `internal/tui` presents terminal state and emits typed lifecycle requests;
+  `cmd/gork` performs runtime restart while `internal/session` retains JSONL
+  listing, path validation, and resume rules.
 - `internal/api`, `internal/mcp`, and `internal/lsp` adapt external protocols.
 - `internal/tools` adapts domain-safe workspace operations to model tools. It
   also owns the small session-local aggregates that exist only through the
