@@ -541,6 +541,7 @@ type model struct {
 	sessionSelect *sessionSelectState
 	forkChoice    *forkChoiceState
 	mcp           *mcpModal
+	debug         debugState
 	lastEmptyEsc  time.Time
 	questionClick struct {
 		option int
@@ -724,7 +725,9 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		persistTheme:       options.SetTheme,
 		forkSession:        options.ForkSession,
 		forkInGit:          options.ForkInGit,
+		debug:              newDebugState(),
 	}
+	defer m.debug.closeLog()
 	if options.WordSeparators != nil {
 		m.wordSeparators = *options.WordSeparators
 	}
@@ -812,7 +815,9 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.selectionClick = selectionClickState{}
 		m.timelineHover = nil
 		m.clearTranscriptAnchor()
+		before := m.scroll
 		m.scroll = max(0, m.scroll+msg.lines)
+		m.debug.recordScroll("wheel", msg.lines, before, m.scroll, m.maxTranscriptScroll(), m.contentHeight())
 		return m, nil
 	case timelineHoverEvent:
 		m.timelineHover = msg.hit
@@ -1698,6 +1703,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "/settings", "/config", "/preferences", "/prefs":
 			m.openSettings()
+			return m, nil
+		case "/debug", "/scroll-debug":
+			m.handleDebugCommand(fields[0], strings.TrimSpace(strings.TrimPrefix(prompt, fields[0])))
 			return m, nil
 		case "/mcps":
 			m.openMCPModal()
@@ -2893,7 +2901,9 @@ func (m *model) scrollTranscript(lines int) {
 	m.selection = nil
 	m.selectionClick = selectionClickState{}
 	m.clearTranscriptAnchor()
+	before := m.scroll
 	m.scroll = min(max(m.scroll+lines, 0), m.maxTranscriptScroll())
+	m.debug.recordScroll("keyboard", lines, before, m.scroll, m.maxTranscriptScroll(), m.contentHeight())
 }
 
 func (m *model) maxTranscriptScroll() int {
@@ -3672,6 +3682,8 @@ func runMemoryNoteSave(runner *agent.Runner, content string) tea.Cmd {
 }
 
 func (m *model) View() tea.View {
+	frameStarted := time.Now()
+	defer func() { m.debug.recordFrame(time.Since(frameStarted)) }()
 	width := max(m.width, 20)
 	colors := m.colors()
 	mode := ""
@@ -3737,6 +3749,7 @@ func (m *model) View() tea.View {
 		visible = m.jumpOverlay(visible, width)
 	}
 	visible = m.renderTimeline(visible, timelineRail)
+	visible = m.debug.overlay(visible, width, m.scroll, m.maxTranscriptScroll(), m.contentHeight(), transcriptLineCount, m.scrollLines, m.invertScroll, m.scrollFocused)
 	plainVisible := make([]string, len(visible))
 	for index, line := range visible {
 		plainVisible[index] = stripUIANSI(line)

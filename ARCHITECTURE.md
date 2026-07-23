@@ -55,7 +55,9 @@ implementation.
 - `internal/tui` presents terminal state and emits typed lifecycle requests;
   `cmd/gork` performs runtime restart and coordinates session/worktree forks,
   while `internal/session` retains JSONL identity, copy, listing, path
-  validation, and resume rules.
+  validation, and resume rules. TUI-only diagnostics stay in this adapter: HUD
+  sampling observes render/viewport state and the scroll recorder writes only
+  input transitions, so neither feeds back into domain behavior.
 - `internal/api`, `internal/mcp`, and `internal/lsp` adapt external protocols.
 - `internal/tools` adapts domain-safe workspace operations to model tools. It
   also owns the small session-local aggregates that exist only through the

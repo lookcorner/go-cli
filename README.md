@@ -622,6 +622,13 @@ to restore it.
 Set `[ui] scroll_lines` from 1 to 10 to choose the number of transcript lines per
 wheel event, and `[ui] invert_scroll = true` for natural scrolling. The
 `GROK_SCROLL_LINES` and `GROK_INVERT_SCROLL` environment variables override them.
+The hidden, release-safe `/debug` command reports diagnostic state without a
+model turn. `/debug scroll` (also `/scroll-debug`) overlays live viewport and
+wheel state, `/debug fps` overlays bounded render-rate percentiles, and
+`/debug log` records each keyboard or wheel scroll immediately as JSONL under
+`$GROK_HOME/logs`. `GROK_SCROLL_DEBUG`, `GROK_FPS`, and `GROK_SCROLL_LOG` can
+enable the same diagnostics at startup; a non-default `GROK_SCROLL_LOG` value is
+used as the output path.
 Up/Down browse durable prompt history when the prompt is empty. `/history`
 opens fuzzy search over the same workspace-scoped history; Enter or Tab restores
 the selected prompt to the composer without submitting it.
