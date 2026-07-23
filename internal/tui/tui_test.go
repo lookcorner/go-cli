@@ -27,6 +27,12 @@ type scheduledTUIStreamer struct {
 type rememberTUIStreamer struct{}
 
 type recapTUIStreamer struct{ request api.ResponseRequest }
+type promptSuggestionTUIStreamer struct{ request api.ResponseRequest }
+
+func (s *promptSuggestionTUIStreamer) StreamResponse(_ context.Context, request api.ResponseRequest, _ func(string)) (api.StreamResult, error) {
+	s.request = request
+	return api.StreamResult{Text: "run the complete test suite"}, nil
+}
 
 func (s *recapTUIStreamer) CloneForCompaction(bool) api.Streamer { return s }
 
@@ -1551,6 +1557,140 @@ func TestRenderPromptInputShowsCursorWindowAndShrinksContent(t *testing.T) {
 	m.height = 10
 	if m.visiblePromptInputRows() != 4 || m.contentHeight() != 3 {
 		t.Fatalf("small viewport rows=%d content=%d", m.visiblePromptInputRows(), m.contentHeight())
+	}
+}
+
+func TestPromptSuggestionGhostFollowsInput(t *testing.T) {
+	m := &model{suggestionsEnabled: true, promptSuggestion: "run the tests"}
+	if got := m.promptSuggestionGhost(); got != "run the tests" {
+		t.Fatalf("empty input ghost=%q", got)
+	}
+	m.setInput("run ")
+	if got := m.promptSuggestionGhost(); got != "the tests" {
+		t.Fatalf("prefix ghost=%q", got)
+	}
+	m.setInput("review ")
+	if got := m.promptSuggestionGhost(); got != "" {
+		t.Fatalf("divergent ghost=%q", got)
+	}
+	m.setInput("run the tests")
+	if got := m.promptSuggestionGhost(); got != "" {
+		t.Fatalf("complete ghost=%q", got)
+	}
+	m.setInput("run ")
+	m.cursor--
+	if got := m.promptSuggestionGhost(); got != "" {
+		t.Fatalf("mid-input ghost=%q", got)
+	}
+	m.cursor = len(m.input)
+	m.suggestionDismissed = true
+	if got := m.promptSuggestionGhost(); got != "" {
+		t.Fatalf("dismissed ghost=%q", got)
+	}
+}
+
+func TestPromptSuggestionKeysAcceptDismissAndRestore(t *testing.T) {
+	m := &model{suggestionsEnabled: true, promptSuggestion: "run the tests", status: "ready"}
+	m.setInput("run ")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	m = updated.(*model)
+	if command != nil || string(m.input) != "run the tests" || m.promptSuggestion != "" || m.scrollFocused {
+		t.Fatalf("tab command=%v input=%q suggestion=%q focused=%v", command != nil, m.input, m.promptSuggestion, m.scrollFocused)
+	}
+
+	m.promptSuggestion = "run the tests"
+	m.setInput("run ")
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyRight}))
+	m = updated.(*model)
+	if string(m.input) != "run the tests" {
+		t.Fatalf("right input=%q", m.input)
+	}
+
+	m.promptSuggestion = "review the diff"
+	m.clearInput()
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
+	m = updated.(*model)
+	if !m.suggestionDismissed || m.promptSuggestionGhost() != "" {
+		t.Fatalf("dismissed=%v ghost=%q", m.suggestionDismissed, m.promptSuggestionGhost())
+	}
+	m.suggestionDismissed = false
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: 'x', Text: "x"}))
+	m = updated.(*model)
+	if m.promptSuggestionGhost() != "" {
+		t.Fatalf("divergent typed ghost=%q", m.promptSuggestionGhost())
+	}
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: 'u', Mod: tea.ModCtrl}))
+	m = updated.(*model)
+	if got := m.promptSuggestionGhost(); got != "review the diff" {
+		t.Fatalf("restored ghost=%q", got)
+	}
+}
+
+func TestPromptSuggestionDropsStaleAndRunningResults(t *testing.T) {
+	m := &model{suggestionsEnabled: true, promptSerial: 4}
+	updated, _ := m.Update(promptSuggestionEvent{text: "stale", serial: 3})
+	m = updated.(*model)
+	if m.promptSuggestion != "" {
+		t.Fatalf("accepted stale suggestion=%q", m.promptSuggestion)
+	}
+	m.running = true
+	updated, _ = m.Update(promptSuggestionEvent{text: "busy", serial: 4})
+	m = updated.(*model)
+	if m.promptSuggestion != "" {
+		t.Fatalf("accepted running suggestion=%q", m.promptSuggestion)
+	}
+	m.running = false
+	updated, _ = m.Update(promptSuggestionEvent{text: "current", serial: 4})
+	m = updated.(*model)
+	if m.promptSuggestion != "current" {
+		t.Fatalf("current suggestion=%q", m.promptSuggestion)
+	}
+}
+
+func TestTurnCompletionFetchesPromptSuggestion(t *testing.T) {
+	logger, err := session.NewLoggerWithID(t.TempDir(), "suggestion")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.AppendPrompt("implement the feature", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append("model_response", map[string]any{"response_id": "r1", "text": "The feature is implemented.", "tool_call_count": 0}); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	streamer := &promptSuggestionTUIStreamer{}
+	m := &model{
+		ctx: context.Background(), runner: &agent.Runner{Client: streamer, SessionPath: logger.Path()},
+		workspace: "/work/project", width: 40, height: 16, running: true, suggestionsEnabled: true, promptSerial: 2,
+	}
+	updated, command := m.Update(turnDoneEvent{result: agent.Result{ResponseID: "r1", Steps: 1}})
+	m = updated.(*model)
+	if command == nil || m.running {
+		t.Fatalf("command=%v running=%v", command != nil, m.running)
+	}
+	message := command()
+	event, ok := message.(promptSuggestionEvent)
+	if !ok || event.serial != 2 || event.text != "run the complete test suite" {
+		t.Fatalf("event=%#v", message)
+	}
+	updated, _ = m.Update(event)
+	m = updated.(*model)
+	if !strings.Contains(m.View().Content, "\x1b[2mrun the complete test suite\x1b[0m") {
+		t.Fatalf("suggestion not rendered:\n%s", m.View().Content)
+	}
+	content, _ := streamer.request.Input[0].Content.(string)
+	if streamer.request.Model != "grok-build-0.1" || !strings.Contains(content, "CWD: /work/project") {
+		t.Fatalf("request=%#v", streamer.request)
+	}
+}
+
+func TestRenderPromptInputWithGhostStaysWithinWidth(t *testing.T) {
+	lines := renderPromptInputWithGhost([]rune("run "), 4, "the complete test suite", 12, 1)
+	if len(lines) != 1 || displayWidth(stripUIANSI(lines[0])) > 12 || !strings.Contains(lines[0], "\x1b[2m") {
+		t.Fatalf("lines=%q width=%d", lines, displayWidth(stripUIANSI(lines[0])))
 	}
 }
 

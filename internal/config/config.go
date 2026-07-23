@@ -202,6 +202,7 @@ type UIConfig struct {
 	VimMode              bool    `json:"vim_mode,omitempty"`
 	ScrollLines          *uint8  `json:"scroll_lines,omitempty"`
 	InvertScroll         bool    `json:"invert_scroll,omitempty"`
+	PromptSuggestions    bool    `json:"prompt_suggestions"`
 }
 
 type GoalConfig struct {
@@ -427,6 +428,7 @@ type fileUIConfig struct {
 	VimMode                      *bool   `json:"vim_mode,omitempty" toml:"vim_mode"`
 	ScrollLines                  *uint8  `json:"scroll_lines,omitempty" toml:"scroll_lines"`
 	InvertScroll                 *bool   `json:"invert_scroll,omitempty" toml:"invert_scroll"`
+	PromptSuggestions            *bool   `json:"prompt_suggestions,omitempty" toml:"prompt_suggestions"`
 	SelectionHighlightDurationMS *uint64 `json:"selection_highlight_duration_ms,omitempty" toml:"selection_highlight_duration_ms"`
 	DoubleClickAction            *string `json:"double_click_action,omitempty" toml:"double_click_action"`
 }
@@ -637,7 +639,7 @@ func Load(path string) (Config, error) {
 		AskUserQuestion:             AskUserQuestionConfig{TimeoutEnabled: true, TimeoutSeconds: 30 * 60},
 		Toolset:                     ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}},
 		Goal:                        GoalConfig{VerifierCount: 3, ClassifierMaxRuns: 10, ReverifyAfter: 8},
-		UI:                          UIConfig{KeepTextSelection: "flash"},
+		UI:                          UIConfig{KeepTextSelection: "flash", PromptSuggestions: true},
 		Pruning:                     PruningConfig{Enabled: true, KeepLastNTurns: 3, SoftTrimThreshold: 4000, SoftTrimHead: 1500, SoftTrimTail: 1500, HardClearAgeTurns: 10},
 		Memory:                      memory.DefaultConfig(),
 	}
@@ -878,6 +880,9 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.UI.InvertScroll != nil {
 		cfg.UI.InvertScroll = *disk.UI.InvertScroll
+	}
+	if disk.UI.PromptSuggestions != nil {
+		cfg.UI.PromptSuggestions = *disk.UI.PromptSuggestions
 	}
 	if disk.Goal.VerifierCount != nil {
 		cfg.Goal.VerifierCount = normalizedGoalVerifierCount(*disk.Goal.VerifierCount)
@@ -1539,6 +1544,9 @@ func applyEnv(cfg *Config) {
 	}
 	if value, ok := envBool("GROK_MOUSE_REPORTING_TOGGLE"); ok {
 		cfg.UI.MouseReportingToggle = value
+	}
+	if value, ok := envBool("GROK_PROMPT_SUGGESTIONS"); ok {
+		cfg.UI.PromptSuggestions = value
 	}
 	if raw := strings.TrimSpace(os.Getenv("GROK_SCROLL_LINES")); raw != "" {
 		if value, err := strconv.ParseUint(raw, 10, 8); err == nil {

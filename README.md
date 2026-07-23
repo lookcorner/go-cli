@@ -508,6 +508,12 @@ of the current conversation, including the active prompt. It can run beside the
 main turn, exposes tool definitions for context but never executes returned tool
 calls, leaves the main history unchanged, and records success or failure in the
 session artifact directory.
+After a successful turn, the TUI can show an isolated, tool-free next-prompt
+suggestion as dim ghost text. The ghost shrinks while its prefix is typed, hides
+when the input diverges, and ignores results made stale by a newer turn. Tab or
+Right accepts it at the end of the input; Esc dismisses it while the input is
+empty. `[ui] prompt_suggestions = false` disables the default-on behavior, and
+`GROK_PROMPT_SUGGESTIONS` overrides that setting.
 Left/Right, Home/End, Delete, Backspace, Ctrl-A,
 Ctrl-E, Ctrl-U, and Ctrl/Cmd-Z edit or undo the active prompt and structured
 response input. Shift/Alt-Enter inserts a newline; Ctrl-M, `/multiline`, or `/ml`

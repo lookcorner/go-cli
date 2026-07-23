@@ -135,6 +135,14 @@ func TestSuggestPromptModelPrecedenceAndFailures(t *testing.T) {
 	})
 }
 
+func TestSanitizePromptSuggestionRejectsTerminalControlCharacters(t *testing.T) {
+	for _, suggestion := range []string{"run tests\x1b[2J", "run\ttests", "approve\a now"} {
+		if got := sanitizePromptSuggestion(suggestion); got != "" {
+			t.Fatalf("sanitizePromptSuggestion(%q)=%q", suggestion, got)
+		}
+	}
+}
+
 func TestPromptSuggestionFilteringAndRepeatGuard(t *testing.T) {
 	accepted := map[string]string{
 		"run the tests":          "run the tests",

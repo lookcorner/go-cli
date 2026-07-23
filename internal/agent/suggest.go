@@ -6,6 +6,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/lookcorner/go-cli/internal/api"
@@ -157,6 +158,11 @@ func sanitizePromptSuggestion(raw string) string {
 	line = strings.TrimSpace(strings.TrimLeft(strings.TrimRight(strings.TrimSpace(line), "\"'`\u201d\u2019"), "\"'`\u201c\u2018"))
 	if line == "" || len(line) >= suggestionMaxBytes {
 		return ""
+	}
+	for _, char := range line {
+		if unicode.IsControl(char) {
+			return ""
+		}
 	}
 	lower := strings.ToLower(line)
 	for _, meta := range []string{"none", "n/a", "no suggestion", "nothing", "(silence)", "silence", "null"} {

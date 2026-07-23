@@ -71,6 +71,10 @@ type turnDoneEvent struct {
 	result agent.Result
 	err    error
 }
+type promptSuggestionEvent struct {
+	text   string
+	serial uint64
+}
 type shellDoneEvent struct {
 	command string
 	output  string
@@ -391,10 +395,15 @@ type model struct {
 	scheduled      []tools.ScheduledTaskFired
 	activeTask     string
 	promptSerial   uint64
-	recapRunning   bool
-	pendingRecap   string
-	btwRunning     bool
-	questionClick  struct {
+
+	promptSuggestion    string
+	suggestionsEnabled  bool
+	suggestionDismissed bool
+
+	recapRunning  bool
+	pendingRecap  string
+	btwRunning    bool
+	questionClick struct {
 		option int
 		at     time.Time
 	}
@@ -445,6 +454,7 @@ type UIOptions struct {
 	VimMode              bool
 	ScrollLines          *uint8
 	InvertScroll         bool
+	PromptSuggestions    bool
 }
 
 func parseTextSelectionMode(value string) textSelectionMode {
@@ -504,7 +514,8 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		history: loadPromptHistory(runner, workspace), selectionMode: parseTextSelectionMode(options.Mode),
 		wordSeparators: defaultWordSeparators, mouseToggle: options.MouseReportingToggle, vimMode: options.VimMode,
 		scrollLines: mouseWheelScrollLines, invertScroll: options.InvertScroll,
-		hyperlinks: detectTerminalHyperlinks(),
+		suggestionsEnabled: options.PromptSuggestions,
+		hyperlinks:         detectTerminalHyperlinks(),
 	}
 	if options.WordSeparators != nil {
 		m.wordSeparators = *options.WordSeparators
@@ -754,6 +765,14 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if command := m.startNext(); command != nil {
 			return m, command
+		}
+		if msg.err == nil && m.suggestionsEnabled {
+			return m, runPromptSuggestion(m.ctx, m.runner, m.workspace, m.promptSerial)
+		}
+	case promptSuggestionEvent:
+		if msg.serial == m.promptSerial && !m.running && strings.TrimSpace(msg.text) != "" {
+			m.promptSuggestion = msg.text
+			m.suggestionDismissed = false
 		}
 	case shellDoneEvent:
 		m.running = false
@@ -1032,6 +1051,19 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.clearInput()
 		m.status = "memory note cancelled"
 		return m, nil
+	}
+	if !m.running {
+		if remainder := m.promptSuggestionGhost(); remainder != "" && ((key.Code == tea.KeyTab && key.Mod == 0) || (key.Code == tea.KeyRight && key.Mod == 0)) {
+			m.insertInput(remainder)
+			m.promptSuggestion = ""
+			m.suggestionDismissed = false
+			m.status = "suggestion accepted"
+			return m, nil
+		}
+		if key.Code == tea.KeyEsc && len(m.input) == 0 && m.promptSuggestion != "" {
+			m.suggestionDismissed = true
+			return m, nil
+		}
 	}
 	if key.Code == tea.KeyTab && key.Mod == 0 {
 		m.scrollFocused = true
@@ -1366,6 +1398,7 @@ func (m *model) handleRunningKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.clearInput()
 		m.rememberPrompt(prompt)
 		m.promptSerial++
+		m.clearPromptSuggestion()
 		m.pendingPrompts = append(m.pendingPrompts, prompt)
 		m.status = fmt.Sprintf("queued prompt #%d", len(m.pendingPrompts))
 		return m, nil
@@ -2227,6 +2260,7 @@ func (m *model) editInput(message tea.KeyPressMsg) {
 
 func (m *model) beginTurn(prompt string) {
 	m.promptSerial++
+	m.clearPromptSuggestion()
 	if m.transcript.Len() > 0 {
 		m.transcript.WriteString("\n")
 	}
@@ -2257,6 +2291,13 @@ func runRecap(ctx context.Context, runner *agent.Runner, previousID string, seri
 	return func() tea.Msg {
 		text, err := runner.Recap(ctx, previousID)
 		return recapDoneEvent{text: text, err: err, serial: serial}
+	}
+}
+
+func runPromptSuggestion(ctx context.Context, runner *agent.Runner, cwd string, serial uint64) tea.Cmd {
+	return func() tea.Msg {
+		text, _ := runner.SuggestPrompt(ctx, cwd, "")
+		return promptSuggestionEvent{text: text, serial: serial}
 	}
 }
 
@@ -2482,7 +2523,7 @@ func (m *model) View() tea.View {
 		if m.running {
 			inputLines = []string{"> "}
 		} else {
-			inputLines = renderPromptInput(m.input, m.cursor, width, m.visiblePromptInputRows())
+			inputLines = renderPromptInputWithGhost(m.input, m.cursor, m.promptSuggestionGhost(), width, m.visiblePromptInputRows())
 		}
 		hint := "Enter send · Shift/Alt-Enter newline · Ctrl-M multiline · Ctrl-Z undo"
 		if m.multiline {
@@ -2965,6 +3006,34 @@ func renderPromptInput(input []rune, cursor, width, maxRows int) []string {
 		}
 	}
 	return lines
+}
+
+func renderPromptInputWithGhost(input []rune, cursor int, ghost string, width, maxRows int) []string {
+	lines := renderPromptInput(input, cursor, width, maxRows)
+	if ghost == "" || cursor != len(input) || len(lines) == 0 {
+		return lines
+	}
+	remaining := width - displayWidth(stripUIANSI(lines[len(lines)-1]))
+	if remaining > 0 {
+		lines[len(lines)-1] += "\x1b[2m" + fitInputLine([]rune(ghost), remaining) + "\x1b[0m"
+	}
+	return lines
+}
+
+func (m *model) promptSuggestionGhost() string {
+	if !m.suggestionsEnabled || m.suggestionDismissed || m.cursor != len(m.input) {
+		return ""
+	}
+	remainder, ok := strings.CutPrefix(m.promptSuggestion, string(m.input))
+	if !ok || remainder == "" {
+		return ""
+	}
+	return remainder
+}
+
+func (m *model) clearPromptSuggestion() {
+	m.promptSuggestion = ""
+	m.suggestionDismissed = false
 }
 
 func fitInputLine(input []rune, width int) string {

@@ -145,6 +145,7 @@ mouse_reporting_toggle = true
 vim_mode = true
 scroll_lines = 5
 invert_scroll = true
+prompt_suggestions = false
 
 [[permission.rules]]
 action = "allow"
@@ -225,7 +226,7 @@ pattern = ".env*"
 	if len(cfg.Permission.Rules) != 2 || cfg.Permission.Rules[0].Action != "allow" || *cfg.Permission.Rules[1].Pattern != ".env*" {
 		t.Fatalf("unexpected permission config: %#v", cfg.Permission)
 	}
-	if cfg.UI.KeepTextSelection != "word_select" || cfg.UI.WordSeparators == nil || *cfg.UI.WordSeparators != "./" || !cfg.UI.MouseReportingToggle || !cfg.UI.VimMode || cfg.UI.ScrollLines == nil || *cfg.UI.ScrollLines != 5 || !cfg.UI.InvertScroll {
+	if cfg.UI.KeepTextSelection != "word_select" || cfg.UI.WordSeparators == nil || *cfg.UI.WordSeparators != "./" || !cfg.UI.MouseReportingToggle || !cfg.UI.VimMode || cfg.UI.ScrollLines == nil || *cfg.UI.ScrollLines != 5 || !cfg.UI.InvertScroll || cfg.UI.PromptSuggestions {
 		t.Fatalf("unexpected UI config: %#v", cfg.UI)
 	}
 	if strings.Join(cfg.Skills.Paths, ",") != "~/shared-skills,project-skills" || strings.Join(cfg.Skills.Ignore, ",") != "~/shared-skills/ignored" || strings.Join(cfg.Skills.Disabled, ",") != "manual-only" {
@@ -997,6 +998,35 @@ func TestTextSelectionCompatibilityAcrossJSONLayers(t *testing.T) {
 	}
 	if cfg.UI.KeepTextSelection != "word_select" {
 		t.Fatalf("managed double-click value did not beat user duration: %#v", cfg.UI)
+	}
+}
+
+func TestPromptSuggestionsConfigPrecedence(t *testing.T) {
+	t.Setenv("GROK_PROMPT_SUGGESTIONS", "")
+	cfg, err := Load(filepath.Join(t.TempDir(), "missing.toml"))
+	if err != nil || !cfg.UI.PromptSuggestions {
+		t.Fatalf("default config=%#v err=%v", cfg.UI, err)
+	}
+
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[ui]\nprompt_suggestions = false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(path)
+	if err != nil || cfg.UI.PromptSuggestions {
+		t.Fatalf("file config=%#v err=%v", cfg.UI, err)
+	}
+
+	t.Setenv("GROK_PROMPT_SUGGESTIONS", "true")
+	cfg, err = Load(path)
+	if err != nil || !cfg.UI.PromptSuggestions {
+		t.Fatalf("environment override=%#v err=%v", cfg.UI, err)
+	}
+
+	t.Setenv("GROK_PROMPT_SUGGESTIONS", "sometimes")
+	cfg, err = Load(path)
+	if err != nil || cfg.UI.PromptSuggestions {
+		t.Fatalf("invalid environment value did not preserve file config=%#v err=%v", cfg.UI, err)
 	}
 }
 
