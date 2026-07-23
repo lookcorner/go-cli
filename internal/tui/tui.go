@@ -451,6 +451,7 @@ type model struct {
 	wordSeparators string
 	mouseToggle    bool
 	vimMode        bool
+	persistVimMode func(bool) error
 	scrollLines    int
 	invertScroll   bool
 	mouseReleased  bool
@@ -536,6 +537,7 @@ type UIOptions struct {
 	WordSeparators       *string
 	MouseReportingToggle bool
 	VimMode              bool
+	SetVimMode           func(bool) error
 	ScrollLines          *uint8
 	InvertScroll         bool
 	PromptSuggestions    bool
@@ -638,7 +640,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		contextWindow: runner.ContextWindow,
 		status:        "ready", initial: strings.TrimSpace(initialPrompt), historyIndex: -1,
 		history: loadPromptHistory(runner, workspace), selectionMode: parseTextSelectionMode(options.Mode),
-		wordSeparators: defaultWordSeparators, mouseToggle: options.MouseReportingToggle, vimMode: options.VimMode,
+		wordSeparators: defaultWordSeparators, mouseToggle: options.MouseReportingToggle, vimMode: options.VimMode, persistVimMode: options.SetVimMode,
 		scrollLines: mouseWheelScrollLines, invertScroll: options.InvertScroll,
 		suggestionsEnabled: options.PromptSuggestions,
 		hyperlinks:         detectTerminalHyperlinks(),
@@ -1357,7 +1359,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if m.bridge != nil && m.bridge.AutoModeAvailable() {
 				permissionCommands += " `/auto`"
 			}
-			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + " `/btw <question>` `/compact` `/context` `/copy [N]` `/dream` `/effort [level]` `/exit` `/export [filename]` `/find` `/flush` `/help` `/history` `/loop` `/memory` `/model [name] [effort]` (`/m`) `/multiline` `/plan [description]` `/queue` `/recap` `/remember` `/rename <title>` `/rewind` `/session-info` (`/status`, `/info`) `/tasks` `/transcript` `/view-plan`")
+			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + " `/btw <question>` `/compact` `/context` `/copy [N]` `/dream` `/effort [level]` `/exit` `/export [filename]` `/find` `/flush` `/help` `/history` `/loop` `/memory` `/model [name] [effort]` (`/m`) `/multiline` `/plan [description]` `/queue` `/recap` `/remember` `/rename <title>` `/rewind` `/session-info` (`/status`, `/info`) `/tasks` `/transcript` `/view-plan` `/vim-mode`")
 			m.status = "commands"
 			return m, nil
 		case "/queue":
@@ -1480,6 +1482,24 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.status = "normal mode"
 			}
+			return m, nil
+		case "/vim-mode":
+			previous := m.vimMode
+			m.vimMode = !previous
+			if m.persistVimMode != nil {
+				if err := m.persistVimMode(m.vimMode); err != nil {
+					m.vimMode = previous
+					m.status = "persist vim mode: " + err.Error()
+					return m, nil
+				}
+			}
+			state := "off"
+			if m.vimMode {
+				state = "on"
+			}
+			message := "Vim mode: " + state
+			m.appendSystem(message)
+			m.status = message
 			return m, nil
 		case "/session-info", "/status", "/info":
 			if m.runner == nil || strings.TrimSpace(m.runner.SessionID) == "" {

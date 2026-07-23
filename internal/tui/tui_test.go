@@ -1028,6 +1028,60 @@ func TestMouseReportingToggle(t *testing.T) {
 	}
 }
 
+func TestVimModeCommandPersistsAndChangesNavigation(t *testing.T) {
+	var persisted []bool
+	m := &model{
+		runner: &agent.Runner{}, width: 80, height: 12, status: "ready", historyIndex: -1,
+		persistVimMode: func(enabled bool) error {
+			persisted = append(persisted, enabled)
+			return nil
+		},
+	}
+	for line := 0; line < 40; line++ {
+		fmt.Fprintf(&m.transcript, "line %02d\n", line)
+	}
+	m.setInput("/vim-mode ignored")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || !m.vimMode || len(persisted) != 1 || !persisted[0] || m.status != "Vim mode: on" || !strings.Contains(m.transcript.String(), "Vim mode: on") {
+		t.Fatalf("enabled=%v persisted=%v status=%q command=%v", m.vimMode, persisted, m.status, command != nil)
+	}
+	m.scrollFocused = true
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: 'k', Text: "k"}))
+	m = updated.(*model)
+	if m.scroll != 1 {
+		t.Fatalf("vim navigation scroll=%d", m.scroll)
+	}
+	m.scrollFocused = false
+	m.setInput("/vim-mode")
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.vimMode || len(persisted) != 2 || persisted[1] || m.status != "Vim mode: off" || !strings.Contains(m.transcript.String(), "Vim mode: off") {
+		t.Fatalf("disabled=%v persisted=%v status=%q command=%v", !m.vimMode, persisted, m.status, command != nil)
+	}
+	m.setInput("/help")
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if !strings.Contains(m.transcript.String(), "`/vim-mode`") {
+		t.Fatalf("help missing vim command: %q", m.transcript.String())
+	}
+}
+
+func TestVimModeCommandRollsBackPersistenceFailure(t *testing.T) {
+	for _, initial := range []bool{false, true} {
+		m := &model{
+			width: 60, height: 16, vimMode: initial,
+			persistVimMode: func(bool) error { return errors.New("disk full") },
+		}
+		m.setInput("/vim-mode")
+		updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+		m = updated.(*model)
+		if command != nil || m.vimMode != initial || m.transcript.Len() != 0 || m.status != "persist vim mode: disk full" {
+			t.Fatalf("initial=%v mode=%v transcript=%q status=%q command=%v", initial, m.vimMode, m.transcript.String(), m.status, command != nil)
+		}
+	}
+}
+
 func TestScrollbackFocusAndNavigation(t *testing.T) {
 	m := &model{runner: &agent.Runner{}, width: 80, height: 12, status: "ready", history: []string{"old prompt"}, historyIndex: -1, vimMode: true}
 	for line := 0; line < 40; line++ {

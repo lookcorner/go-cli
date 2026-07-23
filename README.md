@@ -491,6 +491,8 @@ switches cleanly from always-approve; the command is unavailable when policy
 or configuration disables auto mode. Successful mode changes are atomically
 saved as `[ui].permission_mode` (`ask`, `auto`, or `always-approve`) and restored
 on the next run; a write failure leaves the active mode unchanged.
+`/vim-mode` toggles Vim-style scrollback navigation immediately and atomically
+saves `[ui].vim_mode`; a write failure restores the previous navigation mode.
 `/plan` idempotently enters Plan mode, while `/plan <description>` enters it and
 starts a planning turn. `/quit` and `/exit` close the TUI without a model turn.
 `/view-plan`, `/show-plan`, and `/plan-view` open the current confined plan file

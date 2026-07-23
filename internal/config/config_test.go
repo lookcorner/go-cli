@@ -1793,12 +1793,15 @@ func TestUpdatePluginsPreservesOtherConfiguration(t *testing.T) {
 	}
 }
 
-func TestPermissionModeConfigPersistenceAndPrecedence(t *testing.T) {
+func TestUIConfigPersistenceAndPermissionPrecedence(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte("[models]\ndefault = \"local\"\n\n[model.local]\nmodel = \"local-api\"\n\n[ui]\nvim_mode = true\npermission_mode = \"ask\"\n"), 0o640); err != nil {
 		t.Fatal(err)
 	}
 	if err := UpdatePermissionMode(path, "auto"); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateVimMode(path, false); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := Load(path)
@@ -1807,11 +1810,19 @@ func TestPermissionModeConfigPersistenceAndPrecedence(t *testing.T) {
 	}
 	remoteMode := "always-approve"
 	cfg.ApplyRemoteSettings(&RemoteSettings{PermissionMode: &remoteMode})
-	if cfg.UI.PermissionMode != "auto" || !cfg.UI.VimMode || cfg.DefaultModelID != "local" || cfg.Model != "local-api" {
+	if cfg.UI.PermissionMode != "auto" || cfg.UI.VimMode || cfg.DefaultModelID != "local" || cfg.Model != "local-api" {
 		t.Fatalf("config=%#v", cfg)
 	}
 	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o640 {
 		t.Fatalf("mode info=%v err=%v", info, err)
+	}
+	emptyPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := UpdateVimMode(emptyPath, true); err != nil {
+		t.Fatal(err)
+	}
+	emptyConfig, err := Load(emptyPath)
+	if err != nil || !emptyConfig.UI.VimMode {
+		t.Fatalf("new config=%#v err=%v", emptyConfig, err)
 	}
 
 	jsonPath := filepath.Join(t.TempDir(), "config.json")
@@ -1821,8 +1832,11 @@ func TestPermissionModeConfigPersistenceAndPrecedence(t *testing.T) {
 	if err := UpdatePermissionMode(jsonPath, "always-approve"); err != nil {
 		t.Fatal(err)
 	}
+	if err := UpdateVimMode(jsonPath, false); err != nil {
+		t.Fatal(err)
+	}
 	jsonConfig, err := Load(jsonPath)
-	if err != nil || jsonConfig.UI.PermissionMode != "always-approve" || !jsonConfig.UI.VimMode {
+	if err != nil || jsonConfig.UI.PermissionMode != "always-approve" || jsonConfig.UI.VimMode {
 		t.Fatalf("JSON config=%#v err=%v", jsonConfig, err)
 	}
 

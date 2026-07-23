@@ -597,6 +597,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return tui.Run(ctx, runner, tuiBridge, prompt, opts.previousID, resumedTranscript, ws.Root(), cfg.Model, tui.UIOptions{
 			Mode: cfg.UI.KeepTextSelection, WordSeparators: cfg.UI.WordSeparators, MouseReportingToggle: cfg.UI.MouseReportingToggle, VimMode: cfg.UI.VimMode,
 			ScrollLines: cfg.UI.ScrollLines, InvertScroll: cfg.UI.InvertScroll, PromptSuggestions: cfg.UI.PromptSuggestions,
+			SetVimMode: func(enabled bool) error { return config.UpdateVimMode(opts.configPath, enabled) },
 		})
 	}
 	fmt.Fprintf(stderr, "[gork] workspace: %s\n[gork] session: %s\n", ws.Root(), displayPath(logger.Path()))
