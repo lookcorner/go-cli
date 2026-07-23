@@ -401,6 +401,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleMemoryExtension(ctx, incoming)
 		case "x.ai/btw":
 			s.handleBtw(ctx, incoming)
+		case "x.ai/feedback", "x.ai/feedback/dismiss":
+			s.handleFeedback(incoming)
 		case "x.ai/interject":
 			s.handleInterject(incoming)
 		case "x.ai/recap":

@@ -168,7 +168,7 @@ type Runner struct {
 	UpdatePlugins           func(context.Context, func(*plugin.Settings)) ([]plugin.Plugin, error)
 	MarketplaceList         func() ([]marketplace.ScanResult, error)
 	MarketplaceAction       func(context.Context, marketplace.Action) (marketplace.Outcome, error)
-	SubmitFeedback          func(string) error
+	SubmitFeedback          func(session.UserFeedback) error
 	lastInputTokens         int
 	pendingSummary          string
 	modelHistory            []api.InputItem

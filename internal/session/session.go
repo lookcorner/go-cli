@@ -32,12 +32,23 @@ type Event struct {
 }
 
 type UserFeedback struct {
-	SessionID       string `json:"sessionId"`
-	Text            string `json:"text"`
-	ModelID         string `json:"modelId,omitempty"`
-	ResolvedModelID string `json:"resolvedModelId,omitempty"`
-	ClientVersion   string `json:"clientVersion,omitempty"`
-	CWD             string `json:"cwd,omitempty"`
+	SessionID       string          `json:"sessionId"`
+	TurnNumber      *int64          `json:"turnNumber,omitempty"`
+	Solicited       bool            `json:"solicited,omitempty"`
+	RequestID       string          `json:"requestId,omitempty"`
+	Dismissed       bool            `json:"dismissed,omitempty"`
+	ClientType      string          `json:"clientType,omitempty"`
+	RatingType      string          `json:"ratingType,omitempty"`
+	RatingValue     *int            `json:"ratingValue,omitempty"`
+	Text            string          `json:"text,omitempty"`
+	Categories      []string        `json:"categories,omitempty"`
+	ContextType     string          `json:"contextType,omitempty"`
+	Metadata        json.RawMessage `json:"metadata,omitempty"`
+	TerminalInfo    json.RawMessage `json:"terminalInfo,omitempty"`
+	ModelID         string          `json:"modelId,omitempty"`
+	ResolvedModelID string          `json:"resolvedModelId,omitempty"`
+	ClientVersion   string          `json:"clientVersion,omitempty"`
+	CWD             string          `json:"cwd,omitempty"`
 }
 
 type storedEvent struct {

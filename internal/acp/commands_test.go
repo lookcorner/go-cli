@@ -15,6 +15,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/hooks"
 	"github.com/lookcorner/go-cli/internal/plugin"
+	sessionlog "github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/skills"
 	"github.com/lookcorner/go-cli/internal/tools"
 	"github.com/lookcorner/go-cli/internal/workspace"
@@ -39,7 +40,7 @@ func TestCommandsListAdvertisesCapabilitiesAndSkills(t *testing.T) {
 	}
 	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
 	defer registry.Close()
-	runner := &agent.Runner{Tools: registry, Skills: catalog, HookCatalog: hooks.DiscoverPlugins(nil), PluginInventory: func() []plugin.Plugin { return nil }, SubmitFeedback: func(string) error { return nil }}
+	runner := &agent.Runner{Tools: registry, Skills: catalog, HookCatalog: hooks.DiscoverPlugins(nil), PluginInventory: func() []plugin.Plugin { return nil }, SubmitFeedback: func(sessionlog.UserFeedback) error { return nil }}
 	var output bytes.Buffer
 	server := &Server{output: &output, sessions: map[string]*session{"commands": {id: "commands", cwd: root, runner: runner}}}
 	server.handleCommands(message{ID: json.RawMessage("1"), Params: json.RawMessage(`{"cwd":` + quoted(root) + `}`)})
@@ -85,7 +86,7 @@ func TestCommandsListAdvertisesCapabilitiesAndSkills(t *testing.T) {
 }
 
 func TestBuiltinCommandsFollowReferenceOrderAndCapabilityGates(t *testing.T) {
-	runner := &agent.Runner{HookCatalog: hooks.DiscoverPlugins(nil), PluginInventory: func() []plugin.Plugin { return nil }, SubmitFeedback: func(string) error { return nil }}
+	runner := &agent.Runner{HookCatalog: hooks.DiscoverPlugins(nil), PluginInventory: func() []plugin.Plugin { return nil }, SubmitFeedback: func(sessionlog.UserFeedback) error { return nil }}
 	commands := availableCommands(runner, true)
 	names := make([]string, 0, len(commands))
 	for _, command := range commands {

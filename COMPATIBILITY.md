@@ -65,6 +65,9 @@ scheduler groups.
 Feedback-capable sessions advertise `/feedback`; submissions are persisted
 locally and deliberately use the reference `LocalOnly` outcome because this
 privacy build does not configure a feedback upload service.
+The corresponding `x.ai/feedback` extension accepts simple and structured
+rating submissions with reference clamping and turn fallback. Dismissals are
+persisted before returning the reference missing-credentials error.
 
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |

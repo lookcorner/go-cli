@@ -38,6 +38,10 @@ is stored only in the private session JSONL as a `user_feedback` event; this
 privacy build never uploads it. The command defaults on and follows the reference
 configuration precedence across `[features] feedback`, remote settings, managed
 requirements, and `GROK_FEEDBACK_ENABLED`.
+The matching `x.ai/feedback` extension accepts the reference simple text and
+structured rating payloads, including per-turn context and request metadata.
+`x.ai/feedback/dismiss` records the dismissal locally, then reports that no
+feedback credentials exist because this build has no remote feedback client.
 
 ACP clients can request turn-end ghost text through `x.ai/suggestPrompt`. The
 extension echoes the client generation, returns `null` when no safe suggestion

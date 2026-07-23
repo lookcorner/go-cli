@@ -2520,11 +2520,15 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			SessionID:         logger.ID(), SessionPath: logger.Path(), Workspace: ws.Root(),
 		}
 		if cfg.FeedbackEnabled {
-			runner.SubmitFeedback = func(text string) error {
-				return logger.Append("user_feedback", session.UserFeedback{
-					SessionID: logger.ID(), Text: text, ModelID: modelID,
-					ResolvedModelID: sessionCfg.Model, ClientVersion: version.Current, CWD: ws.Root(),
-				})
+			runner.SubmitFeedback = func(feedback session.UserFeedback) error {
+				feedback.SessionID = logger.ID()
+				feedback.ModelID = modelID
+				feedback.ResolvedModelID = sessionCfg.Model
+				if feedback.ClientVersion == "" {
+					feedback.ClientVersion = version.Current
+				}
+				feedback.CWD = ws.Root()
+				return logger.Append("user_feedback", feedback)
 			}
 		}
 		runner.ResolveModel = func(id string) (agent.ModelRuntime, error) {
