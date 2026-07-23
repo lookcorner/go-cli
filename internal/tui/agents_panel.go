@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/lookcorner/go-cli/internal/agents"
+	"github.com/lookcorner/go-cli/internal/config"
 	"github.com/lookcorner/go-cli/internal/personas"
 )
 
@@ -28,6 +29,7 @@ type agentConfigState struct {
 	form      *personaForm
 	confirm   *personas.Persona
 	err       string
+	settings  config.AgentSettings
 }
 
 type personaForm struct {
@@ -51,6 +53,11 @@ func (m *model) refreshAgentConfig() {
 		return
 	}
 	state.err = ""
+	if m.runner != nil && m.runner.AgentSettings != nil {
+		if settings, err := m.runner.AgentSettings(); err == nil {
+			state.settings = settings
+		}
+	}
 	if m.runner == nil || m.runner.Personas == nil {
 		state.personas = nil
 		if state.tab == agentConfigPersonas {
@@ -134,7 +141,14 @@ func (m *model) agentConfigContent() string {
 			if index == state.selected {
 				cursor = "> "
 			}
-			out.WriteString(fmt.Sprintf("%s%s [%s]\n    %s\n", cursor, definition.Name, definition.Scope, definition.Description))
+			status := "on"
+			if !definition.Enabled {
+				status = "off"
+			}
+			if state.settings.Default == definition.Name {
+				status += ", default"
+			}
+			out.WriteString(fmt.Sprintf("%s%s [%s; %s]\n    %s\n", cursor, definition.Name, definition.Scope, status, definition.Description))
 			if state.expanded[definition.Name] {
 				if definition.Model != "" {
 					out.WriteString("    Model: " + definition.Model + "\n")
@@ -196,7 +210,7 @@ func (m *model) agentConfigHint() string {
 	if state.tab == agentConfigPersonas {
 		return "Enter view | E edit | N new | D delete | Left/Right tabs | / search | R refresh | Esc close"
 	}
-	return "Enter view | E expand | Left/Right tabs | / search | R refresh | Esc close"
+	return "Enter view | E expand | T toggle | S default | Left/Right tabs | / search | R refresh | Esc close"
 }
 
 func (m *model) handleAgentConfigKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -266,6 +280,34 @@ func (m *model) handleAgentConfigKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case rows > 0 && state.tab == agentConfigAgents && text == "e":
 		definition := m.agentConfigDefinitions()[state.selected]
 		state.expanded[definition.Name] = !state.expanded[definition.Name]
+	case rows > 0 && state.tab == agentConfigAgents && text == "t":
+		definition := m.agentConfigDefinitions()[state.selected]
+		if m.runner == nil || m.runner.SetAgentEnabled == nil {
+			state.err = "Agent settings are unavailable"
+			break
+		}
+		if err := m.runner.SetAgentEnabled(definition.Name, !definition.Enabled); err != nil {
+			state.err = err.Error()
+		} else {
+			m.refreshAgentConfig()
+			m.status = "updated agent " + definition.Name
+		}
+	case rows > 0 && state.tab == agentConfigAgents && text == "s":
+		definition := m.agentConfigDefinitions()[state.selected]
+		if m.runner == nil || m.runner.SetDefaultAgent == nil {
+			state.err = "Agent settings are unavailable"
+			break
+		}
+		name := definition.Name
+		if state.settings.Default == name {
+			name = ""
+		}
+		if err := m.runner.SetDefaultAgent(name); err != nil {
+			state.err = err.Error()
+		} else {
+			m.refreshAgentConfig()
+			m.status = "updated default agent"
+		}
 	case rows > 0 && state.tab == agentConfigAgents && (stroke == "enter" || text == "o"):
 		m.viewAgentDefinition(m.agentConfigDefinitions()[state.selected])
 	case state.tab == agentConfigPersonas && text == "n":

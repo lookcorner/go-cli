@@ -304,6 +304,9 @@ func (m *Manager) Start(ctx context.Context, request tools.SubagentRequest) (too
 	if !ok {
 		return tools.SubagentResult{}, fmt.Errorf("unknown subagent type %q", request.Type)
 	}
+	if !definition.Enabled {
+		return tools.SubagentResult{}, fmt.Errorf("subagent type %q is disabled", request.Type)
+	}
 	runtimeDefinition := definition
 	if request.HarnessType != "" {
 		m.mu.RLock()

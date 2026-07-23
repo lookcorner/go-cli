@@ -77,6 +77,26 @@ func readConfigSection[T any](root map[string]any, name string) (T, error) {
 	return result, nil
 }
 
+func readConfigMap(path string) (map[string]any, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return map[string]any{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	root := map[string]any{}
+	if filepath.Ext(path) == ".json" {
+		err = json.Unmarshal(data, &root)
+	} else {
+		err = toml.Unmarshal(data, &root)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("parse config %q: %w", path, err)
+	}
+	return root, nil
+}
+
 func writeConfigAtomic(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create config directory: %w", err)

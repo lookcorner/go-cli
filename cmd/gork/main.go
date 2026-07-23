@@ -535,8 +535,10 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		registry.SetUserQuestionObserver(terminalPrompts)
 	}
 	defer hookRuntime.SessionEnded(context.Background(), "closed")
+	agentSettings, _ := config.LoadAgentSettings(opts.configPath)
 	agentCatalog, agentErrors := agents.Discover(agents.Config{
 		WorkspaceRoot: ws.Root(), ProjectTrusted: projectTrusted, Compat: cfg.Compat, Plugins: enabledPlugins(plugins),
+		Toggles: agentSettings.Toggle,
 	})
 	for _, agentErr := range agentErrors {
 		fmt.Fprintln(statusOutput, "[gork] agent definition:", agentErr)
@@ -715,7 +717,8 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		workspaceSource.LSPServers = reloaded.LSPServers
 		workspaceSource.Compat = reloaded.Compat
 		hookCatalog.Reconfigure(hooks.Config{WorkspaceRoot: ws.Root(), Compat: reloaded.Compat, ProjectTrusted: projectTrusted, Plugins: nextEnabled})
-		nextAgents, _ := agents.Discover(agents.Config{WorkspaceRoot: ws.Root(), ProjectTrusted: projectTrusted, Compat: reloaded.Compat, Plugins: nextEnabled})
+		nextSettings, _ := config.LoadAgentSettings(opts.configPath)
+		nextAgents, _ := agents.Discover(agents.Config{WorkspaceRoot: ws.Root(), ProjectTrusted: projectTrusted, Compat: reloaded.Compat, Plugins: nextEnabled, Toggles: nextSettings.Toggle})
 		subagents.SetCatalog(nextAgents)
 		return append([]plugin.Plugin(nil), next...), nil
 	}
@@ -735,6 +738,27 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			defer extensionMu.Unlock()
 			return append([]plugin.Plugin(nil), plugins...)
 		}, AgentDefinitions: subagents.Definitions, Personas: personas.New(ws.Root()),
+		AgentSettings: func() (config.AgentSettings, error) { return config.LoadAgentSettings(opts.configPath) },
+		SetAgentEnabled: func(name string, enabled bool) error {
+			if err := config.UpdateAgentToggle(opts.configPath, name, enabled); err != nil {
+				return err
+			}
+			reloaded, err := config.Load(opts.configPath)
+			if err != nil {
+				return err
+			}
+			settings, err := config.LoadAgentSettings(opts.configPath)
+			if err != nil {
+				return err
+			}
+			catalog, errs := agents.Discover(agents.Config{WorkspaceRoot: ws.Root(), ProjectTrusted: projectTrusted, Compat: reloaded.Compat, Plugins: enabledPlugins(plugins), Toggles: settings.Toggle})
+			for _, discoverErr := range errs {
+				fmt.Fprintln(statusOutput, "[gork] agent definition:", discoverErr)
+			}
+			subagents.SetCatalog(catalog)
+			return nil
+		},
+		SetDefaultAgent: func(name string) error { return config.UpdateDefaultAgent(opts.configPath, name) },
 		Login: func(context.Context) error {
 			return runLogin([]string{"--config", opts.configPath}, inputReader, stdout, stderr)
 		},
@@ -2637,8 +2661,10 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		registry.SetSchedulerObserver(processObserver)
 		registry.SetPlanModeObserver(processObserver)
 		registry.SetUserQuestionObserver(processObserver)
+		agentSettings, _ := config.LoadAgentSettings(opts.configPath)
 		agentCatalog, agentErrors := agents.Discover(agents.Config{
 			WorkspaceRoot: ws.Root(), ProjectTrusted: projectTrusted, Compat: sessionCfg.Compat, Plugins: enabledPlugins(plugins),
+			Toggles: agentSettings.Toggle,
 		})
 		for _, agentErr := range agentErrors {
 			fmt.Fprintln(statusOutput, "[gork] agent definition:", agentErr)
@@ -2844,8 +2870,10 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 				state.hookCfg.Plugins = enabledPlugins(inventory)
 				state.hookCfg.ProjectTrusted = trusted
 				state.hooks.Reconfigure(state.hookCfg)
+				agentSettings, _ := config.LoadAgentSettings(opts.configPath)
 				agentCatalog, _ := agents.Discover(agents.Config{
 					WorkspaceRoot: state.root, ProjectTrusted: trusted, Compat: state.hookCfg.Compat, Plugins: enabledPlugins(inventory),
+					Toggles: agentSettings.Toggle,
 				})
 				state.agents = agentCatalog
 				state.subagents.SetCatalog(agentCatalog)

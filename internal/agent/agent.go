@@ -19,6 +19,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/agents"
 	"github.com/lookcorner/go-cli/internal/announcement"
 	"github.com/lookcorner/go-cli/internal/api"
+	"github.com/lookcorner/go-cli/internal/config"
 	"github.com/lookcorner/go-cli/internal/hooks"
 	"github.com/lookcorner/go-cli/internal/marketplace"
 	"github.com/lookcorner/go-cli/internal/mcp"
@@ -129,6 +130,9 @@ type Runner struct {
 	Skills                  *skills.Catalog
 	PluginInventory         func() []plugin.Plugin
 	AgentDefinitions        func() []agents.Definition
+	AgentSettings           func() (config.AgentSettings, error)
+	SetAgentEnabled         func(string, bool) error
+	SetDefaultAgent         func(string) error
 	Personas                *personas.Service
 	HookCatalog             *hooks.Catalog
 	ReloadHooks             func() error

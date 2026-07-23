@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/agents"
+	"github.com/lookcorner/go-cli/internal/config"
 	"github.com/lookcorner/go-cli/internal/personas"
 )
 
@@ -71,6 +73,39 @@ func TestAgentConfigSearchExpandAndView(t *testing.T) {
 	m = updated.(*model)
 	if m.agentConfig != nil || m.viewer == nil || m.viewer.content != "Do the work." {
 		t.Fatalf("agent viewer=%#v state=%#v", m.viewer, m.agentConfig)
+	}
+}
+
+func TestAgentConfigToggleAndDefault(t *testing.T) {
+	enabled := true
+	defaultName := ""
+	runner := &agent.Runner{
+		AgentDefinitions: func() []agents.Definition {
+			return []agents.Definition{{Name: "explore", Description: "Explore", Scope: "built-in", Enabled: enabled}}
+		},
+		AgentSettings: func() (config.AgentSettings, error) {
+			return config.AgentSettings{Toggle: map[string]bool{"explore": enabled}, Default: defaultName}, nil
+		},
+		SetAgentEnabled: func(name string, value bool) error {
+			if name != "explore" {
+				return fmt.Errorf("unexpected agent %s", name)
+			}
+			enabled = value
+			return nil
+		},
+		SetDefaultAgent: func(name string) error { defaultName = name; return nil },
+	}
+	m := &model{runner: runner}
+	m.openAgentConfig(agentConfigAgents)
+	updated, _ := m.handleAgentConfigKey(tea.KeyPressMsg(tea.Key{Code: 't', Text: "t"}))
+	m = updated.(*model)
+	if enabled || !strings.Contains(m.agentConfigContent(), "off") {
+		t.Fatalf("toggle state=%v content=%s", enabled, m.agentConfigContent())
+	}
+	updated, _ = m.handleAgentConfigKey(tea.KeyPressMsg(tea.Key{Code: 's', Text: "s"}))
+	m = updated.(*model)
+	if defaultName != "explore" || !strings.Contains(m.agentConfigContent(), "default") {
+		t.Fatalf("default=%q content=%s", defaultName, m.agentConfigContent())
 	}
 }
 

@@ -39,6 +39,7 @@ type Definition struct {
 	Hooks           json.RawMessage
 	Memory          string
 	Builtin         bool
+	Enabled         bool
 }
 
 type MCPInheritance struct {
@@ -165,6 +166,7 @@ type Config struct {
 	ProjectTrusted bool
 	Compat         compat.Config
 	Plugins        []plugin.Plugin
+	Toggles        map[string]bool
 }
 
 type Catalog struct {
@@ -176,6 +178,7 @@ func Discover(config Config) (*Catalog, []error) {
 	definitions := builtinDefinitions()
 	byName := make(map[string]Definition, len(definitions))
 	for _, definition := range definitions {
+		definition.Enabled = agentEnabled(definition.Name, config.Toggles)
 		byName[definition.Name] = definition
 	}
 	var errors []error
@@ -183,6 +186,7 @@ func Discover(config Config) (*Catalog, []error) {
 		loaded, loadErrors := inspectDir(dir, "", scope)
 		errors = append(errors, loadErrors...)
 		for _, definition := range loaded {
+			definition.Enabled = agentEnabled(definition.Name, config.Toggles)
 			existing, found := byName[definition.Name]
 			if found && (!existing.Builtin || !canShadowBuiltin) {
 				continue
@@ -241,6 +245,7 @@ func Discover(config Config) (*Catalog, []error) {
 		for _, definition := range loaded {
 			definition.Name = item.Name + ":" + definition.Name
 			definition.Scope = "plugin"
+			definition.Enabled = agentEnabled(definition.Name, config.Toggles)
 			if _, found := byName[definition.Name]; !found {
 				definitions = append(definitions, definition)
 				byName[definition.Name] = definition
@@ -248,6 +253,14 @@ func Discover(config Config) (*Catalog, []error) {
 		}
 	}
 	return &Catalog{definitions: definitions, byName: byName}, errors
+}
+
+func agentEnabled(name string, toggles map[string]bool) bool {
+	if toggles == nil {
+		return true
+	}
+	enabled, ok := toggles[name]
+	return !ok || enabled
 }
 
 func (c *Catalog) Definitions() []Definition {
