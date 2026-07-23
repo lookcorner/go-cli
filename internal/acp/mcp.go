@@ -75,6 +75,28 @@ func (s *Server) notifyMCPServerStatus(sessionID, name, status, reason string) {
 	}})
 }
 
+// NotifyMCPToolsChanged publishes a refreshed tool directory after an MCP
+// server sends notifications/tools/list_changed.
+func (s *Server) NotifyMCPToolsChanged(sessionID, serverName string, tools []mcppkg.ToolInfo) {
+	entries := make([]map[string]any, 0, len(tools))
+	for _, tool := range tools {
+		entry := map[string]any{"name": tool.Name, "enabled": true}
+		if tool.Title != "" {
+			entry["displayName"] = tool.Title
+		}
+		if tool.Description != "" {
+			entry["description"] = tool.Description
+		}
+		if len(tool.Annotations) > 0 {
+			entry["_meta"] = tool.Annotations
+		}
+		entries = append(entries, entry)
+	}
+	s.write(map[string]any{"jsonrpc": "2.0", "method": "x.ai/mcp/tools_changed", "params": map[string]any{
+		"sessionId": sessionID, "serverName": serverName, "tools": entries,
+	}})
+}
+
 func mcpServerTransportEqual(left, right MCPServer) bool {
 	left.DisabledTools = nil
 	right.DisabledTools = nil

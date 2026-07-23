@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -2149,10 +2150,16 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			return nil, nil, err
 		}
 		mcpRuntime = newSessionMCPRuntime(sessionCtx, sessionCfg, ws.Root(), registry, approver, sessionTokenProvider, statusOutput)
+		mcpRuntime.SetToolsChanged(func(name string, tools []mcp.ToolInfo) {
+			if mcpRuntime.toolsReady.Load() {
+				server.NotifyMCPToolsChanged(logger.ID(), name, tools)
+			}
+		})
 		if err = mcpRuntime.Update(sessionCtx, sessionConfig.MCPServers); err != nil {
 			cleanup()
 			return nil, nil, err
 		}
+		mcpRuntime.toolsReady.Store(true)
 		mcpRuntime.SetNotify(func(before, after []mcp.ServerConfig) {
 			server.NotifyMCPServerChanges(logger.ID(), before, after)
 		})
@@ -3375,6 +3382,7 @@ func startMCPServers(
 	approver tools.Approver,
 	tokenProvider api.TokenProvider,
 	stderr io.Writer,
+	toolsChanged func(string, []mcp.ToolInfo),
 ) ([]*mcp.Client, error) {
 	names := make([]string, 0, len(cfg.MCPServers))
 	for name, server := range cfg.MCPServers {
@@ -3471,6 +3479,9 @@ func startMCPServers(
 				}
 				remoteNames = newNames
 				fmt.Fprintf(stderr, "[gork] MCP %s tools reloaded: %d tool(s)\n", name, len(newNames))
+				if toolsChanged != nil {
+					toolsChanged(name, updated)
+				}
 			})
 		}
 		if initialized.Capabilities.Resources != nil {
@@ -3515,7 +3526,7 @@ func startSubagentMCPServers(
 			Env: cloneStringsMap(server.Env), URL: server.URL, Headers: cloneStringsMap(server.Headers),
 		}
 	}
-	clients, err := startMCPServers(ctx, cfg, workspaceRoot, registry, approver, tokenProvider, stderr)
+	clients, err := startMCPServers(ctx, cfg, workspaceRoot, registry, approver, tokenProvider, stderr, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -3540,6 +3551,8 @@ type sessionMCPRuntime struct {
 	effective     []mcp.ServerConfig
 	catalog       []mcp.ServerConfig
 	notify        func(before, after []mcp.ServerConfig)
+	toolsChanged  func(string, []mcp.ToolInfo)
+	toolsReady    atomic.Bool
 	closed        bool
 }
 
@@ -3625,6 +3638,12 @@ func (r *sessionMCPRuntime) SetNotify(notify func(before, after []mcp.ServerConf
 	r.mu.Unlock()
 }
 
+func (r *sessionMCPRuntime) SetToolsChanged(notify func(string, []mcp.ToolInfo)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.toolsChanged = notify
+}
+
 func (r *sessionMCPRuntime) Configs() []mcp.ServerConfig {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -3649,7 +3668,7 @@ func (r *sessionMCPRuntime) Close() {
 
 func (r *sessionMCPRuntime) startLocked(requested []mcp.ServerConfig) ([]*mcp.Client, []mcp.ServerConfig, []mcp.ServerConfig, error) {
 	cfg, effective, catalog := r.mergedConfig(requested)
-	clients, err := startMCPServers(r.ctx, cfg, r.workspaceRoot, r.registry, r.approver, r.tokenProvider, r.stderr)
+	clients, err := startMCPServers(r.ctx, cfg, r.workspaceRoot, r.registry, r.approver, r.tokenProvider, r.stderr, r.toolsChanged)
 	return clients, effective, catalog, err
 }
 

@@ -742,6 +742,24 @@ func TestMCPServerChangeNotifications(t *testing.T) {
 	}
 }
 
+func TestMCPToolsChangedNotification(t *testing.T) {
+	var output bytes.Buffer
+	server := &Server{output: &output}
+	server.NotifyMCPToolsChanged("mcp-tools", "fixture", []mcppkg.ToolInfo{{
+		Name: "echo", Title: "Echo", Description: "returns input", Annotations: map[string]any{"readOnly": true},
+	}})
+	message := decodeACP(t, json.NewDecoder(&output))
+	if message["method"] != "x.ai/mcp/tools_changed" {
+		t.Fatalf("method=%#v", message)
+	}
+	params := message["params"].(map[string]any)
+	tools := params["tools"].([]any)
+	entry := tools[0].(map[string]any)
+	if params["sessionId"] != "mcp-tools" || params["serverName"] != "fixture" || entry["name"] != "echo" || entry["displayName"] != "Echo" || entry["description"] != "returns input" || entry["enabled"] != true {
+		t.Fatalf("payload=%#v", message)
+	}
+}
+
 func TestMCPConfigExtensions(t *testing.T) {
 	root := t.TempDir()
 	ws, err := workspace.Open(root)
