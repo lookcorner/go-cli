@@ -112,6 +112,7 @@ type Server struct {
 	input              io.Reader
 	output             io.Writer
 	writeMu            sync.Mutex
+	pathRewriters      sync.Map
 	initializedOnce    sync.Once
 	initialized        atomic.Bool
 	announcements      announcementState
@@ -1501,6 +1502,10 @@ func (s *Server) handleHunkQuery(ctx context.Context, incoming message) {
 		return
 	}
 	tracker := current.runner.Tools.HunkTracker()
+	displayCWD := current.cwd
+	if current.displayCWD != "" {
+		displayCWD = current.displayCWD
+	}
 	switch incoming.Method {
 	case "x.ai/hunk-tracker/get-hunks":
 		if params.Path != "" {
@@ -1510,7 +1515,7 @@ func (s *Server) handleHunkQuery(ctx context.Context, incoming message) {
 				return
 			}
 			s.respond(incoming.ID, getHunksWire{
-				Hunks:    hunkWires(data.Hunks, tracker, current.cwd, true),
+				Hunks:    hunkWires(data.Hunks, tracker, displayCWD, true),
 				Baseline: &data.Baseline, Current: &data.Current,
 				BaselineContent: data.BaselineContent, CurrentContent: data.CurrentContent,
 			})
@@ -1521,7 +1526,7 @@ func (s *Server) handleHunkQuery(ctx context.Context, incoming message) {
 			s.respondError(incoming.ID, -32000, err.Error())
 			return
 		}
-		s.respond(incoming.ID, getHunksWire{Hunks: hunkWires(hunks, tracker, current.cwd, false)})
+		s.respond(incoming.ID, getHunksWire{Hunks: hunkWires(hunks, tracker, displayCWD, false)})
 	case "x.ai/hunk-tracker/get-files":
 		files, err := tracker.Files(ctx)
 		if err != nil {
@@ -1529,7 +1534,7 @@ func (s *Server) handleHunkQuery(ctx context.Context, incoming message) {
 			return
 		}
 		for index := range files {
-			files[index].Path = displayHunkPath(current.cwd, files[index].Path)
+			files[index].Path = displayHunkPath(displayCWD, files[index].Path)
 		}
 		s.respond(incoming.ID, map[string]any{"files": files})
 	case "x.ai/hunk-tracker/get-all-file-contents":
@@ -1539,7 +1544,7 @@ func (s *Server) handleHunkQuery(ctx context.Context, incoming message) {
 			return
 		}
 		for index := range files {
-			files[index].Path = displayHunkPath(current.cwd, files[index].Path)
+			files[index].Path = displayHunkPath(displayCWD, files[index].Path)
 		}
 		s.respond(incoming.ID, map[string]any{"files": files})
 	case "x.ai/hunk-tracker/get-summary":
@@ -1549,7 +1554,7 @@ func (s *Server) handleHunkQuery(ctx context.Context, incoming message) {
 			return
 		}
 		s.respond(incoming.ID, hunkSummaryWire{
-			Stats: summary.Stats, Turns: hunkTurnWires(summary.Turns, tracker, current.cwd),
+			Stats: summary.Stats, Turns: hunkTurnWires(summary.Turns, tracker, displayCWD),
 			FilesModified: summary.FilesModified, FilesWithPending: summary.FilesWithPending,
 			PendingHunks: summary.PendingHunks, PendingLinesAdded: summary.PendingLinesAdded,
 			PendingLinesRemoved: summary.PendingLinesRemoved, UnattributedPending: summary.UnattributedPending,
@@ -1875,6 +1880,9 @@ func (s *Server) startSession(ctx context.Context, id string, sessionConfig Sess
 	}
 	s.sessions[id] = created
 	s.mu.Unlock()
+	if rewriter := newPathRewriter(created.cwd, created.displayCWD); rewriter != nil {
+		s.pathRewriters.Store(id, rewriter)
+	}
 	startSource := "new"
 	if sessionConfig.ResumePath != "" {
 		startSource = "load"
@@ -2464,12 +2472,15 @@ func (s *Server) handleRestoreSession(ctx context.Context, incoming message, rep
 	}
 	noReplay, _ := params.Meta["noReplay"].(bool)
 	restoreCode, _ := params.Meta["x.ai/restore_code"].(bool)
+	if requested := stringMeta(params.Meta, "x.ai/display_cwd"); requested != "" {
+		displayCWD = requested
+	}
 	var codeRestore map[string]any
 	if restoreCode && sessionHead != "" {
 		codeRestore = restoreSessionCode(ctx, params.CWD, sessionHead)
 	}
 	if replay && !noReplay {
-		if err := s.replaySession(path, params.SessionID); err != nil {
+		if err := s.replaySessionWithPaths(path, params.SessionID, params.CWD, displayCWD); err != nil {
 			s.respondError(incoming.ID, -32000, err.Error())
 			return
 		}
@@ -2477,12 +2488,9 @@ func (s *Server) handleRestoreSession(ctx context.Context, incoming message, rep
 	yoloMode, autoMode := sessionPermissionModeOverrides(params.Meta)
 	config := SessionConfig{
 		CWD: params.CWD, Title: title, Model: model, ReasoningEffort: reasoningEffort, SessionID: params.SessionID,
-		DisplayCWD: stringMeta(params.Meta, "x.ai/display_cwd"),
+		DisplayCWD: displayCWD,
 		ResumePath: path, MCPServers: servers, YoloMode: yoloMode, AutoMode: autoMode,
 		ClientHooks: parseClientHooks(params.Meta),
-	}
-	if config.DisplayCWD == "" {
-		config.DisplayCWD = displayCWD
 	}
 	created, err := s.startSession(ctx, params.SessionID, config, previous)
 	if err != nil {
@@ -2536,6 +2544,10 @@ func restoreSessionCode(ctx context.Context, cwd, commit string) map[string]any 
 }
 
 func (s *Server) replaySession(path, sessionID string) error {
+	return s.replaySessionWithPaths(path, sessionID, "", "")
+}
+
+func (s *Server) replaySessionWithPaths(path, sessionID, realCWD, displayCWD string) error {
 	messages, err := sessionlog.Transcript(path)
 	if err != nil {
 		return err
@@ -2546,10 +2558,10 @@ func (s *Server) replaySession(path, sessionID string) error {
 			updateType = "user_message_chunk"
 		}
 		if historical.Role != "user" || len(historical.Content) == 0 {
-			s.notify(sessionID, map[string]any{
+			s.notifyWithPaths(sessionID, map[string]any{
 				"sessionUpdate": updateType,
 				"content":       map[string]any{"type": "text", "text": historical.Text},
-			})
+			}, realCWD, displayCWD)
 			continue
 		}
 		for _, part := range historical.Content {
@@ -2562,7 +2574,7 @@ func (s *Server) replaySession(path, sessionID string) error {
 			} else {
 				content["uri"] = part.URI
 			}
-			s.notify(sessionID, map[string]any{"sessionUpdate": updateType, "content": content})
+			s.notifyWithPaths(sessionID, map[string]any{"sessionUpdate": updateType, "content": content}, realCWD, displayCWD)
 		}
 	}
 	events, err := sessionlog.Events(path, "subagent_spawned", "subagent_finished", "task_backgrounded", "task_completed", "xai_session_notification")
@@ -2573,6 +2585,9 @@ func (s *Server) replaySession(path, sessionID string) error {
 		update, ok := event.Data.(map[string]any)
 		if !ok {
 			return fmt.Errorf("invalid %s event", event.Kind)
+		}
+		if rewritten, ok := newPathRewriter(realCWD, displayCWD).rewriteJSON(update).(map[string]any); ok {
+			update = rewritten
 		}
 		switch event.Kind {
 		case "subagent_spawned", "subagent_finished":
@@ -2764,6 +2779,7 @@ func (s *Server) closeSession(id string) bool {
 	s.mu.Unlock()
 	s.notifyRosterRemoved(id)
 	s.shutdownSession(current)
+	s.pathRewriters.Delete(id)
 	return true
 }
 
@@ -3305,6 +3321,7 @@ func (s *Server) closeAll() {
 			<-gitWatchDone
 		}
 		current.close()
+		s.pathRewriters.Delete(current.id)
 	}
 }
 
@@ -3355,6 +3372,12 @@ func (s *Server) respondErrorData(id json.RawMessage, code int, message string, 
 }
 
 func (s *Server) notify(sessionID string, update any) {
+	update = s.rewriteSessionValue(sessionID, update)
+	s.write(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{"sessionId": sessionID, "update": update}})
+}
+
+func (s *Server) notifyWithPaths(sessionID string, update any, realCWD, displayCWD string) {
+	update = newPathRewriter(realCWD, displayCWD).rewriteJSON(update)
 	s.write(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{"sessionId": sessionID, "update": update}})
 }
 
@@ -3369,7 +3392,7 @@ func (s *Server) notifyXAI(current *session, update map[string]any) {
 	if current.runner == nil || current.runner.Logger == nil || current.runner.Logger.Append("xai_session_notification", params) != nil {
 		delete(params, "_meta")
 	}
-	s.write(map[string]any{"jsonrpc": "2.0", "method": "x.ai/session_notification", "params": params})
+	s.write(map[string]any{"jsonrpc": "2.0", "method": "x.ai/session_notification", "params": newPathRewriter(current.cwd, current.displayCWD).rewriteJSON(params)})
 }
 
 func (s *Server) write(value any) {

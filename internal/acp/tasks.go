@@ -438,6 +438,9 @@ func SubagentFinishedUpdate(result tools.SubagentResult) map[string]any {
 }
 
 func (s *Server) notifySubagent(sessionID string, update map[string]any) {
+	if rewritten, ok := s.rewriteSessionValue(sessionID, update).(map[string]any); ok {
+		update = rewritten
+	}
 	s.write(map[string]any{
 		"jsonrpc": "2.0", "method": "x.ai/session_notification",
 		"params": map[string]any{"sessionId": sessionID, "update": update},
@@ -446,6 +449,9 @@ func (s *Server) notifySubagent(sessionID string, update map[string]any) {
 
 func (s *Server) NotifyTaskBackgrounded(sessionID string, event tools.ProcessBackgrounded) {
 	update := TaskBackgroundedUpdate(event)
+	if rewritten, ok := s.rewriteSessionValue(sessionID, update).(map[string]any); ok {
+		update = rewritten
+	}
 	s.write(map[string]any{
 		"jsonrpc": "2.0", "method": "x.ai/task_backgrounded",
 		"params": map[string]any{"sessionId": sessionID, "update": update},
@@ -468,9 +474,10 @@ func TaskBackgroundedUpdate(event tools.ProcessBackgrounded) map[string]any {
 }
 
 func (s *Server) NotifyTaskCompleted(sessionID string, snapshot tools.ProcessSnapshot, willWake bool) {
+	update := s.rewriteSessionValue(sessionID, TaskCompletedUpdate(snapshot, willWake))
 	s.write(map[string]any{
 		"jsonrpc": "2.0", "method": "x.ai/task_completed",
-		"params": map[string]any{"sessionId": sessionID, "update": TaskCompletedUpdate(snapshot, willWake)},
+		"params": map[string]any{"sessionId": sessionID, "update": update},
 	})
 	if willWake {
 		if current := s.lookupSession(sessionID); current != nil {

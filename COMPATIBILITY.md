@@ -40,7 +40,9 @@ echo client-owned `x.ai/persist` metadata and their session ID.
 Loaded ACP sessions also report `gitDivergence` when their recorded Git HEAD
 differs from the workspace's current HEAD.
 ACP `_meta.x.ai/display_cwd` metadata is persisted across restore and used for
-active or dormant session roster display while the real cwd remains the execution path.
+active or dormant session roster display. Live and replayed ACP updates rewrite
+plain and URL-encoded worktree paths for the client while the real cwd remains
+the execution path.
 Authenticated remote-settings refreshes publish reference-shaped
 `x.ai/settings/update` notifications so connected ACP clients receive live access,
 subscription, permission, layout, tip, and announcement state.
