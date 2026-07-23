@@ -1824,6 +1824,77 @@ func TestUsageCommandsDoNotRunModelTurn(t *testing.T) {
 	}
 }
 
+func TestShareCommandDoesNotRunModelTurn(t *testing.T) {
+	calls := 0
+	m := &model{ctx: context.Background(), runner: &agent.Runner{
+		SessionID: "session-1", SharingEnabled: func() bool { return true },
+		ShareSession: func(context.Context) (string, error) {
+			calls++
+			return "https://web.example/build/share/one", nil
+		},
+	}}
+	m.setInput("/share ignored")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command == nil || !m.running || m.status != "sharing session" {
+		t.Fatalf("command=%v running=%v status=%q", command != nil, m.running, m.status)
+	}
+	m.pendingPrompts = []string{"follow-up"}
+	updated, next := m.Update(command())
+	m = updated.(*model)
+	if next == nil || !m.running || len(m.pendingPrompts) != 0 || calls != 1 || !strings.Contains(m.transcript.String(), "Session shared: https://web.example/build/share/one") {
+		t.Fatalf("next=%v running=%v calls=%d status=%q transcript=%q", next != nil, m.running, calls, m.status, m.transcript.String())
+	}
+
+	m = &model{ctx: context.Background(), runner: &agent.Runner{
+		SessionID: "session-1", SharingEnabled: func() bool { return true },
+		ShareSession: func(context.Context) (string, error) { return "", errors.New("offline") },
+	}}
+	m.setInput("/share")
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	updated, _ = updated.(*model).Update(command())
+	m = updated.(*model)
+	if m.status != "share failed" || !strings.Contains(m.transcript.String(), "Couldn't share session: offline") {
+		t.Fatalf("status=%q transcript=%q", m.status, m.transcript.String())
+	}
+
+	m = &model{ctx: context.Background(), runner: &agent.Runner{SharingEnabled: func() bool { return false }}}
+	m.setInput("/share")
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.running || m.status != "sharing disabled" || !strings.Contains(m.transcript.String(), "Sharing is disabled") {
+		t.Fatalf("command=%v running=%v status=%q transcript=%q", command != nil, m.running, m.status, m.transcript.String())
+	}
+
+	m = &model{ctx: context.Background(), runner: &agent.Runner{SharingEnabled: func() bool { return true }}}
+	m.setInput("/share")
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.status != "share unavailable" || !strings.Contains(m.transcript.String(), "No active session to share") {
+		t.Fatalf("command=%v status=%q transcript=%q", command != nil, m.status, m.transcript.String())
+	}
+
+	m = &model{ctx: context.Background(), runner: &agent.Runner{SharingEnabled: func() bool { return true }}}
+	m.setInput("/help")
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if !strings.Contains(updated.(*model).transcript.String(), "/share") {
+		t.Fatalf("enabled help=%q", updated.(*model).transcript.String())
+	}
+	m = &model{ctx: context.Background(), runner: &agent.Runner{SharingEnabled: func() bool { return false }}}
+	m.setInput("/help")
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if strings.Contains(updated.(*model).transcript.String(), "`/share`") {
+		t.Fatalf("disabled help=%q", updated.(*model).transcript.String())
+	}
+
+	m = &model{ctx: context.Background(), runner: &agent.Runner{}}
+	m.setInput("/sharex")
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if command == nil || !updated.(*model).running {
+		t.Fatalf("/sharex command=%v running=%v", command != nil, updated.(*model).running)
+	}
+}
+
 func TestMultilineCursorNavigationAndUndo(t *testing.T) {
 	m := &model{}
 	press := func(key tea.Key) {

@@ -91,6 +91,10 @@ and response shapes locally for client integration testing.
 REPL, TUI, and ACP sessions support shared `/usage` and `/cost` billing metrics
 plus management links as local commands that never invoke model inference. ACP
 also advertises `/usage` with `show | manage` argument guidance.
+Capability-gated `/share` is also available across REPL, TUI, and ACP without
+model inference. It reuses the `x.ai/share_session` domain service, refreshes an
+expired token once, preserves the reference 413 data-upload fallback, and
+enforces authentication, account enablement, and team ZDR restrictions.
 
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |

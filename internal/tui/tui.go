@@ -111,6 +111,10 @@ type usageDoneEvent struct {
 	text string
 	err  error
 }
+type shareDoneEvent struct {
+	url string
+	err error
+}
 type compactDoneEvent struct{ err error }
 type memoryFlushDoneEvent struct {
 	result agent.MemoryFlushResult
@@ -1064,6 +1068,19 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if command := m.startNext(); command != nil {
 			return m, command
 		}
+	case shareDoneEvent:
+		m.running = false
+		m.turnCancel = nil
+		if msg.err != nil {
+			m.appendSystem("Couldn't share session: " + msg.err.Error())
+			m.status = "share failed"
+		} else {
+			m.appendSystem("Session shared: " + msg.url)
+			m.status = "session shared"
+		}
+		if command := m.startNext(); command != nil {
+			return m, command
+		}
 	case scheduledFiredEvent:
 		if msg.event.TaskID != m.activeTask {
 			duplicate := false
@@ -1463,7 +1480,11 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if m.runner != nil && m.runner.SubmitFeedback != nil {
 				feedbackCommand = " `/feedback [text]`"
 			}
-			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + " `/btw <question>` `/compact` `/compact-mode` `/context` `/copy [N]` `/dream` `/effort [level]` `/exit` `/export [filename]`" + feedbackCommand + " `/find` `/flush` `/help` `/history` `/loop` `/memory` `/model [name] [effort]` (`/m`) `/multiline` `/plan [description]` `/privacy [opt-out]` `/queue` `/recap` `/remember` `/rename <title>` `/rewind` `/session-info` (`/status`, `/info`) `/tasks` `/terminal-setup`" + mouseCommand + " `/timestamps` `/transcript` `/usage [show|manage]` (`/cost`) `/view-plan` `/vim-mode`")
+			shareCommand := ""
+			if m.runner != nil && m.runner.SharingEnabled != nil && m.runner.SharingEnabled() {
+				shareCommand = " `/share`"
+			}
+			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + " `/btw <question>` `/compact` `/compact-mode` `/context` `/copy [N]` `/dream` `/effort [level]` `/exit` `/export [filename]`" + feedbackCommand + " `/find` `/flush` `/help` `/history` `/loop` `/memory` `/model [name] [effort]` (`/m`) `/multiline` `/plan [description]` `/privacy [opt-out]` `/queue` `/recap` `/remember` `/rename <title>` `/rewind` `/session-info` (`/status`, `/info`)" + shareCommand + " `/tasks` `/terminal-setup`" + mouseCommand + " `/timestamps` `/transcript` `/usage [show|manage]` (`/cost`) `/view-plan` `/vim-mode`")
 			m.status = "commands"
 			return m, nil
 		case "/privacy":
@@ -1471,6 +1492,22 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.appendSystem(result.Message)
 			m.status = result.Status
 			return m, nil
+		case "/share":
+			if m.runner == nil || m.runner.SharingEnabled == nil || !m.runner.SharingEnabled() {
+				m.appendSystem("Sharing is disabled")
+				m.status = "sharing disabled"
+				return m, nil
+			}
+			if strings.TrimSpace(m.runner.SessionID) == "" || m.runner.ShareSession == nil {
+				m.appendSystem("No active session to share")
+				m.status = "share unavailable"
+				return m, nil
+			}
+			m.running = true
+			turnCtx, cancel := context.WithCancel(m.ctx)
+			m.turnCancel = cancel
+			m.status = "sharing session"
+			return m, runShare(turnCtx, m.runner)
 		case "/terminal-setup", "/terminal-check", "/terminal-info":
 			m.appendSystem(terminaldiag.Report())
 			m.status = "terminal setup"
@@ -3138,6 +3175,13 @@ func runUsage(ctx context.Context, runner *agent.Runner) tea.Cmd {
 		}
 		text, err := runner.FetchUsage(ctx)
 		return usageDoneEvent{text: text, err: err}
+	}
+}
+
+func runShare(ctx context.Context, runner *agent.Runner) tea.Cmd {
+	return func() tea.Msg {
+		url, err := runner.ShareSession(ctx)
+		return shareDoneEvent{url: url, err: err}
 	}
 }
 

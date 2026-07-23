@@ -41,7 +41,7 @@ func TestCommandsListAdvertisesCapabilitiesAndSkills(t *testing.T) {
 	}
 	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
 	defer registry.Close()
-	runner := &agent.Runner{Tools: registry, Skills: catalog, HookCatalog: hooks.DiscoverPlugins(nil), PluginInventory: func() []plugin.Plugin { return nil }, SubmitFeedback: func(sessionlog.UserFeedback) error { return nil }}
+	runner := &agent.Runner{Tools: registry, Skills: catalog, HookCatalog: hooks.DiscoverPlugins(nil), PluginInventory: func() []plugin.Plugin { return nil }, SubmitFeedback: func(sessionlog.UserFeedback) error { return nil }, SharingEnabled: func() bool { return true }}
 	var output bytes.Buffer
 	server := &Server{output: &output, sessions: map[string]*session{"commands": {id: "commands", cwd: root, runner: runner}}}
 	server.handleCommands(message{ID: json.RawMessage("1"), Params: json.RawMessage(`{"cwd":` + quoted(root) + `}`)})
@@ -52,7 +52,7 @@ func TestCommandsListAdvertisesCapabilitiesAndSkills(t *testing.T) {
 		command := raw.(map[string]any)
 		byName[command["name"].(string)] = command
 	}
-	for _, name := range []string{"compact", "always-approve", "privacy", "terminal-setup", "usage", "context", "session-info", "hooks-trust", "hooks-list", "hooks-add", "hooks-remove", "hooks-untrust", "plugins", "reload-plugins", "feedback", "goal", "loop", "local:compact", "local:plugins", "local:feedback", "deploy"} {
+	for _, name := range []string{"compact", "always-approve", "privacy", "terminal-setup", "usage", "share", "context", "session-info", "hooks-trust", "hooks-list", "hooks-add", "hooks-remove", "hooks-untrust", "plugins", "reload-plugins", "feedback", "goal", "loop", "local:compact", "local:plugins", "local:feedback", "deploy"} {
 		if byName[name] == nil {
 			t.Fatalf("missing command %q in %#v", name, commands)
 		}
@@ -100,6 +100,11 @@ func TestBuiltinCommandsFollowReferenceOrderAndCapabilityGates(t *testing.T) {
 	for _, command := range availableCommands(&agent.Runner{}, true) {
 		if name := command["name"].(string); name == "plugins" || name == "reload-plugins" {
 			t.Fatalf("plugin command advertised without capability: %#v", command)
+		}
+	}
+	for _, command := range availableCommands(&agent.Runner{SharingEnabled: func() bool { return false }}, true) {
+		if command["name"] == "share" {
+			t.Fatalf("share command advertised while disabled: %#v", command)
 		}
 	}
 }
@@ -340,6 +345,56 @@ func TestUsageSlashCommandCompletesLocally(t *testing.T) {
 	}
 	if fetches != 2 || opened != "https://grok.com/?_s=usage" {
 		t.Fatalf("fetches=%d opened=%q", fetches, opened)
+	}
+}
+
+func TestShareSlashCommandCompletesLocally(t *testing.T) {
+	streamer := &fixtureStreamer{}
+	calls := 0
+	current := &session{id: "share-command", runner: &agent.Runner{
+		Client: streamer, Model: "test", SessionID: "share-command",
+		SharingEnabled: func() bool { return true },
+		ShareSession: func(context.Context) (string, error) {
+			calls++
+			if calls == 2 {
+				return "", errors.New("offline")
+			}
+			return "https://web.example/build/share/one", nil
+		},
+	}, activePrompt: -1}
+	var output bytes.Buffer
+	server := &Server{output: &output, sessions: map[string]*session{current.id: current}}
+	for id, test := range []struct{ prompt, want string }{
+		{"/share", "Session shared: https://web.example/build/share/one"},
+		{"/share ignored", "Couldn't share session: offline"},
+	} {
+		output.Reset()
+		params, _ := json.Marshal(map[string]any{"sessionId": current.id, "prompt": []any{map[string]any{"type": "text", "text": test.prompt}}})
+		server.handlePrompt(context.Background(), message{ID: json.RawMessage(fmt.Sprintf("%d", id+60)), Method: "session/prompt", Params: params})
+		messages := decodeACPOutput(t, output.Bytes())
+		encoded, _ := json.Marshal(messages)
+		completed := false
+		for _, item := range messages {
+			result, ok := item["result"].(map[string]any)
+			completed = completed || ok && result["stopReason"] == "end_turn"
+		}
+		if !bytes.Contains(encoded, []byte(test.want)) || !completed || len(streamer.requests) != 0 || current.promptIndex != 0 {
+			t.Fatalf("prompt=%q calls=%d requests=%d messages=%#v", test.prompt, calls, len(streamer.requests), messages)
+		}
+	}
+
+	current.runner.SharingEnabled = func() bool { return false }
+	output.Reset()
+	params, _ := json.Marshal(map[string]any{"sessionId": current.id, "prompt": []any{map[string]any{"type": "text", "text": "/share"}}})
+	server.handlePrompt(context.Background(), message{ID: json.RawMessage("62"), Method: "session/prompt", Params: params})
+	messages := decodeACPOutput(t, output.Bytes())
+	completed := false
+	for _, item := range messages {
+		result, ok := item["result"].(map[string]any)
+		completed = completed || ok && result["stopReason"] == "end_turn"
+	}
+	if encoded, _ := json.Marshal(messages); !bytes.Contains(encoded, []byte("Sharing is disabled")) || !completed || calls != 2 {
+		t.Fatalf("calls=%d output=%s", calls, encoded)
 	}
 }
 

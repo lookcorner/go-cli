@@ -40,6 +40,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/memory"
 	"github.com/lookcorner/go-cli/internal/plugin"
 	"github.com/lookcorner/go-cli/internal/session"
+	sessionshare "github.com/lookcorner/go-cli/internal/share"
 	"github.com/lookcorner/go-cli/internal/skills"
 	"github.com/lookcorner/go-cli/internal/subagent"
 	"github.com/lookcorner/go-cli/internal/terminaldiag"
@@ -563,6 +564,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 	usage := newBillingService(cfg, tokenProvider, nil)
 	runner.FetchUsage, runner.OpenURL = usage.Usage, openBrowser
+	sharingEnabled := func() bool { return cfg.SharingEnabled }
+	sharing := newShareService(cfg, tokenProvider, opts.sessionDir, sharingEnabled)
+	runner.ShareSession, runner.SharingEnabled = func(ctx context.Context) (string, error) { return sharing.Share(ctx, logger.ID()) }, sharingEnabled
 	if cfg.FeedbackEnabled {
 		runner.SubmitFeedback = feedbackSubmitter(logger, runner.ModelID, runner.Model, ws.Root())
 	}
@@ -1354,6 +1358,16 @@ func newBillingService(cfg config.Config, tokenProvider api.TokenProvider, metad
 	return billing.Service{
 		AuthPath: path, AuthScope: authConfig.Scope(), BaseURL: cfg.ProxyBaseURL,
 		HTTP: &http.Client{Timeout: cfg.HTTPTimeout}, TokenProvider: tokenProvider, Metadata: metadata,
+	}
+}
+
+func newShareService(cfg config.Config, tokenProvider api.TokenProvider, sessionDir string, enabled func() bool) sessionshare.Service {
+	path, _ := auth.DefaultPath()
+	authConfig := auth.DefaultConfig()
+	applyAuthPolicy(&authConfig, cfg)
+	return sessionshare.Service{
+		SessionDir: sessionDir, AuthPath: path, AuthScope: authConfig.Scope(),
+		HTTP: &http.Client{Timeout: cfg.HTTPTimeout}, TokenProvider: tokenProvider, Enabled: enabled,
 	}
 }
 
@@ -2589,6 +2603,9 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		}
 		usage := newBillingService(cfg, sessionTokenProvider, getBillingMeta)
 		runner.FetchUsage, runner.OpenURL = usage.Usage, openBrowser
+		sharingEnabled := func() bool { return runtimeConfigSnapshot().SharingEnabled }
+		sharing := newShareService(cfg, sessionTokenProvider, opts.sessionDir, sharingEnabled)
+		runner.ShareSession, runner.SharingEnabled = func(ctx context.Context) (string, error) { return sharing.Share(ctx, logger.ID()) }, sharingEnabled
 		if cfg.FeedbackEnabled {
 			runner.SubmitFeedback = feedbackSubmitter(logger, modelID, sessionCfg.Model, ws.Root())
 		}
@@ -3315,7 +3332,7 @@ func interactiveLoop(
 			command := prompt
 			if fields := strings.Fields(prompt); len(fields) > 0 {
 				switch fields[0] {
-				case "/session-info", "/status", "/info", "/context":
+				case "/session-info", "/status", "/info", "/context", "/share":
 					command = fields[0]
 				}
 			}
@@ -3325,7 +3342,23 @@ func interactiveLoop(
 			case "/exit", "/quit":
 				return nil
 			case "/help":
-				fmt.Fprintln(stderr, "Commands: ! <command>, /compact, /context, /flush, /dream, /remember [text], /memory [on|off], /loop, /privacy [opt-out], /session-info (/status, /info), /terminal-setup, /usage [show|manage] (/cost), /help, /exit. Every other line is sent as a prompt.")
+				shareCommand := ""
+				if runner.SharingEnabled != nil && runner.SharingEnabled() {
+					shareCommand = ", /share"
+				}
+				fmt.Fprintln(stderr, "Commands: ! <command>, /compact, /context, /flush, /dream, /remember [text], /memory [on|off], /loop, /privacy [opt-out], /session-info (/status, /info)"+shareCommand+", /terminal-setup, /usage [show|manage] (/cost), /help, /exit. Every other line is sent as a prompt.")
+				prompt = ""
+				continue
+			case "/share":
+				if runner.SharingEnabled == nil || !runner.SharingEnabled() {
+					fmt.Fprintln(stderr, "[gork] Sharing is disabled")
+				} else if strings.TrimSpace(runner.SessionID) == "" || runner.ShareSession == nil {
+					fmt.Fprintln(stderr, "[gork] No active session to share")
+				} else if url, err := runner.ShareSession(ctx); err != nil {
+					fmt.Fprintln(stderr, "[gork] Couldn't share session:", err)
+				} else {
+					fmt.Fprintln(stderr, "[gork] Session shared:", url)
+				}
 				prompt = ""
 				continue
 			case "/session-info", "/status", "/info":

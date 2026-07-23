@@ -58,6 +58,9 @@ func availableCommands(runner *agent.Runner, workspaceSkills bool) []map[string]
 		availableCommand("usage", "View credit usage or manage billing", "show | manage", nil),
 	}
 	if runner != nil {
+		if runner.SharingEnabled != nil && runner.SharingEnabled() {
+			commands = append(commands, availableCommand("share", "Share this session via URL", "", nil))
+		}
 		memoryConfigured, memoryEnabled := runner.MemoryAvailability()
 		if memoryEnabled && runner.Tools != nil && runner.Tools.HasTool("memory_search") && runner.Tools.HasTool("memory_get") {
 			commands = append(commands,
@@ -422,6 +425,20 @@ func (s *Server) handleUsagePrompt(ctx context.Context, incoming message, curren
 		message = billing.ManageURL
 		if current.runner.OpenURL != nil && current.runner.OpenURL(billing.ManageURL) {
 			message = "Opened usage management: " + billing.ManageURL
+		}
+	}
+	s.handleLocalMessagePrompt(incoming, current, lifecycle, message)
+}
+
+func (s *Server) handleSharePrompt(ctx context.Context, incoming message, current *session, lifecycle promptLifecycle) {
+	message := "Sharing is disabled"
+	if current.runner.SharingEnabled != nil && current.runner.SharingEnabled() {
+		if current.runner.ShareSession == nil || strings.TrimSpace(current.runner.SessionID) == "" {
+			message = "No active session to share"
+		} else if url, err := current.runner.ShareSession(ctx); err != nil {
+			message = "Couldn't share session: " + err.Error()
+		} else {
+			message = "Session shared: " + url
 		}
 	}
 	s.handleLocalMessagePrompt(incoming, current, lifecycle, message)

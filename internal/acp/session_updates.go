@@ -7,15 +7,12 @@ import (
 	"strings"
 
 	sessionlog "github.com/lookcorner/go-cli/internal/session"
+	shareapp "github.com/lookcorner/go-cli/internal/share"
 )
 
 const sessionUpdatesChunkSize = 64
 
-type sessionUpdateEnvelope struct {
-	Timestamp int64          `json:"timestamp"`
-	Method    string         `json:"method"`
-	Params    map[string]any `json:"params"`
-}
+type sessionUpdateEnvelope = shareapp.Update
 
 type sessionUpdatesRequest struct {
 	SessionID string         `json:"sessionId"`
@@ -88,145 +85,7 @@ func (s *Server) handleSessionUpdates(incoming message) {
 }
 
 func sessionUpdateEnvelopes(path, sessionID string) ([]sessionUpdateEnvelope, error) {
-	events, err := sessionlog.Events(path)
-	if err != nil {
-		return nil, err
-	}
-	updates := make([]sessionUpdateEnvelope, 0, len(events))
-	appendStandard := func(timestamp int64, update map[string]any) {
-		updates = append(updates, sessionUpdateEnvelope{Timestamp: timestamp, Method: "session/update", Params: map[string]any{"sessionId": sessionID, "update": update}})
-	}
-	appendExtension := func(timestamp int64, update map[string]any, meta map[string]any) {
-		params := map[string]any{"sessionId": sessionID, "update": update}
-		if len(meta) > 0 {
-			params["_meta"] = meta
-		}
-		updates = append(updates, sessionUpdateEnvelope{Timestamp: timestamp, Method: "_x.ai/session/update", Params: params})
-	}
-
-	for _, event := range events {
-		timestamp := event.Time.UnixMilli()
-		switch event.Kind {
-		case "user_prompt":
-			var data struct {
-				Text      string               `json:"text"`
-				Content   []sessionlog.Content `json:"content"`
-				Synthetic bool                 `json:"synthetic"`
-			}
-			if decodeSessionEvent(event.Data, &data) != nil || data.Synthetic {
-				continue
-			}
-			if len(data.Content) == 0 {
-				if data.Text != "" {
-					appendStandard(timestamp, messageChunk("user_message_chunk", map[string]any{"type": "text", "text": data.Text}))
-				}
-				continue
-			}
-			hasText := false
-			for _, part := range data.Content {
-				hasText = hasText || part.Type == "text"
-			}
-			if data.Text != "" && !hasText {
-				appendStandard(timestamp, messageChunk("user_message_chunk", map[string]any{"type": "text", "text": data.Text}))
-			}
-			for _, part := range data.Content {
-				part, materializeErr := sessionlog.MaterializeContent(path, part)
-				if materializeErr != nil {
-					return nil, materializeErr
-				}
-				content := map[string]any{"type": part.Type}
-				if part.Type == "text" {
-					content["text"] = part.Text
-				} else if part.Data == "" {
-					content["uri"] = part.URI
-				} else {
-					content["data"], content["mimeType"] = part.Data, part.MimeType
-				}
-				appendStandard(timestamp, messageChunk("user_message_chunk", content))
-			}
-		case "model_response":
-			var data struct {
-				Text string `json:"text"`
-			}
-			if decodeSessionEvent(event.Data, &data) == nil && data.Text != "" {
-				appendStandard(timestamp, messageChunk("agent_message_chunk", map[string]any{"type": "text", "text": data.Text}))
-			}
-		case "tool_call":
-			var data struct {
-				CallID    string          `json:"call_id"`
-				Name      string          `json:"name"`
-				Arguments json.RawMessage `json:"arguments"`
-			}
-			if decodeSessionEvent(event.Data, &data) == nil && data.CallID != "" {
-				update := map[string]any{"sessionUpdate": "tool_call", "toolCallId": data.CallID, "title": data.Name, "kind": acpToolKind(data.Name), "status": "in_progress"}
-				if len(data.Arguments) > 0 {
-					update["rawInput"] = data.Arguments
-				}
-				appendStandard(timestamp, update)
-			}
-		case "tool_result":
-			var data struct {
-				CallID string `json:"call_id"`
-				Output string `json:"output"`
-				Failed bool   `json:"failed"`
-			}
-			if decodeSessionEvent(event.Data, &data) == nil && data.CallID != "" {
-				status := "completed"
-				if data.Failed {
-					status = "failed"
-				}
-				appendStandard(timestamp, map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": data.CallID, "status": status, "rawOutput": data.Output})
-			}
-		case "session_mode":
-			var data struct {
-				ModeID string `json:"mode_id"`
-			}
-			if decodeSessionEvent(event.Data, &data) == nil && data.ModeID != "" {
-				appendStandard(timestamp, map[string]any{"sessionUpdate": "current_mode_update", "currentModeId": data.ModeID})
-			}
-		case "subagent_spawned", "subagent_finished", "task_backgrounded", "task_completed":
-			update, ok := event.Data.(map[string]any)
-			if !ok {
-				continue
-			}
-			update = cloneMap(update)
-			if _, exists := update["sessionUpdate"]; !exists {
-				update["sessionUpdate"] = event.Kind
-			}
-			appendExtension(timestamp, update, nil)
-		case "xai_session_notification":
-			params, ok := event.Data.(map[string]any)
-			if !ok {
-				continue
-			}
-			update, _ := params["update"].(map[string]any)
-			meta, _ := params["_meta"].(map[string]any)
-			if update != nil {
-				appendExtension(timestamp, update, meta)
-			}
-		}
-	}
-	return updates, nil
-}
-
-func decodeSessionEvent(data any, target any) error {
-	encoded, err := json.Marshal(data)
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(encoded, target)
-}
-
-func messageChunk(kind string, content map[string]any) map[string]any {
-	return map[string]any{"sessionUpdate": kind, "content": content}
-}
-
-func cloneMap(value map[string]any) map[string]any {
-	cloned := make(map[string]any, len(value)+1)
-	for key, item := range value {
-		cloned[key] = item
-	}
-	return cloned
+	return shareapp.Updates(path, sessionID)
 }
 
 func sessionPromptStarts(updates []sessionUpdateEnvelope) []int {

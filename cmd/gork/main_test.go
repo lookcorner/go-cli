@@ -195,6 +195,48 @@ func TestInteractiveUsageCommandsDoNotRunModelTurn(t *testing.T) {
 	}
 }
 
+func TestInteractiveShareCommandDoesNotRunModelTurn(t *testing.T) {
+	streamer := &interactiveStatusStreamer{}
+	calls := 0
+	runner := &agent.Runner{
+		Client: streamer, Model: "test", SessionID: "session-1",
+		SharingEnabled: func() bool { return true },
+		ShareSession: func(context.Context) (string, error) {
+			calls++
+			if calls == 2 {
+				return "", errors.New("offline")
+			}
+			return "https://web.example/build/share/one", nil
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	input := newTerminalInput(ctx, bufio.NewReader(strings.NewReader("/share\n/share ignored\n/help\n/exit\n")))
+	var stderr bytes.Buffer
+	if err := interactiveLoop(ctx, runner, newScheduledWakeQueue(), input, io.Discard, &stderr, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	output := stderr.String()
+	for _, want := range []string{"Session shared: https://web.example/build/share/one", "Couldn't share session: offline", "/share"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("missing %q in %q", want, output)
+		}
+	}
+	if streamer.calls != 0 || calls != 2 {
+		t.Fatalf("model calls=%d share calls=%d output=%q", streamer.calls, calls, output)
+	}
+
+	disabled := &agent.Runner{Client: streamer, Model: "test", SharingEnabled: func() bool { return false }}
+	input = newTerminalInput(ctx, bufio.NewReader(strings.NewReader("/share\n/help\n/exit\n")))
+	stderr.Reset()
+	if err := interactiveLoop(ctx, disabled, newScheduledWakeQueue(), input, io.Discard, &stderr, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if output := stderr.String(); !strings.Contains(output, "Sharing is disabled") || strings.Contains(output, ", /share,") {
+		t.Fatalf("disabled output=%q", output)
+	}
+}
+
 func TestInteractiveRememberModeTreatsPrivacyAsNoteText(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("GROK_HOME", root)

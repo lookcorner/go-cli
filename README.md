@@ -591,6 +591,10 @@ and actionable setup warnings without calling the model.
 reset, auto-topup, and pay-as-you-go metrics without calling the model.
 `/usage manage` and `/cost manage` open the billing management page, with the URL
 printed as a fallback when a browser cannot be opened.
+When remote account settings enable session sharing, `/share` uploads the active
+session and prints its public URL without invoking the model. The command is
+hidden when sharing is unavailable, requires xAI authentication, and remains
+blocked for teams whose data-retention policy disables sharing.
 In Vim mode, `/` opens incremental regular-expression search while scrollback is focused; Enter
 accepts the query, Up/Down or `n`/`N` navigates matches, and Esc closes it. `/find <pattern>`
 opens the same search directly from the prompt without sending a model turn.
