@@ -10,7 +10,7 @@ func TestSummariesFoldSessionEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = logger.Append("session_metadata", map[string]any{"cwd": cwd, "modelId": "model-one", "headCommit": "abc123", "headBranch": "main"})
+	_ = logger.Append("session_metadata", map[string]any{"cwd": cwd, "displayCwd": "/project", "modelId": "model-one", "headCommit": "abc123", "headBranch": "main"})
 	_ = logger.Append("user_prompt", map[string]any{"text": "Initial title"})
 	_ = logger.Append("model_response", map[string]any{"text": "answer", "response_id": "r1", "tool_call_count": 0})
 	_ = logger.Append("session_forked", map[string]any{"parent_session_id": "parent-session"})
@@ -25,7 +25,7 @@ func TestSummariesFoldSessionEvents(t *testing.T) {
 		t.Fatalf("summaries=%#v", summaries)
 	}
 	summary := summaries[0]
-	if summary.Info.ID != "summary-session" || summary.Info.CWD != cwd || summary.SessionSummary != "Manual title" {
+	if summary.Info.ID != "summary-session" || summary.Info.CWD != cwd || summary.Info.DisplayCWD != "/project" || summary.SessionSummary != "Manual title" {
 		t.Fatalf("identity/title=%#v", summary)
 	}
 	if summary.NumMessages != 5 || summary.NumChatMessages != 2 || summary.CurrentModelID != "model-one" {

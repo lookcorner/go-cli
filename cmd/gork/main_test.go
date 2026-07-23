@@ -49,6 +49,14 @@ type failingGoalStreamer struct{ err error }
 
 type interactiveStatusStreamer struct{ calls int }
 
+func TestSessionMetadataWithDisplayCWD(t *testing.T) {
+	root := t.TempDir()
+	metadata := sessionMetadataWithDisplay(context.Background(), root, "model", "high", "  /project  ")
+	if metadata["cwd"] != root || metadata["displayCwd"] != "/project" || metadata["modelId"] != "model" || metadata["reasoningEffort"] != "high" {
+		t.Fatalf("metadata=%#v", metadata)
+	}
+}
+
 func (s failingGoalStreamer) StreamResponse(context.Context, api.ResponseRequest, func(string)) (api.StreamResult, error) {
 	return api.StreamResult{}, s.err
 }

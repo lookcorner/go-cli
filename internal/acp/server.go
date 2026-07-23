@@ -2429,12 +2429,14 @@ func (s *Server) handleRestoreSession(ctx context.Context, incoming message, rep
 	}
 	found := false
 	model, title := "", ""
+	displayCWD := ""
 	reasoningEffort := ""
 	sessionHead, sessionBranch := "", ""
 	for _, item := range items {
 		if item.SessionID == params.SessionID {
 			found = true
 			model = item.ModelID
+			displayCWD = item.DisplayCWD
 			title = item.Title
 			reasoningEffort = item.ReasoningEffort
 			sessionHead = item.HeadCommit
@@ -2478,6 +2480,9 @@ func (s *Server) handleRestoreSession(ctx context.Context, incoming message, rep
 		DisplayCWD: stringMeta(params.Meta, "x.ai/display_cwd"),
 		ResumePath: path, MCPServers: servers, YoloMode: yoloMode, AutoMode: autoMode,
 		ClientHooks: parseClientHooks(params.Meta),
+	}
+	if config.DisplayCWD == "" {
+		config.DisplayCWD = displayCWD
 	}
 	created, err := s.startSession(ctx, params.SessionID, config, previous)
 	if err != nil {

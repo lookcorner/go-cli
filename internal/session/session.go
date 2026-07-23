@@ -280,6 +280,7 @@ func PathForID(dir, id string) (string, error) {
 type Info struct {
 	SessionID       string    `json:"sessionId"`
 	CWD             string    `json:"cwd"`
+	DisplayCWD      string    `json:"displayCwd,omitempty"`
 	HeadCommit      string    `json:"headCommit,omitempty"`
 	HeadBranch      string    `json:"headBranch,omitempty"`
 	ModelID         string    `json:"modelId,omitempty"`
@@ -355,6 +356,7 @@ func readInfo(path, id string) (Info, error) {
 		case "session_metadata":
 			var data struct {
 				CWD             string `json:"cwd"`
+				DisplayCWD      string `json:"displayCwd"`
 				HeadCommit      string `json:"headCommit"`
 				HeadBranch      string `json:"headBranch"`
 				ModelID         string `json:"modelId"`
@@ -362,6 +364,7 @@ func readInfo(path, id string) (Info, error) {
 			}
 			if json.Unmarshal(event.Data, &data) == nil && data.CWD != "" {
 				info.CWD = data.CWD
+				info.DisplayCWD = data.DisplayCWD
 				if data.HeadCommit != "" {
 					info.HeadCommit = data.HeadCommit
 				}

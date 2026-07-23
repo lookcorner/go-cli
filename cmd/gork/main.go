@@ -2125,7 +2125,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		registry.SetGoalObserver(&sessionGoalObserver{server: server, sessionID: logger.ID(), logger: logger})
 		registry.SetWebFetchEnabled(cfg.WebFetch.Enabled)
 		if sessionConfig.ResumePath == "" {
-			if err := logger.Append("session_metadata", sessionMetadata(ctx, ws.Root(), modelID, reasoningEffort)); err != nil {
+			if err := logger.Append("session_metadata", sessionMetadataWithDisplay(ctx, ws.Root(), modelID, reasoningEffort, sessionConfig.DisplayCWD)); err != nil {
 				_ = logger.Close()
 				_ = registry.Close()
 				return nil, nil, err
@@ -2801,7 +2801,14 @@ func terminalIO(value any) bool {
 }
 
 func sessionMetadata(ctx context.Context, cwd, model, reasoningEffort string) map[string]any {
+	return sessionMetadataWithDisplay(ctx, cwd, model, reasoningEffort, "")
+}
+
+func sessionMetadataWithDisplay(ctx context.Context, cwd, model, reasoningEffort, displayCWD string) map[string]any {
 	metadata := map[string]any{"cwd": cwd, "modelId": model}
+	if displayCWD = strings.TrimSpace(displayCWD); displayCWD != "" {
+		metadata["displayCwd"] = displayCWD
+	}
 	if reasoningEffort != "" {
 		metadata["reasoningEffort"] = reasoningEffort
 	}

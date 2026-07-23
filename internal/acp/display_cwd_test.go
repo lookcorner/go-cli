@@ -2,8 +2,12 @@ package acp
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"testing"
 	"time"
+
+	sessionlog "github.com/lookcorner/go-cli/internal/session"
 )
 
 func TestRosterUsesDisplayCWDWithoutChangingExecutionCWD(t *testing.T) {
@@ -23,6 +27,31 @@ func TestRosterUsesDisplayCWDWithoutChangingExecutionCWD(t *testing.T) {
 	}
 	if current.cwd != "/real/worktree" {
 		t.Fatalf("execution cwd changed: %q", current.cwd)
+	}
+}
+
+func TestDormantRosterUsesPersistedDisplayCWD(t *testing.T) {
+	dir := t.TempDir()
+	logger, err := sessionlog.NewLoggerWithID(dir, "dormant-display")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append("session_metadata", map[string]any{"cwd": "/real/worktree", "displayCwd": "/project"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	server := &Server{SessionDir: dir, output: &output}
+	server.handleSessionRoster(context.Background(), message{ID: json.RawMessage("1"), Method: "x.ai/sessions/list", Params: json.RawMessage(`{}`)})
+	var response map[string]any
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	rows := response["result"].(map[string]any)["result"].(map[string]any)["sessions"].([]any)
+	if len(rows) != 1 || rows[0].(map[string]any)["cwd"] != "/project" {
+		t.Fatalf("rows=%#v", rows)
 	}
 }
 

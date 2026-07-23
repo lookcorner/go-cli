@@ -9,8 +9,9 @@ import (
 )
 
 type SummaryIdentity struct {
-	ID  string `json:"id"`
-	CWD string `json:"cwd"`
+	ID         string `json:"id"`
+	CWD        string `json:"cwd"`
+	DisplayCWD string `json:"displayCwd,omitempty"`
 }
 
 type Summary struct {
@@ -67,7 +68,7 @@ func summaryFromInfo(dir string, info Info) (Summary, error) {
 	}
 	defer file.Close()
 	result := Summary{
-		Info: SummaryIdentity{ID: info.SessionID, CWD: info.CWD}, SessionSummary: info.Title,
+		Info: SummaryIdentity{ID: info.SessionID, CWD: info.CWD, DisplayCWD: info.DisplayCWD}, SessionSummary: info.Title,
 		UpdatedAt: info.UpdatedAt, CurrentModelID: info.ModelID,
 	}
 	scanner := bufio.NewScanner(file)

@@ -82,7 +82,11 @@ func (s *Server) handleSessionRoster(ctx context.Context, incoming message) {
 		rows = append(rows, newRosterEntry(ctx, current.id, current.title, current.cwd, current.model, current.effort, current.activity, current.yolo, true, current.changed))
 	}
 	for _, summary := range byID {
-		rows = append(rows, newRosterEntry(ctx, summary.Info.ID, summary.SessionSummary, summary.Info.CWD, summary.CurrentModelID, "", "dormant", false, false, summary.UpdatedAt))
+		cwd := summary.Info.DisplayCWD
+		if cwd == "" {
+			cwd = summary.Info.CWD
+		}
+		rows = append(rows, newRosterEntry(ctx, summary.Info.ID, summary.SessionSummary, cwd, summary.CurrentModelID, "", "dormant", false, false, summary.UpdatedAt))
 	}
 	sort.SliceStable(rows, func(i, j int) bool {
 		if rows[i].LastChangeUnixMS == rows[j].LastChangeUnixMS {
