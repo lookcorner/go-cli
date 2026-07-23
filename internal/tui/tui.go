@@ -44,6 +44,8 @@ const (
 
 var selectionURLPattern = regexp.MustCompile(`(?i)\b(?:https?|ftp|file)://[^\s\x00-\x1f]+`)
 
+var ErrNewSession = errors.New("start a new session")
+
 type textEvent struct{ text string }
 type statusEvent struct{ text string }
 type mouseSelectionPhase uint8
@@ -500,6 +502,7 @@ type model struct {
 	scheduled          []tools.ScheduledTaskFired
 	activeTask         string
 	promptSerial       uint64
+	newSession         bool
 
 	promptSuggestion    string
 	suggestionsEnabled  bool
@@ -702,11 +705,17 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		}
 	}
 	program := tea.NewProgram(m, tea.WithContext(ctx))
-	_, err := program.Run()
+	final, err := program.Run()
 	if errors.Is(err, tea.ErrInterrupted) || errors.Is(err, context.Canceled) {
 		return nil
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	if current, ok := final.(*model); ok && current.newSession {
+		return ErrNewSession
+	}
+	return nil
 }
 
 func (m *model) Init() tea.Cmd {
@@ -1518,6 +1527,10 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		switch fields[0] {
 		case "/quit", "/exit":
 			return m, tea.Quit
+		case "/new", "/clear":
+			m.newSession = true
+			m.status = "starting new session"
+			return m, tea.Quit
 		case "/help":
 			permissionCommands := "`/always-approve`"
 			if m.bridge != nil && m.bridge.AutoModeAvailable() {
@@ -1543,7 +1556,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if m.runner != nil && m.runner.MCPServerCatalog != nil {
 				mcpCommand = " `/mcps`"
 			}
-			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + announcementCommand + " `/btw <question>` `/compact` `/compact-mode` `/context` `/copy [N]` `/dream` `/effort [level]` `/exit` `/export [filename]`" + feedbackCommand + " `/find` `/flush` `/help` `/history` `/loop` `/memory`" + mcpCommand + " `/model [name] [effort]` (`/m`) `/multiline` `/plan [description]` `/privacy [opt-out]` `/queue` `/recap` `/release-notes` (`/changelog`) `/remember` `/rename <title>` `/rewind` `/session-info` (`/status`, `/info`)" + shareCommand + " `/tasks` `/terminal-setup`" + mouseCommand + " `/timestamps` `/transcript` `/usage [show|manage]` (`/cost`) `/view-plan` `/vim-mode`")
+			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + announcementCommand + " `/btw <question>` `/compact` `/compact-mode` `/context` `/copy [N]` `/dream` `/effort [level]` `/exit` `/export [filename]`" + feedbackCommand + " `/find` `/flush` `/help` `/history` `/loop` `/memory`" + mcpCommand + " `/model [name] [effort]` (`/m`) `/multiline` `/new` (`/clear`) `/plan [description]` `/privacy [opt-out]` `/queue` `/recap` `/release-notes` (`/changelog`) `/remember` `/rename <title>` `/rewind` `/session-info` (`/status`, `/info`)" + shareCommand + " `/tasks` `/terminal-setup`" + mouseCommand + " `/timestamps` `/transcript` `/usage [show|manage]` (`/cost`) `/view-plan` `/vim-mode`")
 			m.status = "commands"
 			return m, nil
 		case "/mcps":

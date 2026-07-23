@@ -506,6 +506,10 @@ When feedback is enabled, `/feedback <text>` saves feedback locally without a
 model turn; bare `/feedback` enters a dedicated input mode that Esc cancels.
 `/plan` idempotently enters Plan mode, while `/plan <description>` enters it and
 starts a planning turn. `/quit` and `/exit` close the TUI without a model turn.
+`/new` (alias `/clear`) closes the current runtime and creates a fresh session
+without a model turn. Workspace, model, permission, and UI flags are preserved,
+while the previous response chain, resume target, transcript, and initial prompt
+are intentionally discarded. The interactive REPL supports the same command.
 `/view-plan`, `/show-plan`, and `/plan-view` open the current confined plan file
 in a read-only preview; Esc returns to the conversation.
 `/transcript` and `/log` open the completed persisted conversation in the same

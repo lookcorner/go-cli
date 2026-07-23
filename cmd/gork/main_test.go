@@ -31,6 +31,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/subagent"
 	"github.com/lookcorner/go-cli/internal/tools"
+	"github.com/lookcorner/go-cli/internal/tui"
 	"github.com/lookcorner/go-cli/internal/version"
 	"github.com/lookcorner/go-cli/internal/workspace"
 )
@@ -148,6 +149,67 @@ func TestInteractivePrivacyCommandsDoNotRunModelTurn(t *testing.T) {
 	}
 	if streamer.calls != 0 {
 		t.Fatalf("model calls=%d output=%q", streamer.calls, output)
+	}
+}
+
+func TestInteractiveNewSessionCommandsDoNotRunModelTurn(t *testing.T) {
+	for _, prompt := range []string{"/new", "/clear ignored"} {
+		streamer := &interactiveStatusStreamer{}
+		runner := &agent.Runner{Client: streamer, Model: "test"}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		input := newTerminalInput(ctx, bufio.NewReader(strings.NewReader(prompt+"\n")))
+		err := interactiveLoop(ctx, runner, newScheduledWakeQueue(), input, io.Discard, io.Discard, "", "response-1")
+		cancel()
+		if !errors.Is(err, tui.ErrNewSession) || streamer.calls != 0 {
+			t.Fatalf("prompt=%q err=%v model calls=%d", prompt, err, streamer.calls)
+		}
+	}
+}
+
+func TestFreshSessionArgsDropsConversationState(t *testing.T) {
+	tests := []struct {
+		name       string
+		args       []string
+		positional []string
+		want       []string
+	}{
+		{"separate values", []string{"--tui", "--workspace", "/project", "--resume", "latest", "--model", "grok", "continue", "work"}, []string{"continue", "work"}, []string{"--tui", "--workspace", "/project", "--model", "grok"}},
+		{"equals values", []string{"-interactive", "-resume=/tmp/old.jsonl", "-previous-response-id=old", "-approval=auto"}, nil, []string{"-interactive", "-approval=auto"}},
+		{"separator", []string{"--tui", "--", "/new should be text"}, []string{"/new should be text"}, []string{"--tui"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := freshSessionArgs(test.args, test.positional); !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("got=%#v want=%#v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestRunInteractiveNewCreatesFreshSession(t *testing.T) {
+	home, root, sessionDir := t.TempDir(), t.TempDir(), t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	t.Setenv("HOME", home)
+	t.Setenv("GORK_API_KEY", "test-key")
+	t.Setenv("GORK_MODEL", "test-model")
+	t.Setenv("XAI_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	var stderr bytes.Buffer
+	if err := run([]string{"--interactive", "--tui=false", "--workspace", root, "--session-dir", sessionDir}, strings.NewReader("/new\n/exit\n"), io.Discard, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(sessionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logs := 0
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".jsonl") {
+			logs++
+		}
+	}
+	if logs != 2 || strings.Count(stderr.String(), "[gork] session:") != 2 {
+		t.Fatalf("logs=%d stderr=%q", logs, stderr.String())
 	}
 }
 

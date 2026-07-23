@@ -99,6 +99,21 @@ func main() {
 }
 
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
+	for {
+		err := runOnce(args, stdin, stdout, stderr)
+		var restart *newSessionRequest
+		if !errors.As(err, &restart) {
+			return err
+		}
+		args = restart.args
+	}
+}
+
+type newSessionRequest struct{ args []string }
+
+func (r *newSessionRequest) Error() string { return "start a new session" }
+
+func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if len(args) > 0 && args[0] == "login" {
 		return runLogin(args[1:], stdin, stdout, stderr)
 	}
@@ -669,7 +684,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 	defer waitRunnerMemory(runner)
 	if opts.tui {
-		return tui.Run(ctx, runner, tuiBridge, prompt, opts.previousID, resumedTranscript, ws.Root(), cfg.Model, tui.UIOptions{
+		err := tui.Run(ctx, runner, tuiBridge, prompt, opts.previousID, resumedTranscript, ws.Root(), cfg.Model, tui.UIOptions{
 			Mode: cfg.UI.KeepTextSelection, WordSeparators: cfg.UI.WordSeparators, MouseReportingToggle: cfg.UI.MouseReportingToggle, VimMode: cfg.UI.VimMode,
 			ScrollLines: cfg.UI.ScrollLines, InvertScroll: cfg.UI.InvertScroll, PromptSuggestions: cfg.UI.PromptSuggestions,
 			CompactMode:       cfg.UI.CompactMode,
@@ -678,13 +693,21 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			SetCompactMode:    func(enabled bool) error { return config.UpdateCompactMode(opts.configPath, enabled) },
 			SetShowTimestamps: func(enabled bool) error { return config.UpdateShowTimestamps(opts.configPath, enabled) },
 		})
+		if errors.Is(err, tui.ErrNewSession) {
+			return &newSessionRequest{args: freshSessionArgs(args, flags.Args())}
+		}
+		return err
 	}
 	fmt.Fprintf(stderr, "[gork] workspace: %s\n[gork] session: %s\n", ws.Root(), displayPath(logger.Path()))
 	if opts.interactive {
 		if resumedTranscript != "" {
 			fmt.Fprintln(stdout, resumedTranscript)
 		}
-		return interactiveLoop(ctx, runner, scheduledQueue, terminalLines, stdout, stderr, prompt, opts.previousID)
+		err := interactiveLoop(ctx, runner, scheduledQueue, terminalLines, stdout, stderr, prompt, opts.previousID)
+		if errors.Is(err, tui.ErrNewSession) {
+			return &newSessionRequest{args: freshSessionArgs(args, flags.Args())}
+		}
+		return err
 	}
 	if opts.goal {
 		snapshot := registry.GoalSnapshot()
@@ -719,6 +742,28 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return goalLoop(ctx, runner, registry, stdout, stderr, prompt, opts.previousID, opts.goalRuns, cfg.Goal.VerifierCount, cfg.Goal.ClassifierMaxRuns, cfg.Goal.ReverifyAfter)
 	}
 	return runHeadless(ctx, runner, scheduledQueue, stdout, stderr, prompt, opts.previousID)
+}
+
+func freshSessionArgs(args, positional []string) []string {
+	flagCount := len(args) - len(positional)
+	if flagCount < 0 {
+		flagCount = 0
+	}
+	flags := args[:flagCount]
+	result := make([]string, 0, len(flags))
+	for index := 0; index < len(flags); index++ {
+		arg := flags[index]
+		name := strings.TrimLeft(arg, "-")
+		if name == "resume" || name == "previous-response-id" {
+			index++
+			continue
+		}
+		if strings.HasPrefix(name, "resume=") || strings.HasPrefix(name, "previous-response-id=") || arg == "--" {
+			continue
+		}
+		result = append(result, arg)
+	}
+	return result
 }
 
 func newAuthTokenProvider(cfg config.Config, path string, authConfig auth.Config, stderr io.Writer) api.TokenProvider {
@@ -3407,7 +3452,7 @@ func interactiveLoop(
 			command := prompt
 			if fields := strings.Fields(prompt); len(fields) > 0 {
 				switch fields[0] {
-				case "/session-info", "/status", "/info", "/context", "/share", "/release-notes", "/changelog", "/announcements", "/mcps":
+				case "/session-info", "/status", "/info", "/context", "/share", "/release-notes", "/changelog", "/announcements", "/mcps", "/new", "/clear":
 					command = fields[0]
 				}
 			}
@@ -3416,6 +3461,8 @@ func interactiveLoop(
 				continue
 			case "/exit", "/quit":
 				return nil
+			case "/new", "/clear":
+				return tui.ErrNewSession
 			case "/help":
 				shareCommand := ""
 				if runner.SharingEnabled != nil && runner.SharingEnabled() {
@@ -3429,7 +3476,7 @@ func interactiveLoop(
 				if runner.MCPServerCatalog != nil {
 					mcpCommand = ", /mcps"
 				}
-				fmt.Fprintln(stderr, "Commands: ! <command>"+announcementCommand+", /compact, /context, /flush, /dream, /remember [text], /memory [on|off]"+mcpCommand+", /loop, /privacy [opt-out], /release-notes (/changelog), /session-info (/status, /info)"+shareCommand+", /terminal-setup, /usage [show|manage] (/cost), /help, /exit. Every other line is sent as a prompt.")
+				fmt.Fprintln(stderr, "Commands: ! <command>"+announcementCommand+", /compact, /context, /flush, /dream, /remember [text], /memory [on|off]"+mcpCommand+", /new (/clear), /loop, /privacy [opt-out], /release-notes (/changelog), /session-info (/status, /info)"+shareCommand+", /terminal-setup, /usage [show|manage] (/cost), /help, /exit. Every other line is sent as a prompt.")
 				prompt = ""
 				continue
 			case "/mcps":

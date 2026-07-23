@@ -1506,6 +1506,18 @@ func TestMultilineSlashCommandAndAlias(t *testing.T) {
 	}
 }
 
+func TestNewSessionCommandsExitWithoutModelTurn(t *testing.T) {
+	for _, prompt := range []string{"/new", "/clear ignored"} {
+		m := &model{ctx: context.Background(), runner: &agent.Runner{}, width: 60, height: 16, status: "ready"}
+		m.setInput(prompt)
+		updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+		m = updated.(*model)
+		if command == nil || !m.newSession || m.running || m.transcript.Len() != 0 || m.status != "starting new session" {
+			t.Fatalf("prompt=%q command=%v new=%v running=%v transcript=%q status=%q", prompt, command != nil, m.newSession, m.running, m.transcript.String(), m.status)
+		}
+	}
+}
+
 func TestMCPModalManagesServersWithoutModelTurn(t *testing.T) {
 	catalog := []mcppkg.ServerConfig{{Name: "alpha", Command: "alpha-server"}, {Name: "beta", URL: "https://mcp.example/sse", Disabled: true, DisabledTools: []string{"hidden"}}}
 	var toggled string
