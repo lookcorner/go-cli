@@ -60,7 +60,7 @@ func (s *Server) handleLocalGoalPrompt(incoming message, current *session, lifec
 	case "resume":
 		switch snapshot.Status {
 		case "active", "verifying":
-			s.sendGoalCommandOutput(current.id, "Goal nudged - refreshing context.")
+			s.sendCommandOutput(current.id, "Goal nudged - refreshing context.")
 			return goalResumePrompt(snapshot.Objective), []api.ContentPart{{Type: "input_text", Text: goalResumePrompt(snapshot.Objective)}}, false
 		case "user_paused", "back_off_paused", "no_progress_paused", "infra_paused", "blocked", "paused":
 			objective, err := registry.ResumeGoal()
@@ -68,7 +68,7 @@ func (s *Server) handleLocalGoalPrompt(incoming message, current *session, lifec
 				s.failPrompt(incoming, current, lifecycle, err.Error())
 				return "", nil, true
 			}
-			s.sendGoalCommandOutput(current.id, "Goal resumed.")
+			s.sendCommandOutput(current.id, "Goal resumed.")
 			return goalResumePrompt(objective), []api.ContentPart{{Type: "input_text", Text: goalResumePrompt(objective)}}, false
 		case "completed":
 			text = "Goal is already complete. Use /goal <objective> to start a new one."
@@ -87,15 +87,11 @@ func (s *Server) handleLocalGoalPrompt(incoming message, current *session, lifec
 		s.failPrompt(incoming, current, lifecycle, fmt.Sprintf("unknown goal action %q", command.action))
 		return "", nil, true
 	}
-	s.sendGoalCommandOutput(current.id, text)
+	s.sendCommandOutput(current.id, text)
 	s.finishPrompt(incoming, current, lifecycle, "end_turn", agent.Result{}, nil, "")
 	return "", nil, true
 }
 
 func goalResumePrompt(objective string) string {
 	return "Continue working toward the active goal:\n" + objective + "\nVerify the remaining work before claiming completion."
-}
-
-func (s *Server) sendGoalCommandOutput(sessionID, text string) {
-	s.notify(sessionID, map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": text}})
 }

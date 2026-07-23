@@ -13,6 +13,8 @@ import (
 
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/api"
+	"github.com/lookcorner/go-cli/internal/hooks"
+	"github.com/lookcorner/go-cli/internal/plugin"
 	"github.com/lookcorner/go-cli/internal/skills"
 	"github.com/lookcorner/go-cli/internal/tools"
 	"github.com/lookcorner/go-cli/internal/workspace"
@@ -35,7 +37,7 @@ func TestCommandsListAdvertisesCapabilitiesAndSkills(t *testing.T) {
 	}
 	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
 	defer registry.Close()
-	runner := &agent.Runner{Tools: registry, Skills: catalog}
+	runner := &agent.Runner{Tools: registry, Skills: catalog, HookCatalog: hooks.DiscoverPlugins(nil)}
 	var output bytes.Buffer
 	server := &Server{output: &output, sessions: map[string]*session{"commands": {id: "commands", cwd: root, runner: runner}}}
 	server.handleCommands(message{ID: json.RawMessage("1"), Params: json.RawMessage(`{"cwd":` + quoted(root) + `}`)})
@@ -46,7 +48,7 @@ func TestCommandsListAdvertisesCapabilitiesAndSkills(t *testing.T) {
 		command := raw.(map[string]any)
 		byName[command["name"].(string)] = command
 	}
-	for _, name := range []string{"compact", "always-approve", "context", "session-info", "goal", "loop", "local:compact", "deploy"} {
+	for _, name := range []string{"compact", "always-approve", "context", "session-info", "hooks-trust", "hooks-list", "hooks-add", "hooks-remove", "hooks-untrust", "goal", "loop", "local:compact", "deploy"} {
 		if byName[name] == nil {
 			t.Fatalf("missing command %q in %#v", name, commands)
 		}
@@ -77,6 +79,28 @@ func TestCommandsListAdvertisesCapabilitiesAndSkills(t *testing.T) {
 	}
 	if byName["global"] == nil || byName["deploy"] != nil || byName["local:compact"] != nil {
 		t.Fatalf("global commands=%#v", commands)
+	}
+}
+
+func TestHookCommandsRequireCatalog(t *testing.T) {
+	for _, command := range availableCommands(&agent.Runner{}, true) {
+		if strings.HasPrefix(command["name"].(string), "hooks-") {
+			t.Fatalf("hook command advertised without a catalog: %#v", command)
+		}
+	}
+	for _, test := range []struct {
+		prompt, action, path string
+		ok                   bool
+	}{
+		{"/hooks-list", "list", "", true},
+		{" /hooks-add  /tmp/my hooks.json ", "add", "/tmp/my hooks.json", true},
+		{"/hooks-remove", "remove", "", true},
+		{"/hooks-listing", "", "", false},
+	} {
+		action, path, ok := parseHookCommand(test.prompt)
+		if action != test.action || path != test.path || ok != test.ok {
+			t.Errorf("prompt=%q action=%q path=%q ok=%v", test.prompt, action, path, ok)
+		}
 	}
 }
 
@@ -312,6 +336,80 @@ func TestGoalSlashCommandLifecycleAndInference(t *testing.T) {
 	}
 	if !findText(messages, "Goal cleared.") || !cleared || registry.GoalSnapshot().Objective != "" || len(streamer.requests) != 2 {
 		t.Fatalf("clear messages=%#v snapshot=%#v", messages, registry.GoalSnapshot())
+	}
+}
+
+func TestHookSlashCommandsManageHooksWithoutModelTurn(t *testing.T) {
+	home, root := t.TempDir(), t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	runACPGit(t, root, "init", "-q")
+	gitRoot, ok := workspace.FindGitRoot(root)
+	if !ok {
+		t.Fatal("Git root was not detected")
+	}
+	hookFile := filepath.Join(root, "hooks.json")
+	if err := os.WriteFile(hookFile, []byte(`{"hooks":{"PreToolUse":[{"matcher":"shell","hooks":[{"type":"command","command":"check","timeout":2}]}]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	catalog := hooks.Discover(hooks.Config{ProjectTrusted: true, Plugins: []plugin.Plugin{{Name: "guard", Root: root, HooksConfig: hookFile, Executable: true}}})
+	current := &session{id: "hook-command", cwd: root, runner: &agent.Runner{HookCatalog: catalog}, activePrompt: -1}
+	var output bytes.Buffer
+	server := &Server{output: &output, sessions: map[string]*session{current.id: current}}
+	request := func(id int, prompt string) []map[string]any {
+		t.Helper()
+		output.Reset()
+		params, _ := json.Marshal(map[string]any{"sessionId": current.id, "prompt": []any{map[string]any{"type": "text", "text": prompt}}})
+		server.handlePrompt(context.Background(), message{ID: json.RawMessage(fmt.Sprintf("%d", id)), Method: "session/prompt", Params: params})
+		return decodeACPOutput(t, output.Bytes())
+	}
+	text := func(messages []map[string]any) string {
+		for _, item := range messages {
+			params, _ := item["params"].(map[string]any)
+			update, _ := params["update"].(map[string]any)
+			content, _ := update["content"].(map[string]any)
+			if value, _ := content["text"].(string); value != "" {
+				return value
+			}
+		}
+		return ""
+	}
+
+	listed := text(request(1, "/hooks-list"))
+	if !strings.Contains(listed, "Loaded hooks (1):") || !strings.Contains(listed, "matcher: shell  command: check  timeout: 2s") {
+		t.Fatalf("listed=%q", listed)
+	}
+	if got := text(request(2, "/hooks-add")); !strings.HasPrefix(got, "Usage: /hooks add <path>") {
+		t.Fatalf("empty add=%q", got)
+	}
+	if got := text(request(3, "/hooks-add "+filepath.Join(t.TempDir(), "outside.json"))); !strings.HasPrefix(got, "Failed to add hook path:") {
+		t.Fatalf("unsafe add=%q", got)
+	}
+	custom := filepath.Join(home, "custom", "hooks.json")
+	if got := text(request(4, "/hooks-add "+custom)); got != "Added hook path: "+custom+"\nRestart session to load hooks from this path." {
+		t.Fatalf("add=%q", got)
+	}
+	if got := text(request(5, "/hooks-remove "+custom)); got != "Removed hook path: "+custom+"\nRestart session to stop loading hooks from this path." {
+		t.Fatalf("remove=%q", got)
+	}
+	if got := text(request(6, "/hooks-trust")); got != "Trusted: "+gitRoot+"." {
+		t.Fatalf("trust=%q", got)
+	}
+	if got := text(request(7, "/hooks-untrust")); got != "Untrusted: "+gitRoot+"." {
+		t.Fatalf("untrust=%q", got)
+	}
+	catalog.Reconfigure(hooks.Config{})
+	if got := text(request(8, "/hooks-list")); got != "No hooks loaded for this session." {
+		t.Fatalf("empty list=%q", got)
+	}
+	if got := text(request(9, "/hooks-untrust")); got != "Not currently trusted: "+gitRoot {
+		t.Fatalf("second untrust=%q", got)
+	}
+	current.cwd = t.TempDir()
+	if got := text(request(10, "/hooks-trust")); got != "Project hooks require a Git worktree." {
+		t.Fatalf("non-Git trust=%q", got)
+	}
+	if current.promptIndex != 0 {
+		t.Fatalf("hook commands started model turns: promptIndex=%d", current.promptIndex)
 	}
 }
 

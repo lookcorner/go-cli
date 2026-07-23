@@ -1912,6 +1912,11 @@ func (s *Server) handlePromptRequest(parent context.Context, incoming message, c
 		s.markRunningPrompt(current, promptID(params.Meta))
 		return
 	}
+	if action, path, ok := parseHookCommand(prompt); ok && current.runner != nil && current.runner.HookCatalog != nil {
+		s.handleHookSlashPrompt(parent, incoming, current, newPromptLifecycle(params), action, path)
+		s.markRunningPrompt(current, promptID(params.Meta))
+		return
+	}
 	if command, ok := parseGoalCommand(prompt); ok {
 		var handled bool
 		prompt, content, handled = s.handleLocalGoalPrompt(incoming, current, newPromptLifecycle(params), command)

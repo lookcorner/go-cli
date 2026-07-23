@@ -3,7 +3,10 @@ package acp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 
+	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/hooks"
 	"github.com/lookcorner/go-cli/internal/workspace"
 )
@@ -162,4 +165,84 @@ func (s *Server) hookActionOutcome(incoming message, status, message string, rel
 	s.respond(incoming.ID, map[string]any{"result": map[string]any{
 		"status": status, "message": message, "requiresReload": reload, "requiresRestart": restart,
 	}, "error": nil})
+}
+
+func (s *Server) handleHookSlashPrompt(ctx context.Context, incoming message, current *session, lifecycle promptLifecycle, action, path string) {
+	var text string
+	switch action {
+	case "list":
+		text = hookListText(current.runner.HookCatalog)
+	case "trust":
+		root, ok := workspace.FindGitRoot(current.cwd)
+		if !ok {
+			text = "Project hooks require a Git worktree."
+		} else if err := workspace.GrantFolderTrust(ctx, root); err != nil {
+			text = err.Error()
+		} else {
+			text = fmt.Sprintf("Trusted: %s.", root)
+		}
+	case "untrust":
+		root, ok := workspace.FindGitRoot(current.cwd)
+		if !ok {
+			text = "Project hooks require a Git worktree."
+		} else if current.runner.HookCatalog == nil || !current.runner.HookCatalog.ProjectTrusted() {
+			text = fmt.Sprintf("Not currently trusted: %s", root)
+		} else {
+			s.clearFolderTrustPrompt(root)
+			if err := workspace.RevokeFolderTrust(ctx, root); err != nil {
+				text = err.Error()
+			} else {
+				text = fmt.Sprintf("Untrusted: %s.", root)
+			}
+		}
+	case "add", "remove":
+		if path == "" {
+			if action == "add" {
+				text = "Usage: /hooks add <path>\nProvide a path to a hook JSON file or directory under ~/.grok/."
+			} else {
+				text = "Usage: /hooks-remove <path>\nProvide the path to remove from hooks-paths."
+			}
+			break
+		}
+		var err error
+		if action == "add" {
+			err = hooks.AddPath(ctx, path)
+		} else {
+			err = hooks.RemovePath(ctx, path)
+		}
+		if err != nil {
+			text = fmt.Sprintf("Failed to %s hook path: %v", action, err)
+		} else if action == "add" {
+			text = fmt.Sprintf("Added hook path: %s\nRestart session to load hooks from this path.", path)
+		} else {
+			text = fmt.Sprintf("Removed hook path: %s\nRestart session to stop loading hooks from this path.", path)
+		}
+	}
+	s.sendCommandOutput(current.id, text)
+	s.finishPrompt(incoming, current, lifecycle, "end_turn", agent.Result{}, nil, "")
+}
+
+func hookListText(catalog *hooks.Catalog) string {
+	if catalog == nil {
+		return "No hooks loaded for this session."
+	}
+	items := catalog.Snapshot().Hooks
+	if len(items) == 0 {
+		return "No hooks loaded for this session."
+	}
+	lines := []string{fmt.Sprintf("Loaded hooks (%d):", len(items))}
+	for _, item := range items {
+		matcher := ""
+		if item.Matcher != "" {
+			matcher = "  matcher: " + item.Matcher
+		}
+		target := "target: <none>"
+		if item.Command != "" {
+			target = "command: " + item.Command
+		} else if item.URL != "" {
+			target = "url: " + item.URL
+		}
+		lines = append(lines, fmt.Sprintf("  %s%s  %s  timeout: %ds", item.Name, matcher, target, int64(item.Timeout.Seconds())))
+	}
+	return strings.Join(lines, "\n")
 }

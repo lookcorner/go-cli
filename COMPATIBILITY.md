@@ -57,6 +57,11 @@ semantics locally while preserving explicit-deny and managed-policy locks.
 ACP `/goal` advertises the reference management actions and trailing positive
 token-budget syntax; status, pause, and clear complete locally, while create and
 successful resume continue through inference and publish live Goal updates.
+Hook-capable ACP sessions advertise and locally execute the reference
+`/hooks-list`, `/hooks-trust`, `/hooks-untrust`, `/hooks-add`, and
+`/hooks-remove` commands without starting a model turn. Command discovery also
+preserves the reference ordering across the implemented memory, Hook, Goal, and
+scheduler groups.
 
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |

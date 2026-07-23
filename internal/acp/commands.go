@@ -51,24 +51,35 @@ func availableCommands(runner *agent.Runner, workspaceSkills bool) []map[string]
 	commands := []map[string]any{
 		availableCommand("compact", "Compress conversation history to save context window", "optional context about what to preserve", nil),
 		availableCommand("always-approve", "Toggle always-approve mode (skip all permission prompts)", "on|off", nil),
-		availableCommand("context", "Show context window usage and session stats", "", nil),
-		availableCommand("session-info", "Show session details (model, turns, context usage)", "", nil),
 	}
+	if runner != nil {
+		memoryConfigured, memoryEnabled := runner.MemoryAvailability()
+		if memoryEnabled && runner.Tools != nil && runner.Tools.HasTool("memory_search") && runner.Tools.HasTool("memory_get") {
+			commands = append(commands,
+				availableCommand("flush", "Save reusable conversation context to workspace memory", "", nil),
+				availableCommand("dream", "Consolidate session logs into organized memory", "", nil),
+			)
+		}
+		if memoryConfigured {
+			commands = append(commands, availableCommand("memory", "Browse or toggle workspace memory", "on|off", nil))
+		}
+	}
+	commands = append(commands, availableCommand("context", "Show context window usage and session stats", "", nil))
+	if runner != nil && runner.HookCatalog != nil {
+		commands = append(commands,
+			availableCommand("hooks-trust", "Trust this project for hook execution", "", nil),
+			availableCommand("hooks-list", "Show hooks loaded in this session", "", nil),
+			availableCommand("hooks-add", "Add a custom hook file or directory", "path to hook file or directory", nil),
+			availableCommand("hooks-remove", "Remove a custom hook file or directory path", "path to hook file or directory", nil),
+			availableCommand("hooks-untrust", "Remove trust for the current project", "", nil),
+		)
+	}
+	commands = append(commands, availableCommand("session-info", "Show session details (model, turns, context usage)", "", nil))
 	if runner == nil {
 		return commands
 	}
 	if runner.Tools != nil && runner.Tools.GoalAvailable() {
 		commands = append(commands, availableCommand("goal", "Set, manage, or check an autonomous goal", "<objective> [--budget <tokens>] | status | pause | resume | clear", nil))
-	}
-	memoryConfigured, memoryEnabled := runner.MemoryAvailability()
-	if memoryEnabled && runner.Tools != nil && runner.Tools.HasTool("memory_search") && runner.Tools.HasTool("memory_get") {
-		commands = append(commands,
-			availableCommand("flush", "Save reusable conversation context to workspace memory", "", nil),
-			availableCommand("dream", "Consolidate session logs into organized memory", "", nil),
-		)
-	}
-	if memoryConfigured {
-		commands = append(commands, availableCommand("memory", "Browse or toggle workspace memory", "on|off", nil))
 	}
 	if runner.Tools != nil && runner.Tools.HasTool("scheduler_create") {
 		commands = append(commands, availableCommand("loop", "Run a prompt on a recurring interval", "[interval] <prompt>", nil))
@@ -138,6 +149,20 @@ func parseGoalCommand(prompt string) (goalCommand, bool) {
 	}
 	objective, budget := parseGoalBudget(args)
 	return goalCommand{action: "set", objective: objective, budget: budget}, true
+}
+
+func parseHookCommand(prompt string) (string, string, bool) {
+	trimmed := strings.TrimSpace(prompt)
+	fields := strings.Fields(trimmed)
+	if len(fields) == 0 {
+		return "", "", false
+	}
+	switch fields[0] {
+	case "/hooks-trust", "/hooks-list", "/hooks-add", "/hooks-remove", "/hooks-untrust":
+		return strings.TrimPrefix(fields[0], "/hooks-"), strings.TrimSpace(strings.TrimPrefix(trimmed, fields[0])), true
+	default:
+		return "", "", false
+	}
 }
 
 func parseGoalBudget(objective string) (string, int64) {
@@ -211,6 +236,10 @@ func formatGoalElapsed(elapsed time.Duration) string {
 		return fmt.Sprintf("%dm%02ds", total/60, total%60)
 	}
 	return fmt.Sprintf("%ds", total)
+}
+
+func (s *Server) sendCommandOutput(sessionID, text string) {
+	s.notify(sessionID, map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": text}})
 }
 
 func alwaysApproveCommand(prompt string) (bool, bool) {

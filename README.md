@@ -84,6 +84,12 @@ budget at the end of the objective is consumed. Status, pause, and clear finish
 locally; creating a goal or successfully resuming one continues into model
 inference, while Goal state changes publish live `goal_updated` notifications.
 
+Sessions with a Hook catalog advertise `/hooks-list`, `/hooks-trust`,
+`/hooks-untrust`, `/hooks-add <path>`, and `/hooks-remove <path>` in the same
+order and with the same local output as the reference client. These commands do
+not invoke the model; custom Hook paths retain the existing `~/.grok` confinement
+and atomic configuration writes.
+
 ACP permission prompts also offer an exact-request `allow_always` choice for
 the current session. `x.ai/permissions/reset` clears those remembered grants
 from every live session without changing its ask, auto, always-approve, deny,
