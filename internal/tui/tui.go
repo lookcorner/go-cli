@@ -24,6 +24,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/billing"
 	"github.com/lookcorner/go-cli/internal/changelog"
+	guides "github.com/lookcorner/go-cli/internal/docs"
 	"github.com/lookcorner/go-cli/internal/imagine"
 	"github.com/lookcorner/go-cli/internal/memory"
 	"github.com/lookcorner/go-cli/internal/session"
@@ -536,6 +537,7 @@ type model struct {
 	timelineHover *timelineHit
 	modelSelect   *modelSelectState
 	settings      *settingsState
+	docs          *docsState
 	sessionSelect *sessionSelectState
 	forkChoice    *forkChoiceState
 	mcp           *mcpModal
@@ -1375,6 +1377,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.settings != nil {
 		return m.handleSettingsKey(msg)
 	}
+	if m.docs != nil {
+		return m.handleDocsKey(msg)
+	}
 	if m.sessionSelect != nil {
 		return m.handleSessionSelectKey(msg)
 	}
@@ -1666,8 +1671,30 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 					imagineCommands += " `/imagine-video <description>`"
 				}
 			}
-			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + announcementCommand + " `/btw <question>` `/compact` `/compact-mode` `/context` `/copy [N]` `/dream` `/effort [level]` `/exit` `/export [filename]`" + feedbackCommand + " `/find` `/flush` `/fork [--worktree|--no-worktree] [directive]` `/help` `/history`" + imagineCommands + " `/jump` `/loop` `/memory`" + mcpCommand + " `/model [name] [effort]` (`/m`) `/multiline` `/new` (`/clear`) `/plan [description]` `/privacy [opt-out]` `/queue` `/recap` `/release-notes` (`/changelog`) `/remember` `/rename <title>` `/resume` `/rewind` `/session-info` (`/status`, `/info`) `/settings`" + shareCommand + " `/tasks` `/terminal-setup` `/theme [name]` (`/t`)" + mouseCommand + " `/timeline` `/timestamps` `/transcript` `/usage [show|manage]` (`/cost`) `/view-plan` `/vim-mode`")
+			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + announcementCommand + " `/btw <question>` `/compact` `/compact-mode` `/context` `/copy [N]` `/docs [web|title]` `/dream` `/effort [level]` `/exit` `/export [filename]`" + feedbackCommand + " `/find` `/flush` `/fork [--worktree|--no-worktree] [directive]` `/help` `/history`" + imagineCommands + " `/jump` `/loop` `/memory`" + mcpCommand + " `/model [name] [effort]` (`/m`) `/multiline` `/new` (`/clear`) `/plan [description]` `/privacy [opt-out]` `/queue` `/recap` `/release-notes` (`/changelog`) `/remember` `/rename <title>` `/resume` `/rewind` `/session-info` (`/status`, `/info`) `/settings`" + shareCommand + " `/tasks` `/terminal-setup` `/theme [name]` (`/t`)" + mouseCommand + " `/timeline` `/timestamps` `/transcript` `/usage [show|manage]` (`/cost`) `/view-plan` `/vim-mode`")
 			m.status = "commands"
+			return m, nil
+		case "/docs", "/howto", "/guides":
+			target := strings.TrimSpace(strings.TrimPrefix(prompt, fields[0]))
+			switch strings.ToLower(target) {
+			case "", "how-to", "howto", "guides", "guide", "list", "tui":
+				m.openDocs()
+			case "web", "online", "browser", "site", "www":
+				if m.runner == nil || m.runner.OpenURL == nil || !m.runner.OpenURL(guides.BuildURL) {
+					m.appendSystem("Open: " + guides.BuildURL)
+					m.status = "documentation link"
+				} else {
+					m.status = "documentation opened"
+				}
+			default:
+				guide, ok := guides.Find(target)
+				if !ok {
+					m.appendSystem(fmt.Sprintf("Unknown docs target %q. Try /docs, /docs web, or a guide title such as /docs Getting Started.", target))
+					m.status = "docs target invalid"
+					return m, nil
+				}
+				m.openGuide(guide, true)
+			}
 			return m, nil
 		case "/settings", "/config", "/preferences", "/prefs":
 			m.openSettings()
@@ -3670,6 +3697,8 @@ func (m *model) View() tea.View {
 		content = m.mcpContent()
 	} else if m.settings != nil {
 		content = m.settingsContent()
+	} else if m.docs != nil {
+		content = m.docsContent()
 	} else if m.sessionSelect != nil {
 		content = m.sessionSelectContent()
 	} else if m.forkChoice != nil {
@@ -3722,6 +3751,8 @@ func (m *model) View() tea.View {
 		footer = ansiBold + colors.modal + "MCP servers" + ansiReset + "\n" + ansiDim + truncate(m.mcpHint(), width) + ansiReset
 	} else if m.settings != nil {
 		footer = ansiBold + colors.modal + "Settings" + ansiReset + "\n" + ansiDim + truncate("Up/Down select | Enter/Space change | Esc close", width) + ansiReset
+	} else if m.docs != nil {
+		footer = ansiBold + colors.modal + "Docs" + ansiReset + "\n" + ansiDim + truncate(m.docsHint(), width) + ansiReset
 	} else if m.sessionSelect != nil {
 		footer = ansiBold + colors.modal + "Resume session" + ansiReset + "\n> " + renderInput(m.sessionSelect.query, m.sessionSelect.cursor, max(width-2, 1)) + "\n" + ansiDim + truncate(m.sessionSelectHint(), width) + ansiReset
 	} else if m.forkChoice != nil {
@@ -4206,7 +4237,7 @@ func renderedLabelContains(line, label string, x, width int) bool {
 
 func (m *model) contentHeight() int {
 	banner := m.announcementHeight()
-	if m.question != nil || m.planReview != nil || m.remember != nil || m.rememberInput || m.rewind != nil || m.jump != nil || m.modelSelect != nil || m.settings != nil || m.sessionSelect != nil || m.forkChoice != nil || m.mcp != nil {
+	if m.question != nil || m.planReview != nil || m.remember != nil || m.rememberInput || m.rewind != nil || m.jump != nil || m.modelSelect != nil || m.settings != nil || m.docs != nil || m.sessionSelect != nil || m.forkChoice != nil || m.mcp != nil {
 		return max(m.height-7-banner, 3)
 	}
 	if m.historySearch != nil {

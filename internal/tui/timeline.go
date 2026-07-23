@@ -54,7 +54,7 @@ func (m *model) timelineWidth() int {
 }
 
 func (m *model) transcriptVisible() bool {
-	return m.mcp == nil && m.settings == nil && m.sessionSelect == nil && m.forkChoice == nil && m.modelSelect == nil &&
+	return m.mcp == nil && m.settings == nil && m.docs == nil && m.sessionSelect == nil && m.forkChoice == nil && m.modelSelect == nil &&
 		m.rewind == nil && m.planReview == nil && m.viewer == nil && m.remember == nil
 }
 

@@ -518,6 +518,11 @@ settings panel for timestamps, the timeline, compact mode, Vim navigation, and
 the terminal theme. Enter or Space changes the selected value through the same
 atomic configuration writers as the individual commands, including rollback on
 write failure.
+`/docs` (aliases `/howto` and `/guides`) opens a 24-entry in-TUI guide picker.
+Enter opens the selected guide and Esc returns to the preserved list; a guide
+title opens it directly with a case-insensitive exact match. `/docs web` and its
+browser aliases open the Build documentation site, with a visible URL fallback
+when no browser is available.
 `/theme [name]` (alias `/t`) changes the terminal palette immediately and saves
 `[ui].theme`. Supported values are `groknight`, `grokday`, `tokyonight`,
 `rosepine-moon`, `oscura-midnight`, and `auto`; aliases such as `dark`, `light`,
