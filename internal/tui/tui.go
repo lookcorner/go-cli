@@ -138,6 +138,10 @@ type authDoneEvent struct {
 	action string
 	err    error
 }
+type workspaceDoneEvent struct {
+	path string
+	err  error
+}
 type compactDoneEvent struct{ err error }
 type memoryFlushDoneEvent struct {
 	result agent.MemoryFlushResult
@@ -1350,6 +1354,17 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.newSession = true
 			return m, tea.Quit
 		}
+	case workspaceDoneEvent:
+		m.running = false
+		m.turnCancel = nil
+		if msg.err != nil {
+			m.status = "workspace change failed: " + msg.err.Error()
+			m.appendSystem("Workspace change failed: " + msg.err.Error())
+		} else {
+			m.status = "changing workspace"
+			m.resumeSession = &ResumeSessionError{Workspace: msg.path}
+			return m, tea.Quit
+		}
 	case claudeImportDoneEvent:
 		if m.claudeImport != nil {
 			m.claudeImport.busy = false
@@ -1726,6 +1741,23 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.turnCancel = cancel
 			m.status = action + " in progress"
 			return m, runAuth(turnCtx, action, operation)
+		case "/cd":
+			if m.runner == nil || m.runner.ChangeWorkspace == nil {
+				m.status = "workspace change unavailable"
+				m.appendSystem("Workspace change is unavailable")
+				return m, nil
+			}
+			path := strings.TrimSpace(strings.TrimPrefix(prompt, "/cd"))
+			if path == "" {
+				m.status = "workspace path required"
+				m.appendSystem("Usage: /cd <path>")
+				return m, nil
+			}
+			m.running = true
+			turnCtx, cancel := context.WithCancel(m.ctx)
+			m.turnCancel = cancel
+			m.status = "changing workspace"
+			return m, runWorkspaceChange(turnCtx, m.runner, path)
 		case "/help":
 			permissionCommands := "`/always-approve`"
 			if m.bridge != nil && m.bridge.AutoModeAvailable() {
@@ -1768,7 +1800,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 					imagineCommands += " `/imagine-video <description>`"
 				}
 			}
-			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + announcementCommand + agentCommands + " `/btw <question>` `/compact` `/compact-mode` `/context` `/copy [N]` `/docs [web|title]` `/dream` `/effort [level]` `/exit` `/export [filename]` `/home` `/login` `/logout`" + feedbackCommand + " `/find` `/flush` `/fork [--worktree|--no-worktree] [directive]` `/help` `/history`" + extensionCommands + imagineCommands + " `/jump` `/loop` `/memory`" + mcpCommand + " `/model [name] [effort]` (`/m`) `/multiline` `/new` (`/clear`) `/plan [description]` `/privacy [opt-out]` `/queue` `/recap` `/release-notes` (`/changelog`) `/remember` `/rename <title>` `/resume` `/rewind` `/session-info` (`/status`, `/info`) `/settings`" + shareCommand + " `/tasks` `/terminal-setup` `/theme [name]` (`/t`)" + mouseCommand + " `/timeline` `/timestamps` `/transcript` `/usage [show|manage]` (`/cost`) `/view-plan` `/vim-mode`")
+			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + announcementCommand + agentCommands + " `/btw <question>` `/cd <path>` `/compact` `/compact-mode` `/context` `/copy [N]` `/docs [web|title]` `/dream` `/effort [level]` `/exit` `/export [filename]` `/home` `/login` `/logout`" + feedbackCommand + " `/find` `/flush` `/fork [--worktree|--no-worktree] [directive]` `/help` `/history`" + extensionCommands + imagineCommands + " `/jump` `/loop` `/memory`" + mcpCommand + " `/model [name] [effort]` (`/m`) `/multiline` `/new` (`/clear`) `/plan [description]` `/privacy [opt-out]` `/queue` `/recap` `/release-notes` (`/changelog`) `/remember` `/rename <title>` `/resume` `/rewind` `/session-info` (`/status`, `/info`) `/settings`" + shareCommand + " `/tasks` `/terminal-setup` `/theme [name]` (`/t`)" + mouseCommand + " `/timeline` `/timestamps` `/transcript` `/usage [show|manage]` (`/cost`) `/view-plan` `/vim-mode`")
 			m.status = "commands"
 			return m, nil
 		case "/docs", "/howto", "/guides":
@@ -3621,6 +3653,13 @@ func runShare(ctx context.Context, runner *agent.Runner) tea.Cmd {
 
 func runAuth(ctx context.Context, action string, operation func(context.Context) error) tea.Cmd {
 	return func() tea.Msg { return authDoneEvent{action: action, err: operation(ctx)} }
+}
+
+func runWorkspaceChange(ctx context.Context, runner *agent.Runner, path string) tea.Cmd {
+	return func() tea.Msg {
+		resolved, err := runner.ChangeWorkspace(ctx, path)
+		return workspaceDoneEvent{path: resolved, err: err}
+	}
 }
 
 func runRecap(ctx context.Context, runner *agent.Runner, previousID string, serial uint64) tea.Cmd {

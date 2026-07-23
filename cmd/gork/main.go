@@ -741,6 +741,9 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		Logout: func(context.Context) error {
 			return runLogout([]string{"--config", opts.configPath}, stdout, stderr)
 		}, Logger: logger,
+		ChangeWorkspace: func(_ context.Context, path string) (string, error) {
+			return resolveWorkspacePath(path, ws.Root())
+		},
 		HookCatalog: hookCatalog, HookPolicy: hookRuntime,
 		ReloadHooks: func() error {
 			reloaded, err := config.Load(opts.configPath)
@@ -894,6 +897,34 @@ func restartTUI(err error, args, positional []string) error {
 		return &sessionRestartRequest{args: restartForkArgs(args, positional, fork.Path, fork.Workspace, fork.Directive)}
 	}
 	return err
+}
+
+func resolveWorkspacePath(raw, base string) (string, error) {
+	path := strings.TrimSpace(raw)
+	if path == "" {
+		return "", errors.New("workspace path is required")
+	}
+	if path == "~" || strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		path = filepath.Join(home, strings.TrimPrefix(strings.TrimPrefix(path, "~"), "/"))
+	} else if !filepath.IsAbs(path) {
+		path = filepath.Join(base, path)
+	}
+	path, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve workspace path: %w", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("workspace path: %w", err)
+	}
+	if !info.IsDir() {
+		return "", errors.New("workspace path is not a directory")
+	}
+	return filepath.Clean(path), nil
 }
 
 func forkCurrentSession(ctx context.Context, manager *worktrees.Manager, sessionDir, sourceID, cwd, modelID string, isolated bool) (tui.ForkResult, error) {

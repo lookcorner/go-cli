@@ -1465,6 +1465,7 @@ validated user/project creation, source viewing, and confirmation-gated deletion
 The TUI also supports `/home` (return to a fresh welcome session), `/login`, and
 `/logout`; authentication reuses the existing OAuth and credential services, and
 a successful change restarts the session so the new credential state is loaded.
+`/cd <path>` validates and switches the workspace for the next session.
 Definitions may set `memory: user`, `memory: project`, or `memory: local`.
 The corresponding `MEMORY.md` is injected at startup with a 200-line/25-KiB
 cap, and that child alone receives standard read/write/replace access to its

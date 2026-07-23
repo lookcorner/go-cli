@@ -183,6 +183,7 @@ type Runner struct {
 	OpenURL                 func(string) bool
 	Login                   func(context.Context) error
 	Logout                  func(context.Context) error
+	ChangeWorkspace         func(context.Context, string) (string, error)
 	ShareSession            func(context.Context) (string, error)
 	SharingEnabled          func() bool
 	Announcements           *announcement.Service
