@@ -1912,6 +1912,14 @@ func (s *Server) handlePromptRequest(parent context.Context, incoming message, c
 		s.markRunningPrompt(current, promptID(params.Meta))
 		return
 	}
+	if command, ok := parseGoalCommand(prompt); ok {
+		var handled bool
+		prompt, content, handled = s.handleLocalGoalPrompt(incoming, current, newPromptLifecycle(params), command)
+		if handled {
+			s.markRunningPrompt(current, promptID(params.Meta))
+			return
+		}
+	}
 	if strings.TrimSpace(prompt) == "/compact" {
 		s.handleCompactPrompt(parent, incoming, current, newPromptLifecycle(params), "", false)
 		s.markRunningPrompt(current, promptID(params.Meta))

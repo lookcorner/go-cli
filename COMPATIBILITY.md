@@ -54,6 +54,9 @@ and latest context usage without starting a model turn. ACP also advertises and
 locally completes the reference display-only `/context` command.
 ACP `/always-approve` and `/yolo` commands apply reference on/off argument
 semantics locally while preserving explicit-deny and managed-policy locks.
+ACP `/goal` advertises the reference management actions and trailing positive
+token-budget syntax; status, pause, and clear complete locally, while create and
+successful resume continue through inference and publish live Goal updates.
 
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |

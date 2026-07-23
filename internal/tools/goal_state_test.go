@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -117,6 +118,30 @@ func TestGoalStatePersistsResumesAndCompletes(t *testing.T) {
 	}
 	if _, err := third.ResumeGoal(); err == nil || !strings.Contains(err.Error(), "completed") {
 		t.Fatalf("completed resume err=%v", err)
+	}
+}
+
+func TestGoalClearRemovesPersistedState(t *testing.T) {
+	root, artifactDir := t.TempDir(), filepath.Join(t.TempDir(), "artifacts")
+	registry := newPersistentGoalRegistry(t, root, artifactDir)
+	if err := registry.BeginGoalWithBudget("old objective", 500); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.ClearGoal(); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot := registry.GoalSnapshot(); snapshot.Objective != "" || snapshot.Status != "" || snapshot.TokenBudget != 0 {
+		t.Fatalf("cleared snapshot=%#v", snapshot)
+	}
+	if _, err := os.Stat(filepath.Join(artifactDir, "goal.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("goal state still exists: %v", err)
+	}
+	registry.Close()
+
+	restored := newPersistentGoalRegistry(t, root, artifactDir)
+	defer restored.Close()
+	if snapshot := restored.GoalSnapshot(); snapshot.Objective != "" || snapshot.Status != "" {
+		t.Fatalf("restored cleared goal=%#v", snapshot)
 	}
 }
 

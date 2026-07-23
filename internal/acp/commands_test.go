@@ -46,7 +46,7 @@ func TestCommandsListAdvertisesCapabilitiesAndSkills(t *testing.T) {
 		command := raw.(map[string]any)
 		byName[command["name"].(string)] = command
 	}
-	for _, name := range []string{"compact", "always-approve", "context", "session-info", "loop", "local:compact", "deploy"} {
+	for _, name := range []string{"compact", "always-approve", "context", "session-info", "goal", "loop", "local:compact", "deploy"} {
 		if byName[name] == nil {
 			t.Fatalf("missing command %q in %#v", name, commands)
 		}
@@ -77,6 +77,31 @@ func TestCommandsListAdvertisesCapabilitiesAndSkills(t *testing.T) {
 	}
 	if byName["global"] == nil || byName["deploy"] != nil || byName["local:compact"] != nil {
 		t.Fatalf("global commands=%#v", commands)
+	}
+}
+
+func TestParseGoalCommandConsumesOnlyValidTrailingBudget(t *testing.T) {
+	tests := []struct {
+		prompt, action, objective string
+		budget                    int64
+		ok                        bool
+	}{
+		{"/goal", "status", "", 0, true},
+		{"/goal STATUS", "status", "", 0, true},
+		{"/goal pause", "pause", "", 0, true},
+		{"/goal ship it --budget 1200", "set", "ship it", 1200, true},
+		{"/goal\u2003ship it --budget\u20031200", "set", "ship it", 1200, true},
+		{"/goal mention --budget later", "set", "mention --budget later", 0, true},
+		{"/goal ship --budget 0", "set", "ship --budget 0", 0, true},
+		{"/goal ship --budget 12 extra", "set", "ship --budget 12 extra", 0, true},
+		{"/goal ship--budget 12", "set", "ship--budget 12", 0, true},
+		{"/goalkeeper ship", "", "", 0, false},
+	}
+	for _, test := range tests {
+		got, ok := parseGoalCommand(test.prompt)
+		if ok != test.ok || got.action != test.action || got.objective != test.objective || got.budget != test.budget {
+			t.Errorf("prompt=%q got=%#v ok=%v", test.prompt, got, ok)
+		}
 	}
 }
 
@@ -187,6 +212,106 @@ func TestAlwaysApproveSlashCommandUsesReferenceArgumentsWithoutModelTurn(t *test
 				t.Fatalf("mode=%q ok=%v responded=%v messages=%#v", mode, ok, responded, messages)
 			}
 		})
+	}
+}
+
+type forwardingGoalObserver struct {
+	server    *Server
+	sessionID string
+}
+
+func (o forwardingGoalObserver) GoalEvent(event tools.GoalEvent) {
+	o.server.NotifyGoalEvent(o.sessionID, event)
+}
+
+func TestGoalSlashCommandLifecycleAndInference(t *testing.T) {
+	root := t.TempDir()
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	if err := registry.ConfigureGoalVerification(filepath.Join(t.TempDir(), "artifacts")); err != nil {
+		t.Fatal(err)
+	}
+	streamer := &fixtureStreamer{results: []api.StreamResult{
+		{ResponseID: "goal-set", Text: "working"},
+		{ResponseID: "goal-resume", Text: "continuing"},
+	}}
+	current := &session{id: "goal-command", cwd: root, runner: &agent.Runner{Client: streamer, Tools: registry, Model: "test"}, activePrompt: -1}
+	var output bytes.Buffer
+	server := &Server{output: &output, sessions: map[string]*session{current.id: current}}
+	registry.SetGoalObserver(forwardingGoalObserver{server: server, sessionID: current.id})
+	request := func(id int, prompt string) []map[string]any {
+		t.Helper()
+		output.Reset()
+		params, _ := json.Marshal(map[string]any{"sessionId": current.id, "prompt": []any{map[string]any{"type": "text", "text": prompt}}})
+		server.handlePrompt(context.Background(), message{ID: json.RawMessage(fmt.Sprintf("%d", id)), Method: "session/prompt", Params: params})
+		server.wg.Wait()
+		return decodeACPOutput(t, output.Bytes())
+	}
+	findText := func(messages []map[string]any, want string) bool {
+		for _, item := range messages {
+			params, _ := item["params"].(map[string]any)
+			update, _ := params["update"].(map[string]any)
+			content, _ := update["content"].(map[string]any)
+			if content["text"] == want {
+				return true
+			}
+		}
+		return false
+	}
+	findTextContaining := func(messages []map[string]any, parts ...string) bool {
+		for _, item := range messages {
+			params, _ := item["params"].(map[string]any)
+			update, _ := params["update"].(map[string]any)
+			content, _ := update["content"].(map[string]any)
+			text, _ := content["text"].(string)
+			matched := true
+			for _, part := range parts {
+				matched = matched && strings.Contains(text, part)
+			}
+			if matched {
+				return true
+			}
+		}
+		return false
+	}
+
+	if messages := request(1, "/goal status"); !findText(messages, "No goal is currently set. Use /goal <objective> to start one.") || len(streamer.requests) != 0 {
+		t.Fatalf("empty status messages=%#v requests=%d", messages, len(streamer.requests))
+	}
+	request(2, "/goal ship the feature --budget 1200")
+	snapshot := registry.GoalSnapshot()
+	if snapshot.Objective != "ship the feature" || snapshot.Status != "active" || snapshot.TokenBudget != 1200 || len(streamer.requests) != 1 || !strings.Contains(fmt.Sprint(streamer.requests[0].Input), "ship the feature") {
+		t.Fatalf("set snapshot=%#v requests=%#v", snapshot, streamer.requests)
+	}
+	if messages := request(3, "/goal replace it"); len(streamer.requests) != 1 || messages[len(messages)-1]["error"].(map[string]any)["message"] != "a goal is already active" {
+		t.Fatalf("active replacement messages=%#v requests=%d", messages, len(streamer.requests))
+	}
+	status := request(4, "/goal")
+	if !findTextContaining(status, "Goal: ship the feature\nStatus: Active | Phase: Executing\nTokens used: 0\nElapsed: ", " | Budget: 1200") || len(streamer.requests) != 1 {
+		t.Fatalf("status messages=%#v requests=%d", status, len(streamer.requests))
+	}
+	if messages := request(5, "/goal pause"); !findText(messages, "Goal paused. Use /goal resume to continue.") || registry.GoalSnapshot().Status != "user_paused" || len(streamer.requests) != 1 {
+		t.Fatalf("pause messages=%#v snapshot=%#v", messages, registry.GoalSnapshot())
+	}
+	if messages := request(6, "/goal pause"); !findText(messages, "Goal is already paused.") || len(streamer.requests) != 1 {
+		t.Fatalf("second pause messages=%#v", messages)
+	}
+	if messages := request(7, "/goal resume"); !findText(messages, "Goal resumed.") || registry.GoalSnapshot().Status != "active" || len(streamer.requests) != 2 || !strings.Contains(fmt.Sprint(streamer.requests[1].Input), "Continue working toward the active goal") {
+		t.Fatalf("resume messages=%#v snapshot=%#v requests=%#v", messages, registry.GoalSnapshot(), streamer.requests)
+	}
+	messages := request(8, "/goal clear")
+	cleared := false
+	for _, item := range messages {
+		params, _ := item["params"].(map[string]any)
+		update, _ := params["update"].(map[string]any)
+		cleared = cleared || update["sessionUpdate"] == "goal_updated" && update["status"] == "cleared"
+	}
+	if !findText(messages, "Goal cleared.") || !cleared || registry.GoalSnapshot().Objective != "" || len(streamer.requests) != 2 {
+		t.Fatalf("clear messages=%#v snapshot=%#v", messages, registry.GoalSnapshot())
 	}
 }
 

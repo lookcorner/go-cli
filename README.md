@@ -78,6 +78,12 @@ mode by default; `off`, `false`, `0`, `no`, or `disable` turns it off. The
 command completes without invoking the model and cannot bypass deny or managed
 policy locks.
 
+Live ACP sessions also advertise `/goal <objective> [--budget <tokens>]` with
+`status`, `pause`, `resume`, and `clear` operations. Only a positive standalone
+budget at the end of the objective is consumed. Status, pause, and clear finish
+locally; creating a goal or successfully resuming one continues into model
+inference, while Goal state changes publish live `goal_updated` notifications.
+
 ACP permission prompts also offer an exact-request `allow_always` choice for
 the current session. `x.ai/permissions/reset` clears those remembered grants
 from every live session without changing its ask, auto, always-approve, deny,

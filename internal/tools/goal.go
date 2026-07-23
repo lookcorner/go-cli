@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -32,6 +33,8 @@ type GoalSnapshot struct {
 	LastClassifierDetailsPath string
 	ScratchDir                string
 	ScratchReady              bool
+	CreatedAtUnix             int64
+	CurrentSubagentRole       string
 }
 
 type GoalRoleModel struct {
@@ -150,7 +153,30 @@ func (s *GoalStore) Snapshot() GoalSnapshot {
 		FinishedSubagentTokens: s.finishedSubagentTokens,
 		LastClassifierVerdict:  s.lastClassifierVerdict, LastClassifierDetailsPath: s.lastClassifierDetailsPath,
 		ScratchDir: s.scratchDir, ScratchReady: s.scratchReady,
+		CreatedAtUnix: s.createdAtUnix, CurrentSubagentRole: s.currentSubagentRole,
 	}
+}
+
+func (s *GoalStore) Clear() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.statePath != "" {
+		if err := os.Remove(s.statePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("clear goal state: %w", err)
+		}
+	}
+	s.cleanupScratchLocked()
+	s.goalID, s.objective, s.status, s.message = "", "", "", ""
+	s.verificationRuns, s.totalWorkerRounds, s.totalVerifyRounds, s.roundsSinceVerify = 0, 0, 0, 0
+	s.lastVerification, s.stallVerification, s.verificationStall, s.consecutiveReject = "", "", 0, 0
+	s.resetStrategistLocked()
+	s.baselineCommit, s.createdAtUnix, s.planBaselinePath, s.plannerPlanPath = "", 0, "", ""
+	s.plannerCompleted, s.summaryAttempted, s.closingSummary = false, false, ""
+	s.tokenBudget, s.tokensUsed, s.finishedSubagentTokens, s.currentSubagentRole = 0, 0, 0, ""
+	s.lastClassifierVerdict, s.lastClassifierDetailsPath, s.firstFinalResponse = "", "", ""
+	s.blockedStreak, s.scratchDir, s.scratchReady = 0, "", false
+	s.skeptic0SessionID, s.skepticModels = "", nil
+	return nil
 }
 
 func (s *GoalStore) addTokens(tokens int64, subagent bool) bool {

@@ -1249,7 +1249,7 @@ func TestMemoryFlushExtensionAndSlashCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	commands := commandResponse["result"].(map[string]any)["commands"].([]any)
-	if len(commands) != 8 || commands[1].(map[string]any)["name"] != "always-approve" || commands[2].(map[string]any)["name"] != "context" || commands[3].(map[string]any)["name"] != "session-info" || commands[4].(map[string]any)["name"] != "flush" || commands[5].(map[string]any)["name"] != "dream" || commands[6].(map[string]any)["name"] != "memory" || commands[7].(map[string]any)["name"] != "loop" {
+	if len(commands) != 9 || commands[4].(map[string]any)["name"] != "goal" || commands[5].(map[string]any)["name"] != "flush" || commands[6].(map[string]any)["name"] != "dream" || commands[7].(map[string]any)["name"] != "memory" || commands[8].(map[string]any)["name"] != "loop" {
 		t.Fatalf("memory commands=%#v", commands)
 	}
 	output.Reset()
@@ -1261,7 +1261,7 @@ func TestMemoryFlushExtensionAndSlashCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	commands = commandResponse["result"].(map[string]any)["commands"].([]any)
-	if len(commands) != 6 || commands[1].(map[string]any)["name"] != "always-approve" || commands[2].(map[string]any)["name"] != "context" || commands[3].(map[string]any)["name"] != "session-info" || commands[4].(map[string]any)["name"] != "memory" || commands[5].(map[string]any)["name"] != "loop" {
+	if len(commands) != 7 || commands[4].(map[string]any)["name"] != "goal" || commands[5].(map[string]any)["name"] != "memory" || commands[6].(map[string]any)["name"] != "loop" {
 		t.Fatalf("disabled memory commands=%#v", commands)
 	}
 	if _, err := runner.SetMemoryEnabled(context.Background(), true); err != nil {

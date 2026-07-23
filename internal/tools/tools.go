@@ -392,6 +392,19 @@ func (r *Registry) BeginGoal(objective string) error {
 	return r.BeginGoalWithBudget(objective, 0)
 }
 
+func (r *Registry) GoalAvailable() bool { return r != nil && r.goal != nil }
+
+func (r *Registry) ClearGoal() error {
+	if !r.GoalAvailable() {
+		return errors.New("goal store is unavailable")
+	}
+	if err := r.goal.Clear(); err != nil {
+		return err
+	}
+	r.emitGoalUpdatedWith("goal_cleared", map[string]any{"status": "cleared", "phase": "idle", "elapsed_ms": int64(0)})
+	return nil
+}
+
 func (r *Registry) BeginGoalWithBudget(objective string, tokenBudget int64) error {
 	if r.goal == nil {
 		return errors.New("goal store is unavailable")

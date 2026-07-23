@@ -4,10 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
+	"unicode"
 
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/skills"
+	"github.com/lookcorner/go-cli/internal/tools"
 )
 
 func (s *Server) handleCommands(incoming message) {
@@ -52,6 +56,9 @@ func availableCommands(runner *agent.Runner, workspaceSkills bool) []map[string]
 	}
 	if runner == nil {
 		return commands
+	}
+	if runner.Tools != nil && runner.Tools.GoalAvailable() {
+		commands = append(commands, availableCommand("goal", "Set, manage, or check an autonomous goal", "<objective> [--budget <tokens>] | status | pause | resume | clear", nil))
 	}
 	memoryConfigured, memoryEnabled := runner.MemoryAvailability()
 	if memoryEnabled && runner.Tools != nil && runner.Tools.HasTool("memory_search") && runner.Tools.HasTool("memory_get") {
@@ -105,6 +112,105 @@ func availableCommands(runner *agent.Runner, workspaceSkills bool) []map[string]
 		}))
 	}
 	return commands
+}
+
+type goalCommand struct {
+	action    string
+	objective string
+	budget    int64
+}
+
+func parseGoalCommand(prompt string) (goalCommand, bool) {
+	trimmed := strings.TrimSpace(prompt)
+	if !strings.HasPrefix(trimmed, "/goal") {
+		return goalCommand{}, false
+	}
+	rest := strings.TrimPrefix(trimmed, "/goal")
+	if rest != "" && strings.TrimLeftFunc(rest, unicode.IsSpace) == rest {
+		return goalCommand{}, false
+	}
+	args := strings.TrimSpace(rest)
+	switch strings.ToLower(args) {
+	case "", "status":
+		return goalCommand{action: "status"}, true
+	case "pause", "resume", "clear":
+		return goalCommand{action: strings.ToLower(args)}, true
+	}
+	objective, budget := parseGoalBudget(args)
+	return goalCommand{action: "set", objective: objective, budget: budget}, true
+}
+
+func parseGoalBudget(objective string) (string, int64) {
+	index := strings.LastIndex(objective, "--budget")
+	if index <= 0 {
+		return objective, 0
+	}
+	head := objective[:index]
+	if strings.TrimRightFunc(head, unicode.IsSpace) == head {
+		return objective, 0
+	}
+	tail := objective[index+len("--budget"):]
+	if tail == "" || strings.TrimLeftFunc(tail, unicode.IsSpace) == tail {
+		return objective, 0
+	}
+	value := strings.TrimSpace(tail)
+	if value == "" || strings.IndexFunc(value, unicode.IsSpace) >= 0 {
+		return objective, 0
+	}
+	for _, char := range value {
+		if char < '0' || char > '9' {
+			return objective, 0
+		}
+	}
+	budget, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || budget <= 0 {
+		return objective, 0
+	}
+	return strings.TrimSpace(head), budget
+}
+
+func goalStatusText(snapshot tools.GoalSnapshot) string {
+	if snapshot.Objective == "" {
+		return "No goal is currently set. Use /goal <objective> to start one."
+	}
+	elapsed := time.Duration(max(int64(0), time.Now().Unix()-snapshot.CreatedAtUnix)) * time.Second
+	text := fmt.Sprintf("Goal: %s\nStatus: %s | Phase: %s\nTokens used: %d\nElapsed: %s", snapshot.Objective, goalStatusLabel(snapshot.Status), goalPhaseLabel(snapshot.Status), snapshot.TokensUsed, formatGoalElapsed(elapsed))
+	if snapshot.TokenBudget > 0 {
+		text += fmt.Sprintf(" | Budget: %d", snapshot.TokenBudget)
+	}
+	if snapshot.CurrentSubagentRole != "" {
+		text += "\nActive subagent: " + snapshot.CurrentSubagentRole
+	}
+	return text
+}
+
+func goalStatusLabel(status string) string {
+	labels := map[string]string{"active": "Active", "verifying": "Active", "user_paused": "UserPaused", "back_off_paused": "BackOffPaused", "no_progress_paused": "NoProgressPaused", "infra_paused": "InfraPaused", "blocked": "Blocked", "completed": "Complete", "budget_limited": "BudgetLimited"}
+	if label := labels[status]; label != "" {
+		return label
+	}
+	return status
+}
+
+func goalPhaseLabel(status string) string {
+	if status == "active" {
+		return "Executing"
+	}
+	if status == "verifying" {
+		return "Verifying"
+	}
+	return "Idle"
+}
+
+func formatGoalElapsed(elapsed time.Duration) string {
+	total := int64(elapsed / time.Second)
+	if total >= 3600 {
+		return fmt.Sprintf("%dh%02dm", total/3600, total%3600/60)
+	}
+	if total >= 60 {
+		return fmt.Sprintf("%dm%02ds", total/60, total%60)
+	}
+	return fmt.Sprintf("%ds", total)
 }
 
 func alwaysApproveCommand(prompt string) (bool, bool) {
