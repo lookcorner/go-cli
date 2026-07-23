@@ -100,6 +100,7 @@ type Server struct {
 	AuthChanged        func(context.Context, auth.LogoutResult) error
 	Initialized        func()
 	BillingMeta        func() (*bool, *string)
+	SharingEnabled     func() bool
 	SessionDir         string
 	FolderTrustEnabled bool
 	input              io.Reader
@@ -379,6 +380,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleBilling(ctx, incoming)
 		case "x.ai/cloud/env/list", "x.ai/cloud/env/create", "x.ai/cloud/env/update", "x.ai/cloud/env/delete", "x.ai/cloud/terminate":
 			s.handleCloud(ctx, incoming)
+		case "x.ai/share_session":
+			s.handleShareSession(ctx, incoming)
 		case "x.ai/session_summaries/session_list", "x.ai/session_summaries/workspace_list", "x.ai/session_summaries/workspace_list_recent":
 			s.handleSessionSummaries(incoming)
 		case "x.ai/sessions/list":

@@ -1895,7 +1895,9 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		authPath: authPath, scope: authConfig.Scope(), tokenProvider: tokenProvider, http: subscriptionHTTP, authMethod: authRuntime.Method,
 		config: runtimeConfigSnapshot, applySettings: applyRemoteSettings, refreshModels: catalogRefresher.Start,
 	}
-	server = &acp.Server{SessionDir: opts.sessionDir, FolderTrustEnabled: cfg.FolderTrustEnabled, BillingMeta: getBillingMeta, Auth: acp.AuthConfig{
+	server = &acp.Server{SessionDir: opts.sessionDir, FolderTrustEnabled: cfg.FolderTrustEnabled, BillingMeta: getBillingMeta, SharingEnabled: func() bool {
+		return runtimeConfigSnapshot().SharingEnabled
+	}, Auth: acp.AuthConfig{
 		Path: authPath, Scope: authConfig.Scope(), MethodID: authMethodID, Token: cfg.APIKey, Methods: authMethods, DefaultMethodID: defaultAuthMethodID, TokenProvider: tokenProvider,
 		ProxyBaseURL: cfg.ProxyBaseURL, HTTP: &http.Client{Timeout: cfg.HTTPTimeout}, CheckSubscription: subscriptionChecker.Check,
 	}, AuthChanged: func(authCtx context.Context, result auth.LogoutResult) error {

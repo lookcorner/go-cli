@@ -53,6 +53,7 @@ type Config struct {
 	SubscriptionTier                *string                    `json:"-"`
 	SubscriptionTierDisplay         *string                    `json:"-"`
 	OnDemandEnabled                 *bool                      `json:"-"`
+	SharingEnabled                  bool                       `json:"-"`
 	AllowAccess                     *bool                      `json:"-"`
 	GateMessage                     *string                    `json:"-"`
 	GateURL                         *string                    `json:"-"`

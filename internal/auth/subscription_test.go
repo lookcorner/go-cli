@@ -135,3 +135,19 @@ func TestCredentialIsZDRTeam(t *testing.T) {
 		t.Fatal("ordinary team was recognized as ZDR")
 	}
 }
+
+func TestCredentialIsXAIAuth(t *testing.T) {
+	for _, test := range []struct {
+		credential Credential
+		want       bool
+	}{
+		{Credential{AuthMode: "oidc", Issuer: "https://auth.x.ai"}, true},
+		{Credential{AuthMode: "OIDC", Issuer: "http://localhost:22255/"}, true},
+		{Credential{AuthMode: "oidc", Issuer: "https://example.com"}, false},
+		{Credential{AuthMode: "api_key", Issuer: "https://auth.x.ai"}, false},
+	} {
+		if got := test.credential.IsXAIAuth(); got != test.want {
+			t.Fatalf("credential=%#v got=%v want=%v", test.credential, got, test.want)
+		}
+	}
+}

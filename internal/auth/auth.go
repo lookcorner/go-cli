@@ -97,6 +97,14 @@ type Credential struct {
 	TokenEndpoint             string     `json:"token_endpoint,omitempty"`
 }
 
+func (c Credential) IsXAIAuth() bool {
+	if !strings.EqualFold(c.AuthMode, "oidc") {
+		return false
+	}
+	issuer := strings.TrimRight(strings.ToLower(c.Issuer), "/")
+	return issuer == defaultIssuer || issuer == "http://localhost:22255"
+}
+
 type DeviceCode struct {
 	VerificationURI         string
 	VerificationURIComplete string

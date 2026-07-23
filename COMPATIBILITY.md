@@ -43,6 +43,8 @@ subscription, permission, layout, tip, and announcement state.
 Authenticated ACP clients can list, create, update, and delete remote sandbox
 environments and terminate sandbox sessions through the reference cloud extensions.
 Rollout survey submissions validate the reference payload and acknowledge receipt.
+Remote-enabled authenticated clients can also export persisted session updates,
+sync them to the code backend, and create reference-shaped public share URLs.
 ACP announcement updates also use reference-shaped `x.ai/announcements/update`
 notifications with expiry filtering, change deduplication, epoch-seeded monotonic
 generations, initialize/new-session replay semantics, and authenticated periodic

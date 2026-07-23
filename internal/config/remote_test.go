@@ -76,6 +76,18 @@ func TestBillingRemoteMetadataRefreshesAndClears(t *testing.T) {
 	}
 }
 
+func TestSharingRemoteFlagRefreshesAndClears(t *testing.T) {
+	cfg := Config{}
+	cfg.ApplyRemoteSettings(&RemoteSettings{SharingEnabled: boolPointer(true)})
+	if !cfg.SharingEnabled {
+		t.Fatal("sharing flag was not enabled")
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{})
+	if cfg.SharingEnabled {
+		t.Fatal("stale sharing flag survived refresh")
+	}
+}
+
 func TestAccessGateRemoteMetadataRefreshesAndClears(t *testing.T) {
 	var remote RemoteSettings
 	if err := json.Unmarshal([]byte(`{"allow_access":true,"gate_message":"Upgrade","gate_url":"https://example.com/upgrade","gate_label":"Subscribe","show_resolved_model":false}`), &remote); err != nil {

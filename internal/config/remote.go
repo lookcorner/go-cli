@@ -176,6 +176,7 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 	c.SubscriptionTier = remote.SubscriptionTier
 	c.SubscriptionTierDisplay = remote.SubscriptionTierDisplay
 	c.OnDemandEnabled = remote.OnDemandEnabled
+	c.SharingEnabled = remote.SharingEnabled != nil && *remote.SharingEnabled
 	c.AllowAccess = remote.AllowAccess
 	c.GateMessage = remote.GateMessage
 	c.GateURL = remote.GateURL
