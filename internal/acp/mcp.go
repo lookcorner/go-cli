@@ -67,6 +67,7 @@ func (s *Server) NotifyMCPServerChanges(sessionID string, before, after []MCPSer
 			s.notifyMCPServerStatus(sessionID, name, "ready", "initialized")
 		}
 	}
+	s.NotifyMCPServersUpdated(sessionID)
 }
 
 func (s *Server) notifyMCPServerStatus(sessionID, name, status, reason string) {
@@ -100,6 +101,18 @@ func (s *Server) NotifyMCPToolsChanged(sessionID, serverName string, tools []mcp
 func (s *Server) NotifyMCPInitialized(sessionID string, toolCount int, elapsedMs uint64) {
 	s.write(map[string]any{"jsonrpc": "2.0", "method": "x.ai/mcp_initialized", "params": map[string]any{
 		"sessionId": sessionID, "mcpToolCount": toolCount, "elapsedMs": elapsedMs,
+	}})
+}
+
+func (s *Server) NotifyMCPInitProgress(sessionID string, total, connected int) {
+	s.write(map[string]any{"jsonrpc": "2.0", "method": "x.ai/mcp/init_progress", "params": map[string]any{
+		"total": total, "connected": connected, "sessionId": sessionID,
+	}})
+}
+
+func (s *Server) NotifyMCPServersUpdated(sessionID string) {
+	s.write(map[string]any{"jsonrpc": "2.0", "method": "x.ai/mcp/servers_updated", "params": map[string]any{
+		"mcpServers": mcpServerCatalog(s.lookupSession(sessionID)),
 	}})
 }
 
@@ -309,10 +322,13 @@ func (s *Server) handleMCPReadResource(ctx context.Context, incoming message, se
 }
 
 func (s *Server) handleMCPList(incoming message, sessionID string) {
-	current := s.lookupSession(sessionID)
+	servers := mcpServerCatalog(s.lookupSession(sessionID))
+	s.respond(incoming.ID, map[string]any{"result": map[string]any{"servers": servers}, "error": nil})
+}
+
+func mcpServerCatalog(current *session) []map[string]any {
 	if current == nil || current.runner == nil || current.runner.Tools == nil {
-		s.respond(incoming.ID, map[string]any{"result": map[string]any{"servers": []any{}}, "error": nil})
-		return
+		return []map[string]any{}
 	}
 	current.mu.Lock()
 	configs := append([]MCPServer(nil), current.mcpServers...)
@@ -389,7 +405,7 @@ func (s *Server) handleMCPList(incoming message, sessionID string) {
 		servers = append(servers, entry)
 	}
 	sort.Slice(servers, func(i, j int) bool { return servers[i]["name"].(string) < servers[j]["name"].(string) })
-	s.respond(incoming.ID, map[string]any{"result": map[string]any{"servers": servers}, "error": nil})
+	return servers
 }
 
 func (s *Server) handleMCPConfig(ctx context.Context, incoming message, sessionID, name, toolName string, enabled *bool, server mcppkg.ServerConfig) {

@@ -612,9 +612,16 @@ func TestSessionMCPRuntimeMergesAndRestoresConfiguration(t *testing.T) {
 	if err := live.Update(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}
+	var progress [][2]int
+	live.SetProgress(func(total, connected int) {
+		progress = append(progress, [2]int{total, connected})
+	})
 	err = live.Update(context.Background(), []mcp.ServerConfig{{Name: "broken", Command: filepath.Join(root, "missing-server")}})
 	if err == nil {
 		t.Fatal("invalid MCP update unexpectedly succeeded")
+	}
+	if !reflect.DeepEqual(progress, [][2]int{{1, 0}, {1, 1}}) {
+		t.Fatalf("failed MCP initialization did not complete progress: %#v", progress)
 	}
 	if configs := live.Configs(); len(configs) != 0 {
 		t.Fatalf("failed update replaced previous MCP configuration: %#v", configs)
@@ -657,8 +664,15 @@ func TestSessionMCPRuntimeMergesAndRestoresConfiguration(t *testing.T) {
 		}
 	}))
 	defer server.Close()
+	progress = nil
+	live.SetProgress(func(total, connected int) {
+		progress = append(progress, [2]int{total, connected})
+	})
 	if err := live.Update(context.Background(), []mcp.ServerConfig{{Name: "client-only", Type: "http", URL: server.URL}}); err != nil {
 		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(progress, [][2]int{{1, 0}, {1, 1}}) {
+		t.Fatalf("unexpected MCP initialization progress: %#v", progress)
 	}
 	if len(changes) != 1 || len(changes[0][0]) != 0 || len(changes[0][1]) != 1 || changes[0][1][0].Name != "client-only" {
 		t.Fatalf("unexpected MCP runtime change callback: %#v", changes)

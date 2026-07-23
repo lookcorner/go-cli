@@ -45,6 +45,7 @@ type SessionConfig struct {
 	YoloMode        *bool
 	AutoMode        *bool
 	ClientHooks     []hooks.ClientHookGroup
+	MCPInitProgress func(total, connected int)
 }
 
 func sessionPermissionModeOverrides(meta map[string]any) (yoloMode, autoMode *bool) {
@@ -1613,6 +1614,9 @@ func (s *Server) handleNewSession(ctx context.Context, incoming message) {
 	if toolCount := countMCPTools(created.runner); toolCount > 0 || len(servers) > 0 {
 		s.NotifyMCPInitialized(id, toolCount, uint64(time.Since(mcpStarted).Milliseconds()))
 	}
+	if len(mcpServerCatalog(created)) > 0 {
+		s.NotifyMCPServersUpdated(id)
+	}
 	if s.initialized.Load() {
 		s.ForceAnnouncements()
 	}
@@ -1779,6 +1783,9 @@ func rewindResponse(target int, mode string, success bool, message string) map[s
 }
 
 func (s *Server) startSession(ctx context.Context, id string, sessionConfig SessionConfig, previous string) (*session, error) {
+	sessionConfig.MCPInitProgress = func(total, connected int) {
+		s.NotifyMCPInitProgress(id, total, connected)
+	}
 	approver := &serverApprover{server: s, sessionID: id}
 	writer := &sessionTextWriter{server: s, sessionID: id}
 	runner, closeRuntime, err := s.Factory(ctx, sessionConfig, approver, writer, io.Discard)
@@ -2522,6 +2529,9 @@ func (s *Server) handleRestoreSession(ctx context.Context, incoming message, rep
 		responseMeta["codeRestore"] = codeRestore
 	}
 	s.respond(incoming.ID, response)
+	if len(mcpServerCatalog(created)) > 0 {
+		s.NotifyMCPServersUpdated(params.SessionID)
+	}
 	s.startFolderTrustPrompt(created)
 }
 

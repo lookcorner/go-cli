@@ -859,7 +859,9 @@ refetch the catalog; server-pushed tool list changes include the refreshed
 entries. Successful live server additions, removals, and transport
 replacements emit `x.ai/mcp/server_status` transitions. `x.ai/mcp/upsert` and `x.ai/mcp/delete` atomically update
 the user config and hot-reload the live session. Disabled entries remain visible
-in `x.ai/mcp/list`. `x.ai/session/update_mcp_servers` safely
+in `x.ai/mcp/list`. Initialization emits real-time `x.ai/mcp/init_progress`
+counts, while successful startup and configuration changes publish the complete
+catalog through `x.ai/mcp/servers_updated`. `x.ai/session/update_mcp_servers` safely
 restarts the session MCP runtime, preserves project/plugin base servers, and
 restores the previous runtime if replacement fails. Sessionless agent-level MCP
 pools and OAuth enrollment are not yet available. Local MCP configuration files

@@ -754,6 +754,10 @@ func TestMCPServerChangeNotifications(t *testing.T) {
 			t.Fatalf("unexpected MCP status payload: %#v", params)
 		}
 	}
+	updated := decodeACP(t, decoder)
+	if updated["method"] != "x.ai/mcp/servers_updated" || len(updated["params"].(map[string]any)["mcpServers"].([]any)) != 0 {
+		t.Fatalf("unexpected MCP catalog update: %#v", updated)
+	}
 }
 
 func TestMCPToolsChangedNotification(t *testing.T) {
@@ -781,6 +785,41 @@ func TestMCPInitializedNotification(t *testing.T) {
 	message := decodeACP(t, json.NewDecoder(&output))
 	params := message["params"].(map[string]any)
 	if message["method"] != "x.ai/mcp_initialized" || params["sessionId"] != "mcp-init" || params["mcpToolCount"] != float64(3) || params["elapsedMs"] != float64(17) {
+		t.Fatalf("payload=%#v", message)
+	}
+}
+
+func TestMCPInitProgressNotification(t *testing.T) {
+	var output bytes.Buffer
+	server := &Server{output: &output}
+	server.NotifyMCPInitProgress("mcp-progress", 3, 1)
+	message := decodeACP(t, json.NewDecoder(&output))
+	params := message["params"].(map[string]any)
+	if message["method"] != "x.ai/mcp/init_progress" || params["sessionId"] != "mcp-progress" || params["total"] != float64(3) || params["connected"] != float64(1) {
+		t.Fatalf("payload=%#v", message)
+	}
+}
+
+func TestMCPServersUpdatedNotification(t *testing.T) {
+	root := t.TempDir()
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, nil)
+	defer registry.Close()
+	if err := registry.Register(fakeMCPTool{}); err != nil {
+		t.Fatal(err)
+	}
+	current := &session{id: "mcp-catalog", runner: &agent.Runner{Tools: registry}, mcpServers: []MCPServer{{Name: "fixture", Command: "fixture-server"}}}
+	var output bytes.Buffer
+	server := &Server{output: &output, sessions: map[string]*session{"mcp-catalog": current}}
+	server.NotifyMCPServersUpdated("mcp-catalog")
+	message := decodeACP(t, json.NewDecoder(&output))
+	params := message["params"].(map[string]any)
+	servers := params["mcpServers"].([]any)
+	entry := servers[0].(map[string]any)
+	if message["method"] != "x.ai/mcp/servers_updated" || len(params) != 1 || len(servers) != 1 || entry["name"] != "fixture" || entry["type"] != "stdio" {
 		t.Fatalf("payload=%#v", message)
 	}
 }
@@ -2760,6 +2799,11 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 	initialized := decodeACP(t, decoder)
 	if initialized["method"] != "x.ai/mcp_initialized" {
 		t.Fatalf("unexpected MCP initialization notification: %#v", initialized)
+	}
+	serversUpdated := decodeACP(t, decoder)
+	updatedCatalog := serversUpdated["params"].(map[string]any)["mcpServers"].([]any)
+	if serversUpdated["method"] != "x.ai/mcp/servers_updated" || len(updatedCatalog) != 3 {
+		t.Fatalf("unexpected MCP catalog notification: %#v", serversUpdated)
 	}
 	announcement := decodeACP(t, decoder)
 	if announcement["method"] != "x.ai/announcements/update" || len(announcement["params"].(map[string]any)["announcements"].([]any)) != 0 {

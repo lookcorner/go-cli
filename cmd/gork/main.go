@@ -2152,6 +2152,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			return nil, nil, err
 		}
 		mcpRuntime = newSessionMCPRuntime(sessionCtx, sessionCfg, ws.Root(), registry, approver, sessionTokenProvider, statusOutput)
+		mcpRuntime.SetProgress(sessionConfig.MCPInitProgress)
 		mcpRuntime.SetToolsChanged(func(name string, tools []mcp.ToolInfo) {
 			if mcpRuntime.toolsReady.Load() {
 				server.NotifyMCPToolsChanged(logger.ID(), name, tools)
@@ -3392,7 +3393,8 @@ func startMCPServers(
 	tokenProvider api.TokenProvider,
 	stderr io.Writer,
 	toolsChanged func(string, []mcp.ToolInfo),
-) ([]*mcp.Client, error) {
+	progress func(total, connected int),
+) (clients []*mcp.Client, err error) {
 	names := make([]string, 0, len(cfg.MCPServers))
 	for name, server := range cfg.MCPServers {
 		if server.IsEnabled() {
@@ -3400,7 +3402,15 @@ func startMCPServers(
 		}
 	}
 	sort.Strings(names)
-	clients := make([]*mcp.Client, 0, len(names))
+	if progress != nil {
+		progress(len(names), 0)
+		defer func() {
+			if err != nil {
+				progress(len(names), len(names))
+			}
+		}()
+	}
+	clients = make([]*mcp.Client, 0, len(names))
 	closeClients := func() {
 		for _, client := range clients {
 			_ = client.Close()
@@ -3412,7 +3422,6 @@ func startMCPServers(
 		fmt.Fprintf(stderr, "[gork] starting MCP server: %s\n", name)
 		var client *mcp.Client
 		var initialized mcp.InitializeResult
-		var err error
 		if server.URL != "" {
 			httpConfig := mcp.HTTPConfig{Name: name, URL: server.URL, Headers: mcpHTTPHeaders(server)}
 			transport := strings.ToLower(strings.TrimSpace(server.Type))
@@ -3514,6 +3523,9 @@ func startMCPServers(
 			serverLabel = name
 		}
 		fmt.Fprintf(stderr, "[gork] MCP %s ready: %d tool(s)\n", serverLabel, len(remoteTools))
+		if progress != nil {
+			progress(len(names), len(clients))
+		}
 	}
 	return clients, nil
 }
@@ -3535,7 +3547,7 @@ func startSubagentMCPServers(
 			Env: cloneStringsMap(server.Env), URL: server.URL, Headers: cloneStringsMap(server.Headers),
 		}
 	}
-	clients, err := startMCPServers(ctx, cfg, workspaceRoot, registry, approver, tokenProvider, stderr, nil)
+	clients, err := startMCPServers(ctx, cfg, workspaceRoot, registry, approver, tokenProvider, stderr, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -3561,6 +3573,7 @@ type sessionMCPRuntime struct {
 	catalog       []mcp.ServerConfig
 	notify        func(before, after []mcp.ServerConfig)
 	toolsChanged  func(string, []mcp.ToolInfo)
+	progress      func(total, connected int)
 	toolsReady    atomic.Bool
 	closed        bool
 }
@@ -3592,7 +3605,7 @@ func (r *sessionMCPRuntime) Update(ctx context.Context, requested []mcp.ServerCo
 	}
 	previous := cloneMCPServerConfigs(r.clientConfigs)
 	previousEffective := cloneMCPServerConfigs(r.effective)
-	if err := r.restartLocked(requested); err == nil {
+	if err := r.restartLocked(requested, r.progress); err == nil {
 		r.clientConfigs = cloneMCPServerConfigs(requested)
 		before, after, notify := previousEffective, cloneMCPServerConfigs(r.effective), r.notify
 		r.mu.Unlock()
@@ -3600,7 +3613,7 @@ func (r *sessionMCPRuntime) Update(ctx context.Context, requested []mcp.ServerCo
 			notify(before, after)
 		}
 		return nil
-	} else if restoreErr := r.restartLocked(previous); restoreErr == nil {
+	} else if restoreErr := r.restartLocked(previous, nil); restoreErr == nil {
 		r.mu.Unlock()
 		return err
 	} else {
@@ -3622,7 +3635,7 @@ func (r *sessionMCPRuntime) UpdateBase(ctx context.Context, base config.Config) 
 	previousEffective := cloneMCPServerConfigs(r.effective)
 	base.MCPServers = cloneMCPConfigMap(base.MCPServers)
 	r.base = base
-	if err := r.restartLocked(r.clientConfigs); err == nil {
+	if err := r.restartLocked(r.clientConfigs, r.progress); err == nil {
 		before, after, notify := previousEffective, cloneMCPServerConfigs(r.effective), r.notify
 		r.mu.Unlock()
 		if notify != nil && !reflect.DeepEqual(before, after) {
@@ -3631,7 +3644,7 @@ func (r *sessionMCPRuntime) UpdateBase(ctx context.Context, base config.Config) 
 		return nil
 	} else {
 		r.base = previous
-		if restoreErr := r.restartLocked(r.clientConfigs); restoreErr == nil {
+		if restoreErr := r.restartLocked(r.clientConfigs, nil); restoreErr == nil {
 			r.mu.Unlock()
 			return err
 		} else {
@@ -3644,6 +3657,12 @@ func (r *sessionMCPRuntime) UpdateBase(ctx context.Context, base config.Config) 
 func (r *sessionMCPRuntime) SetNotify(notify func(before, after []mcp.ServerConfig)) {
 	r.mu.Lock()
 	r.notify = notify
+	r.mu.Unlock()
+}
+
+func (r *sessionMCPRuntime) SetProgress(progress func(total, connected int)) {
+	r.mu.Lock()
+	r.progress = progress
 	r.mu.Unlock()
 }
 
@@ -3675,15 +3694,15 @@ func (r *sessionMCPRuntime) Close() {
 	r.stopLocked()
 }
 
-func (r *sessionMCPRuntime) startLocked(requested []mcp.ServerConfig) ([]*mcp.Client, []mcp.ServerConfig, []mcp.ServerConfig, error) {
+func (r *sessionMCPRuntime) startLocked(requested []mcp.ServerConfig, progress func(total, connected int)) ([]*mcp.Client, []mcp.ServerConfig, []mcp.ServerConfig, error) {
 	cfg, effective, catalog := r.mergedConfig(requested)
-	clients, err := startMCPServers(r.ctx, cfg, r.workspaceRoot, r.registry, r.approver, r.tokenProvider, r.stderr, r.toolsChanged)
+	clients, err := startMCPServers(r.ctx, cfg, r.workspaceRoot, r.registry, r.approver, r.tokenProvider, r.stderr, r.toolsChanged, progress)
 	return clients, effective, catalog, err
 }
 
-func (r *sessionMCPRuntime) restartLocked(requested []mcp.ServerConfig) error {
+func (r *sessionMCPRuntime) restartLocked(requested []mcp.ServerConfig, progress func(total, connected int)) error {
 	r.stopLocked()
-	clients, effective, catalog, err := r.startLocked(requested)
+	clients, effective, catalog, err := r.startLocked(requested, progress)
 	if err != nil {
 		r.stopLocked()
 		return err
