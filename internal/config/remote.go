@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lookcorner/go-cli/internal/announcement"
 	"github.com/lookcorner/go-cli/internal/compat"
 	"github.com/lookcorner/go-cli/internal/version"
 )
@@ -72,23 +73,8 @@ type RemoteSettings struct {
 	ClaudeHooks                      *bool                `json:"claude_hooks_enabled"`
 }
 
-type RemoteAnnouncement struct {
-	ID          *string          `json:"id"`
-	Message     *string          `json:"message"`
-	Severity    *string          `json:"severity"`
-	Title       *string          `json:"title"`
-	CTA         *AnnouncementCTA `json:"cta"`
-	UpdatedAt   *string          `json:"updated_at"`
-	ExpiresAt   *string          `json:"expires_at"`
-	Dismissible *bool            `json:"dismissible"`
-	Persistent  *bool            `json:"persistent"`
-}
-
-type AnnouncementCTA struct {
-	Label   *string `json:"label"`
-	URL     *string `json:"url"`
-	Caption *string `json:"caption"`
-}
+type RemoteAnnouncement = announcement.Announcement
+type AnnouncementCTA = announcement.CTA
 
 func (r *RemoteSettings) UnmarshalJSON(data []byte) error {
 	type alias RemoteSettings
@@ -177,6 +163,7 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 	c.SubscriptionTierDisplay = remote.SubscriptionTierDisplay
 	c.OnDemandEnabled = remote.OnDemandEnabled
 	c.SharingEnabled = remote.SharingEnabled != nil && *remote.SharingEnabled
+	c.Announcements = append([]announcement.Announcement(nil), remote.Announcements...)
 	c.AllowAccess = remote.AllowAccess
 	c.GateMessage = remote.GateMessage
 	c.GateURL = remote.GateURL

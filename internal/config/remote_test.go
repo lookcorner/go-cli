@@ -37,6 +37,20 @@ func TestFetchRemoteSettingsRetriesAndAuthenticates(t *testing.T) {
 	}
 }
 
+func TestApplyRemoteSettingsCopiesAnnouncements(t *testing.T) {
+	remote := &RemoteSettings{Announcements: []RemoteAnnouncement{{ID: stringPointer("notice"), Message: stringPointer("hello")}}}
+	var cfg Config
+	cfg.ApplyRemoteSettings(remote)
+	remote.Announcements[0].ID = stringPointer("changed")
+	if len(cfg.Announcements) != 1 || cfg.Announcements[0].ID == nil || *cfg.Announcements[0].ID != "notice" {
+		t.Fatalf("announcements=%#v", cfg.Announcements)
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{})
+	if len(cfg.Announcements) != 0 {
+		t.Fatalf("stale announcements=%#v", cfg.Announcements)
+	}
+}
+
 func TestFetchRemoteSettingsIncludesSessionIdentity(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.Header.Get("x-userid") != "user-1" || request.Header.Get("x-email") != "user@example.com" {

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/lookcorner/go-cli/internal/agent"
+	"github.com/lookcorner/go-cli/internal/announcement"
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/auth"
 	"github.com/lookcorner/go-cli/internal/compat"
@@ -220,6 +221,45 @@ func TestInteractiveReleaseNotesCommandsDoNotRunModelTurn(t *testing.T) {
 	}
 	if streamer.calls != 0 || requests != 2 {
 		t.Fatalf("model calls=%d requests=%d output=%q", streamer.calls, requests, output)
+	}
+}
+
+func TestInteractiveAnnouncementCommandsDoNotRunModelTurn(t *testing.T) {
+	text := func(value string) *string { return &value }
+	streamer := &interactiveStatusStreamer{}
+	runner := &agent.Runner{
+		Client: streamer, Model: "test",
+		Announcements: announcement.New([]announcement.Announcement{
+			{ID: text("notice"), Title: text("Incident"), Message: text("Read only mode"), Severity: text("critical")},
+		}, t.TempDir()),
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	input := newTerminalInput(ctx, bufio.NewReader(strings.NewReader("/announcements bad\n/announcements hide extra\n/announcements show\n/help\n/exit\n")))
+	var stderr bytes.Buffer
+	if err := interactiveLoop(ctx, runner, newScheduledWakeQueue(), input, io.Discard, &stderr, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	output := stderr.String()
+	for _, want := range []string{"Incident", "Usage: /announcements hide | show", "/announcements hide|show"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("missing %q in %q", want, output)
+		}
+	}
+	if streamer.calls != 0 {
+		t.Fatalf("model calls=%d output=%q", streamer.calls, output)
+	}
+}
+
+func TestPrintTerminalAnnouncementSanitizesRemoteText(t *testing.T) {
+	text := func(value string) *string { return &value }
+	runner := &agent.Runner{Announcements: announcement.New([]announcement.Announcement{{
+		ID: text("notice"), Title: text("Alert\x1b[31m"), Message: text("line\rreplacement"), Severity: text("critical"),
+	}}, t.TempDir())}
+	var output bytes.Buffer
+	printTerminalAnnouncement(&output, runner)
+	if strings.Contains(output.String(), "\x1b") || strings.Contains(output.String(), "\r") || !strings.Contains(output.String(), "Alert [31m") {
+		t.Fatalf("output=%q", output.String())
 	}
 }
 

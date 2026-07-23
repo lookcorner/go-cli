@@ -28,6 +28,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/acp"
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/agents"
+	"github.com/lookcorner/go-cli/internal/announcement"
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/auth"
 	"github.com/lookcorner/go-cli/internal/billing"
@@ -567,6 +568,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	runner.FetchUsage, runner.OpenURL = usage.Usage, openBrowser
 	releaseNotes := newChangelogService()
 	runner.FetchReleaseNotes = releaseNotes.Fetch
+	if home, homeErr := config.PolicyHome(); homeErr == nil {
+		runner.Announcements = announcement.New(cfg.Announcements, home)
+	}
 	sharingEnabled := func() bool { return cfg.SharingEnabled }
 	sharing := newShareService(cfg, tokenProvider, opts.sessionDir, sharingEnabled)
 	runner.ShareSession, runner.SharingEnabled = func(ctx context.Context) (string, error) { return sharing.Share(ctx, logger.ID()) }, sharingEnabled
@@ -3213,6 +3217,7 @@ func interactiveLoop(
 	previousResponseID string,
 ) error {
 	fmt.Fprintln(stderr, "[gork] interactive mode; /exit to quit, /help for commands")
+	printTerminalAnnouncement(stderr, runner)
 	prompt := strings.TrimSpace(initialPrompt)
 	rememberMode := false
 	inputClosed := false
@@ -3345,7 +3350,7 @@ func interactiveLoop(
 			command := prompt
 			if fields := strings.Fields(prompt); len(fields) > 0 {
 				switch fields[0] {
-				case "/session-info", "/status", "/info", "/context", "/share", "/release-notes", "/changelog":
+				case "/session-info", "/status", "/info", "/context", "/share", "/release-notes", "/changelog", "/announcements":
 					command = fields[0]
 				}
 			}
@@ -3359,7 +3364,34 @@ func interactiveLoop(
 				if runner.SharingEnabled != nil && runner.SharingEnabled() {
 					shareCommand = ", /share"
 				}
-				fmt.Fprintln(stderr, "Commands: ! <command>, /compact, /context, /flush, /dream, /remember [text], /memory [on|off], /loop, /privacy [opt-out], /release-notes (/changelog), /session-info (/status, /info)"+shareCommand+", /terminal-setup, /usage [show|manage] (/cost), /help, /exit. Every other line is sent as a prompt.")
+				announcementCommand := ""
+				if runner.Announcements != nil && runner.Announcements.Available() {
+					announcementCommand = ", /announcements hide|show"
+				}
+				fmt.Fprintln(stderr, "Commands: ! <command>"+announcementCommand+", /compact, /context, /flush, /dream, /remember [text], /memory [on|off], /loop, /privacy [opt-out], /release-notes (/changelog), /session-info (/status, /info)"+shareCommand+", /terminal-setup, /usage [show|manage] (/cost), /help, /exit. Every other line is sent as a prompt.")
+				prompt = ""
+				continue
+			case "/announcements":
+				if runner.Announcements == nil || !runner.Announcements.Available() {
+					fmt.Fprintln(stderr, "[gork] No session announcements")
+				} else {
+					fields := strings.Fields(prompt)
+					if len(fields) < 2 || fields[1] != "hide" && fields[1] != "show" {
+						fmt.Fprintln(stderr, "[gork] Usage: /announcements hide | show")
+					} else {
+						var err error
+						if fields[1] == "hide" {
+							err = runner.Announcements.Hide()
+						} else {
+							err = runner.Announcements.Show()
+						}
+						if err != nil {
+							fmt.Fprintln(stderr, "[gork] Couldn't update announcements:", err)
+						} else {
+							printTerminalAnnouncement(stderr, runner)
+						}
+					}
+				}
 				prompt = ""
 				continue
 			case "/release-notes", "/changelog":
@@ -3478,6 +3510,36 @@ func interactiveLoop(
 			return nil
 		}
 	}
+}
+
+func printTerminalAnnouncement(output io.Writer, runner *agent.Runner) {
+	if runner == nil || runner.Announcements == nil {
+		return
+	}
+	item, ok := runner.Announcements.Current()
+	if !ok {
+		return
+	}
+	value := func(text *string) string {
+		if text == nil {
+			return ""
+		}
+		return strings.TrimSpace(sanitizeAnnouncementText(*text))
+	}
+	if value(item.Severity) == "critical" {
+		fmt.Fprintf(output, "[gork] ! %s\n[gork] %s\n", value(item.Title), value(item.Message))
+	} else {
+		fmt.Fprintln(output, "[gork]", value(item.Message))
+	}
+}
+
+func sanitizeAnnouncementText(value string) string {
+	return strings.Map(func(char rune) rune {
+		if char == '\t' || char < 0x20 || char == 0x7f || char >= 0x80 && char <= 0x9f {
+			return ' '
+		}
+		return char
+	}, value)
 }
 
 func valueOrUnknown(value string) string {

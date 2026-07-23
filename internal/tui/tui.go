@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -1312,6 +1313,15 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.scrollSearch != nil && m.handleScrollSearchKey(msg) {
 		return m, nil
 	}
+	if stroke == "ctrl+o" {
+		if target := m.pinnedAnnouncementURL(); target != "" {
+			if m.runner.OpenURL == nil || !m.runner.OpenURL(target) {
+				m.appendSystem("Open: " + target)
+			}
+			m.status = "announcement link opened"
+			return m, nil
+		}
+	}
 	if m.scrollFocused && m.handleScrollbackKey(msg) {
 		return m, nil
 	}
@@ -1509,7 +1519,11 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if m.runner != nil && m.runner.SharingEnabled != nil && m.runner.SharingEnabled() {
 				shareCommand = " `/share`"
 			}
-			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + " `/btw <question>` `/compact` `/compact-mode` `/context` `/copy [N]` `/dream` `/effort [level]` `/exit` `/export [filename]`" + feedbackCommand + " `/find` `/flush` `/help` `/history` `/loop` `/memory` `/model [name] [effort]` (`/m`) `/multiline` `/plan [description]` `/privacy [opt-out]` `/queue` `/recap` `/release-notes` (`/changelog`) `/remember` `/rename <title>` `/rewind` `/session-info` (`/status`, `/info`)" + shareCommand + " `/tasks` `/terminal-setup`" + mouseCommand + " `/timestamps` `/transcript` `/usage [show|manage]` (`/cost`) `/view-plan` `/vim-mode`")
+			announcementCommand := ""
+			if m.runner != nil && m.runner.Announcements != nil && m.runner.Announcements.Available() {
+				announcementCommand = " `/announcements hide|show`"
+			}
+			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + announcementCommand + " `/btw <question>` `/compact` `/compact-mode` `/context` `/copy [N]` `/dream` `/effort [level]` `/exit` `/export [filename]`" + feedbackCommand + " `/find` `/flush` `/help` `/history` `/loop` `/memory` `/model [name] [effort]` (`/m`) `/multiline` `/plan [description]` `/privacy [opt-out]` `/queue` `/recap` `/release-notes` (`/changelog`) `/remember` `/rename <title>` `/rewind` `/session-info` (`/status`, `/info`)" + shareCommand + " `/tasks` `/terminal-setup`" + mouseCommand + " `/timestamps` `/transcript` `/usage [show|manage]` (`/cost`) `/view-plan` `/vim-mode`")
 			m.status = "commands"
 			return m, nil
 		case "/privacy":
@@ -1533,6 +1547,30 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.turnCancel = cancel
 			m.status = "sharing session"
 			return m, runShare(turnCtx, m.runner)
+		case "/announcements":
+			if m.runner == nil || m.runner.Announcements == nil || !m.runner.Announcements.Available() {
+				m.appendSystem("No session announcements")
+				m.status = "no announcements"
+				return m, nil
+			}
+			if len(fields) < 2 || fields[1] != "hide" && fields[1] != "show" {
+				m.appendSystem("Usage: /announcements hide | show")
+				m.status = "announcement argument invalid"
+				return m, nil
+			}
+			var err error
+			if fields[1] == "hide" {
+				err = m.runner.Announcements.Hide()
+			} else {
+				err = m.runner.Announcements.Show()
+			}
+			if err != nil {
+				m.appendSystem("Couldn't update announcements: " + err.Error())
+				m.status = "announcement update failed"
+				return m, nil
+			}
+			m.status = "announcements " + fields[1]
+			return m, nil
 		case "/terminal-setup", "/terminal-check", "/terminal-info":
 			m.appendSystem(terminaldiag.Report())
 			m.status = "terminal setup"
@@ -3404,6 +3442,7 @@ func (m *model) View() tea.View {
 	}
 	header := fmt.Sprintf("\x1b[1m Gork Go\x1b[0m%s  \x1b[2m%s · %s\x1b[0m", mode, truncate(m.modelName, 24), truncate(m.workspace, max(width-45, 10)))
 	header = padRight(truncateANSIUnsafe(header, width), width)
+	banner := m.announcementBanner(width)
 	content := m.transcriptText()
 	if m.modelSelect != nil {
 		content = m.modelSelectContent()
@@ -3497,18 +3536,24 @@ func (m *model) View() tea.View {
 		footer = strings.Join(inputLines, "\n") + "\n\x1b[2m" + truncate(hint, width) + "\x1b[0m"
 	}
 	status := "\x1b[2m" + truncate(m.status, width) + "\x1b[0m"
-	view := tea.NewView(header + "\n" + body + status + "\n" + footer)
+	prefix := header + "\n"
+	if len(banner) > 0 {
+		prefix += strings.Join(banner, "\n") + "\n"
+	}
+	view := tea.NewView(prefix + body + status + "\n" + footer)
 	view.AltScreen = true
 	view.MouseMode = tea.MouseModeNone
 	if !m.mouseReleased {
 		view.MouseMode = tea.MouseModeCellMotion
 	}
 	contentHeight := m.contentHeight()
+	bannerHeight := len(banner)
+	bodyEnd := bannerHeight + contentHeight
 	view.OnMouse = func(message tea.MouseMsg) tea.Cmd {
 		mouse := message.Mouse()
 		switch message.(type) {
 		case tea.MouseWheelMsg:
-			if mouse.Y < 1 || mouse.Y > contentHeight {
+			if mouse.Y < bannerHeight+1 || mouse.Y > bodyEnd {
 				return nil
 			}
 			scrollLines := m.scrollLines
@@ -3532,11 +3577,13 @@ func (m *model) View() tea.View {
 			if mouse.Button != tea.MouseLeft {
 				return nil
 			}
-			if mouse.Y >= 1 && mouse.Y <= contentHeight {
-				event := mouseSelectionEvent{phase: selectionStart, point: selectionPointForMouse(mouse, plainVisible), lines: plainVisible, at: time.Now()}
+			if mouse.Y >= bannerHeight+1 && mouse.Y <= bodyEnd {
+				adjusted := mouse
+				adjusted.Y -= bannerHeight
+				event := mouseSelectionEvent{phase: selectionStart, point: selectionPointForMouse(adjusted, plainVisible), lines: plainVisible, at: time.Now()}
 				return func() tea.Msg { return event }
 			}
-			if mouse.Y < contentHeight+3 {
+			if mouse.Y < bodyEnd+3 {
 				return nil
 			}
 			if event, ok := m.footerClick(mouse.X, mouse.Y, width); ok {
@@ -3544,18 +3591,131 @@ func (m *model) View() tea.View {
 			}
 		case tea.MouseMotionMsg:
 			if mouse.Button == tea.MouseLeft && m.selection != nil {
-				event := mouseSelectionEvent{phase: selectionMove, point: selectionPointForMouse(mouse, m.selection.lines)}
+				adjusted := mouse
+				adjusted.Y -= bannerHeight
+				event := mouseSelectionEvent{phase: selectionMove, point: selectionPointForMouse(adjusted, m.selection.lines)}
 				return func() tea.Msg { return event }
 			}
 		case tea.MouseReleaseMsg:
 			if (mouse.Button == tea.MouseLeft || mouse.Button == tea.MouseNone) && m.selection != nil {
-				event := mouseSelectionEvent{phase: selectionRelease, point: selectionPointForMouse(mouse, m.selection.lines)}
+				adjusted := mouse
+				adjusted.Y -= bannerHeight
+				event := mouseSelectionEvent{phase: selectionRelease, point: selectionPointForMouse(adjusted, m.selection.lines)}
 				return func() tea.Msg { return event }
 			}
 		}
 		return nil
 	}
 	return view
+}
+
+func (m *model) announcementBanner(width int) []string {
+	if m.runner == nil || m.runner.Announcements == nil {
+		return nil
+	}
+	item, ok := m.runner.Announcements.Current()
+	if !ok {
+		return nil
+	}
+	value := func(text *string) string {
+		if text == nil {
+			return ""
+		}
+		return strings.TrimSpace(sanitizeTerminalText(*text))
+	}
+	dismissible := item.Dismissible == nil || *item.Dismissible
+	hide := ""
+	if dismissible {
+		hide = "[hide]"
+	}
+	if value(item.Severity) == "critical" {
+		title := value(item.Title)
+		if title == "" {
+			title = "Announcement"
+		}
+		first := fitAnnouncementParts("! "+title, hide, width)
+		second := value(item.Message)
+		if dismissible {
+			second = fitAnnouncementParts(second, "hide: /announcements hide", width)
+		} else {
+			second = truncate(second, width)
+		}
+		return []string{"\x1b[1;31m" + first + "\x1b[0m", second}
+	}
+	left := value(item.Message)
+	button, target := "", ""
+	if item.CTA != nil && value(item.CTA.Label) != "" && safeAnnouncementURL(value(item.CTA.URL)) {
+		button, target = "["+value(item.CTA.Label)+"]", value(item.CTA.URL)
+		left = button
+		if !dismissible && value(item.CTA.Caption) != "" {
+			left += " " + value(item.CTA.Caption)
+		}
+	}
+	right := ""
+	if dismissible {
+		right = "hide: /announcements hide  [hide]"
+	}
+	line := fitAnnouncementParts(left, right, width)
+	if button != "" && target != "" && m.hyperlinks && strings.Contains(line, button) {
+		link := ansi.SetHyperlink(target, "id="+hyperlinkID(target)) + button + ansi.ResetHyperlink()
+		line = strings.Replace(line, button, link, 1)
+	}
+	return []string{"\x1b[33m" + line + "\x1b[0m"}
+}
+
+func (m *model) pinnedAnnouncementURL() string {
+	if m.runner == nil || m.runner.Announcements == nil {
+		return ""
+	}
+	item, ok := m.runner.Announcements.Current()
+	if !ok || item.Severity == nil || strings.TrimSpace(*item.Severity) != "promo" || item.Dismissible == nil || *item.Dismissible || item.CTA == nil || item.CTA.URL == nil {
+		return ""
+	}
+	target := strings.TrimSpace(*item.CTA.URL)
+	if !safeAnnouncementURL(target) {
+		return ""
+	}
+	return target
+}
+
+func fitAnnouncementParts(left, right string, width int) string {
+	if right == "" {
+		return truncateAnnouncement(left, width)
+	}
+	rightWidth := displayWidth(right)
+	if width <= rightWidth+2 {
+		return truncateAnnouncement(right, width)
+	}
+	left = truncateAnnouncement(left, width-rightWidth-2)
+	return left + strings.Repeat(" ", max(width-displayWidth(left)-rightWidth, 2)) + right
+}
+
+func truncateAnnouncement(value string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if displayWidth(value) <= width {
+		return value
+	}
+	if width == 1 {
+		return "…"
+	}
+	used := 0
+	var result strings.Builder
+	for _, char := range value {
+		charWidth := runeWidth(char)
+		if used+charWidth > width-1 {
+			break
+		}
+		result.WriteRune(char)
+		used += charWidth
+	}
+	return result.String() + "…"
+}
+
+func safeAnnouncementURL(raw string) bool {
+	parsed, err := url.Parse(raw)
+	return err == nil && parsed.Scheme == "https" && parsed.Host != ""
 }
 
 func (m *model) viewerContent() string {
@@ -3733,7 +3893,7 @@ func (m *model) maxViewerScroll() int {
 }
 
 func (m *model) footerClick(x, y, width int) (mouseClickEvent, bool) {
-	if y != m.contentHeight()+3 {
+	if y != m.contentHeight()+m.announcementHeight()+3 {
 		return mouseClickEvent{}, false
 	}
 	if m.approval != nil {
@@ -3777,20 +3937,35 @@ func renderedLabelContains(line, label string, x, width int) bool {
 }
 
 func (m *model) contentHeight() int {
+	banner := m.announcementHeight()
 	if m.question != nil || m.planReview != nil || m.remember != nil || m.rememberInput || m.rewind != nil || m.modelSelect != nil {
-		return max(m.height-7, 3)
+		return max(m.height-7-banner, 3)
 	}
 	if m.historySearch != nil {
-		return max(m.height-6, 3)
+		return max(m.height-6-banner, 3)
 	}
 	if m.scrollSearch != nil {
-		return max(m.height-6, 3)
+		return max(m.height-6-banner, 3)
 	}
 	rows := 1
 	if !m.running {
 		rows = min(strings.Count(string(m.input), "\n")+1, m.visiblePromptInputRows())
 	}
-	return max(m.height-4-rows, 3)
+	return max(m.height-4-rows-banner, 3)
+}
+
+func (m *model) announcementHeight() int {
+	if m.runner == nil || m.runner.Announcements == nil {
+		return 0
+	}
+	item, ok := m.runner.Announcements.Current()
+	if !ok {
+		return 0
+	}
+	if item.Severity != nil && strings.TrimSpace(*item.Severity) == "critical" {
+		return 2
+	}
+	return 1
 }
 
 func (m *model) visiblePromptInputRows() int {

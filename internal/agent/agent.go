@@ -16,6 +16,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/lookcorner/go-cli/internal/announcement"
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/hooks"
 	"github.com/lookcorner/go-cli/internal/marketplace"
@@ -178,6 +179,7 @@ type Runner struct {
 	OpenURL                 func(string) bool
 	ShareSession            func(context.Context) (string, error)
 	SharingEnabled          func() bool
+	Announcements           *announcement.Service
 	lastInputTokens         int
 	pendingSummary          string
 	modelHistory            []api.InputItem

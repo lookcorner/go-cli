@@ -54,6 +54,7 @@ type Config struct {
 	SubscriptionTierDisplay         *string                    `json:"-"`
 	OnDemandEnabled                 *bool                      `json:"-"`
 	SharingEnabled                  bool                       `json:"-"`
+	Announcements                   []RemoteAnnouncement       `json:"-"`
 	AllowAccess                     *bool                      `json:"-"`
 	GateMessage                     *string                    `json:"-"`
 	GateURL                         *string                    `json:"-"`

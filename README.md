@@ -768,6 +768,11 @@ filters expired entries, suppresses unchanged snapshots, seeds newly initialized
 clients, and forces a refresh after `session/new`. An authenticated background
 poll checks for announcement changes every five minutes by default; set
 `GROK_ANNOUNCEMENTS_REFRESH_INTERVAL_SECS` to override the interval.
+Authenticated TUI and interactive sessions also display active `critical` and
+`promo` notices. Critical notices take precedence, expired notices are ignored,
+and `/announcements hide|show` persists per-notice visibility in
+`$GROK_HOME/announcements.json` without starting a model turn. A valid
+`GROK_ANNOUNCEMENTS_OVERRIDE` JSON array replaces the remote list for local testing.
 Clients can
 also enforce the privacy build's coding-data-retention opt-out through
 `x.ai/privacy/setCodingDataRetention`, including refresh-aware authentication and

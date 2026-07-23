@@ -15,6 +15,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/lookcorner/go-cli/internal/agent"
+	"github.com/lookcorner/go-cli/internal/announcement"
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/memory"
 	"github.com/lookcorner/go-cli/internal/session"
@@ -1935,6 +1936,74 @@ func TestShareCommandDoesNotRunModelTurn(t *testing.T) {
 	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	if command == nil || !updated.(*model).running {
 		t.Fatalf("/sharex command=%v running=%v", command != nil, updated.(*model).running)
+	}
+}
+
+func TestAnnouncementCommandsAndBannerDoNotRunModelTurn(t *testing.T) {
+	text := func(value string) *string { return &value }
+	service := announcement.New([]announcement.Announcement{
+		{ID: text("notice"), Title: text("Service notice"), Message: text("Maintenance tonight"), Severity: text("critical")},
+	}, t.TempDir())
+	m := &model{ctx: context.Background(), runner: &agent.Runner{Announcements: service}, width: 80, height: 16, status: "ready"}
+	if banner := m.announcementBanner(80); len(banner) != 2 || !strings.Contains(strings.Join(banner, "\n"), "Service notice") || m.contentHeight() != 9 {
+		t.Fatalf("banner=%q contentHeight=%d", banner, m.contentHeight())
+	}
+	m.setInput("/announcements hide ignored")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.running || m.status != "announcements hide" || m.announcementHeight() != 0 {
+		t.Fatalf("command=%v running=%v status=%q height=%d", command != nil, m.running, m.status, m.announcementHeight())
+	}
+	m.setInput("/announcements show")
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.status != "announcements show" || m.announcementHeight() != 2 {
+		t.Fatalf("command=%v status=%q height=%d", command != nil, m.status, m.announcementHeight())
+	}
+	m.setInput("/announcements invalid")
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.status != "announcement argument invalid" || !strings.Contains(m.transcript.String(), "Usage: /announcements") {
+		t.Fatalf("command=%v status=%q transcript=%q", command != nil, m.status, m.transcript.String())
+	}
+	m.setInput("/help")
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if !strings.Contains(updated.(*model).transcript.String(), "/announcements") {
+		t.Fatalf("help=%q", updated.(*model).transcript.String())
+	}
+}
+
+func TestPinnedPromoAnnouncementOpensSafeCTA(t *testing.T) {
+	text := func(value string) *string { return &value }
+	pinned := false
+	opened := ""
+	service := announcement.New([]announcement.Announcement{{
+		ID: text("promo"), Message: text("upgrade"), Severity: text("promo"), Dismissible: &pinned,
+		CTA: &announcement.CTA{Label: text("Upgrade"), URL: text("https://example.com/upgrade"), Caption: text("or press Ctrl+O")},
+	}}, t.TempDir())
+	m := &model{runner: &agent.Runner{Announcements: service, OpenURL: func(target string) bool { opened = target; return true }}, hyperlinks: true, width: 80, height: 16}
+	banner := strings.Join(m.announcementBanner(80), "\n")
+	if !strings.Contains(banner, "Upgrade") || !strings.Contains(banner, "Ctrl+O") || !strings.Contains(banner, "\x1b]8;") {
+		t.Fatalf("banner=%q", banner)
+	}
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: 'o', Mod: tea.ModCtrl}))
+	m = updated.(*model)
+	if command != nil || opened != "https://example.com/upgrade" || m.status != "announcement link opened" {
+		t.Fatalf("command=%v opened=%q status=%q", command != nil, opened, m.status)
+	}
+}
+
+func TestAnnouncementBannerSanitizesAndFitsWideText(t *testing.T) {
+	text := func(value string) *string { return &value }
+	service := announcement.New([]announcement.Announcement{{
+		ID: text("notice"), Title: text("维护\x1b[31m通知"), Message: text("今晚进行系统维护"), Severity: text("critical"),
+	}}, t.TempDir())
+	m := &model{runner: &agent.Runner{Announcements: service}}
+	for _, line := range m.announcementBanner(20) {
+		plain := stripUIANSI(line)
+		if strings.Contains(plain, "\x1b") || displayWidth(plain) > 20 {
+			t.Fatalf("unsafe or overflowing line=%q width=%d", plain, displayWidth(plain))
+		}
 	}
 }
 
