@@ -50,7 +50,10 @@ func (s *Server) handleSessionRoster(ctx context.Context, incoming message) {
 		} else if current.running {
 			activity = "working"
 		}
-		title, model, effort, yolo, changed := current.title, "", "", false, current.updated
+		title, cwd, model, effort, yolo, changed := current.title, current.cwd, "", "", false, current.updated
+		if current.displayCWD != "" {
+			cwd = current.displayCWD
+		}
 		if current.runner != nil {
 			model = current.runner.Model
 			effort = current.runner.ReasoningEffort
@@ -71,7 +74,7 @@ func (s *Server) handleSessionRoster(ctx context.Context, incoming message) {
 			}
 			delete(byID, current.id)
 		}
-		live = append(live, liveSnapshot{id: current.id, title: title, cwd: current.cwd, model: model, effort: effort, yolo: yolo, activity: activity, changed: changed})
+		live = append(live, liveSnapshot{id: current.id, title: title, cwd: cwd, model: model, effort: effort, yolo: yolo, activity: activity, changed: changed})
 		current.mu.Unlock()
 	}
 	s.mu.Unlock()
@@ -108,6 +111,9 @@ func (s *Server) notifyRosterUpsert(current *session, activity string) {
 		}
 	}
 	title, cwd, model, effort, yolo, changed := current.title, current.cwd, "", "", false, current.updated
+	if current.displayCWD != "" {
+		cwd = current.displayCWD
+	}
 	if current.runner != nil {
 		model = current.runner.Model
 		effort = current.runner.ReasoningEffort

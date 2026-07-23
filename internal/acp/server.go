@@ -35,6 +35,7 @@ var clientSessionIDPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0
 
 type SessionConfig struct {
 	CWD             string
+	DisplayCWD      string
 	Title           string
 	Model           string
 	ReasoningEffort string
@@ -58,6 +59,11 @@ func sessionPermissionModeOverrides(meta map[string]any) (yoloMode, autoMode *bo
 		autoMode = &value
 	}
 	return yoloMode, autoMode
+}
+
+func stringMeta(meta map[string]any, key string) string {
+	value, _ := meta[key].(string)
+	return strings.TrimSpace(value)
 }
 
 func sessionStartupOverrides(meta map[string]any) (sessionID, model string, err error) {
@@ -147,6 +153,7 @@ type session struct {
 	id                  string
 	ctx                 context.Context
 	cwd                 string
+	displayCWD          string
 	title               string
 	updated             time.Time
 	runner              *agent.Runner
@@ -1576,7 +1583,8 @@ func (s *Server) handleNewSession(ctx context.Context, incoming message) {
 	yoloMode, autoMode := sessionPermissionModeOverrides(params.Meta)
 	sessionConfig := SessionConfig{
 		CWD: params.CWD, Model: model, SessionID: id, MCPServers: servers,
-		YoloMode: yoloMode, AutoMode: autoMode, ClientHooks: parseClientHooks(params.Meta),
+		DisplayCWD: stringMeta(params.Meta, "x.ai/display_cwd"),
+		YoloMode:   yoloMode, AutoMode: autoMode, ClientHooks: parseClientHooks(params.Meta),
 	}
 	mcpStarted := time.Now()
 	created, err := s.startSession(ctx, id, sessionConfig, "")
@@ -1825,7 +1833,7 @@ func (s *Server) startSession(ctx context.Context, id string, sessionConfig Sess
 		return nil, err
 	}
 	created := &session{
-		id: id, ctx: ctx, cwd: sessionConfig.CWD, title: sessionConfig.Title, updated: time.Now().UTC(), previous: previous,
+		id: id, ctx: ctx, cwd: sessionConfig.CWD, displayCWD: sessionConfig.DisplayCWD, title: sessionConfig.Title, updated: time.Now().UTC(), previous: previous,
 		runner: runner, close: closeRuntime, promptIndex: promptIndex, activePrompt: -1, rewind: rewind, logPath: sessionPath, mode: mode,
 		mcpServers: append([]MCPServer(nil), sessionConfig.MCPServers...), permissions: approver,
 		gitHeadEnabled: s.clientGitHead,
@@ -2467,6 +2475,7 @@ func (s *Server) handleRestoreSession(ctx context.Context, incoming message, rep
 	yoloMode, autoMode := sessionPermissionModeOverrides(params.Meta)
 	config := SessionConfig{
 		CWD: params.CWD, Title: title, Model: model, ReasoningEffort: reasoningEffort, SessionID: params.SessionID,
+		DisplayCWD: stringMeta(params.Meta, "x.ai/display_cwd"),
 		ResumePath: path, MCPServers: servers, YoloMode: yoloMode, AutoMode: autoMode,
 		ClientHooks: parseClientHooks(params.Meta),
 	}
