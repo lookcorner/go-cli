@@ -550,6 +550,9 @@ TUI first asks whether to cancel it. Rewind can restore the conversation and
 files together, the conversation only, or files only. File restores preview
 external conflicts before confirmation, conversation rewinds preserve an
 append-only branch, and the removed prompt is returned to the composer.
+`/jump` opens an oldest-first turn picker without changing conversation history.
+Moving with Up/Down or j/k previews the selected prompt at the top of the
+scrollback; Enter keeps that position, while Esc restores the previous viewport.
 `/model` (or `/m`) opens the selectable model picker; `/model <name>` switches
 immediately and atomically saves that model as the user default. Reasoning
 models continue to a model-specific effort picker. `/model <name> <effort>` and
