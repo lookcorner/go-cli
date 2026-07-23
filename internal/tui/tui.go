@@ -134,6 +134,10 @@ type shareDoneEvent struct {
 	url string
 	err error
 }
+type authDoneEvent struct {
+	action string
+	err    error
+}
 type compactDoneEvent struct{ err error }
 type memoryFlushDoneEvent struct {
 	result agent.MemoryFlushResult
@@ -1334,6 +1338,18 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				m.status = msg.action
 			}
 		}
+	case authDoneEvent:
+		m.running = false
+		m.turnCancel = nil
+		if msg.err != nil {
+			m.status = msg.action + " failed: " + msg.err.Error()
+			m.appendSystem("Authentication " + msg.action + " failed: " + msg.err.Error())
+		} else {
+			m.status = msg.action + " complete"
+			m.appendSystem("Authentication " + msg.action + " complete; restarting session.")
+			m.newSession = true
+			return m, tea.Quit
+		}
 	case claudeImportDoneEvent:
 		if m.claudeImport != nil {
 			m.claudeImport.busy = false
@@ -1683,10 +1699,33 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		switch fields[0] {
 		case "/quit", "/exit":
 			return m, tea.Quit
-		case "/new", "/clear":
+		case "/new", "/clear", "/home", "/welcome":
 			m.newSession = true
 			m.status = "starting new session"
 			return m, tea.Quit
+		case "/login", "/logout":
+			if m.runner == nil {
+				m.status = "authentication unavailable"
+				m.appendSystem("Authentication is unavailable")
+				return m, nil
+			}
+			action := strings.TrimPrefix(fields[0], "/")
+			var operation func(context.Context) error
+			if action == "login" {
+				operation = m.runner.Login
+			} else {
+				operation = m.runner.Logout
+			}
+			if operation == nil {
+				m.status = "authentication unavailable"
+				m.appendSystem("Authentication " + action + " is unavailable")
+				return m, nil
+			}
+			m.running = true
+			turnCtx, cancel := context.WithCancel(m.ctx)
+			m.turnCancel = cancel
+			m.status = action + " in progress"
+			return m, runAuth(turnCtx, action, operation)
 		case "/help":
 			permissionCommands := "`/always-approve`"
 			if m.bridge != nil && m.bridge.AutoModeAvailable() {
@@ -1729,7 +1768,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 					imagineCommands += " `/imagine-video <description>`"
 				}
 			}
-			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + announcementCommand + agentCommands + " `/btw <question>` `/compact` `/compact-mode` `/context` `/copy [N]` `/docs [web|title]` `/dream` `/effort [level]` `/exit` `/export [filename]`" + feedbackCommand + " `/find` `/flush` `/fork [--worktree|--no-worktree] [directive]` `/help` `/history`" + extensionCommands + imagineCommands + " `/jump` `/loop` `/memory`" + mcpCommand + " `/model [name] [effort]` (`/m`) `/multiline` `/new` (`/clear`) `/plan [description]` `/privacy [opt-out]` `/queue` `/recap` `/release-notes` (`/changelog`) `/remember` `/rename <title>` `/resume` `/rewind` `/session-info` (`/status`, `/info`) `/settings`" + shareCommand + " `/tasks` `/terminal-setup` `/theme [name]` (`/t`)" + mouseCommand + " `/timeline` `/timestamps` `/transcript` `/usage [show|manage]` (`/cost`) `/view-plan` `/vim-mode`")
+			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + announcementCommand + agentCommands + " `/btw <question>` `/compact` `/compact-mode` `/context` `/copy [N]` `/docs [web|title]` `/dream` `/effort [level]` `/exit` `/export [filename]` `/home` `/login` `/logout`" + feedbackCommand + " `/find` `/flush` `/fork [--worktree|--no-worktree] [directive]` `/help` `/history`" + extensionCommands + imagineCommands + " `/jump` `/loop` `/memory`" + mcpCommand + " `/model [name] [effort]` (`/m`) `/multiline` `/new` (`/clear`) `/plan [description]` `/privacy [opt-out]` `/queue` `/recap` `/release-notes` (`/changelog`) `/remember` `/rename <title>` `/resume` `/rewind` `/session-info` (`/status`, `/info`) `/settings`" + shareCommand + " `/tasks` `/terminal-setup` `/theme [name]` (`/t`)" + mouseCommand + " `/timeline` `/timestamps` `/transcript` `/usage [show|manage]` (`/cost`) `/view-plan` `/vim-mode`")
 			m.status = "commands"
 			return m, nil
 		case "/docs", "/howto", "/guides":
@@ -3578,6 +3617,10 @@ func runShare(ctx context.Context, runner *agent.Runner) tea.Cmd {
 		url, err := runner.ShareSession(ctx)
 		return shareDoneEvent{url: url, err: err}
 	}
+}
+
+func runAuth(ctx context.Context, action string, operation func(context.Context) error) tea.Cmd {
+	return func() tea.Msg { return authDoneEvent{action: action, err: operation(ctx)} }
 }
 
 func runRecap(ctx context.Context, runner *agent.Runner, previousID string, serial uint64) tea.Cmd {

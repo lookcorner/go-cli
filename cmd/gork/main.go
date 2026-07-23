@@ -734,7 +734,13 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			extensionMu.Lock()
 			defer extensionMu.Unlock()
 			return append([]plugin.Plugin(nil), plugins...)
-		}, AgentDefinitions: subagents.Definitions, Personas: personas.New(ws.Root()), Logger: logger,
+		}, AgentDefinitions: subagents.Definitions, Personas: personas.New(ws.Root()),
+		Login: func(context.Context) error {
+			return runLogin([]string{"--config", opts.configPath}, inputReader, stdout, stderr)
+		},
+		Logout: func(context.Context) error {
+			return runLogout([]string{"--config", opts.configPath}, stdout, stderr)
+		}, Logger: logger,
 		HookCatalog: hookCatalog, HookPolicy: hookRuntime,
 		ReloadHooks: func() error {
 			reloaded, err := config.Load(opts.configPath)

@@ -181,6 +181,8 @@ type Runner struct {
 	FetchUsage              func(context.Context) (string, error)
 	FetchReleaseNotes       func(context.Context) (string, error)
 	OpenURL                 func(string) bool
+	Login                   func(context.Context) error
+	Logout                  func(context.Context) error
 	ShareSession            func(context.Context) (string, error)
 	SharingEnabled          func() bool
 	Announcements           *announcement.Service
