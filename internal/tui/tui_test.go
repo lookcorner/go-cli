@@ -1123,6 +1123,79 @@ func TestVimModeCommandRollsBackPersistenceFailure(t *testing.T) {
 	}
 }
 
+func TestTimestampsCommandPersistsAndRendersMessages(t *testing.T) {
+	at := time.Date(2026, 7, 23, 3, 4, 0, 0, time.Local)
+	messages := []session.Message{
+		{Role: "user", Text: "hello", Time: at},
+		{Role: "assistant", Text: "hi", Time: at.Add(time.Minute)},
+	}
+	var persisted []bool
+	m := &model{
+		width: 80, height: 16, showTimestamps: true,
+		persistTimestamps: func(enabled bool) error {
+			persisted = append(persisted, enabled)
+			return nil
+		},
+	}
+	m.replaceTranscript(session.FormatTranscript(messages), messages)
+	if text := m.transcriptText(); !strings.Contains(text, "You  3:04 AM") || !strings.Contains(text, "Gork  3:05 AM") {
+		t.Fatalf("timestamps not rendered: %q", text)
+	}
+	m.setInput("/timestamps ignored")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.showTimestamps || len(persisted) != 1 || persisted[0] || strings.Contains(m.transcriptText(), "3:04 AM") || m.status != "Timestamps: off" {
+		t.Fatalf("disabled=%v persisted=%v status=%q text=%q", !m.showTimestamps, persisted, m.status, m.transcriptText())
+	}
+	m.setInput("/timestamps")
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || !m.showTimestamps || len(persisted) != 2 || !persisted[1] || !strings.Contains(m.transcriptText(), "3:04 AM") || strings.Contains(m.transcriptText(), "Timestamps: off  ") {
+		t.Fatalf("enabled=%v persisted=%v text=%q", m.showTimestamps, persisted, m.transcriptText())
+	}
+	m.setInput("/help")
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if !strings.Contains(m.transcript.String(), "`/timestamps`") {
+		t.Fatalf("help missing timestamps command: %q", m.transcript.String())
+	}
+}
+
+func TestTimestampsCommandRollsBackPersistenceFailure(t *testing.T) {
+	m := &model{showTimestamps: true, persistTimestamps: func(bool) error { return errors.New("disk full") }}
+	m.setInput("/timestamps")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || !m.showTimestamps || m.transcript.Len() != 0 || m.status != "persist timestamps: disk full" {
+		t.Fatalf("enabled=%v transcript=%q status=%q", m.showTimestamps, m.transcript.String(), m.status)
+	}
+}
+
+func TestBeginTurnTimestampsOnlyMessages(t *testing.T) {
+	m := &model{showTimestamps: true}
+	m.appendSystem("system")
+	m.beginTurn("hello")
+	if len(m.messageTimestamps) != 2 {
+		t.Fatalf("timestamps=%#v", m.messageTimestamps)
+	}
+	text := m.transcriptText()
+	if strings.Contains(text, "system  ") || !strings.Contains(text, "You  ") || !strings.Contains(text, "Gork  ") {
+		t.Fatalf("unexpected rendered transcript: %q", text)
+	}
+}
+
+func TestSideQuestionViewerTimestampFollowsSetting(t *testing.T) {
+	at := time.Date(2026, 7, 23, 15, 4, 0, 0, time.Local)
+	m := &model{showTimestamps: true, viewer: &readOnlyViewer{title: "Side question", content: "answer", at: at}}
+	if content := m.viewerContent(); !strings.Contains(content, "Side question  3:04 PM") {
+		t.Fatalf("timestamped viewer=%q", content)
+	}
+	m.showTimestamps = false
+	if content := m.viewerContent(); strings.Contains(content, "3:04 PM") {
+		t.Fatalf("hidden timestamp viewer=%q", content)
+	}
+}
+
 func TestScrollbackFocusAndNavigation(t *testing.T) {
 	m := &model{runner: &agent.Runner{}, width: 80, height: 12, status: "ready", history: []string{"old prompt"}, historyIndex: -1, vimMode: true}
 	for line := 0; line < 40; line++ {
@@ -2085,7 +2158,7 @@ func TestTUIRewindPickerPreviewsConflictAndRestoresAll(t *testing.T) {
 	}
 	updated, _ = m.Update(command())
 	m = updated.(*model)
-	if m.rewind != nil || m.previousID != "response-1" || string(m.input) != "second request" || strings.Contains(m.transcript.String(), "second request") {
+	if m.rewind != nil || m.previousID != "response-1" || string(m.input) != "second request" || strings.Contains(m.transcript.String(), "second request") || len(m.messageTimestamps) != 2 {
 		t.Fatalf("previous=%q input=%q transcript=%q rewind=%#v", m.previousID, m.input, m.transcript.String(), m.rewind)
 	}
 	if current, _ := os.ReadFile(file); string(current) != "first" {

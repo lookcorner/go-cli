@@ -1804,13 +1804,16 @@ func TestUIConfigPersistenceAndPermissionPrecedence(t *testing.T) {
 	if err := UpdateVimMode(path, false); err != nil {
 		t.Fatal(err)
 	}
+	if err := UpdateShowTimestamps(path, false); err != nil {
+		t.Fatal(err)
+	}
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	remoteMode := "always-approve"
 	cfg.ApplyRemoteSettings(&RemoteSettings{PermissionMode: &remoteMode})
-	if cfg.UI.PermissionMode != "auto" || cfg.UI.VimMode || cfg.DefaultModelID != "local" || cfg.Model != "local-api" {
+	if cfg.UI.PermissionMode != "auto" || cfg.UI.VimMode || cfg.UI.ShowTimestamps || cfg.DefaultModelID != "local" || cfg.Model != "local-api" {
 		t.Fatalf("config=%#v", cfg)
 	}
 	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o640 {
@@ -1820,8 +1823,11 @@ func TestUIConfigPersistenceAndPermissionPrecedence(t *testing.T) {
 	if err := UpdateVimMode(emptyPath, true); err != nil {
 		t.Fatal(err)
 	}
+	if err := UpdateShowTimestamps(emptyPath, false); err != nil {
+		t.Fatal(err)
+	}
 	emptyConfig, err := Load(emptyPath)
-	if err != nil || !emptyConfig.UI.VimMode {
+	if err != nil || !emptyConfig.UI.VimMode || emptyConfig.UI.ShowTimestamps {
 		t.Fatalf("new config=%#v err=%v", emptyConfig, err)
 	}
 
@@ -1835,8 +1841,11 @@ func TestUIConfigPersistenceAndPermissionPrecedence(t *testing.T) {
 	if err := UpdateVimMode(jsonPath, false); err != nil {
 		t.Fatal(err)
 	}
+	if err := UpdateShowTimestamps(jsonPath, false); err != nil {
+		t.Fatal(err)
+	}
 	jsonConfig, err := Load(jsonPath)
-	if err != nil || jsonConfig.UI.PermissionMode != "always-approve" || jsonConfig.UI.VimMode {
+	if err != nil || jsonConfig.UI.PermissionMode != "always-approve" || jsonConfig.UI.VimMode || jsonConfig.UI.ShowTimestamps {
 		t.Fatalf("JSON config=%#v err=%v", jsonConfig, err)
 	}
 
@@ -1845,7 +1854,7 @@ func TestUIConfigPersistenceAndPermissionPrecedence(t *testing.T) {
 		t.Fatal(err)
 	}
 	defaultConfig, err := Load(defaultPath)
-	if err != nil || defaultConfig.UI.PermissionMode != "ask" {
+	if err != nil || defaultConfig.UI.PermissionMode != "ask" || !defaultConfig.UI.ShowTimestamps {
 		t.Fatalf("default config=%#v err=%v", defaultConfig, err)
 	}
 	remoteConfig := Config{UI: UIConfig{PermissionMode: "ask"}}

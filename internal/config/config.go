@@ -201,6 +201,7 @@ type UIConfig struct {
 	WordSeparators       *string `json:"word_separators,omitempty"`
 	MouseReportingToggle bool    `json:"mouse_reporting_toggle,omitempty"`
 	VimMode              bool    `json:"vim_mode,omitempty"`
+	ShowTimestamps       bool    `json:"show_timestamps"`
 	ScrollLines          *uint8  `json:"scroll_lines,omitempty"`
 	InvertScroll         bool    `json:"invert_scroll,omitempty"`
 	PromptSuggestions    bool    `json:"prompt_suggestions"`
@@ -428,6 +429,7 @@ type fileUIConfig struct {
 	WordSeparators               *string `json:"word_separators,omitempty" toml:"word_separators"`
 	MouseReportingToggle         *bool   `json:"mouse_reporting_toggle,omitempty" toml:"mouse_reporting_toggle"`
 	VimMode                      *bool   `json:"vim_mode,omitempty" toml:"vim_mode"`
+	ShowTimestamps               *bool   `json:"show_timestamps,omitempty" toml:"show_timestamps"`
 	ScrollLines                  *uint8  `json:"scroll_lines,omitempty" toml:"scroll_lines"`
 	InvertScroll                 *bool   `json:"invert_scroll,omitempty" toml:"invert_scroll"`
 	PromptSuggestions            *bool   `json:"prompt_suggestions,omitempty" toml:"prompt_suggestions"`
@@ -642,7 +644,7 @@ func Load(path string) (Config, error) {
 		AskUserQuestion:             AskUserQuestionConfig{TimeoutEnabled: true, TimeoutSeconds: 30 * 60},
 		Toolset:                     ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}},
 		Goal:                        GoalConfig{VerifierCount: 3, ClassifierMaxRuns: 10, ReverifyAfter: 8},
-		UI:                          UIConfig{KeepTextSelection: "flash", PromptSuggestions: true, PermissionMode: "ask"},
+		UI:                          UIConfig{KeepTextSelection: "flash", ShowTimestamps: true, PromptSuggestions: true, PermissionMode: "ask"},
 		Pruning:                     PruningConfig{Enabled: true, KeepLastNTurns: 3, SoftTrimThreshold: 4000, SoftTrimHead: 1500, SoftTrimTail: 1500, HardClearAgeTurns: 10},
 		Memory:                      memory.DefaultConfig(),
 	}
@@ -877,6 +879,9 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.UI.VimMode != nil {
 		cfg.UI.VimMode = *disk.UI.VimMode
+	}
+	if disk.UI.ShowTimestamps != nil {
+		cfg.UI.ShowTimestamps = *disk.UI.ShowTimestamps
 	}
 	if disk.UI.ScrollLines != nil {
 		cfg.UI.ScrollLines = normalizedScrollLines(*disk.UI.ScrollLines)

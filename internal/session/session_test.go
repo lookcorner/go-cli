@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 var testPNG = []byte{137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0, 144, 119, 83, 222, 0, 0, 0, 12, 73, 68, 65, 84, 8, 215, 99, 248, 207, 192, 0, 0, 3, 1, 1, 0, 24, 221, 141, 176, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130}
@@ -56,13 +57,13 @@ func TestPendingPromptTracksOnlyUncompletedRealPrompt(t *testing.T) {
 		`{"kind":"user_prompt","data":{"text":"finished"}}` + "\n" +
 		`{"kind":"model_response","data":{"response_id":"r1","tool_call_count":0}}` + "\n" +
 		`{"kind":"user_prompt","data":{"text":"synthetic","synthetic":true}}` + "\n" +
-		`{"kind":"user_prompt","data":{"text":"current"}}` + "\n" +
+		`{"time":"2026-07-23T01:02:03Z","kind":"user_prompt","data":{"text":"current"}}` + "\n" +
 		`{"kind":"model_response","data":{"response_id":"r2","tool_call_count":1}}` + "\n"
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	prompt, ok, err := PendingPrompt(path)
-	if err != nil || !ok || prompt.Text != "current" {
+	if err != nil || !ok || prompt.Text != "current" || !prompt.Time.Equal(time.Date(2026, 7, 23, 1, 2, 3, 0, time.UTC)) {
 		t.Fatalf("prompt=%#v ok=%v err=%v", prompt, ok, err)
 	}
 	if err := os.WriteFile(path, []byte(content+`{"kind":"model_response","data":{"response_id":"r3","tool_call_count":0}}`+"\n"), 0o600); err != nil {
@@ -154,6 +155,29 @@ func TestTranscriptStopsAtLastCompletedTurn(t *testing.T) {
 	formatted := FormatTranscript(messages)
 	if formatted != "You\nfirst\n\nGork\nchecking done" {
 		t.Fatalf("unexpected formatted transcript: %q", formatted)
+	}
+}
+
+func TestTranscriptPreservesMessageTimesWithoutChangingFormatting(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	content := "" +
+		`{"time":"2026-07-23T01:02:03Z","kind":"user_prompt","data":{"text":"hello"}}` + "\n" +
+		`{"time":"2026-07-23T01:03:04Z","kind":"model_response","data":{"response_id":"r1","text":"part ","tool_call_count":1}}` + "\n" +
+		`{"time":"2026-07-23T01:04:05Z","kind":"model_response","data":{"response_id":"r2","text":"done","tool_call_count":0}}` + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	messages, err := Transcript(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	userTime := time.Date(2026, 7, 23, 1, 2, 3, 0, time.UTC)
+	assistantTime := time.Date(2026, 7, 23, 1, 3, 4, 0, time.UTC)
+	if len(messages) != 2 || !messages[0].Time.Equal(userTime) || !messages[1].Time.Equal(assistantTime) {
+		t.Fatalf("unexpected message times: %#v", messages)
+	}
+	if formatted := FormatTranscript(messages); formatted != "You\nhello\n\nGork\npart done" {
+		t.Fatalf("timestamps changed transcript formatting: %q", formatted)
 	}
 }
 

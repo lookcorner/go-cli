@@ -209,6 +209,7 @@ type Message struct {
 	Role    string
 	Text    string
 	Content []Content
+	Time    time.Time `json:"-"`
 }
 
 type Content struct {
@@ -688,7 +689,7 @@ func PendingPrompt(path string) (Message, bool, error) {
 				return Message{}, false, fmt.Errorf("parse user prompt on session line %d: %w", index+1, err)
 			}
 			if !data.Synthetic {
-				value := Message{Role: "user", Text: data.Text, Content: data.Content}
+				value := Message{Role: "user", Text: data.Text, Content: data.Content, Time: event.Time}
 				pending = &value
 			}
 		case "model_response":
@@ -761,7 +762,7 @@ func transcriptFromEvents(path string, events []storedEvent, allowEmpty bool) ([
 			if data.Synthetic {
 				forceAssistantBoundary = true
 			} else if data.Text != "" || len(data.Content) > 0 {
-				current = append(current, Message{Role: "user", Text: data.Text, Content: data.Content})
+				current = append(current, Message{Role: "user", Text: data.Text, Content: data.Content, Time: event.Time})
 				forceAssistantBoundary = false
 			}
 		case "model_response":
@@ -777,7 +778,7 @@ func transcriptFromEvents(path string, events []storedEvent, allowEmpty bool) ([
 				if !forceAssistantBoundary && len(current) > 0 && current[len(current)-1].Role == "assistant" {
 					current[len(current)-1].Text += data.Text
 				} else {
-					current = append(current, Message{Role: "assistant", Text: data.Text})
+					current = append(current, Message{Role: "assistant", Text: data.Text, Time: event.Time})
 				}
 				forceAssistantBoundary = false
 			}
