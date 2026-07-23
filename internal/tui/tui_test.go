@@ -29,6 +29,15 @@ type rememberTUIStreamer struct{}
 
 type recapTUIStreamer struct{ request api.ResponseRequest }
 type promptSuggestionTUIStreamer struct{ request api.ResponseRequest }
+type modelTUIStreamer struct{ history []session.Message }
+
+func (s *modelTUIStreamer) StreamResponse(context.Context, api.ResponseRequest, func(string)) (api.StreamResult, error) {
+	return api.StreamResult{ResponseID: "new-response", Text: "done"}, nil
+}
+
+func (s *modelTUIStreamer) RewindHistory(messages []session.Message) {
+	s.history = append([]session.Message(nil), messages...)
+}
 
 func (s *promptSuggestionTUIStreamer) StreamResponse(_ context.Context, request api.ResponseRequest, _ func(string)) (api.StreamResult, error) {
 	s.request = request
@@ -1912,6 +1921,128 @@ func TestRewindModesAlwaysOfferConversationAndCombinedRewind(t *testing.T) {
 	withFiles := rewindModes([]session.RewindPoint{{PromptIndex: 0, HasFileChanges: true}}, 0)
 	if !slices.Equal(withFiles, []agent.RewindMode{agent.RewindAll, agent.RewindConversationOnly, agent.RewindFilesOnly}) {
 		t.Fatalf("modes with files=%#v", withFiles)
+	}
+}
+
+func modelTUIFixture(t *testing.T) (*model, *modelTUIStreamer) {
+	t.Helper()
+	logger, err := session.NewLoggerWithID(t.TempDir(), "tui-model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = logger.Close() })
+	if err := logger.AppendPrompt("existing prompt", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append("model_response", map[string]any{"response_id": "old-response", "text": "existing answer", "tool_call_count": 0}); err != nil {
+		t.Fatal(err)
+	}
+	streamer := &modelTUIStreamer{}
+	runner := &agent.Runner{
+		Logger: logger, SessionPath: logger.Path(), ModelID: "plain", Model: "plain-api", ReasoningEffort: "",
+		ModelOptions: []agent.ModelOption{
+			{ID: "plain", Model: "plain-api", Name: "Plain"},
+			{ID: "reasoning", Model: "reasoning-api", Name: "Reasoning X", SupportsReasoningEffort: true, ReasoningEffort: "low", ReasoningEfforts: []agent.ReasoningEffortOption{{ID: "low", Value: "low", Label: "Low"}, {ID: "max", Value: "xhigh", Label: "Maximum"}}},
+			{ID: "hidden", Name: "Hidden", Hidden: true},
+		},
+		ResolveModel: func(id string) (agent.ModelRuntime, error) {
+			return agent.ModelRuntime{ID: id, Client: streamer, Model: id + "-api", ContextWindow: 4096, CompactThresholdPercent: 80, ReasoningEffort: "low", SupportsReasoningEffort: id == "reasoning"}, nil
+		},
+	}
+	m := &model{ctx: context.Background(), runner: runner, modelName: "Plain", previousID: "old-response", width: 60, height: 18, status: "ready", suggestionsEnabled: true}
+	m.transcript.WriteString("You\nexisting prompt\n\nGork\nexisting answer")
+	return m, streamer
+}
+
+func TestTUIModelPickerSwitchesModelAndEffort(t *testing.T) {
+	m, streamer := modelTUIFixture(t)
+	m.setInput("/model")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.modelSelect == nil || m.modelSelect.phase != modelSelectModel || len(m.modelSelect.models) != 2 || strings.Contains(stripUIANSI(m.View().Content), "Hidden") {
+		t.Fatalf("command=%v state=%#v view=%q", command != nil, m.modelSelect, stripUIANSI(m.View().Content))
+	}
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	m = updated.(*model)
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if m.modelSelect.phase != modelSelectEffort || len(m.modelSelect.efforts) != 2 {
+		t.Fatalf("effort state=%#v", m.modelSelect)
+	}
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	m = updated.(*model)
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.modelSelect != nil || m.runner.ModelID != "reasoning" || m.runner.ReasoningEffort != "xhigh" || m.modelName != "Reasoning X" || m.previousID != "" || m.contextWindow != 4096 || m.inputTokens != 0 {
+		t.Fatalf("command=%v state=%#v runner=%#v model=%q previous=%q", command != nil, m.modelSelect, m.runner, m.modelName, m.previousID)
+	}
+	if len(streamer.history) != 2 || !strings.Contains(m.status, "Reasoning X (xhigh)") || !strings.Contains(m.transcript.String(), "existing answer") {
+		t.Fatalf("history=%#v status=%q transcript=%q", streamer.history, m.status, m.transcript.String())
+	}
+}
+
+func TestTUIModelCommandsAndPickerNavigation(t *testing.T) {
+	m, _ := modelTUIFixture(t)
+	m.setInput("/model Reasoning X max")
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if m.runner.ModelID != "reasoning" || m.runner.ReasoningEffort != "xhigh" {
+		t.Fatalf("direct model id=%q effort=%q status=%q", m.runner.ModelID, m.runner.ReasoningEffort, m.status)
+	}
+	m.setInput("/effort low")
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if m.runner.ReasoningEffort != "low" || !strings.Contains(m.status, "Reasoning X (low)") {
+		t.Fatalf("direct effort=%q status=%q", m.runner.ReasoningEffort, m.status)
+	}
+	m.setInput("/effort")
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if m.modelSelect == nil || m.modelSelect.phase != modelSelectEffort || !m.modelSelect.effortOnly || m.modelSelect.selected != 0 {
+		t.Fatalf("effort picker=%#v", m.modelSelect)
+	}
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
+	m = updated.(*model)
+	if m.modelSelect != nil {
+		t.Fatalf("effort picker was not dismissed=%#v", m.modelSelect)
+	}
+	m.setInput("/model")
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if m.modelSelect.phase != modelSelectEffort {
+		t.Fatalf("picker state=%#v", m.modelSelect)
+	}
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
+	m = updated.(*model)
+	if m.modelSelect.phase != modelSelectModel {
+		t.Fatalf("picker back state=%#v", m.modelSelect)
+	}
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
+	m = updated.(*model)
+	if m.modelSelect != nil || m.status != "ready" {
+		t.Fatalf("picker dismissed=%#v status=%q", m.modelSelect, m.status)
+	}
+	m.setInput("/model missing")
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if !strings.Contains(m.status, "unknown or unavailable") {
+		t.Fatalf("invalid status=%q", m.status)
+	}
+	m.runner.SetDefaultModel = func(string) error { return fmt.Errorf("disk full") }
+	m.previousID = "active-response"
+	m.setInput("/model Plain")
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if m.runner.ModelID != "plain" || m.modelName != "Plain" || m.previousID != "" || !strings.Contains(m.status, "persist default model") {
+		t.Fatalf("partial persistence model=%q name=%q previous=%q status=%q", m.runner.ModelID, m.modelName, m.previousID, m.status)
+	}
+	m.btwRunning = true
+	m.setInput("/model Reasoning X")
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if !strings.Contains(updated.(*model).status, "background model request") || updated.(*model).runner.ModelID != "plain" {
+		t.Fatalf("busy status=%q model=%q", updated.(*model).status, updated.(*model).runner.ModelID)
 	}
 }
 

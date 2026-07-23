@@ -141,6 +141,7 @@ type Runner struct {
 	ResolveModel            func(string) (ModelRuntime, error)
 	ReloadModels            func() (ModelCatalogUpdate, error)
 	ReloadModelCache        func() (ModelCatalogUpdate, error)
+	SetDefaultModel         func(string) error
 	OnModelChanged          func(ModelRuntime)
 	ReasoningEffort         string
 	PermissionClassifier    PermissionClassifierConfig

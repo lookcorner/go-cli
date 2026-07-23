@@ -419,6 +419,7 @@ type model struct {
 	pendingRecap  string
 	btwRunning    bool
 	rewind        *rewindState
+	modelSelect   *modelSelectState
 	lastEmptyEsc  time.Time
 	questionClick struct {
 		option int
@@ -535,6 +536,24 @@ type rewindState struct {
 	err      string
 }
 
+type modelSelectPhase uint8
+
+const (
+	modelSelectModel modelSelectPhase = iota
+	modelSelectEffort
+	modelSelectError
+)
+
+type modelSelectState struct {
+	phase      modelSelectPhase
+	models     []agent.ModelOption
+	efforts    []agent.ReasoningEffortOption
+	selected   int
+	model      agent.ModelOption
+	effortOnly bool
+	err        string
+}
+
 type questionState struct {
 	event       questionEvent
 	index       int
@@ -563,6 +582,9 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 	}
 	if options.ScrollLines != nil {
 		m.scrollLines = int(*options.ScrollLines)
+	}
+	if current, ok := runner.CurrentModel(); ok && strings.TrimSpace(current.Name) != "" {
+		m.modelName = current.Name
 	}
 	if runner.Tools != nil {
 		m.planMode = runner.Tools.PlanModeActive()
@@ -1083,6 +1105,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.rewind != nil {
 		return m.handleRewindKey(msg)
 	}
+	if m.modelSelect != nil {
+		return m.handleModelSelectKey(msg)
+	}
 	if key.Code != tea.KeyEsc {
 		m.lastEmptyEsc = time.Time{}
 	}
@@ -1262,7 +1287,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "/quit", "/exit":
 			return m, tea.Quit
 		case "/help":
-			m.appendSystem("# Commands\n\n`! <command>` `/always-approve` `/btw <question>` `/compact` `/context` `/copy [N]` `/dream` `/exit` `/export [filename]` `/find` `/flush` `/help` `/history` `/loop` `/memory` `/multiline` `/plan [description]` `/queue` `/recap` `/remember` `/rename <title>` `/rewind` `/session-info` (`/status`, `/info`) `/tasks` `/transcript` `/view-plan`")
+			m.appendSystem("# Commands\n\n`! <command>` `/always-approve` `/btw <question>` `/compact` `/context` `/copy [N]` `/dream` `/effort [level]` `/exit` `/export [filename]` `/find` `/flush` `/help` `/history` `/loop` `/memory` `/model [name] [effort]` (`/m`) `/multiline` `/plan [description]` `/queue` `/recap` `/remember` `/rename <title>` `/rewind` `/session-info` (`/status`, `/info`) `/tasks` `/transcript` `/view-plan`")
 			m.status = "commands"
 			return m, nil
 		case "/queue":
@@ -1276,6 +1301,22 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, m.startRecap()
 		case "/rewind":
 			return m, m.openRewind(false)
+		case "/model", "/m":
+			arguments := strings.TrimSpace(strings.TrimPrefix(prompt, fields[0]))
+			if arguments == "" {
+				m.openModelSelect(false)
+				return m, nil
+			}
+			m.applyModelCommand(arguments)
+			return m, nil
+		case "/effort":
+			level := strings.TrimSpace(strings.TrimPrefix(prompt, "/effort"))
+			if level == "" {
+				m.openModelSelect(true)
+				return m, nil
+			}
+			m.applyModel(m.runner.ModelID, level)
+			return m, nil
 		case "/btw":
 			return m, m.startBtw(strings.TrimSpace(strings.TrimPrefix(prompt, "/btw")))
 		case "/export":
@@ -1516,6 +1557,196 @@ func (m *model) handleRunningKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	m.editInput(msg)
 	return m, nil
+}
+
+func (m *model) openModelSelect(effortOnly bool) {
+	if m.runner == nil || m.runner.ResolveModel == nil {
+		m.status = "model switching unavailable"
+		return
+	}
+	if m.recapRunning || m.btwRunning {
+		m.status = "wait for the background model request before switching models"
+		return
+	}
+	state := &modelSelectState{models: m.runner.AvailableModels(), effortOnly: effortOnly}
+	if effortOnly {
+		current, ok := m.runner.CurrentModel()
+		if !ok {
+			m.status = "no active model"
+			return
+		}
+		state.model = current
+		state.efforts = m.runner.CurrentReasoningEfforts()
+		if len(state.efforts) == 0 {
+			m.status = fmt.Sprintf("model %q does not support reasoning effort", current.Name)
+			return
+		}
+		state.phase = modelSelectEffort
+		state.selected = selectedEffort(state.efforts, m.runner.ReasoningEffort)
+	} else {
+		if len(state.models) == 0 {
+			m.status = "no selectable models"
+			return
+		}
+		state.phase = modelSelectModel
+		for index, option := range state.models {
+			if option.ID == m.runner.ModelID {
+				state.selected = index
+				break
+			}
+		}
+	}
+	m.promptSerial++
+	m.clearPromptSuggestion()
+	m.modelSelect = state
+	m.scroll = 0
+	m.status = "select a model"
+	if effortOnly {
+		m.status = "select reasoning effort"
+	}
+}
+
+func (m *model) handleModelSelectKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	state := m.modelSelect
+	key := msg.Key()
+	if key.Code == tea.KeyEsc {
+		if state.phase == modelSelectEffort && !state.effortOnly {
+			state.phase = modelSelectModel
+			state.efforts = nil
+			state.selected = 0
+			for index, option := range state.models {
+				if option.ID == state.model.ID {
+					state.selected = index
+					break
+				}
+			}
+			m.status = "select a model"
+			return m, nil
+		}
+		m.modelSelect = nil
+		m.status = "ready"
+		return m, nil
+	}
+	if state.phase == modelSelectError {
+		if key.Code == tea.KeyEnter {
+			m.modelSelect = nil
+			m.status = "ready"
+		}
+		return m, nil
+	}
+	items := len(state.models)
+	if state.phase == modelSelectEffort {
+		items = len(state.efforts)
+	}
+	if key.Code == tea.KeyUp || key.Text == "k" {
+		state.selected = max(0, state.selected-1)
+		return m, nil
+	}
+	if key.Code == tea.KeyDown || key.Text == "j" {
+		state.selected = min(items-1, state.selected+1)
+		return m, nil
+	}
+	if key.Code != tea.KeyEnter || items == 0 {
+		return m, nil
+	}
+	if state.phase == modelSelectModel {
+		state.model = state.models[state.selected]
+		if state.model.SupportsReasoningEffort {
+			state.efforts = agent.ReasoningEfforts(state.model)
+			state.phase = modelSelectEffort
+			current := state.model.ReasoningEffort
+			if state.model.ID == m.runner.ModelID {
+				current = m.runner.ReasoningEffort
+			}
+			state.selected = selectedEffort(state.efforts, current)
+			m.status = "select reasoning effort"
+			return m, nil
+		}
+		m.applyModelCommand(state.model.ID)
+		return m, nil
+	}
+	effort := state.efforts[state.selected]
+	m.applyModel(state.model.ID, effort.ID)
+	return m, nil
+}
+
+func (m *model) applyModelCommand(arguments string) {
+	if m.runner == nil {
+		m.status = "model switching unavailable"
+		return
+	}
+	if m.recapRunning || m.btwRunning {
+		m.status = "wait for the background model request before switching models"
+		return
+	}
+	option, err := m.runner.SwitchModelCommand(arguments)
+	m.finishModelSwitch(option, err)
+}
+
+func (m *model) applyModel(id, effort string) {
+	if m.runner == nil {
+		m.status = "model switching unavailable"
+		return
+	}
+	if m.recapRunning || m.btwRunning {
+		m.status = "wait for the background model request before switching models"
+		return
+	}
+	option, err := m.runner.SwitchModel(id, effort)
+	m.finishModelSwitch(option, err)
+}
+
+func (m *model) finishModelSwitch(option agent.ModelOption, err error) {
+	if err != nil && option.ID == "" {
+		if m.modelSelect != nil {
+			m.modelSelect.phase, m.modelSelect.err = modelSelectError, err.Error()
+		}
+		m.status = "model switch failed: " + err.Error()
+		return
+	}
+	m.modelSelect = nil
+	m.previousID = ""
+	m.inputTokens = 0
+	m.contextWindow = m.runner.ContextWindow
+	m.modelName = option.Name
+	if strings.TrimSpace(m.modelName) == "" {
+		m.modelName = option.Model
+	}
+	m.promptSerial++
+	m.clearPromptSuggestion()
+	m.status = "model switched to " + m.modelName
+	if m.runner.ReasoningEffort != "" {
+		m.status += " (" + m.runner.ReasoningEffort + ")"
+	}
+	if err != nil {
+		m.status += "; " + err.Error()
+	}
+}
+
+func selectedEffort(efforts []agent.ReasoningEffortOption, current string) int {
+	for index, effort := range efforts {
+		if matchesEffort(effort, current) {
+			return index
+		}
+	}
+	for index, effort := range efforts {
+		if effort.Default {
+			return index
+		}
+	}
+	return 0
+}
+
+func matchesEffort(effort agent.ReasoningEffortOption, current string) bool {
+	current = strings.TrimSpace(current)
+	if current == "" {
+		return false
+	}
+	value := effort.Value
+	if value == "" {
+		value = effort.ID
+	}
+	return strings.EqualFold(effort.ID, current) || strings.EqualFold(value, current)
 }
 
 func (m *model) showTasks() {
@@ -2724,7 +2955,9 @@ func (m *model) View() tea.View {
 	header := fmt.Sprintf("\x1b[1m Gork Go\x1b[0m%s  \x1b[2m%s · %s\x1b[0m", mode, truncate(m.modelName, 24), truncate(m.workspace, max(width-45, 10)))
 	header = padRight(truncateANSIUnsafe(header, width), width)
 	content := m.transcript.String()
-	if m.rewind != nil {
+	if m.modelSelect != nil {
+		content = m.modelSelectContent()
+	} else if m.rewind != nil {
 		content = m.rewindContent()
 	} else if m.planReview != nil {
 		content = "# Review implementation plan\n\n" + m.planReview.event.event.PlanContent
@@ -2757,7 +2990,9 @@ func (m *model) View() tea.View {
 	body := strings.Join(visible, "\n")
 
 	var footer string
-	if m.rewind != nil {
+	if m.modelSelect != nil {
+		footer = "\x1b[1;33mModel\x1b[0m\n\x1b[2m" + truncate(m.modelSelectHint(), width) + "\x1b[0m"
+	} else if m.rewind != nil {
 		footer = "\x1b[1;33mRewind\x1b[0m\n\x1b[2m" + truncate(m.rewindHint(), width) + "\x1b[0m"
 	} else if m.remember != nil {
 		tab := "enhancing..."
@@ -2875,6 +3110,64 @@ func (m *model) viewerContent() string {
 		return ""
 	}
 	return "# " + m.viewer.title + "\n\n" + strings.TrimSpace(m.viewer.content)
+}
+
+func (m *model) modelSelectContent() string {
+	state := m.modelSelect
+	if state == nil {
+		return ""
+	}
+	if state.phase == modelSelectError {
+		return "# Model switch failed\n\n" + state.err
+	}
+	if state.phase == modelSelectEffort {
+		lines := make([]string, 0, len(state.efforts))
+		for _, effort := range state.efforts {
+			label := effort.Label
+			if label == "" {
+				label = effort.ID
+			}
+			suffix := ""
+			if state.model.ID == m.runner.ModelID && matchesEffort(effort, m.runner.ReasoningEffort) {
+				suffix = " (current)"
+			} else if state.model.ID != m.runner.ModelID && (effort.Default || matchesEffort(effort, state.model.ReasoningEffort)) {
+				suffix = " (default)"
+			}
+			lines = append(lines, fmt.Sprintf("%s%s · %s", label, suffix, effort.ID))
+		}
+		name := state.model.Name
+		if name == "" {
+			name = state.model.Model
+		}
+		return fmt.Sprintf("# Reasoning effort for %s\n\n%s", name, selectedLines(lines, state.selected))
+	}
+	lines := make([]string, 0, len(state.models))
+	for _, option := range state.models {
+		name := option.Name
+		if name == "" {
+			name = option.Model
+		}
+		suffix := ""
+		if option.ID == m.runner.ModelID {
+			suffix = " (current)"
+		}
+		line := name + suffix
+		if option.Description != "" {
+			line += " · " + strings.Join(strings.Fields(option.Description), " ")
+		}
+		lines = append(lines, line)
+	}
+	return "# Select model\n\n" + selectedWindow(lines, state.selected, max(m.contentHeight()-4, 1))
+}
+
+func (m *model) modelSelectHint() string {
+	if m.modelSelect != nil && m.modelSelect.phase == modelSelectError {
+		return "Enter/Esc close"
+	}
+	if m.modelSelect != nil && m.modelSelect.phase == modelSelectEffort && !m.modelSelect.effortOnly {
+		return "Up/Down select · Enter switch · Esc models"
+	}
+	return "Up/Down select · Enter switch · Esc cancel"
 }
 
 func (m *model) rewindContent() string {
@@ -3027,7 +3320,7 @@ func renderedLabelContains(line, label string, x, width int) bool {
 }
 
 func (m *model) contentHeight() int {
-	if m.question != nil || m.planReview != nil || m.remember != nil || m.rememberInput || m.rewind != nil {
+	if m.question != nil || m.planReview != nil || m.remember != nil || m.rememberInput || m.rewind != nil || m.modelSelect != nil {
 		return max(m.height-7, 3)
 	}
 	if m.historySearch != nil {

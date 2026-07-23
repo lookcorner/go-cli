@@ -500,6 +500,13 @@ TUI first asks whether to cancel it. Rewind can restore the conversation and
 files together, the conversation only, or files only. File restores preview
 external conflicts before confirmation, conversation rewinds preserve an
 append-only branch, and the removed prompt is returned to the composer.
+`/model` (or `/m`) opens the selectable model picker; `/model <name>` switches
+immediately and atomically saves that model as the user default. Reasoning
+models continue to a model-specific effort picker. `/model <name> <effort>` and
+`/effort <level>` change only the current session. A switch preserves completed
+conversation history, starts a fresh provider response chain, and updates future
+subagents; it is rejected while a turn, recap, or side question is using the
+model.
 `/export` copies the completed conversation as Markdown; `/export <filename>`
 writes it to disk with `~`, spaces, relative paths, and parent creation supported.
 While a turn is running, additional prompts are queued FIFO; `/queue` prints a

@@ -548,7 +548,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		ListSubagents: subagents.List, GetSubagent: subagents.Output, KillSubagent: subagents.Kill,
 		ListTasks: registry.BackgroundTasks, KillTask: registry.KillBackgroundTask,
 		SessionID: logger.ID(), SessionPath: logger.Path(), Workspace: ws.Root(),
-		Model: cfg.Model, Instructions: cfg.SystemPrompt, MaxSteps: cfg.MaxSteps,
+		ModelID: acpSessionModelID(cfg, ""), Model: cfg.Model, ModelOptions: acpModelOptions(cfg), ReasoningEffort: cfg.ReasoningEffort,
+		Instructions: cfg.SystemPrompt, MaxSteps: cfg.MaxSteps,
 		PermissionClassifier: permissionClassifier,
 		TextOutput:           stdout, StatusOutput: stderr,
 		ContextWindow: cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,
@@ -557,6 +558,28 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		OpenMemory:       memoryStoreOpener(cfg.Memory, ws.Root(), logger.ID()),
 		UpdateMCPServers: mcpRuntime.Update, MCPServers: mcpRuntime.Configs,
 	}
+	runner.ResolveModel = func(id string) (agent.ModelRuntime, error) {
+		resolvedID, resolved, ok := cfg.ResolveModelEntry(id)
+		if !ok {
+			return agent.ModelRuntime{}, fmt.Errorf("unknown model id %q", id)
+		}
+		client, err := newModelClient(resolved, tokenProvider)
+		if err != nil {
+			return agent.ModelRuntime{}, err
+		}
+		return agent.ModelRuntime{
+			ID: resolvedID, Client: client, Model: resolved.Model,
+			ContextWindow: resolved.ContextWindow, CompactThresholdPercent: resolved.AutoCompactThresholdPercent,
+			ReasoningEffort: resolved.ReasoningEffort, SupportsReasoningEffort: resolved.ModelSupportsReasoningEffort,
+		}, nil
+	}
+	runner.OnModelChanged = func(runtime agent.ModelRuntime) {
+		subagents.SetParentModel(runtime.Model, runtime.ContextWindow, runtime.CompactThresholdPercent)
+		if _, resolved, ok := cfg.ResolveModelEntry(runtime.ID); ok {
+			registry.ConfigureGoalRoles(goalRoleConfig(resolved, true))
+		}
+	}
+	runner.SetDefaultModel = func(id string) error { return config.UpdateDefaultModel(opts.configPath, id) }
 	rewindStore, err := workspace.NewRewindStore(ws, filepath.Join(filepath.Dir(logger.Path()), "rewind", logger.ID()+".jsonl"))
 	if err != nil {
 		return err
@@ -1665,8 +1688,8 @@ func acpModelOptions(cfg config.Config) []agent.ModelOption {
 			ID: id, Model: resolved.Model, Name: displayName, Description: profile.Description,
 			Hidden:        cfg.ModelSelectable(id, resolved.Model) && !cfg.ModelVisible(id, resolved.Model),
 			Disallowed:    !cfg.ModelSelectable(id, resolved.Model),
-			ContextWindow: resolved.ContextWindow, ReasoningEffort: profile.ReasoningEffort,
-			SupportsReasoningEffort: profile.SupportsReasoningEffort, ReasoningEfforts: acpReasoningEffortOptions(profile.ReasoningEfforts),
+			ContextWindow: resolved.ContextWindow, ReasoningEffort: resolved.ReasoningEffort,
+			SupportsReasoningEffort: resolved.ModelSupportsReasoningEffort, ReasoningEfforts: acpReasoningEffortOptions(resolved.ModelReasoningEfforts),
 		})
 		seen[id] = true
 	}
