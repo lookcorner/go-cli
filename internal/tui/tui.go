@@ -535,6 +535,7 @@ type model struct {
 	jump          *jumpState
 	timelineHover *timelineHit
 	modelSelect   *modelSelectState
+	settings      *settingsState
 	sessionSelect *sessionSelectState
 	forkChoice    *forkChoiceState
 	mcp           *mcpModal
@@ -1371,6 +1372,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.mcp != nil {
 		return m.handleMCPKey(msg)
 	}
+	if m.settings != nil {
+		return m.handleSettingsKey(msg)
+	}
 	if m.sessionSelect != nil {
 		return m.handleSessionSelectKey(msg)
 	}
@@ -1662,8 +1666,11 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 					imagineCommands += " `/imagine-video <description>`"
 				}
 			}
-			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + announcementCommand + " `/btw <question>` `/compact` `/compact-mode` `/context` `/copy [N]` `/dream` `/effort [level]` `/exit` `/export [filename]`" + feedbackCommand + " `/find` `/flush` `/fork [--worktree|--no-worktree] [directive]` `/help` `/history`" + imagineCommands + " `/jump` `/loop` `/memory`" + mcpCommand + " `/model [name] [effort]` (`/m`) `/multiline` `/new` (`/clear`) `/plan [description]` `/privacy [opt-out]` `/queue` `/recap` `/release-notes` (`/changelog`) `/remember` `/rename <title>` `/resume` `/rewind` `/session-info` (`/status`, `/info`)" + shareCommand + " `/tasks` `/terminal-setup` `/theme [name]` (`/t`)" + mouseCommand + " `/timeline` `/timestamps` `/transcript` `/usage [show|manage]` (`/cost`) `/view-plan` `/vim-mode`")
+			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + announcementCommand + " `/btw <question>` `/compact` `/compact-mode` `/context` `/copy [N]` `/dream` `/effort [level]` `/exit` `/export [filename]`" + feedbackCommand + " `/find` `/flush` `/fork [--worktree|--no-worktree] [directive]` `/help` `/history`" + imagineCommands + " `/jump` `/loop` `/memory`" + mcpCommand + " `/model [name] [effort]` (`/m`) `/multiline` `/new` (`/clear`) `/plan [description]` `/privacy [opt-out]` `/queue` `/recap` `/release-notes` (`/changelog`) `/remember` `/rename <title>` `/resume` `/rewind` `/session-info` (`/status`, `/info`) `/settings`" + shareCommand + " `/tasks` `/terminal-setup` `/theme [name]` (`/t`)" + mouseCommand + " `/timeline` `/timestamps` `/transcript` `/usage [show|manage]` (`/cost`) `/view-plan` `/vim-mode`")
 			m.status = "commands"
+			return m, nil
+		case "/settings", "/config", "/preferences", "/prefs":
+			m.openSettings()
 			return m, nil
 		case "/mcps":
 			m.openMCPModal()
@@ -3661,6 +3668,8 @@ func (m *model) View() tea.View {
 	content := m.transcriptText()
 	if m.mcp != nil {
 		content = m.mcpContent()
+	} else if m.settings != nil {
+		content = m.settingsContent()
 	} else if m.sessionSelect != nil {
 		content = m.sessionSelectContent()
 	} else if m.forkChoice != nil {
@@ -3711,6 +3720,8 @@ func (m *model) View() tea.View {
 	var footer string
 	if m.mcp != nil {
 		footer = ansiBold + colors.modal + "MCP servers" + ansiReset + "\n" + ansiDim + truncate(m.mcpHint(), width) + ansiReset
+	} else if m.settings != nil {
+		footer = ansiBold + colors.modal + "Settings" + ansiReset + "\n" + ansiDim + truncate("Up/Down select | Enter/Space change | Esc close", width) + ansiReset
 	} else if m.sessionSelect != nil {
 		footer = ansiBold + colors.modal + "Resume session" + ansiReset + "\n> " + renderInput(m.sessionSelect.query, m.sessionSelect.cursor, max(width-2, 1)) + "\n" + ansiDim + truncate(m.sessionSelectHint(), width) + ansiReset
 	} else if m.forkChoice != nil {
@@ -4195,7 +4206,7 @@ func renderedLabelContains(line, label string, x, width int) bool {
 
 func (m *model) contentHeight() int {
 	banner := m.announcementHeight()
-	if m.question != nil || m.planReview != nil || m.remember != nil || m.rememberInput || m.rewind != nil || m.jump != nil || m.modelSelect != nil || m.sessionSelect != nil || m.forkChoice != nil || m.mcp != nil {
+	if m.question != nil || m.planReview != nil || m.remember != nil || m.rememberInput || m.rewind != nil || m.jump != nil || m.modelSelect != nil || m.settings != nil || m.sessionSelect != nil || m.forkChoice != nil || m.mcp != nil {
 		return max(m.height-7-banner, 3)
 	}
 	if m.historySearch != nil {

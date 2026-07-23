@@ -513,6 +513,11 @@ state if the configuration write fails.
 columns wide, conversations with two or more turns reserve a two-column rail:
 the highlighted tick follows the turn at the viewport top, chevrons step between
 turns, clicking a tick top-aligns it, and hovering shows the prompt preview.
+`/settings` (aliases `/config`, `/preferences`, and `/prefs`) opens a keyboard
+settings panel for timestamps, the timeline, compact mode, Vim navigation, and
+the terminal theme. Enter or Space changes the selected value through the same
+atomic configuration writers as the individual commands, including rollback on
+write failure.
 `/theme [name]` (alias `/t`) changes the terminal palette immediately and saves
 `[ui].theme`. Supported values are `groknight`, `grokday`, `tokyonight`,
 `rosepine-moon`, `oscura-midnight`, and `auto`; aliases such as `dark`, `light`,
