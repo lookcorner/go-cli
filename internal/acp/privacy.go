@@ -8,11 +8,12 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/auth"
 	"github.com/lookcorner/go-cli/internal/version"
 )
 
-const retentionLockedMessage = "Gork Build locks coding data retention to opt-out; opt-in is not available."
+const retentionLockedMessage = agent.PrivacyLockedMessage
 
 func (s *Server) handlePrivacy(ctx context.Context, incoming message) {
 	var params struct {

@@ -3232,6 +3232,11 @@ func interactiveLoop(
 				prompt = ""
 				continue
 			}
+			if result, ok := agent.ParsePrivacyCommand(prompt); ok {
+				fmt.Fprintln(stderr, "[gork]", result.Message)
+				prompt = ""
+				continue
+			}
 			if note, ok := tools.ParseRememberCommand(prompt); ok {
 				if note == "" {
 					rememberMode = true
@@ -3279,7 +3284,7 @@ func interactiveLoop(
 			case "/exit", "/quit":
 				return nil
 			case "/help":
-				fmt.Fprintln(stderr, "Commands: ! <command>, /compact, /context, /flush, /dream, /remember [text], /memory [on|off], /loop, /session-info (/status, /info), /help, /exit. Every other line is sent as a prompt.")
+				fmt.Fprintln(stderr, "Commands: ! <command>, /compact, /context, /flush, /dream, /remember [text], /memory [on|off], /loop, /privacy [opt-out], /session-info (/status, /info), /help, /exit. Every other line is sent as a prompt.")
 				prompt = ""
 				continue
 			case "/session-info", "/status", "/info":

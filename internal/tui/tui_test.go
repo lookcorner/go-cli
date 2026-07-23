@@ -1683,6 +1683,47 @@ func TestInstantInfoCommandsDoNotRunModelTurn(t *testing.T) {
 	}
 }
 
+func TestPrivacyCommandsDoNotRunModelTurn(t *testing.T) {
+	tests := []struct {
+		prompt, want, status string
+	}{
+		{"/privacy", "Product: Gork Build", "privacy status"},
+		{"/privacy opt-out", "Coding data sharing: Opt out", "privacy opt-out"},
+		{"/privacy OUT", "Coding data sharing: Opt out", "privacy opt-out"},
+		{"/privacy Private", "Coding data sharing: Opt out", "privacy opt-out"},
+		{"/privacy opt-in", agent.PrivacyLockedMessage, "privacy locked"},
+		{"/privacy IN", agent.PrivacyLockedMessage, "privacy locked"},
+		{"/privacy Share", agent.PrivacyLockedMessage, "privacy locked"},
+		{"/privacy off", "Unknown argument", "privacy argument invalid"},
+	}
+	for _, test := range tests {
+		t.Run(test.prompt, func(t *testing.T) {
+			m := &model{ctx: context.Background(), runner: &agent.Runner{}}
+			m.setInput(test.prompt)
+			updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+			m = updated.(*model)
+			if command != nil || m.running || m.status != test.status || !strings.Contains(m.transcript.String(), test.want) {
+				t.Fatalf("command=%v running=%v status=%q transcript=%q", command != nil, m.running, m.status, m.transcript.String())
+			}
+		})
+	}
+
+	m := &model{ctx: context.Background(), runner: &agent.Runner{}}
+	m.setInput("/help")
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if !strings.Contains(updated.(*model).transcript.String(), "/privacy [opt-out]") {
+		t.Fatalf("help=%q", updated.(*model).transcript.String())
+	}
+
+	m = &model{ctx: context.Background(), runner: &agent.Runner{}}
+	m.setInput("/privacyx")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command == nil || !m.running {
+		t.Fatalf("/privacyx command=%v running=%v", command != nil, m.running)
+	}
+}
+
 func TestMultilineCursorNavigationAndUndo(t *testing.T) {
 	m := &model{}
 	press := func(key tea.Key) {

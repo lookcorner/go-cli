@@ -51,6 +51,7 @@ func availableCommands(runner *agent.Runner, workspaceSkills bool) []map[string]
 	commands := []map[string]any{
 		availableCommand("compact", "Compress conversation history to save context window", "optional context about what to preserve", nil),
 		availableCommand("always-approve", "Toggle always-approve mode (skip all permission prompts)", "on|off", nil),
+		availableCommand("privacy", "Show privacy status (coding data retention is locked to opt-out)", "opt-out", nil),
 	}
 	if runner != nil {
 		memoryConfigured, memoryEnabled := runner.MemoryAvailability()
@@ -380,6 +381,25 @@ func (s *Server) handleSessionStatusPrompt(incoming message, current *session, l
 		}
 		s.notify(id, map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": text}})
 	}
+	s.finishPrompt(incoming, current, lifecycle, "end_turn", agent.Result{}, nil, "")
+}
+
+func (s *Server) handlePrivacySlashPrompt(incoming message, current *session, lifecycle promptLifecycle, result agent.PrivacyResult) {
+	current.mu.Lock()
+	if current.closed {
+		current.mu.Unlock()
+		s.failPrompt(incoming, current, lifecycle, "session is closed")
+		return
+	}
+	if current.running {
+		current.mu.Unlock()
+		s.failPrompt(incoming, current, lifecycle, "session already has an active prompt")
+		return
+	}
+	id := current.id
+	current.mu.Unlock()
+
+	s.sendCommandOutput(id, result.Message)
 	s.finishPrompt(incoming, current, lifecycle, "end_turn", agent.Result{}, nil, "")
 }
 

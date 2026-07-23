@@ -129,6 +129,44 @@ func TestInteractiveSessionInfoAliasesAndContext(t *testing.T) {
 	}
 }
 
+func TestInteractivePrivacyCommandsDoNotRunModelTurn(t *testing.T) {
+	streamer := &interactiveStatusStreamer{}
+	runner := &agent.Runner{Client: streamer, Model: "test"}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	input := newTerminalInput(ctx, bufio.NewReader(strings.NewReader("/privacy\n/privacy private\n/privacy opt-in\n/privacy on\n/help\n/exit\n")))
+	var stderr bytes.Buffer
+	if err := interactiveLoop(ctx, runner, newScheduledWakeQueue(), input, io.Discard, &stderr, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	output := stderr.String()
+	for _, want := range []string{"Product: Gork Build", "Coding data sharing: Opt out", agent.PrivacyLockedMessage, "Unknown argument", "/privacy [opt-out]"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("missing %q in %q", want, output)
+		}
+	}
+	if streamer.calls != 0 {
+		t.Fatalf("model calls=%d output=%q", streamer.calls, output)
+	}
+}
+
+func TestInteractiveRememberModeTreatsPrivacyAsNoteText(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("GROK_HOME", root)
+	runner := &agent.Runner{}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	input := newTerminalInput(ctx, bufio.NewReader(strings.NewReader("/remember\n/privacy\ny\n/exit\n")))
+	var stderr bytes.Buffer
+	if err := interactiveLoop(ctx, runner, newScheduledWakeQueue(), input, io.Discard, &stderr, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(memory.GlobalPath(filepath.Join(root, "memory")))
+	if err != nil || !strings.Contains(string(content), "/privacy") || strings.Contains(stderr.String(), "Product: Gork Build") {
+		t.Fatalf("content=%q err=%v output=%q", content, err, stderr.String())
+	}
+}
+
 func TestNewPermissionClassifierConfig(t *testing.T) {
 	cfg := config.Config{Model: "main", Backend: "responses", BaseURL: "https://main.example/v1"}
 	inherited, err := newPermissionClassifierConfig(cfg, nil)

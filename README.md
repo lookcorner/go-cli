@@ -580,7 +580,10 @@ the selected prompt to the composer without submitting it.
 transcript to the terminal clipboard.
 `/help` lists local commands, `/session-info` (also `/status` or `/info`) shows
 the active session, workspace, model, completed turns, and latest available
-context-window usage; `/context` reports only the context usage.
+context-window usage; `/context` reports only the context usage. `/privacy`
+reports the build's enforced privacy state without calling the model.
+`/privacy opt-out`, `/privacy out`, and `/privacy private` confirm the locked
+state; opt-in aliases and ambiguous values such as `on` or `off` are rejected.
 In Vim mode, `/` opens incremental regular-expression search while scrollback is focused; Enter
 accepts the query, Up/Down or `n`/`N` navigates matches, and Esc closes it. `/find <pattern>`
 opens the same search directly from the prompt without sending a model turn.
@@ -753,7 +756,9 @@ poll checks for announcement changes every five minutes by default; set
 Clients can
 also enforce the privacy build's coding-data-retention opt-out through
 `x.ai/privacy/setCodingDataRetention`, including refresh-aware authentication and
-local profile synchronization. Authenticated clients can fetch reference-shaped
+local profile synchronization. ACP command discovery also exposes `/privacy`,
+which reports or confirms the locked state and completes locally without model
+inference. Authenticated clients can fetch reference-shaped
 credit usage through `x.ai/billing` and the current automatic top-up rule through
 `x.ai/auto-topup-rule`; both include the expected identity/client headers, retry
 once after an unauthorized response, and use live remote-settings metadata for
