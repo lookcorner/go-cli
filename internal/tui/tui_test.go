@@ -1344,6 +1344,100 @@ func TestMultilineSlashCommandAndAlias(t *testing.T) {
 	}
 }
 
+func TestFeedbackCommandUsesLocalSubmissionWithoutModelTurn(t *testing.T) {
+	var saved []session.UserFeedback
+	runner := &agent.Runner{ModelID: "current-profile", Model: "current-model", SubmitFeedback: func(feedback session.UserFeedback) error {
+		saved = append(saved, feedback)
+		return nil
+	}}
+	m := &model{ctx: context.Background(), runner: runner, width: 60, height: 16, status: "ready"}
+	m.setInput("/feedback direct feedback")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command == nil || !m.running || m.status != "saving feedback" || m.transcript.Len() != 0 {
+		t.Fatalf("direct start command=%v running=%v status=%q transcript=%q", command != nil, m.running, m.status, m.transcript.String())
+	}
+	updated, _ = m.Update(command())
+	m = updated.(*model)
+	if m.running || m.status != "feedback saved" || len(saved) != 1 || saved[0].Text != "direct feedback" || saved[0].ClientType != "tui" || saved[0].ModelID != "current-profile" || saved[0].ResolvedModelID != "current-model" || saved[0].TurnNumber == nil || *saved[0].TurnNumber != 0 {
+		t.Fatalf("direct result running=%v status=%q saved=%#v", m.running, m.status, saved)
+	}
+	if strings.Contains(m.transcript.String(), "You\n") || !strings.Contains(m.transcript.String(), "Feedback saved locally") {
+		t.Fatalf("feedback started a model turn or omitted result: %q", m.transcript.String())
+	}
+
+	m.setInput("/feedback")
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || !m.feedbackInput || m.status != "feedback mode" || !strings.Contains(stripUIANSI(m.View().Content), "~ ") {
+		t.Fatalf("feedback mode command=%v active=%v status=%q view=%q", command != nil, m.feedbackInput, m.status, stripUIANSI(m.View().Content))
+	}
+	m.setInput("mode feedback")
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command == nil || m.feedbackInput || !m.running {
+		t.Fatalf("mode submit command=%v active=%v running=%v", command != nil, m.feedbackInput, m.running)
+	}
+	updated, _ = m.Update(command())
+	m = updated.(*model)
+	if len(saved) != 2 || saved[1].Text != "mode feedback" {
+		t.Fatalf("mode feedback=%#v", saved)
+	}
+
+	m.setInput("/feedback")
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.feedbackInput || m.status != "feedback required" || !strings.Contains(m.transcript.String(), "Please provide feedback text.") || len(saved) != 2 {
+		t.Fatalf("empty command=%v active=%v status=%q transcript=%q saved=%d", command != nil, m.feedbackInput, m.status, m.transcript.String(), len(saved))
+	}
+
+	m.setInput("/feedback")
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	m.setInput("cancel me")
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
+	m = updated.(*model)
+	if command != nil || m.feedbackInput || string(m.input) != "" || m.status != "feedback cancelled" || len(saved) != 2 {
+		t.Fatalf("cancel command=%v active=%v input=%q status=%q saved=%d", command != nil, m.feedbackInput, m.input, m.status, len(saved))
+	}
+}
+
+func TestFeedbackCommandGateHelpAndFailure(t *testing.T) {
+	disabled := &model{ctx: context.Background(), runner: &agent.Runner{}, width: 60, height: 16, status: "ready"}
+	disabled.setInput("/feedback ignored")
+	updated, command := disabled.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	disabled = updated.(*model)
+	if command != nil || disabled.running || disabled.status != "feedback is disabled" || !strings.Contains(disabled.transcript.String(), agent.FeedbackDisabledMessage) {
+		t.Fatalf("disabled command=%v running=%v status=%q transcript=%q", command != nil, disabled.running, disabled.status, disabled.transcript.String())
+	}
+	disabled.setInput("/help")
+	updated, _ = disabled.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	disabled = updated.(*model)
+	if strings.Contains(disabled.transcript.String(), "`/feedback [text]`") {
+		t.Fatalf("disabled help exposed feedback: %q", disabled.transcript.String())
+	}
+
+	enabled := &model{ctx: context.Background(), runner: &agent.Runner{SubmitFeedback: func(session.UserFeedback) error {
+		return errors.New("disk full")
+	}}, width: 60, height: 16, status: "ready"}
+	enabled.setInput("/help")
+	updated, _ = enabled.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	enabled = updated.(*model)
+	if !strings.Contains(enabled.transcript.String(), "`/feedback [text]`") {
+		t.Fatalf("enabled help omitted feedback: %q", enabled.transcript.String())
+	}
+	enabled.setInput("/feedback cannot save")
+	updated, command = enabled.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	enabled = updated.(*model)
+	updated, _ = enabled.Update(command())
+	enabled = updated.(*model)
+	if enabled.running || enabled.status != "feedback failed" || !strings.Contains(enabled.transcript.String(), "Feedback could not be saved locally: disk full") {
+		t.Fatalf("failure running=%v status=%q transcript=%q", enabled.running, enabled.status, enabled.transcript.String())
+	}
+}
+
 func TestCopyAssistantMessageUsesSessionTranscript(t *testing.T) {
 	logger, err := session.NewLoggerWithID(t.TempDir(), "copy-session")
 	if err != nil {

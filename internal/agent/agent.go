@@ -118,6 +118,8 @@ type HistoryRewinder interface {
 	RewindHistory(messages []session.Message)
 }
 
+const FeedbackDisabledMessage = "Feedback is disabled. To enable, set GROK_FEEDBACK_ENABLED=true or [features] feedback = true in config.toml."
+
 type Runner struct {
 	Client                  ResponseStreamer
 	Tools                   *tools.Registry

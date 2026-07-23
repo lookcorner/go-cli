@@ -57,6 +57,37 @@ func TestSessionMetadataWithDisplayCWD(t *testing.T) {
 	}
 }
 
+func TestFeedbackSubmitterAddsSessionMetadata(t *testing.T) {
+	logger, err := session.NewLoggerWithID(t.TempDir(), "local-feedback")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logger.Close()
+	submit := feedbackSubmitter(logger, "grok-build", "grok-4", "/workspace")
+	if err := submit(session.UserFeedback{Text: "keep local", ClientType: "tui"}); err != nil {
+		t.Fatal(err)
+	}
+	events, err := session.Events(logger.Path(), "user_feedback")
+	if err != nil || len(events) != 1 {
+		t.Fatalf("events=%#v err=%v", events, err)
+	}
+	data := events[0].Data.(map[string]any)
+	if data["sessionId"] != logger.ID() || data["modelId"] != "grok-build" || data["resolvedModelId"] != "grok-4" || data["clientVersion"] != version.Current || data["cwd"] != "/workspace" || data["text"] != "keep local" {
+		t.Fatalf("feedback=%#v", data)
+	}
+	if err := submit(session.UserFeedback{Text: "current", ModelID: "selected", ResolvedModelID: "selected-api"}); err != nil {
+		t.Fatal(err)
+	}
+	events, err = session.Events(logger.Path(), "user_feedback")
+	if err != nil || len(events) != 2 {
+		t.Fatalf("events=%#v err=%v", events, err)
+	}
+	data = events[1].Data.(map[string]any)
+	if data["modelId"] != "selected" || data["resolvedModelId"] != "selected-api" {
+		t.Fatalf("current model metadata=%#v", data)
+	}
+}
+
 func (s failingGoalStreamer) StreamResponse(context.Context, api.ResponseRequest, func(string)) (api.StreamResult, error) {
 	return api.StreamResult{}, s.err
 }

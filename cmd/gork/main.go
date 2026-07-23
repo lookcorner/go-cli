@@ -559,6 +559,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		OpenMemory:       memoryStoreOpener(cfg.Memory, ws.Root(), logger.ID()),
 		UpdateMCPServers: mcpRuntime.Update, MCPServers: mcpRuntime.Configs,
 	}
+	if cfg.FeedbackEnabled {
+		runner.SubmitFeedback = feedbackSubmitter(logger, runner.ModelID, runner.Model, ws.Root())
+	}
 	runner.ResolveModel = func(id string) (agent.ModelRuntime, error) {
 		resolvedID, resolved, ok := cfg.ResolveModelEntry(id)
 		if !ok {
@@ -2567,16 +2570,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			SessionID:         logger.ID(), SessionPath: logger.Path(), Workspace: ws.Root(), PromptWorkspace: sessionConfig.DisplayCWD,
 		}
 		if cfg.FeedbackEnabled {
-			runner.SubmitFeedback = func(feedback session.UserFeedback) error {
-				feedback.SessionID = logger.ID()
-				feedback.ModelID = modelID
-				feedback.ResolvedModelID = sessionCfg.Model
-				if feedback.ClientVersion == "" {
-					feedback.ClientVersion = version.Current
-				}
-				feedback.CWD = ws.Root()
-				return logger.Append("user_feedback", feedback)
-			}
+			runner.SubmitFeedback = feedbackSubmitter(logger, modelID, sessionCfg.Model, ws.Root())
 		}
 		runner.ResolveModel = func(id string) (agent.ModelRuntime, error) {
 			modelCatalogMu.RLock()
@@ -2656,6 +2650,23 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		return err
 	}
 	return nil
+}
+
+func feedbackSubmitter(logger *session.Logger, modelID, resolvedModelID, cwd string) func(session.UserFeedback) error {
+	return func(feedback session.UserFeedback) error {
+		feedback.SessionID = logger.ID()
+		if feedback.ModelID == "" {
+			feedback.ModelID = modelID
+		}
+		if feedback.ResolvedModelID == "" {
+			feedback.ResolvedModelID = resolvedModelID
+		}
+		if feedback.ClientVersion == "" {
+			feedback.ClientVersion = version.Current
+		}
+		feedback.CWD = cwd
+		return logger.Append("user_feedback", feedback)
+	}
 }
 
 func resolvePermissionMode(cfg config.Config, cliValue string, cliSet bool) (tools.PermissionMode, error) {

@@ -496,6 +496,8 @@ saves `[ui].vim_mode`; a write failure restores the previous navigation mode.
 When `[ui].mouse_reporting_toggle` is enabled, `/toggle-mouse-reporting` toggles
 terminal mouse capture from any TUI focus, matching scrollback Ctrl-R without
 persisting the current capture state.
+When feedback is enabled, `/feedback <text>` saves feedback locally without a
+model turn; bare `/feedback` enters a dedicated input mode that Esc cancels.
 `/plan` idempotently enters Plan mode, while `/plan <description>` enters it and
 starts a planning turn. `/quit` and `/exit` close the TUI without a model turn.
 `/view-plan`, `/show-plan`, and `/plan-view` open the current confined plan file

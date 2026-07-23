@@ -104,6 +104,7 @@ type exportDoneEvent struct {
 	path string
 	err  error
 }
+type feedbackDoneEvent struct{ err error }
 type compactDoneEvent struct{ err error }
 type memoryFlushDoneEvent struct {
 	result agent.MemoryFlushResult
@@ -470,6 +471,7 @@ type model struct {
 	viewer         *readOnlyViewer
 	remember       *rememberReviewState
 	rememberInput  bool
+	feedbackInput  bool
 	rememberNonce  uint64
 	turnCancel     context.CancelFunc
 	initial        string
@@ -1005,6 +1007,21 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if command := m.startNext(); command != nil {
 			return m, command
 		}
+	case feedbackDoneEvent:
+		m.running = false
+		m.turnCancel = nil
+		if msg.err != nil {
+			message := "Feedback could not be saved locally: " + msg.err.Error()
+			m.appendSystem(message)
+			m.status = "feedback failed"
+		} else {
+			message := "Feedback saved locally; no feedback server is configured for this session."
+			m.appendSystem(message)
+			m.status = "feedback saved"
+		}
+		if command := m.startNext(); command != nil {
+			return m, command
+		}
 	case scheduledFiredEvent:
 		if msg.event.TaskID != m.activeTask {
 			duplicate := false
@@ -1241,6 +1258,12 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.status = "memory note cancelled"
 		return m, nil
 	}
+	if m.feedbackInput && key.Code == tea.KeyEsc {
+		m.feedbackInput = false
+		m.clearInput()
+		m.status = "feedback cancelled"
+		return m, nil
+	}
 	if !m.running {
 		if remainder := m.promptSuggestionGhost(); remainder != "" && ((key.Code == tea.KeyTab && key.Mod == 0) || (key.Code == tea.KeyRight && key.Mod == 0)) {
 			m.insertInput(remainder)
@@ -1327,9 +1350,18 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyEnter:
 		prompt := strings.TrimSpace(string(m.input))
 		if prompt == "" {
+			if m.feedbackInput {
+				m.feedbackInput = false
+				m.appendSystem("Please provide feedback text.")
+				m.status = "feedback required"
+			}
 			return m, nil
 		}
 		m.clearInput()
+		if m.feedbackInput {
+			m.feedbackInput = false
+			return m, m.submitFeedback(prompt)
+		}
 		if m.rememberInput {
 			m.rememberInput = false
 			return m.startRememberReview(prompt)
@@ -1363,7 +1395,11 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if m.mouseToggle {
 				mouseCommand = " `/toggle-mouse-reporting`"
 			}
-			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + " `/btw <question>` `/compact` `/context` `/copy [N]` `/dream` `/effort [level]` `/exit` `/export [filename]` `/find` `/flush` `/help` `/history` `/loop` `/memory` `/model [name] [effort]` (`/m`) `/multiline` `/plan [description]` `/queue` `/recap` `/remember` `/rename <title>` `/rewind` `/session-info` (`/status`, `/info`) `/tasks`" + mouseCommand + " `/transcript` `/view-plan` `/vim-mode`")
+			feedbackCommand := ""
+			if m.runner != nil && m.runner.SubmitFeedback != nil {
+				feedbackCommand = " `/feedback [text]`"
+			}
+			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + " `/btw <question>` `/compact` `/context` `/copy [N]` `/dream` `/effort [level]` `/exit` `/export [filename]`" + feedbackCommand + " `/find` `/flush` `/help` `/history` `/loop` `/memory` `/model [name] [effort]` (`/m`) `/multiline` `/plan [description]` `/queue` `/recap` `/remember` `/rename <title>` `/rewind` `/session-info` (`/status`, `/info`) `/tasks`" + mouseCommand + " `/transcript` `/view-plan` `/vim-mode`")
 			m.status = "commands"
 			return m, nil
 		case "/queue":
@@ -1400,6 +1436,19 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.running = true
 			m.status = "exporting conversation"
 			return m, runExport(m.runner, filename, m.workspace)
+		case "/feedback":
+			if m.runner == nil || m.runner.SubmitFeedback == nil {
+				m.appendSystem(agent.FeedbackDisabledMessage)
+				m.status = "feedback is disabled"
+				return m, nil
+			}
+			text := strings.TrimSpace(strings.TrimPrefix(prompt, "/feedback"))
+			if text == "" {
+				m.feedbackInput = true
+				m.status = "feedback mode"
+				return m, nil
+			}
+			return m, m.submitFeedback(text)
 		case "/rename", "/title":
 			title := strings.TrimSpace(strings.TrimPrefix(prompt, fields[0]))
 			if err := m.runner.RenameSession(title); err != nil {
@@ -1609,6 +1658,12 @@ func (m *model) toggleMultiline() {
 	} else {
 		m.status = "single-line input"
 	}
+}
+
+func (m *model) submitFeedback(text string) tea.Cmd {
+	m.running = true
+	m.status = "saving feedback"
+	return runFeedback(m.runner, text)
 }
 
 func (m *model) setPlanMode(active bool) error {
@@ -2892,6 +2947,20 @@ func runTurn(ctx context.Context, runner *agent.Runner, prompt, previousID strin
 	}
 }
 
+func runFeedback(runner *agent.Runner, text string) tea.Cmd {
+	return func() tea.Msg {
+		if runner == nil || runner.SubmitFeedback == nil {
+			return feedbackDoneEvent{err: errors.New("feedback is disabled")}
+		}
+		turn := int64(max(0, runner.SessionTurnCount()-1))
+		err := runner.SubmitFeedback(session.UserFeedback{
+			TurnNumber: &turn, ClientType: "tui", Text: strings.TrimSpace(text),
+			ModelID: runner.ModelID, ResolvedModelID: runner.Model,
+		})
+		return feedbackDoneEvent{err: err}
+	}
+}
+
 func runRecap(ctx context.Context, runner *agent.Runner, previousID string, serial uint64) tea.Cmd {
 	return func() tea.Msg {
 		text, err := runner.Recap(ctx, previousID)
@@ -3158,6 +3227,9 @@ func (m *model) View() tea.View {
 			inputLines = []string{"> "}
 		} else {
 			inputLines = renderPromptInputWithGhost(m.input, m.cursor, m.promptSuggestionGhost(), width, m.visiblePromptInputRows())
+			if m.feedbackInput && len(inputLines) > 0 {
+				inputLines[0] = "~ " + strings.TrimPrefix(inputLines[0], "> ")
+			}
 		}
 		hint := "Enter send · Shift/Alt-Enter newline · Ctrl-M multiline · Ctrl-Z undo"
 		if m.multiline {

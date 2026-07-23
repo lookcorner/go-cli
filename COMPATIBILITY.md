@@ -75,9 +75,10 @@ Hook-capable ACP sessions advertise and locally execute the reference
 `/hooks-remove` commands without starting a model turn. Command discovery also
 preserves the reference ordering across the implemented memory, Hook, Goal, and
 scheduler groups.
-Feedback-capable sessions advertise `/feedback`; submissions are persisted
-locally and deliberately use the reference `LocalOnly` outcome because this
-privacy build does not configure a feedback upload service.
+Feedback-capable ACP and TUI sessions advertise `/feedback`; submissions are
+persisted locally without a model turn and deliberately use the reference
+`LocalOnly` outcome because this privacy build does not configure a feedback
+upload service.
 The corresponding `x.ai/feedback` extension accepts simple and structured
 rating submissions with reference clamping and turn fallback. Dismissals are
 persisted before returning the reference missing-credentials error.

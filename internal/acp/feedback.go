@@ -9,7 +9,7 @@ import (
 	sessionlog "github.com/lookcorner/go-cli/internal/session"
 )
 
-const feedbackDisabledMessage = "Feedback is disabled. To enable, set GROK_FEEDBACK_ENABLED=true or [features] feedback = true in config.toml."
+const feedbackDisabledMessage = agent.FeedbackDisabledMessage
 
 type feedbackInput struct {
 	SessionID          string          `json:"session_id"`
