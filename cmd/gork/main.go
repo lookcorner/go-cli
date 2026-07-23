@@ -1829,6 +1829,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 	setBillingMeta(cfg)
 	var runtimeConfigMu sync.RWMutex
 	runtimeConfig := cfg
+	var server *acp.Server
 	runtimeConfigSnapshot := func() config.Config {
 		runtimeConfigMu.RLock()
 		defer runtimeConfigMu.RUnlock()
@@ -1840,6 +1841,9 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		current := runtimeConfig
 		runtimeConfigMu.Unlock()
 		setBillingMeta(current)
+		if server != nil {
+			server.NotifySettingsUpdate(remote)
+		}
 	}
 	setSessionKey := func(token string) {
 		runtimeConfigMu.Lock()
@@ -1847,7 +1851,6 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		runtimeConfigMu.Unlock()
 	}
 	subscriptionHTTP := &http.Client{Timeout: cfg.HTTPTimeout}
-	var server *acp.Server
 	catalogRefresher := &acpSubscriptionCatalogRefresher{
 		ctx: ctx, config: runtimeConfigSnapshot, authPath: authPath, scope: authConfig.Scope(), tokenProvider: tokenProvider,
 		reload: func() error {

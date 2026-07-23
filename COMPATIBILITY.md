@@ -37,6 +37,9 @@ New sessions expose their working directory and Git-root state; loaded sessions
 echo client-owned `x.ai/persist` metadata and their session ID.
 Loaded ACP sessions also report `gitDivergence` when their recorded Git HEAD
 differs from the workspace's current HEAD.
+Authenticated remote-settings refreshes publish reference-shaped
+`x.ai/settings/update` notifications so connected ACP clients receive live access,
+subscription, permission, layout, tip, and announcement state.
 
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |

@@ -664,7 +664,10 @@ refreshes OAuth and identity-targeted remote settings, and lifts the returned
 AuthMeta gate only when settings explicitly grant `allow_access`. Tier-targeted
 models refresh immediately when the new JWT claim matches, or through a bounded
 single-flight retry when the claim is still stale. Static API-key, deployment,
-and external credentials bypass the OAuth subscription gate.
+and external credentials bypass the OAuth subscription gate. Every successful
+remote-settings refresh also publishes `x.ai/settings/update` with the reference
+nullable payload for access gates, subscription display, permission defaults,
+client layout preferences, tips, and announcements.
 Clients can
 also enforce the privacy build's coding-data-retention opt-out through
 `x.ai/privacy/setCodingDataRetention`, including refresh-aware authentication and

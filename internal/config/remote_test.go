@@ -50,6 +50,16 @@ func TestFetchRemoteSettingsIncludesSessionIdentity(t *testing.T) {
 	}
 }
 
+func TestRemoteSettingsDecodesACPClientFields(t *testing.T) {
+	var settings RemoteSettings
+	if err := json.Unmarshal([]byte(`{"sharing_enabled":true,"session_picker_grouped":false,"tips":["one"],"announcements":[{"id":"notice"}],"permission_mode":"auto","group_tool_verbs":true,"collapsed_edit_blocks":false,"subscription_watch_interval_secs":30}`), &settings); err != nil {
+		t.Fatal(err)
+	}
+	if settings.SharingEnabled == nil || !*settings.SharingEnabled || settings.SessionPickerGrouped == nil || *settings.SessionPickerGrouped || len(settings.Tips) != 1 || len(settings.Announcements) != 1 || settings.PermissionMode == nil || *settings.PermissionMode != "auto" || settings.GroupToolVerbs == nil || !*settings.GroupToolVerbs || settings.CollapsedEditBlocks == nil || *settings.CollapsedEditBlocks || settings.SubscriptionWatchIntervalSeconds == nil || *settings.SubscriptionWatchIntervalSeconds != 30 {
+		t.Fatalf("settings=%#v", settings)
+	}
+}
+
 func TestBillingRemoteMetadataRefreshesAndClears(t *testing.T) {
 	var remote RemoteSettings
 	if err := json.Unmarshal([]byte(`{"subscription_tier":"supergrok","subscription_tier_display":"SuperGrok","on_demand_enabled":true}`), &remote); err != nil {
