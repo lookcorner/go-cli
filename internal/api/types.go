@@ -39,6 +39,7 @@ type ResponseRequest struct {
 	Model              string           `json:"model"`
 	Instructions       string           `json:"instructions,omitempty"`
 	Input              []InputItem      `json:"input"`
+	JSONSchema         map[string]any   `json:"-"`
 	Tools              []ToolDefinition `json:"tools,omitempty"`
 	ToolChoice         string           `json:"tool_choice,omitempty"`
 	ParallelToolCalls  bool             `json:"parallel_tool_calls"`
@@ -47,6 +48,21 @@ type ResponseRequest struct {
 	Temperature        *float64         `json:"temperature,omitempty"`
 	Reasoning          *ReasoningConfig `json:"reasoning,omitempty"`
 	Stream             bool             `json:"stream"`
+}
+
+func (r ResponseRequest) MarshalJSON() ([]byte, error) {
+	type wireRequest ResponseRequest
+	value := struct {
+		wireRequest
+		Text map[string]any `json:"text,omitempty"`
+	}{wireRequest: wireRequest(r)}
+	if r.JSONSchema != nil {
+		value.Text = map[string]any{"format": map[string]any{
+			"type": "json_schema", "name": "structured_output",
+			"strict": true, "schema": r.JSONSchema,
+		}}
+	}
+	return json.Marshal(value)
 }
 
 type ReasoningConfig struct {

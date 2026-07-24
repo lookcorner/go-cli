@@ -156,6 +156,7 @@ type Runner struct {
 	SetDefaultModel         func(string) error
 	OnModelChanged          func(ModelRuntime)
 	ReasoningEffort         string
+	JSONSchema              map[string]any
 	PermissionClassifier    PermissionClassifierConfig
 	Instructions            string
 	MaxSteps                int
@@ -717,6 +718,7 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 			Model:              r.Model,
 			Instructions:       requestInstructions,
 			Input:              input,
+			JSONSchema:         r.JSONSchema,
 			Tools:              r.Tools.Definitions(),
 			ToolChoice:         "auto",
 			ParallelToolCalls:  false,

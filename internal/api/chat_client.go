@@ -172,6 +172,14 @@ func (c *ChatClient) StreamResponse(ctx context.Context, request ResponseRequest
 	if request.Reasoning != nil {
 		payload["reasoning_effort"] = request.Reasoning.Effort
 	}
+	if request.JSONSchema != nil {
+		payload["response_format"] = map[string]any{
+			"type": "json_schema",
+			"json_schema": map[string]any{
+				"name": "structured_output", "strict": true, "schema": request.JSONSchema,
+			},
+		}
+	}
 	if len(definitions) > 0 {
 		payload["tools"] = definitions
 		payload["tool_choice"] = "auto"

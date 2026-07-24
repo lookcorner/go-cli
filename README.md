@@ -481,6 +481,15 @@ instructions. `--always-approve`, `--yolo`, and
 `--dangerously-skip-permissions` select always-approve mode while preserving
 managed policy and explicit deny rules.
 
+Headless runs also accept `--prompt-file PATH` and `--prompt-json JSON`.
+Files ending in `.json` use the same ACP text, image, resource-link, and
+embedded-text-resource content-block format as `--prompt-json`; other files
+are read as text. `--output-format` accepts
+`plain`, `json`, or newline-delimited `streaming-json`. A JSON object passed to
+`--json-schema` constrains structured output on Responses, Chat Completions,
+and Anthropic Messages backends and implies JSON output when no format is
+specified.
+
 Prompts can also be piped through stdin:
 
 ```sh

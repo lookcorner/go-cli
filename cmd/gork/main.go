@@ -75,6 +75,14 @@ type options struct {
 	timeout            time.Duration
 	showVersion        bool
 	single             string
+	singleSet          bool
+	promptJSON         string
+	promptJSONSet      bool
+	promptFile         string
+	promptFileSet      bool
+	outputFormat       string
+	jsonSchema         string
+	jsonSchemaSet      bool
 	interactive        bool
 	previousID         string
 	resume             string
@@ -171,6 +179,10 @@ func parseRunOptions(args []string, stderr io.Writer) (options, *flag.FlagSet, e
 	flags.StringVar(&opts.single, "single", "", "single-turn prompt")
 	flags.StringVar(&opts.single, "print", "", "single-turn prompt")
 	flags.StringVar(&opts.single, "p", "", "single-turn prompt")
+	flags.StringVar(&opts.promptJSON, "prompt-json", "", "single-turn prompt as ACP JSON content blocks")
+	flags.StringVar(&opts.promptFile, "prompt-file", "", "single-turn prompt from a file")
+	flags.StringVar(&opts.outputFormat, "output-format", "plain", "headless output: plain, json, or streaming-json")
+	flags.StringVar(&opts.jsonSchema, "json-schema", "", "JSON Schema for structured output")
 	flags.BoolVar(&opts.interactive, "interactive", false, "start an interactive multi-turn session")
 	flags.StringVar(&opts.previousID, "previous-response-id", "", "continue a stored Responses API conversation")
 	flags.StringVar(&opts.resume, "resume", "", "resume a JSONL session path or 'latest'")
@@ -196,6 +208,16 @@ func parseRunOptions(args []string, stderr io.Writer) (options, *flag.FlagSet, e
 		}
 		if flag.Name == "sandbox" {
 			opts.sandboxSet = true
+		}
+		switch flag.Name {
+		case "single", "print", "p":
+			opts.singleSet = true
+		case "prompt-json":
+			opts.promptJSONSet = true
+		case "prompt-file":
+			opts.promptFileSet = true
+		case "json-schema":
+			opts.jsonSchemaSet = true
 		}
 	})
 	if opts.alwaysApprove {
@@ -279,6 +301,20 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if opts.dashboard {
 		opts.tui = true
 	}
+	outputFormat, err := parseHeadlessOutputFormat(opts.outputFormat)
+	if err != nil {
+		return err
+	}
+	if opts.jsonSchemaSet && opts.jsonSchema == "" {
+		return errors.New("--json-schema: invalid JSON: empty input")
+	}
+	jsonSchema, err := parseJSONSchema(opts.jsonSchema)
+	if err != nil {
+		return err
+	}
+	if jsonSchema != nil && outputFormat == headlessOutputPlain {
+		outputFormat = headlessOutputJSON
+	}
 	if opts.minimal && opts.fullscreen {
 		return errors.New("--minimal and --fullscreen are mutually exclusive")
 	}
@@ -289,11 +325,30 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		fmt.Fprintln(stdout, version.Current)
 		return nil
 	}
-	if opts.single != "" && len(flags.Args()) > 0 {
-		return errors.New("--single cannot be combined with a positional prompt")
+	promptFlags := 0
+	for _, set := range []bool{opts.singleSet, opts.promptJSONSet, opts.promptFileSet} {
+		if set {
+			promptFlags++
+		}
 	}
-	if opts.single != "" && (opts.tui || opts.interactive || opts.goal || opts.acp) {
-		return errors.New("--single cannot be combined with interactive, goal, or ACP modes")
+	if promptFlags > 1 {
+		return errors.New("--single, --prompt-json, and --prompt-file are mutually exclusive")
+	}
+	explicitPrompt, hasExplicitPrompt, err := loadHeadlessPrompt(opts)
+	if err != nil {
+		return err
+	}
+	if hasExplicitPrompt && len(flags.Args()) > 0 {
+		return errors.New("headless prompt flags cannot be combined with a positional prompt")
+	}
+	if hasExplicitPrompt && (opts.tui || opts.interactive || opts.goal || opts.acp) {
+		return errors.New("headless prompt flags cannot be combined with interactive, goal, or ACP modes")
+	}
+	if outputFormat != headlessOutputPlain && (opts.tui || opts.interactive || opts.goal || opts.acp) {
+		return errors.New("--output-format is only supported in headless mode")
+	}
+	if jsonSchema != nil && (opts.tui || opts.interactive || opts.goal || opts.acp) {
+		return errors.New("--json-schema is only supported in headless mode")
 	}
 	if opts.tui && opts.interactive {
 		return errors.New("--tui and --interactive are mutually exclusive")
@@ -375,17 +430,24 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 
 	inputReader := bufio.NewReader(stdin)
-	prompt := opts.single
-	if prompt == "" {
-		prompt = strings.TrimSpace(strings.Join(flags.Args(), " "))
+	promptInput := explicitPrompt
+	if !hasExplicitPrompt {
+		promptInput, err = textHeadlessPrompt(strings.Join(flags.Args(), " "))
+		if err != nil {
+			promptInput = headlessPrompt{}
+		}
 	}
+	prompt := promptInput.text
 	resumingGoal := opts.goal && opts.resume != ""
 	if prompt == "" && !opts.interactive && !opts.tui && !resumingGoal {
 		data, err := io.ReadAll(io.LimitReader(inputReader, 4<<20))
 		if err != nil {
 			return fmt.Errorf("read prompt: %w", err)
 		}
-		prompt = strings.TrimSpace(string(data))
+		promptInput, err = textHeadlessPrompt(string(data))
+		if err == nil {
+			prompt = promptInput.text
+		}
 	}
 	if prompt == "" && !opts.interactive && !opts.tui && !resumingGoal {
 		flags.Usage()
@@ -930,6 +992,11 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 	usage := newBillingService(cfg, tokenProvider, nil)
 	runner.FetchUsage, runner.OpenURL = usage.Usage, openBrowser
+	emitter := &headlessEmitter{format: outputFormat, output: stdout, sessionID: logger.ID()}
+	if !opts.interactive && !opts.tui && !opts.goal && !opts.acp {
+		runner.TextOutput = emitter.textWriter()
+		runner.JSONSchema = jsonSchema
+	}
 	releaseNotes := newChangelogService()
 	runner.FetchReleaseNotes = releaseNotes.Fetch
 	if home, homeErr := config.PolicyHome(); homeErr == nil {
@@ -1062,7 +1129,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		prompt = appendGoalScratchReminder(prompt, scratch, scratchReady)
 		return goalLoop(ctx, runner, registry, stdout, stderr, prompt, opts.previousID, opts.goalRuns, cfg.Goal.VerifierCount, cfg.Goal.ClassifierMaxRuns, cfg.Goal.ReverifyAfter)
 	}
-	return runHeadless(ctx, runner, scheduledQueue, stdout, stderr, prompt, opts.previousID)
+	return runHeadlessWithOptions(ctx, runner, scheduledQueue, emitter, stderr, promptInput, opts.previousID, jsonSchema != nil)
 }
 
 func applyRunOverrides(cfg *config.Config, opts options) {
@@ -4305,33 +4372,47 @@ func reviewMemoryNoteTerminal(ctx context.Context, runner *agent.Runner, input *
 }
 
 func runHeadless(ctx context.Context, runner *agent.Runner, scheduled *scheduledWakeQueue, stdout, stderr io.Writer, prompt, previousResponseID string) error {
-	prompt, _ = tools.ExpandLoopCommand(prompt)
-	result, err := runner.RunTurn(ctx, prompt, previousResponseID)
+	emitter := &headlessEmitter{format: headlessOutputPlain, output: stdout, sessionID: runner.SessionID}
+	return runHeadlessWithOptions(ctx, runner, scheduled, emitter, stderr, headlessPrompt{text: prompt}, previousResponseID, false)
+}
+
+func runHeadlessWithOptions(ctx context.Context, runner *agent.Runner, scheduled *scheduledWakeQueue, emitter *headlessEmitter, stderr io.Writer, prompt headlessPrompt, previousResponseID string, structured bool) error {
+	prompt.text, _ = tools.ExpandLoopCommand(prompt.text)
+	var result agent.Result
+	var err error
+	if len(prompt.parts) > 0 {
+		result, err = runner.RunTurnParts(ctx, prompt.text, prompt.parts, previousResponseID)
+	} else {
+		result, err = runner.RunTurn(ctx, prompt.text, previousResponseID)
+	}
 	if err != nil {
+		emitter.emitError(err)
+		return err
+	}
+	if err := emitter.add(result); err != nil {
 		return err
 	}
 	previousResponseID = result.ResponseID
-	if result.Text != "" && !strings.HasSuffix(result.Text, "\n") {
-		fmt.Fprintln(stdout)
-	}
 	for {
 		event, ok, err := scheduled.Next(ctx)
 		if err != nil {
+			emitter.emitError(err)
 			return err
 		}
 		if !ok {
-			return nil
+			return emitter.finish(structured)
 		}
 		fmt.Fprintf(stderr, "[gork] scheduled task %s fired\n", event.TaskID)
 		result, err = runner.RunSyntheticTurn(ctx, event.Prompt, previousResponseID)
 		scheduled.Done(event.TaskID)
 		if err != nil {
+			emitter.emitError(err)
+			return err
+		}
+		if err := emitter.add(result); err != nil {
 			return err
 		}
 		previousResponseID = result.ResponseID
-		if result.Text != "" && !strings.HasSuffix(result.Text, "\n") {
-			fmt.Fprintln(stdout)
-		}
 	}
 }
 

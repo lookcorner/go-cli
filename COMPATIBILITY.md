@@ -124,6 +124,11 @@ Common reference run flags are supported, including cwd/model/reasoning,
 single-prompt, system-prompt/rules, turn-limit, permission-mode,
 always-approve, and version aliases. Explicit CLI values are reapplied after
 remote settings so command-line intent wins.
+Headless prompt files, ACP JSON text/image/resource blocks,
+plain/JSON/streaming-JSON output, and JSON Schema structured output are
+supported. Schemas map to
+Responses `text.format`, Chat Completions `response_format`, and Anthropic
+Messages `output_config.format`.
 
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |

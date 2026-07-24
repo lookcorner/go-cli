@@ -105,6 +105,7 @@ func TestChatClientCarriesToolHistory(t *testing.T) {
 	temperature := 0.3
 	first, err := client.StreamResponse(context.Background(), ResponseRequest{
 		Model: "model", Instructions: "system", Stream: true, Reasoning: &ReasoningConfig{Effort: "high"},
+		JSONSchema:  map[string]any{"type": "object"},
 		Temperature: &temperature,
 		Input:       []InputItem{{Type: "message", Role: "user", Content: "inspect"}},
 	}, nil)
@@ -132,6 +133,12 @@ func TestChatClientCarriesToolHistory(t *testing.T) {
 	}
 	if requests[0]["temperature"] != 0.3 {
 		t.Fatalf("temperature missing: %#v", requests[0])
+	}
+	format := requests[0]["response_format"].(map[string]any)
+	definition := format["json_schema"].(map[string]any)
+	if format["type"] != "json_schema" || definition["name"] != "structured_output" ||
+		definition["strict"] != true || definition["schema"].(map[string]any)["type"] != "object" {
+		t.Fatalf("response format missing: %#v", requests[0])
 	}
 	messages, ok := requests[1]["messages"].([]any)
 	if !ok || len(messages) != 4 {

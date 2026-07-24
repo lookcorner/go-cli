@@ -181,6 +181,11 @@ func (c *MessagesClient) StreamResponse(ctx context.Context, request ResponseReq
 	if request.Temperature != nil {
 		payload["temperature"] = *request.Temperature
 	}
+	if request.JSONSchema != nil {
+		payload["output_config"] = map[string]any{
+			"format": map[string]any{"type": "json_schema", "schema": request.JSONSchema},
+		}
+	}
 	if len(definitions) > 0 {
 		payload["tools"] = definitions
 		payload["tool_choice"] = map[string]any{"type": "auto"}

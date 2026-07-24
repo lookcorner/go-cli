@@ -391,7 +391,7 @@ func TestSinglePromptConflictsFailBeforeConfiguration(t *testing.T) {
 		{"-p", "one", "--acp"},
 	} {
 		err := runOnce(args, strings.NewReader(""), io.Discard, io.Discard)
-		if err == nil || !strings.Contains(err.Error(), "--single cannot be combined") {
+		if err == nil || !strings.Contains(err.Error(), "headless prompt flags cannot be combined") {
 			t.Fatalf("args=%v error=%v", args, err)
 		}
 	}
@@ -442,6 +442,72 @@ func TestReferenceRunFlagsReachResponsesRequest(t *testing.T) {
 		!strings.Contains(request.Instructions, "extra rule") ||
 		len(request.Input) != 2 || request.Input[1].Content != "inspect this" {
 		t.Fatalf("stdout=%q stderr=%q request=%#v", stdout.String(), stderr.String(), request)
+	}
+}
+
+func TestHeadlessJSONPromptAndSchemaReachResponsesRequest(t *testing.T) {
+	home, root, sessionDir := t.TempDir(), t.TempDir(), t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	t.Setenv("HOME", home)
+	t.Setenv("GORK_API_KEY", "test-key")
+	t.Setenv("XAI_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	var request map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, httpRequest *http.Request) {
+		if httpRequest.URL.Path != "/responses" {
+			http.NotFound(writer, httpRequest)
+			return
+		}
+		if err := json.NewDecoder(httpRequest.Body).Decode(&request); err != nil {
+			t.Error(err)
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(writer).Encode(map[string]any{
+			"id": "response-json",
+			"usage": map[string]any{
+				"input_tokens": 5, "output_tokens": 3, "total_tokens": 8,
+			},
+			"output": []any{map[string]any{
+				"type":    "message",
+				"content": []any{map[string]any{"type": "output_text", "text": `{"name":"gork"}`}},
+			}},
+		})
+	}))
+	defer server.Close()
+
+	imageData := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+	prompt := `[{"type":"text","text":"inspect image"},{"type":"image","mimeType":"image/png","data":"` + imageData + `"}]`
+	schema := `{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}`
+	var stdout, stderr bytes.Buffer
+	err := runOnce([]string{
+		"--cwd", root, "--session-dir", sessionDir, "--base-url", server.URL,
+		"-m", "test-model", "--prompt-json", prompt, "--json-schema", schema,
+	}, strings.NewReader("ignored stdin"), &stdout, &stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+		t.Fatalf("stdout is not one JSON document: %q: %v", stdout.String(), err)
+	}
+	structured := output["structuredOutput"].(map[string]any)
+	if output["text"] != `{"name":"gork"}` || output["requestId"] != "response-json" ||
+		output["stopReason"] != "EndTurn" || structured["name"] != "gork" {
+		t.Fatalf("output=%#v stderr=%q", output, stderr.String())
+	}
+	text := request["text"].(map[string]any)
+	format := text["format"].(map[string]any)
+	if format["type"] != "json_schema" || format["name"] != "structured_output" ||
+		format["strict"] != true || format["schema"].(map[string]any)["type"] != "object" {
+		t.Fatalf("request format=%#v", format)
+	}
+	input := request["input"].([]any)
+	content := input[len(input)-1].(map[string]any)["content"].([]any)
+	if len(content) != 2 || content[0].(map[string]any)["text"] != "inspect image" ||
+		content[1].(map[string]any)["image_url"] != "data:image/png;base64,"+imageData {
+		t.Fatalf("request input=%#v", input)
 	}
 }
 
