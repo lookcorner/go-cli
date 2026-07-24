@@ -776,6 +776,16 @@ while managed requirements have final precedence. Whole-file writes and
 failed edits stay expanded because their previous contents or diagnostics
 cannot be summarized safely.
 
+`[ui] group_tool_verbs` defaults to `true`. Consecutive read, search,
+directory-listing, web, memory-search, and subagent tool results collapse into
+one ordered summary such as `Read 3 files, Searched 2 patterns`; failed members
+add a `N failed` suffix. Edits, commands, other tools, assistant text, and new
+user turns end the current group. `/expand` or Ctrl-E in minimal mode prints
+the complete member blocks. The behavior is identical for live output,
+resumed/rewound sessions, the transcript viewer, and dashboard previews.
+Local configuration overrides the remote value, while managed requirements
+have final precedence.
+
 `[ui] cursor_blink = true` forces a blinking block cursor at TUI startup, while
 `false` forces a steady block. Leaving it unset preserves the terminal's cursor
 style, and the TUI restores the terminal default after a forced style exits.

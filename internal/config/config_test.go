@@ -396,6 +396,42 @@ func TestCollapsedEditBlocksConfigRemoteAndRequirementsPrecedence(t *testing.T) 
 	}
 }
 
+func TestGroupToolVerbsDefaultsAndPrecedence(t *testing.T) {
+	defaults, err := Load(filepath.Join(t.TempDir(), "missing.toml"))
+	if err != nil || !defaults.UI.GroupToolVerbs {
+		t.Fatalf("default group tool verbs=%v err=%v", defaults.UI.GroupToolVerbs, err)
+	}
+
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[ui]\ngroup_tool_verbs = false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil || cfg.UI.GroupToolVerbs {
+		t.Fatalf("local group tool verbs=%v err=%v", cfg.UI.GroupToolVerbs, err)
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{GroupToolVerbs: boolPointer(true)})
+	if cfg.UI.GroupToolVerbs {
+		t.Fatal("remote settings overrode local group tool verbs")
+	}
+	if err := applyRequirementsData(&cfg, []byte("[ui]\ngroup_tool_verbs = true\n"), "test", false, false); err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.UI.GroupToolVerbs {
+		t.Fatal("requirements did not override local group tool verbs")
+	}
+
+	remote := Config{}
+	remote.ApplyRemoteSettings(&RemoteSettings{GroupToolVerbs: boolPointer(false)})
+	if remote.UI.GroupToolVerbs {
+		t.Fatal("remote false group tool verbs was not applied")
+	}
+	remote.ApplyRemoteSettings(&RemoteSettings{})
+	if !remote.UI.GroupToolVerbs {
+		t.Fatal("missing remote setting did not restore the default")
+	}
+}
+
 func TestDefaultSelectedPermissionConfigAndEnvironmentPrecedence(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte("[ui]\ndefault_selected_permission = \" REJECT \"\n"), 0o600); err != nil {

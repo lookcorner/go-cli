@@ -28,6 +28,32 @@ type toolFinishedEvent struct {
 	err    error
 }
 
+type toolVerbKind string
+
+const (
+	toolVerbFile         toolVerbKind = "file"
+	toolVerbSkill        toolVerbKind = "skill"
+	toolVerbSearch       toolVerbKind = "search"
+	toolVerbDir          toolVerbKind = "dir"
+	toolVerbWebFetch     toolVerbKind = "web_fetch"
+	toolVerbWebSearch    toolVerbKind = "web_search"
+	toolVerbMemorySearch toolVerbKind = "memory_search"
+	toolVerbSubagent     toolVerbKind = "subagent"
+)
+
+type toolVerbMember struct {
+	kind   toolVerbKind
+	failed bool
+	full   string
+}
+
+type toolVerbGroup struct {
+	prefix      string
+	members     []toolVerbMember
+	expandIndex int
+	rendered    bool
+}
+
 func (b *Bridge) ToolStarted(call api.ToolCall) {
 	b.send(toolStartedEvent{call: call})
 }
@@ -37,10 +63,18 @@ func (b *Bridge) ToolFinished(call api.ToolCall, result tools.ExecutionResult, e
 }
 
 func (m *model) finishTool(event toolFinishedEvent) {
+	full, _ := renderToolBlock(event.call, event.result, event.err, false)
+	if m.groupToolVerbs {
+		if kind, ok := classifyToolVerb(event.call.Name, event.call.Arguments); ok {
+			m.addToolVerbMember(toolVerbMember{kind: kind, failed: event.err != nil, full: full})
+			m.status = "tool finished: " + event.call.Name
+			return
+		}
+	}
+	m.finishToolVerbGroup()
 	if m.collapsedEditBlocks {
 		if summary, ok := collapsedEditSummary(event.call.Name, event.call.Arguments, event.result.Output, event.err != nil); ok {
-			full, _ := renderToolBlock(event.call, event.result, event.err, false)
-			m.appendSystem(summary)
+			m.appendToolDisplay(summary)
 			m.rememberToolExpansion(full)
 			if m.minimal {
 				m.minimalFlushTo = m.transcript.Len()
@@ -50,8 +84,7 @@ func (m *model) finishTool(event toolFinishedEvent) {
 		}
 	}
 	compact, folded := renderToolBlock(event.call, event.result, event.err, true)
-	full, _ := renderToolBlock(event.call, event.result, event.err, false)
-	m.appendSystem(compact)
+	m.appendToolDisplay(compact)
 	if folded {
 		m.rememberToolExpansion(full)
 	}
@@ -65,12 +98,50 @@ func (m *model) finishTool(event toolFinishedEvent) {
 	}
 }
 
-func (m *model) rememberToolExpansion(full string) {
+func (m *model) rememberToolExpansion(full string) int {
 	m.toolExpand = append(m.toolExpand, full)
 	if len(m.toolExpand) > toolExpandLimit {
 		copy(m.toolExpand, m.toolExpand[len(m.toolExpand)-toolExpandLimit:])
 		m.toolExpand = m.toolExpand[:toolExpandLimit]
 	}
+	return len(m.toolExpand) - 1
+}
+
+func (m *model) addToolVerbMember(member toolVerbMember) {
+	if m.toolVerbGroup == nil {
+		m.toolVerbGroup = &toolVerbGroup{prefix: m.transcript.String(), expandIndex: -1}
+	}
+	group := m.toolVerbGroup
+	group.members = append(group.members, member)
+	label := toolVerbGroupLabel(group.members)
+	full := toolVerbGroupExpansion(group.members)
+	if m.minimal {
+		return
+	}
+	if group.rendered {
+		m.transcript.Reset()
+		m.transcript.WriteString(group.prefix)
+	}
+	m.appendToolDisplay(label)
+	group.rendered = true
+	if group.expandIndex < 0 {
+		group.expandIndex = m.rememberToolExpansion(full)
+	} else if group.expandIndex < len(m.toolExpand) {
+		m.toolExpand[group.expandIndex] = full
+	}
+}
+
+func (m *model) finishToolVerbGroup() {
+	group := m.toolVerbGroup
+	if group == nil {
+		return
+	}
+	if m.minimal {
+		m.appendToolDisplay(toolVerbGroupLabel(group.members))
+		m.rememberToolExpansion(toolVerbGroupExpansion(group.members))
+		m.minimalFlushTo = m.transcript.Len()
+	}
+	m.toolVerbGroup = nil
 }
 
 func (m *model) expandLastTool() {
@@ -151,7 +222,7 @@ func renderStoredToolBlock(tool session.DisplayTool, compact bool) (string, bool
 	return fmt.Sprintf("#### %s: `%s`\n\n%s", title, tool.Name, strings.Join(sections, "\n\n")), folded
 }
 
-func sessionDisplayTranscript(path string, collapsedEditBlocks bool) (string, []transcriptMessage, []string, error) {
+func sessionDisplayTranscript(path string, collapsedEditBlocks, groupToolVerbs bool) (string, []transcriptMessage, []string, error) {
 	entries, err := session.DisplayTimeline(path)
 	if err != nil {
 		return "", nil, nil, err
@@ -161,6 +232,7 @@ func sessionDisplayTranscript(path string, collapsedEditBlocks bool) (string, []
 	var expands []string
 	assistantOpen := false
 	lastKind := ""
+	var verbGroup []session.DisplayTool
 	separate := func() {
 		if text.Len() > 0 {
 			text.WriteString("\n\n")
@@ -172,9 +244,44 @@ func sessionDisplayTranscript(path string, collapsedEditBlocks bool) (string, []
 		messages = append(messages, transcriptMessage{start: start, offset: text.Len(), at: at.Time, role: role})
 		text.WriteByte('\n')
 	}
+	writeTool := func(tool session.DisplayTool) {
+		if collapsedEditBlocks {
+			if summary, ok := collapsedEditSummary(tool.Name, tool.Arguments, tool.Output, tool.Failed); ok {
+				text.WriteString(summary)
+				full, _ := renderStoredToolBlock(tool, false)
+				expands = appendBoundedExpansion(expands, full)
+				return
+			}
+		}
+		compact, folded := renderStoredToolBlock(tool, true)
+		text.WriteString(compact)
+		if folded {
+			full, _ := renderStoredToolBlock(tool, false)
+			expands = appendBoundedExpansion(expands, full)
+		}
+	}
+	flushVerbGroup := func() {
+		if len(verbGroup) == 0 {
+			return
+		}
+		if lastKind != "" {
+			text.WriteString("\n\n")
+		}
+		members := make([]toolVerbMember, 0, len(verbGroup))
+		for _, tool := range verbGroup {
+			full, _ := renderStoredToolBlock(tool, false)
+			kind, _ := classifyToolVerb(tool.Name, tool.Arguments)
+			members = append(members, toolVerbMember{kind: kind, failed: tool.Failed, full: full})
+		}
+		text.WriteString(toolVerbGroupLabel(members))
+		expands = appendBoundedExpansion(expands, toolVerbGroupExpansion(members))
+		verbGroup = nil
+		lastKind = "tool"
+	}
 	for _, entry := range entries {
 		switch entry.Kind {
 		case "user":
+			flushVerbGroup()
 			if entry.Synthetic {
 				assistantOpen = false
 				lastKind = ""
@@ -192,38 +299,140 @@ func sessionDisplayTranscript(path string, collapsedEditBlocks bool) (string, []
 				assistantOpen = true
 				lastKind = ""
 			}
-			if lastKind == "tool" || entry.Kind == "tool" && lastKind != "" {
-				text.WriteString("\n\n")
-			}
 			if entry.Kind == "assistant" {
+				flushVerbGroup()
+				if lastKind == "tool" {
+					text.WriteString("\n\n")
+				}
 				text.WriteString(entry.Text)
 			} else if entry.Tool != nil {
-				if collapsedEditBlocks {
-					if summary, ok := collapsedEditSummary(entry.Tool.Name, entry.Tool.Arguments, entry.Tool.Output, entry.Tool.Failed); ok {
-						text.WriteString(summary)
-						full, _ := renderStoredToolBlock(*entry.Tool, false)
-						expands = append(expands, full)
-						if len(expands) > toolExpandLimit {
-							expands = expands[len(expands)-toolExpandLimit:]
-						}
-						lastKind = entry.Kind
+				if groupToolVerbs {
+					if _, ok := classifyToolVerb(entry.Tool.Name, entry.Tool.Arguments); ok {
+						verbGroup = append(verbGroup, *entry.Tool)
 						continue
 					}
 				}
-				compact, folded := renderStoredToolBlock(*entry.Tool, true)
-				text.WriteString(compact)
-				if folded {
-					full, _ := renderStoredToolBlock(*entry.Tool, false)
-					expands = append(expands, full)
-					if len(expands) > toolExpandLimit {
-						expands = expands[len(expands)-toolExpandLimit:]
-					}
+				flushVerbGroup()
+				if lastKind != "" {
+					text.WriteString("\n\n")
 				}
+				writeTool(*entry.Tool)
 			}
 			lastKind = entry.Kind
 		}
 	}
+	flushVerbGroup()
 	return strings.TrimSpace(text.String()), messages, expands, nil
+}
+
+func appendBoundedExpansion(expands []string, full string) []string {
+	expands = append(expands, full)
+	if len(expands) > toolExpandLimit {
+		expands = expands[len(expands)-toolExpandLimit:]
+	}
+	return expands
+}
+
+func classifyToolVerb(name string, raw json.RawMessage) (toolVerbKind, bool) {
+	switch name {
+	case "read_file", "hashline_read":
+		var args struct {
+			TargetFile string `json:"target_file"`
+			Path       string `json:"path"`
+		}
+		_ = json.Unmarshal(raw, &args)
+		path := args.TargetFile
+		if path == "" {
+			path = args.Path
+		}
+		if strings.EqualFold(filepath.Base(path), "SKILL.md") {
+			return toolVerbSkill, true
+		}
+		return toolVerbFile, true
+	case "grep", "hashline_grep", "search_files":
+		return toolVerbSearch, true
+	case "list_dir", "list_files":
+		return toolVerbDir, true
+	case "web_fetch":
+		return toolVerbWebFetch, true
+	case "web_search":
+		return toolVerbWebSearch, true
+	case "memory_search":
+		return toolVerbMemorySearch, true
+	case "task":
+		return toolVerbSubagent, true
+	default:
+		return "", false
+	}
+}
+
+func toolVerbGroupLabel(members []toolVerbMember) string {
+	type bucket struct {
+		kind  toolVerbKind
+		count int
+	}
+	var buckets []bucket
+	failed := 0
+	for _, member := range members {
+		index := -1
+		for candidate := range buckets {
+			if buckets[candidate].kind == member.kind {
+				index = candidate
+				break
+			}
+		}
+		if index < 0 {
+			buckets = append(buckets, bucket{kind: member.kind})
+			index = len(buckets) - 1
+		}
+		buckets[index].count++
+		if member.failed {
+			failed++
+		}
+	}
+	labels := make([]string, 0, len(buckets))
+	for _, item := range buckets {
+		verb, one, many := toolVerbWords(item.kind)
+		noun := many
+		if item.count == 1 {
+			noun = one
+		}
+		labels = append(labels, fmt.Sprintf("%s %d %s", verb, item.count, noun))
+	}
+	result := strings.Join(labels, ", ")
+	if failed > 0 {
+		result += fmt.Sprintf(" · %d failed", failed)
+	}
+	return result
+}
+
+func toolVerbWords(kind toolVerbKind) (verb, one, many string) {
+	switch kind {
+	case toolVerbFile:
+		return "Read", "file", "files"
+	case toolVerbSkill:
+		return "Read", "skill", "skills"
+	case toolVerbSearch:
+		return "Searched", "pattern", "patterns"
+	case toolVerbDir:
+		return "Listed", "dir", "dirs"
+	case toolVerbWebFetch:
+		return "Fetched", "website", "websites"
+	case toolVerbWebSearch:
+		return "Searched", "website", "websites"
+	case toolVerbMemorySearch:
+		return "Searched", "memory", "memories"
+	default:
+		return "Ran", "subagent", "subagents"
+	}
+}
+
+func toolVerbGroupExpansion(members []toolVerbMember) string {
+	blocks := make([]string, 0, len(members))
+	for _, member := range members {
+		blocks = append(blocks, member.full)
+	}
+	return strings.Join(blocks, "\n\n")
 }
 
 func collapsedEditSummary(name string, arguments json.RawMessage, output string, failed bool) (string, bool) {

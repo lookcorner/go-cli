@@ -687,6 +687,7 @@ type model struct {
 	scrollInput         scrollInput
 	invertScroll        bool
 	collapsedEditBlocks bool
+	groupToolVerbs      bool
 	mouseReleased       bool
 	hyperlinks          bool
 	scrollFocused       bool
@@ -758,6 +759,7 @@ type model struct {
 	voiceInterim     string
 	voiceSendOnStop  bool
 	toolExpand       []string
+	toolVerbGroup    *toolVerbGroup
 
 	dashboard         *dashboardState
 	startupDashboard  bool
@@ -847,6 +849,7 @@ type UIOptions struct {
 	ScrollLines          *uint8
 	InvertScroll         bool
 	CollapsedEditBlocks  bool
+	GroupToolVerbs       bool
 	PromptSuggestions    bool
 	CursorBlink          *bool
 	Theme                string
@@ -984,6 +987,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		showTimeline: options.ShowTimeline, persistTimeline: options.SetShowTimeline,
 		scrollLines: mouseWheelScrollLines, scrollSpeed: options.ScrollSpeed, scrollInput: scrollInput{mode: options.ScrollMode}, invertScroll: options.InvertScroll,
 		collapsedEditBlocks: options.CollapsedEditBlocks,
+		groupToolVerbs:      options.GroupToolVerbs,
 		suggestionsEnabled:  options.PromptSuggestions,
 		hyperlinks:          detectTerminalHyperlinks(),
 		themeName:           options.Theme,
@@ -1036,7 +1040,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 	m.replaceTranscript(initialTranscript, nil)
 	if runner != nil && strings.TrimSpace(runner.SessionPath) != "" {
 		if messages, err := session.Transcript(runner.SessionPath); err == nil && strings.TrimSpace(session.FormatTranscript(messages)) == strings.TrimSpace(initialTranscript) {
-			if text, displayMessages, expands, displayErr := sessionDisplayTranscript(runner.SessionPath, m.collapsedEditBlocks); displayErr == nil {
+			if text, displayMessages, expands, displayErr := sessionDisplayTranscript(runner.SessionPath, m.collapsedEditBlocks, m.groupToolVerbs); displayErr == nil {
 				m.replaceDisplayTranscript(text, displayMessages, expands)
 			} else {
 				m.replaceTranscript(initialTranscript, messages)
@@ -1142,6 +1146,7 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.refreshScrollSearch()
 	case textEvent:
+		m.finishToolVerbGroup()
 		m.selection = nil
 		m.selectionClick = selectionClickState{}
 		before := 0
@@ -1404,6 +1409,7 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, waitVoice(m.voiceSession)
 	case turnDoneEvent:
+		m.finishToolVerbGroup()
 		m.running = false
 		m.turnCancel = nil
 		m.transcript.WriteString("\n")
@@ -1478,7 +1484,7 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		mode := msg.result.Mode
 		if mode == agent.RewindAll || mode == agent.RewindConversationOnly {
 			m.previousID = msg.result.PreviousResponseID
-			if text, messages, expands, err := sessionDisplayTranscript(m.runner.SessionPath, m.collapsedEditBlocks); err == nil {
+			if text, messages, expands, err := sessionDisplayTranscript(m.runner.SessionPath, m.collapsedEditBlocks, m.groupToolVerbs); err == nil {
 				m.replaceDisplayTranscript(text, messages, expands)
 			} else {
 				m.replaceTranscript(session.FormatTranscript(msg.result.Messages), msg.result.Messages)
@@ -2650,7 +2656,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.status = "no active session to view"
 				return m, nil
 			}
-			content, _, _, err := sessionDisplayTranscript(m.runner.SessionPath, m.collapsedEditBlocks)
+			content, _, _, err := sessionDisplayTranscript(m.runner.SessionPath, m.collapsedEditBlocks, m.groupToolVerbs)
 			if err != nil {
 				m.status = "transcript failed: " + err.Error()
 				return m, nil
@@ -2866,6 +2872,11 @@ func (m *model) setPlanMode(active bool) error {
 }
 
 func (m *model) appendSystem(text string) {
+	m.finishToolVerbGroup()
+	m.appendToolDisplay(text)
+}
+
+func (m *model) appendToolDisplay(text string) {
 	m.clearTranscriptAnchor()
 	if m.transcript.Len() > 0 {
 		m.transcript.WriteString("\n")
@@ -4278,6 +4289,7 @@ func (m *model) minimalPrint(text string) tea.Cmd {
 }
 
 func (m *model) beginTurn(prompt string) {
+	m.finishToolVerbGroup()
 	if m.minimal && m.transcript.Len() > m.minimalCommitted {
 		m.minimalFlushTo = m.transcript.Len()
 	}

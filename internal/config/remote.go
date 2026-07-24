@@ -184,6 +184,9 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 	if !c.uiCollapsedEditsConfigured {
 		c.UI.CollapsedEditBlocks = remote.CollapsedEditBlocks != nil && *remote.CollapsedEditBlocks
 	}
+	if !c.uiGroupToolVerbsConfigured {
+		c.UI.GroupToolVerbs = remote.GroupToolVerbs == nil || *remote.GroupToolVerbs
+	}
 	if remote.OfficialMarketplaceAutoRegister != nil {
 		c.OfficialMarketplaceAutoRegister = *remote.OfficialMarketplaceAutoRegister
 	}

@@ -122,6 +122,7 @@ type Config struct {
 	uiPermissionModeConfigured      bool
 	uiRememberApprovalsConfigured   bool
 	uiCollapsedEditsConfigured      bool
+	uiGroupToolVerbsConfigured      bool
 	modelConfigured                 bool
 	defaultModelConfigured          bool
 	allowedModelsConfigured         bool
@@ -225,6 +226,7 @@ type UIConfig struct {
 	DefaultSelectedPermission string  `json:"default_selected_permission"`
 	RememberToolApprovals     bool    `json:"remember_tool_approvals,omitempty"`
 	CollapsedEditBlocks       bool    `json:"collapsed_edit_blocks,omitempty"`
+	GroupToolVerbs            bool    `json:"group_tool_verbs"`
 	PromptSuggestions         bool    `json:"prompt_suggestions"`
 	CursorBlink               *bool   `json:"cursor_blink,omitempty"`
 	PermissionMode            string  `json:"permission_mode"`
@@ -491,6 +493,7 @@ type fileUIConfig struct {
 	DefaultSelectedPermission    *string `json:"default_selected_permission,omitempty" toml:"default_selected_permission"`
 	RememberToolApprovals        *bool   `json:"remember_tool_approvals,omitempty" toml:"remember_tool_approvals"`
 	CollapsedEditBlocks          *bool   `json:"collapsed_edit_blocks,omitempty" toml:"collapsed_edit_blocks"`
+	GroupToolVerbs               *bool   `json:"group_tool_verbs,omitempty" toml:"group_tool_verbs"`
 	PromptSuggestions            *bool   `json:"prompt_suggestions,omitempty" toml:"prompt_suggestions"`
 	CursorBlink                  *bool   `json:"cursor_blink,omitempty" toml:"cursor_blink"`
 	PermissionMode               *string `json:"permission_mode,omitempty" toml:"permission_mode"`
@@ -528,6 +531,7 @@ type requirementsFile struct {
 		Yolo                         any   `toml:"yolo"`
 		RememberToolApprovals        *bool `toml:"remember_tool_approvals"`
 		CollapsedEditBlocks          *bool `toml:"collapsed_edit_blocks"`
+		GroupToolVerbs               *bool `toml:"group_tool_verbs"`
 	} `toml:"ui"`
 }
 
@@ -706,7 +710,7 @@ func Load(path string) (Config, error) {
 		AskUserQuestion:             AskUserQuestionConfig{TimeoutEnabled: true, TimeoutSeconds: 30 * 60},
 		Toolset:                     ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}},
 		Goal:                        GoalConfig{VerifierCount: 3, ClassifierMaxRuns: 10, ReverifyAfter: 8},
-		UI:                          UIConfig{Theme: "groknight", AutoDarkTheme: "groknight", AutoLightTheme: "grokday", HunkTrackerMode: "agent_only", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, ScrollSpeed: 50, ScrollMode: "auto", DefaultSelectedPermission: "always_allow_all_sessions", PromptSuggestions: true, PermissionMode: "ask"},
+		UI:                          UIConfig{Theme: "groknight", AutoDarkTheme: "groknight", AutoLightTheme: "grokday", HunkTrackerMode: "agent_only", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, ScrollSpeed: 50, ScrollMode: "auto", DefaultSelectedPermission: "always_allow_all_sessions", GroupToolVerbs: true, PromptSuggestions: true, PermissionMode: "ask"},
 		Dashboard:                   DashboardConfig{Enabled: true, Grouping: "state"},
 		Sandbox:                     SandboxConfig{Profile: "off"},
 		Pruning:                     PruningConfig{Enabled: true, KeepLastNTurns: 3, SoftTrimThreshold: 4000, SoftTrimHead: 1500, SoftTrimTail: 1500, HardClearAgeTurns: 10},
@@ -1014,6 +1018,10 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	if disk.UI.CollapsedEditBlocks != nil {
 		cfg.UI.CollapsedEditBlocks = *disk.UI.CollapsedEditBlocks
 		cfg.uiCollapsedEditsConfigured = true
+	}
+	if disk.UI.GroupToolVerbs != nil {
+		cfg.UI.GroupToolVerbs = *disk.UI.GroupToolVerbs
+		cfg.uiGroupToolVerbsConfigured = true
 	}
 	if disk.UI.PromptSuggestions != nil {
 		cfg.UI.PromptSuggestions = *disk.UI.PromptSuggestions
@@ -2207,6 +2215,10 @@ func applyRequirementsData(cfg *Config, data []byte, source string, envFailClose
 	if requirement.UI.CollapsedEditBlocks != nil {
 		cfg.UI.CollapsedEditBlocks = *requirement.UI.CollapsedEditBlocks
 		cfg.uiCollapsedEditsConfigured = true
+	}
+	if requirement.UI.GroupToolVerbs != nil {
+		cfg.UI.GroupToolVerbs = *requirement.UI.GroupToolVerbs
+		cfg.uiGroupToolVerbsConfigured = true
 	}
 	if requirement.GrokComConfig == nil {
 		return nil

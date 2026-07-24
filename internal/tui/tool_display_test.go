@@ -81,6 +81,74 @@ func TestToolResultCanBeExpandedInMinimalMode(t *testing.T) {
 	}
 }
 
+func TestToolVerbGroupLabelPreservesBucketOrderAndFailures(t *testing.T) {
+	members := []toolVerbMember{
+		{kind: toolVerbFile},
+		{kind: toolVerbSearch, failed: true},
+		{kind: toolVerbFile},
+		{kind: toolVerbDir},
+	}
+	if got, want := toolVerbGroupLabel(members), "Read 2 files, Searched 1 pattern, Listed 1 dir · 1 failed"; got != want {
+		t.Fatalf("label=%q want=%q", got, want)
+	}
+	if kind, ok := classifyToolVerb("read_file", json.RawMessage(`{"target_file":"/tmp/skills/deploy/SKILL.md"}`)); !ok || kind != toolVerbSkill {
+		t.Fatalf("skill classification=%q ok=%v", kind, ok)
+	}
+	if _, ok := classifyToolVerb("edit_file", json.RawMessage(`{"path":"main.go"}`)); ok {
+		t.Fatal("edit tool joined a verb group")
+	}
+}
+
+func TestFullscreenToolVerbGroupUpdatesInPlaceAndEndsAtEdit(t *testing.T) {
+	m := &model{groupToolVerbs: true, width: 80, height: 20}
+	m.finishTool(toolFinishedEvent{
+		call:   api.ToolCall{Name: "read_file", Arguments: json.RawMessage(`{"target_file":"a.go"}`)},
+		result: tools.ExecutionResult{Output: "package a"},
+	})
+	m.finishTool(toolFinishedEvent{
+		call:   api.ToolCall{Name: "grep", Arguments: json.RawMessage(`{"pattern":"TODO"}`)},
+		result: tools.ExecutionResult{Output: "a.go:1:TODO"},
+	})
+	text := m.transcript.String()
+	if text != "Read 1 file, Searched 1 pattern\n" || len(m.toolExpand) != 1 {
+		t.Fatalf("group text=%q expansions=%d", text, len(m.toolExpand))
+	}
+	if !strings.Contains(m.toolExpand[0], "read_file") || !strings.Contains(m.toolExpand[0], "grep") {
+		t.Fatalf("group expansion=%q", m.toolExpand[0])
+	}
+
+	m.finishTool(toolFinishedEvent{
+		call:   api.ToolCall{Name: "edit_file", Arguments: json.RawMessage(`{"path":"a.go","old_text":"a","new_text":"b"}`)},
+		result: tools.ExecutionResult{Output: "edited a.go (1 replacement(s))"},
+	})
+	if m.toolVerbGroup != nil || strings.Count(m.transcript.String(), "Read 1 file") != 1 ||
+		!strings.Contains(m.transcript.String(), "#### Tool: `edit_file`") {
+		t.Fatalf("edit did not end group:\n%s", m.transcript.String())
+	}
+}
+
+func TestMinimalToolVerbGroupPrintsOnceAtBoundary(t *testing.T) {
+	m := &model{minimal: true, groupToolVerbs: true, width: 80, height: 20}
+	m.finishTool(toolFinishedEvent{
+		call:   api.ToolCall{Name: "read_file", Arguments: json.RawMessage(`{"target_file":"a.go"}`)},
+		result: tools.ExecutionResult{Output: "package a"},
+	})
+	m.finishTool(toolFinishedEvent{
+		call:   api.ToolCall{Name: "read_file", Arguments: json.RawMessage(`{"target_file":"b.go"}`)},
+		result: tools.ExecutionResult{Output: "package b"},
+	})
+	if m.transcript.Len() != 0 || len(m.toolExpand) != 0 {
+		t.Fatalf("minimal group printed before boundary: %q", m.transcript.String())
+	}
+	m.finishToolVerbGroup()
+	if got := m.transcript.String(); got != "Read 2 files\n" {
+		t.Fatalf("minimal group=%q", got)
+	}
+	if len(m.toolExpand) != 1 || m.minimalFlushTo != m.transcript.Len() {
+		t.Fatalf("expansions=%d flush=%d len=%d", len(m.toolExpand), m.minimalFlushTo, m.transcript.Len())
+	}
+}
+
 func TestCollapsedEditBlockUsesExactDiffstatAndKeepsExpansion(t *testing.T) {
 	m := &model{minimal: true, collapsedEditBlocks: true, width: 80, height: 20}
 	m.finishTool(toolFinishedEvent{
@@ -249,7 +317,7 @@ func TestSessionDisplayTranscriptRestoresToolsInOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	text, messages, expands, err := sessionDisplayTranscript(path, false)
+	text, messages, expands, err := sessionDisplayTranscript(path, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,12 +369,72 @@ func TestSessionDisplayTranscriptRestoresCollapsedEdit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	text, _, expands, err := sessionDisplayTranscript(path, true)
+	text, _, expands, err := sessionDisplayTranscript(path, true, false)
 	if err != nil || !strings.Contains(text, "Edit `main.go` +2/-1") || strings.Contains(text, "Arguments") {
 		t.Fatalf("text=%q err=%v", text, err)
 	}
 	if len(expands) != 1 || !strings.Contains(expands[0], `"old_text": "old"`) {
 		t.Fatalf("expansions=%#v", expands)
+	}
+}
+
+func TestSessionDisplayTranscriptGroupsConsecutiveToolVerbs(t *testing.T) {
+	logger, err := session.NewLoggerWithID(t.TempDir(), "tool-verbs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.AppendPrompt("inspect", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append("model_response", map[string]any{"response_id": "r1", "text": "checking", "tool_call_count": 1}); err != nil {
+		t.Fatal(err)
+	}
+	tools := []struct {
+		id, name, args, output string
+		failed                 bool
+	}{
+		{"read-1", "read_file", `{"target_file":"a.go"}`, "package a", false},
+		{"read-2", "read_file", `{"target_file":"skills/test/SKILL.md"}`, "# Skill", false},
+		{"grep-1", "grep", `{"pattern":"TODO"}`, "a.go:1:TODO", true},
+		{"edit-1", "edit_file", `{"path":"a.go","old_text":"a","new_text":"b"}`, "edited a.go (1 replacement(s))", false},
+		{"read-3", "hashline_read", `{"target_file":"b.go"}`, "1:abc:package b", false},
+	}
+	for _, tool := range tools {
+		if err := logger.Append("tool_call", map[string]any{
+			"call_id": tool.id, "name": tool.name, "arguments": json.RawMessage(tool.args),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := logger.Append("tool_result", map[string]any{
+			"call_id": tool.id, "name": tool.name, "output": tool.output, "failed": tool.failed,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := logger.Append("model_response", map[string]any{"response_id": "r2", "text": "done", "tool_call_count": 0}); err != nil {
+		t.Fatal(err)
+	}
+	path := logger.Path()
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	text, _, expands, err := sessionDisplayTranscript(path, true, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := "Read 1 file, Read 1 skill, Searched 1 pattern · 1 failed"
+	if !strings.Contains(text, "checking\n\n"+first) || strings.Count(text, first) != 1 || !strings.Contains(text, "Edit `a.go` +1/-1") ||
+		strings.Count(text, "Read 1 file") != 2 || !strings.Contains(text, "done") {
+		t.Fatalf("grouped transcript:\n%s", text)
+	}
+	if len(expands) != 3 || !strings.Contains(expands[0], "read_file") || !strings.Contains(expands[0], "grep") {
+		t.Fatalf("expansions=%#v", expands)
+	}
+
+	ungrouped, _, _, err := sessionDisplayTranscript(path, true, false)
+	if err != nil || strings.Contains(ungrouped, first) || !strings.Contains(ungrouped, "#### Tool failed: `grep`") {
+		t.Fatalf("ungrouped transcript=%q err=%v", ungrouped, err)
 	}
 }
 
@@ -334,7 +462,7 @@ func TestSessionDisplayTranscriptKeepsSyntheticAssistantBoundary(t *testing.T) {
 	if err := logger.Close(); err != nil {
 		t.Fatal(err)
 	}
-	text, messages, _, err := sessionDisplayTranscript(path, false)
+	text, messages, _, err := sessionDisplayTranscript(path, false, false)
 	if err != nil || strings.Count(text, "Gork\n") != 2 || strings.Contains(text, "internal") || len(messages) != 3 {
 		t.Fatalf("text=%q messages=%#v err=%v", text, messages, err)
 	}
