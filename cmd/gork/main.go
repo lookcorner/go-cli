@@ -900,7 +900,11 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		err := tui.Run(ctx, runner, tuiBridge, prompt, opts.previousID, resumedTranscript, ws.Root(), cfg.Model, tui.UIOptions{
 			Minimal: minimal, ScreenMode: cfg.UI.ScreenMode,
 			SetScreenMode: func(mode string) error { return config.UpdateScreenMode(opts.configPath, mode) },
-			Mode:          cfg.UI.KeepTextSelection, WordSeparators: cfg.UI.WordSeparators, MouseReportingToggle: cfg.UI.MouseReportingToggle, VimMode: cfg.UI.VimMode,
+			RenderMermaid: cfg.UI.RenderMermaid,
+			SetRenderMermaid: func(mode string) error {
+				return config.UpdateRenderMermaid(opts.configPath, mode)
+			},
+			Mode: cfg.UI.KeepTextSelection, WordSeparators: cfg.UI.WordSeparators, MouseReportingToggle: cfg.UI.MouseReportingToggle, VimMode: cfg.UI.VimMode,
 			ScrollLines: cfg.UI.ScrollLines, InvertScroll: cfg.UI.InvertScroll, PromptSuggestions: cfg.UI.PromptSuggestions,
 			CompactMode:       cfg.UI.CompactMode,
 			ShowTimestamps:    cfg.UI.ShowTimestamps,

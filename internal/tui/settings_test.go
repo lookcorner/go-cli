@@ -17,7 +17,7 @@ func TestSettingsCommandAliasesOpenAndClose(t *testing.T) {
 		if command != nil || m.settings == nil || m.running || m.status != "settings" {
 			t.Fatalf("prompt=%q command=%v settings=%v running=%v status=%q", prompt, command != nil, m.settings != nil, m.running, m.status)
 		}
-		if content := stripUIANSI(m.View().Content); !strings.Contains(content, "Settings") || !strings.Contains(content, "Timestamps: off") || !strings.Contains(content, "Theme: groknight") {
+		if content := stripUIANSI(m.View().Content); !strings.Contains(content, "Settings") || !strings.Contains(content, "Timestamps: off") || !strings.Contains(content, "Mermaid rendering: auto") {
 			t.Fatalf("prompt=%q content=%q", prompt, content)
 		}
 		updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
@@ -40,8 +40,9 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 	var booleans []string
 	var themes []string
 	var screenModes []string
+	var mermaidModes []string
 	m := &model{
-		width: 70, height: 18, themeName: "groknight", theme: paletteFor("groknight"), settings: &settingsState{},
+		width: 70, height: 18, themeName: "groknight", theme: paletteFor("groknight"), mermaidMode: "auto", settings: &settingsState{},
 		persistTimestamps: func(value bool) error { booleans = append(booleans, "timestamps"); return nil },
 		persistTimeline:   func(value bool) error { booleans = append(booleans, "timeline"); return nil },
 		persistCompactMode: func(value bool) error {
@@ -53,7 +54,8 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 			screenModes = append(screenModes, value)
 			return nil
 		},
-		persistTheme: func(value string) error { themes = append(themes, value); return nil },
+		persistMermaid: func(value string) error { mermaidModes = append(mermaidModes, value); return nil },
+		persistTheme:   func(value string) error { themes = append(themes, value); return nil },
 	}
 	for index := 0; index < settingsCount; index++ {
 		m.settings.selected = index
@@ -68,6 +70,9 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 	}
 	if m.themeName != "grokday" || m.theme.name != "grokday" || strings.Join(themes, ",") != "grokday" {
 		t.Fatalf("theme=%q palette=%q persisted=%v", m.themeName, m.theme.name, themes)
+	}
+	if m.mermaidMode != "on" || strings.Join(mermaidModes, ",") != "on" {
+		t.Fatalf("Mermaid=%q persisted=%v", m.mermaidMode, mermaidModes)
 	}
 }
 
@@ -94,6 +99,15 @@ func TestSettingsPanelRollsBackFailedPersistence(t *testing.T) {
 	}
 
 	m.settings.selected = 5
+	m.mermaidMode = "auto"
+	m.persistMermaid = func(string) error { return errors.New("read only") }
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.mermaidMode != "auto" || m.settings.err != "read only" {
+		t.Fatalf("command=%v Mermaid=%q err=%q", command != nil, m.mermaidMode, m.settings.err)
+	}
+
+	m.settings.selected = 6
 	m.persistTheme = func(string) error { return errors.New("read only") }
 	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)

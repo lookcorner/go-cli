@@ -533,6 +533,8 @@ type model struct {
 	themeName          string
 	theme              themePalette
 	persistTheme       func(string) error
+	mermaidMode        string
+	persistMermaid     func(string) error
 	transcriptMessages []transcriptMessage
 	scrollLines        int
 	invertScroll       bool
@@ -695,6 +697,8 @@ type UIOptions struct {
 	PromptSuggestions    bool
 	Theme                string
 	SetTheme             func(string) error
+	RenderMermaid        string
+	SetRenderMermaid     func(string) error
 	ForkSession          func(context.Context, bool) (ForkResult, error)
 	ForkInGit            bool
 	DashboardPinned      []string
@@ -827,6 +831,8 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		themeName:          options.Theme,
 		theme:              paletteFor(options.Theme),
 		persistTheme:       options.SetTheme,
+		mermaidMode:        options.RenderMermaid,
+		persistMermaid:     options.SetRenderMermaid,
 		forkSession:        options.ForkSession,
 		forkInGit:          options.ForkInGit,
 		dashboardDisabled:  options.DashboardDisabled,
@@ -838,6 +844,9 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		persistGrouping:    options.SetDashboardGrouping,
 		voiceClient:        options.Voice,
 		debug:              newDebugState(),
+	}
+	if m.mermaidMode == "" {
+		m.mermaidMode = "auto"
 	}
 	for _, id := range options.DashboardPinned {
 		if id = strings.TrimSpace(id); id != "" {

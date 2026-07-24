@@ -49,7 +49,18 @@ func renderMarkdownTheme(value string, width int, links bool, theme themePalette
 		raw := rawLines[index]
 		trimmed := strings.TrimSpace(raw)
 		ticks, rest := markdownFence(trimmed)
-		if codeFence == 0 && ticks >= 3 {
+		mermaidTicks, mermaidRest, quoteDepth := markdownMermaidFence(raw)
+		if theme.mermaid && codeFence == 0 && mermaidTicks >= 3 {
+			info := strings.Fields(strings.TrimSpace(mermaidRest))
+			if len(info) > 0 && strings.EqualFold(info[0], "mermaid") {
+				if source, closing, ok := closedMermaidFence(rawLines, index+1, mermaidTicks, quoteDepth); ok {
+					if rendered, ok := renderMermaid(source, width, theme); ok {
+						lines = append(lines, rendered...)
+						index = closing
+						continue
+					}
+				}
+			}
 			codeFence = ticks
 			if strings.TrimSpace(rest) != "" {
 				language := strings.TrimSpace(rest)
@@ -80,6 +91,46 @@ func renderMarkdownTheme(value string, width int, links bool, theme themePalette
 		lines = append(lines, wrapMarkdownSpans(spans, width, links)...)
 	}
 	return lines
+}
+
+func markdownMermaidFence(line string) (ticks int, rest string, quoteDepth int) {
+	value := strings.TrimSpace(line)
+	for strings.HasPrefix(value, ">") {
+		quoteDepth++
+		value = strings.TrimSpace(strings.TrimPrefix(value, ">"))
+	}
+	ticks, rest = markdownFence(value)
+	return
+}
+
+func closedMermaidFence(lines []string, start, ticks, quoteDepth int) (string, int, bool) {
+	source := make([]string, 0)
+	for index := start; index < len(lines); index++ {
+		line, ok := unquoteMarkdownLine(lines[index], quoteDepth)
+		if !ok {
+			return "", 0, false
+		}
+		count, rest := markdownFence(strings.TrimSpace(line))
+		if count >= ticks && strings.TrimSpace(rest) == "" {
+			return strings.Join(source, "\n"), index, true
+		}
+		source = append(source, line)
+	}
+	return "", 0, false
+}
+
+func unquoteMarkdownLine(line string, depth int) (string, bool) {
+	for range depth {
+		line = strings.TrimLeft(line, " \t")
+		if !strings.HasPrefix(line, ">") {
+			return "", false
+		}
+		line = strings.TrimPrefix(line, ">")
+		if strings.HasPrefix(line, " ") {
+			line = line[1:]
+		}
+	}
+	return line, true
 }
 
 func markdownFence(value string) (int, string) {

@@ -204,6 +204,7 @@ type AskUserQuestionConfig struct {
 type UIConfig struct {
 	Theme                string  `json:"theme"`
 	ScreenMode           string  `json:"screen_mode"`
+	RenderMermaid        string  `json:"render_mermaid"`
 	KeepTextSelection    string  `json:"keep_text_selection"`
 	WordSeparators       *string `json:"word_separators,omitempty"`
 	MouseReportingToggle bool    `json:"mouse_reporting_toggle,omitempty"`
@@ -457,6 +458,7 @@ type fileHashlineConfig struct {
 type fileUIConfig struct {
 	Theme                        *string `json:"theme,omitempty" toml:"theme"`
 	ScreenMode                   *string `json:"screen_mode,omitempty" toml:"screen_mode"`
+	RenderMermaid                *string `json:"render_mermaid,omitempty" toml:"render_mermaid"`
 	KeepTextSelection            any     `json:"keep_text_selection,omitempty" toml:"keep_text_selection"`
 	WordSeparators               *string `json:"word_separators,omitempty" toml:"word_separators"`
 	MouseReportingToggle         *bool   `json:"mouse_reporting_toggle,omitempty" toml:"mouse_reporting_toggle"`
@@ -678,7 +680,7 @@ func Load(path string) (Config, error) {
 		AskUserQuestion:             AskUserQuestionConfig{TimeoutEnabled: true, TimeoutSeconds: 30 * 60},
 		Toolset:                     ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}},
 		Goal:                        GoalConfig{VerifierCount: 3, ClassifierMaxRuns: 10, ReverifyAfter: 8},
-		UI:                          UIConfig{Theme: "groknight", ScreenMode: "fullscreen", KeepTextSelection: "flash", ShowTimestamps: true, PromptSuggestions: true, PermissionMode: "ask"},
+		UI:                          UIConfig{Theme: "groknight", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, PromptSuggestions: true, PermissionMode: "ask"},
 		Dashboard:                   DashboardConfig{Enabled: true, Grouping: "state"},
 		Sandbox:                     SandboxConfig{Profile: "off"},
 		Pruning:                     PruningConfig{Enabled: true, KeepLastNTurns: 3, SoftTrimThreshold: 4000, SoftTrimHead: 1500, SoftTrimTail: 1500, HardClearAgeTurns: 10},
@@ -901,6 +903,12 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 		cfg.UI.ScreenMode = strings.ToLower(strings.TrimSpace(*disk.UI.ScreenMode))
 		if cfg.UI.ScreenMode != "fullscreen" && cfg.UI.ScreenMode != "minimal" {
 			return errors.New("ui screen_mode must be fullscreen or minimal")
+		}
+	}
+	if disk.UI.RenderMermaid != nil {
+		cfg.UI.RenderMermaid = strings.ToLower(strings.TrimSpace(*disk.UI.RenderMermaid))
+		if cfg.UI.RenderMermaid != "auto" && cfg.UI.RenderMermaid != "on" && cfg.UI.RenderMermaid != "off" {
+			return errors.New("ui render_mermaid must be auto, on, or off")
 		}
 	}
 	if disk.UI.KeepTextSelection != nil {
@@ -2319,6 +2327,9 @@ func (c Config) Validate() error {
 	}
 	if c.UI.ScreenMode != "" && c.UI.ScreenMode != "fullscreen" && c.UI.ScreenMode != "minimal" {
 		return errors.New("ui screen_mode must be fullscreen or minimal")
+	}
+	if c.UI.RenderMermaid != "" && c.UI.RenderMermaid != "auto" && c.UI.RenderMermaid != "on" && c.UI.RenderMermaid != "off" {
+		return errors.New("ui render_mermaid must be auto, on, or off")
 	}
 	if c.Toolset.FileToolset != "" && c.Toolset.FileToolset != "standard" && c.Toolset.FileToolset != "hashline" {
 		return errors.New("toolset file_toolset must be standard or hashline")

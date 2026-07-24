@@ -493,7 +493,14 @@ Within a session, `/minimal` reopens the same session in minimal mode and
 
 The TUI streams model output as it arrives, renders headings, emphasis, links,
 lists, quotes, pipe tables, and inline or fenced code, strips untrusted terminal
-control characters, and keeps a scrollable transcript.
+control characters, and keeps a scrollable transcript. Closed Mermaid fences for
+flowcharts, graphs, state, sequence, class, and entity-relationship diagrams are
+rendered as width-bounded Unicode relationship art. Unknown diagram kinds,
+unparseable input, incomplete streaming fences, and terminals narrower than five
+columns retain the selectable Mermaid source instead of dropping content.
+`[ui].render_mermaid` accepts `auto` (the default), `on`, or `off`; `auto` and
+`on` render supported diagrams, while `off` always keeps the source. The setting
+is also available in `/settings`.
 Tool calls are rendered into the transcript with formatted arguments, results,
 errors, and image metadata. Their persisted event history is reconstructed after
 resume and rewind without adding presentation text to the model's conversation

@@ -14,7 +14,7 @@ type settingsState struct {
 	err      string
 }
 
-const settingsCount = 6
+const settingsCount = 7
 
 func (m *model) openSettings() {
 	m.settings = &settingsState{}
@@ -84,6 +84,19 @@ func (m *model) applySetting(selected int) {
 			state.err = persistSetting(m.persistScreenMode(mode), func() { m.defaultMinimal = previous })
 		}
 	case 5:
+		previous := m.mermaidMode
+		switch m.mermaidMode {
+		case "auto":
+			m.mermaidMode = "on"
+		case "on":
+			m.mermaidMode = "off"
+		default:
+			m.mermaidMode = "auto"
+		}
+		if m.persistMermaid != nil {
+			state.err = persistSetting(m.persistMermaid(m.mermaidMode), func() { m.mermaidMode = previous })
+		}
+	case 6:
 		previousName, previousTheme := m.themeName, m.theme
 		m.themeName = nextTheme(m.themeName)
 		m.theme = paletteFor(m.themeName)
@@ -120,12 +133,17 @@ func (m *model) settingsContent() string {
 	if m.settings == nil {
 		return ""
 	}
+	mermaidMode := m.mermaidMode
+	if mermaidMode == "" {
+		mermaidMode = "auto"
+	}
 	lines := []string{
 		settingLine("Timestamps", m.showTimestamps),
 		settingLine("Timeline", m.showTimeline),
 		settingLine("Compact mode", m.compactMode),
 		settingLine("Vim navigation", m.vimMode),
 		settingLine("Minimal by default", m.defaultMinimal),
+		fmt.Sprintf("Mermaid rendering: %s", mermaidMode),
 		fmt.Sprintf("Theme: %s", m.themeName),
 	}
 	content := "# Settings\n\n" + selectedWindow(lines, m.settings.selected, max(m.contentHeight()-3, 1))
