@@ -295,8 +295,18 @@ func TestDashboardRequiresActiveSession(t *testing.T) {
 	}
 }
 
-func TestDashboardCreatesNewAgentWithEditedPrompt(t *testing.T) {
-	m := &model{runner: dashboardFixtureRunner(), workspace: "/work", modelName: "grok"}
+func TestDashboardStartsNewAgentAndStaysOpen(t *testing.T) {
+	var prompt string
+	var started []tools.SubagentResult
+	runner := dashboardFixtureRunner()
+	runner.ListSubagents = func() []tools.SubagentResult { return slices.Clone(started) }
+	runner.StartSubagent = func(_ context.Context, value string) (tools.SubagentResult, error) {
+		prompt = value
+		result := tools.SubagentResult{ID: "sub-new", Type: "general-purpose", Status: "running", Description: value}
+		started = append(started, result)
+		return result, nil
+	}
+	m := &model{ctx: context.Background(), runner: runner, workspace: "/work", modelName: "grok"}
 	m.openDashboard()
 	pressDashboardKey(t, m, tea.Key{Code: 'n', Text: "n"})
 	if !m.dashboard.dispatching || m.status != "new agent prompt" || !strings.Contains(m.dashboardContent(), "New agent: |") {
@@ -311,14 +321,64 @@ func TestDashboardCreatesNewAgentWithEditedPrompt(t *testing.T) {
 	pressDashboardKey(t, m, tea.Key{Code: tea.KeyRight})
 	pressDashboardKey(t, m, tea.Key{Code: tea.KeyDelete})
 	pressDashboardKey(t, m, tea.Key{Code: '查', Text: "查"})
-	updated, quit := m.handleDashboardKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	updated, cmd := m.handleDashboardKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)
-	if quit == nil || !m.newSession || m.newSessionPrompt != "检查部署" || m.status != "starting new agent" {
-		t.Fatalf("quit=%v new=%v prompt=%q status=%q", quit != nil, m.newSession, m.newSessionPrompt, m.status)
+	if cmd == nil || !m.dashboard.busy || m.newSession || m.status != "starting new agent" {
+		t.Fatalf("command=%v busy=%v new=%v status=%q", cmd != nil, m.dashboard.busy, m.newSession, m.status)
+	}
+	if _, duplicate := m.handleDashboardKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter})); duplicate != nil {
+		t.Fatal("agent dispatch allowed a duplicate submission while starting")
+	}
+	updated, _ = m.Update(cmd())
+	m = updated.(*model)
+	if prompt != "检查部署" || m.dashboard == nil || m.dashboard.dispatching || m.dashboard.busy || m.status != "agent started" {
+		t.Fatalf("prompt=%q dashboard=%#v status=%q", prompt, m.dashboard, m.status)
+	}
+	if dashboardRowIndex(t, m.dashboard.rows, dashboardSubagent, "sub-new") < 0 {
+		t.Fatal("started agent was not added to the dashboard")
 	}
 }
 
-func TestDashboardCancelsOrRejectsNewAgentComposer(t *testing.T) {
+func TestDashboardStartsNewAgentAndOpensDetails(t *testing.T) {
+	result := tools.SubagentResult{ID: "sub-new", Type: "general-purpose", Status: "running", Description: "deploy"}
+	runner := dashboardFixtureRunner()
+	runner.ListSubagents = func() []tools.SubagentResult { return []tools.SubagentResult{result} }
+	runner.StartSubagent = func(context.Context, string) (tools.SubagentResult, error) { return result, nil }
+	m := &model{ctx: context.Background(), runner: runner, workspace: "/work", modelName: "grok"}
+	m.openDashboard()
+	pressDashboardKey(t, m, tea.Key{Code: 'n', Text: "n"})
+	pressDashboardKey(t, m, tea.Key{Code: 'd', Text: "deploy"})
+	updated, cmd := m.handleDashboardKey(tea.KeyPressMsg(tea.Key{Code: 's', Text: "s", Mod: tea.ModCtrl}))
+	m = updated.(*model)
+	if cmd == nil {
+		t.Fatal("Ctrl+S did not start an agent")
+	}
+	updated, _ = m.Update(cmd())
+	m = updated.(*model)
+	if m.dashboard == nil || !m.dashboard.attached || m.dashboard.peekID != "sub-new" || m.status != "dashboard detail" || !strings.Contains(m.dashboard.peekContent, "running") {
+		t.Fatalf("dashboard=%#v status=%q", m.dashboard, m.status)
+	}
+}
+
+func TestDashboardPreservesNewAgentDraftAfterFailure(t *testing.T) {
+	runner := dashboardFixtureRunner()
+	runner.StartSubagent = func(context.Context, string) (tools.SubagentResult, error) {
+		return tools.SubagentResult{}, errors.New("launch failed")
+	}
+	m := &model{ctx: context.Background(), runner: runner, workspace: "/work", modelName: "grok"}
+	m.openDashboard()
+	pressDashboardKey(t, m, tea.Key{Code: 'n', Text: "n"})
+	pressDashboardKey(t, m, tea.Key{Code: 'd', Text: "draft"})
+	updated, cmd := m.handleDashboardKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	updated, _ = m.Update(cmd())
+	m = updated.(*model)
+	if !m.dashboard.dispatching || string(m.dashboard.dispatchInput) != "draft" || m.dashboard.busy || m.dashboard.err != "launch failed" || m.status != "dashboard action failed" {
+		t.Fatalf("dashboard=%#v status=%q", m.dashboard, m.status)
+	}
+}
+
+func TestDashboardCancelsNewAgentComposerWhileRequestRuns(t *testing.T) {
 	m := &model{runner: dashboardFixtureRunner(), workspace: "/work", modelName: "grok"}
 	m.openDashboard()
 	pressDashboardKey(t, m, tea.Key{Code: 'n', Text: "n"})
@@ -330,8 +390,29 @@ func TestDashboardCancelsOrRejectsNewAgentComposer(t *testing.T) {
 
 	m.running = true
 	pressDashboardKey(t, m, tea.Key{Code: 'n', Text: "n"})
-	if m.dashboard.dispatching || m.dashboard.err != "Wait for the current request before creating a new agent" {
+	if !m.dashboard.dispatching || m.dashboard.err != "" || m.status != "new agent prompt" {
 		t.Fatalf("state=%#v", m.dashboard)
+	}
+}
+
+func TestDashboardRejectsUnavailableOrOversizedAgentPrompt(t *testing.T) {
+	m := &model{runner: dashboardFixtureRunner(), workspace: "/work", modelName: "grok"}
+	m.openDashboard()
+	pressDashboardKey(t, m, tea.Key{Code: 'n', Text: "n"})
+	m.dashboard.dispatchInput = []rune("work")
+	m.dashboard.dispatchCursor = len(m.dashboard.dispatchInput)
+	pressDashboardKey(t, m, tea.Key{Code: tea.KeyEnter})
+	if m.dashboard.err != "Agent launch is unavailable" {
+		t.Fatalf("error=%q", m.dashboard.err)
+	}
+	m.runner.StartSubagent = func(context.Context, string) (tools.SubagentResult, error) {
+		return tools.SubagentResult{}, nil
+	}
+	m.dashboard.dispatchInput = []rune(strings.Repeat("a", maxDashboardDispatchBytes+1))
+	m.dashboard.dispatchCursor = len(m.dashboard.dispatchInput)
+	pressDashboardKey(t, m, tea.Key{Code: tea.KeyEnter})
+	if m.dashboard.err != "Prompt exceeds 64 KiB" {
+		t.Fatalf("error=%q", m.dashboard.err)
 	}
 }
 

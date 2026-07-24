@@ -137,6 +137,7 @@ type Runner struct {
 	HookCatalog             *hooks.Catalog
 	ReloadHooks             func() error
 	ListSubagents           func() []tools.SubagentResult
+	StartSubagent           func(context.Context, string) (tools.SubagentResult, error)
 	GetSubagent             func(context.Context, string, time.Duration) (tools.SubagentResult, error)
 	KillSubagent            func(context.Context, string) (string, error)
 	ListTasks               func() []tools.ProcessSnapshot

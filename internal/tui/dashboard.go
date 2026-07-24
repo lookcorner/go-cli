@@ -16,7 +16,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/tools"
 )
 
-const maxDashboardDispatchRunes = 4000
+const maxDashboardDispatchBytes = 64 << 10
 
 type dashboardRowKind uint8
 
@@ -80,6 +80,7 @@ type dashboardDoneEvent struct {
 	action string
 	id     string
 	text   string
+	attach bool
 	err    error
 }
 
@@ -385,7 +386,7 @@ func (m *model) dashboardHint() string {
 		return "Type to filter | Enter keep | Esc cancel | Ctrl+/ cancel"
 	}
 	if m.dashboard != nil && m.dashboard.dispatching {
-		return "Enter create and open | Esc cancel | Left/Right move cursor"
+		return "Enter start | Ctrl+S start and open | Esc cancel | Left/Right move cursor"
 	}
 	if m.dashboard != nil && m.dashboard.attached {
 		return "Esc return to dashboard | Up/Down scroll"
@@ -499,15 +500,11 @@ func (m *model) handleDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.scroll = m.maxDashboardScroll()
 		m.status = "dashboard shortcuts"
 	case text == "n":
-		if m.running {
-			state.err = "Wait for the current request before creating a new agent"
-		} else {
-			state.dispatching = true
-			state.dispatchInput = nil
-			state.dispatchCursor = 0
-			state.err = ""
-			m.status = "new agent prompt"
-		}
+		state.dispatching = true
+		state.dispatchInput = nil
+		state.dispatchCursor = 0
+		state.err = ""
+		m.status = "new agent prompt"
 	case stroke == "ctrl+g":
 		m.toggleDashboardGrouping()
 	case (stroke == "shift+up" || stroke == "shift+down") && len(state.rows) > 0:
@@ -1061,6 +1058,9 @@ func editDashboardTextLimit(input []rune, cursor int, key tea.Key, limit int) ([
 func (m *model) handleDashboardDispatchKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	state := m.dashboard
 	key := msg.Key()
+	if state.busy {
+		return m, nil
+	}
 	if key.Code == tea.KeyEsc {
 		state.dispatching = false
 		state.dispatchInput = nil
@@ -1069,18 +1069,37 @@ func (m *model) handleDashboardDispatchKey(msg tea.KeyPressMsg) (tea.Model, tea.
 		m.status = "agent dashboard"
 		return m, nil
 	}
-	if key.Code == tea.KeyEnter {
+	if key.Code == tea.KeyEnter || msg.Keystroke() == "ctrl+s" {
 		prompt := strings.TrimSpace(string(state.dispatchInput))
 		if prompt == "" {
 			state.err = "Prompt is required"
 			return m, nil
 		}
-		m.newSession = true
-		m.newSessionPrompt = prompt
+		if len(prompt) > maxDashboardDispatchBytes {
+			state.err = "Prompt exceeds 64 KiB"
+			return m, nil
+		}
+		if m.runner.StartSubagent == nil {
+			state.err = "Agent launch is unavailable"
+			return m, nil
+		}
+		ctx := m.ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		attach := msg.Keystroke() == "ctrl+s"
+		state.busy = true
+		state.err = ""
 		m.status = "starting new agent"
-		return m, tea.Quit
+		return m, func() tea.Msg {
+			result, err := m.runner.StartSubagent(ctx, prompt)
+			return dashboardDoneEvent{action: "dispatch", id: result.ID, text: formatSubagentDetail(result), attach: attach, err: err}
+		}
 	}
-	state.dispatchInput, state.dispatchCursor = editDashboardTextLimit(state.dispatchInput, state.dispatchCursor, key, maxDashboardDispatchRunes)
+	next, cursor := editDashboardTextLimit(state.dispatchInput, state.dispatchCursor, key, maxDashboardDispatchBytes)
+	if len(string(next)) <= maxDashboardDispatchBytes {
+		state.dispatchInput, state.dispatchCursor = next, cursor
+	}
 	state.err = ""
 	return m, nil
 }

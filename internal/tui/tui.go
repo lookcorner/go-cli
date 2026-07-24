@@ -1444,6 +1444,22 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 					m.dashboard.err = "Subagent no longer exists"
 					m.status = "dashboard action failed"
 				}
+			} else if msg.action == "dispatch" {
+				m.dashboard.dispatching = false
+				m.dashboard.dispatchInput = nil
+				m.dashboard.dispatchCursor = 0
+				m.refreshDashboard()
+				if msg.attach {
+					m.dashboard.peekID = msg.id
+					m.dashboard.peekKind = dashboardSubagent
+					m.dashboard.peekTitle = "Subagent: " + msg.id
+					m.dashboard.peekContent = msg.text
+					m.dashboard.attached = true
+					m.scroll = 0
+					m.status = "dashboard detail"
+				} else {
+					m.status = "agent started"
+				}
 			} else {
 				fallback := "task stopped"
 				statusText := msg.text

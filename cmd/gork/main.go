@@ -786,7 +786,13 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			hookCatalog.Reconfigure(hooks.Config{WorkspaceRoot: ws.Root(), Compat: reloaded.Compat, ProjectTrusted: projectTrusted, Plugins: enabledPlugins(plugins)})
 			return nil
 		},
-		ListSubagents: subagents.List, GetSubagent: subagents.Output, KillSubagent: subagents.Kill,
+		ListSubagents: subagents.List,
+		StartSubagent: func(ctx context.Context, prompt string) (tools.SubagentResult, error) {
+			return subagents.Start(ctx, tools.SubagentRequest{
+				Prompt: prompt, Description: prompt, Type: subagents.DefaultType(), Background: true, BackgroundSet: true,
+			})
+		},
+		GetSubagent: subagents.Output, KillSubagent: subagents.Kill,
 		ListTasks: registry.BackgroundTasks, KillTask: registry.KillBackgroundTask,
 		SessionID: logger.ID(), SessionPath: logger.Path(), Workspace: ws.Root(),
 		ModelID: acpSessionModelID(cfg, ""), Model: cfg.Model, ModelOptions: acpModelOptions(cfg), ReasoningEffort: cfg.ReasoningEffort,
@@ -2984,7 +2990,13 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			Client: modelClient, Tools: registry, Skills: catalog, PluginInventory: pluginInventory,
 			AgentDefinitions: subagentManager.Definitions, Personas: personas.New(pluginState.root), Logger: logger,
 			HookCatalog: pluginState.hooks, HookPolicy: pluginState.hookRun,
-			ListSubagents: subagentManager.List, GetSubagent: subagentManager.Output, KillSubagent: subagentManager.Kill,
+			ListSubagents: subagentManager.List,
+			StartSubagent: func(ctx context.Context, prompt string) (tools.SubagentResult, error) {
+				return subagentManager.Start(ctx, tools.SubagentRequest{
+					Prompt: prompt, Description: prompt, Type: subagentManager.DefaultType(), Background: true, BackgroundSet: true,
+				})
+			},
+			GetSubagent: subagentManager.Output, KillSubagent: subagentManager.Kill,
 			ListTasks: registry.BackgroundTasks, KillTask: registry.KillBackgroundTask,
 			ReloadHooks: func() error {
 				pluginState.updateMu.Lock()

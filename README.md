@@ -582,8 +582,9 @@ read-only snapshot and queued prompts run before scheduled wake-ups.
 without creating a model turn.
 `/dashboard` (also `/sessions` and `/agents-dashboard`) opens an interactive
 overview of active and stored sessions, subagents, background processes, and
-scheduled tasks. `N` opens a prompt editor that creates and enters a new agent
-session in the current workspace. Enter opens details or switches sessions,
+scheduled tasks. `N` opens a prompt editor for a concurrent agent in the current
+workspace; Enter starts it and stays on the dashboard, while `Ctrl+S` starts it
+and opens its details. Enter otherwise opens details or switches sessions,
 while `P` peeks any selected row without leaving the dashboard. `Ctrl+T` pins a
 session or subagent; Enter from a peek opens its full-screen detail, and Esc
 returns to the dashboard. `Shift+Up/Down` changes manual order, `Ctrl+R` renames
