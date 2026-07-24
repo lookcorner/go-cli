@@ -213,6 +213,7 @@ type UIConfig struct {
 	CompactMode          bool    `json:"compact_mode,omitempty"`
 	ShowTimestamps       bool    `json:"show_timestamps"`
 	ShowTimeline         bool    `json:"show_timeline,omitempty"`
+	ScrollSpeed          uint8   `json:"scroll_speed,omitempty"`
 	ScrollLines          *uint8  `json:"scroll_lines,omitempty"`
 	InvertScroll         bool    `json:"invert_scroll,omitempty"`
 	PromptSuggestions    bool    `json:"prompt_suggestions"`
@@ -470,6 +471,7 @@ type fileUIConfig struct {
 	CompactMode                  *bool   `json:"compact_mode,omitempty" toml:"compact_mode"`
 	ShowTimestamps               *bool   `json:"show_timestamps,omitempty" toml:"show_timestamps"`
 	ShowTimeline                 *bool   `json:"show_timeline,omitempty" toml:"show_timeline"`
+	ScrollSpeed                  *uint8  `json:"scroll_speed,omitempty" toml:"scroll_speed"`
 	ScrollLines                  *uint8  `json:"scroll_lines,omitempty" toml:"scroll_lines"`
 	InvertScroll                 *bool   `json:"invert_scroll,omitempty" toml:"invert_scroll"`
 	PromptSuggestions            *bool   `json:"prompt_suggestions,omitempty" toml:"prompt_suggestions"`
@@ -684,7 +686,7 @@ func Load(path string) (Config, error) {
 		AskUserQuestion:             AskUserQuestionConfig{TimeoutEnabled: true, TimeoutSeconds: 30 * 60},
 		Toolset:                     ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}},
 		Goal:                        GoalConfig{VerifierCount: 3, ClassifierMaxRuns: 10, ReverifyAfter: 8},
-		UI:                          UIConfig{Theme: "groknight", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, PromptSuggestions: true, PermissionMode: "ask"},
+		UI:                          UIConfig{Theme: "groknight", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, ScrollSpeed: 50, PromptSuggestions: true, PermissionMode: "ask"},
 		Dashboard:                   DashboardConfig{Enabled: true, Grouping: "state"},
 		Sandbox:                     SandboxConfig{Profile: "off"},
 		Pruning:                     PruningConfig{Enabled: true, KeepLastNTurns: 3, SoftTrimThreshold: 4000, SoftTrimHead: 1500, SoftTrimTail: 1500, HardClearAgeTurns: 10},
@@ -960,6 +962,9 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.UI.ShowTimeline != nil {
 		cfg.UI.ShowTimeline = *disk.UI.ShowTimeline
+	}
+	if disk.UI.ScrollSpeed != nil {
+		cfg.UI.ScrollSpeed = normalizedScrollSpeed(*disk.UI.ScrollSpeed)
 	}
 	if disk.UI.ScrollLines != nil {
 		cfg.UI.ScrollLines = normalizedScrollLines(*disk.UI.ScrollLines)
@@ -1663,6 +1668,11 @@ func applyEnv(cfg *Config) {
 			cfg.UI.ScrollLines = normalizedScrollLines(uint8(value))
 		}
 	}
+	if raw := strings.TrimSpace(os.Getenv("GROK_SCROLL_SPEED")); raw != "" {
+		if value, err := strconv.ParseUint(raw, 10, 8); err == nil {
+			cfg.UI.ScrollSpeed = normalizedScrollSpeed(uint8(value))
+		}
+	}
 	if raw := strings.TrimSpace(os.Getenv("GROK_INVERT_SCROLL")); raw == "1" || raw == "true" {
 		cfg.UI.InvertScroll = true
 	} else if raw == "0" || raw == "false" {
@@ -1802,6 +1812,10 @@ func normalizedScrollLines(value uint8) *uint8 {
 	}
 	value = min(value, 10)
 	return &value
+}
+
+func normalizedScrollSpeed(value uint8) uint8 {
+	return min(max(value, 1), 100)
 }
 
 func parseKeepTextSelection(value any) (string, error) {

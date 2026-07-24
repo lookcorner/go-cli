@@ -3649,6 +3649,41 @@ func TestMouseWheelScrollsOnlyTheTranscriptPane(t *testing.T) {
 	}
 }
 
+func TestScrollSpeedUsesReferenceCurve(t *testing.T) {
+	for _, test := range []struct {
+		speed uint8
+		want  float64
+	}{
+		{0, 1},
+		{1, 0.1},
+		{50, 1},
+		{75, 3.5},
+		{100, 6},
+	} {
+		if got := scrollSpeedMultiplier(test.speed); got != test.want {
+			t.Fatalf("speed=%d multiplier=%g want=%g", test.speed, got, test.want)
+		}
+	}
+
+	m := &model{width: 60, height: 16, scrollLines: 3, scrollSpeed: 1}
+	for range 3 {
+		command := m.View().OnMouse(tea.MouseWheelMsg(tea.Mouse{Y: 1, Button: tea.MouseWheelUp}))
+		updated, _ := m.Update(command())
+		m = updated.(*model)
+	}
+	if m.scroll != 0 {
+		t.Fatalf("sub-line carry scrolled early: %d", m.scroll)
+	}
+	command := m.View().OnMouse(tea.MouseWheelMsg(tea.Mouse{Y: 1, Button: tea.MouseWheelUp}))
+	if command == nil {
+		t.Fatal("wheel event was ignored")
+	}
+	updated, _ := m.Update(command())
+	if updated.(*model).scroll != 1 {
+		t.Fatalf("carried scroll=%d", updated.(*model).scroll)
+	}
+}
+
 func TestTextSelectionCopiesRenderedTranscript(t *testing.T) {
 	lines := []string{"alpha beta", "second 你好"}
 	if got := (&textSelection{}).text(); got != "" {

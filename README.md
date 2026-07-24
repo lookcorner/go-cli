@@ -745,8 +745,10 @@ Set `[ui] mouse_reporting_toggle = true` (or `GROK_MOUSE_REPORTING_TOGGLE=true`)
 to let Ctrl-R release mouse capture while scrollback is focused and press Ctrl-R again
 to restore it.
 Set `[ui] scroll_lines` from 1 to 10 to choose the number of transcript lines per
-wheel event, and `[ui] invert_scroll = true` for natural scrolling. The
-`GROK_SCROLL_LINES` and `GROK_INVERT_SCROLL` environment variables override them.
+wheel event, `[ui] scroll_speed` from 1 to 100 to scale movement (50 is the
+default), and `[ui] invert_scroll = true` for natural scrolling. The
+`GROK_SCROLL_LINES`, `GROK_SCROLL_SPEED`, and `GROK_INVERT_SCROLL` environment
+variables override them.
 The hidden, release-safe `/debug` command reports diagnostic state without a
 model turn. `/debug scroll` (also `/scroll-debug`) overlays live viewport and
 wheel state, `/debug fps` overlays bounded render-rate percentiles, and

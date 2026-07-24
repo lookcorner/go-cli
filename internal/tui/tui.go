@@ -47,6 +47,17 @@ const (
 	recapLabel                = "Recap \u2014 "
 )
 
+func scrollSpeedMultiplier(speed uint8) float64 {
+	if speed == 0 {
+		speed = 50
+	}
+	speed = min(max(speed, 1), 100)
+	if speed > 50 {
+		return 1 + float64(speed-50)*(5.0/50)
+	}
+	return 0.1 + float64(speed-1)*(0.9/49)
+}
+
 var selectionURLPattern = regexp.MustCompile(`(?i)\b(?:https?|ftp|file)://[^\s\x00-\x1f]+`)
 
 var ErrNewSession = errors.New("start a new session")
@@ -198,7 +209,10 @@ type btwDoneEvent struct {
 }
 type scheduledFiredEvent struct{ event tools.ScheduledTaskFired }
 type wakeCancelledEvent struct{ id string }
-type mouseScrollEvent struct{ lines int }
+type mouseScrollEvent struct {
+	lines int
+	scale bool
+}
 type mouseClickEvent struct {
 	action string
 	option int
@@ -537,6 +551,8 @@ type model struct {
 	persistMermaid     func(string) error
 	transcriptMessages []transcriptMessage
 	scrollLines        int
+	scrollSpeed        uint8
+	scrollCarry        float64
 	invertScroll       bool
 	mouseReleased      bool
 	hyperlinks         bool
@@ -693,6 +709,7 @@ type UIOptions struct {
 	SetShowTimestamps    func(bool) error
 	ShowTimeline         bool
 	SetShowTimeline      func(bool) error
+	ScrollSpeed          uint8
 	ScrollLines          *uint8
 	InvertScroll         bool
 	PromptSuggestions    bool
@@ -827,7 +844,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		defaultMinimal: options.ScreenMode == "minimal", persistScreenMode: options.SetScreenMode,
 		showTimestamps: options.ShowTimestamps, persistTimestamps: options.SetShowTimestamps,
 		showTimeline: options.ShowTimeline, persistTimeline: options.SetShowTimeline,
-		scrollLines: mouseWheelScrollLines, invertScroll: options.InvertScroll,
+		scrollLines: mouseWheelScrollLines, scrollSpeed: options.ScrollSpeed, invertScroll: options.InvertScroll,
 		suggestionsEnabled: options.PromptSuggestions,
 		hyperlinks:         detectTerminalHyperlinks(),
 		themeName:          options.Theme,
@@ -862,6 +879,9 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 	}
 	if options.ScrollLines != nil {
 		m.scrollLines = int(*options.ScrollLines)
+	}
+	if m.scrollSpeed == 0 {
+		m.scrollSpeed = 50
 	}
 	if current, ok := runner.CurrentModel(); ok && strings.TrimSpace(current.Name) != "" {
 		m.modelName = current.Name
@@ -990,6 +1010,14 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshScrollSearch()
 		return m, waitForBridge(m.bridge)
 	case mouseScrollEvent:
+		if msg.scale {
+			scaled := float64(msg.lines)*scrollSpeedMultiplier(m.scrollSpeed) + m.scrollCarry
+			msg.lines = int(scaled)
+			m.scrollCarry = scaled - float64(msg.lines)
+			if msg.lines == 0 {
+				return m, nil
+			}
+		}
 		m.selection = nil
 		m.selectionClick = selectionClickState{}
 		m.timelineHover = nil
@@ -4587,7 +4615,7 @@ func (m *model) View() tea.View {
 			default:
 				return nil
 			}
-			return func() tea.Msg { return mouseScrollEvent{lines: lines} }
+			return func() tea.Msg { return mouseScrollEvent{lines: lines, scale: true} }
 		case tea.MouseClickMsg:
 			if mouse.Button != tea.MouseLeft {
 				return nil

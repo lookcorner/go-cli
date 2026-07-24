@@ -1154,7 +1154,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 				return config.UpdateRenderMermaid(opts.configPath, mode)
 			},
 			Mode: cfg.UI.KeepTextSelection, WordSeparators: cfg.UI.WordSeparators, MouseReportingToggle: cfg.UI.MouseReportingToggle, VimMode: cfg.UI.VimMode,
-			ScrollLines: cfg.UI.ScrollLines, InvertScroll: cfg.UI.InvertScroll, PromptSuggestions: cfg.UI.PromptSuggestions,
+			ScrollSpeed: cfg.UI.ScrollSpeed, ScrollLines: cfg.UI.ScrollLines, InvertScroll: cfg.UI.InvertScroll, PromptSuggestions: cfg.UI.PromptSuggestions,
 			CompactMode:       cfg.UI.CompactMode,
 			ShowTimestamps:    cfg.UI.ShowTimestamps,
 			ShowTimeline:      cfg.UI.ShowTimeline,
