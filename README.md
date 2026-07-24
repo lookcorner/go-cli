@@ -1693,11 +1693,11 @@ requirements lock described above downgrades the setting to normal prompting.
 The same direct-install lifecycle is available outside ACP:
 
 ```sh
-gork plugin install ./local-plugin
-gork plugin install owner/repository@v1.2.0
-gork plugin list
+gork plugin install ./local-plugin --trust
+gork plugin install owner/repository@v1.2.0 --trust
+gork plugin list [--json [--available]]
 gork plugin update [plugin-name]
-gork plugin uninstall [--confirm] [--keep-data] plugin-name
+gork plugin uninstall|rm|remove [--confirm] [--keep-data] plugin-name
 gork plugin enable plugin-name
 gork plugin disable plugin-name
 gork plugin details plugin-name
@@ -1707,6 +1707,9 @@ gork plugin marketplace add <git-url-or-local-path>
 gork plugin marketplace remove <git-url-or-local-path>
 gork plugin marketplace update [source-name]
 ```
+
+Direct installation requires explicit `--trust` because plugins may provide
+executable hooks, MCP servers, skills, and agents.
 
 Local installs are full snapshots rather than symlinks. New sessions and
 explicit plugin reloads safely recopy the source; uninstall removes plugin data

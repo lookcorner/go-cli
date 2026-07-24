@@ -66,3 +66,41 @@ func TestValidateRejectsMalformedAndInvalidManifests(t *testing.T) {
 		})
 	}
 }
+
+func TestListInstalledIsStableAndIncludesProvenance(t *testing.T) {
+	t.Setenv("GROK_HOME", t.TempDir())
+	registry, err := LoadInstallRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry.Repos["z-repo"] = InstalledRepo{
+		Kind: InstallKind{Type: "git", URL: "https://example.com/z.git"},
+		Path: "/plugins/z",
+		Plugins: map[string]RepoPlugin{
+			"zeta":  {Version: "2.0.0"},
+			"alpha": {Version: "1.0.0"},
+		},
+	}
+	registry.Repos["a-repo"] = InstalledRepo{
+		Kind: InstallKind{Type: "local", SourcePath: "/source/a"},
+		Path: "/plugins/a",
+		Plugins: map[string]RepoPlugin{
+			"middle": {Version: "3.0.0"},
+		},
+		Marketplace: &MarketplaceProvenance{SourceDisplayName: "Team catalog"},
+	}
+	if err := registry.Save(); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := ListInstalled()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 3 ||
+		entries[0].RepoKey != "a-repo" || entries[0].Name != "middle" ||
+		entries[0].Source != "/source/a" || entries[0].Marketplace != "Team catalog" ||
+		entries[1].RepoKey != "z-repo" || entries[1].Name != "alpha" ||
+		entries[2].RepoKey != "z-repo" || entries[2].Name != "zeta" {
+		t.Fatalf("entries=%#v", entries)
+	}
+}

@@ -2230,19 +2230,48 @@ func TestRunPluginLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	if err := runPlugin([]string{"install", source}, &stdout, &stderr); err != nil {
+	if err := runPlugin([]string{"install", source}, &stdout, &stderr); err == nil || !strings.Contains(err.Error(), "retry with --trust") {
+		t.Fatalf("untrusted install error=%v", err)
+	}
+	registry, err := plugin.LoadInstallRegistry()
+	if err != nil || len(registry.Repos) != 0 {
+		t.Fatalf("untrusted install registry=%#v err=%v", registry, err)
+	}
+	cfg, err := config.Load("")
+	if err != nil || len(cfg.Plugins.Enabled) != 0 || len(cfg.Plugins.Disabled) != 0 {
+		t.Fatalf("untrusted install config=%#v err=%v", cfg.Plugins, err)
+	}
+	if err := runPlugin([]string{"install", source, "--trust"}, &stdout, &stderr); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(stdout.String(), "cli-plugin") {
 		t.Fatalf("install output = %q", stdout.String())
 	}
-	cfg, err := config.Load("")
+	cfg, err = config.Load("")
 	if err != nil || strings.Join(cfg.Plugins.Enabled, "|") != "cli-plugin" {
 		t.Fatalf("installed config=%#v err=%v", cfg.Plugins, err)
 	}
 	stdout.Reset()
 	if err := runPlugin([]string{"list"}, &stdout, &stderr); err != nil || !strings.Contains(stdout.String(), "cli-plugin") {
 		t.Fatalf("list output=%q err=%v", stdout.String(), err)
+	}
+	stdout.Reset()
+	if err := runPlugin([]string{"list", "--json"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	var listed []map[string]any
+	canonicalSource, err := filepath.EvalSymlinks(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &listed); err != nil || len(listed) != 1 ||
+		listed[0]["status"] != "installed" || listed[0]["name"] != "cli-plugin" ||
+		listed[0]["version"] != "1.0.0" || listed[0]["source"] != canonicalSource ||
+		listed[0]["repo_key"] == "" || listed[0]["path"] == "" {
+		t.Fatalf("installed JSON=%#v output=%q err=%v", listed, stdout.String(), err)
+	}
+	if err := runPlugin([]string{"list", "--available"}, io.Discard, &stderr); err == nil || !strings.Contains(err.Error(), "requires --json") {
+		t.Fatalf("available without JSON error=%v", err)
 	}
 	stdout.Reset()
 	if err := runPlugin([]string{"details", "cli-plugin"}, &stdout, &stderr); err != nil ||
@@ -2293,12 +2322,68 @@ func TestRunPluginLifecycle(t *testing.T) {
 		t.Fatalf("update output=%q err=%v", stdout.String(), err)
 	}
 	stdout.Reset()
-	if err := runPlugin([]string{"uninstall", "cli-plugin"}, &stdout, &stderr); err != nil {
+	if err := runPlugin([]string{"rm", "cli-plugin"}, &stdout, &stderr); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err = config.Load("")
 	if err != nil || len(cfg.Plugins.Enabled) != 0 || !strings.Contains(stdout.String(), "Uninstalled") {
 		t.Fatalf("uninstall output=%q config=%#v err=%v", stdout.String(), cfg.Plugins, err)
+	}
+	if err := runPlugin([]string{"remove", "cli-plugin"}, io.Discard, &stderr); err == nil || strings.Contains(err.Error(), "unknown plugin command") {
+		t.Fatalf("remove alias error=%v", err)
+	}
+}
+
+func TestRunPluginListJSONIncludesAvailableMarketplacePlugins(t *testing.T) {
+	grokHome := filepath.Join(t.TempDir(), ".grok")
+	t.Setenv("GROK_HOME", grokHome)
+	t.Setenv("HOME", filepath.Dir(grokHome))
+	root := t.TempDir()
+	for _, item := range []struct {
+		dir, name, version string
+	}{
+		{"installed", "installed-plugin", "1.0.0"},
+		{"available", "available-plugin", "2.0.0"},
+	} {
+		pluginRoot := filepath.Join(root, "plugins", item.dir)
+		if err := os.MkdirAll(filepath.Join(pluginRoot, "skills", "demo"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		manifest := fmt.Sprintf(`{"name":%q,"version":%q,"description":%q}`, item.name, item.version, item.name+" description")
+		if err := os.WriteFile(filepath.Join(pluginRoot, "plugin.json"), []byte(manifest), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(pluginRoot, "skills", "demo", "SKILL.md"), []byte("---\nname: demo\ndescription: Demo\n---\nDemo"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := config.UpdateMarketplace("", func(settings *config.MarketplaceConfig) {
+		settings.Sources = []config.MarketplaceSourceConfig{{Name: "Local catalog", Path: root}}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	outcome, err := marketplace.Execute("", root, marketplace.Action{
+		Type: "install", SourceURLOrPath: root, PluginRelativePath: "plugins/installed",
+	})
+	if err != nil || outcome.Status != "success" {
+		t.Fatalf("marketplace install=%#v err=%v", outcome, err)
+	}
+	var stdout bytes.Buffer
+	if err := runPlugin([]string{"list", "--available", "--json"}, &stdout, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	var listed []map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &listed); err != nil {
+		t.Fatalf("JSON output=%q err=%v", stdout.String(), err)
+	}
+	if len(listed) != 2 || listed[0]["status"] != "installed" || listed[0]["name"] != "installed-plugin" {
+		t.Fatalf("installed and available entries=%#v", listed)
+	}
+	available := listed[1]
+	if available["status"] != "available" || available["name"] != "available-plugin" ||
+		available["marketplace"] != "Local catalog" || available["skill_count"] != float64(1) ||
+		available["has_hooks"] != false || available["has_agents"] != false || available["has_mcp"] != false {
+		t.Fatalf("available entry=%#v", available)
 	}
 }
 

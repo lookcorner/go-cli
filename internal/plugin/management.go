@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 )
 
 type ComponentSummary struct {
@@ -40,6 +41,46 @@ type ManifestValidation struct {
 	Version     string
 	Description string
 	Components  ComponentSummary
+}
+
+type ListEntry struct {
+	Name        string
+	RepoKey     string
+	Version     string
+	Path        string
+	Source      string
+	Marketplace string
+}
+
+func ListInstalled() ([]ListEntry, error) {
+	registry, err := LoadInstallRegistry()
+	if err != nil {
+		return nil, err
+	}
+	keys := make([]string, 0, len(registry.Repos))
+	for key := range registry.Repos {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var entries []ListEntry
+	for _, key := range keys {
+		repo := registry.Repos[key]
+		source := repo.Kind.URL
+		if repo.Kind.Type == "local" {
+			source = repo.Kind.SourcePath
+		}
+		marketplace := ""
+		if repo.Marketplace != nil {
+			marketplace = repo.Marketplace.SourceDisplayName
+		}
+		for _, name := range sortedPluginNames(repo.Plugins) {
+			entries = append(entries, ListEntry{
+				Name: name, RepoKey: key, Version: repo.Plugins[name].Version,
+				Path: repo.Path, Source: source, Marketplace: marketplace,
+			})
+		}
+	}
+	return entries, nil
 }
 
 func InstalledDetails(name string) (InstalledPluginDetails, error) {

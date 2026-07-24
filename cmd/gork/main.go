@@ -1748,8 +1748,54 @@ func runPlugin(args []string, stdout, stderr io.Writer) error {
 	}
 	switch args[0] {
 	case "list":
-		if len(args) != 1 {
-			return errors.New("plugin list does not accept arguments")
+		flags := flag.NewFlagSet("gork plugin list", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
+		available := flags.Bool("available", false, "include available marketplace plugins")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if flags.NArg() != 0 {
+			return errors.New("usage: gork plugin list [--json [--available]]")
+		}
+		if *available && !*jsonOutput {
+			return errors.New("plugin list --available requires --json")
+		}
+		installed, err := plugin.ListInstalled()
+		if err != nil {
+			return err
+		}
+		if *jsonOutput {
+			entries := make([]any, 0, len(installed))
+			for _, item := range installed {
+				entries = append(entries, pluginInstalledJSON{
+					Status: "installed", Name: item.Name, RepoKey: item.RepoKey, Version: item.Version,
+					Path: item.Path, Source: item.Source, Marketplace: item.Marketplace,
+				})
+			}
+			if *available {
+				cwd, err := os.Getwd()
+				if err != nil {
+					return err
+				}
+				sources, err := marketplace.List("", cwd)
+				if err != nil {
+					return err
+				}
+				for _, source := range sources {
+					for _, item := range source.Plugins {
+						if item.InstallStatus == "installed" {
+							continue
+						}
+						entries = append(entries, pluginAvailableJSON{
+							Status: "available", Name: item.Name, Version: item.Version, Description: item.Description,
+							Marketplace: source.SourceName, SkillCount: item.SkillCount, HasHooks: item.HasHooks,
+							HasAgents: item.HasAgents, HasMCP: item.HasMCP, Components: item.Components,
+						})
+					}
+				}
+			}
+			return json.NewEncoder(stdout).Encode(entries)
 		}
 		registry, err := plugin.LoadInstallRegistry()
 		if err != nil {
@@ -1775,14 +1821,21 @@ func runPlugin(args []string, stdout, stderr io.Writer) error {
 		}
 		return nil
 	case "install":
-		if len(args) != 2 {
-			return errors.New("usage: gork plugin install <git-url-or-local-path>")
+		source, trust, err := parsePluginInstallArgs(args[1:])
+		if err != nil {
+			return err
+		}
+		if source == "" {
+			return errors.New("usage: gork plugin install <git-url-or-local-path> --trust")
+		}
+		if !trust {
+			return errors.New("plugin installation requires explicit trust; retry with --trust")
 		}
 		cwd, err := os.Getwd()
 		if err != nil {
 			return err
 		}
-		outcome, err := plugin.Install(args[1], cwd)
+		outcome, err := plugin.Install(source, cwd)
 		if err != nil {
 			return err
 		}
@@ -1796,7 +1849,7 @@ func runPlugin(args []string, stdout, stderr io.Writer) error {
 		}); err != nil {
 			return err
 		}
-		fmt.Fprintf(stdout, "Installed %d plugin(s) from %s: %s\n", len(outcome.Plugins), args[1], strings.Join(outcome.Plugins, ", "))
+		fmt.Fprintf(stdout, "Installed %d plugin(s) from %s: %s\n", len(outcome.Plugins), source, strings.Join(outcome.Plugins, ", "))
 		return nil
 	case "update":
 		if len(args) > 2 {
@@ -1814,7 +1867,7 @@ func runPlugin(args []string, stdout, stderr io.Writer) error {
 			fmt.Fprintf(stdout, "%s: %s\n", outcome.RepoKey, strings.ReplaceAll(outcome.Status, "_", " "))
 		}
 		return nil
-	case "uninstall":
+	case "uninstall", "rm", "remove":
 		flags := flag.NewFlagSet("gork plugin uninstall", flag.ContinueOnError)
 		flags.SetOutput(stderr)
 		confirmed := flags.Bool("confirm", false, "confirm removal of a repository containing multiple plugins")
@@ -1922,6 +1975,46 @@ func runPlugin(args []string, stdout, stderr io.Writer) error {
 	default:
 		return fmt.Errorf("unknown plugin command %q", args[0])
 	}
+}
+
+func parsePluginInstallArgs(args []string) (string, bool, error) {
+	var source string
+	trust := false
+	for _, arg := range args {
+		switch arg {
+		case "--trust":
+			trust = true
+		default:
+			if strings.HasPrefix(arg, "-") || source != "" {
+				return "", false, errors.New("usage: gork plugin install <git-url-or-local-path> --trust")
+			}
+			source = arg
+		}
+	}
+	return source, trust, nil
+}
+
+type pluginInstalledJSON struct {
+	Status      string `json:"status"`
+	Name        string `json:"name"`
+	RepoKey     string `json:"repo_key"`
+	Version     string `json:"version,omitempty"`
+	Path        string `json:"path"`
+	Source      string `json:"source"`
+	Marketplace string `json:"marketplace,omitempty"`
+}
+
+type pluginAvailableJSON struct {
+	Status      string                  `json:"status"`
+	Name        string                  `json:"name"`
+	Version     string                  `json:"version,omitempty"`
+	Description string                  `json:"description,omitempty"`
+	Marketplace string                  `json:"marketplace"`
+	SkillCount  int                     `json:"skill_count"`
+	HasHooks    bool                    `json:"has_hooks"`
+	HasAgents   bool                    `json:"has_agents"`
+	HasMCP      bool                    `json:"has_mcp"`
+	Components  *marketplace.Components `json:"components,omitempty"`
 }
 
 func pluginKindLabel(kind plugin.InstallKind) string {
