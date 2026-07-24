@@ -151,6 +151,12 @@ same complete ACP stdio runtime as `--acp`. `gork agent serve` exposes that
 persistent runtime over an authenticated WebSocket and preserves active
 sessions across reconnects. Headless and shared-leader modes remain unavailable
 and fail explicitly rather than being misparsed as prompts.
+The top-level `gork leader list/info` commands discover reference lock/socket
+candidates, verify live Unix sockets with the reference length-prefixed
+registration/control protocol, classify stale/unreachable/unsupported entries,
+select the production or explicit-PID leader, and emit reference-shaped JSON.
+Leader spawning, forwarding, destructive kill, and Windows named-pipe IPC
+remain.
 
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |

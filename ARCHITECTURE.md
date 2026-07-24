@@ -34,6 +34,8 @@ implementation.
   state, cancellation, resume, and tool-capability filtering coordination.
 - `internal/compat` owns resolved vendor compatibility values shared by
   configuration, instruction discovery, and skill discovery.
+- `internal/leader` owns shared-leader discovery, IPC framing, registration,
+  control queries, target selection, and candidate classification.
 - `internal/theme` owns canonical terminal theme identities and aliases shared
   by configuration validation and the TUI adapter.
 - `internal/docs` owns the immutable built-in guide catalog and title lookup;
@@ -51,8 +53,8 @@ implementation.
 - `internal/acp` translates ACP JSON-RPC requests and responses; feedback slash
   and extension inputs share one application persistence port, while review
   comments reuse the existing session event logger.
-- `cmd/gork` wires configuration, domains, and interactive, ACP stdio, or
-  WebSocket transports.
+- `cmd/gork` wires configuration, domains, and interactive, ACP stdio,
+  WebSocket, or leader-management transports.
 - `internal/tui` presents terminal state and emits typed lifecycle requests;
   `cmd/gork` performs runtime restart and coordinates session/worktree forks,
   while `internal/session` retains JSONL identity, copy, listing, path

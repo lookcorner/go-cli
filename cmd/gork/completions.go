@@ -37,8 +37,11 @@ var completionRoot = completionSpec{
 		"dashboard":   {flags: words("--config --fullscreen --minimal --session-dir --trust --workspace")},
 		"export":      {flags: []string{"--clipboard", "-c"}},
 		"inspect":     {flags: words("--config --json")},
-		"login":       {flags: words("--auth-file --audience --client-id --config --device-auth --issuer --no-browser --oauth --scopes")},
-		"logout":      {flags: words("--auth-file --client-id --config --issuer")},
+		"leader": {children: map[string]completionSpec{
+			"info": {flags: words("--json --pid")}, "kill": {}, "list": {flags: words("--json")},
+		}},
+		"login":  {flags: words("--auth-file --audience --client-id --config --device-auth --issuer --no-browser --oauth --scopes")},
+		"logout": {flags: words("--auth-file --client-id --config --issuer")},
 		"mcp": {children: map[string]completionSpec{
 			"add":    {flags: words("--args --command --config --env --header --scope --transport --type --url -H -e -s -t")},
 			"doctor": {flags: words("--config --json")}, "list": {flags: words("--config --json")},
@@ -77,7 +80,7 @@ var completionRoot = completionSpec{
 var completionValueFlags = map[string]bool{
 	"--allow": true, "--approval": true, "--auth-file": true, "--audience": true, "--bind": true,
 	"--append-system-prompt": true, "--backend": true, "--base-url": true, "--client-id": true, "--config": true, "--cwd": true,
-	"--deny": true, "--goal-runs": true, "--issuer": true, "--limit": true,
+	"--deny": true, "--goal-runs": true, "--issuer": true, "--limit": true, "--pid": true,
 	"--effort": true, "--json-schema": true, "--max-age": true, "--max-steps": true, "--max-turns": true, "--model": true,
 	"--load": true, "--output-format": true, "--permission-mode": true, "--previous-response-id": true, "--print": true,
 	"--prompt-file": true, "--prompt-json": true, "--reasoning-effort": true, "--rules": true, "--single": true,

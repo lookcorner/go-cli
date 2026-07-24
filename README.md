@@ -917,6 +917,24 @@ neither is set, the command prints a generated 12-character token. Use
 accepted, and running sessions survive client reconnects. Reference
 `agent headless` and `agent leader` modes still fail explicitly.
 
+Inspect reference-compatible shared leader candidates without starting the
+normal agent runtime:
+
+```sh
+./gork leader list
+./gork leader list --json
+./gork leader info
+./gork leader info --pid 1234 --json
+```
+
+`leader list` scans `$GROK_HOME` (normally `~/.grok`) for paired leader lock
+and socket files, verifies live candidates with the length-prefixed leader IPC
+protocol, and classifies stale, unreachable, unsupported, and reachable
+entries. `leader info` selects the production leader by default or an explicit
+live PID and requests `GetLeaderInfo`. Destructive `leader kill` remains
+disabled until process identity and cross-platform termination checks match the
+reference.
+
 Each `session/new` gets its own workspace, tool state, model history, local
 session log, MCP/LSP processes, and cleanup lifecycle. New and restored session
 responses include `_meta["x.ai/sessionConfig"]` model/reasoning choices and
