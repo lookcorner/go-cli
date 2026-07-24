@@ -115,6 +115,9 @@ type mcpAddOptions struct {
 func parseMCPAdd(args []string) (mcpAddOptions, error) {
 	result := mcpAddOptions{request: mcpadmin.AddRequest{Scope: mcpadmin.UserScope, Transport: "stdio"}}
 	var positionals, commandArgs []string
+	var legacyCommand, legacyURL, legacyType string
+	var legacyArgs []string
+	explicitTransport := false
 	afterSeparator := false
 	for index := 0; index < len(args); index++ {
 		arg := args[index]
@@ -140,6 +143,7 @@ func parseMCPAdd(args []string) (mcpAddOptions, error) {
 				return result, err
 			}
 			result.request.Transport = strings.ToLower(value)
+			explicitTransport = true
 		case "-s", "--scope":
 			value, err := next()
 			if err != nil {
@@ -179,6 +183,34 @@ func parseMCPAdd(args []string) (mcpAddOptions, error) {
 				result.request.Headers = make(map[string]string)
 			}
 			result.request.Headers[name] = strings.TrimSpace(content)
+		case "--command":
+			value, err := next()
+			if err != nil {
+				return result, err
+			}
+			legacyCommand = value
+		case "--args":
+			start := index + 1
+			for start < len(args) && !mcpAddOption(args[start]) {
+				legacyArgs = append(legacyArgs, args[start])
+				start++
+			}
+			if start == index+1 {
+				return result, errors.New("--args requires at least one value")
+			}
+			index = start - 1
+		case "--url":
+			value, err := next()
+			if err != nil {
+				return result, err
+			}
+			legacyURL = value
+		case "--type":
+			value, err := next()
+			if err != nil {
+				return result, err
+			}
+			legacyType = strings.ToLower(value)
 		default:
 			if strings.HasPrefix(arg, "-") {
 				return result, fmt.Errorf("unknown MCP add option %q", cleanCLIText(arg))
@@ -192,12 +224,54 @@ func parseMCPAdd(args []string) (mcpAddOptions, error) {
 	result.request.Name = positionals[0]
 	sources := append([]string(nil), positionals[1:]...)
 	sources = append(sources, commandArgs...)
-	if len(sources) == 0 {
+	legacySources := 0
+	if legacyCommand != "" {
+		legacySources++
+	}
+	if legacyURL != "" {
+		legacySources++
+	}
+	if legacySources > 1 || legacySources > 0 && len(sources) > 0 {
+		return result, errors.New("MCP server source options are mutually exclusive")
+	}
+	if len(legacyArgs) > 0 && legacyCommand == "" {
+		return result, errors.New("--args is only valid together with --command")
+	}
+	if legacyType != "" && legacyURL == "" {
+		return result, errors.New("--type is only valid together with --url; use --transport to choose the transport")
+	}
+	if legacyURL != "" {
+		if explicitTransport && result.request.Transport == "stdio" {
+			return result, errors.New("--url cannot be combined with --transport stdio")
+		}
+		if !explicitTransport {
+			result.request.Transport = "http"
+			if legacyType == "sse" {
+				result.request.Transport = "sse"
+			}
+		}
+		result.request.Source = legacyURL
+	} else if legacyCommand != "" {
+		result.request.Source = legacyCommand
+		result.request.Args = legacyArgs
+	} else if len(sources) > 0 {
+		result.request.Source = sources[0]
+		result.request.Args = sources[1:]
+	}
+	if result.request.Source == "" {
 		return result, errors.New("MCP server command or URL is required")
 	}
-	result.request.Source = sources[0]
-	result.request.Args = sources[1:]
 	return result, nil
+}
+
+func mcpAddOption(value string) bool {
+	switch value {
+	case "-t", "--transport", "-s", "--scope", "--config", "-e", "--env", "-H", "--header",
+		"--command", "--args", "--url", "--type", "--":
+		return true
+	default:
+		return false
+	}
 }
 
 func runMCPRemove(cwd string, args []string, stdout, stderr io.Writer) error {

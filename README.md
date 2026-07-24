@@ -1387,6 +1387,8 @@ gork mcp doctor [server-name]
 `.grok/config.toml` in the current directory; the default scope is the user
 config. `doctor` performs the MCP handshake and tool discovery without exposing
 configured environment or header values in its report.
+Legacy SDK forms remain accepted: `--command ... --args ...` for stdio and
+`--url ... --type http|sse` for remote servers.
 
 In the TUI, `/mcps` opens the live server manager. Use Up/Down to select,
 Enter to inspect tools, Space to enable or disable a server or tool, `A` to add

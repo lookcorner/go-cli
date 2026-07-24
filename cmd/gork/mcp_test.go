@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -115,6 +116,68 @@ func TestParseMCPAddSupportsFlagsAfterName(t *testing.T) {
 		parsed.request.Transport != "sse" || parsed.request.Scope != mcpadmin.ProjectScope ||
 		parsed.request.Headers["X-Test"] != "yes" {
 		t.Fatalf("parsed=%#v", parsed)
+	}
+}
+
+func TestMCPAddSupportsLegacyFlagForms(t *testing.T) {
+	stdio, err := parseMCPAdd([]string{
+		"oldfs", "--command", "npx", "--args", "-y", "@foo/bar", "/path", "--env", "TOKEN=secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stdio.request.Name != "oldfs" || stdio.request.Source != "npx" ||
+		strings.Join(stdio.request.Args, "|") != "-y|@foo/bar|/path" ||
+		stdio.request.Transport != "stdio" || stdio.request.Env["TOKEN"] != "secret" {
+		t.Fatalf("legacy stdio=%#v", stdio)
+	}
+	remote, err := parseMCPAdd([]string{
+		"remote", "--url", "https://mcp.example/sse", "--type", "sse", "--header", "Authorization: token",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if remote.request.Source != "https://mcp.example/sse" || remote.request.Transport != "sse" ||
+		remote.request.Headers["Authorization"] != "token" {
+		t.Fatalf("legacy remote=%#v", remote)
+	}
+}
+
+func TestMCPAddRejectsInvalidLegacyFlagCombinations(t *testing.T) {
+	for _, test := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"fs", "npx", "--command", "other"}, "mutually exclusive"},
+		{[]string{"fs", "--command", "npx", "--url", "https://example.com"}, "mutually exclusive"},
+		{[]string{"fs", "--args", "one"}, "--command"},
+		{[]string{"fs", "https://example.com", "--type", "sse"}, "--url"},
+		{[]string{"fs", "--url", "https://example.com", "--transport", "stdio"}, "--url"},
+		{[]string{"fs", "--args"}, "requires at least one"},
+	} {
+		if _, err := parseMCPAdd(test.args); err == nil || !strings.Contains(err.Error(), test.want) {
+			t.Fatalf("args=%v err=%v want=%q", test.args, err, test.want)
+		}
+	}
+}
+
+func TestMCPCLILegacyAddWritesNormalizedConfiguration(t *testing.T) {
+	userPath := filepath.Join(t.TempDir(), "config.toml")
+	var stdout bytes.Buffer
+	if err := runMCP([]string{
+		"add", "--config", userPath, "remote", "--url", "https://mcp.example/sse", "--type", "sse",
+		"--header", "Authorization: token",
+	}, &stdout, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(userPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := cfg.MCPServers["remote"]
+	if server.URL != "https://mcp.example/sse" || server.Type != "sse" ||
+		server.Headers["Authorization"] != "token" || server.Command != "" {
+		t.Fatalf("server=%#v output=%q", server, stdout.String())
 	}
 }
 

@@ -36,7 +36,7 @@ var completionRoot = completionSpec{
 		"login":       {flags: words("--auth-file --audience --client-id --config --device-auth --issuer --no-browser --oauth --scopes")},
 		"logout":      {flags: words("--auth-file --client-id --config --issuer")},
 		"mcp": {children: map[string]completionSpec{
-			"add":    {flags: words("--config --env --header --scope --transport -H -e -s -t")},
+			"add":    {flags: words("--args --command --config --env --header --scope --transport --type --url -H -e -s -t")},
 			"doctor": {flags: words("--config --json")}, "list": {flags: words("--config --json")},
 			"remove": {flags: words("--config --scope -s")},
 		}},
@@ -76,9 +76,9 @@ var completionValueFlags = map[string]bool{
 	"--effort": true, "--json-schema": true, "--max-age": true, "--max-steps": true, "--max-turns": true, "--model": true,
 	"--load": true, "--output-format": true, "--permission-mode": true, "--previous-response-id": true, "--print": true,
 	"--prompt-file": true, "--prompt-json": true, "--reasoning-effort": true, "--rules": true, "--single": true,
-	"--env": true, "--header": true, "--repo": true, "--resume": true, "--sandbox": true, "--scope": true, "--scopes": true,
+	"--args": true, "--command": true, "--env": true, "--header": true, "--repo": true, "--resume": true, "--sandbox": true, "--scope": true, "--scopes": true,
 	"--session-dir": true, "--session-id": true, "--system": true, "--system-prompt": true, "--system-prompt-override": true,
-	"--timeout": true, "--type": true, "--transport": true, "--workspace": true, "-H": true, "-e": true, "-m": true,
+	"--timeout": true, "--type": true, "--transport": true, "--url": true, "--workspace": true, "-H": true, "-e": true, "-m": true,
 	"--worktree": true, "--worktree-ref": true, "--ref": true, "-n": true, "-p": true, "-r": true, "-s": true,
 	"-t": true, "-w": true,
 }
