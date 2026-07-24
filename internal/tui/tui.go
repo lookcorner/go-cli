@@ -606,6 +606,7 @@ type model struct {
 	voiceStarting    bool
 	voiceInterim     string
 	voiceSendOnStop  bool
+	toolExpand       []string
 
 	dashboard         *dashboardState
 	dashboardDisabled bool
@@ -805,6 +806,9 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 	defer bridge.Close()
 	runner.TextOutput = bridge.TextWriter()
 	runner.StatusOutput = bridge.StatusWriter()
+	previousToolObserver := runner.ToolObserver
+	runner.ToolObserver = bridge
+	defer func() { runner.ToolObserver = previousToolObserver }()
 	m := &model{
 		ctx: ctx, runner: runner, bridge: bridge, workspace: workspace,
 		modelName: modelName, previousID: previousID, width: 80, height: 24,
@@ -1140,6 +1144,12 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.planReview = &planReviewState{event: msg}
 		m.clearInput()
 		m.status = "review implementation plan"
+		return m, waitForBridge(m.bridge)
+	case toolStartedEvent:
+		m.status = "tool running: " + msg.call.Name
+		return m, waitForBridge(m.bridge)
+	case toolFinishedEvent:
+		m.finishTool(msg)
 		return m, waitForBridge(m.bridge)
 	case voiceStartedEvent:
 		if !m.voiceStarting {
@@ -1821,6 +1831,10 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if stroke == "ctrl+@" || stroke == "ctrl+space" || stroke == "f8" {
 		return m, m.toggleVoice()
 	}
+	if stroke == "ctrl+e" && m.minimal {
+		m.expandLastTool()
+		return m, nil
+	}
 	if m.voiceSession != nil && key.Code == tea.KeyEsc {
 		m.voiceSendOnStop = false
 		m.finishVoice()
@@ -2027,6 +2041,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if prompt == "/voice" {
 				return m, m.toggleVoice()
 			}
+		case "/expand":
+			m.expandLastTool()
+			return m, nil
 		case "/new", "/clear", "/home", "/welcome":
 			m.newSession = true
 			m.status = "starting new session"
@@ -2643,6 +2660,10 @@ func (m *model) handleRunningKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "/voice":
 			m.clearInput()
 			return m, m.toggleVoice()
+		case "/expand":
+			m.clearInput()
+			m.expandLastTool()
+			return m, nil
 		case "/recap":
 			m.clearInput()
 			return m, m.startRecap()

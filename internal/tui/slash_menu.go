@@ -46,6 +46,7 @@ var slashCommandCatalog = []slashCommandItem{
 	{name: "voice", description: "Toggle voice dictation"},
 	{name: "export", placeholder: "[filename]", description: "Export the conversation"},
 	{name: "transcript", aliases: []string{"log"}, description: "View the stored transcript"},
+	{name: "expand", description: "Re-print the last folded tool output"},
 	{name: "context", description: "Show context usage"},
 	{name: "minimal", description: "Switch to native scrollback"},
 	{name: "fullscreen", aliases: []string{"full"}, description: "Switch to full-screen mode"},
@@ -241,6 +242,8 @@ func (m *model) slashCommandAvailable(name string) bool {
 	case "minimal":
 		return !m.minimal
 	case "fullscreen":
+		return m.minimal
+	case "expand":
 		return m.minimal
 	case "always-approve":
 		return m.bridge != nil

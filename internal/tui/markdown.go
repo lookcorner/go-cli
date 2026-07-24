@@ -43,20 +43,25 @@ func renderMarkdownTheme(value string, width int, links bool, theme themePalette
 		width = 1
 	}
 	var lines []string
-	inCode := false
+	codeFence := 0
 	rawLines := strings.Split(value, "\n")
 	for index := 0; index < len(rawLines); index++ {
 		raw := rawLines[index]
 		trimmed := strings.TrimSpace(raw)
-		if strings.HasPrefix(trimmed, "```") {
-			inCode = !inCode
-			if inCode && strings.TrimSpace(strings.TrimPrefix(trimmed, "```")) != "" {
-				language := strings.TrimSpace(strings.TrimPrefix(trimmed, "```"))
+		ticks, rest := markdownFence(trimmed)
+		if codeFence == 0 && ticks >= 3 {
+			codeFence = ticks
+			if strings.TrimSpace(rest) != "" {
+				language := strings.TrimSpace(rest)
 				lines = append(lines, wrapMarkdownSpans([]markdownSpan{{text: language, style: ansiDim}}, width, links)...)
 			}
 			continue
 		}
-		if inCode {
+		if codeFence > 0 && ticks >= codeFence && strings.TrimSpace(rest) == "" {
+			codeFence = 0
+			continue
+		}
+		if codeFence > 0 {
 			lines = append(lines, wrapMarkdownSpans([]markdownSpan{{text: "  " + raw, style: theme.code}}, width, links)...)
 			continue
 		}
@@ -75,6 +80,17 @@ func renderMarkdownTheme(value string, width int, links bool, theme themePalette
 		lines = append(lines, wrapMarkdownSpans(spans, width, links)...)
 	}
 	return lines
+}
+
+func markdownFence(value string) (int, string) {
+	count := 0
+	for count < len(value) && value[count] == '`' {
+		count++
+	}
+	if count < 3 {
+		return 0, value
+	}
+	return count, value[count:]
 }
 
 func renderMarkdownTable(lines []string, width int, links bool, theme themePalette) ([]string, int) {
