@@ -76,3 +76,17 @@ func TestMCPServerConfigLifecycleValidatesMutations(t *testing.T) {
 		t.Fatalf("missing delete existed=%v err=%v", existed, err)
 	}
 }
+
+func TestLoadMCPServersAtReadsOnlyRequestedLayer(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("disabled_mcp_servers = [\"local\"]\n[mcp_servers.local]\ncommand = \"server\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	servers, disabled, err := LoadMCPServersAt(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if servers["local"].Command != "server" || len(disabled) != 1 || disabled[0] != "local" {
+		t.Fatalf("servers=%#v disabled=%#v", servers, disabled)
+	}
+}

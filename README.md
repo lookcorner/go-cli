@@ -1315,6 +1315,22 @@ from being attached to a half-finished tool transaction.
 
 ## MCP servers
 
+Manage user and project MCP definitions without editing TOML manually:
+
+```sh
+gork mcp list
+gork mcp add filesystem -- npx -y @modelcontextprotocol/server-filesystem /project
+gork mcp add --transport http sentry https://mcp.sentry.dev/mcp
+gork mcp remove filesystem
+gork mcp doctor [server-name]
+```
+
+`add` accepts repeatable `-e KEY=value` for stdio servers and
+`-H "Name: value"` for HTTP/SSE servers. Use `--scope project` to write
+`.grok/config.toml` in the current directory; the default scope is the user
+config. `doctor` performs the MCP handshake and tool discovery without exposing
+configured environment or header values in its report.
+
 In the TUI, `/mcps` opens the live server manager. Use Up/Down to select,
 Enter to inspect tools, Space to enable or disable a server or tool, `A` to add
 an HTTP(S) URL or stdio command, `X` to remove a user-configured server, `R` to

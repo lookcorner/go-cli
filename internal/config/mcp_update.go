@@ -7,6 +7,24 @@ import (
 	"strings"
 )
 
+func LoadMCPServersAt(path string) (map[string]MCPServerConfig, []string, error) {
+	root, err := readConfigMap(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	servers, err := readConfigSection[map[string]MCPServerConfig](root, "mcp_servers")
+	if err != nil {
+		return nil, nil, err
+	}
+	disabled := configStringSet(root["disabled_mcp_servers"])
+	disabledNames := make([]string, 0, len(disabled))
+	for name := range disabled {
+		disabledNames = append(disabledNames, name)
+	}
+	sort.Strings(disabledNames)
+	return servers, disabledNames, nil
+}
+
 func SetMCPServerEnabled(path, name string, enabled bool) error {
 	name = strings.TrimSpace(name)
 	if name == "" {

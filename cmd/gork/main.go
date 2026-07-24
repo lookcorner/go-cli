@@ -138,6 +138,9 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if len(args) > 0 && args[0] == "inspect" {
 		return runInspect(args[1:], stdout, stderr)
 	}
+	if len(args) > 0 && args[0] == "mcp" {
+		return runMCP(args[1:], stdout, stderr)
+	}
 	if len(args) > 0 && args[0] == "plugin" {
 		return runPlugin(args[1:], stdout, stderr)
 	}
@@ -193,7 +196,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	flags.BoolVar(&opts.experimentalMemory, "experimental-memory", false, "enable cross-session workspace memory")
 	flags.BoolVar(&opts.noMemory, "no-memory", false, "disable cross-session memory")
 	flags.Usage = func() {
-		fmt.Fprintf(stderr, "Usage: gork [flags] [prompt]\n       gork login [--oauth|--device-auth]\n       gork logout\n       gork setup\n       gork inspect [--json] [--config path]\n       gork models [--config path]\n       gork completions <bash|elvish|fish|powershell|zsh>\n       gork plugin <list|install|update|uninstall|marketplace>\n       gork sessions <list|search|delete>\n       gork export <session-id> [output] [-c|--clipboard]\n       gork worktree <list|show|rm|gc|db>\n       gork memory clear [--workspace|--global|--all] [-y|--yes]\n\n")
+		fmt.Fprintf(stderr, "Usage: gork [flags] [prompt]\n       gork login [--oauth|--device-auth]\n       gork logout\n       gork setup\n       gork inspect [--json] [--config path]\n       gork mcp <list|add|remove|doctor>\n       gork models [--config path]\n       gork completions <bash|elvish|fish|powershell|zsh>\n       gork plugin <list|install|update|uninstall|marketplace>\n       gork sessions <list|search|delete>\n       gork export <session-id> [output] [-c|--clipboard]\n       gork worktree <list|show|rm|gc|db>\n       gork memory clear [--workspace|--global|--all] [-y|--yes]\n\n")
 		flags.PrintDefaults()
 	}
 	if err := flags.Parse(args); err != nil {
