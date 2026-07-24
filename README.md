@@ -757,10 +757,15 @@ the persisted mode. The
 `GROK_SCROLL_LINES`, `GROK_SCROLL_SPEED`, and `GROK_INVERT_SCROLL` environment
 variables override them.
 
-ACP permission prompts allow one request or reject it by default. Set
-`[ui] remember_tool_approvals = true` to add a request-scoped "Always allow"
-choice whose grant lasts for the current session. `GROK_REMEMBER_TOOL_APPROVALS`
-overrides the local setting; managed requirements have final precedence.
+Permission prompts preselect the global "Always allow on all sessions" choice
+on the first TUI prompt. Set `[ui] default_selected_permission` to
+`allow_command_always`, `allow_once`, or `reject` to choose another row;
+`GROK_DEFAULT_SELECTED_PERMISSION` overrides the local value. After one choice
+is confirmed, later prompts preselect that same kind for the rest of the
+session. Set `[ui] remember_tool_approvals = true` to show the request-scoped
+"Always allow" row and reuse its exact action/detail grant for the current
+session. `GROK_REMEMBER_TOOL_APPROVALS` overrides the local gate; managed
+requirements have final precedence.
 
 `[ui] cursor_blink = true` forces a blinking block cursor at TUI startup, while
 `false` forces a steady block. Leaving it unset preserves the terminal's cursor

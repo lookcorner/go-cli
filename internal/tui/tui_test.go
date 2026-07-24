@@ -95,7 +95,7 @@ func TestBridgeApproval(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("approval request did not arrive")
 	}
-	request.reply <- true
+	request.reply <- approvalOnce
 	select {
 	case err := <-result:
 		if err != nil {
@@ -103,6 +103,124 @@ func TestBridgeApproval(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("approval did not complete")
+	}
+}
+
+func TestPermissionPromptSelectionAndRememberedExactRequest(t *testing.T) {
+	bridge := NewBridge(context.Background(), tools.PermissionPrompt)
+	defer bridge.Close()
+	bridge.ConfigurePermissionPrompts("allow_command_always", true)
+
+	first := make(chan error, 1)
+	go func() { first <- bridge.Approve(context.Background(), "shell", "git status") }()
+	request := (<-bridge.events).(approvalEvent)
+	if request.options[request.selected].choice != approvalCommandAlways {
+		t.Fatalf("selected=%d options=%#v", request.selected, request.options)
+	}
+	request.reply <- approvalCommandAlways
+	if err := <-first; err != nil {
+		t.Fatal(err)
+	}
+	if err := bridge.Approve(context.Background(), "shell", "git status"); err != nil {
+		t.Fatalf("remembered request=%v", err)
+	}
+	select {
+	case event := <-bridge.events:
+		t.Fatalf("remembered request prompted: %#v", event)
+	default:
+	}
+	bridge.ConfigurePermissionPrompts("allow_once", false)
+	recheck := make(chan error, 1)
+	go func() { recheck <- bridge.Approve(context.Background(), "shell", "git status") }()
+	request = (<-bridge.events).(approvalEvent)
+	if len(request.options) != 3 || request.options[request.selected].choice != approvalAlwaysAll {
+		t.Fatalf("disabled options=%#v selected=%d", request.options, request.selected)
+	}
+	request.reply <- approvalOnce
+	if err := <-recheck; err != nil {
+		t.Fatal(err)
+	}
+	bridge.ConfigurePermissionPrompts("allow_command_always", true)
+
+	second := make(chan error, 1)
+	go func() { second <- bridge.Approve(context.Background(), "shell", "git diff") }()
+	request = (<-bridge.events).(approvalEvent)
+	if request.options[request.selected].choice != approvalOnce {
+		t.Fatalf("sticky selected=%d options=%#v", request.selected, request.options)
+	}
+	request.reply <- approvalReject
+	if err := <-second; err == nil {
+		t.Fatal("rejected request was allowed")
+	}
+
+	third := make(chan error, 1)
+	go func() { third <- bridge.Approve(context.Background(), "shell", "git log") }()
+	request = (<-bridge.events).(approvalEvent)
+	if request.options[request.selected].choice != approvalReject {
+		t.Fatalf("reject sticky selected=%d options=%#v", request.selected, request.options)
+	}
+	request.reply <- approvalOnce
+	if err := <-third; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExplicitAskRuleReusesRememberedRequest(t *testing.T) {
+	bridge := NewBridge(context.Background(), tools.PermissionAlwaysApprove)
+	defer bridge.Close()
+	bridge.ConfigurePermissionPrompts("allow_command_always", true)
+	policy, err := tools.NewPolicyApprover(bridge, PromptApprover(bridge), nil, []string{"Bash(git push *)"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- policy.Approve(context.Background(), "shell", "git push origin main") }()
+	request := (<-bridge.events).(approvalEvent)
+	request.reply <- approvalCommandAlways
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if err := policy.Approve(context.Background(), "shell", "git push origin main"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case event := <-bridge.events:
+		t.Fatalf("remembered explicit ask prompted: %#v", event)
+	default:
+	}
+}
+
+func TestPermissionPromptGatesUnavailableChoices(t *testing.T) {
+	bridge := NewBridgeWithLocks(context.Background(), tools.PermissionPrompt, true, false)
+	defer bridge.Close()
+	bridge.ConfigurePermissionPrompts("allow_command_always", false)
+
+	done := make(chan error, 1)
+	go func() { done <- bridge.Approve(context.Background(), "shell", "git status") }()
+	request := (<-bridge.events).(approvalEvent)
+	if len(request.options) != 2 || request.options[0].choice != approvalOnce || request.options[1].choice != approvalReject || request.selected != 0 {
+		t.Fatalf("options=%#v selected=%d", request.options, request.selected)
+	}
+	request.reply <- approvalCommandAlways
+	if err := <-done; err == nil {
+		t.Fatal("forged unavailable choice was allowed")
+	}
+}
+
+func TestAlwaysAllSelectionPersistsBeforeApproval(t *testing.T) {
+	bridge := NewBridge(context.Background(), tools.PermissionPrompt)
+	defer bridge.Close()
+	bridge.ConfigurePermissionPrompts("always_allow_all_sessions", false)
+	bridge.SetPermissionModePersister(func(string) error { return errors.New("disk full") })
+
+	done := make(chan error, 1)
+	go func() { done <- bridge.Approve(context.Background(), "shell", "git status") }()
+	request := (<-bridge.events).(approvalEvent)
+	m := &model{bridge: bridge, approval: &request}
+	m.finishApproval(approvalAlwaysAll)
+	if err := <-done; err == nil || bridge.PermissionMode() != tools.PermissionPrompt || m.status != "persist permission mode: disk full" {
+		t.Fatalf("err=%v mode=%q status=%q", err, bridge.PermissionMode(), m.status)
 	}
 }
 
@@ -136,7 +254,7 @@ func TestAlwaysApproveCommandTogglesBridgeMode(t *testing.T) {
 	asked := make(chan error, 1)
 	go func() { asked <- PromptApprover(bridge).Approve(context.Background(), "shell", "git push") }()
 	event := (<-bridge.events).(approvalEvent)
-	event.reply <- true
+	event.reply <- approvalOnce
 	if err := <-asked; err != nil {
 		t.Fatalf("explicit ask was not preserved: %v", err)
 	}
@@ -200,7 +318,7 @@ func TestAutoCommandTogglesBridgeMode(t *testing.T) {
 	asked := make(chan error, 1)
 	go func() { asked <- policy.Approve(context.Background(), "shell", "git push origin main") }()
 	event := (<-bridge.events).(approvalEvent)
-	event.reply <- true
+	event.reply <- approvalOnce
 	if err := <-asked; err != nil {
 		t.Fatalf("explicit ask rule was not preserved: %v", err)
 	}
@@ -289,7 +407,7 @@ func TestBridgeAutoModePromptsOnlyForRisk(t *testing.T) {
 	result := make(chan error, 1)
 	go func() { result <- bridge.Approve(context.Background(), "shell", "git push origin main") }()
 	event := (<-bridge.events).(approvalEvent)
-	event.reply <- true
+	event.reply <- approvalOnce
 	if err := <-result; err != nil {
 		t.Fatalf("risky command approval: %v", err)
 	}
@@ -673,7 +791,7 @@ func TestBridgeSerializesBlockingInteractions(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("serialized approval did not arrive")
 	}
-	approval.reply <- true
+	approval.reply <- approvalOnce
 	if err := <-approvalDone; err != nil {
 		t.Fatal(err)
 	}
@@ -4048,27 +4166,74 @@ func TestCopyTextSelectionFlashAndEmpty(t *testing.T) {
 
 func TestMouseClickAnswersApproval(t *testing.T) {
 	for _, test := range []struct {
-		name    string
-		x       int
-		allowed bool
+		name   string
+		option int
+		want   approvalChoice
 	}{
-		{name: "approve", x: 1, allowed: true},
-		{name: "deny", x: 12, allowed: false},
+		{name: "approve", option: 0, want: approvalOnce},
+		{name: "deny", option: 1, want: approvalReject},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			reply := make(chan bool, 1)
-			m := &model{width: 60, height: 16, approval: &approvalEvent{reply: reply}}
+			reply := make(chan approvalChoice, 1)
+			m := &model{width: 60, height: 16, approval: &approvalEvent{
+				reply: reply, options: []approvalOption{
+					{choice: approvalOnce, label: "Allow once"},
+					{choice: approvalReject, label: "Reject"},
+				},
+			}}
 			view := m.View()
-			command := view.OnMouse(tea.MouseClickMsg(tea.Mouse{X: test.x, Y: m.contentHeight() + 3, Button: tea.MouseLeft}))
+			command := view.OnMouse(tea.MouseClickMsg(tea.Mouse{X: 1, Y: m.contentHeight() + 3 + test.option, Button: tea.MouseLeft}))
 			if command == nil {
 				t.Fatal("approval click was ignored")
 			}
 			updated, _ := m.Update(command())
 			m = updated.(*model)
-			if got := <-reply; got != test.allowed || m.approval != nil {
-				t.Fatalf("allowed=%v approval=%#v", got, m.approval)
+			if got := <-reply; got != test.want || m.approval != nil {
+				t.Fatalf("choice=%v approval=%#v", got, m.approval)
 			}
 		})
+	}
+}
+
+func TestApprovalKeyboardNavigationConfirmsSelectedChoice(t *testing.T) {
+	reply := make(chan approvalChoice, 1)
+	m := &model{approval: &approvalEvent{
+		reply: reply, options: []approvalOption{
+			{choice: approvalAlwaysAll, label: "Always allow on all sessions"},
+			{choice: approvalOnce, label: "Allow once"},
+			{choice: approvalReject, label: "Reject"},
+		},
+	}}
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	m = updated.(*model)
+	if m.approval.selected != 1 {
+		t.Fatalf("selected=%d", m.approval.selected)
+	}
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if got := <-reply; got != approvalOnce || m.approval != nil || m.status != "approved" {
+		t.Fatalf("choice=%q approval=%#v status=%q", got, m.approval, m.status)
+	}
+}
+
+func TestApprovalFooterFitsNarrowViewport(t *testing.T) {
+	m := &model{width: 20, height: 10, approval: &approvalEvent{
+		action: "shell", detail: "a very long command", reply: make(chan approvalChoice, 1),
+		options: []approvalOption{
+			{choice: approvalAlwaysAll, label: "Always allow on all sessions"},
+			{choice: approvalCommandAlways, label: "Always allow this request"},
+			{choice: approvalOnce, label: "Allow once"},
+			{choice: approvalReject, label: "Reject"},
+		},
+	}}
+	lines := strings.Split(m.View().Content, "\n")
+	if len(lines) != m.height {
+		t.Fatalf("height=%d want=%d view=%q", len(lines), m.height, stripUIANSI(m.View().Content))
+	}
+	for _, line := range lines {
+		if width := len([]rune(stripUIANSI(line))); width > m.width {
+			t.Fatalf("width=%d line=%q", width, stripUIANSI(line))
+		}
 	}
 }
 
@@ -4176,10 +4341,12 @@ func TestQuestionOptionSelectionCanBeUndone(t *testing.T) {
 }
 
 func TestMouseClickIgnoresFooterGapsAndClippedActions(t *testing.T) {
-	m := &model{width: 60, height: 16, approval: &approvalEvent{reply: make(chan bool, 1)}}
+	m := &model{width: 60, height: 16, approval: &approvalEvent{
+		reply: make(chan approvalChoice, 1), options: []approvalOption{{choice: approvalOnce, label: "Allow once"}},
+	}}
 	view := m.View()
-	if command := view.OnMouse(tea.MouseClickMsg(tea.Mouse{X: 9, Y: m.contentHeight() + 3, Button: tea.MouseLeft})); command != nil {
-		t.Fatal("approval gap was clickable")
+	if command := view.OnMouse(tea.MouseClickMsg(tea.Mouse{X: 1, Y: m.contentHeight() + 4, Button: tea.MouseLeft})); command != nil {
+		t.Fatal("approval hint was clickable")
 	}
 	m.approval = nil
 	m.planReview = &planReviewState{event: planReviewEvent{reply: make(chan tools.PlanModeDecision, 1)}}

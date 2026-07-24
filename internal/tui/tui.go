@@ -106,10 +106,27 @@ type mouseSelectionEvent struct {
 	at    time.Time
 }
 type selectionClearEvent struct{ nonce uint64 }
+
+type approvalChoice string
+
+const (
+	approvalAlwaysAll     approvalChoice = "always_allow_all_sessions"
+	approvalCommandAlways approvalChoice = "allow_command_always"
+	approvalOnce          approvalChoice = "allow_once"
+	approvalReject        approvalChoice = "reject"
+)
+
+type approvalOption struct {
+	choice approvalChoice
+	label  string
+}
+
 type approvalEvent struct {
-	action string
-	detail string
-	reply  chan bool
+	action   string
+	detail   string
+	options  []approvalOption
+	selected int
+	reply    chan approvalChoice
 }
 type questionEvent struct {
 	request tools.UserQuestionRequest
@@ -252,9 +269,18 @@ type Bridge struct {
 	autoModeLocked        bool
 	asker                 tools.Approver
 	persistPermissionMode func(string) error
+	defaultApproval       approvalChoice
+	lastApproval          approvalChoice
+	rememberApprovals     bool
+	grants                map[permissionGrant]struct{}
 	events                chan tea.Msg
 	once                  sync.Once
 	interactionMu         sync.Mutex
+}
+
+type permissionGrant struct {
+	action string
+	detail string
 }
 
 func NewBridge(parent context.Context, mode tools.PermissionMode) *Bridge {
@@ -346,6 +372,12 @@ func (b *Bridge) Approve(ctx context.Context, action, detail string) error {
 		if tools.PermissionBypassed(ctx) {
 			return nil
 		}
+		b.modeMu.RLock()
+		_, granted := b.grants[permissionGrant{action: action, detail: detail}]
+		b.modeMu.RUnlock()
+		if granted {
+			return nil
+		}
 		if mode == tools.PermissionAuto && tools.AutoModeFastPath(action, detail) {
 			return nil
 		}
@@ -364,6 +396,16 @@ func (b *Bridge) Approve(ctx context.Context, action, detail string) error {
 	default:
 		return fmt.Errorf("unknown permission mode %q", mode)
 	}
+}
+
+func (b *Bridge) ConfigurePermissionPrompts(defaultSelected string, remember bool) {
+	b.modeMu.Lock()
+	b.defaultApproval = parseApprovalChoice(defaultSelected)
+	b.rememberApprovals = remember
+	if !remember {
+		clear(b.grants)
+	}
+	b.modeMu.Unlock()
 }
 
 func (b *Bridge) SetPromptApprover(asker tools.Approver) {
@@ -474,10 +516,23 @@ func (a promptApprover) Approve(ctx context.Context, action, detail string) erro
 }
 
 func (b *Bridge) prompt(ctx context.Context, action, detail string) error {
+	b.modeMu.RLock()
+	_, granted := b.grants[permissionGrant{action: action, detail: detail}]
+	b.modeMu.RUnlock()
+	if granted {
+		return nil
+	}
 	b.interactionMu.Lock()
 	defer b.interactionMu.Unlock()
-	reply := make(chan bool, 1)
-	request := approvalEvent{action: action, detail: detail, reply: reply}
+	b.modeMu.RLock()
+	target := b.lastApproval
+	if target == "" {
+		target = b.defaultApproval
+	}
+	options := b.permissionOptionsLocked()
+	b.modeMu.RUnlock()
+	reply := make(chan approvalChoice, 1)
+	request := approvalEvent{action: action, detail: detail, options: options, selected: selectedApprovalOption(options, target), reply: reply}
 	select {
 	case b.events <- request:
 	case <-ctx.Done():
@@ -486,16 +541,83 @@ func (b *Bridge) prompt(ctx context.Context, action, detail string) error {
 		return b.ctx.Err()
 	}
 	select {
-	case allowed := <-reply:
-		if allowed {
+	case choice := <-reply:
+		switch choice {
+		case approvalAlwaysAll:
+			if b.PermissionMode() != tools.PermissionAlwaysApprove {
+				return fmt.Errorf("permission denied for %s", action)
+			}
 			return nil
+		case approvalCommandAlways:
+			b.modeMu.Lock()
+			if !b.rememberApprovals {
+				b.modeMu.Unlock()
+				return fmt.Errorf("permission denied for %s", action)
+			}
+			if b.grants == nil {
+				b.grants = make(map[permissionGrant]struct{})
+			}
+			b.grants[permissionGrant{action: action, detail: detail}] = struct{}{}
+			b.lastApproval = approvalCommandAlways
+			b.modeMu.Unlock()
+			return nil
+		case approvalOnce:
+			b.modeMu.Lock()
+			b.lastApproval = approvalOnce
+			b.modeMu.Unlock()
+			return nil
+		default:
+			b.modeMu.Lock()
+			b.lastApproval = approvalReject
+			b.modeMu.Unlock()
+			return fmt.Errorf("permission denied for %s", action)
 		}
-		return fmt.Errorf("permission denied for %s", action)
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-b.ctx.Done():
 		return b.ctx.Err()
 	}
+}
+
+func parseApprovalChoice(value string) approvalChoice {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case string(approvalCommandAlways):
+		return approvalCommandAlways
+	case string(approvalOnce):
+		return approvalOnce
+	case string(approvalReject):
+		return approvalReject
+	default:
+		return approvalAlwaysAll
+	}
+}
+
+func (b *Bridge) permissionOptionsLocked() []approvalOption {
+	options := make([]approvalOption, 0, 4)
+	if !b.alwaysApproveLocked && b.mode != tools.PermissionDeny {
+		options = append(options, approvalOption{choice: approvalAlwaysAll, label: "Always allow on all sessions"})
+	}
+	if b.rememberApprovals {
+		options = append(options, approvalOption{choice: approvalCommandAlways, label: "Always allow this request"})
+	}
+	return append(options,
+		approvalOption{choice: approvalOnce, label: "Allow once"},
+		approvalOption{choice: approvalReject, label: "Reject"},
+	)
+}
+
+func selectedApprovalOption(options []approvalOption, target approvalChoice) int {
+	for index, option := range options {
+		if option.choice == target {
+			return index
+		}
+	}
+	for index, option := range options {
+		if option.choice == approvalAlwaysAll {
+			return index
+		}
+	}
+	return 0
 }
 
 type bridgeWriter struct {
@@ -1158,16 +1280,9 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case mouseClickEvent:
 		switch msg.action {
-		case "approve", "deny":
-			if m.approval != nil {
-				allowed := msg.action == "approve"
-				m.approval.reply <- allowed
-				m.approval = nil
-				if allowed {
-					m.status = "approved"
-				} else {
-					m.status = "denied"
-				}
+		case "approval_option":
+			if m.approval != nil && msg.option >= 0 && msg.option < len(m.approval.options) {
+				m.finishApproval(m.approval.options[msg.option].choice)
 			}
 		case "plan_approve", "plan_revise", "plan_abandon":
 			if m.planReview != nil && !m.planReview.editing {
@@ -1777,6 +1892,24 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *model) finishApproval(choice approvalChoice) {
+	if choice == approvalAlwaysAll && m.bridge != nil {
+		if err := m.bridge.SetAlwaysApprove(true); err != nil {
+			m.approval.reply <- approvalReject
+			m.approval = nil
+			m.status = err.Error()
+			return
+		}
+	}
+	m.approval.reply <- choice
+	m.approval = nil
+	if choice == approvalReject {
+		m.status = "denied"
+	} else {
+		m.status = "approved"
+	}
+}
+
 func (m *model) scaledScrollLines(lines float64) int {
 	scaled := lines*scrollSpeedMultiplier(m.scrollSpeed) + m.scrollCarry
 	result := int(scaled)
@@ -1812,18 +1945,19 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.approval != nil {
 		switch strings.ToLower(key.Text) {
 		case "y":
-			m.approval.reply <- true
-			m.approval = nil
-			m.status = "approved"
+			m.finishApproval(approvalOnce)
 		case "n":
-			m.approval.reply <- false
-			m.approval = nil
-			m.status = "denied"
+			m.finishApproval(approvalReject)
 		default:
-			if stroke == "esc" || stroke == "ctrl+c" {
-				m.approval.reply <- false
-				m.approval = nil
-				m.status = "denied"
+			switch stroke {
+			case "up", "k":
+				m.approval.selected = (m.approval.selected + len(m.approval.options) - 1) % len(m.approval.options)
+			case "down", "j":
+				m.approval.selected = (m.approval.selected + 1) % len(m.approval.options)
+			case "enter", "space":
+				m.finishApproval(m.approval.options[m.approval.selected].choice)
+			case "esc", "ctrl+c":
+				m.finishApproval(approvalReject)
 			}
 		}
 		return m, nil
@@ -4526,7 +4660,16 @@ func (m *model) View() tea.View {
 		footer = fmt.Sprintf("%s%s GBOOM %s  HP %d · KILLS %d/%d\n%sWASD/↑↓ move · ←→ turn · Space/click fire · Esc quit%s",
 			ansiBold, colors.error, ansiReset, m.gboom.hp, m.gboom.kills, len(m.gboom.enemies), ansiDim, ansiReset)
 	} else if m.approval != nil {
-		footer = fmt.Sprintf("%s%sApprove %s?%s %s\n%s[y] allow  [n/esc] deny%s", ansiBold, colors.modal, m.approval.action, ansiReset, truncate(m.approval.detail, width-20), ansiDim, ansiReset)
+		lines := []string{fmt.Sprintf("%s%sApprove %s?%s %s", ansiBold, colors.modal, m.approval.action, ansiReset, truncate(m.approval.detail, width-20))}
+		for index, option := range m.approval.options {
+			prefix := "  "
+			if index == m.approval.selected {
+				prefix = "> "
+			}
+			lines = append(lines, truncate(prefix+option.label, width))
+		}
+		lines = append(lines, ansiDim+truncate("Up/Down select · Enter confirm · Y allow once · N/Esc reject", width)+ansiReset)
+		footer = strings.Join(lines, "\n")
 	} else if m.planReview != nil {
 		if m.planReview.editing {
 			footer = fmt.Sprintf("%s%s%s%s\n> %s\n%s%s%s", ansiBold, colors.modal, truncate("Request plan changes", width), ansiReset, renderInput(m.input, m.cursor, max(width-2, 1)), ansiDim, truncate("Enter send · Esc back · Ctrl-U clear", width), ansiReset)
@@ -5004,16 +5147,15 @@ func (m *model) maxViewerScroll() int {
 }
 
 func (m *model) footerClick(x, y, width int) (mouseClickEvent, bool) {
-	if y != m.contentHeight()+m.announcementHeight()+3 {
+	if m.approval != nil {
+		option := y - (m.contentHeight() + m.announcementHeight() + 3)
+		if option >= 0 && option < len(m.approval.options) && x >= 0 && x < width {
+			return mouseClickEvent{action: "approval_option", option: option}, true
+		}
 		return mouseClickEvent{}, false
 	}
-	if m.approval != nil {
-		line := "[y] allow  [n/esc] deny"
-		for _, item := range []struct{ label, action string }{{"[y] allow", "approve"}, {"[n/esc] deny", "deny"}} {
-			if renderedLabelContains(line, item.label, x, width) {
-				return mouseClickEvent{action: item.action}, true
-			}
-		}
+	if y != m.contentHeight()+m.announcementHeight()+3 {
+		return mouseClickEvent{}, false
 	}
 	if m.planReview != nil && !m.planReview.editing {
 		line := "[Y] approve · [R] request changes · [A] abandon"
@@ -5049,6 +5191,9 @@ func renderedLabelContains(line, label string, x, width int) bool {
 
 func (m *model) contentHeight() int {
 	banner := m.announcementHeight()
+	if m.approval != nil {
+		return max(m.height-4-banner-len(m.approval.options), 3)
+	}
 	if m.question != nil || m.planReview != nil || m.remember != nil || m.rememberInput || m.rewind != nil || m.jump != nil || m.modelSelect != nil || m.settings != nil || m.docs != nil || m.sessionSelect != nil || m.forkChoice != nil || m.mcp != nil || m.claudeImport != nil || m.extensions != nil || m.agentConfig != nil || m.dashboard != nil {
 		return max(m.height-7-banner, 3)
 	}

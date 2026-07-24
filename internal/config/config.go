@@ -204,27 +204,28 @@ type AskUserQuestionConfig struct {
 }
 
 type UIConfig struct {
-	Theme                 string  `json:"theme"`
-	AutoDarkTheme         string  `json:"auto_dark_theme"`
-	AutoLightTheme        string  `json:"auto_light_theme"`
-	HunkTrackerMode       string  `json:"hunk_tracker_mode"`
-	ScreenMode            string  `json:"screen_mode"`
-	RenderMermaid         string  `json:"render_mermaid"`
-	KeepTextSelection     string  `json:"keep_text_selection"`
-	WordSeparators        *string `json:"word_separators,omitempty"`
-	MouseReportingToggle  bool    `json:"mouse_reporting_toggle,omitempty"`
-	VimMode               bool    `json:"vim_mode,omitempty"`
-	CompactMode           bool    `json:"compact_mode,omitempty"`
-	ShowTimestamps        bool    `json:"show_timestamps"`
-	ShowTimeline          bool    `json:"show_timeline,omitempty"`
-	ScrollSpeed           uint8   `json:"scroll_speed,omitempty"`
-	ScrollMode            string  `json:"scroll_mode"`
-	ScrollLines           *uint8  `json:"scroll_lines,omitempty"`
-	InvertScroll          bool    `json:"invert_scroll,omitempty"`
-	RememberToolApprovals bool    `json:"remember_tool_approvals,omitempty"`
-	PromptSuggestions     bool    `json:"prompt_suggestions"`
-	CursorBlink           *bool   `json:"cursor_blink,omitempty"`
-	PermissionMode        string  `json:"permission_mode"`
+	Theme                     string  `json:"theme"`
+	AutoDarkTheme             string  `json:"auto_dark_theme"`
+	AutoLightTheme            string  `json:"auto_light_theme"`
+	HunkTrackerMode           string  `json:"hunk_tracker_mode"`
+	ScreenMode                string  `json:"screen_mode"`
+	RenderMermaid             string  `json:"render_mermaid"`
+	KeepTextSelection         string  `json:"keep_text_selection"`
+	WordSeparators            *string `json:"word_separators,omitempty"`
+	MouseReportingToggle      bool    `json:"mouse_reporting_toggle,omitempty"`
+	VimMode                   bool    `json:"vim_mode,omitempty"`
+	CompactMode               bool    `json:"compact_mode,omitempty"`
+	ShowTimestamps            bool    `json:"show_timestamps"`
+	ShowTimeline              bool    `json:"show_timeline,omitempty"`
+	ScrollSpeed               uint8   `json:"scroll_speed,omitempty"`
+	ScrollMode                string  `json:"scroll_mode"`
+	ScrollLines               *uint8  `json:"scroll_lines,omitempty"`
+	InvertScroll              bool    `json:"invert_scroll,omitempty"`
+	DefaultSelectedPermission string  `json:"default_selected_permission"`
+	RememberToolApprovals     bool    `json:"remember_tool_approvals,omitempty"`
+	PromptSuggestions         bool    `json:"prompt_suggestions"`
+	CursorBlink               *bool   `json:"cursor_blink,omitempty"`
+	PermissionMode            string  `json:"permission_mode"`
 }
 
 type DashboardConfig struct {
@@ -485,6 +486,7 @@ type fileUIConfig struct {
 	ScrollMode                   *string `json:"scroll_mode,omitempty" toml:"scroll_mode"`
 	ScrollLines                  *uint8  `json:"scroll_lines,omitempty" toml:"scroll_lines"`
 	InvertScroll                 *bool   `json:"invert_scroll,omitempty" toml:"invert_scroll"`
+	DefaultSelectedPermission    *string `json:"default_selected_permission,omitempty" toml:"default_selected_permission"`
 	RememberToolApprovals        *bool   `json:"remember_tool_approvals,omitempty" toml:"remember_tool_approvals"`
 	PromptSuggestions            *bool   `json:"prompt_suggestions,omitempty" toml:"prompt_suggestions"`
 	CursorBlink                  *bool   `json:"cursor_blink,omitempty" toml:"cursor_blink"`
@@ -700,7 +702,7 @@ func Load(path string) (Config, error) {
 		AskUserQuestion:             AskUserQuestionConfig{TimeoutEnabled: true, TimeoutSeconds: 30 * 60},
 		Toolset:                     ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}},
 		Goal:                        GoalConfig{VerifierCount: 3, ClassifierMaxRuns: 10, ReverifyAfter: 8},
-		UI:                          UIConfig{Theme: "groknight", AutoDarkTheme: "groknight", AutoLightTheme: "grokday", HunkTrackerMode: "agent_only", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, ScrollSpeed: 50, ScrollMode: "auto", PromptSuggestions: true, PermissionMode: "ask"},
+		UI:                          UIConfig{Theme: "groknight", AutoDarkTheme: "groknight", AutoLightTheme: "grokday", HunkTrackerMode: "agent_only", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, ScrollSpeed: 50, ScrollMode: "auto", DefaultSelectedPermission: "always_allow_all_sessions", PromptSuggestions: true, PermissionMode: "ask"},
 		Dashboard:                   DashboardConfig{Enabled: true, Grouping: "state"},
 		Sandbox:                     SandboxConfig{Profile: "off"},
 		Pruning:                     PruningConfig{Enabled: true, KeepLastNTurns: 3, SoftTrimThreshold: 4000, SoftTrimHead: 1500, SoftTrimTail: 1500, HardClearAgeTurns: 10},
@@ -997,6 +999,9 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.UI.InvertScroll != nil {
 		cfg.UI.InvertScroll = *disk.UI.InvertScroll
+	}
+	if disk.UI.DefaultSelectedPermission != nil {
+		cfg.UI.DefaultSelectedPermission = normalizeDefaultSelectedPermission(*disk.UI.DefaultSelectedPermission)
 	}
 	if disk.UI.RememberToolApprovals != nil {
 		cfg.UI.RememberToolApprovals = *disk.UI.RememberToolApprovals
@@ -1625,6 +1630,28 @@ func normalizedGoalVerifierCount(count int) int {
 	return max(1, min(5, count))
 }
 
+func normalizeDefaultSelectedPermission(value string) string {
+	if normalized, ok := parseDefaultSelectedPermission(value); ok {
+		return normalized
+	}
+	return "always_allow_all_sessions"
+}
+
+func parseDefaultSelectedPermission(value string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "always_allow_all_sessions":
+		return "always_allow_all_sessions", true
+	case "allow_command_always":
+		return "allow_command_always", true
+	case "allow_once":
+		return "allow_once", true
+	case "reject":
+		return "reject", true
+	default:
+		return "", false
+	}
+}
+
 func applyAutoModeConfig(target *AutoModeConfig, source AutoModeConfig) error {
 	normalized, err := normalizeAutoModeConfig(source)
 	if err != nil {
@@ -1721,6 +1748,9 @@ func applyEnv(cfg *Config) {
 	if value, ok := envBool("GROK_REMEMBER_TOOL_APPROVALS"); ok {
 		cfg.UI.RememberToolApprovals = value
 		cfg.uiRememberApprovalsConfigured = true
+	}
+	if value, ok := parseDefaultSelectedPermission(os.Getenv("GROK_DEFAULT_SELECTED_PERMISSION")); ok {
+		cfg.UI.DefaultSelectedPermission = value
 	}
 	if value := os.Getenv("GORK_WEB_SEARCH_API_KEY"); value != "" {
 		cfg.WebSearch.Enabled = true

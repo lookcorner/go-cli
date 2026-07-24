@@ -637,6 +637,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	statusOutput := stderr
 	if opts.tui {
 		tuiBridge = tui.NewBridgeWithLocks(ctx, mode, cfg.DisableBypassPermissionsMode, !cfg.AutoModeEnabled())
+		tuiBridge.ConfigurePermissionPrompts(cfg.UI.DefaultSelectedPermission, cfg.UI.RememberToolApprovals)
 		tuiBridge.SetPermissionModePersister(func(mode string) error {
 			return config.UpdatePermissionMode(opts.configPath, mode)
 		})

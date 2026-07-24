@@ -315,7 +315,7 @@ func TestVimModeDefaultsToFalse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.UI.VimMode || cfg.UI.ScrollSpeed != 50 || cfg.UI.ScrollMode != "auto" || cfg.UI.ScrollLines != nil || cfg.UI.InvertScroll || cfg.UI.RememberToolApprovals || cfg.UI.CursorBlink != nil {
+	if cfg.UI.VimMode || cfg.UI.ScrollSpeed != 50 || cfg.UI.ScrollMode != "auto" || cfg.UI.ScrollLines != nil || cfg.UI.InvertScroll || cfg.UI.DefaultSelectedPermission != "always_allow_all_sessions" || cfg.UI.RememberToolApprovals || cfg.UI.CursorBlink != nil {
 		t.Fatalf("unexpected UI defaults: %#v", cfg.UI)
 	}
 }
@@ -362,6 +362,35 @@ func TestRememberToolApprovalsConfigEnvironmentAndRequirementsPrecedence(t *test
 
 	if err := applyRequirementsData(&cfg, []byte("[ui]\nremember_tool_approvals = true\n"), "test", false, false); err != nil || !cfg.UI.RememberToolApprovals {
 		t.Fatalf("requirements config=%#v err=%v", cfg.UI, err)
+	}
+}
+
+func TestDefaultSelectedPermissionConfigAndEnvironmentPrecedence(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[ui]\ndefault_selected_permission = \" REJECT \"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil || cfg.UI.DefaultSelectedPermission != "reject" {
+		t.Fatalf("local config=%#v err=%v", cfg.UI, err)
+	}
+
+	t.Setenv("GROK_DEFAULT_SELECTED_PERMISSION", "allow_once")
+	cfg, err = Load(path)
+	if err != nil || cfg.UI.DefaultSelectedPermission != "allow_once" {
+		t.Fatalf("environment config=%#v err=%v", cfg.UI, err)
+	}
+
+	t.Setenv("GROK_DEFAULT_SELECTED_PERMISSION", "always_allow_all_sessions")
+	cfg, err = Load(path)
+	if err != nil || cfg.UI.DefaultSelectedPermission != "always_allow_all_sessions" {
+		t.Fatalf("explicit default config=%#v err=%v", cfg.UI, err)
+	}
+
+	t.Setenv("GROK_DEFAULT_SELECTED_PERMISSION", "invalid")
+	cfg, err = Load(path)
+	if err != nil || cfg.UI.DefaultSelectedPermission != "reject" {
+		t.Fatalf("invalid environment config=%#v err=%v", cfg.UI, err)
 	}
 }
 

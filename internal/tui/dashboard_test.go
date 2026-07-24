@@ -90,18 +90,21 @@ func TestDashboardShortcutsPanel(t *testing.T) {
 }
 
 func TestDashboardSurfacesApproval(t *testing.T) {
-	reply := make(chan bool, 1)
+	reply := make(chan approvalChoice, 1)
 	m := &model{
 		width: 70, height: 18,
 		dashboard: &dashboardState{},
-		approval:  &approvalEvent{action: "shell", detail: "go test ./...", reply: reply},
+		approval: &approvalEvent{
+			action: "shell", detail: "go test ./...", reply: reply,
+			options: []approvalOption{{choice: approvalOnce, label: "Allow once"}, {choice: approvalReject, label: "Reject"}},
+		},
 	}
-	if view := stripUIANSI(m.View().Content); !strings.Contains(view, "Approve shell?") || !strings.Contains(view, "[y] allow") {
+	if view := stripUIANSI(m.View().Content); !strings.Contains(view, "Approve shell?") || !strings.Contains(view, "> Allow once") {
 		t.Fatalf("view=%q", view)
 	}
 	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'y', Text: "y"}))
 	m = updated.(*model)
-	if approved := <-reply; !approved || m.approval != nil || m.dashboard == nil || m.status != "approved" {
+	if approved := <-reply; approved != approvalOnce || m.approval != nil || m.dashboard == nil || m.status != "approved" {
 		t.Fatalf("approved=%v approval=%#v dashboard=%#v status=%q", approved, m.approval, m.dashboard, m.status)
 	}
 }
