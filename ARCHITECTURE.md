@@ -35,7 +35,8 @@ implementation.
 - `internal/compat` owns resolved vendor compatibility values shared by
   configuration, instruction discovery, and skill discovery.
 - `internal/leader` owns shared-leader discovery, IPC framing, registration,
-  control queries, target selection, and candidate classification.
+  control queries, target selection, candidate classification, and safe
+  process identity verification and termination.
 - `internal/theme` owns canonical terminal theme identities and aliases shared
   by configuration validation and the TUI adapter.
 - `internal/docs` owns the immutable built-in guide catalog and title lookup;

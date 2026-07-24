@@ -45,11 +45,22 @@ func TestLeaderRejectsInvalidArguments(t *testing.T) {
 		{"unknown"},
 		{"list", "extra"},
 		{"info", "--pid", "4294967296"},
-		{"kill"},
+		{"kill", "extra"},
 	} {
 		var stdout, stderr bytes.Buffer
 		if err := runLeader(args, &stdout, &stderr); err == nil {
 			t.Fatalf("args=%v unexpectedly succeeded", args)
 		}
+	}
+}
+
+func TestLeaderKillEmpty(t *testing.T) {
+	t.Setenv("GROK_HOME", t.TempDir())
+	var stdout, stderr bytes.Buffer
+	if err := runOnce([]string{"leader", "kill"}, strings.NewReader(""), &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.Len() != 0 || stderr.String() != "No leader candidates found.\n" {
+		t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
 }

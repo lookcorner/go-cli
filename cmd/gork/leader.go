@@ -66,7 +66,37 @@ func runLeader(args []string, stdout, stderr io.Writer) error {
 		}
 		return writeLeaderInfo(descriptor, leader.QueryResult{ClientID: descriptor.ClientID, Info: *descriptor.LiveInfo}, *jsonOutput, stdout)
 	case "kill":
-		return errors.New("leader kill is not implemented")
+		if len(args) != 1 {
+			return errors.New("leader kill does not accept arguments")
+		}
+		descriptors, err := discoverLeaders()
+		if err != nil {
+			return err
+		}
+		if len(descriptors) == 0 {
+			fmt.Fprintln(stderr, "No leader candidates found.")
+			return nil
+		}
+		result := leader.Kill(descriptors)
+		for _, outcome := range result.Outcomes {
+			switch outcome.Action {
+			case leader.KillTerminated:
+				fmt.Fprintf(stderr, "  Killed leader PID %d\n", outcome.PID)
+			case leader.KillCleaned:
+				fmt.Fprintf(stderr, "  PID %d is not a gork process, removing stale lock\n", outcome.PID)
+			case leader.KillFailed:
+				fmt.Fprintf(stderr, "  warning: failed to terminate PID %d: %v\n", outcome.PID, outcome.Error)
+			}
+		}
+		switch {
+		case result.Killed > 0:
+			fmt.Fprintf(stderr, "Killed %d leader process(es).\n", result.Killed)
+		case result.Cleaned > 0:
+			fmt.Fprintf(stderr, "No live leader processes found (cleaned up %d stale lock(s)).\n", result.Cleaned)
+		default:
+			fmt.Fprintln(stderr, "No live leader processes found.")
+		}
+		return nil
 	case "-h", "--help":
 		leaderUsage(stderr)
 		return nil

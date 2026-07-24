@@ -925,15 +925,17 @@ normal agent runtime:
 ./gork leader list --json
 ./gork leader info
 ./gork leader info --pid 1234 --json
+./gork leader kill
 ```
 
 `leader list` scans `$GROK_HOME` (normally `~/.grok`) for paired leader lock
 and socket files, verifies live candidates with the length-prefixed leader IPC
 protocol, and classifies stale, unreachable, unsupported, and reachable
 entries. `leader info` selects the production leader by default or an explicit
-live PID and requests `GetLeaderInfo`. Destructive `leader kill` remains
-disabled until process identity and cross-platform termination checks match the
-reference.
+live PID and requests `GetLeaderInfo`. `leader kill` verifies that each
+candidate PID belongs to a `gork` or `go-cli` executable before terminating it;
+unverified candidates are never signaled, and their stale lock/socket files are
+removed instead.
 
 Each `session/new` gets its own workspace, tool state, model history, local
 session log, MCP/LSP processes, and cleanup lifecycle. New and restored session
