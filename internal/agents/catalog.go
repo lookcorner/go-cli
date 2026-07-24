@@ -177,9 +177,9 @@ type Catalog struct {
 func Discover(config Config) (*Catalog, []error) {
 	definitions := builtinDefinitions()
 	byName := make(map[string]Definition, len(definitions))
-	for _, definition := range definitions {
-		definition.Enabled = agentEnabled(definition.Name, config.Toggles)
-		byName[definition.Name] = definition
+	for index := range definitions {
+		definitions[index].Enabled = agentEnabled(definitions[index].Name, config.Toggles)
+		byName[definitions[index].Name] = definitions[index]
 	}
 	var errors []error
 	add := func(dir, scope string, canShadowBuiltin bool) {

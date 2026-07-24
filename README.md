@@ -6,6 +6,9 @@ The implementation follows the lightweight DDD boundaries documented in
 Gork Go is a Go reimplementation of [Gork Build](https://github.com/thedavidweng/gork-build),
 the privacy-oriented community build of the Grok Build coding agent.
 
+Use `gork inspect` for a redacted configuration and component report, or
+`gork inspect --json` for machine-readable output.
+
 The project is under active compatibility development. The current runtime is
 a usable headless coding agent with a Responses-compatible streaming client,
 function-tool loop, workspace confinement, explicit mutation approval and

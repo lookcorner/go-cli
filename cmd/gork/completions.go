@@ -24,6 +24,7 @@ var completionRoot = completionSpec{
 	children: map[string]completionSpec{
 		"completions": {children: leaves("bash", "elvish", "fish", "powershell", "zsh")},
 		"export":      {flags: []string{"--clipboard", "-c"}},
+		"inspect":     {flags: words("--config --json")},
 		"login":       {flags: words("--auth-file --audience --client-id --config --device-auth --issuer --no-browser --oauth --scopes")},
 		"logout":      {flags: words("--auth-file --client-id --config --issuer")},
 		"memory":      {children: map[string]completionSpec{"clear": {flags: words("--all --global --workspace --yes -y")}}},
