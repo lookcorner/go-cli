@@ -1698,6 +1698,10 @@ gork plugin install owner/repository@v1.2.0
 gork plugin list
 gork plugin update [plugin-name]
 gork plugin uninstall [--confirm] [--keep-data] plugin-name
+gork plugin enable plugin-name
+gork plugin disable plugin-name
+gork plugin details plugin-name
+gork plugin validate [path]
 gork plugin marketplace list [--json]
 gork plugin marketplace add <git-url-or-local-path>
 gork plugin marketplace remove <git-url-or-local-path>

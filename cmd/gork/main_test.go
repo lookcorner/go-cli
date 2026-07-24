@@ -2223,7 +2223,7 @@ func TestRunPluginLifecycle(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(source, "skills", "cli"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(source, "plugin.json"), []byte(`{"name":"cli-plugin","version":"1.0.0"}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(source, "plugin.json"), []byte(`{"name":"cli-plugin","version":"1.0.0","description":"CLI plugin"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(source, "skills", "cli", "SKILL.md"), []byte("---\nname: cli\ndescription: CLI\n---\nCLI"), 0o600); err != nil {
@@ -2243,6 +2243,47 @@ func TestRunPluginLifecycle(t *testing.T) {
 	stdout.Reset()
 	if err := runPlugin([]string{"list"}, &stdout, &stderr); err != nil || !strings.Contains(stdout.String(), "cli-plugin") {
 		t.Fatalf("list output=%q err=%v", stdout.String(), err)
+	}
+	stdout.Reset()
+	if err := runPlugin([]string{"details", "cli-plugin"}, &stdout, &stderr); err != nil ||
+		!strings.Contains(stdout.String(), "description: CLI plugin") ||
+		!strings.Contains(stdout.String(), "components: 1 skill dir(s)") {
+		t.Fatalf("details output=%q err=%v", stdout.String(), err)
+	}
+	stdout.Reset()
+	if err := runPlugin([]string{"disable", "cli-plugin"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = config.Load("")
+	if err != nil || len(cfg.Plugins.Enabled) != 0 || strings.Join(cfg.Plugins.Disabled, "|") != "cli-plugin" {
+		t.Fatalf("disabled config=%#v err=%v", cfg.Plugins, err)
+	}
+	stdout.Reset()
+	if err := runPlugin([]string{"enable", "cli-plugin"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = config.Load("")
+	if err != nil || strings.Join(cfg.Plugins.Enabled, "|") != "cli-plugin" || len(cfg.Plugins.Disabled) != 0 {
+		t.Fatalf("enabled config=%#v err=%v", cfg.Plugins, err)
+	}
+	if err := runPlugin([]string{"enable", "cli-plugin"}, io.Discard, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = config.Load("")
+	if err != nil || strings.Join(cfg.Plugins.Enabled, "|") != "cli-plugin" {
+		t.Fatalf("duplicate enable config=%#v err=%v", cfg.Plugins, err)
+	}
+	if err := runPlugin([]string{"disable", "missing-plugin"}, io.Discard, &stderr); err == nil {
+		t.Fatal("missing plugin was disabled")
+	}
+	cfg, err = config.Load("")
+	if err != nil || strings.Join(cfg.Plugins.Enabled, "|") != "cli-plugin" || len(cfg.Plugins.Disabled) != 0 {
+		t.Fatalf("missing plugin changed config=%#v err=%v", cfg.Plugins, err)
+	}
+	stdout.Reset()
+	if err := runPlugin([]string{"validate", source}, &stdout, &stderr); err != nil ||
+		!strings.Contains(stdout.String(), "Plugin manifest is valid.") {
+		t.Fatalf("validate output=%q err=%v", stdout.String(), err)
 	}
 	if err := os.WriteFile(filepath.Join(source, "plugin.json"), []byte(`{"name":"cli-plugin","version":"2.0.0"}`), 0o600); err != nil {
 		t.Fatal(err)

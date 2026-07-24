@@ -223,7 +223,7 @@ func parseRunOptions(args []string, stderr io.Writer) (options, *flag.FlagSet, e
 	flags.BoolVar(&opts.experimentalMemory, "experimental-memory", false, "enable cross-session workspace memory")
 	flags.BoolVar(&opts.noMemory, "no-memory", false, "disable cross-session memory")
 	flags.Usage = func() {
-		fmt.Fprintf(stderr, "Usage: gork [flags] [prompt]\n       gork dashboard [flags]\n       gork login [--oauth|--device-auth]\n       gork logout\n       gork setup\n       gork inspect [--json] [--config path]\n       gork mcp <list|add|remove|doctor>\n       gork models [--config path]\n       gork share <session-id>\n       gork trace <session-id> [--local] [-o path] [--json]\n       gork wrap <command> [args...]\n       gork version [--json]\n       gork completions <bash|elvish|fish|powershell|zsh>\n       gork plugin <list|install|update|uninstall|marketplace>\n       gork sessions <list|search|delete>\n       gork export <session-id> [output] [-c|--clipboard]\n       gork worktree <list|show|rm|gc|db>\n       gork memory clear [--workspace|--global|--all] [-y|--yes]\n\n")
+		fmt.Fprintf(stderr, "Usage: gork [flags] [prompt]\n       gork dashboard [flags]\n       gork login [--oauth|--device-auth]\n       gork logout\n       gork setup\n       gork inspect [--json] [--config path]\n       gork mcp <list|add|remove|doctor>\n       gork models [--config path]\n       gork share <session-id>\n       gork trace <session-id> [--local] [-o path] [--json]\n       gork wrap <command> [args...]\n       gork version [--json]\n       gork completions <bash|elvish|fish|powershell|zsh>\n       gork plugin <list|install|update|uninstall|enable|disable|details|validate|marketplace>\n       gork sessions <list|search|delete>\n       gork export <session-id> [output] [-c|--clipboard]\n       gork worktree <list|show|rm|gc|db>\n       gork memory clear [--workspace|--global|--all] [-y|--yes]\n\n")
 		flags.PrintDefaults()
 	}
 	if err := flags.Parse(args); err != nil {
@@ -1744,7 +1744,7 @@ func runSetup(args []string, stdout, stderr io.Writer) error {
 
 func runPlugin(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("plugin command is required: list, install, update, uninstall, or marketplace")
+		return errors.New("plugin command is required: list, install, update, uninstall, enable, disable, details, validate, or marketplace")
 	}
 	switch args[0] {
 	case "list":
@@ -1839,11 +1839,119 @@ func runPlugin(args []string, stdout, stderr io.Writer) error {
 		}
 		fmt.Fprintf(stdout, "Uninstalled %d plugin(s) from %s: %s\n", len(outcome.Plugins), outcome.RepoKey, strings.Join(outcome.Plugins, ", "))
 		return nil
+	case "enable", "disable":
+		if len(args) != 2 {
+			return fmt.Errorf("usage: gork plugin %s <plugin-name>", args[0])
+		}
+		name := args[1]
+		if _, err := plugin.InstalledDetails(name); err != nil {
+			return err
+		}
+		enable := args[0] == "enable"
+		if err := config.UpdatePlugins("", func(settings *config.PluginsConfig) {
+			settings.Enabled = slices.DeleteFunc(settings.Enabled, func(value string) bool { return value == name })
+			settings.Disabled = slices.DeleteFunc(settings.Disabled, func(value string) bool { return value == name })
+			if enable {
+				settings.Enabled = append(settings.Enabled, name)
+			} else {
+				settings.Disabled = append(settings.Disabled, name)
+			}
+		}); err != nil {
+			return err
+		}
+		action := "Disabled"
+		if enable {
+			action = "Enabled"
+		}
+		fmt.Fprintf(stdout, "%s plugin: %s\n", action, name)
+		return nil
+	case "details":
+		if len(args) != 2 {
+			return errors.New("usage: gork plugin details <plugin-name>")
+		}
+		details, err := plugin.InstalledDetails(args[1])
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(stdout, details.RepoKey)
+		fmt.Fprintf(stdout, "  path: %s\n  kind: %s\n  installed: %s\n  updated: %s\n  plugins (%d):\n",
+			details.Path, pluginKindLabel(details.Kind), details.InstalledAt, details.UpdatedAt, len(details.Plugins))
+		for _, item := range details.Plugins {
+			version, subdir := "", ""
+			if item.Version != "" {
+				version = " v" + item.Version
+			}
+			if item.Subdir != "" {
+				subdir = " (subdir: " + item.Subdir + ")"
+			}
+			fmt.Fprintf(stdout, "    %s%s%s\n", item.Name, version, subdir)
+		}
+		if details.Description != "" {
+			fmt.Fprintf(stdout, "  description: %s\n", details.Description)
+		}
+		printPluginComponents(stdout, details.Components)
+		return nil
+	case "validate":
+		if len(args) > 2 {
+			return errors.New("usage: gork plugin validate [path]")
+		}
+		path := "."
+		if len(args) == 2 {
+			path = args[1]
+		}
+		result, err := plugin.Validate(path)
+		if err != nil {
+			return err
+		}
+		if !result.Found {
+			fmt.Fprintln(stdout, "No plugin.json found. Convention-based plugin directories do not require a manifest.")
+			return nil
+		}
+		fmt.Fprintln(stdout, "Plugin manifest is valid.")
+		fmt.Fprintf(stdout, "  name: %s\n", result.Name)
+		if result.Version != "" {
+			fmt.Fprintf(stdout, "  version: %s\n", result.Version)
+		}
+		if result.Description != "" {
+			fmt.Fprintf(stdout, "  description: %s\n", result.Description)
+		}
+		printPluginComponents(stdout, result.Components)
+		return nil
 	case "marketplace":
 		return runMarketplace(args[1:], stdout, stderr)
 	default:
 		return fmt.Errorf("unknown plugin command %q", args[0])
 	}
+}
+
+func pluginKindLabel(kind plugin.InstallKind) string {
+	switch kind.Type {
+	case "git":
+		return "git: " + kind.URL
+	case "local":
+		return "local: " + kind.SourcePath
+	default:
+		return "unknown: " + kind.Type
+	}
+}
+
+func printPluginComponents(output io.Writer, summary plugin.ComponentSummary) {
+	var extras []string
+	if summary.Hooks {
+		extras = append(extras, "hooks")
+	}
+	if summary.MCP {
+		extras = append(extras, "MCP servers")
+	}
+	if summary.LSP {
+		extras = append(extras, "LSP servers")
+	}
+	suffix := ""
+	if len(extras) > 0 {
+		suffix = ", " + strings.Join(extras, ", ")
+	}
+	fmt.Fprintf(output, "  components: %d skill dir(s), %d command dir(s), %d agent dir(s)%s\n",
+		summary.SkillDirs, summary.CommandDirs, summary.AgentDirs, suffix)
 }
 
 func runMarketplace(args []string, stdout, stderr io.Writer) error {
