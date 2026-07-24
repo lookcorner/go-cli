@@ -322,6 +322,129 @@ func TestScreenModeFlagsAreMutuallyExclusive(t *testing.T) {
 	}
 }
 
+func TestParseRunOptionsSupportsReferenceAliases(t *testing.T) {
+	opts, flags, err := parseRunOptions([]string{
+		"--cwd", "/work", "-m", "fast", "--effort", "max",
+		"--append-system-prompt", "be exact", "--max-turns", "7",
+		"--permission-mode", "auto", "-p", "inspect",
+	}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.workspace != "/work" || opts.model != "fast" || opts.reasoningEffort != "xhigh" ||
+		opts.rules != "be exact" || opts.maxSteps != 7 || opts.approval != "auto" ||
+		!opts.approvalSet || opts.single != "inspect" || len(flags.Args()) != 0 {
+		t.Fatalf("options=%#v args=%v", opts, flags.Args())
+	}
+}
+
+func TestParseRunOptionsSupportsApprovalAndPromptAliases(t *testing.T) {
+	for _, test := range []struct {
+		args   []string
+		prompt string
+	}{
+		{[]string{"--always-approve", "--single", "one"}, "one"},
+		{[]string{"--yolo", "--print", "two"}, "two"},
+		{[]string{"--dangerously-skip-permissions", "-p", "three"}, "three"},
+	} {
+		opts, _, err := parseRunOptions(test.args, io.Discard)
+		if err != nil || opts.approval != "always-approve" || !opts.approvalSet || opts.single != test.prompt {
+			t.Fatalf("args=%v options=%#v error=%v", test.args, opts, err)
+		}
+	}
+}
+
+func TestParseRunOptionsRejectsInvalidReasoningEffort(t *testing.T) {
+	if _, _, err := parseRunOptions([]string{"--reasoning-effort", "extreme"}, io.Discard); err == nil ||
+		!strings.Contains(err.Error(), "invalid --reasoning-effort") {
+		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestApplyRunOverridesKeepsExplicitCLIValues(t *testing.T) {
+	cfg := config.Config{
+		Model: "default", DefaultModelID: "default", ReasoningEffort: "low",
+		ModelSupportsReasoningEffort: true, BaseURL: "https://old.example/", Backend: "responses",
+		SystemPrompt: "old", MaxSteps: 20, Sandbox: config.SandboxConfig{Profile: "off"},
+	}
+	opts := options{
+		model: "fast", reasoningEffort: "high", baseURL: "https://new.example/",
+		backend: "chat_completions", system: "override", maxSteps: 5,
+		sandbox: "READ-ONLY", sandboxSet: true,
+	}
+	applyRunOverrides(&cfg, opts)
+	if cfg.Model != "fast" || cfg.DefaultModelID != "" || cfg.ReasoningEffort != "high" ||
+		!cfg.ModelSupportsReasoningEffort || cfg.BaseURL != "https://new.example" ||
+		cfg.Backend != "chat_completions" || cfg.SystemPrompt != "override" ||
+		cfg.MaxSteps != 5 || cfg.Sandbox.Profile != "read-only" {
+		t.Fatalf("config=%#v", cfg)
+	}
+}
+
+func TestSinglePromptConflictsFailBeforeConfiguration(t *testing.T) {
+	t.Setenv("GROK_HOME", filepath.Join(t.TempDir(), "missing"))
+	for _, args := range [][]string{
+		{"-p", "one", "two"},
+		{"-p", "one", "--interactive"},
+		{"-p", "one", "--tui"},
+		{"-p", "one", "--goal"},
+		{"-p", "one", "--acp"},
+	} {
+		err := runOnce(args, strings.NewReader(""), io.Discard, io.Discard)
+		if err == nil || !strings.Contains(err.Error(), "--single cannot be combined") {
+			t.Fatalf("args=%v error=%v", args, err)
+		}
+	}
+}
+
+func TestReferenceRunFlagsReachResponsesRequest(t *testing.T) {
+	home, root, sessionDir := t.TempDir(), t.TempDir(), t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	t.Setenv("HOME", home)
+	t.Setenv("GORK_API_KEY", "test-key")
+	t.Setenv("XAI_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	var request api.ResponseRequest
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, httpRequest *http.Request) {
+		if httpRequest.URL.Path != "/responses" {
+			http.NotFound(writer, httpRequest)
+			return
+		}
+		if err := json.NewDecoder(httpRequest.Body).Decode(&request); err != nil {
+			t.Error(err)
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(writer).Encode(map[string]any{
+			"id": "response-1",
+			"output": []any{map[string]any{
+				"type":    "message",
+				"content": []any{map[string]any{"type": "output_text", "text": "done"}},
+			}},
+		})
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	err := runOnce([]string{
+		"--cwd", root, "--session-dir", sessionDir,
+		"--base-url", server.URL, "-m", "cli-model",
+		"--reasoning-effort", "high", "--system-prompt", "base rule",
+		"--rules", "extra rule", "--max-turns", "1", "-p", "inspect this",
+	}, strings.NewReader("ignored stdin"), &stdout, &stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != "done\n" || request.Model != "cli-model" ||
+		request.Reasoning == nil || request.Reasoning.Effort != "high" ||
+		!strings.Contains(request.Instructions, "base rule") ||
+		!strings.Contains(request.Instructions, "extra rule") ||
+		len(request.Input) != 2 || request.Input[1].Content != "inspect this" {
+		t.Fatalf("stdout=%q stderr=%q request=%#v", stdout.String(), stderr.String(), request)
+	}
+}
+
 func TestRestartTUITranslatesNewAgentPrompt(t *testing.T) {
 	fresh := &tui.NewSessionError{Prompt: "--check this branch"}
 	if !errors.Is(fresh, tui.ErrNewSession) {

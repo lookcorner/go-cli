@@ -15,11 +15,14 @@ type completionSpec struct {
 
 var completionRoot = completionSpec{
 	flags: []string{
-		"--acp", "--allow", "--approval", "--backend", "--base-url", "--config",
-		"--deny", "--experimental-memory", "--fullscreen", "--goal", "--goal-runs",
-		"--interactive", "--max-steps", "--minimal", "--model", "--no-memory",
+		"--acp", "--allow", "--always-approve", "--append-system-prompt", "--approval",
+		"--backend", "--base-url", "--config", "--cwd", "--dangerously-skip-permissions",
+		"--deny", "--effort", "--experimental-memory", "--fullscreen", "--goal", "--goal-runs",
+		"--interactive", "--max-steps", "--max-turns", "--minimal", "--model", "--no-memory",
+		"--permission-mode", "--print", "--reasoning-effort", "--rules", "--single",
 		"--previous-response-id", "--resume", "--sandbox", "--session-dir",
-		"--system", "--timeout", "--trust", "--tui", "--version", "--workspace",
+		"--system", "--system-prompt", "--system-prompt-override", "--timeout", "--trust",
+		"--tui", "--version", "--workspace", "--yolo", "-m", "-p", "-v", "-V",
 	},
 	children: map[string]completionSpec{
 		"completions": {children: leaves("bash", "elvish", "fish", "powershell", "zsh")},
@@ -61,12 +64,13 @@ var completionRoot = completionSpec{
 
 var completionValueFlags = map[string]bool{
 	"--allow": true, "--approval": true, "--auth-file": true, "--audience": true,
-	"--backend": true, "--base-url": true, "--client-id": true, "--config": true,
+	"--append-system-prompt": true, "--backend": true, "--base-url": true, "--client-id": true, "--config": true, "--cwd": true,
 	"--deny": true, "--goal-runs": true, "--issuer": true, "--limit": true,
-	"--max-age": true, "--max-steps": true, "--model": true, "--previous-response-id": true,
+	"--effort": true, "--max-age": true, "--max-steps": true, "--max-turns": true, "--model": true, "--permission-mode": true,
+	"--previous-response-id": true, "--print": true, "--reasoning-effort": true, "--rules": true, "--single": true,
 	"--env": true, "--header": true, "--repo": true, "--resume": true, "--sandbox": true, "--scope": true, "--scopes": true,
-	"--session-dir": true, "--system": true, "--timeout": true, "--type": true,
-	"--transport": true, "--workspace": true, "-H": true, "-e": true, "-n": true, "-s": true, "-t": true,
+	"--session-dir": true, "--system": true, "--system-prompt": true, "--system-prompt-override": true, "--timeout": true, "--type": true,
+	"--transport": true, "--workspace": true, "-H": true, "-e": true, "-m": true, "-n": true, "-p": true, "-s": true, "-t": true,
 }
 
 func words(value string) []string { return strings.Fields(value) }

@@ -120,6 +120,10 @@ The top-level `gork wrap` command runs arbitrary commands in a local Unix PTY,
 forwards terminal input and resize events, intercepts plain and tmux-wrapped
 OSC 52 writes into the native clipboard, and preserves output and exit status;
 non-interactive and unsupported-platform runs fall back to direct execution.
+Common reference run flags are supported, including cwd/model/reasoning,
+single-prompt, system-prompt/rules, turn-limit, permission-mode,
+always-approve, and version aliases. Explicit CLI values are reapplied after
+remote settings so command-line intent wins.
 
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |

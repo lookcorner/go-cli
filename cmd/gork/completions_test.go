@@ -29,7 +29,7 @@ func TestCompletionCandidatesFollowCommandTree(t *testing.T) {
 		args []string
 		want []string
 	}{
-		{nil, []string{"--version", "completions", "dashboard", "models", "plugin", "share", "trace", "version", "wrap", "worktree"}},
+		{nil, []string{"--always-approve", "--cwd", "--max-turns", "--reasoning-effort", "--single", "-m", "-p", "-V", "completions", "dashboard", "models", "plugin", "share", "trace", "version", "wrap", "worktree"}},
 		{[]string{"dashboard", "--"}, []string{"--config", "--fullscreen", "--minimal", "--session-dir", "--trust", "--workspace"}},
 		{[]string{"completions", ""}, []string{"bash", "elvish", "fish", "powershell", "zsh"}},
 		{[]string{"plugin", ""}, []string{"install", "list", "marketplace", "uninstall", "update"}},

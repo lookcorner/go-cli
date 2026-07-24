@@ -60,17 +60,21 @@ type options struct {
 	configPath         string
 	workspace          string
 	model              string
+	reasoningEffort    string
 	baseURL            string
 	backend            string
 	system             string
+	rules              string
 	approval           string
 	approvalSet        bool
+	alwaysApprove      bool
 	sandbox            string
 	sandboxSet         bool
 	sessionDir         string
 	maxSteps           int
 	timeout            time.Duration
 	showVersion        bool
+	single             string
 	interactive        bool
 	previousID         string
 	resume             string
@@ -126,6 +130,91 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 type sessionRestartRequest struct{ args []string }
 
 func (r *sessionRestartRequest) Error() string { return "restart session" }
+
+func parseRunOptions(args []string, stderr io.Writer) (options, *flag.FlagSet, error) {
+	var opts options
+	if len(args) > 0 && args[0] == "dashboard" {
+		opts.dashboard = true
+		args = args[1:]
+	}
+	flags := flag.NewFlagSet("gork", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	flags.StringVar(&opts.configPath, "config", "", "path to JSON config file")
+	flags.StringVar(&opts.workspace, "workspace", ".", "workspace directory")
+	flags.StringVar(&opts.workspace, "cwd", ".", "working directory")
+	flags.StringVar(&opts.model, "model", "", "model ID (or GORK_MODEL)")
+	flags.StringVar(&opts.model, "m", "", "model ID")
+	flags.StringVar(&opts.reasoningEffort, "reasoning-effort", "", "reasoning effort: none, minimal, low, medium, high, or xhigh")
+	flags.StringVar(&opts.reasoningEffort, "effort", "", "reasoning effort")
+	flags.StringVar(&opts.baseURL, "base-url", "", "Responses-compatible API base URL")
+	flags.StringVar(&opts.backend, "backend", "", "model API backend: responses, chat_completions, or anthropic_messages")
+	flags.StringVar(&opts.system, "system", "", "additional agent instructions")
+	flags.StringVar(&opts.system, "system-prompt-override", "", "override the agent system prompt")
+	flags.StringVar(&opts.system, "system-prompt", "", "override the agent system prompt")
+	flags.StringVar(&opts.rules, "rules", "", "extra rules to append to the system prompt")
+	flags.StringVar(&opts.rules, "append-system-prompt", "", "extra rules to append to the system prompt")
+	flags.StringVar(&opts.approval, "approval", "prompt", "write/shell approval: prompt, auto, always-approve, or deny")
+	flags.StringVar(&opts.approval, "permission-mode", "prompt", "permission mode")
+	flags.BoolVar(&opts.alwaysApprove, "always-approve", false, "auto-approve all tool executions")
+	flags.BoolVar(&opts.alwaysApprove, "yolo", false, "auto-approve all tool executions")
+	flags.BoolVar(&opts.alwaysApprove, "dangerously-skip-permissions", false, "auto-approve all tool executions")
+	flags.StringVar(&opts.sandbox, "sandbox", "", "shell sandbox: off, workspace, or read-only")
+	flags.Var(&opts.allow, "allow", "allow matching Tool(pattern) permission rule; repeatable")
+	flags.Var(&opts.deny, "deny", "deny matching Tool(pattern) permission rule; repeatable")
+	flags.StringVar(&opts.sessionDir, "session-dir", "", "session JSONL directory")
+	flags.IntVar(&opts.maxSteps, "max-steps", 0, "maximum model/tool iterations")
+	flags.IntVar(&opts.maxSteps, "max-turns", 0, "maximum model/tool iterations")
+	flags.DurationVar(&opts.timeout, "timeout", 0, "overall run timeout")
+	flags.BoolVar(&opts.showVersion, "version", false, "print version")
+	flags.BoolVar(&opts.showVersion, "v", false, "print version")
+	flags.BoolVar(&opts.showVersion, "V", false, "print version")
+	flags.StringVar(&opts.single, "single", "", "single-turn prompt")
+	flags.StringVar(&opts.single, "print", "", "single-turn prompt")
+	flags.StringVar(&opts.single, "p", "", "single-turn prompt")
+	flags.BoolVar(&opts.interactive, "interactive", false, "start an interactive multi-turn session")
+	flags.StringVar(&opts.previousID, "previous-response-id", "", "continue a stored Responses API conversation")
+	flags.StringVar(&opts.resume, "resume", "", "resume a JSONL session path or 'latest'")
+	flags.BoolVar(&opts.tui, "tui", false, "start the terminal interface")
+	flags.BoolVar(&opts.minimal, "minimal", false, "start the scrollback-native terminal interface")
+	flags.BoolVar(&opts.fullscreen, "fullscreen", false, "force the full-screen terminal interface")
+	flags.BoolVar(&opts.goal, "goal", false, "keep running turns until update_goal completes or blocks the goal")
+	flags.IntVar(&opts.goalRuns, "goal-runs", 10, "maximum turns in --goal mode")
+	flags.BoolVar(&opts.acp, "acp", false, "serve Agent Client Protocol v1 over stdio")
+	flags.BoolVar(&opts.trust, "trust", false, "trust this workspace's executable project configuration")
+	flags.BoolVar(&opts.experimentalMemory, "experimental-memory", false, "enable cross-session workspace memory")
+	flags.BoolVar(&opts.noMemory, "no-memory", false, "disable cross-session memory")
+	flags.Usage = func() {
+		fmt.Fprintf(stderr, "Usage: gork [flags] [prompt]\n       gork dashboard [flags]\n       gork login [--oauth|--device-auth]\n       gork logout\n       gork setup\n       gork inspect [--json] [--config path]\n       gork mcp <list|add|remove|doctor>\n       gork models [--config path]\n       gork share <session-id>\n       gork trace <session-id> [--local] [-o path] [--json]\n       gork wrap <command> [args...]\n       gork version [--json]\n       gork completions <bash|elvish|fish|powershell|zsh>\n       gork plugin <list|install|update|uninstall|marketplace>\n       gork sessions <list|search|delete>\n       gork export <session-id> [output] [-c|--clipboard]\n       gork worktree <list|show|rm|gc|db>\n       gork memory clear [--workspace|--global|--all] [-y|--yes]\n\n")
+		flags.PrintDefaults()
+	}
+	if err := flags.Parse(args); err != nil {
+		return options{}, flags, err
+	}
+	flags.Visit(func(flag *flag.Flag) {
+		if flag.Name == "approval" || flag.Name == "permission-mode" {
+			opts.approvalSet = true
+		}
+		if flag.Name == "sandbox" {
+			opts.sandboxSet = true
+		}
+	})
+	if opts.alwaysApprove {
+		opts.approval, opts.approvalSet = "always-approve", true
+	}
+	if opts.reasoningEffort != "" {
+		switch opts.reasoningEffort = strings.ToLower(strings.TrimSpace(opts.reasoningEffort)); opts.reasoningEffort {
+		case "none", "minimal", "low", "medium", "high", "xhigh":
+		case "max":
+			opts.reasoningEffort = "xhigh"
+		default:
+			return options{}, flags, fmt.Errorf("invalid --reasoning-effort %q", cleanCLIText(opts.reasoningEffort))
+		}
+	}
+	if opts.dashboard && len(flags.Args()) > 0 {
+		return options{}, flags, errors.New("dashboard does not accept positional arguments")
+	}
+	return opts, flags, nil
+}
 
 func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if len(args) > 0 && args[0] == "__complete" {
@@ -183,56 +272,9 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		}
 		return runMemory(args[1:], cwd, stdin, stdout, stderr)
 	}
-	var opts options
-	if len(args) > 0 && args[0] == "dashboard" {
-		opts.dashboard = true
-		args = args[1:]
-	}
-	flags := flag.NewFlagSet("gork", flag.ContinueOnError)
-	flags.SetOutput(stderr)
-	flags.StringVar(&opts.configPath, "config", "", "path to JSON config file")
-	flags.StringVar(&opts.workspace, "workspace", ".", "workspace directory")
-	flags.StringVar(&opts.model, "model", "", "model ID (or GORK_MODEL)")
-	flags.StringVar(&opts.baseURL, "base-url", "", "Responses-compatible API base URL")
-	flags.StringVar(&opts.backend, "backend", "", "model API backend: responses, chat_completions, or anthropic_messages")
-	flags.StringVar(&opts.system, "system", "", "additional agent instructions")
-	flags.StringVar(&opts.approval, "approval", "prompt", "write/shell approval: prompt, auto, always-approve, or deny")
-	flags.StringVar(&opts.sandbox, "sandbox", "", "shell sandbox: off, workspace, or read-only")
-	flags.Var(&opts.allow, "allow", "allow matching Tool(pattern) permission rule; repeatable")
-	flags.Var(&opts.deny, "deny", "deny matching Tool(pattern) permission rule; repeatable")
-	flags.StringVar(&opts.sessionDir, "session-dir", "", "session JSONL directory")
-	flags.IntVar(&opts.maxSteps, "max-steps", 0, "maximum model/tool iterations")
-	flags.DurationVar(&opts.timeout, "timeout", 0, "overall run timeout")
-	flags.BoolVar(&opts.showVersion, "version", false, "print version")
-	flags.BoolVar(&opts.interactive, "interactive", false, "start an interactive multi-turn session")
-	flags.StringVar(&opts.previousID, "previous-response-id", "", "continue a stored Responses API conversation")
-	flags.StringVar(&opts.resume, "resume", "", "resume a JSONL session path or 'latest'")
-	flags.BoolVar(&opts.tui, "tui", false, "start the terminal interface")
-	flags.BoolVar(&opts.minimal, "minimal", false, "start the scrollback-native terminal interface")
-	flags.BoolVar(&opts.fullscreen, "fullscreen", false, "force the full-screen terminal interface")
-	flags.BoolVar(&opts.goal, "goal", false, "keep running turns until update_goal completes or blocks the goal")
-	flags.IntVar(&opts.goalRuns, "goal-runs", 10, "maximum turns in --goal mode")
-	flags.BoolVar(&opts.acp, "acp", false, "serve Agent Client Protocol v1 over stdio")
-	flags.BoolVar(&opts.trust, "trust", false, "trust this workspace's executable project configuration")
-	flags.BoolVar(&opts.experimentalMemory, "experimental-memory", false, "enable cross-session workspace memory")
-	flags.BoolVar(&opts.noMemory, "no-memory", false, "disable cross-session memory")
-	flags.Usage = func() {
-		fmt.Fprintf(stderr, "Usage: gork [flags] [prompt]\n       gork dashboard [flags]\n       gork login [--oauth|--device-auth]\n       gork logout\n       gork setup\n       gork inspect [--json] [--config path]\n       gork mcp <list|add|remove|doctor>\n       gork models [--config path]\n       gork share <session-id>\n       gork trace <session-id> [--local] [-o path] [--json]\n       gork wrap <command> [args...]\n       gork version [--json]\n       gork completions <bash|elvish|fish|powershell|zsh>\n       gork plugin <list|install|update|uninstall|marketplace>\n       gork sessions <list|search|delete>\n       gork export <session-id> [output] [-c|--clipboard]\n       gork worktree <list|show|rm|gc|db>\n       gork memory clear [--workspace|--global|--all] [-y|--yes]\n\n")
-		flags.PrintDefaults()
-	}
-	if err := flags.Parse(args); err != nil {
+	opts, flags, err := parseRunOptions(args, stderr)
+	if err != nil {
 		return err
-	}
-	flags.Visit(func(flag *flag.Flag) {
-		if flag.Name == "approval" {
-			opts.approvalSet = true
-		}
-		if flag.Name == "sandbox" {
-			opts.sandboxSet = true
-		}
-	})
-	if opts.dashboard && len(flags.Args()) > 0 {
-		return errors.New("dashboard does not accept positional arguments")
 	}
 	if opts.dashboard {
 		opts.tui = true
@@ -246,6 +288,12 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if opts.showVersion {
 		fmt.Fprintln(stdout, version.Current)
 		return nil
+	}
+	if opts.single != "" && len(flags.Args()) > 0 {
+		return errors.New("--single cannot be combined with a positional prompt")
+	}
+	if opts.single != "" && (opts.tui || opts.interactive || opts.goal || opts.acp) {
+		return errors.New("--single cannot be combined with interactive, goal, or ACP modes")
 	}
 	if opts.tui && opts.interactive {
 		return errors.New("--tui and --interactive are mutually exclusive")
@@ -275,28 +323,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	} else if opts.experimentalMemory {
 		cfg.OverrideMemory(true)
 	}
-	if opts.model != "" {
-		cfg.Model = opts.model
-		cfg.DefaultModelID = ""
-		cfg.ReasoningEffort = ""
-		cfg.ModelSupportsReasoningEffort = false
-		cfg.ModelReasoningEfforts = nil
-	}
-	if opts.baseURL != "" {
-		cfg.BaseURL = strings.TrimRight(opts.baseURL, "/")
-	}
-	if opts.backend != "" {
-		cfg.Backend = opts.backend
-	}
-	if opts.system != "" {
-		cfg.SystemPrompt = opts.system
-	}
-	if opts.sandboxSet {
-		cfg.Sandbox.Profile = strings.ToLower(strings.TrimSpace(opts.sandbox))
-	}
-	if opts.maxSteps > 0 {
-		cfg.MaxSteps = opts.maxSteps
-	}
+	applyRunOverrides(&cfg, opts)
 	if err := cfg.ValidateAuthPolicy(); err != nil {
 		return err
 	}
@@ -321,6 +348,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			remote := config.FetchRemoteSettingsForSession(settingsCtx, cfg.ProxyBaseURL, cfg.APIKey, credential.UserID, credential.Email, &http.Client{Timeout: 3 * time.Second})
 			cancel()
 			cfg.ApplyRemoteSettings(remote)
+			applyRunOverrides(&cfg, opts)
 		} else if !errors.Is(authErr, os.ErrNotExist) {
 			return fmt.Errorf("load dynamic credentials: %w", authErr)
 		}
@@ -347,7 +375,10 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 
 	inputReader := bufio.NewReader(stdin)
-	prompt := strings.TrimSpace(strings.Join(flags.Args(), " "))
+	prompt := opts.single
+	if prompt == "" {
+		prompt = strings.TrimSpace(strings.Join(flags.Args(), " "))
+	}
 	resumingGoal := opts.goal && opts.resume != ""
 	if prompt == "" && !opts.interactive && !opts.tui && !resumingGoal {
 		data, err := io.ReadAll(io.LimitReader(inputReader, 4<<20))
@@ -380,7 +411,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return err
 	}
 	var extensionMu sync.Mutex
-	cfg.SystemPrompt = joinInstructions(cfg.SystemPrompt, projectInstructions, skillCatalog.Summary())
+	cfg.SystemPrompt = joinInstructions(cfg.SystemPrompt, opts.rules, projectInstructions, skillCatalog.Summary())
 	mode, err := resolvePermissionMode(cfg, opts.approval, opts.approvalSet)
 	if err != nil {
 		return err
@@ -1032,6 +1063,35 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return goalLoop(ctx, runner, registry, stdout, stderr, prompt, opts.previousID, opts.goalRuns, cfg.Goal.VerifierCount, cfg.Goal.ClassifierMaxRuns, cfg.Goal.ReverifyAfter)
 	}
 	return runHeadless(ctx, runner, scheduledQueue, stdout, stderr, prompt, opts.previousID)
+}
+
+func applyRunOverrides(cfg *config.Config, opts options) {
+	if opts.model != "" {
+		cfg.Model = opts.model
+		cfg.DefaultModelID = ""
+		cfg.ReasoningEffort = ""
+		cfg.ModelSupportsReasoningEffort = false
+		cfg.ModelReasoningEfforts = nil
+	}
+	if opts.reasoningEffort != "" {
+		cfg.ReasoningEffort = opts.reasoningEffort
+		cfg.ModelSupportsReasoningEffort = true
+	}
+	if opts.baseURL != "" {
+		cfg.BaseURL = strings.TrimRight(opts.baseURL, "/")
+	}
+	if opts.backend != "" {
+		cfg.Backend = opts.backend
+	}
+	if opts.system != "" {
+		cfg.SystemPrompt = opts.system
+	}
+	if opts.sandboxSet {
+		cfg.Sandbox.Profile = strings.ToLower(strings.TrimSpace(opts.sandbox))
+	}
+	if opts.maxSteps > 0 {
+		cfg.MaxSteps = opts.maxSteps
+	}
 }
 
 func restartTUI(err error, args, positional []string) error {

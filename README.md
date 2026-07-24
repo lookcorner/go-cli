@@ -471,6 +471,16 @@ are preferred so secrets are not stored in a plain-text file.
 ./gork --workspace /path/to/project "inspect this repository and run its tests"
 ```
 
+Reference-compatible aliases are available for common one-shot runs:
+`--cwd` for `--workspace`, `-m` for `--model`, `--max-turns` for
+`--max-steps`, and `-p`/`--print`/`--single` for an explicit prompt.
+`--reasoning-effort` (or `--effort`) selects `none`, `minimal`, `low`,
+`medium`, `high`, or `xhigh`; `max` maps to `xhigh`. Use
+`--system-prompt` to replace the configured prompt and `--rules` to append
+instructions. `--always-approve`, `--yolo`, and
+`--dangerously-skip-permissions` select always-approve mode while preserving
+managed policy and explicit deny rules.
+
 Prompts can also be piped through stdin:
 
 ```sh
