@@ -312,6 +312,7 @@ type Info struct {
 	HeadBranch      string    `json:"headBranch,omitempty"`
 	ModelID         string    `json:"modelId,omitempty"`
 	ReasoningEffort string    `json:"reasoningEffort,omitempty"`
+	SandboxProfile  string    `json:"sandboxProfile,omitempty"`
 	Title           string    `json:"title,omitempty"`
 	UpdatedAt       time.Time `json:"updatedAt"`
 }
@@ -388,6 +389,7 @@ func readInfo(path, id string) (Info, error) {
 				HeadBranch      string `json:"headBranch"`
 				ModelID         string `json:"modelId"`
 				ReasoningEffort string `json:"reasoningEffort"`
+				SandboxProfile  string `json:"sandboxProfile"`
 			}
 			if json.Unmarshal(event.Data, &data) == nil && data.CWD != "" {
 				info.CWD = data.CWD
@@ -402,6 +404,7 @@ func readInfo(path, id string) (Info, error) {
 					info.ModelID = data.ModelID
 				}
 				info.ReasoningEffort = data.ReasoningEffort
+				info.SandboxProfile = data.SandboxProfile
 			}
 		case "session_model":
 			var data struct {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -127,6 +128,11 @@ func InfoByID(dir, id string) (Info, error) {
 	if err != nil {
 		return Info{}, err
 	}
+	return readInfo(path, id)
+}
+
+func InfoForPath(path string) (Info, error) {
+	id := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 	return readInfo(path, id)
 }
 

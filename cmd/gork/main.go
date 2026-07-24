@@ -65,6 +65,8 @@ type options struct {
 	system             string
 	approval           string
 	approvalSet        bool
+	sandbox            string
+	sandboxSet         bool
 	sessionDir         string
 	maxSteps           int
 	timeout            time.Duration
@@ -150,6 +152,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	flags.StringVar(&opts.backend, "backend", "", "model API backend: responses, chat_completions, or anthropic_messages")
 	flags.StringVar(&opts.system, "system", "", "additional agent instructions")
 	flags.StringVar(&opts.approval, "approval", "prompt", "write/shell approval: prompt, auto, always-approve, or deny")
+	flags.StringVar(&opts.sandbox, "sandbox", "", "shell sandbox: off, workspace, or read-only")
 	flags.Var(&opts.allow, "allow", "allow matching Tool(pattern) permission rule; repeatable")
 	flags.Var(&opts.deny, "deny", "deny matching Tool(pattern) permission rule; repeatable")
 	flags.StringVar(&opts.sessionDir, "session-dir", "", "session JSONL directory")
@@ -178,6 +181,9 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	flags.Visit(func(flag *flag.Flag) {
 		if flag.Name == "approval" {
 			opts.approvalSet = true
+		}
+		if flag.Name == "sandbox" {
+			opts.sandboxSet = true
 		}
 	})
 	if opts.minimal && opts.fullscreen {
@@ -230,6 +236,9 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 	if opts.system != "" {
 		cfg.SystemPrompt = opts.system
+	}
+	if opts.sandboxSet {
+		cfg.Sandbox.Profile = strings.ToLower(strings.TrimSpace(opts.sandbox))
 	}
 	if opts.maxSteps > 0 {
 		cfg.MaxSteps = opts.maxSteps
@@ -338,6 +347,13 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 				return err
 			}
 		}
+		cfg.Sandbox.Profile, err = resumeSandboxProfile(
+			resumePath, cfg.Sandbox.Profile,
+			opts.sandboxSet || strings.TrimSpace(os.Getenv("GROK_SANDBOX")) != "",
+		)
+		if err != nil {
+			return err
+		}
 		var messages []session.Message
 		messages, err = session.Transcript(resumePath)
 		if err == nil {
@@ -351,7 +367,9 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return err
 	}
 	if opts.resume == "" {
-		if err := logger.Append("session_metadata", sessionMetadata(context.Background(), ws.Root(), cfg.Model, cfg.ReasoningEffort)); err != nil {
+		metadata := sessionMetadata(context.Background(), ws.Root(), cfg.Model, cfg.ReasoningEffort)
+		metadata["sandboxProfile"] = cfg.Sandbox.Profile
+		if err := logger.Append("session_metadata", metadata); err != nil {
 			return err
 		}
 	}
@@ -413,6 +431,10 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return err
 	}
 	registry := tools.NewRegistry(ws, approver)
+	if err := registry.ConfigureSandbox(cfg.Sandbox.Profile); err != nil {
+		_ = registry.Close()
+		return err
+	}
 	registry.ConfigureEnvironment(cfg.Env)
 	if err := registry.ConfigureFileToolset(cfg.Toolset.FileToolset, cfg.Toolset.Hashline.Scheme, cfg.Toolset.Hashline.HashLen, cfg.Toolset.Hashline.ChunkSize); err != nil {
 		_ = registry.Close()
@@ -2551,6 +2573,15 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		modelCatalog := sessionCfg
 		var modelCatalogMu sync.RWMutex
 		modelID, sessionCfg := resolveACPSessionModelEntry(sessionCfg, sessionConfig.Model, sessionConfig.ResumePath != "")
+		if sessionConfig.ResumePath != "" {
+			sessionCfg.Sandbox.Profile, err = resumeSandboxProfile(
+				sessionConfig.ResumePath, sessionCfg.Sandbox.Profile,
+				opts.sandboxSet || strings.TrimSpace(os.Getenv("GROK_SANDBOX")) != "",
+			)
+			if err != nil {
+				return nil, nil, err
+			}
+		}
 		reasoningEffort := sessionCfg.ReasoningEffort
 		if sessionConfig.ReasoningEffort != "" && sessionCfg.ModelSupportsReasoningEffort {
 			reasoningEffort = sessionConfig.ReasoningEffort
@@ -2570,6 +2601,10 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			return nil, nil, err
 		}
 		registry := tools.NewRegistry(ws, approver)
+		if err := registry.ConfigureSandbox(sessionCfg.Sandbox.Profile); err != nil {
+			_ = registry.Close()
+			return nil, nil, err
+		}
 		registry.ConfigureEnvironment(sessionCfg.Env)
 		if err := registry.ConfigureFileToolset(sessionCfg.Toolset.FileToolset, sessionCfg.Toolset.Hashline.Scheme, sessionCfg.Toolset.Hashline.HashLen, sessionCfg.Toolset.Hashline.ChunkSize); err != nil {
 			_ = registry.Close()
@@ -2644,7 +2679,9 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		registry.SetGoalObserver(&sessionGoalObserver{server: server, sessionID: logger.ID(), logger: logger})
 		registry.SetWebFetchEnabled(cfg.WebFetch.Enabled)
 		if sessionConfig.ResumePath == "" {
-			if err := logger.Append("session_metadata", sessionMetadataWithDisplay(ctx, ws.Root(), modelID, reasoningEffort, sessionConfig.DisplayCWD)); err != nil {
+			metadata := sessionMetadataWithDisplay(ctx, ws.Root(), modelID, reasoningEffort, sessionConfig.DisplayCWD)
+			metadata["sandboxProfile"] = sessionCfg.Sandbox.Profile
+			if err := logger.Append("session_metadata", metadata); err != nil {
 				_ = logger.Close()
 				_ = registry.Close()
 				return nil, nil, err
@@ -3425,6 +3462,28 @@ func sessionMetadataWithDisplay(ctx context.Context, cwd, model, reasoningEffort
 		metadata["headBranch"] = info.Branch
 	}
 	return metadata
+}
+
+func resumeSandboxProfile(path, configured string, explicit bool) (string, error) {
+	current, err := tools.ParseSandboxProfile(configured)
+	if err != nil {
+		return "", err
+	}
+	info, err := session.InfoForPath(path)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(info.SandboxProfile) == "" {
+		return string(current), nil
+	}
+	saved, err := tools.ParseSandboxProfile(info.SandboxProfile)
+	if err != nil {
+		return "", fmt.Errorf("session has invalid sandbox profile: %w", err)
+	}
+	if explicit && saved != current {
+		return "", fmt.Errorf("cannot change resumed session sandbox from %q to %q; start a new session instead", saved, current)
+	}
+	return string(saved), nil
 }
 
 func goalLoop(

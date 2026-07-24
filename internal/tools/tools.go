@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -144,6 +143,7 @@ type Registry struct {
 	fileToolset   string
 	hashline      hashlineConfig
 	environment   map[string]string
+	sandbox       SandboxProfile
 }
 
 type mutationCheckpoint struct {
@@ -285,10 +285,11 @@ func (r *Registry) ForWorkspace(ws *workspace.Workspace) *Registry {
 		return nil
 	}
 	r.mu.RLock()
-	fileToolset, hashline, environment := r.fileToolset, r.hashline, cloneEnvironment(r.environment)
+	fileToolset, hashline, environment, sandbox := r.fileToolset, r.hashline, cloneEnvironment(r.environment), r.sandbox
 	r.mu.RUnlock()
 	child := NewRegistry(ws, r.approver)
 	child.ConfigureEnvironment(environment)
+	child.setSandbox(sandbox)
 	if fileToolset == "hashline" {
 		_ = child.ConfigureFileToolset(fileToolset, hashline.scheme, hashline.hashLen, hashline.chunkSize)
 	}
@@ -332,6 +333,31 @@ func (r *Registry) ForWorkspace(ws *workspace.Workspace) *Registry {
 	}
 	r.mu.RUnlock()
 	return child
+}
+
+func (r *Registry) ConfigureSandbox(value string) error {
+	if r == nil {
+		return nil
+	}
+	profile, err := ParseSandboxProfile(value)
+	if err != nil {
+		return err
+	}
+	if err := validateSandboxRuntime(profile); err != nil {
+		return err
+	}
+	r.setSandbox(profile)
+	return nil
+}
+
+func (r *Registry) setSandbox(profile SandboxProfile) {
+	r.mu.Lock()
+	r.sandbox = profile
+	if shell, ok := r.tools["shell"].(*shellTool); ok {
+		shell.setSandbox(profile)
+	}
+	r.mu.Unlock()
+	r.processes.setSandbox(profile)
 }
 
 // ConfigureEnvironment overlays variables for commands started by this registry.
@@ -1589,7 +1615,14 @@ type shellTool struct {
 	timeout     time.Duration
 	rewind      *mutationCheckpoint
 	environment map[string]string
+	sandbox     SandboxProfile
 	envMu       sync.RWMutex
+}
+
+func (t *shellTool) setSandbox(profile SandboxProfile) {
+	t.envMu.Lock()
+	t.sandbox = profile
+	t.envMu.Unlock()
 }
 
 func (t *shellTool) setEnvironment(values map[string]string) {
@@ -1598,10 +1631,10 @@ func (t *shellTool) setEnvironment(values map[string]string) {
 	t.envMu.Unlock()
 }
 
-func (t *shellTool) environmentSnapshot() map[string]string {
+func (t *shellTool) environmentSnapshot() (map[string]string, SandboxProfile) {
 	t.envMu.RLock()
 	defer t.envMu.RUnlock()
-	return cloneEnvironment(t.environment)
+	return cloneEnvironment(t.environment), t.sandbox
 }
 
 func (t *shellTool) Definition() api.ToolDefinition {
@@ -1633,14 +1666,17 @@ func (t *shellTool) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	}
 	commandCtx, cancel := context.WithTimeout(ctx, t.timeout)
 	defer cancel()
-	var command *exec.Cmd
+	executable, commandArgs := "/bin/sh", []string{"-lc", args.Command}
 	if runtime.GOOS == "windows" {
-		command = exec.CommandContext(commandCtx, "cmd.exe", "/C", args.Command)
-	} else {
-		command = exec.CommandContext(commandCtx, "/bin/sh", "-lc", args.Command)
+		executable, commandArgs = "cmd.exe", []string{"/C", args.Command}
+	}
+	environment, sandbox := t.environmentSnapshot()
+	command, err := sandboxCommand(commandCtx, sandbox, t.ws.Root(), executable, commandArgs...)
+	if err != nil {
+		return "", err
 	}
 	command.Dir = t.ws.Root()
-	command.Env = setEnvironment(os.Environ(), t.environmentSnapshot())
+	command.Env = setEnvironment(os.Environ(), environment)
 	var output cappedBuffer
 	command.Stdout = &output
 	command.Stderr = &output

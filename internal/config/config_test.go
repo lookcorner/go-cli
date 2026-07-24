@@ -12,6 +12,34 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
+func TestLoadSandboxProfileFromConfigAndEnvironment(t *testing.T) {
+	t.Setenv("GROK_SANDBOX", "")
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[sandbox]\nprofile = \"workspace\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil || cfg.Sandbox.Profile != "workspace" {
+		t.Fatalf("profile=%q err=%v", cfg.Sandbox.Profile, err)
+	}
+	t.Setenv("GROK_SANDBOX", "read-only")
+	cfg, err = Load(path)
+	if err != nil || cfg.Sandbox.Profile != "read-only" {
+		t.Fatalf("environment profile=%q err=%v", cfg.Sandbox.Profile, err)
+	}
+}
+
+func TestValidateRejectsUnknownSandboxProfile(t *testing.T) {
+	cfg := Config{
+		APIKey: "key", Model: "model", Backend: "responses", BaseURL: "https://api.example",
+		MaxSteps: 1, ContextWindow: 1, Toolset: ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}},
+		Sandbox: SandboxConfig{Profile: "strict"},
+	}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "sandbox profile") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
 func TestLoadGrokTOMLModelAndServers(t *testing.T) {
 	t.Setenv("GORK_API_KEY", "")
 	t.Setenv("XAI_API_KEY", "")

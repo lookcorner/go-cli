@@ -314,6 +314,31 @@ func TestRestartTUITranslatesForkRequestWithDirective(t *testing.T) {
 	}
 }
 
+func TestResumeSandboxProfileRestoresAndRejectsChanges(t *testing.T) {
+	logger, err := session.NewLoggerWithID(t.TempDir(), "sandbox-resume")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append("session_metadata", map[string]any{
+		"cwd": t.TempDir(), "modelId": "model", "sandboxProfile": "workspace",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	path := logger.Path()
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if profile, err := resumeSandboxProfile(path, "off", false); err != nil || profile != "workspace" {
+		t.Fatalf("restored profile=%q err=%v", profile, err)
+	}
+	if _, err := resumeSandboxProfile(path, "off", true); err == nil || !strings.Contains(err.Error(), "cannot change") {
+		t.Fatalf("explicit profile change err=%v", err)
+	}
+	if profile, err := resumeSandboxProfile(path, "workspace", true); err != nil || profile != "workspace" {
+		t.Fatalf("matching profile=%q err=%v", profile, err)
+	}
+}
+
 func TestForkCurrentSessionCopiesParentWithoutChangingIt(t *testing.T) {
 	dir, cwd := t.TempDir(), t.TempDir()
 	logger, err := session.NewLoggerWithID(dir, "parent")

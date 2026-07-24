@@ -43,6 +43,8 @@ type ProcessManager struct {
 	currentDir   string
 	environment  []string
 	shellPrelude string
+	sandboxMu    sync.RWMutex
+	sandbox      SandboxProfile
 	rewind       *mutationCheckpoint
 	observerMu   sync.RWMutex
 	observer     ProcessObserver
@@ -164,6 +166,12 @@ func (m *ProcessManager) ConfigureEnvironment(values map[string]string) {
 	m.stateMu.Unlock()
 }
 
+func (m *ProcessManager) setSandbox(profile SandboxProfile) {
+	m.sandboxMu.Lock()
+	m.sandbox = profile
+	m.sandboxMu.Unlock()
+}
+
 func (m *ProcessManager) Start(ctx context.Context, command string) (string, error) {
 	return m.start(ctx, command, "", 0, "bash")
 }
@@ -191,7 +199,10 @@ func (m *ProcessManager) start(ctx context.Context, command, description string,
 	if err != nil {
 		return "", fmt.Errorf("checkpoint before background command: %w", err)
 	}
-	cmd := shellCommand(command)
+	cmd, err := m.shellCommand(command)
+	if err != nil {
+		return "", err
+	}
 	cmd.Dir, cmd.Env = m.shellSnapshot()
 	configureProcessGroup(cmd)
 	buffer := &tailBuffer{limit: backgroundOutputBytes}
@@ -385,7 +396,10 @@ func (m *ProcessManager) shellSnapshot() (string, []string) {
 func (m *ProcessManager) persistentShellCommand(command string) (*exec.Cmd, shellCapture, error) {
 	capture := shellCapture{}
 	if runtime.GOOS == "windows" {
-		cmd := shellCommand(command)
+		cmd, err := m.shellCommand(command)
+		if err != nil {
+			return nil, capture, err
+		}
 		cmd.Dir = m.currentDir
 		cmd.Env = append([]string(nil), m.environment...)
 		return cmd, capture, nil
@@ -446,7 +460,11 @@ func (m *ProcessManager) persistentShellCommand(command string) (*exec.Cmd, shel
 	}
 	trap := "trap '__gork_status=$?; pwd > \"$GORK_GO_STATE_CWD\"; /usr/bin/env -0 > \"$GORK_GO_STATE_ENV\"; " + dumpScript + " > \"$GORK_GO_STATE_SCRIPT\"; trap - EXIT; exit \"$__gork_status\"' EXIT\n"
 	wrapped := m.shellPrelude + "\n" + bootstrap + trap + ". \"$GORK_GO_COMMAND_FILE\""
-	cmd := shellCommand(wrapped)
+	cmd, err := m.shellCommand(wrapped)
+	if err != nil {
+		capture.cleanup()
+		return nil, capture, err
+	}
 	cmd.Dir = m.currentDir
 	cmd.Env = setEnvironment(m.environment, map[string]string{
 		"GORK_GO_STATE_CWD":    capture.cwdPath,
@@ -809,11 +827,19 @@ func (m *ProcessManager) Close() error {
 	return nil
 }
 
-func shellCommand(command string) *exec.Cmd {
+func (m *ProcessManager) shellCommand(command string) (*exec.Cmd, error) {
+	executable, args := shellCommandParts(command)
+	m.sandboxMu.RLock()
+	profile := m.sandbox
+	m.sandboxMu.RUnlock()
+	return sandboxCommand(nil, profile, m.ws.Root(), executable, args...)
+}
+
+func shellCommandParts(command string) (string, []string) {
 	if runtime.GOOS == "windows" {
-		return exec.Command("cmd.exe", "/C", command)
+		return "cmd.exe", []string{"/C", command}
 	}
-	return exec.Command(selectedShell(), "-lc", command)
+	return selectedShell(), []string{"-lc", command}
 }
 
 func selectedShell() string {

@@ -41,6 +41,7 @@ type Config struct {
 	DisabledMCPTools                map[string][]string        `json:"disabled_mcp_tools,omitempty"`
 	LSPServers                      map[string]LSPServerConfig `json:"lsp_servers,omitempty"`
 	Permission                      PermissionConfig           `json:"permission,omitempty"`
+	Sandbox                         SandboxConfig              `json:"sandbox,omitempty"`
 	AutoMode                        AutoModeConfig             `json:"auto_mode,omitempty"`
 	ContextWindow                   int                        `json:"context_window,omitempty"`
 	AutoCompactThresholdPercent     int                        `json:"auto_compact_threshold_percent,omitempty"`
@@ -306,6 +307,10 @@ type PermissionConfig struct {
 	Rules []PermissionRule `json:"rules,omitempty" toml:"rules"`
 }
 
+type SandboxConfig struct {
+	Profile string `json:"profile,omitempty" toml:"profile"`
+}
+
 type PermissionRule struct {
 	Action      string  `json:"action" toml:"action"`
 	Tool        string  `json:"tool,omitempty" toml:"tool"`
@@ -395,6 +400,7 @@ type fileConfig struct {
 	DisabledMCPTools   map[string][]string        `json:"disabled_mcp_tools,omitempty" toml:"disabled_mcp_tools"`
 	LSPServers         map[string]LSPServerConfig `json:"lsp_servers,omitempty" toml:"lsp_servers"`
 	Permission         PermissionConfig           `json:"permission,omitempty" toml:"permission"`
+	Sandbox            SandboxConfig              `json:"sandbox,omitempty" toml:"sandbox"`
 	AutoMode           AutoModeConfig             `json:"auto_mode,omitempty" toml:"auto_mode"`
 	Session            sessionConfig              `json:"session,omitempty" toml:"session"`
 	ContextWindow      int                        `json:"context_window,omitempty" toml:"context_window"`
@@ -674,6 +680,7 @@ func Load(path string) (Config, error) {
 		Goal:                        GoalConfig{VerifierCount: 3, ClassifierMaxRuns: 10, ReverifyAfter: 8},
 		UI:                          UIConfig{Theme: "groknight", ScreenMode: "fullscreen", KeepTextSelection: "flash", ShowTimestamps: true, PromptSuggestions: true, PermissionMode: "ask"},
 		Dashboard:                   DashboardConfig{Enabled: true, Grouping: "state"},
+		Sandbox:                     SandboxConfig{Profile: "off"},
 		Pruning:                     PruningConfig{Enabled: true, KeepLastNTurns: 3, SoftTrimThreshold: 4000, SoftTrimHead: 1500, SoftTrimTail: 1500, HardClearAgeTurns: 10},
 		Memory:                      memory.DefaultConfig(),
 	}
@@ -830,6 +837,9 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.Permission.Rules != nil {
 		cfg.Permission = disk.Permission
+	}
+	if disk.Sandbox.Profile != "" {
+		cfg.Sandbox.Profile = strings.ToLower(strings.TrimSpace(disk.Sandbox.Profile))
 	}
 	if err := applyAutoModeConfig(&cfg.AutoMode, disk.AutoMode); err != nil {
 		return err
@@ -1604,6 +1614,9 @@ func normalizeAutoModeConfig(value AutoModeConfig) (AutoModeConfig, error) {
 }
 
 func applyEnv(cfg *Config) {
+	if value := strings.TrimSpace(os.Getenv("GROK_SANDBOX")); value != "" {
+		cfg.Sandbox.Profile = strings.ToLower(value)
+	}
 	if value := firstEnv("GORK_API_KEY", "XAI_API_KEY", "OPENAI_API_KEY"); value != "" {
 		cfg.APIKey = value
 	}
@@ -2277,6 +2290,9 @@ func (c Config) Validate() error {
 	}
 	if c.Backend != "responses" && c.Backend != "chat_completions" && c.Backend != "anthropic_messages" {
 		return fmt.Errorf("unsupported backend %q: use responses, chat_completions, or anthropic_messages", c.Backend)
+	}
+	if c.Sandbox.Profile != "" && c.Sandbox.Profile != "off" && c.Sandbox.Profile != "workspace" && c.Sandbox.Profile != "read-only" {
+		return errors.New("sandbox profile must be off, workspace, or read-only")
 	}
 	if c.BaseURL == "" {
 		return errors.New("missing API base URL")
