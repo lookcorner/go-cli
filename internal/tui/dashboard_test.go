@@ -30,6 +30,66 @@ func TestDashboardAliasesOpenTaskOverview(t *testing.T) {
 	}
 }
 
+func TestDashboardSurfacesApproval(t *testing.T) {
+	reply := make(chan bool, 1)
+	m := &model{
+		width: 70, height: 18,
+		dashboard: &dashboardState{},
+		approval:  &approvalEvent{action: "shell", detail: "go test ./...", reply: reply},
+	}
+	if view := stripUIANSI(m.View().Content); !strings.Contains(view, "Approve shell?") || !strings.Contains(view, "[y] allow") {
+		t.Fatalf("view=%q", view)
+	}
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'y', Text: "y"}))
+	m = updated.(*model)
+	if approved := <-reply; !approved || m.approval != nil || m.dashboard == nil || m.status != "approved" {
+		t.Fatalf("approved=%v approval=%#v dashboard=%#v status=%q", approved, m.approval, m.dashboard, m.status)
+	}
+}
+
+func TestDashboardSurfacesStructuredQuestion(t *testing.T) {
+	reply := make(chan tools.UserQuestionResponse, 1)
+	m := &model{
+		width: 70, height: 18,
+		dashboard: &dashboardState{},
+		question: &questionState{
+			event: questionEvent{request: tools.UserQuestionRequest{Questions: []tools.UserQuestion{{
+				Question: "Deploy where?", Options: []tools.UserQuestionOption{{Label: "Local"}, {Label: "Cloud"}},
+			}}}, reply: reply},
+			answers: make(map[string][]string), annotations: make(map[string]tools.UserQuestionAnnotation), partial: make(map[string]string),
+		},
+	}
+	if view := stripUIANSI(m.View().Content); !strings.Contains(view, "Deploy where?") || !strings.Contains(view, "[2] Cloud") {
+		t.Fatalf("view=%q", view)
+	}
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: '2', Text: "2"}))
+	m = updated.(*model)
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	response := <-reply
+	if response.Outcome != "accepted" || response.Answers["Deploy where?"][0] != "Cloud" || m.question != nil || m.dashboard == nil {
+		t.Fatalf("response=%#v question=%#v dashboard=%#v", response, m.question, m.dashboard)
+	}
+}
+
+func TestDashboardSurfacesPlanReview(t *testing.T) {
+	reply := make(chan tools.PlanModeDecision, 1)
+	m := &model{
+		width: 70, height: 18,
+		dashboard:  &dashboardState{},
+		planReview: &planReviewState{event: planReviewEvent{event: tools.PlanModeEvent{PlanContent: "Run the migration safely."}, reply: reply}},
+	}
+	view := stripUIANSI(m.View().Content)
+	if !strings.Contains(view, "Review implementation plan") || !strings.Contains(view, "Run the migration safely.") || !strings.Contains(view, "Plan review") {
+		t.Fatalf("view=%q", view)
+	}
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'y', Text: "y"}))
+	m = updated.(*model)
+	if decision := <-reply; decision.Outcome != "approved" || m.planReview != nil || m.dashboard == nil {
+		t.Fatalf("decision=%#v review=%#v dashboard=%#v", decision, m.planReview, m.dashboard)
+	}
+}
+
 func TestDashboardViewsAndStopsSubagent(t *testing.T) {
 	running := true
 	runner := dashboardFixtureRunner()

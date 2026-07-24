@@ -1523,6 +1523,12 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+	if m.planReview != nil {
+		return m.handlePlanReviewKey(msg)
+	}
+	if m.question != nil {
+		return m.handleQuestionKey(msg)
+	}
 	if m.rewind != nil {
 		return m.handleRewindKey(msg)
 	}
@@ -1562,14 +1568,8 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if key.Code != tea.KeyEsc {
 		m.lastEmptyEsc = time.Time{}
 	}
-	if m.planReview != nil {
-		return m.handlePlanReviewKey(msg)
-	}
 	if m.remember != nil {
 		return m.handleRememberReviewKey(msg)
-	}
-	if m.question != nil {
-		return m.handleQuestionKey(msg)
 	}
 	if m.viewer != nil {
 		if stroke == "ctrl+q" {
@@ -3945,7 +3945,9 @@ func (m *model) View() tea.View {
 	header = padRight(truncateANSIUnsafe(header, width), width)
 	banner := m.announcementBanner(width)
 	content := m.transcriptText()
-	if m.mcp != nil {
+	if m.planReview != nil {
+		content = "# Review implementation plan\n\n" + m.planReview.event.event.PlanContent
+	} else if m.mcp != nil {
 		content = m.mcpContent()
 	} else if m.claudeImport != nil {
 		content = m.claudeImportContent()
@@ -3967,8 +3969,6 @@ func (m *model) View() tea.View {
 		content = m.modelSelectContent()
 	} else if m.rewind != nil {
 		content = m.rewindContent()
-	} else if m.planReview != nil {
-		content = "# Review implementation plan\n\n" + m.planReview.event.event.PlanContent
 	} else if m.viewer != nil {
 		content = m.viewerContent()
 	} else if m.remember != nil {
@@ -4008,7 +4008,28 @@ func (m *model) View() tea.View {
 	body := strings.Join(visible, "\n")
 
 	var footer string
-	if m.mcp != nil {
+	if m.approval != nil {
+		footer = fmt.Sprintf("%s%sApprove %s?%s %s\n%s[y] allow  [n/esc] deny%s", ansiBold, colors.modal, m.approval.action, ansiReset, truncate(m.approval.detail, width-20), ansiDim, ansiReset)
+	} else if m.planReview != nil {
+		if m.planReview.editing {
+			footer = fmt.Sprintf("%s%s%s%s\n> %s\n%s%s%s", ansiBold, colors.modal, truncate("Request plan changes", width), ansiReset, renderInput(m.input, m.cursor, max(width-2, 1)), ansiDim, truncate("Enter send · Esc back · Ctrl-U clear", width), ansiReset)
+		} else {
+			footer = ansiBold + colors.modal + "Plan review" + ansiReset + "\n" + ansiDim + truncate("[Y] approve · [R] request changes · [A] abandon · Esc keep planning", width) + ansiReset
+		}
+	} else if m.question != nil {
+		question := m.question.event.request.Questions[m.question.index]
+		labels := make([]string, 0, len(question.Options))
+		for index, option := range question.Options {
+			labels = append(labels, fmt.Sprintf("[%d] %s", index+1, option.Label))
+		}
+		hint := "Enter answer · Esc cancel"
+		if m.question.event.request.Mode == "plan" {
+			hint += " · Ctrl-R clarify · Ctrl-S skip"
+		}
+		footer = fmt.Sprintf("%s%s%s%s\n%s\n> %s\n%s%s%s", ansiBold, colors.modal,
+			truncate(question.Question, width), ansiReset, truncate(strings.Join(labels, "  ")+"  [Other] type response", width),
+			renderInput(m.input, m.cursor, max(width-2, 1)), ansiDim, truncate(hint, width), ansiReset)
+	} else if m.mcp != nil {
 		footer = ansiBold + colors.modal + "MCP servers" + ansiReset + "\n" + ansiDim + truncate(m.mcpHint(), width) + ansiReset
 	} else if m.claudeImport != nil {
 		footer = ansiBold + colors.modal + "Import Claude settings" + ansiReset + "\n" + ansiDim + truncate("Up/Down select | Space toggle | A all | N none | Enter import | Esc cancel", width) + ansiReset
@@ -4041,27 +4062,6 @@ func (m *model) View() tea.View {
 			tab = "Tab raw/enhanced"
 		}
 		footer = ansiBold + colors.positive + "Memory note review" + ansiReset + "\n" + ansiDim + truncate("Enter/Y save · "+tab+" · Esc cancel", width) + ansiReset
-	} else if m.planReview != nil {
-		if m.planReview.editing {
-			footer = fmt.Sprintf("%s%s%s%s\n> %s\n%s%s%s", ansiBold, colors.modal, truncate("Request plan changes", width), ansiReset, renderInput(m.input, m.cursor, max(width-2, 1)), ansiDim, truncate("Enter send · Esc back · Ctrl-U clear", width), ansiReset)
-		} else {
-			footer = ansiBold + colors.modal + "Plan review" + ansiReset + "\n" + ansiDim + truncate("[Y] approve · [R] request changes · [A] abandon · Esc keep planning", width) + ansiReset
-		}
-	} else if m.approval != nil {
-		footer = fmt.Sprintf("%s%sApprove %s?%s %s\n%s[y] allow  [n/esc] deny%s", ansiBold, colors.modal, m.approval.action, ansiReset, truncate(m.approval.detail, width-20), ansiDim, ansiReset)
-	} else if m.question != nil {
-		question := m.question.event.request.Questions[m.question.index]
-		labels := make([]string, 0, len(question.Options))
-		for index, option := range question.Options {
-			labels = append(labels, fmt.Sprintf("[%d] %s", index+1, option.Label))
-		}
-		hint := "Enter answer · Esc cancel"
-		if m.question.event.request.Mode == "plan" {
-			hint += " · Ctrl-R clarify · Ctrl-S skip"
-		}
-		footer = fmt.Sprintf("%s%s%s%s\n%s\n> %s\n%s%s%s", ansiBold, colors.modal,
-			truncate(question.Question, width), ansiReset, truncate(strings.Join(labels, "  ")+"  [Other] type response", width),
-			renderInput(m.input, m.cursor, max(width-2, 1)), ansiDim, truncate(hint, width), ansiReset)
 	} else if m.rememberInput {
 		footer = ansiBold + colors.positive + "# Save a memory note" + ansiReset + "\n> " + renderInput(m.input, m.cursor, max(width-2, 1)) + "\n" + ansiDim + "Enter review · Esc cancel" + ansiReset
 	} else if m.historySearch != nil {
