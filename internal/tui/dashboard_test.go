@@ -14,6 +14,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/tools"
+	"github.com/lookcorner/go-cli/internal/workspace"
 )
 
 func TestDashboardAliasesOpenTaskOverview(t *testing.T) {
@@ -612,6 +613,85 @@ func TestDashboardFilterParsing(t *testing.T) {
 		if kind != test.kind || value != test.value {
 			t.Fatalf("query=%q got=(%q,%q) want=(%q,%q)", test.query, kind, value, test.kind, test.value)
 		}
+	}
+}
+
+func TestDashboardShowsLiveSubagentMetrics(t *testing.T) {
+	item := tools.SubagentResult{
+		ID: "sub", Type: "explore", Description: "Inspect",
+		Status: "running", DurationMS: 1500, ToolCalls: 2, TokensUsed: 300,
+		Turns: 1, ContextUsage: 25,
+	}
+	runner := &agent.Runner{
+		SessionID:     "current",
+		ListSubagents: func() []tools.SubagentResult { return []tools.SubagentResult{item} },
+	}
+	m := &model{runner: runner, workspace: "/work", modelName: "grok", dashboard: &dashboardState{epoch: 1}}
+	m.refreshDashboard()
+	index := dashboardRowIndex(t, m.dashboard.rows, dashboardSubagent, "sub")
+	if detail := m.dashboard.rows[index].detail; detail != "explore · 2s · 2 tools · 300 tok · 1 turn · 25% ctx" {
+		t.Fatalf("detail=%q", detail)
+	}
+	item.DurationMS, item.ToolCalls, item.TokensUsed, item.Turns, item.ContextUsage = 6100, 4, 900, 2, 50
+	updated, next := m.Update(dashboardTickEvent{epoch: 1})
+	m = updated.(*model)
+	index = dashboardRowIndex(t, m.dashboard.rows, dashboardSubagent, "sub")
+	if next == nil || m.dashboard.rows[index].detail != "explore · 6s · 4 tools · 900 tok · 2 turns · 50% ctx" {
+		t.Fatalf("next=%v detail=%q", next != nil, m.dashboard.rows[index].detail)
+	}
+}
+
+func TestDashboardProcessMetrics(t *testing.T) {
+	exitCode := 7
+	start := time.Unix(100, 0)
+	end := start.Add(3 * time.Second)
+	item := tools.ProcessSnapshot{
+		Kind: "shell", Completed: true, ExitCode: &exitCode,
+		StartTime: tools.ProcessTime{SecsSinceEpoch: start.Unix()},
+		EndTime:   &tools.ProcessTime{SecsSinceEpoch: end.Unix()},
+	}
+	if detail := dashboardProcessMetrics(item); detail != "shell · exit 7 · 3s" {
+		t.Fatalf("detail=%q", detail)
+	}
+}
+
+func TestDashboardCancelsScheduledTask(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	if _, err := registry.Execute(context.Background(), "scheduler_create", []byte(`{"interval":"1h","prompt":"check deployment","recurring":true}`)); err != nil {
+		t.Fatal(err)
+	}
+	scheduled := registry.ScheduledTasks()
+	if len(scheduled) != 1 {
+		t.Fatalf("scheduled=%#v", scheduled)
+	}
+	m := &model{
+		ctx: context.Background(), runner: &agent.Runner{SessionID: "current", Tools: registry},
+		workspace: "/work", modelName: "grok",
+	}
+	m.openDashboard()
+	m.dashboard.selected = dashboardRowIndex(t, m.dashboard.rows, dashboardScheduled, scheduled[0].TaskID)
+	updated, cancel := m.handleDashboardKey(tea.KeyPressMsg(tea.Key{Code: 'x', Text: "x"}))
+	m = updated.(*model)
+	if cancel == nil || !m.dashboard.busy {
+		t.Fatalf("cancel=%v state=%#v", cancel != nil, m.dashboard)
+	}
+	updated, _ = m.Update(cancel())
+	m = updated.(*model)
+	if len(registry.ScheduledTasks()) != 0 || dashboardRowStatus(m.dashboard.rows, scheduled[0].TaskID) != "" || m.status != "scheduled task cancelled" {
+		t.Fatalf("scheduled=%#v rows=%#v status=%q", registry.ScheduledTasks(), m.dashboard.rows, m.status)
+	}
+}
+
+func TestDashboardReportsUnavailableScheduledCancellation(t *testing.T) {
+	m := &model{runner: &agent.Runner{SessionID: "current"}, dashboard: &dashboardState{}}
+	updated, command := m.stopDashboardRow(dashboardRow{kind: dashboardScheduled, id: "loop-1"})
+	if updated.(*model) != m || command != nil || m.dashboard.err != "Scheduled task cancellation is unavailable" {
+		t.Fatalf("command=%v state=%#v", command != nil, m.dashboard)
 	}
 }
 

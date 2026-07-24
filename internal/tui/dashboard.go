@@ -218,7 +218,7 @@ func (m *model) refreshDashboard() {
 		return subagents[i].StartedAtMS > subagents[j].StartedAtMS
 	})
 	for _, item := range subagents {
-		rows = append(rows, dashboardRow{kind: dashboardSubagent, id: item.ID, status: dashboardFirst(item.Status, "done"), title: dashboardFirst(item.Description, item.Type), detail: item.Type, cwd: dashboardFirst(item.WorktreeDir, m.workspace)})
+		rows = append(rows, dashboardRow{kind: dashboardSubagent, id: item.ID, status: dashboardFirst(item.Status, "done"), title: dashboardFirst(item.Description, item.Type), detail: dashboardSubagentMetrics(item), cwd: dashboardFirst(item.WorktreeDir, m.workspace)})
 	}
 	processes := slices.Clone(snapshot.Processes)
 	sort.Slice(processes, func(i, j int) bool {
@@ -240,7 +240,7 @@ func (m *model) refreshDashboard() {
 				status = "failed"
 			}
 		}
-		rows = append(rows, dashboardRow{kind: dashboardProcess, id: item.TaskID, status: status, title: dashboardFirst(firstNonemptyLine(item.Description), firstNonemptyLine(item.Command)), detail: dashboardFirst(item.Kind, "process"), cwd: dashboardFirst(item.CWD, m.workspace), process: item})
+		rows = append(rows, dashboardRow{kind: dashboardProcess, id: item.TaskID, status: status, title: dashboardFirst(firstNonemptyLine(item.Description), firstNonemptyLine(item.Command)), detail: dashboardProcessMetrics(item), cwd: dashboardFirst(item.CWD, m.workspace), process: item})
 	}
 	for _, item := range snapshot.Scheduled {
 		rows = append(rows, dashboardRow{kind: dashboardScheduled, id: item.TaskID, status: "scheduled", title: firstNonemptyLine(item.Prompt), detail: item.HumanSchedule, cwd: m.workspace, scheduled: item})
@@ -323,7 +323,7 @@ func (m *model) dashboardHint() string {
 	if m.dashboard != nil && m.dashboard.searching {
 		return "Type to filter | Enter keep | Esc cancel | Ctrl+/ cancel"
 	}
-	return "Enter view/switch | Ctrl+/ search | Ctrl+G group | Ctrl+T pin | Shift+Up/Down reorder | Ctrl+R rename | X stop | D delete | R refresh | Esc close"
+	return "Enter view/switch | Ctrl+/ search | Ctrl+G group | Ctrl+T pin | Shift+Up/Down reorder | Ctrl+R rename | X stop/cancel | D delete | R refresh | Esc close"
 }
 
 func (m *model) handleDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -591,6 +591,57 @@ func dashboardFilterDisplay(kind, value string) string {
 	default:
 		return value
 	}
+}
+
+func dashboardSubagentMetrics(item tools.SubagentResult) string {
+	parts := []string{dashboardFirst(item.Type, "subagent")}
+	if item.DurationMS > 0 {
+		elapsed := (time.Duration(item.DurationMS) * time.Millisecond).Round(time.Second)
+		parts = append(parts, max(elapsed, time.Second).String())
+	}
+	if item.ToolCalls > 0 {
+		parts = append(parts, dashboardMetricCount(item.ToolCalls, "tool"))
+	}
+	if item.TokensUsed > 0 {
+		parts = append(parts, fmt.Sprintf("%d tok", item.TokensUsed))
+	}
+	if item.Turns > 0 {
+		parts = append(parts, dashboardMetricCount(item.Turns, "turn"))
+	}
+	if item.ContextUsage > 0 {
+		parts = append(parts, fmt.Sprintf("%d%% ctx", item.ContextUsage))
+	}
+	return strings.Join(parts, " · ")
+}
+
+func dashboardProcessMetrics(item tools.ProcessSnapshot) string {
+	parts := []string{dashboardFirst(item.Kind, "process")}
+	if item.Completed {
+		switch {
+		case item.Signal != nil:
+			parts = append(parts, "signal "+*item.Signal)
+		case item.ExitCode != nil:
+			parts = append(parts, fmt.Sprintf("exit %d", *item.ExitCode))
+		}
+	}
+	started := time.Unix(item.StartTime.SecsSinceEpoch, int64(item.StartTime.NanosSinceEpoch))
+	if item.StartTime.SecsSinceEpoch > 0 {
+		ended := time.Now()
+		if item.EndTime != nil {
+			ended = time.Unix(item.EndTime.SecsSinceEpoch, int64(item.EndTime.NanosSinceEpoch))
+		}
+		if elapsed := ended.Sub(started).Round(time.Second); elapsed >= 0 {
+			parts = append(parts, elapsed.String())
+		}
+	}
+	return strings.Join(parts, " · ")
+}
+
+func dashboardMetricCount(value int, label string) string {
+	if value != 1 {
+		label += "s"
+	}
+	return fmt.Sprintf("%d %s", value, label)
 }
 
 func (m *model) startDashboardSearch() {
@@ -879,6 +930,20 @@ func (m *model) stopDashboardRow(row dashboardRow) (tea.Model, tea.Cmd) {
 		return m, func() tea.Msg {
 			text, err := m.runner.KillTask(ctx, row.id)
 			return dashboardDoneEvent{action: "stop", id: row.id, text: text, err: err}
+		}
+	}
+	if row.kind == dashboardScheduled {
+		if m.runner.Tools == nil {
+			state.err = "Scheduled task cancellation is unavailable"
+			return m, nil
+		}
+		state.busy = true
+		return m, func() tea.Msg {
+			removed, err := m.runner.Tools.DeleteScheduledTask(row.id)
+			if err == nil && !removed {
+				err = fmt.Errorf("scheduled task %s was not found", row.id)
+			}
+			return dashboardDoneEvent{action: "stop", id: row.id, text: "scheduled task cancelled", err: err}
 		}
 	}
 	state.err = "Selected item is not running"

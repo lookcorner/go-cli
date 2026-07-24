@@ -588,8 +588,9 @@ stored session, `X` stops a selected running subagent or process, `D` confirms
 deletion of an idle session, `Ctrl+G` switches between state sections and a
 directory-sorted flat list, `Ctrl+/` filters live by text (`a:name` and
 `s:state` are supported), and `R` refreshes the snapshot. Enter keeps a search
-filter and Esc clears it. Pins, manual order, and grouping persist in
-`[dashboard]`.
+filter and Esc clears it. `X` also cancels a selected scheduled task, and
+subagent rows update elapsed time, tool calls, tokens, turns, and context usage
+live. Pins, manual order, and grouping persist in `[dashboard]`.
 While open, the dashboard refreshes live task metrics and stored sessions once
 per second; polling stops when the dashboard closes.
 `/recap` makes a tool-free, display-only model call against the current
