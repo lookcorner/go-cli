@@ -66,6 +66,7 @@ type dashboardState struct {
 	dispatching    bool
 	dispatchInput  []rune
 	dispatchCursor int
+	shortcuts      bool
 	peekID         string
 	peekKind       dashboardRowKind
 	peekTitle      string
@@ -287,6 +288,30 @@ func (m *model) dashboardContent() string {
 	if state == nil {
 		return ""
 	}
+	if state.shortcuts {
+		return strings.TrimSpace(`# Dashboard Shortcuts
+
+| Key | Action |
+| --- | --- |
+| Up / Down, j / k | Select a row |
+| Enter | Open details or switch session |
+| Enter in a peek | Open full-screen details |
+| PgUp / PgDown, Ctrl+K / Ctrl+J | Scroll full-screen details |
+| Home / End | Jump to the start or end of details |
+| N | Create and open a new agent |
+| P | Peek at the selected row |
+| Ctrl+/ | Search and filter |
+| Ctrl+G | Change grouping |
+| Ctrl+T | Pin or unpin |
+| Shift+Up / Shift+Down | Change manual order |
+| Ctrl+R or E | Rename a session |
+| X | Stop or cancel |
+| D | Delete an idle session |
+| Y / N | Confirm or cancel deletion |
+| R | Refresh |
+| Ctrl+. or ? | Show this panel |
+| Esc or Q | Close or go back |`)
+	}
 	if state.attached && state.peekID != "" {
 		return strings.TrimSpace("# " + state.peekTitle + "\n\n" + state.peekContent)
 	}
@@ -350,6 +375,9 @@ func (m *model) dashboardHint() string {
 	if m.dashboard != nil && m.dashboard.busy {
 		return "Working... | Esc close"
 	}
+	if m.dashboard != nil && m.dashboard.shortcuts {
+		return "Esc / Q / Ctrl+. / ? close shortcuts"
+	}
 	if m.dashboard != nil && m.dashboard.renameID != "" {
 		return "Enter save | Esc cancel | Left/Right move cursor"
 	}
@@ -374,6 +402,27 @@ func (m *model) handleDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	stroke, text := msg.Keystroke(), strings.ToLower(msg.Key().Text)
+	if state.shortcuts {
+		switch {
+		case stroke == "esc" || stroke == "ctrl+." || text == "q" || text == "?":
+			state.shortcuts = false
+			m.scroll = 0
+			m.status = "agent dashboard"
+		case stroke == "up" || text == "k":
+			m.scroll = min(m.scroll+1, m.maxDashboardScroll())
+		case stroke == "down" || text == "j":
+			m.scroll = max(m.scroll-1, 0)
+		case stroke == "pgup" || stroke == "ctrl+k":
+			m.scroll = min(m.scroll+max(m.contentHeight()/2, 1), m.maxDashboardScroll())
+		case stroke == "pgdown" || stroke == "ctrl+j":
+			m.scroll = max(m.scroll-max(m.contentHeight()/2, 1), 0)
+		case msg.Key().Code == tea.KeyHome:
+			m.scroll = m.maxDashboardScroll()
+		case msg.Key().Code == tea.KeyEnd:
+			m.scroll = 0
+		}
+		return m, nil
+	}
 	if state.renameID != "" {
 		return m.handleDashboardRenameKey(msg)
 	}
@@ -445,6 +494,10 @@ func (m *model) handleDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	switch {
+	case stroke == "ctrl+." || text == "?":
+		state.shortcuts = true
+		m.scroll = m.maxDashboardScroll()
+		m.status = "dashboard shortcuts"
 	case text == "n":
 		if m.running {
 			state.err = "Wait for the current request before creating a new agent"

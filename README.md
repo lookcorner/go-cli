@@ -591,6 +591,7 @@ an active or stored session, `X` stops a selected running subagent or process,
 `D` confirms deletion of an idle session, `Ctrl+G` switches between state
 sections and a directory-sorted flat list, `Ctrl+/` filters live by text
 (`a:name` and `s:state` are supported), and `R` refreshes the snapshot.
+`Ctrl+.` or `?` opens a complete Dashboard shortcut panel.
 Enter keeps a search filter and Esc clears it. `X` also cancels a selected
 scheduled task, and
 subagent rows update elapsed time, tool calls, tokens, turns, and context usage

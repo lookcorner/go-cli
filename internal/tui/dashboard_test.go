@@ -42,6 +42,52 @@ func TestDashboardAliasesRespectDisabledGate(t *testing.T) {
 	}
 }
 
+func TestDashboardShortcutsPanel(t *testing.T) {
+	for _, open := range []tea.Key{
+		{Code: '?', Text: "?"},
+		{Code: '.', Text: ".", Mod: tea.ModCtrl},
+	} {
+		m := &model{
+			width: 80, height: 24,
+			dashboard: &dashboardState{
+				rows: []dashboardRow{{kind: dashboardStoredSession, id: "stored", title: "Stored"}},
+			},
+		}
+		updated, command := m.handleDashboardKey(tea.KeyPressMsg(open))
+		m = updated.(*model)
+		if command != nil || !m.dashboard.shortcuts || m.status != "dashboard shortcuts" {
+			t.Fatalf("open=%#v command=%v state=%#v status=%q", open, command != nil, m.dashboard, m.status)
+		}
+		content := m.dashboardContent()
+		if !strings.Contains(content, "# Dashboard Shortcuts") || !strings.Contains(content, "Ctrl+R or E") || !strings.Contains(m.dashboardHint(), "close shortcuts") {
+			t.Fatalf("content=%q hint=%q", content, m.dashboardHint())
+		}
+		if view := stripUIANSI(m.View().Content); !strings.Contains(view, "Dashboard Shortcuts") || m.scroll == 0 {
+			t.Fatalf("initial view=%q scroll=%d", view, m.scroll)
+		}
+		updated, command = m.handleDashboardKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnd}))
+		m = updated.(*model)
+		if command != nil || m.scroll != 0 {
+			t.Fatalf("end command=%v scroll=%d", command != nil, m.scroll)
+		}
+		updated, command = m.handleDashboardKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
+		m = updated.(*model)
+		if command != nil || m.scroll != 1 {
+			t.Fatalf("up command=%v scroll=%d", command != nil, m.scroll)
+		}
+		updated, command = m.handleDashboardKey(tea.KeyPressMsg(tea.Key{Code: 'd', Text: "d"}))
+		m = updated.(*model)
+		if command != nil || !m.dashboard.shortcuts || m.dashboard.pendingDelete != "" {
+			t.Fatalf("panel leaked dashboard action: command=%v state=%#v", command != nil, m.dashboard)
+		}
+		updated, command = m.handleDashboardKey(tea.KeyPressMsg(open))
+		m = updated.(*model)
+		if command != nil || m.dashboard.shortcuts || m.status != "agent dashboard" {
+			t.Fatalf("close=%#v command=%v state=%#v status=%q", open, command != nil, m.dashboard, m.status)
+		}
+	}
+}
+
 func TestDashboardSurfacesApproval(t *testing.T) {
 	reply := make(chan bool, 1)
 	m := &model{
