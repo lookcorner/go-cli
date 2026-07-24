@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/lookcorner/go-cli/internal/agent"
+	"github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/tools"
 )
 
@@ -74,6 +76,73 @@ func TestDashboardRequiresActiveSession(t *testing.T) {
 	m.openDashboard()
 	if m.dashboard != nil || m.status != "no active session" {
 		t.Fatalf("dashboard=%#v status=%q", m.dashboard, m.status)
+	}
+}
+
+func TestDashboardLoadsSwitchesAndDeletesStoredSessions(t *testing.T) {
+	dir := t.TempDir()
+	current, err := session.NewLoggerWithID(dir, "current")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := current.Append("session_metadata", map[string]any{"cwd": "/current", "modelId": "grok"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := current.Close(); err != nil {
+		t.Fatal(err)
+	}
+	other, err := session.NewLoggerWithID(dir, "other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := other.Append("session_metadata", map[string]any{"cwd": "/other", "modelId": "grok-fast"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := other.Append("session_title", map[string]any{"title": "Other work"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := other.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := dashboardFixtureRunner()
+	runner.SessionID, runner.SessionPath = "current", current.Path()
+	m := &model{runner: runner, workspace: "/current", modelName: "grok"}
+	load := m.openDashboard()
+	if load == nil || !m.dashboard.loading {
+		t.Fatalf("load=%v state=%#v", load != nil, m.dashboard)
+	}
+	updated, _ := m.Update(load())
+	m = updated.(*model)
+	if m.dashboard.loading || len(m.dashboard.rows) != 4 || m.dashboard.rows[1].kind != dashboardStoredSession || m.dashboard.rows[1].title != "Other work" {
+		t.Fatalf("rows=%#v", m.dashboard.rows)
+	}
+	m.dashboard.selected = 1
+	updated, quit := m.handleDashboardKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if quit == nil || m.resumeSession == nil || m.resumeSession.Path != other.Path() || m.resumeSession.Workspace != "/other" {
+		t.Fatalf("resume=%#v quit=%v", m.resumeSession, quit != nil)
+	}
+
+	m = &model{runner: runner, workspace: "/current", modelName: "grok"}
+	load = m.openDashboard()
+	updated, _ = m.Update(load())
+	m = updated.(*model)
+	m.dashboard.selected = 1
+	updated, _ = m.handleDashboardKey(tea.KeyPressMsg(tea.Key{Code: 'd', Text: "d"}))
+	m = updated.(*model)
+	if m.dashboard.pendingDelete != "other" {
+		t.Fatalf("pending=%q", m.dashboard.pendingDelete)
+	}
+	updated, remove := m.handleDashboardKey(tea.KeyPressMsg(tea.Key{Code: 'y', Text: "y"}))
+	m = updated.(*model)
+	if remove == nil {
+		t.Fatal("delete did not return a command")
+	}
+	updated, _ = m.Update(remove())
+	m = updated.(*model)
+	if _, err := os.Stat(other.Path()); !os.IsNotExist(err) || len(m.dashboard.sessions) != 1 || m.status != "session deleted" {
+		t.Fatalf("stat=%v sessions=%#v status=%q", err, m.dashboard.sessions, m.status)
 	}
 }
 

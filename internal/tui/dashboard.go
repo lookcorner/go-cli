@@ -3,12 +3,14 @@ package tui
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/tools"
 )
 
@@ -16,6 +18,7 @@ type dashboardRowKind uint8
 
 const (
 	dashboardSession dashboardRowKind = iota
+	dashboardStoredSession
 	dashboardSubagent
 	dashboardProcess
 	dashboardScheduled
@@ -29,13 +32,18 @@ type dashboardRow struct {
 	detail    string
 	process   tools.ProcessSnapshot
 	scheduled tools.ScheduledTaskCreated
+	session   session.Info
 }
 
 type dashboardState struct {
-	rows     []dashboardRow
-	selected int
-	busy     bool
-	err      string
+	rows          []dashboardRow
+	selected      int
+	busy          bool
+	loading       bool
+	dir           string
+	sessions      []session.Info
+	pendingDelete string
+	err           string
 }
 
 type dashboardDoneEvent struct {
@@ -45,15 +53,48 @@ type dashboardDoneEvent struct {
 	err    error
 }
 
-func (m *model) openDashboard() {
+type dashboardLoadedEvent struct {
+	dir      string
+	sessions []session.Info
+	err      error
+}
+
+func (m *model) openDashboard() tea.Cmd {
 	if m.runner == nil || strings.TrimSpace(m.runner.SessionID) == "" {
 		m.status = "no active session"
-		return
+		return nil
 	}
-	m.dashboard = &dashboardState{}
+	state := &dashboardState{}
+	if strings.TrimSpace(m.runner.SessionPath) != "" {
+		state.dir = filepath.Dir(m.runner.SessionPath)
+		state.loading = true
+	}
+	m.dashboard = state
 	m.refreshDashboard()
 	m.scroll = 0
 	m.status = "agent dashboard"
+	if state.dir == "" {
+		return nil
+	}
+	return func() tea.Msg {
+		items, err := session.List(state.dir, "")
+		return dashboardLoadedEvent{dir: state.dir, sessions: items, err: err}
+	}
+}
+
+func (m *model) finishDashboardLoad(event dashboardLoadedEvent) {
+	state := m.dashboard
+	if state == nil || state.dir != event.dir {
+		return
+	}
+	state.loading = false
+	if event.err != nil {
+		state.err = event.err.Error()
+		m.status = "dashboard load failed"
+		return
+	}
+	state.sessions = event.sessions
+	m.refreshDashboard()
 }
 
 func (m *model) refreshDashboard() {
@@ -63,6 +104,14 @@ func (m *model) refreshDashboard() {
 	state := m.dashboard
 	state.err = ""
 	rows := []dashboardRow{{kind: dashboardSession, id: m.runner.SessionID, status: "active", title: "Current session", detail: m.modelName + " · " + m.workspace}}
+	for _, item := range state.sessions {
+		if item.SessionID == m.runner.SessionID {
+			continue
+		}
+		title := dashboardFirst(item.Title, item.SessionID)
+		detail := dashboardFirst(item.ModelID, "unknown model") + " · " + dashboardFirst(item.DisplayCWD, item.CWD)
+		rows = append(rows, dashboardRow{kind: dashboardStoredSession, id: item.SessionID, status: "idle", title: title, detail: detail, session: item})
+	}
 	snapshot := m.runner.TaskSnapshot()
 	subagents := slices.Clone(snapshot.Subagents)
 	sort.Slice(subagents, func(i, j int) bool {
@@ -120,6 +169,12 @@ func (m *model) dashboardContent() string {
 	if state.err != "" {
 		out.WriteString("\nError: " + state.err + "\n")
 	}
+	if state.loading {
+		out.WriteString("\nLoading sessions...\n")
+	}
+	if state.pendingDelete != "" {
+		out.WriteString("\nDelete session " + state.pendingDelete + "? Press Y to confirm or N to cancel.\n")
+	}
 	return strings.TrimSpace(out.String())
 }
 
@@ -127,7 +182,7 @@ func (m *model) dashboardHint() string {
 	if m.dashboard != nil && m.dashboard.busy {
 		return "Working... | Esc close"
 	}
-	return "Enter view | X stop running | R refresh | Esc close"
+	return "Enter view/switch | X stop running | D delete idle session | R refresh | Esc close"
 }
 
 func (m *model) handleDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -136,6 +191,18 @@ func (m *model) handleDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	stroke, text := msg.Keystroke(), strings.ToLower(msg.Key().Text)
+	if state.pendingDelete != "" {
+		if text == "y" || stroke == "enter" {
+			id, dir := state.pendingDelete, state.dir
+			state.pendingDelete, state.busy = "", true
+			return m, func() tea.Msg { return dashboardDoneEvent{action: "delete", id: id, err: session.Delete(dir, id)} }
+		}
+		if text == "n" || stroke == "esc" {
+			state.pendingDelete = ""
+			return m, nil
+		}
+		return m, nil
+	}
 	if stroke == "esc" || text == "q" {
 		m.dashboard = nil
 		m.status = "ready"
@@ -152,10 +219,24 @@ func (m *model) handleDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case text == "r":
 		m.refreshDashboard()
 		m.status = "dashboard refreshed"
+		if state.dir != "" {
+			state.loading = true
+			return m, func() tea.Msg {
+				items, err := session.List(state.dir, "")
+				return dashboardLoadedEvent{dir: state.dir, sessions: items, err: err}
+			}
+		}
 	case stroke == "enter" && len(state.rows) > 0:
 		return m.openDashboardRow(state.rows[state.selected])
 	case text == "x" && len(state.rows) > 0:
 		return m.stopDashboardRow(state.rows[state.selected])
+	case text == "d" && len(state.rows) > 0:
+		row := state.rows[state.selected]
+		if row.kind != dashboardStoredSession {
+			state.err = "Only idle sessions can be deleted"
+		} else {
+			state.pendingDelete = row.id
+		}
 	}
 	return m, nil
 }
@@ -165,6 +246,15 @@ func (m *model) openDashboardRow(row dashboardRow) (tea.Model, tea.Cmd) {
 	case dashboardSession:
 		m.dashboard = nil
 		m.viewer = &readOnlyViewer{title: "Current session", content: fmt.Sprintf("# Session info\n\n- Session: `%s`\n- Workspace: `%s`\n- Model: `%s`", row.id, m.workspace, m.modelName)}
+	case dashboardStoredSession:
+		path, err := session.PathForID(m.dashboard.dir, row.id)
+		if err != nil {
+			m.dashboard.err = err.Error()
+			return m, nil
+		}
+		m.resumeSession = &ResumeSessionError{Path: path, Workspace: row.session.CWD}
+		m.status = "resuming session"
+		return m, tea.Quit
 	case dashboardSubagent:
 		if m.runner.GetSubagent == nil {
 			m.dashboard.err = "Subagent details are unavailable"

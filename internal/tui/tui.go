@@ -1398,10 +1398,17 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				m.scroll = 0
 				m.status = "subagent details"
 			} else {
+				fallback := "task stopped"
+				if msg.action == "delete" {
+					m.dashboard.sessions = removeSession(m.dashboard.sessions, msg.id)
+					fallback = "session deleted"
+				}
 				m.refreshDashboard()
-				m.status = dashboardFirst(msg.text, "task stopped")
+				m.status = dashboardFirst(msg.text, fallback)
 			}
 		}
+	case dashboardLoadedEvent:
+		m.finishDashboardLoad(msg)
 	case sessionSelectLoadedEvent:
 		m.finishSessionSelectLoad(msg)
 	case sessionSelectSearchRequestEvent:
@@ -1922,8 +1929,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.showTasks()
 			return m, nil
 		case "/dashboard", "/sessions", "/agents-dashboard":
-			m.openDashboard()
-			return m, nil
+			return m, m.openDashboard()
 		case "/recap":
 			return m, m.startRecap()
 		case "/resume":
@@ -2319,8 +2325,7 @@ func (m *model) handleRunningKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "/dashboard", "/sessions", "/agents-dashboard":
 			m.clearInput()
-			m.openDashboard()
-			return m, nil
+			return m, m.openDashboard()
 		case "/recap":
 			m.clearInput()
 			return m, m.startRecap()
