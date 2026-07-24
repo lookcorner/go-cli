@@ -145,6 +145,11 @@ plain/JSON/streaming-JSON output, and JSON Schema structured output are
 supported. Schemas map to
 Responses `text.format`, Chat Completions `response_format`, and Anthropic
 Messages `output_config.format`.
+The reference `gork agent stdio` command routes its supported model, reasoning,
+permission, workspace, session, trust, memory, and capability flags through the
+same complete ACP stdio runtime as `--acp`. WebSocket headless, serve, and
+shared-leader modes remain unavailable and fail explicitly rather than being
+misparsed as prompts.
 
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |

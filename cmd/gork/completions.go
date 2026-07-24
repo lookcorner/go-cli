@@ -29,6 +29,10 @@ var completionRoot = completionSpec{
 		"-c", "-m", "-p", "-r", "-s", "-v", "-V", "-w",
 	},
 	children: map[string]completionSpec{
+		"agent": {
+			flags:    words("--always-approve --allow --config --cwd --deny --disable-web-search --effort --experimental-memory --model --no-ask-user --no-leader --no-memory --no-plan --no-subagents --permission-mode --reasoning-effort --session-dir --trust --workspace --yolo -m"),
+			children: leaves("stdio"),
+		},
 		"completions": {children: leaves("bash", "elvish", "fish", "powershell", "zsh")},
 		"dashboard":   {flags: words("--config --fullscreen --minimal --session-dir --trust --workspace")},
 		"export":      {flags: []string{"--clipboard", "-c"}},

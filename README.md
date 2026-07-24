@@ -902,7 +902,15 @@ editor/IDE integrations:
 
 ```sh
 ./gork --acp
+./gork agent stdio
 ```
+
+`gork agent stdio` is the reference command form and uses the same ACP runtime
+as `--acp`. It accepts model, reasoning, permission, workspace, session,
+folder-trust, memory, and capability flags before `stdio`. Reference
+`agent headless`, `agent serve`, and `agent leader` modes require the separate
+WebSocket/leader protocol and currently fail explicitly instead of silently
+falling back to ACP or treating the mode as a prompt.
 
 Each `session/new` gets its own workspace, tool state, model history, local
 session log, MCP/LSP processes, and cleanup lifecycle. New and restored session
