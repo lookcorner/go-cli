@@ -113,6 +113,9 @@ history while replacing the model input with the reference direct image or
 image-first video workflow; empty descriptions complete locally with usage.
 The side-effect-free top-level `gork completions` command emits Bash, Elvish,
 Fish, PowerShell, and Zsh scripts for the currently implemented command tree.
+The top-level `gork trace` command preserves the privacy build's hard-off for
+trace uploads while providing reference-shaped local `.tar.gz` exports, JSON
+output, bounded related session artifacts, and non-sensitive export metadata.
 
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |

@@ -11,6 +11,9 @@ Use `gork inspect` for a redacted configuration and component report, or
 Use `gork version [--json]` for reference-shaped version information and
 `gork share <session-id>` to create a share URL for an authenticated,
 share-enabled local session.
+Use `gork trace <session-id> --local` to create a privacy-safe local diagnostic
+archive. Trace uploads remain disabled and the command falls back to local
+export when `--local` is omitted.
 
 The project is under active compatibility development. The current runtime is
 a usable headless coding agent with a Responses-compatible streaming client,

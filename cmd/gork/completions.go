@@ -45,6 +45,7 @@ var completionRoot = completionSpec{
 		}},
 		"share":   {flags: words("--config --session-dir")},
 		"setup":   {flags: words("--config --json")},
+		"trace":   {flags: words("--local --output -o --json --session-dir")},
 		"version": {flags: []string{"--json"}},
 		"v":       {flags: []string{"--json"}},
 		"worktree": {children: map[string]completionSpec{
