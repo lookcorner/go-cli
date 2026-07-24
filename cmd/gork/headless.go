@@ -29,10 +29,10 @@ type sessionStartup struct {
 	fork       bool
 }
 
-func normalizeOptionalResumeArgs(args []string) []string {
+func normalizeOptionalValueArgs(args []string) []string {
 	normalized := append([]string(nil), args...)
 	for index, arg := range normalized {
-		if arg != "--resume" && arg != "-r" {
+		if arg != "--resume" && arg != "-r" && arg != "--worktree" && arg != "-w" {
 			continue
 		}
 		if index+1 == len(normalized) || normalized[index+1] == "--" || strings.HasPrefix(normalized[index+1], "-") {
@@ -55,6 +55,12 @@ func resolveSessionStartup(opts options, workspaceRoot string) (sessionStartup, 
 	}
 	if opts.forkSession && !hasResume {
 		return sessionStartup{}, errors.New("--fork-session requires --resume, --load, or --continue")
+	}
+	if opts.forkSession && opts.worktreeSet {
+		return sessionStartup{}, errors.New("--fork-session cannot be combined with --worktree")
+	}
+	if opts.worktreeRef != "" && !opts.worktreeSet {
+		return sessionStartup{}, errors.New("--worktree-ref requires --worktree")
 	}
 
 	startup := sessionStartup{newID: opts.sessionID, fork: opts.forkSession}

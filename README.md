@@ -1349,6 +1349,18 @@ session; combine it with `--fork-session` and a resume option to create an
 append-only child while leaving the parent unchanged. When omitted for a fork,
 the child UUID is generated automatically.
 
+Use `-w`/`--worktree [LABEL]` to start a new session in an isolated Git
+worktree. `--worktree-ref REF` (alias `--ref`) selects the commit instead of
+the current `HEAD`; dirty state is copied only when no explicit ref is given.
+Combining worktree mode with `--resume`, `--load`, or `--continue` creates a
+child session in the isolated workspace and leaves the parent log unchanged:
+
+```sh
+./gork -w -- "implement in isolation"
+./gork --worktree api-refactor --ref main --session-id UUID "start the refactor"
+./gork -w review-copy --resume SESSION_ID "continue in isolation"
+```
+
 Resume refuses symlinks, oversized logs, malformed events, and sessions whose
 only model response still has pending tool calls. This prevents a new prompt
 from being attached to a half-finished tool transaction.

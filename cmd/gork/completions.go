@@ -21,10 +21,11 @@ var completionRoot = completionSpec{
 		"--interactive", "--max-steps", "--max-turns", "--minimal", "--model", "--no-memory",
 		"--output-format", "--permission-mode", "--print", "--prompt-file", "--prompt-json",
 		"--reasoning-effort", "--rules", "--single", "--json-schema",
-		"--continue", "--fork-session", "--load", "--previous-response-id", "--resume",
+		"--continue", "--fork-session", "--load", "--previous-response-id", "--ref", "--resume",
 		"--sandbox", "--session-dir", "--session-id",
 		"--system", "--system-prompt", "--system-prompt-override", "--timeout", "--trust",
-		"--tui", "--version", "--workspace", "--yolo", "-c", "-m", "-p", "-r", "-s", "-v", "-V",
+		"--tui", "--version", "--workspace", "--worktree", "--worktree-ref", "--yolo",
+		"-c", "-m", "-p", "-r", "-s", "-v", "-V", "-w",
 	},
 	children: map[string]completionSpec{
 		"completions": {children: leaves("bash", "elvish", "fish", "powershell", "zsh")},
@@ -74,7 +75,8 @@ var completionValueFlags = map[string]bool{
 	"--env": true, "--header": true, "--repo": true, "--resume": true, "--sandbox": true, "--scope": true, "--scopes": true,
 	"--session-dir": true, "--session-id": true, "--system": true, "--system-prompt": true, "--system-prompt-override": true,
 	"--timeout": true, "--type": true, "--transport": true, "--workspace": true, "-H": true, "-e": true, "-m": true,
-	"-n": true, "-p": true, "-r": true, "-s": true, "-t": true,
+	"--worktree": true, "--worktree-ref": true, "--ref": true, "-n": true, "-p": true, "-r": true, "-s": true,
+	"-t": true, "-w": true,
 }
 
 func words(value string) []string { return strings.Fields(value) }

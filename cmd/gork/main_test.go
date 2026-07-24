@@ -593,6 +593,198 @@ func TestSessionStartupFlagsCreateResumeAndFork(t *testing.T) {
 	}
 }
 
+func TestStartupWorktreeCreatesIsolatedSession(t *testing.T) {
+	home, root, sessionDir := t.TempDir(), newGitRepo(t), t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	t.Setenv("HOME", home)
+	t.Setenv("GORK_API_KEY", "test-key")
+	t.Setenv("XAI_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{"id":"response-1","output":[{"type":"message","content":[{"type":"output_text","text":"done"}]}]}`)
+	}))
+	defer server.Close()
+
+	id := "018f47a2-4df1-4d5b-8c2a-1f7d9e6b3a42"
+	err := runOnce([]string{
+		"--cwd", root, "--session-dir", sessionDir, "--base-url", server.URL,
+		"-m", "test-model", "-s", id, "--worktree", "startup-test",
+		"--worktree-ref", "HEAD", "-p", "first",
+	}, strings.NewReader(""), io.Discard, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := session.PathForID(sessionDir, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := session.InfoForPath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.CWD == root || filepath.Base(info.CWD) != "startup-test" {
+		t.Fatalf("session cwd=%q root=%q", info.CWD, root)
+	}
+	if _, err := os.Stat(filepath.Join(info.CWD, "tracked.txt")); err != nil {
+		t.Fatalf("isolated workspace missing tracked file: %v", err)
+	}
+	manager, err := worktrees.NewManager(sessionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := manager.List("", nil, true)
+	if len(records) != 1 || records[0].SessionID != id || records[0].Label != "startup-test" ||
+		records[0].GitRef != "HEAD" {
+		t.Fatalf("worktree records=%#v", records)
+	}
+}
+
+func TestStartupWorktreeResumeContinuesChildResponseChain(t *testing.T) {
+	home, root, sessionDir := t.TempDir(), newGitRepo(t), t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	t.Setenv("HOME", home)
+	t.Setenv("GORK_API_KEY", "test-key")
+	t.Setenv("XAI_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	var requests []api.ResponseRequest
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var body api.ResponseRequest
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		requests = append(requests, body)
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(writer, `{"id":"response-%d","output":[{"type":"message","content":[{"type":"output_text","text":"done"}]}]}`, len(requests))
+	}))
+	defer server.Close()
+
+	parentID := "018f47a2-4df1-4d5b-8c2a-1f7d9e6b3a44"
+	base := []string{
+		"--cwd", root, "--session-dir", sessionDir, "--base-url", server.URL,
+		"-m", "test-model",
+	}
+	if err := runOnce(append(append([]string(nil), base...), "-s", parentID, "-p", "parent"),
+		strings.NewReader(""), io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	parentPath, err := session.PathForID(sessionDir, parentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentBefore, err := os.ReadFile(parentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runOnce(append(append([]string(nil), base...),
+		"--resume", parentID, "--worktree", "resume-child", "-p", "child"),
+		strings.NewReader(""), io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 2 || requests[1].PreviousResponseID != "response-1" {
+		t.Fatalf("requests=%#v", requests)
+	}
+	parentAfter, err := os.ReadFile(parentPath)
+	if err != nil || !bytes.Equal(parentBefore, parentAfter) {
+		t.Fatal("worktree resume modified parent")
+	}
+	manager, err := worktrees.NewManager(sessionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := manager.List("", nil, true)
+	if len(records) != 1 || records[0].Label != "resume-child" {
+		t.Fatalf("records=%#v", records)
+	}
+	childPath, err := session.PathForID(sessionDir, records[0].SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	childInfo, err := session.InfoForPath(childPath)
+	if err != nil || childInfo.CWD == root {
+		t.Fatalf("child info=%#v err=%v", childInfo, err)
+	}
+}
+
+func TestCreateStartupWorktreeResumesAsChildAndCleansFailure(t *testing.T) {
+	root, sessionDir := newGitRepo(t), t.TempDir()
+	source, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := session.NewLoggerWithID(sessionDir, "parent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []struct {
+		kind string
+		data any
+	}{
+		{"session_metadata", map[string]any{"cwd": root, "modelId": "old"}},
+		{"user_prompt", map[string]any{"text": "hello"}},
+		{"model_response", map[string]any{"text": "world", "response_id": "r1", "tool_call_count": 0}},
+	} {
+		if err := parent.Append(event.kind, event.data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := parent.Close(); err != nil {
+		t.Fatal(err)
+	}
+	parentBefore, err := os.ReadFile(parent.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	childID := "018f47a2-4df1-4d5b-8c2a-1f7d9e6b3a43"
+	childWorkspace, startup, cleanup, err := createStartupWorktree(
+		context.Background(),
+		options{sessionDir: sessionDir, worktreeSet: true, worktree: "resume-test"},
+		config.Config{Model: "new-model"},
+		source,
+		sessionStartup{resumePath: parent.Path(), newID: childID},
+	)
+	if err != nil || cleanup == nil || startup.resumePath == "" || childWorkspace.Root() == root {
+		t.Fatalf("workspace=%v startup=%#v cleanup=%v err=%v", childWorkspace, startup, cleanup != nil, err)
+	}
+	childData, err := os.ReadFile(startup.resumePath)
+	childInfo, infoErr := session.InfoForPath(startup.resumePath)
+	recordedCWD, recordedErr := filepath.EvalSymlinks(childInfo.CWD)
+	workspaceCWD, workspaceErr := filepath.EvalSymlinks(childWorkspace.Root())
+	if err != nil || infoErr != nil || !bytes.Contains(childData, []byte(`"parent_session_id":"parent"`)) ||
+		recordedErr != nil || workspaceErr != nil || recordedCWD != workspaceCWD {
+		t.Fatalf("child=%s err=%v", childData, err)
+	}
+	parentAfter, err := os.ReadFile(parent.Path())
+	if err != nil || !bytes.Equal(parentBefore, parentAfter) {
+		t.Fatal("startup worktree resume modified parent")
+	}
+
+	manager, err := worktrees.NewManager(sessionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := len(manager.List("", nil, true))
+	_, _, _, err = createStartupWorktree(
+		context.Background(),
+		options{sessionDir: sessionDir, worktreeSet: true, worktree: "failed-test"},
+		config.Config{Model: "new-model"},
+		source,
+		sessionStartup{resumePath: filepath.Join(sessionDir, "missing.jsonl")},
+	)
+	if err == nil {
+		t.Fatal("missing parent session was accepted")
+	}
+	manager, err = worktrees.NewManager(sessionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if records := manager.List("", nil, true); len(records) != before {
+		t.Fatalf("failed startup left worktree record: %#v", records)
+	}
+}
+
 func TestRestartTUITranslatesNewAgentPrompt(t *testing.T) {
 	fresh := &tui.NewSessionError{Prompt: "--check this branch"}
 	if !errors.Is(fresh, tui.ErrNewSession) {
@@ -621,7 +813,8 @@ func TestRestartSessionArgsDropsSessionStartupAliases(t *testing.T) {
 	args := []string{
 		"--tui", "-r", "old", "--load=older", "-c",
 		"--session-id", "018f47a2-4df1-7d5b-8c2a-1f7d9e6b3a40",
-		"--fork-session", "--model", "test", "old prompt",
+		"--fork-session", "-w", "feature", "--worktree-ref", "main",
+		"--model", "test", "old prompt",
 	}
 	got := restartSessionArgs(args, []string{"old prompt"}, "/sessions/current.jsonl", "")
 	want := []string{"--tui", "--model", "test", "--resume", "/sessions/current.jsonl"}

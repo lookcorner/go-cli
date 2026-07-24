@@ -90,6 +90,9 @@ type options struct {
 	continueLast       bool
 	sessionID          string
 	forkSession        bool
+	worktree           string
+	worktreeSet        bool
+	worktreeRef        string
 	tui                bool
 	dashboard          bool
 	minimal            bool
@@ -145,7 +148,7 @@ func (r *sessionRestartRequest) Error() string { return "restart session" }
 
 func parseRunOptions(args []string, stderr io.Writer) (options, *flag.FlagSet, error) {
 	var opts options
-	args = normalizeOptionalResumeArgs(args)
+	args = normalizeOptionalValueArgs(args)
 	if len(args) > 0 && args[0] == "dashboard" {
 		opts.dashboard = true
 		args = args[1:]
@@ -198,6 +201,10 @@ func parseRunOptions(args []string, stderr io.Writer) (options, *flag.FlagSet, e
 	flags.StringVar(&opts.sessionID, "session-id", "", "UUID for a new or forked session")
 	flags.StringVar(&opts.sessionID, "s", "", "UUID for a new or forked session")
 	flags.BoolVar(&opts.forkSession, "fork-session", false, "fork the resumed session")
+	flags.StringVar(&opts.worktree, "worktree", "", "start in an isolated Git worktree, optionally labeled")
+	flags.StringVar(&opts.worktree, "w", "", "start in an isolated Git worktree, optionally labeled")
+	flags.StringVar(&opts.worktreeRef, "worktree-ref", "", "Git ref for --worktree")
+	flags.StringVar(&opts.worktreeRef, "ref", "", "Git ref for --worktree")
 	flags.BoolVar(&opts.tui, "tui", false, "start the terminal interface")
 	flags.BoolVar(&opts.minimal, "minimal", false, "start the scrollback-native terminal interface")
 	flags.BoolVar(&opts.fullscreen, "fullscreen", false, "force the full-screen terminal interface")
@@ -232,6 +239,8 @@ func parseRunOptions(args []string, stderr io.Writer) (options, *flag.FlagSet, e
 			opts.jsonSchemaSet = true
 		case "resume", "r", "load":
 			opts.resumeSet = true
+		case "worktree", "w":
+			opts.worktreeSet = true
 		}
 	})
 	if opts.alwaysApprove {
@@ -476,6 +485,28 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	var startupWorktreeCleanup func()
+	startupWorktreeReady := false
+	if opts.worktreeSet {
+		if startup.resumePath != "" {
+			cfg.Sandbox.Profile, err = resumeSandboxProfile(
+				startup.resumePath, cfg.Sandbox.Profile,
+				opts.sandboxSet || strings.TrimSpace(os.Getenv("GROK_SANDBOX")) != "",
+			)
+			if err != nil {
+				return err
+			}
+		}
+		ws, startup, startupWorktreeCleanup, err = createStartupWorktree(context.Background(), opts, cfg, ws, startup)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if !startupWorktreeReady {
+				startupWorktreeCleanup()
+			}
+		}()
+	}
 	resuming := startup.resumePath != ""
 	instructionFiles, err := ws.LoadInstructions(cfg.Compat)
 	if err != nil {
@@ -544,6 +575,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	defer logger.Close()
 	if !resuming {
 		metadata := sessionMetadata(context.Background(), ws.Root(), cfg.Model, cfg.ReasoningEffort)
 		metadata["sandboxProfile"] = cfg.Sandbox.Profile
@@ -551,7 +583,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			return err
 		}
 	}
-	defer logger.Close()
+	startupWorktreeReady = true
 	memoryStore, err := openMemoryStore(cfg, ws.Root(), logger.ID())
 	if err != nil {
 		return err
@@ -1280,6 +1312,85 @@ func forkCurrentSession(ctx context.Context, manager *worktrees.Manager, session
 	return tui.ForkResult{Path: path, Workspace: workspace}, nil
 }
 
+func createStartupWorktree(
+	ctx context.Context,
+	opts options,
+	cfg config.Config,
+	source *workspace.Workspace,
+	startup sessionStartup,
+) (*workspace.Workspace, sessionStartup, func(), error) {
+	manager, err := worktrees.NewManager(opts.sessionDir)
+	if err != nil {
+		return nil, sessionStartup{}, nil, err
+	}
+	childID := startup.newID
+	if childID == "" {
+		childID, err = newSessionUUID()
+		if err != nil {
+			return nil, sessionStartup{}, nil, err
+		}
+	}
+	if startup.resumePath == "" {
+		path, pathErr := session.PathForID(opts.sessionDir, childID)
+		if pathErr != nil {
+			return nil, sessionStartup{}, nil, pathErr
+		}
+		if _, statErr := os.Lstat(path); statErr == nil {
+			return nil, sessionStartup{}, nil, fmt.Errorf("session %q already exists", childID)
+		} else if !os.IsNotExist(statErr) {
+			return nil, sessionStartup{}, nil, statErr
+		}
+	}
+	record, _, err := manager.Create(ctx, worktrees.CreateRequest{
+		SessionID:  childID,
+		SourcePath: source.Root(),
+		CopyMode:   "dirty",
+		GitRef:     opts.worktreeRef,
+		Label:      opts.worktree,
+	})
+	if err != nil {
+		return nil, sessionStartup{}, nil, err
+	}
+	var childPath string
+	cleanup := func() {
+		if childPath != "" {
+			_ = os.Remove(childPath)
+		}
+		_, _, _ = manager.Remove(context.Background(), worktrees.RemoveRequest{
+			WorktreePath: record.Path,
+			Force:        true,
+		})
+	}
+	root, err := worktrees.EffectiveCWD(ctx, source.Root(), record.Path)
+	if err != nil {
+		cleanup()
+		return nil, sessionStartup{}, nil, err
+	}
+	childWorkspace, err := workspace.Open(root)
+	if err != nil {
+		cleanup()
+		return nil, sessionStartup{}, nil, err
+	}
+	if startup.resumePath == "" {
+		startup.newID = childID
+		return childWorkspace, startup, cleanup, nil
+	}
+	parentDir := filepath.Dir(startup.resumePath)
+	parentID := strings.TrimSuffix(filepath.Base(startup.resumePath), ".jsonl")
+	if _, _, err := session.Fork(parentDir, parentID, childID, root, cfg.Model, nil); err != nil {
+		cleanup()
+		return nil, sessionStartup{}, nil, err
+	}
+	childPath, err = session.PathForID(parentDir, childID)
+	if err != nil {
+		_ = os.Remove(filepath.Join(parentDir, childID+".jsonl"))
+		cleanup()
+		return nil, sessionStartup{}, nil, err
+	}
+	startup.resumePath, startup.newID, startup.fork = childPath, "", false
+	return childWorkspace, startup, cleanup, nil
+}
+
 func restartForkArgs(args, positional []string, resumePath, workspace, directive string) []string {
 	result := restartSessionArgs(args, positional, resumePath, workspace)
 	if strings.TrimSpace(directive) != "" {
@@ -1299,6 +1410,7 @@ func restartSessionArgs(args, positional []string, resumePath, workspace string)
 		arg := flags[index]
 		name := strings.TrimLeft(arg, "-")
 		dropValue := name == "resume" || name == "r" || name == "load" || name == "session-id" || name == "s" ||
+			name == "worktree" || name == "w" || name == "worktree-ref" || name == "ref" ||
 			name == "previous-response-id" || workspace != "" && name == "workspace"
 		if dropValue {
 			if index+1 < len(flags) && !strings.HasPrefix(flags[index+1], "-") {
@@ -1308,7 +1420,9 @@ func restartSessionArgs(args, positional []string, resumePath, workspace string)
 		}
 		dropInline := strings.HasPrefix(name, "resume=") || strings.HasPrefix(name, "r=") ||
 			strings.HasPrefix(name, "load=") || strings.HasPrefix(name, "session-id=") ||
-			strings.HasPrefix(name, "s=") || strings.HasPrefix(name, "previous-response-id=") ||
+			strings.HasPrefix(name, "s=") || strings.HasPrefix(name, "worktree=") ||
+			strings.HasPrefix(name, "w=") || strings.HasPrefix(name, "worktree-ref=") ||
+			strings.HasPrefix(name, "ref=") || strings.HasPrefix(name, "previous-response-id=") ||
 			workspace != "" && strings.HasPrefix(name, "workspace=")
 		if dropInline || name == "continue" || name == "c" || name == "fork-session" || arg == "--" {
 			continue

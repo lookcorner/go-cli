@@ -126,6 +126,9 @@ always-approve, version, and session-startup aliases. `--resume/-r [ID]`,
 `--load ID`, and `--continue/-c` support strict ID/path resume or the current
 workspace's most recent session; `--session-id/-s UUID` names a new session,
 and `--fork-session` creates an append-only child without changing its parent.
+`--worktree/-w [LABEL]` and `--worktree-ref/--ref REF` create isolated
+Git-backed startup sessions; combining worktree mode with resume copies the
+parent conversation into a child bound to the isolated workspace.
 Explicit CLI values are reapplied after remote settings so command-line intent
 wins.
 Headless prompt files, ACP JSON text/image/resource blocks,

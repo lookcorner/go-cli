@@ -50,7 +50,7 @@ func TestLoadHeadlessPromptSupportsTextAndACPJSONFiles(t *testing.T) {
 	}
 }
 
-func TestNormalizeOptionalResumeArgs(t *testing.T) {
+func TestNormalizeOptionalValueArgs(t *testing.T) {
 	tests := []struct {
 		args []string
 		want []string
@@ -60,9 +60,12 @@ func TestNormalizeOptionalResumeArgs(t *testing.T) {
 		{[]string{"--resume", "--", "-prompt"}, []string{"--resume=", "--", "-prompt"}},
 		{[]string{"--resume", "session-id"}, []string{"--resume", "session-id"}},
 		{[]string{"--resume=session-id"}, []string{"--resume=session-id"}},
+		{[]string{"--worktree"}, []string{"--worktree="}},
+		{[]string{"-w", "--resume", "parent"}, []string{"-w=", "--resume", "parent"}},
+		{[]string{"--worktree", "feature"}, []string{"--worktree", "feature"}},
 	}
 	for _, test := range tests {
-		got := normalizeOptionalResumeArgs(test.args)
+		got := normalizeOptionalValueArgs(test.args)
 		if !reflect.DeepEqual(got, test.want) {
 			t.Fatalf("args=%v got=%v want=%v", test.args, got, test.want)
 		}
@@ -77,6 +80,9 @@ func TestParseRunOptionsSupportsSessionStartupAliases(t *testing.T) {
 		continueLast  bool
 		sessionID     string
 		fork          bool
+		worktreeSet   bool
+		worktree      string
+		worktreeRef   string
 		positionalLen int
 	}{
 		{args: []string{"--resume"}, resumeSet: true},
@@ -86,6 +92,8 @@ func TestParseRunOptionsSupportsSessionStartupAliases(t *testing.T) {
 		{args: []string{"-s", "018f47a2-4df1-7d5b-8c2a-1f7d9e6b3a40"}, sessionID: "018f47a2-4df1-7d5b-8c2a-1f7d9e6b3a40"},
 		{args: []string{"--resume", "--", "-prompt"}, resumeSet: true, positionalLen: 1},
 		{args: []string{"--resume", "parent", "--fork-session"}, resume: "parent", resumeSet: true, fork: true},
+		{args: []string{"-w", "--ref", "main"}, worktreeSet: true, worktreeRef: "main"},
+		{args: []string{"--worktree", "feature", "--worktree-ref", "HEAD"}, worktreeSet: true, worktree: "feature", worktreeRef: "HEAD"},
 	}
 	for _, test := range tests {
 		opts, flags, err := parseRunOptions(test.args, io.Discard)
@@ -94,7 +102,9 @@ func TestParseRunOptionsSupportsSessionStartupAliases(t *testing.T) {
 		}
 		if opts.resume != test.resume || opts.resumeSet != test.resumeSet ||
 			opts.continueLast != test.continueLast || opts.sessionID != test.sessionID ||
-			opts.forkSession != test.fork || len(flags.Args()) != test.positionalLen {
+			opts.forkSession != test.fork || opts.worktreeSet != test.worktreeSet ||
+			opts.worktree != test.worktree || opts.worktreeRef != test.worktreeRef ||
+			len(flags.Args()) != test.positionalLen {
 			t.Fatalf("args=%v opts=%#v positional=%v", test.args, opts, flags.Args())
 		}
 	}
@@ -144,6 +154,8 @@ func TestResolveSessionStartupRejectsInvalidCombinations(t *testing.T) {
 		{sessionID: "not-a-uuid"},
 		{sessionID: "018f47a2-4df1-7d5b-8c2a-1f7d9e6b3a40", resumeSet: true, resume: "parent"},
 		{forkSession: true},
+		{forkSession: true, resumeSet: true, resume: "parent", worktreeSet: true},
+		{worktreeRef: "main"},
 	}
 	for _, opts := range tests {
 		if _, err := resolveSessionStartup(opts, root); err == nil {
