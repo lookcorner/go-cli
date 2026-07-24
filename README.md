@@ -580,6 +580,10 @@ While a turn is running, additional prompts are queued FIFO; `/queue` prints a
 read-only snapshot and queued prompts run before scheduled wake-ups.
 `/tasks` instantly lists background commands, subagents, and scheduled tasks
 without creating a model turn.
+`/dashboard` (also `/sessions` and `/agents-dashboard`) opens an interactive
+overview of the active session, subagents, background processes, and scheduled
+tasks. Enter opens details, `X` stops a selected running subagent or process,
+and `R` refreshes the snapshot.
 `/recap` makes a tool-free, display-only model call against the current
 conversation. It can run beside an active turn, never enters the prompt queue or
 changes conversation history, and discards its result if a newer prompt starts.

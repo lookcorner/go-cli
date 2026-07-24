@@ -558,6 +558,7 @@ type model struct {
 	claudeImport  *claudeImportState
 	extensions    *extensionsState
 	agentConfig   *agentConfigState
+	dashboard     *dashboardState
 	debug         debugState
 	lastEmptyEsc  time.Time
 	questionClick struct {
@@ -1385,6 +1386,22 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case extensionsEvent:
 		return m.handleExtensionsEvent(msg)
+	case dashboardDoneEvent:
+		if m.dashboard != nil {
+			m.dashboard.busy = false
+			if msg.err != nil {
+				m.dashboard.err = msg.err.Error()
+				m.status = "dashboard action failed"
+			} else if msg.action == "view" {
+				m.dashboard = nil
+				m.viewer = &readOnlyViewer{title: "Subagent: " + msg.id, content: msg.text}
+				m.scroll = 0
+				m.status = "subagent details"
+			} else {
+				m.refreshDashboard()
+				m.status = dashboardFirst(msg.text, "task stopped")
+			}
+		}
 	case sessionSelectLoadedEvent:
 		m.finishSessionSelectLoad(msg)
 	case sessionSelectSearchRequestEvent:
@@ -1439,6 +1456,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.rewind != nil {
 		return m.handleRewindKey(msg)
+	}
+	if m.dashboard != nil {
+		return m.handleDashboardKey(msg)
 	}
 	if m.jump != nil {
 		return m.handleJumpKey(msg)
@@ -1800,7 +1820,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 					imagineCommands += " `/imagine-video <description>`"
 				}
 			}
-			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + announcementCommand + agentCommands + " `/btw <question>` `/cd <path>` `/compact` `/compact-mode` `/context` `/copy [N]` `/docs [web|title]` `/dream` `/effort [level]` `/exit` `/export [filename]` `/home` `/login` `/logout`" + feedbackCommand + " `/find` `/flush` `/fork [--worktree|--no-worktree] [directive]` `/help` `/history`" + extensionCommands + imagineCommands + " `/jump` `/loop` `/memory`" + mcpCommand + " `/model [name] [effort]` (`/m`) `/multiline` `/new` (`/clear`) `/plan [description]` `/privacy [opt-out]` `/queue` `/recap` `/release-notes` (`/changelog`) `/remember` `/rename <title>` `/resume` `/rewind` `/session-info` (`/status`, `/info`) `/settings`" + shareCommand + " `/tasks` `/terminal-setup` `/theme [name]` (`/t`)" + mouseCommand + " `/timeline` `/timestamps` `/transcript` `/usage [show|manage]` (`/cost`) `/view-plan` `/vim-mode`")
+			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + announcementCommand + agentCommands + " `/btw <question>` `/cd <path>` `/compact` `/compact-mode` `/context` `/copy [N]` `/dashboard` (`/sessions`, `/agents-dashboard`) `/docs [web|title]` `/dream` `/effort [level]` `/exit` `/export [filename]` `/home` `/login` `/logout`" + feedbackCommand + " `/find` `/flush` `/fork [--worktree|--no-worktree] [directive]` `/help` `/history`" + extensionCommands + imagineCommands + " `/jump` `/loop` `/memory`" + mcpCommand + " `/model [name] [effort]` (`/m`) `/multiline` `/new` (`/clear`) `/plan [description]` `/privacy [opt-out]` `/queue` `/recap` `/release-notes` (`/changelog`) `/remember` `/rename <title>` `/resume` `/rewind` `/session-info` (`/status`, `/info`) `/settings`" + shareCommand + " `/tasks` `/terminal-setup` `/theme [name]` (`/t`)" + mouseCommand + " `/timeline` `/timestamps` `/transcript` `/usage [show|manage]` (`/cost`) `/view-plan` `/vim-mode`")
 			m.status = "commands"
 			return m, nil
 		case "/docs", "/howto", "/guides":
@@ -1900,6 +1920,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "/tasks":
 			m.showTasks()
+			return m, nil
+		case "/dashboard", "/sessions", "/agents-dashboard":
+			m.openDashboard()
 			return m, nil
 		case "/recap":
 			return m, m.startRecap()
@@ -2293,6 +2316,10 @@ func (m *model) handleRunningKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "/tasks":
 			m.clearInput()
 			m.showTasks()
+			return m, nil
+		case "/dashboard", "/sessions", "/agents-dashboard":
+			m.clearInput()
+			m.openDashboard()
 			return m, nil
 		case "/recap":
 			m.clearInput()
@@ -3859,6 +3886,8 @@ func (m *model) View() tea.View {
 		content = m.extensionsContent()
 	} else if m.agentConfig != nil {
 		content = m.agentConfigContent()
+	} else if m.dashboard != nil {
+		content = m.dashboardContent()
 	} else if m.settings != nil {
 		content = m.settingsContent()
 	} else if m.docs != nil {
@@ -3920,6 +3949,8 @@ func (m *model) View() tea.View {
 		footer = ansiBold + colors.modal + "Extensions" + ansiReset + "\n" + ansiDim + truncate(m.extensionsHint(), width) + ansiReset
 	} else if m.agentConfig != nil {
 		footer = ansiBold + colors.modal + "Agents and personas" + ansiReset + "\n" + ansiDim + truncate(m.agentConfigHint(), width) + ansiReset
+	} else if m.dashboard != nil {
+		footer = ansiBold + colors.modal + "Agent Dashboard" + ansiReset + "\n" + ansiDim + truncate(m.dashboardHint(), width) + ansiReset
 	} else if m.settings != nil {
 		footer = ansiBold + colors.modal + "Settings" + ansiReset + "\n" + ansiDim + truncate("Up/Down select | Enter/Space change | Esc close", width) + ansiReset
 	} else if m.docs != nil {
@@ -4408,7 +4439,7 @@ func renderedLabelContains(line, label string, x, width int) bool {
 
 func (m *model) contentHeight() int {
 	banner := m.announcementHeight()
-	if m.question != nil || m.planReview != nil || m.remember != nil || m.rememberInput || m.rewind != nil || m.jump != nil || m.modelSelect != nil || m.settings != nil || m.docs != nil || m.sessionSelect != nil || m.forkChoice != nil || m.mcp != nil || m.claudeImport != nil || m.extensions != nil || m.agentConfig != nil {
+	if m.question != nil || m.planReview != nil || m.remember != nil || m.rememberInput || m.rewind != nil || m.jump != nil || m.modelSelect != nil || m.settings != nil || m.docs != nil || m.sessionSelect != nil || m.forkChoice != nil || m.mcp != nil || m.claudeImport != nil || m.extensions != nil || m.agentConfig != nil || m.dashboard != nil {
 		return max(m.height-7-banner, 3)
 	}
 	if m.historySearch != nil {
