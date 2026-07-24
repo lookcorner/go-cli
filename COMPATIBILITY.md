@@ -149,14 +149,19 @@ The reference `gork agent stdio` command routes its supported model, reasoning,
 permission, workspace, session, trust, memory, and capability flags through the
 same complete ACP stdio runtime as `--acp`. `gork agent serve` exposes that
 persistent runtime over an authenticated WebSocket and preserves active
-sessions across reconnects. Headless and shared-leader modes remain unavailable
-and fail explicitly rather than being misparsed as prompts.
+sessions across reconnects. On Unix, `gork agent leader` exposes the same ACP
+application through the reference framed local IPC protocol with lock/socket
+lifecycle, readiness signaling, client request-ID isolation, session ownership,
+disconnect cleanup, and optional persistent operation. Remote headless relay
+mode remains unavailable and fails explicitly rather than being misparsed as a
+prompt.
 The top-level `gork leader list/info/kill` commands discover reference lock/socket
 candidates, verify live Unix sockets with the reference length-prefixed
 registration/control protocol, classify stale/unreachable/unsupported entries,
 select the production or explicit-PID leader, emit reference-shaped JSON, and
 terminate only identity-verified gork processes while cleaning stale candidate
-files. Leader spawning, forwarding, and Windows named-pipe IPC remain.
+files. Automatic follower connection/spawning, remote relay forwarding,
+workspace exposure, and Windows named-pipe IPC remain.
 
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |

@@ -904,6 +904,7 @@ editor/IDE integrations:
 ./gork --acp
 ./gork agent stdio
 ./gork agent --secret TOKEN serve
+./gork agent --model MODEL leader
 ```
 
 `gork agent stdio` is the reference command form and uses the same ACP runtime
@@ -914,8 +915,13 @@ Authenticate with `Authorization: Bearer TOKEN` or the `server-key=TOKEN`
 query parameter. Set the token with `--secret` or `GROK_AGENT_SECRET`; when
 neither is set, the command prints a generated 12-character token. Use
 `--bind ADDRESS` to change the listener. Text and UTF-8 binary JSON frames are
-accepted, and running sessions survive client reconnects. Reference
-`agent headless` and `agent leader` modes still fail explicitly.
+accepted, and running sessions survive client reconnects. `agent leader` runs
+the shared ACP application behind the reference
+length-prefixed local IPC protocol on Unix. It owns `$GROK_HOME/leader.lock`
+and `leader.sock`, isolates client request IDs and session routes, reports
+startup readiness, and exits after the last client disconnects unless
+`--no-exit-on-disconnect` is set. Remote `agent headless` relay mode and
+Windows named-pipe leader IPC remain unavailable.
 
 Inspect reference-compatible shared leader candidates without starting the
 normal agent runtime:

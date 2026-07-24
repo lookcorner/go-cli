@@ -30,8 +30,8 @@ var completionRoot = completionSpec{
 	},
 	children: map[string]completionSpec{
 		"agent": {
-			flags:    words("--always-approve --allow --bind --config --cwd --deny --disable-web-search --effort --experimental-memory --model --no-ask-user --no-leader --no-memory --no-plan --no-subagents --permission-mode --reasoning-effort --secret --session-dir --trust --workspace --yolo -m"),
-			children: leaves("serve", "stdio"),
+			flags:    words("--always-approve --allow --bind --config --cwd --deny --disable-web-search --effort --experimental-memory --model --no-ask-user --no-exit-on-disconnect --no-leader --no-memory --no-plan --no-subagents --permission-mode --reasoning-effort --secret --session-dir --trust --workspace --yolo -m"),
+			children: leaves("leader", "serve", "stdio"),
 		},
 		"completions": {children: leaves("bash", "elvish", "fish", "powershell", "zsh")},
 		"dashboard":   {flags: words("--config --fullscreen --minimal --session-dir --trust --workspace")},

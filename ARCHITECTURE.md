@@ -36,7 +36,9 @@ implementation.
   configuration, instruction discovery, and skill discovery.
 - `internal/leader` owns shared-leader discovery, IPC framing, registration,
   control queries, target selection, candidate classification, and safe
-  process identity verification and termination.
+  process identity verification and termination. It also owns the Unix leader
+  listener, lock/socket lifecycle, ACP request-ID isolation, and session routing;
+  the ACP application remains transport-independent in `internal/acp`.
 - `internal/theme` owns canonical terminal theme identities and aliases shared
   by configuration validation and the TUI adapter.
 - `internal/docs` owns the immutable built-in guide catalog and title lookup;

@@ -30,7 +30,7 @@ func TestCompletionCandidatesFollowCommandTree(t *testing.T) {
 		want []string
 	}{
 		{nil, []string{"--always-approve", "--continue", "--cwd", "--disable-web-search", "--fork-session", "--json-schema", "--load", "--max-turns", "--no-ask-user", "--no-plan", "--no-subagents", "--output-format", "--prompt-file", "--prompt-json", "--reasoning-effort", "--ref", "--session-id", "--single", "--worktree", "--worktree-ref", "-c", "-m", "-p", "-r", "-s", "-w", "-V", "agent", "completions", "dashboard", "leader", "models", "plugin", "share", "trace", "update", "version", "wrap", "worktree"}},
-		{[]string{"agent", ""}, []string{"serve", "stdio"}},
+		{[]string{"agent", ""}, []string{"leader", "serve", "stdio"}},
 		{[]string{"agent", "--"}, []string{"--always-approve", "--bind", "--model", "--no-leader", "--reasoning-effort", "--secret"}},
 		{[]string{"dashboard", "--"}, []string{"--config", "--fullscreen", "--minimal", "--session-dir", "--trust", "--workspace"}},
 		{[]string{"leader", ""}, []string{"info", "kill", "list"}},

@@ -223,7 +223,7 @@ func parseRunOptions(args []string, stderr io.Writer) (options, *flag.FlagSet, e
 	flags.BoolVar(&opts.experimentalMemory, "experimental-memory", false, "enable cross-session workspace memory")
 	flags.BoolVar(&opts.noMemory, "no-memory", false, "disable cross-session memory")
 	flags.Usage = func() {
-		fmt.Fprintf(stderr, "Usage: gork [flags] [prompt]\n       gork agent [options] <stdio|serve>\n       gork leader <list|info|kill>\n       gork dashboard [flags]\n       gork login [--oauth|--device-auth]\n       gork logout\n       gork setup\n       gork inspect [--json] [--config path]\n       gork mcp <list|add|remove|doctor>\n       gork models [--config path]\n       gork share <session-id>\n       gork trace <session-id> [--local] [-o path] [--json]\n       gork update [--check] [--json]\n       gork wrap <command> [args...]\n       gork version [--json]\n       gork completions <bash|elvish|fish|powershell|zsh>\n       gork plugin <list|install|update|uninstall|enable|disable|details|validate|marketplace>\n       gork sessions <list|search|delete>\n       gork export <session-id> [output] [-c|--clipboard]\n       gork worktree <list|show|rm|gc|db>\n       gork memory clear [--workspace|--global|--all] [-y|--yes]\n\n")
+		fmt.Fprintf(stderr, "Usage: gork [flags] [prompt]\n       gork agent [options] <stdio|serve|leader>\n       gork leader <list|info|kill>\n       gork dashboard [flags]\n       gork login [--oauth|--device-auth]\n       gork logout\n       gork setup\n       gork inspect [--json] [--config path]\n       gork mcp <list|add|remove|doctor>\n       gork models [--config path]\n       gork share <session-id>\n       gork trace <session-id> [--local] [-o path] [--json]\n       gork update [--check] [--json]\n       gork wrap <command> [args...]\n       gork version [--json]\n       gork completions <bash|elvish|fish|powershell|zsh>\n       gork plugin <list|install|update|uninstall|enable|disable|details|validate|marketplace>\n       gork sessions <list|search|delete>\n       gork export <session-id> [output] [-c|--clipboard]\n       gork worktree <list|show|rm|gc|db>\n       gork memory clear [--workspace|--global|--all] [-y|--yes]\n\n")
 		flags.PrintDefaults()
 	}
 	if err := flags.Parse(args); err != nil {
@@ -3863,6 +3863,9 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		}, nil
 	}
 	watchModelConfig(ctx, time.Second, config.ModelWatchPaths(opts.configPath), server.ReloadModels, stderr)
+	if ready, ok := stdin.(interface{ MarkReady() }); ok {
+		ready.MarkReady()
+	}
 	if err := server.Serve(ctx, stdin, stdout); err != nil {
 		fmt.Fprintln(stderr, "[gork] ACP server failed:", err)
 		return err

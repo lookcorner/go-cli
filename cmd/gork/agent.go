@@ -1,12 +1,20 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
+	"path/filepath"
 	"strings"
+	"syscall"
+
+	"github.com/lookcorner/go-cli/internal/config"
+	"github.com/lookcorner/go-cli/internal/leader"
+	"github.com/lookcorner/go-cli/internal/version"
 )
 
 func runAgent(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
@@ -19,14 +27,19 @@ func runAgent(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return err
 	}
 	if serve != nil {
+		if serve.leader {
+			return runAgentLeader(normalized, *serve, stdin, stdout, stderr)
+		}
 		return runAgentServer(normalized, *serve, stderr)
 	}
 	return runOnce(normalized, stdin, stdout, stderr)
 }
 
 type agentServerOptions struct {
-	bind   string
-	secret string
+	bind               string
+	secret             string
+	leader             bool
+	noExitOnDisconnect bool
 }
 
 func normalizeAgentArgs(args []string) ([]string, *agentServerOptions, error) {
@@ -70,6 +83,8 @@ func normalizeAgentArgs(args []string) ([]string, *agentServerOptions, error) {
 		case "--always-approve", "--yolo":
 			result = append(result, "--always-approve")
 		case "--no-leader":
+		case "--no-exit-on-disconnect":
+			server.noExitOnDisconnect = true
 		case "--trust", "--disable-web-search", "--no-plan", "--no-subagents", "--no-ask-user",
 			"--experimental-memory", "--no-memory":
 			result = append(result, arg)
@@ -104,8 +119,18 @@ func normalizeAgentArgs(args []string) ([]string, *agentServerOptions, error) {
 	if mode == "" {
 		return nil, nil, errors.New("agent headless mode is not implemented; use `gork agent stdio` for ACP")
 	}
-	if mode == "headless" || mode == "leader" {
+	if mode == "headless" {
 		return nil, nil, fmt.Errorf("agent %s mode is not implemented", mode)
+	}
+	if mode == "leader" {
+		if serverOptionSet {
+			return nil, nil, errors.New("--bind and --secret require agent serve")
+		}
+		server.leader = true
+		return result, &server, nil
+	}
+	if server.noExitOnDisconnect {
+		return nil, nil, errors.New("--no-exit-on-disconnect requires agent leader")
 	}
 	if mode == "serve" {
 		if strings.TrimSpace(server.bind) == "" {
@@ -117,6 +142,27 @@ func normalizeAgentArgs(args []string) ([]string, *agentServerOptions, error) {
 		return nil, nil, errors.New("--bind and --secret require agent serve")
 	}
 	return result, nil, nil
+}
+
+func runAgentLeader(args []string, options agentServerOptions, stdin io.Reader, stdout, stderr io.Writer) error {
+	configPath, err := config.DefaultPath()
+	if err != nil {
+		return err
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	server, err := leader.Start(ctx, leader.ServerConfig{
+		Root: filepath.Dir(configPath), BinaryVersion: version.Current,
+		NoExitOnDisconnect: options.noExitOnDisconnect,
+	})
+	if err != nil {
+		return err
+	}
+	defer server.Close()
+	fmt.Fprintf(stderr, "[gork] leader listening on %s\n", server.SocketPath())
+	runErr := runOnce(args, server, server, stderr)
+	closeErr := server.Close()
+	return errors.Join(runErr, closeErr, server.Wait())
 }
 
 func agentValueOption(arg string) bool {
@@ -131,7 +177,7 @@ func agentValueOption(arg string) bool {
 	return false
 }
 
-const agentHelp = `Usage: gork agent [options] <stdio|serve>
+const agentHelp = `Usage: gork agent [options] <stdio|serve|leader>
 
 Run the agent over Agent Client Protocol JSON-RPC stdio or WebSocket.
 
@@ -153,4 +199,7 @@ Supported options:
 Serve options:
       --bind ADDRESS       listen address (default 127.0.0.1:2419)
       --secret TOKEN       bearer or server-key token (or GROK_AGENT_SECRET)
+
+Leader options:
+      --no-exit-on-disconnect
 `

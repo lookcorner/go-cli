@@ -47,6 +47,10 @@ func TestNormalizeAgentArgs(t *testing.T) {
 	if err != nil || server == nil || server.secret != "environment-token" {
 		t.Fatalf("environment secret options=%+v err=%v", server, err)
 	}
+	got, server, err = normalizeAgentArgs([]string{"--no-exit-on-disconnect", "leader"})
+	if err != nil || server == nil || !server.leader || !server.noExitOnDisconnect || strings.Join(got, " ") != "--acp" {
+		t.Fatalf("leader normalized=%q options=%+v err=%v", got, server, err)
+	}
 }
 
 func TestAgentRejectsUnimplementedModesAndOptions(t *testing.T) {
@@ -56,10 +60,10 @@ func TestAgentRejectsUnimplementedModesAndOptions(t *testing.T) {
 	}{
 		{nil, "headless mode"},
 		{[]string{"headless"}, "headless mode"},
-		{[]string{"leader"}, "leader mode"},
 		{[]string{"--leader", "stdio"}, "leader connection"},
 		{[]string{"--plugin-dir", "/tmp/plugin", "stdio"}, "not implemented"},
 		{[]string{"--bind", "127.0.0.1:0", "stdio"}, "require agent serve"},
+		{[]string{"--no-exit-on-disconnect", "stdio"}, "requires agent leader"},
 		{[]string{"--model=", "stdio"}, "unknown agent option"},
 		{[]string{"unknown"}, "unknown agent mode"},
 	} {
