@@ -143,6 +143,12 @@ func (s *Server) SocketPath() string {
 	return s.info.SocketPath
 }
 
+func SocketPath(root string) string {
+	server := Server{config: ServerConfig{Root: root}}
+	socketPath, _ := server.paths()
+	return socketPath
+}
+
 func (s *Server) Wait() error {
 	return <-s.done
 }

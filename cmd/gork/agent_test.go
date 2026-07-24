@@ -32,8 +32,8 @@ func TestNormalizeAgentArgs(t *testing.T) {
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("normalized=%q want=%q", got, want)
 	}
-	if server != nil {
-		t.Fatalf("stdio server options=%+v", server)
+	if server == nil || server.mode != "stdio" || !server.noLeader {
+		t.Fatalf("stdio options=%+v", server)
 	}
 	got, server, err = normalizeAgentArgs([]string{"stdio", "--model=grok-4", "--permission-mode=deny"})
 	if err != nil || strings.Join(got, " ") != "--acp --model=grok-4 --permission-mode=deny" {
@@ -48,8 +48,12 @@ func TestNormalizeAgentArgs(t *testing.T) {
 		t.Fatalf("environment secret options=%+v err=%v", server, err)
 	}
 	got, server, err = normalizeAgentArgs([]string{"--no-exit-on-disconnect", "leader"})
-	if err != nil || server == nil || !server.leader || !server.noExitOnDisconnect || strings.Join(got, " ") != "--acp" {
+	if err != nil || server == nil || server.mode != "leader" || !server.noExitOnDisconnect || strings.Join(got, " ") != "--acp" {
 		t.Fatalf("leader normalized=%q options=%+v err=%v", got, server, err)
+	}
+	got, server, err = normalizeAgentArgs([]string{"--leader", "stdio"})
+	if err != nil || server == nil || !server.forceLeader || strings.Join(got, " ") != "--acp" {
+		t.Fatalf("follower normalized=%q options=%+v err=%v", got, server, err)
 	}
 }
 
@@ -60,7 +64,8 @@ func TestAgentRejectsUnimplementedModesAndOptions(t *testing.T) {
 	}{
 		{nil, "headless mode"},
 		{[]string{"headless"}, "headless mode"},
-		{[]string{"--leader", "stdio"}, "leader connection"},
+		{[]string{"--leader", "--no-leader", "stdio"}, "cannot be used together"},
+		{[]string{"--leader", "leader"}, "require agent stdio"},
 		{[]string{"--plugin-dir", "/tmp/plugin", "stdio"}, "not implemented"},
 		{[]string{"--bind", "127.0.0.1:0", "stdio"}, "require agent serve"},
 		{[]string{"--no-exit-on-disconnect", "stdio"}, "requires agent leader"},

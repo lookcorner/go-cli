@@ -8,17 +8,15 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 
-	"github.com/lookcorner/go-cli/internal/config"
 	"github.com/lookcorner/go-cli/internal/leader"
 	"github.com/lookcorner/go-cli/internal/version"
 )
 
 func runAgent(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
-	normalized, serve, err := normalizeAgentArgs(args)
+	normalized, options, err := normalizeAgentArgs(args)
 	if errors.Is(err, flag.ErrHelp) {
 		fmt.Fprint(stderr, agentHelp)
 		return nil
@@ -26,11 +24,14 @@ func runAgent(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if serve != nil {
-		if serve.leader {
-			return runAgentLeader(normalized, *serve, stdin, stdout, stderr)
-		}
-		return runAgentServer(normalized, *serve, stderr)
+	switch options.mode {
+	case "leader":
+		return runAgentLeader(normalized, *options, stdin, stdout, stderr)
+	case "serve":
+		return runAgentServer(normalized, *options, stderr)
+	}
+	if options.forceLeader || (!options.noLeader && agentConfigUsesLeader(normalized)) {
+		return runAgentFollower(normalized, stdin, stdout)
 	}
 	return runOnce(normalized, stdin, stdout, stderr)
 }
@@ -38,7 +39,9 @@ func runAgent(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 type agentServerOptions struct {
 	bind               string
 	secret             string
-	leader             bool
+	mode               string
+	forceLeader        bool
+	noLeader           bool
 	noExitOnDisconnect bool
 }
 
@@ -83,6 +86,7 @@ func normalizeAgentArgs(args []string) ([]string, *agentServerOptions, error) {
 		case "--always-approve", "--yolo":
 			result = append(result, "--always-approve")
 		case "--no-leader":
+			server.noLeader = true
 		case "--no-exit-on-disconnect":
 			server.noExitOnDisconnect = true
 		case "--trust", "--disable-web-search", "--no-plan", "--no-subagents", "--no-ask-user",
@@ -91,7 +95,7 @@ func normalizeAgentArgs(args []string) ([]string, *agentServerOptions, error) {
 		case "-h", "--help":
 			return nil, nil, flag.ErrHelp
 		case "--leader":
-			return nil, nil, errors.New("agent leader connection is not implemented")
+			server.forceLeader = true
 		case "--reauth", "--reauthenticate", "--agent-profile", "--plugin-dir",
 			"--grok-ws-origin", "--grok-ws-url", "--cli-chat-proxy-base-url", "--xai-api-base-url":
 			return nil, nil, fmt.Errorf("agent option %q is not implemented", cleanCLIText(arg))
@@ -122,11 +126,17 @@ func normalizeAgentArgs(args []string) ([]string, *agentServerOptions, error) {
 	if mode == "headless" {
 		return nil, nil, fmt.Errorf("agent %s mode is not implemented", mode)
 	}
+	if server.forceLeader && server.noLeader {
+		return nil, nil, errors.New("--leader and --no-leader cannot be used together")
+	}
+	server.mode = mode
 	if mode == "leader" {
 		if serverOptionSet {
 			return nil, nil, errors.New("--bind and --secret require agent serve")
 		}
-		server.leader = true
+		if server.forceLeader || server.noLeader {
+			return nil, nil, errors.New("--leader and --no-leader require agent stdio")
+		}
 		return result, &server, nil
 	}
 	if server.noExitOnDisconnect {
@@ -141,18 +151,23 @@ func normalizeAgentArgs(args []string) ([]string, *agentServerOptions, error) {
 	if serverOptionSet {
 		return nil, nil, errors.New("--bind and --secret require agent serve")
 	}
-	return result, nil, nil
+	return result, &server, nil
 }
 
 func runAgentLeader(args []string, options agentServerOptions, stdin io.Reader, stdout, stderr io.Writer) error {
-	configPath, err := config.DefaultPath()
+	opts, _, err := parseRunOptions(args, io.Discard)
+	if err != nil {
+		return err
+	}
+	root, err := agentLeaderRoot(opts.configPath)
 	if err != nil {
 		return err
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	server, err := leader.Start(ctx, leader.ServerConfig{
-		Root: filepath.Dir(configPath), BinaryVersion: version.Current,
+		Root: root, SocketPath: leaderSocketPath(root),
+		BinaryVersion:      version.Current,
 		NoExitOnDisconnect: options.noExitOnDisconnect,
 	})
 	if err != nil {
@@ -185,6 +200,7 @@ Supported options:
   -m, --model MODEL
       --reasoning-effort EFFORT
       --always-approve, --yolo
+      --leader
       --no-leader
       --config PATH
       --cwd DIR, --workspace DIR

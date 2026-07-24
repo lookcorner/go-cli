@@ -903,13 +903,17 @@ editor/IDE integrations:
 ```sh
 ./gork --acp
 ./gork agent stdio
+./gork agent --leader stdio
 ./gork agent --secret TOKEN serve
 ./gork agent --model MODEL leader
 ```
 
 `gork agent stdio` is the reference command form and uses the same ACP runtime
 as `--acp`. It accepts model, reasoning, permission, workspace, session,
-folder-trust, memory, and capability flags before `stdio`. `agent serve`
+folder-trust, memory, and capability flags before `stdio`. Shared leader use is
+disabled by default. Set `[cli] use_leader = true` in `config.toml` or pass
+`--leader` to connect to an existing Unix leader and start one when needed;
+`--no-leader` always forces the local ACP runtime. `agent serve`
 exposes the same persistent runtime at `ws://127.0.0.1:2419/ws` by default.
 Authenticate with `Authorization: Bearer TOKEN` or the `server-key=TOKEN`
 query parameter. Set the token with `--secret` or `GROK_AGENT_SECRET`; when

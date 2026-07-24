@@ -86,6 +86,7 @@ type Config struct {
 	FolderTrustEnabled              bool                       `json:"folder_trust_enabled"`
 	AutoWakeEnabled                 bool                       `json:"-"`
 	FeedbackEnabled                 bool                       `json:"-"`
+	UseLeader                       bool                       `json:"-"`
 	ModelProfiles                   map[string]ModelProfile    `json:"-"`
 	AllowedModels                   []string                   `json:"-"`
 	HiddenModels                    []string                   `json:"-"`
@@ -411,7 +412,10 @@ type fileConfig struct {
 	Skills             SkillsConfig               `json:"skills,omitempty" toml:"skills"`
 	Plugins            PluginsConfig              `json:"plugins,omitempty" toml:"plugins"`
 	Marketplace        MarketplaceConfig          `json:"marketplace,omitempty" toml:"marketplace"`
-	Features           struct {
+	CLI                struct {
+		UseLeader *bool `json:"use_leader,omitempty" toml:"use_leader"`
+	} `json:"cli,omitempty" toml:"cli"`
+	Features struct {
 		WebFetch          *bool `json:"web_fetch,omitempty" toml:"web_fetch"`
 		AutoWake          *bool `json:"auto_wake,omitempty" toml:"auto_wake"`
 		Feedback          *bool `json:"feedback,omitempty" toml:"feedback"`
@@ -1063,6 +1067,9 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.FolderTrust.Enabled != nil {
 		cfg.FolderTrustEnabled = *disk.FolderTrust.Enabled
+	}
+	if disk.CLI.UseLeader != nil {
+		cfg.UseLeader = *disk.CLI.UseLeader
 	}
 	if disk.Endpoints.CLIChatProxyBaseURL != "" {
 		cfg.ProxyBaseURL = strings.TrimRight(disk.Endpoints.CLIChatProxyBaseURL, "/")
