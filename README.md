@@ -583,10 +583,10 @@ without creating a model turn.
 `/dashboard` (also `/sessions` and `/agents-dashboard`) opens an interactive
 overview of active and stored sessions, subagents, background processes, and
 scheduled tasks. Enter opens details or switches sessions, `Ctrl+T` pins a
-session, `Ctrl+R` renames an active or stored session, `X` stops a selected
-running subagent or process, `D` confirms deletion of an idle session, and `R`
-refreshes the snapshot.
-Pinned session IDs persist in `[dashboard].pinned` in the user config.
+session, `Shift+Up/Down` changes its manual order, `Ctrl+R` renames an active or
+stored session, `X` stops a selected running subagent or process, `D` confirms
+deletion of an idle session, and `R` refreshes the snapshot. Pinned and manually
+ordered session IDs persist in `[dashboard].pinned` and `[dashboard].reorder`.
 `/recap` makes a tool-free, display-only model call against the current
 conversation. It can run beside an active turn, never enters the prompt queue or
 changes conversation history, and discards its result if a newer prompt starts.

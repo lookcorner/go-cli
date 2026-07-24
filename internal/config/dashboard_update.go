@@ -18,7 +18,26 @@ func UpdateDashboardPinned(path string, ids []string) error {
 	})
 }
 
+func UpdateDashboardReorder(path string, ids []string) error {
+	ids = cleanDashboardSessionOrder(ids)
+	return updateUserConfig(path, func(root map[string]any) error {
+		dashboard, _ := root["dashboard"].(map[string]any)
+		if dashboard == nil {
+			dashboard = make(map[string]any)
+		}
+		dashboard["reorder"] = ids
+		root["dashboard"] = dashboard
+		return nil
+	})
+}
+
 func cleanDashboardSessionIDs(ids []string) []string {
+	cleaned := cleanDashboardSessionOrder(ids)
+	sort.Strings(cleaned)
+	return cleaned
+}
+
+func cleanDashboardSessionOrder(ids []string) []string {
 	seen := make(map[string]struct{}, len(ids))
 	cleaned := make([]string, 0, len(ids))
 	for _, id := range ids {
@@ -32,6 +51,5 @@ func cleanDashboardSessionIDs(ids []string) []string {
 		seen[id] = struct{}{}
 		cleaned = append(cleaned, id)
 	}
-	sort.Strings(cleaned)
 	return cleaned
 }

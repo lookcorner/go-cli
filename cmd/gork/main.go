@@ -860,6 +860,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			ShowTimestamps:    cfg.UI.ShowTimestamps,
 			ShowTimeline:      cfg.UI.ShowTimeline,
 			DashboardPinned:   cfg.Dashboard.Pinned,
+			DashboardReorder:  cfg.Dashboard.Reorder,
 			Theme:             cfg.UI.Theme,
 			SetVimMode:        func(enabled bool) error { return config.UpdateVimMode(opts.configPath, enabled) },
 			SetCompactMode:    func(enabled bool) error { return config.UpdateCompactMode(opts.configPath, enabled) },
@@ -867,6 +868,9 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			SetShowTimeline:   func(enabled bool) error { return config.UpdateShowTimeline(opts.configPath, enabled) },
 			SetDashboardPinned: func(ids []string) error {
 				return config.UpdateDashboardPinned(opts.configPath, ids)
+			},
+			SetDashboardReorder: func(ids []string) error {
+				return config.UpdateDashboardReorder(opts.configPath, ids)
 			},
 			SetTheme:  func(value string) error { return config.UpdateTheme(opts.configPath, value) },
 			ForkInGit: forkGitErr == nil,

@@ -216,7 +216,8 @@ type UIConfig struct {
 }
 
 type DashboardConfig struct {
-	Pinned []string `json:"pinned,omitempty" toml:"pinned"`
+	Pinned  []string `json:"pinned,omitempty" toml:"pinned"`
+	Reorder []string `json:"reorder,omitempty" toml:"reorder"`
 }
 
 type GoalConfig struct {
@@ -939,6 +940,9 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.Dashboard.Pinned != nil {
 		cfg.Dashboard.Pinned = cleanDashboardSessionIDs(disk.Dashboard.Pinned)
+	}
+	if disk.Dashboard.Reorder != nil {
+		cfg.Dashboard.Reorder = cleanDashboardSessionOrder(disk.Dashboard.Reorder)
 	}
 	if disk.Goal.VerifierCount != nil {
 		cfg.Goal.VerifierCount = normalizedGoalVerifierCount(*disk.Goal.VerifierCount)

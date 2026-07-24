@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -294,6 +295,51 @@ func TestDashboardPinsSessionsAndPreservesSelection(t *testing.T) {
 	m.dashboard.selected = 2
 	pressDashboardKey(t, m, tea.Key{Code: 't', Mod: tea.ModCtrl})
 	if m.dashboard.err != "Only sessions can be pinned" {
+		t.Fatalf("state=%#v", m.dashboard)
+	}
+}
+
+func TestDashboardReordersSessionsAndCleansStaleReferences(t *testing.T) {
+	var persisted []string
+	m := &model{
+		runner:         dashboardFixtureRunner(),
+		workspace:      "/work",
+		modelName:      "grok",
+		dashboardPins:  map[string]bool{"ghost": true},
+		dashboardOrder: []string{"ghost", "b", "b", "a"},
+		persistOrder: func(ids []string) error {
+			persisted = append([]string(nil), ids...)
+			return nil
+		},
+		dashboard: &dashboardState{sessions: []session.Info{
+			{SessionID: "a", Title: "A", CWD: "/a"},
+			{SessionID: "b", Title: "B", CWD: "/b"},
+			{SessionID: "c", Title: "C", CWD: "/c"},
+		}},
+	}
+	m.refreshDashboard()
+	if m.dashboardPins["ghost"] || !slices.Equal(m.dashboardOrder, []string{"b", "a"}) || m.dashboard.rows[1].id != "b" {
+		t.Fatalf("pins=%v order=%v rows=%#v", m.dashboardPins, m.dashboardOrder, m.dashboard.rows)
+	}
+	m.dashboard.selected = 1
+	pressDashboardKey(t, m, tea.Key{Code: tea.KeyDown, Mod: tea.ModShift})
+	if !slices.Equal(persisted, []string{"a", "b"}) || m.dashboard.rows[m.dashboard.selected].id != "b" || m.dashboard.selected != 2 || m.status != "session moved down" {
+		t.Fatalf("persisted=%v selected=%d rows=%#v status=%q", persisted, m.dashboard.selected, m.dashboard.rows, m.status)
+	}
+	pressDashboardKey(t, m, tea.Key{Code: tea.KeyUp, Mod: tea.ModShift})
+	if !slices.Equal(persisted, []string{"b", "a"}) || m.dashboard.rows[m.dashboard.selected].id != "b" || m.dashboard.selected != 1 || m.status != "session moved up" {
+		t.Fatalf("persisted=%v selected=%d rows=%#v status=%q", persisted, m.dashboard.selected, m.dashboard.rows, m.status)
+	}
+
+	m.persistOrder = func([]string) error { return errors.New("read only") }
+	pressDashboardKey(t, m, tea.Key{Code: tea.KeyDown, Mod: tea.ModShift})
+	if !slices.Equal(m.dashboardOrder, []string{"b", "a"}) || m.dashboard.err != "read only" || m.status != "reorder session failed" {
+		t.Fatalf("order=%v state=%#v status=%q", m.dashboardOrder, m.dashboard, m.status)
+	}
+
+	m.dashboard.selected = 4
+	pressDashboardKey(t, m, tea.Key{Code: tea.KeyUp, Mod: tea.ModShift})
+	if m.dashboard.err != "Only sessions can be reordered" {
 		t.Fatalf("state=%#v", m.dashboard)
 	}
 }

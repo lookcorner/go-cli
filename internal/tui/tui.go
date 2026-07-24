@@ -558,9 +558,13 @@ type model struct {
 	claudeImport  *claudeImportState
 	extensions    *extensionsState
 	agentConfig   *agentConfigState
-	dashboard     *dashboardState
-	dashboardPins map[string]bool
-	persistPins   func([]string) error
+
+	dashboard      *dashboardState
+	dashboardPins  map[string]bool
+	persistPins    func([]string) error
+	dashboardOrder []string
+	persistOrder   func([]string) error
+
 	debug         debugState
 	lastEmptyEsc  time.Time
 	questionClick struct {
@@ -635,6 +639,8 @@ type UIOptions struct {
 	ForkInGit            bool
 	DashboardPinned      []string
 	SetDashboardPinned   func([]string) error
+	DashboardReorder     []string
+	SetDashboardReorder  func([]string) error
 }
 
 type transcriptMessage struct {
@@ -756,6 +762,8 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		forkInGit:          options.ForkInGit,
 		dashboardPins:      make(map[string]bool, len(options.DashboardPinned)),
 		persistPins:        options.SetDashboardPinned,
+		dashboardOrder:     append([]string(nil), options.DashboardReorder...),
+		persistOrder:       options.SetDashboardReorder,
 		debug:              newDebugState(),
 	}
 	for _, id := range options.DashboardPinned {

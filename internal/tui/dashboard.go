@@ -115,6 +115,9 @@ func (m *model) refreshDashboard() {
 		return
 	}
 	state := m.dashboard
+	if !state.loading {
+		m.cleanDashboardRefs()
+	}
 	var selected dashboardRow
 	hasSelection := state.selected >= 0 && state.selected < len(state.rows)
 	if hasSelection {
@@ -130,7 +133,24 @@ func (m *model) refreshDashboard() {
 		detail := dashboardFirst(item.ModelID, "unknown model") + " · " + dashboardFirst(item.DisplayCWD, item.CWD)
 		rows = append(rows, dashboardRow{kind: dashboardStoredSession, id: item.SessionID, pinned: m.dashboardPins[item.SessionID], status: "idle", title: title, detail: detail, session: item})
 	}
-	sort.SliceStable(rows, func(i, j int) bool { return rows[i].pinned && !rows[j].pinned })
+	order := make(map[string]int, len(m.dashboardOrder))
+	for i, id := range m.dashboardOrder {
+		order[id] = i
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		if rows[i].pinned != rows[j].pinned {
+			return rows[i].pinned
+		}
+		if rows[i].status != rows[j].status {
+			return rows[i].status == "active"
+		}
+		iPos, iOrdered := order[rows[i].id]
+		jPos, jOrdered := order[rows[j].id]
+		if iOrdered != jOrdered {
+			return iOrdered
+		}
+		return iOrdered && iPos < jPos
+	})
 	snapshot := m.runner.TaskSnapshot()
 	subagents := slices.Clone(snapshot.Subagents)
 	sort.Slice(subagents, func(i, j int) bool {
@@ -220,7 +240,7 @@ func (m *model) dashboardHint() string {
 	if m.dashboard != nil && m.dashboard.renameID != "" {
 		return "Enter save | Esc cancel | Left/Right move cursor"
 	}
-	return "Enter view/switch | Ctrl+T pin | Ctrl+R rename | X stop running | D delete idle session | R refresh | Esc close"
+	return "Enter view/switch | Ctrl+T pin | Shift+Up/Down reorder | Ctrl+R rename | X stop | D delete | R refresh | Esc close"
 }
 
 func (m *model) handleDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -253,6 +273,8 @@ func (m *model) handleDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	switch {
+	case (stroke == "shift+up" || stroke == "shift+down") && len(state.rows) > 0:
+		m.reorderDashboard(state.rows[state.selected], stroke == "shift+up")
 	case stroke == "up" || text == "k":
 		state.selected = max(0, state.selected-1)
 	case stroke == "down" || text == "j":
@@ -293,6 +315,68 @@ func (m *model) handleDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+func (m *model) cleanDashboardRefs() {
+	alive := map[string]bool{m.runner.SessionID: true}
+	for _, item := range m.dashboard.sessions {
+		alive[item.SessionID] = true
+	}
+	for id := range m.dashboardPins {
+		if !alive[id] {
+			delete(m.dashboardPins, id)
+		}
+	}
+	seen := make(map[string]bool, len(m.dashboardOrder))
+	cleaned := m.dashboardOrder[:0]
+	for _, id := range m.dashboardOrder {
+		if alive[id] && !seen[id] {
+			cleaned = append(cleaned, id)
+			seen[id] = true
+		}
+	}
+	m.dashboardOrder = cleaned
+}
+
+func (m *model) reorderDashboard(row dashboardRow, up bool) {
+	state := m.dashboard
+	if row.kind != dashboardSession && row.kind != dashboardStoredSession {
+		state.err = "Only sessions can be reordered"
+		return
+	}
+	previous := slices.Clone(m.dashboardOrder)
+	position := slices.Index(m.dashboardOrder, row.id)
+	if up {
+		switch {
+		case position == 0:
+			m.dashboardOrder = m.dashboardOrder[1:]
+		case position > 0:
+			m.dashboardOrder[position], m.dashboardOrder[position-1] = m.dashboardOrder[position-1], m.dashboardOrder[position]
+		default:
+			m.dashboardOrder = append([]string{row.id}, m.dashboardOrder...)
+		}
+	} else {
+		switch {
+		case position >= 0 && position+1 < len(m.dashboardOrder):
+			m.dashboardOrder[position], m.dashboardOrder[position+1] = m.dashboardOrder[position+1], m.dashboardOrder[position]
+		case position < 0:
+			m.dashboardOrder = append(m.dashboardOrder, row.id)
+		}
+	}
+	if m.persistOrder != nil {
+		if err := m.persistOrder(slices.Clone(m.dashboardOrder)); err != nil {
+			m.dashboardOrder = previous
+			state.err = err.Error()
+			m.status = "reorder session failed"
+			return
+		}
+	}
+	m.refreshDashboard()
+	if up {
+		m.status = "session moved up"
+	} else {
+		m.status = "session moved down"
+	}
 }
 
 func (m *model) toggleDashboardPin(row dashboardRow) {
