@@ -859,13 +859,17 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			CompactMode:       cfg.UI.CompactMode,
 			ShowTimestamps:    cfg.UI.ShowTimestamps,
 			ShowTimeline:      cfg.UI.ShowTimeline,
+			DashboardPinned:   cfg.Dashboard.Pinned,
 			Theme:             cfg.UI.Theme,
 			SetVimMode:        func(enabled bool) error { return config.UpdateVimMode(opts.configPath, enabled) },
 			SetCompactMode:    func(enabled bool) error { return config.UpdateCompactMode(opts.configPath, enabled) },
 			SetShowTimestamps: func(enabled bool) error { return config.UpdateShowTimestamps(opts.configPath, enabled) },
 			SetShowTimeline:   func(enabled bool) error { return config.UpdateShowTimeline(opts.configPath, enabled) },
-			SetTheme:          func(value string) error { return config.UpdateTheme(opts.configPath, value) },
-			ForkInGit:         forkGitErr == nil,
+			SetDashboardPinned: func(ids []string) error {
+				return config.UpdateDashboardPinned(opts.configPath, ids)
+			},
+			SetTheme:  func(value string) error { return config.UpdateTheme(opts.configPath, value) },
+			ForkInGit: forkGitErr == nil,
 			ForkSession: func(forkCtx context.Context, isolated bool) (tui.ForkResult, error) {
 				return forkCurrentSession(forkCtx, worktreeManager, filepath.Dir(logger.Path()), logger.ID(), ws.Root(), runner.ModelID, isolated)
 			},

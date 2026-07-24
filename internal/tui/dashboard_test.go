@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -160,7 +161,8 @@ func TestDashboardRenamesActiveSessionWithUnicodeEditing(t *testing.T) {
 	updated, _ := m.Update(load())
 	m = updated.(*model)
 
-	pressDashboardKey(t, m, tea.Key{Code: 'e', Text: "e"})
+	pressDashboardKey(t, m, tea.Key{Code: 'r', Mod: tea.ModCtrl})
+	pressDashboardKey(t, m, tea.Key{Code: 'c', Text: "Current"})
 	pressDashboardKey(t, m, tea.Key{Code: tea.KeyHome})
 	pressDashboardKey(t, m, tea.Key{Code: '新', Text: "新"})
 	pressDashboardKey(t, m, tea.Key{Code: tea.KeyRight})
@@ -168,7 +170,7 @@ func TestDashboardRenamesActiveSessionWithUnicodeEditing(t *testing.T) {
 	pressDashboardKey(t, m, tea.Key{Code: tea.KeyEnd})
 	pressDashboardKey(t, m, tea.Key{Code: tea.KeyLeft})
 	pressDashboardKey(t, m, tea.Key{Code: tea.KeyBackspace})
-	pressDashboardKey(t, m, tea.Key{Code: 'o', Text: "o"})
+	pressDashboardKey(t, m, tea.Key{Code: 'n', Text: "n"})
 	updated, rename := m.handleDashboardKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)
 	if rename == nil || !m.dashboard.busy {
@@ -177,7 +179,7 @@ func TestDashboardRenamesActiveSessionWithUnicodeEditing(t *testing.T) {
 	updated, _ = m.Update(rename())
 	m = updated.(*model)
 	info, err := session.InfoByID(dir, "current")
-	if err != nil || info.Title != "新Crrent session" || m.dashboard.rows[0].title != info.Title || m.status != "session renamed" {
+	if err != nil || info.Title != "新Crrent" || m.dashboard.rows[0].title != info.Title || m.status != "session renamed" {
 		t.Fatalf("info=%#v err=%v row=%#v status=%q", info, err, m.dashboard.rows[0], m.status)
 	}
 }
@@ -252,8 +254,47 @@ func TestDashboardRejectsInvalidRenameTargetsAndBlankTitles(t *testing.T) {
 	m.dashboard.renameInput, m.dashboard.renameCursor = []rune("   "), 3
 	updated, cmd := m.handleDashboardKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)
-	if cmd != nil || m.dashboard.err != "Session title must not be blank" || m.dashboard.renameID == "" {
+	if cmd != nil || m.dashboard.err != "" || m.dashboard.renameID != "" || m.status != "agent dashboard" {
 		t.Fatalf("cmd=%v state=%#v", cmd != nil, m.dashboard)
+	}
+}
+
+func TestDashboardPinsSessionsAndPreservesSelection(t *testing.T) {
+	var persisted []string
+	m := &model{
+		runner:        dashboardFixtureRunner(),
+		workspace:     "/work",
+		modelName:     "grok",
+		dashboardPins: map[string]bool{"other": true},
+		persistPins: func(ids []string) error {
+			persisted = append([]string(nil), ids...)
+			return nil
+		},
+		dashboard: &dashboardState{sessions: []session.Info{{SessionID: "other", Title: "Other", CWD: "/other"}}},
+	}
+	m.refreshDashboard()
+	if m.dashboard.rows[0].id != "other" || !m.dashboard.rows[0].pinned || !strings.Contains(m.dashboardContent(), "* idle") {
+		t.Fatalf("rows=%#v\n%s", m.dashboard.rows, m.dashboardContent())
+	}
+	pressDashboardKey(t, m, tea.Key{Code: 't', Mod: tea.ModCtrl})
+	if len(persisted) != 0 || m.dashboardPins["other"] || m.dashboard.rows[m.dashboard.selected].id != "other" || m.status != "session unpinned" {
+		t.Fatalf("persisted=%v pins=%v selected=%d rows=%#v status=%q", persisted, m.dashboardPins, m.dashboard.selected, m.dashboard.rows, m.status)
+	}
+	pressDashboardKey(t, m, tea.Key{Code: 't', Mod: tea.ModCtrl})
+	if !m.dashboardPins["other"] || len(persisted) != 1 || persisted[0] != "other" || m.status != "session pinned" {
+		t.Fatalf("persisted=%v pins=%v status=%q", persisted, m.dashboardPins, m.status)
+	}
+
+	m.persistPins = func([]string) error { return errors.New("disk full") }
+	pressDashboardKey(t, m, tea.Key{Code: 't', Mod: tea.ModCtrl})
+	if !m.dashboardPins["other"] || m.dashboard.err != "disk full" || m.status != "pin session failed" {
+		t.Fatalf("pins=%v state=%#v status=%q", m.dashboardPins, m.dashboard, m.status)
+	}
+
+	m.dashboard.selected = 2
+	pressDashboardKey(t, m, tea.Key{Code: 't', Mod: tea.ModCtrl})
+	if m.dashboard.err != "Only sessions can be pinned" {
+		t.Fatalf("state=%#v", m.dashboard)
 	}
 }
 

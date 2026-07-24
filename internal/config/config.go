@@ -69,6 +69,7 @@ type Config struct {
 	Toolset                         ToolsetConfig              `json:"toolset"`
 	Goal                            GoalConfig                 `json:"goal"`
 	UI                              UIConfig                   `json:"ui"`
+	Dashboard                       DashboardConfig            `json:"dashboard"`
 	AuthProviderCommand             string                     `json:"auth_provider_command,omitempty"`
 	AuthTokenTTL                    time.Duration              `json:"-"`
 	AuthPrincipalType               string                     `json:"auth_principal_type,omitempty"`
@@ -212,6 +213,10 @@ type UIConfig struct {
 	InvertScroll         bool    `json:"invert_scroll,omitempty"`
 	PromptSuggestions    bool    `json:"prompt_suggestions"`
 	PermissionMode       string  `json:"permission_mode"`
+}
+
+type DashboardConfig struct {
+	Pinned []string `json:"pinned,omitempty" toml:"pinned"`
 }
 
 type GoalConfig struct {
@@ -421,6 +426,7 @@ type fileConfig struct {
 	} `json:"toolset,omitempty" toml:"toolset"`
 	Goal        fileGoalConfig        `json:"goal,omitempty" toml:"goal"`
 	UI          fileUIConfig          `json:"ui,omitempty" toml:"ui"`
+	Dashboard   DashboardConfig       `json:"dashboard,omitempty" toml:"dashboard"`
 	Endpoints   fileEndpointsConfig   `json:"endpoints,omitempty" toml:"endpoints"`
 	FolderTrust fileFolderTrustConfig `json:"folder_trust,omitempty" toml:"folder_trust"`
 }
@@ -930,6 +936,9 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 		}
 		cfg.UI.PermissionMode = mode
 		cfg.uiPermissionModeConfigured = true
+	}
+	if disk.Dashboard.Pinned != nil {
+		cfg.Dashboard.Pinned = cleanDashboardSessionIDs(disk.Dashboard.Pinned)
 	}
 	if disk.Goal.VerifierCount != nil {
 		cfg.Goal.VerifierCount = normalizedGoalVerifierCount(*disk.Goal.VerifierCount)

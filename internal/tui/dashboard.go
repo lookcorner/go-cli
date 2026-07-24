@@ -28,6 +28,7 @@ const (
 type dashboardRow struct {
 	kind      dashboardRowKind
 	id        string
+	pinned    bool
 	status    string
 	title     string
 	detail    string
@@ -114,16 +115,22 @@ func (m *model) refreshDashboard() {
 		return
 	}
 	state := m.dashboard
+	var selected dashboardRow
+	hasSelection := state.selected >= 0 && state.selected < len(state.rows)
+	if hasSelection {
+		selected = state.rows[state.selected]
+	}
 	state.err = ""
-	rows := []dashboardRow{{kind: dashboardSession, id: m.runner.SessionID, status: "active", title: dashboardFirst(state.currentTitle, "Current session"), detail: m.modelName + " · " + m.workspace}}
+	rows := []dashboardRow{{kind: dashboardSession, id: m.runner.SessionID, pinned: m.dashboardPins[m.runner.SessionID], status: "active", title: dashboardFirst(state.currentTitle, "Current session"), detail: m.modelName + " · " + m.workspace}}
 	for _, item := range state.sessions {
 		if item.SessionID == m.runner.SessionID {
 			continue
 		}
 		title := dashboardFirst(item.Title, item.SessionID)
 		detail := dashboardFirst(item.ModelID, "unknown model") + " · " + dashboardFirst(item.DisplayCWD, item.CWD)
-		rows = append(rows, dashboardRow{kind: dashboardStoredSession, id: item.SessionID, status: "idle", title: title, detail: detail, session: item})
+		rows = append(rows, dashboardRow{kind: dashboardStoredSession, id: item.SessionID, pinned: m.dashboardPins[item.SessionID], status: "idle", title: title, detail: detail, session: item})
 	}
+	sort.SliceStable(rows, func(i, j int) bool { return rows[i].pinned && !rows[j].pinned })
 	snapshot := m.runner.TaskSnapshot()
 	subagents := slices.Clone(snapshot.Subagents)
 	sort.Slice(subagents, func(i, j int) bool {
@@ -162,6 +169,14 @@ func (m *model) refreshDashboard() {
 	}
 	state.rows = rows
 	state.selected = min(state.selected, max(len(rows)-1, 0))
+	if hasSelection {
+		for i, row := range rows {
+			if row.kind == selected.kind && row.id == selected.id {
+				state.selected = i
+				break
+			}
+		}
+	}
 }
 
 func (m *model) dashboardContent() string {
@@ -176,7 +191,11 @@ func (m *model) dashboardContent() string {
 		if index == state.selected {
 			cursor = "> "
 		}
-		fmt.Fprintf(&out, "%s%-10s %s\n    %s\n", cursor, row.status, row.title, row.detail)
+		pin := "  "
+		if row.pinned {
+			pin = "* "
+		}
+		fmt.Fprintf(&out, "%s%s%-10s %s\n      %s\n", cursor, pin, row.status, row.title, row.detail)
 	}
 	if state.err != "" {
 		out.WriteString("\nError: " + state.err + "\n")
@@ -201,7 +220,7 @@ func (m *model) dashboardHint() string {
 	if m.dashboard != nil && m.dashboard.renameID != "" {
 		return "Enter save | Esc cancel | Left/Right move cursor"
 	}
-	return "Enter view/switch | E rename session | X stop running | D delete idle session | R refresh | Esc close"
+	return "Enter view/switch | Ctrl+T pin | Ctrl+R rename | X stop running | D delete idle session | R refresh | Esc close"
 }
 
 func (m *model) handleDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -259,19 +278,65 @@ func (m *model) handleDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		} else {
 			state.pendingDelete = row.id
 		}
+	case stroke == "ctrl+t" && len(state.rows) > 0:
+		m.toggleDashboardPin(state.rows[state.selected])
 	case (text == "e" || stroke == "ctrl+r") && len(state.rows) > 0:
 		row := state.rows[state.selected]
 		if row.kind != dashboardSession && row.kind != dashboardStoredSession {
 			state.err = "Only sessions can be renamed"
 		} else {
 			state.renameID, state.renameKind = row.id, row.kind
-			state.renameInput = []rune(row.title)
-			state.renameCursor = len(state.renameInput)
+			state.renameInput = nil
+			state.renameCursor = 0
 			state.err = ""
 			m.status = "rename session"
 		}
 	}
 	return m, nil
+}
+
+func (m *model) toggleDashboardPin(row dashboardRow) {
+	state := m.dashboard
+	if row.kind != dashboardSession && row.kind != dashboardStoredSession {
+		state.err = "Only sessions can be pinned"
+		return
+	}
+	if m.dashboardPins == nil {
+		m.dashboardPins = make(map[string]bool)
+	}
+	wasPinned := m.dashboardPins[row.id]
+	if wasPinned {
+		delete(m.dashboardPins, row.id)
+	} else {
+		m.dashboardPins[row.id] = true
+	}
+	if m.persistPins != nil {
+		if err := m.persistPins(m.dashboardPinnedIDs()); err != nil {
+			if wasPinned {
+				m.dashboardPins[row.id] = true
+			} else {
+				delete(m.dashboardPins, row.id)
+			}
+			state.err = err.Error()
+			m.status = "pin session failed"
+			return
+		}
+	}
+	m.refreshDashboard()
+	if wasPinned {
+		m.status = "session unpinned"
+	} else {
+		m.status = "session pinned"
+	}
+}
+
+func (m *model) dashboardPinnedIDs() []string {
+	ids := make([]string, 0, len(m.dashboardPins))
+	for id := range m.dashboardPins {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 func (m *model) handleDashboardRenameKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -285,7 +350,9 @@ func (m *model) handleDashboardRenameKey(msg tea.KeyPressMsg) (tea.Model, tea.Cm
 	if key.Code == tea.KeyEnter {
 		title := strings.TrimSpace(string(state.renameInput))
 		if title == "" {
-			state.err = "Session title must not be blank"
+			state.renameID, state.renameInput, state.renameCursor = "", nil, 0
+			state.err = ""
+			m.status = "agent dashboard"
 			return m, nil
 		}
 		id, kind, dir := state.renameID, state.renameKind, state.dir

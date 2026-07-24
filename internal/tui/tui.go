@@ -559,6 +559,8 @@ type model struct {
 	extensions    *extensionsState
 	agentConfig   *agentConfigState
 	dashboard     *dashboardState
+	dashboardPins map[string]bool
+	persistPins   func([]string) error
 	debug         debugState
 	lastEmptyEsc  time.Time
 	questionClick struct {
@@ -631,6 +633,8 @@ type UIOptions struct {
 	SetTheme             func(string) error
 	ForkSession          func(context.Context, bool) (ForkResult, error)
 	ForkInGit            bool
+	DashboardPinned      []string
+	SetDashboardPinned   func([]string) error
 }
 
 type transcriptMessage struct {
@@ -750,7 +754,14 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		persistTheme:       options.SetTheme,
 		forkSession:        options.ForkSession,
 		forkInGit:          options.ForkInGit,
+		dashboardPins:      make(map[string]bool, len(options.DashboardPinned)),
+		persistPins:        options.SetDashboardPinned,
 		debug:              newDebugState(),
+	}
+	for _, id := range options.DashboardPinned {
+		if id = strings.TrimSpace(id); id != "" {
+			m.dashboardPins[id] = true
+		}
 	}
 	defer m.debug.closeLog()
 	if options.WordSeparators != nil {
