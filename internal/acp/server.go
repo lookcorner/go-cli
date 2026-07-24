@@ -50,6 +50,7 @@ type SessionConfig struct {
 	YoloMode        *bool
 	AutoMode        *bool
 	ClientHooks     []hooks.ClientHookGroup
+	HunkTrackerMode tools.HunkTrackerMode
 	MCPInitProgress func(total, connected int)
 	MCPReverseCall  MCPReverseCall
 }
@@ -136,6 +137,7 @@ type Server struct {
 	clientFS           *clientFSConfig
 	clientGitHead      bool
 	clientFolderTrust  bool
+	clientHunkMode     tools.HunkTrackerMode
 	trustMu            sync.Mutex
 	trustPrompted      map[string]bool
 	trustPromptTimeout time.Duration
@@ -269,6 +271,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 	s.clientFS = nil
 	s.clientGitHead = false
 	s.clientFolderTrust = false
+	s.clientHunkMode = tools.HunkTrackerOff
 	s.trustPrompted = make(map[string]bool)
 	s.trustContext, s.trustCancel = context.WithCancel(ctx)
 	manager, err := worktrees.NewManager(s.SessionDir)
@@ -300,6 +303,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.clientFS = parseClientFS(incoming.Params)
 			s.clientGitHead = parseClientGitHead(incoming.Params)
 			s.clientFolderTrust = parseClientFolderTrust(incoming.Params)
+			s.clientHunkMode = parseClientHunkTrackerMode(incoming.Params)
 			authConfig := s.authSnapshot()
 			meta := map[string]any{"availableCommands": availableCommands(nil, false)}
 			if authConfig.DefaultMethodID != "" {
@@ -1605,6 +1609,7 @@ func (s *Server) handleNewSession(ctx context.Context, incoming message) {
 		MCPSDKServers: parseMCPSDKServers(params.Meta),
 		DisplayCWD:    stringMeta(params.Meta, "x.ai/display_cwd"),
 		YoloMode:      yoloMode, AutoMode: autoMode, ClientHooks: parseClientHooks(params.Meta),
+		HunkTrackerMode: s.clientHunkMode,
 	}
 	mcpStarted := time.Now()
 	created, err := s.startSession(ctx, id, sessionConfig, "")
@@ -2561,7 +2566,7 @@ func (s *Server) handleRestoreSession(ctx context.Context, incoming message, rep
 		CWD: params.CWD, Title: title, Model: model, ReasoningEffort: reasoningEffort, SessionID: params.SessionID,
 		DisplayCWD: displayCWD,
 		ResumePath: path, MCPServers: servers, MCPSDKServers: parseMCPSDKServers(params.Meta), YoloMode: yoloMode, AutoMode: autoMode,
-		ClientHooks: parseClientHooks(params.Meta),
+		ClientHooks: parseClientHooks(params.Meta), HunkTrackerMode: s.clientHunkMode,
 	}
 	created, err := s.startSession(ctx, params.SessionID, config, previous)
 	if err != nil {

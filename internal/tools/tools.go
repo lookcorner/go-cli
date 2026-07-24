@@ -224,6 +224,10 @@ func (c *mutationCheckpoint) afterWorkspace(mutation *workspaceMutation) error {
 }
 
 func NewRegistry(ws *workspace.Workspace, approver Approver) *Registry {
+	return NewRegistryWithHunkMode(ws, approver, HunkTrackerAllDirty)
+}
+
+func NewRegistryWithHunkMode(ws *workspace.Workspace, approver Approver, mode HunkTrackerMode) *Registry {
 	processes := NewProcessManager(ws, approver)
 	subagents := &subagentHolder{}
 	todos := newTodoStore()
@@ -268,7 +272,7 @@ func NewRegistry(ws *workspace.Workspace, approver Approver) *Registry {
 	}
 	registry := &Registry{
 		tools: make(map[string]Tool, len(items)), approver: approver, processes: processes, goal: goal,
-		hunks: NewHunkTracker(ws), rewind: rewind, readFile: readFile, webFetch: webFetch,
+		hunks: NewHunkTracker(ws, mode), rewind: rewind, readFile: readFile, webFetch: webFetch,
 		subagents: subagents, scheduler: scheduler, ownsScheduler: true, plan: plan, questions: questions,
 		todos:       todos,
 		fileToolset: "standard", hashline: defaultHashlineConfig(),
@@ -464,8 +468,8 @@ func (r *Registry) ConfigureHunkState(artifactDir string) error {
 	if artifactDir == "" {
 		return errors.New("session artifact directory is required")
 	}
-	if r.hunks == nil {
-		return errors.New("hunk tracker unavailable")
+	if r.hunks == nil || r.hunks.mode == HunkTrackerOff {
+		return nil
 	}
 	return r.hunks.configureState(filepath.Join(artifactDir, "hunks.json"))
 }

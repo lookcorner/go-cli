@@ -1208,6 +1208,9 @@ signals, and stop with their session unless explicitly backgrounded.
 Git repositories also expose compatible hunk tracker ACP extensions:
 `x.ai/hunk-tracker/get-hunks`, `get-files`, `get-all-file-contents`,
 `get-summary`, `hunk-action`, `file-action`, `turn-action`, and `all-action`.
+Tracking defaults to agent-written files. Set `[ui].hunk_tracker_mode` to
+`all_dirty` to include every Git dirty file or `off` to disable tracking;
+`GROK_HUNK_TRACKER` and `--hunk-tracker-mode` override the config value.
 Core Git extensions are available through `x.ai/git/git_repo_root`, `status`,
 `current_commit`, `info`, `branches`, `stage`, `unstage`, `discard`, `stash`,
 `stage/content`, `checkout`, `checkout_session_head`, `checkout_commit`,

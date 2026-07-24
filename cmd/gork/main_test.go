@@ -326,14 +326,15 @@ func TestParseRunOptionsSupportsReferenceAliases(t *testing.T) {
 	opts, flags, err := parseRunOptions([]string{
 		"--cwd", "/work", "-m", "fast", "--effort", "max",
 		"--append-system-prompt", "be exact", "--max-turns", "7",
-		"--permission-mode", "auto", "-p", "inspect",
+		"--permission-mode", "auto", "--hunk-tracker-mode", "all_dirty", "-p", "inspect",
 	}, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if opts.workspace != "/work" || opts.model != "fast" || opts.reasoningEffort != "xhigh" ||
 		opts.rules != "be exact" || opts.maxSteps != 7 || opts.approval != "auto" ||
-		!opts.approvalSet || opts.single != "inspect" || len(flags.Args()) != 0 {
+		!opts.approvalSet || opts.hunkTrackerMode != "all_dirty" || !opts.hunkTrackerModeSet ||
+		opts.single != "inspect" || len(flags.Args()) != 0 {
 		t.Fatalf("options=%#v args=%v", opts, flags.Args())
 	}
 }
@@ -370,13 +371,13 @@ func TestApplyRunOverridesKeepsExplicitCLIValues(t *testing.T) {
 	opts := options{
 		model: "fast", reasoningEffort: "high", baseURL: "https://new.example/",
 		backend: "chat_completions", system: "override", maxSteps: 5,
-		sandbox: "READ-ONLY", sandboxSet: true,
+		sandbox: "READ-ONLY", sandboxSet: true, hunkTrackerMode: "Disabled", hunkTrackerModeSet: true,
 	}
 	applyRunOverrides(&cfg, opts)
 	if cfg.Model != "fast" || cfg.DefaultModelID != "" || cfg.ReasoningEffort != "high" ||
 		!cfg.ModelSupportsReasoningEffort || cfg.BaseURL != "https://new.example" ||
 		cfg.Backend != "chat_completions" || cfg.SystemPrompt != "override" ||
-		cfg.MaxSteps != 5 || cfg.Sandbox.Profile != "read-only" {
+		cfg.MaxSteps != 5 || cfg.Sandbox.Profile != "read-only" || cfg.UI.HunkTrackerMode != "off" {
 		t.Fatalf("config=%#v", cfg)
 	}
 }

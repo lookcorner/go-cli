@@ -343,6 +343,30 @@ func TestCursorBlinkPreservesTriStateAcrossConfigFormats(t *testing.T) {
 	}
 }
 
+func TestHunkTrackerModeUsesConfigAndEnvironmentPrecedence(t *testing.T) {
+	for _, test := range []struct {
+		name, filename, content, environment, want string
+	}{
+		{name: "default", filename: "config.toml", content: "[ui]\n", want: "agent_only"},
+		{name: "TOML all dirty", filename: "config.toml", content: "[ui]\nhunk_tracker_mode = \" ALL_DIRTY \"\n", want: "all_dirty"},
+		{name: "JSON disabled alias", filename: "config.json", content: `{"ui":{"hunk_tracker_mode":"Disabled"}}`, want: "off"},
+		{name: "unknown falls back", filename: "config.toml", content: "[ui]\nhunk_tracker_mode = \"unknown\"\n", want: "agent_only"},
+		{name: "environment wins", filename: "config.toml", content: "[ui]\nhunk_tracker_mode = \"all_dirty\"\n", environment: "OFF", want: "off"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("GROK_HUNK_TRACKER", test.environment)
+			path := filepath.Join(t.TempDir(), test.filename)
+			if err := os.WriteFile(path, []byte(test.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(path)
+			if err != nil || cfg.UI.HunkTrackerMode != test.want {
+				t.Fatalf("mode=%q want=%q err=%v", cfg.UI.HunkTrackerMode, test.want, err)
+			}
+		})
+	}
+}
+
 func TestMemoryInitialInjectionMinScoreIsClamped(t *testing.T) {
 	for _, test := range []struct {
 		input, want float64

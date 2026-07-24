@@ -76,6 +76,7 @@ type HunkSessionSummary struct {
 
 type HunkTracker struct {
 	ws          *workspace.Workspace
+	mode        HunkTrackerMode
 	mu          sync.RWMutex
 	agentHunks  map[string]hunkAttribution
 	agentFiles  map[string]bool
@@ -94,9 +95,28 @@ type hunkAttribution struct {
 	hasPromptIndex bool
 }
 
-func NewHunkTracker(ws *workspace.Workspace) *HunkTracker {
+type HunkTrackerMode string
+
+const (
+	HunkTrackerAgentOnly HunkTrackerMode = "agent_only"
+	HunkTrackerAllDirty  HunkTrackerMode = "all_dirty"
+	HunkTrackerOff       HunkTrackerMode = "off"
+)
+
+func NormalizeHunkTrackerMode(value string) HunkTrackerMode {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "all_dirty":
+		return HunkTrackerAllDirty
+	case "off", "disabled":
+		return HunkTrackerOff
+	default:
+		return HunkTrackerAgentOnly
+	}
+}
+
+func NewHunkTracker(ws *workspace.Workspace, mode HunkTrackerMode) *HunkTracker {
 	return &HunkTracker{
-		ws: ws, agentHunks: make(map[string]hunkAttribution), agentFiles: make(map[string]bool),
+		ws: ws, mode: mode, agentHunks: make(map[string]hunkAttribution), agentFiles: make(map[string]bool),
 		accepted: make(map[string]bool),
 	}
 }
@@ -108,6 +128,9 @@ func (t *HunkTracker) setPromptIndex(current func() int) {
 }
 
 func (t *HunkTracker) snapshot(ctx context.Context, path string) map[string]bool {
+	if t == nil || t.mode == HunkTrackerOff {
+		return nil
+	}
 	path, err := t.relativePath(path)
 	if err != nil {
 		return nil
@@ -124,7 +147,7 @@ func (t *HunkTracker) snapshot(ctx context.Context, path string) map[string]bool
 }
 
 func (t *HunkTracker) markAgentChanges(ctx context.Context, path string, before map[string]bool) {
-	if before == nil {
+	if t == nil || t.mode == HunkTrackerOff || before == nil {
 		return
 	}
 	path, err := t.relativePath(path)
@@ -160,6 +183,9 @@ func (t *HunkTracker) Hunks(ctx context.Context, path, source string) ([]Hunk, e
 	if t == nil || t.ws == nil {
 		return nil, errors.New("hunk tracker unavailable")
 	}
+	if t.mode == HunkTrackerOff {
+		return []Hunk{}, nil
+	}
 	if path != "" {
 		var err error
 		path, err = t.entryRelativePath(path)
@@ -177,7 +203,7 @@ func (t *HunkTracker) Hunks(ctx context.Context, path, source string) ([]Hunk, e
 	}
 	hunks = hunks[:0]
 	for _, hunk := range unique {
-		if !t.isAccepted(hunk.ID) {
+		if !t.isAccepted(hunk.ID) && (t.mode == HunkTrackerAllDirty || t.IsAgentFile(hunk.Path)) {
 			hunks = append(hunks, hunk)
 		}
 	}
@@ -254,6 +280,9 @@ func (t *HunkTracker) HunkAction(ctx context.Context, id, action string) (int, e
 	if strings.TrimSpace(id) == "" {
 		return 0, errors.New("hunkId is required")
 	}
+	if t.mode == HunkTrackerOff {
+		return 0, fmt.Errorf("unknown or already accepted hunk %q", id)
+	}
 	hunks, err := t.Hunks(ctx, "", "all")
 	if err != nil {
 		return 0, err
@@ -271,6 +300,9 @@ func (t *HunkTracker) FileAction(ctx context.Context, path, action string) (int,
 	if strings.TrimSpace(path) == "" {
 		return 0, errors.New("path is required")
 	}
+	if t.mode == HunkTrackerOff {
+		return 0, nil
+	}
 	hunks, err := t.Hunks(ctx, path, "all")
 	if err != nil {
 		return 0, err
@@ -283,6 +315,9 @@ func (t *HunkTracker) FileAction(ctx context.Context, path, action string) (int,
 
 // AllAction applies an action to every currently visible hunk.
 func (t *HunkTracker) AllAction(ctx context.Context, action string) (int, error) {
+	if t.mode == HunkTrackerOff {
+		return 0, nil
+	}
 	hunks, err := t.Hunks(ctx, "", "all")
 	if err != nil {
 		return 0, err
@@ -296,6 +331,9 @@ func (t *HunkTracker) AllAction(ctx context.Context, action string) (int, error)
 func (t *HunkTracker) TurnAction(ctx context.Context, promptIndex int, action string) (int, error) {
 	if promptIndex < 0 {
 		return 0, errors.New("promptIndex must be non-negative")
+	}
+	if t.mode == HunkTrackerOff {
+		return 0, nil
 	}
 	hunks, err := t.Hunks(ctx, "", "agent")
 	if err != nil {
@@ -490,6 +528,9 @@ func (t *HunkTracker) Files(ctx context.Context) ([]HunkFile, error) {
 }
 
 func (t *HunkTracker) IsAgentFile(path string) bool {
+	if t == nil || t.mode == HunkTrackerOff {
+		return false
+	}
 	t.mu.RLock()
 	tracked := t.agentFiles[path]
 	t.mu.RUnlock()
@@ -543,6 +584,9 @@ func (t *HunkTracker) currentGitIdentity(ctx context.Context) (string, int64) {
 func (t *HunkTracker) Summary(ctx context.Context) (HunkSessionSummary, error) {
 	if t == nil {
 		return HunkSessionSummary{}, errors.New("hunk tracker unavailable")
+	}
+	if t.mode == HunkTrackerOff {
+		return HunkSessionSummary{Turns: []HunkTurnSummary{}}, nil
 	}
 	t.actionMu.Lock()
 	defer t.actionMu.Unlock()

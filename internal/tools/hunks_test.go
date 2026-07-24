@@ -67,6 +67,106 @@ func TestHunkTrackerAttributesAgentAndExternalFiles(t *testing.T) {
 	}
 }
 
+func TestHunkTrackerModesControlDirtyFileVisibility(t *testing.T) {
+	for _, test := range []struct {
+		mode          HunkTrackerMode
+		wantPaths     []string
+		wantContents  int
+		trackerExists bool
+	}{
+		{mode: HunkTrackerAgentOnly, wantPaths: []string{"agent.txt"}, wantContents: 1, trackerExists: true},
+		{mode: HunkTrackerAllDirty, wantPaths: []string{"agent.txt", "external.txt"}, wantContents: 2, trackerExists: true},
+		{mode: HunkTrackerOff, wantContents: 0, trackerExists: true},
+	} {
+		t.Run(string(test.mode), func(t *testing.T) {
+			root := t.TempDir()
+			runGit(t, root, "init", "-q")
+			for _, name := range []string{"agent.txt", "external.txt"} {
+				if err := os.WriteFile(filepath.Join(root, name), []byte("before\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				runGit(t, root, "add", name)
+			}
+			runGit(t, root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "baseline")
+			ws, err := workspace.Open(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			registry := NewRegistryWithHunkMode(ws, PromptApprover{Mode: PermissionAuto}, test.mode)
+			t.Cleanup(func() { _ = registry.Close() })
+			tracker := registry.HunkTracker()
+			if (tracker != nil) != test.trackerExists {
+				t.Fatalf("tracker=%v want exists=%v", tracker, test.trackerExists)
+			}
+			if err := registry.ConfigureHunkState(t.TempDir()); err != nil {
+				t.Fatalf("tracker state: %v", err)
+			}
+			if test.mode == HunkTrackerOff {
+				hunks, err := tracker.Hunks(context.Background(), "", "all")
+				if err != nil || len(hunks) != 0 {
+					t.Fatalf("disabled hunks=%#v err=%v", hunks, err)
+				}
+				if count, err := tracker.AllAction(context.Background(), "accept"); err != nil || count != 0 {
+					t.Fatalf("disabled action count=%d err=%v", count, err)
+				}
+				return
+			}
+			if _, err := registry.Execute(context.Background(), "edit_file", json.RawMessage(`{"path":"agent.txt","old_text":"before","new_text":"agent"}`)); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, "external.txt"), []byte("external\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			hunks, err := tracker.Hunks(context.Background(), "", "all")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var paths []string
+			for _, hunk := range hunks {
+				paths = append(paths, hunk.Path)
+			}
+			if strings.Join(paths, ",") != strings.Join(test.wantPaths, ",") {
+				t.Fatalf("paths=%v want=%v", paths, test.wantPaths)
+			}
+			contents, err := tracker.AllFileContents(context.Background())
+			if err != nil || len(contents) != test.wantContents {
+				t.Fatalf("contents=%#v want=%d err=%v", contents, test.wantContents, err)
+			}
+		})
+	}
+}
+
+func TestAgentOnlyKeepsExternalEditsOnAgentFile(t *testing.T) {
+	root := t.TempDir()
+	runGit(t, root, "init", "-q")
+	if err := os.WriteFile(filepath.Join(root, "mixed.txt"), []byte("one\ntwo\nthree\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, root, "add", "mixed.txt")
+	runGit(t, root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "baseline")
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistryWithHunkMode(ws, PromptApprover{Mode: PermissionAuto}, HunkTrackerAgentOnly)
+	t.Cleanup(func() { _ = registry.Close() })
+	if _, err := registry.Execute(context.Background(), "edit_file", json.RawMessage(`{"path":"mixed.txt","old_text":"one","new_text":"agent-one"}`)); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "mixed.txt")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(strings.Replace(string(data), "three", "user-three", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hunks, err := registry.HunkTracker().Hunks(context.Background(), "", "all")
+	if err != nil || len(hunks) != 2 {
+		t.Fatalf("hunks=%#v err=%v", hunks, err)
+	}
+}
+
 func TestHunkTrackerAttributesMixedFilePerHunk(t *testing.T) {
 	root, registry := newHunkFixture(t, map[string]string{"mixed.txt": "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\n"})
 	path := filepath.Join(root, "mixed.txt")

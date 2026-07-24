@@ -33,6 +33,9 @@ func (t *HunkTracker) configureState(path string) error {
 	if t == nil || path == "" {
 		return errors.New("hunk tracker state path is required")
 	}
+	if t.mode == HunkTrackerOff {
+		return nil
+	}
 	t.actionMu.Lock()
 	defer t.actionMu.Unlock()
 	t.mu.Lock()
@@ -90,7 +93,7 @@ func (t *HunkTracker) configureState(path string) error {
 }
 
 func (t *HunkTracker) saveState() error {
-	if t == nil {
+	if t == nil || t.mode == HunkTrackerOff {
 		return nil
 	}
 	t.actionMu.Lock()

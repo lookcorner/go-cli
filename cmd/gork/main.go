@@ -107,6 +107,8 @@ type options struct {
 	trust              bool
 	experimentalMemory bool
 	noMemory           bool
+	hunkTrackerMode    string
+	hunkTrackerModeSet bool
 	allow              stringListFlag
 	deny               stringListFlag
 }
@@ -222,6 +224,7 @@ func parseRunOptions(args []string, stderr io.Writer) (options, *flag.FlagSet, e
 	flags.BoolVar(&opts.trust, "trust", false, "trust this workspace's executable project configuration")
 	flags.BoolVar(&opts.experimentalMemory, "experimental-memory", false, "enable cross-session workspace memory")
 	flags.BoolVar(&opts.noMemory, "no-memory", false, "disable cross-session memory")
+	flags.StringVar(&opts.hunkTrackerMode, "hunk-tracker-mode", "", "hunk tracker mode: agent_only, all_dirty, or off")
 	flags.Usage = func() {
 		fmt.Fprintf(stderr, "Usage: gork [flags] [prompt]\n       gork agent [options] <stdio|serve|leader>\n       gork leader <list|info|kill>\n       gork dashboard [flags]\n       gork login [--oauth|--device-auth]\n       gork logout\n       gork setup\n       gork inspect [--json] [--config path]\n       gork mcp <list|add|remove|doctor>\n       gork models [--config path]\n       gork share <session-id>\n       gork trace <session-id> [--local] [-o path] [--json]\n       gork update [--check] [--json]\n       gork wrap <command> [args...]\n       gork version [--json]\n       gork completions <bash|elvish|fish|powershell|zsh>\n       gork plugin <list|install|update|uninstall|enable|disable|details|validate|marketplace>\n       gork sessions <list|search|delete>\n       gork export <session-id> [output] [-c|--clipboard]\n       gork worktree <list|show|rm|gc|db>\n       gork memory clear [--workspace|--global|--all] [-y|--yes]\n\n")
 		flags.PrintDefaults()
@@ -235,6 +238,9 @@ func parseRunOptions(args []string, stderr io.Writer) (options, *flag.FlagSet, e
 		}
 		if flag.Name == "sandbox" {
 			opts.sandboxSet = true
+		}
+		if flag.Name == "hunk-tracker-mode" {
+			opts.hunkTrackerModeSet = true
 		}
 		switch flag.Name {
 		case "single", "print", "p":
@@ -657,7 +663,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	registry := tools.NewRegistry(ws, approver)
+	registry := tools.NewRegistryWithHunkMode(ws, approver, tools.NormalizeHunkTrackerMode(cfg.UI.HunkTrackerMode))
 	applyRunToolDisables(registry, opts)
 	if err := registry.ConfigureSandbox(cfg.Sandbox.Profile); err != nil {
 		_ = registry.Close()
@@ -1255,6 +1261,9 @@ func applyRunOverrides(cfg *config.Config, opts options) {
 	}
 	if opts.sandboxSet {
 		cfg.Sandbox.Profile = strings.ToLower(strings.TrimSpace(opts.sandbox))
+	}
+	if opts.hunkTrackerModeSet {
+		cfg.UI.HunkTrackerMode = string(tools.NormalizeHunkTrackerMode(opts.hunkTrackerMode))
 	}
 	if opts.maxSteps > 0 {
 		cfg.MaxSteps = opts.maxSteps
@@ -3261,7 +3270,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		if err != nil {
 			return nil, nil, err
 		}
-		registry := tools.NewRegistry(ws, approver)
+		registry := tools.NewRegistryWithHunkMode(ws, approver, sessionConfig.HunkTrackerMode)
 		applyRunToolDisables(registry, opts)
 		if err := registry.ConfigureSandbox(sessionCfg.Sandbox.Profile); err != nil {
 			_ = registry.Close()

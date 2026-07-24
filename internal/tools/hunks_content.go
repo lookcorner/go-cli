@@ -43,6 +43,9 @@ func (t *HunkTracker) FileData(ctx context.Context, path, source string) (HunkFi
 	if strings.TrimSpace(path) == "" {
 		return HunkFileData{}, errors.New("path is required")
 	}
+	if t.mode == HunkTrackerOff {
+		return HunkFileData{Hunks: []Hunk{}, Baseline: contentMissing(), Current: contentMissing()}, nil
+	}
 	path, err := t.entryRelativePath(path)
 	if err != nil {
 		return HunkFileData{}, err
@@ -60,6 +63,9 @@ func (t *HunkTracker) FileData(ctx context.Context, path, source string) (HunkFi
 }
 
 func (t *HunkTracker) AllFileContents(ctx context.Context) ([]FileContentEntry, error) {
+	if t.mode == HunkTrackerOff {
+		return []FileContentEntry{}, nil
+	}
 	t.syncHead(ctx)
 	paths, err := t.changedPaths(ctx)
 	if err != nil {
@@ -68,6 +74,9 @@ func (t *HunkTracker) AllFileContents(ctx context.Context) ([]FileContentEntry, 
 	staged := t.stagedPaths(ctx)
 	entries := make([]FileContentEntry, 0, len(paths))
 	for _, path := range paths {
+		if t.mode == HunkTrackerAgentOnly && !t.IsAgentFile(path) {
+			continue
+		}
 		entries = append(entries, FileContentEntry{
 			Path: path, Baseline: t.baselineContent(ctx, path), Current: t.currentContent(path),
 			IsAgentFile: t.IsAgentFile(path), Staged: staged[path],

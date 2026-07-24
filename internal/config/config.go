@@ -206,6 +206,7 @@ type UIConfig struct {
 	Theme                string  `json:"theme"`
 	AutoDarkTheme        string  `json:"auto_dark_theme"`
 	AutoLightTheme       string  `json:"auto_light_theme"`
+	HunkTrackerMode      string  `json:"hunk_tracker_mode"`
 	ScreenMode           string  `json:"screen_mode"`
 	RenderMermaid        string  `json:"render_mermaid"`
 	KeepTextSelection    string  `json:"keep_text_selection"`
@@ -467,6 +468,7 @@ type fileUIConfig struct {
 	Theme                        *string `json:"theme,omitempty" toml:"theme"`
 	AutoDarkTheme                *string `json:"auto_dark_theme,omitempty" toml:"auto_dark_theme"`
 	AutoLightTheme               *string `json:"auto_light_theme,omitempty" toml:"auto_light_theme"`
+	HunkTrackerMode              *string `json:"hunk_tracker_mode,omitempty" toml:"hunk_tracker_mode"`
 	ScreenMode                   *string `json:"screen_mode,omitempty" toml:"screen_mode"`
 	RenderMermaid                *string `json:"render_mermaid,omitempty" toml:"render_mermaid"`
 	KeepTextSelection            any     `json:"keep_text_selection,omitempty" toml:"keep_text_selection"`
@@ -692,7 +694,7 @@ func Load(path string) (Config, error) {
 		AskUserQuestion:             AskUserQuestionConfig{TimeoutEnabled: true, TimeoutSeconds: 30 * 60},
 		Toolset:                     ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}},
 		Goal:                        GoalConfig{VerifierCount: 3, ClassifierMaxRuns: 10, ReverifyAfter: 8},
-		UI:                          UIConfig{Theme: "groknight", AutoDarkTheme: "groknight", AutoLightTheme: "grokday", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, ScrollSpeed: 50, PromptSuggestions: true, PermissionMode: "ask"},
+		UI:                          UIConfig{Theme: "groknight", AutoDarkTheme: "groknight", AutoLightTheme: "grokday", HunkTrackerMode: "agent_only", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, ScrollSpeed: 50, PromptSuggestions: true, PermissionMode: "ask"},
 		Dashboard:                   DashboardConfig{Enabled: true, Grouping: "state"},
 		Sandbox:                     SandboxConfig{Profile: "off"},
 		Pruning:                     PruningConfig{Enabled: true, KeepLastNTurns: 3, SoftTrimThreshold: 4000, SoftTrimHead: 1500, SoftTrimTail: 1500, HardClearAgeTurns: 10},
@@ -916,6 +918,9 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.UI.AutoLightTheme != nil {
 		cfg.UI.AutoLightTheme = concreteTheme(*disk.UI.AutoLightTheme, "grokday")
+	}
+	if disk.UI.HunkTrackerMode != nil {
+		cfg.UI.HunkTrackerMode = normalizeHunkTrackerMode(*disk.UI.HunkTrackerMode)
 	}
 	if disk.UI.ScreenMode != nil {
 		cfg.UI.ScreenMode = strings.ToLower(strings.TrimSpace(*disk.UI.ScreenMode))
@@ -1679,6 +1684,9 @@ func applyEnv(cfg *Config) {
 	if value, ok := envBool("GROK_PROMPT_SUGGESTIONS"); ok {
 		cfg.UI.PromptSuggestions = value
 	}
+	if value := strings.TrimSpace(os.Getenv("GROK_HUNK_TRACKER")); value != "" {
+		cfg.UI.HunkTrackerMode = normalizeHunkTrackerMode(value)
+	}
 	if raw := strings.TrimSpace(os.Getenv("GROK_SCROLL_LINES")); raw != "" {
 		if value, err := strconv.ParseUint(raw, 10, 8); err == nil {
 			cfg.UI.ScrollLines = normalizedScrollLines(uint8(value))
@@ -1832,6 +1840,17 @@ func normalizedScrollLines(value uint8) *uint8 {
 
 func normalizedScrollSpeed(value uint8) uint8 {
 	return min(max(value, 1), 100)
+}
+
+func normalizeHunkTrackerMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "all_dirty":
+		return "all_dirty"
+	case "off", "disabled":
+		return "off"
+	default:
+		return "agent_only"
+	}
 }
 
 func concreteTheme(value, fallback string) string {
@@ -2375,6 +2394,9 @@ func (c Config) Validate() error {
 	}
 	if c.UI.RenderMermaid != "" && c.UI.RenderMermaid != "auto" && c.UI.RenderMermaid != "on" && c.UI.RenderMermaid != "off" {
 		return errors.New("ui render_mermaid must be auto, on, or off")
+	}
+	if c.UI.HunkTrackerMode != "" && c.UI.HunkTrackerMode != "agent_only" && c.UI.HunkTrackerMode != "all_dirty" && c.UI.HunkTrackerMode != "off" {
+		return errors.New("ui hunk_tracker_mode must be agent_only, all_dirty, or off")
 	}
 	if c.Toolset.FileToolset != "" && c.Toolset.FileToolset != "standard" && c.Toolset.FileToolset != "hashline" {
 		return errors.New("toolset file_toolset must be standard or hashline")
