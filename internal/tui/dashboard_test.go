@@ -55,12 +55,14 @@ func TestDashboardViewsAndStopsSubagent(t *testing.T) {
 	}
 	updated, _ = m.Update(cmd())
 	m = updated.(*model)
-	if m.dashboard != nil || m.viewer == nil || !strings.Contains(m.viewer.content, "found it") {
+	if m.dashboard == nil || m.dashboard.peekID != "sub-1" || !strings.Contains(m.dashboard.peekContent, "found it") || m.viewer != nil {
 		t.Fatalf("viewer=%#v dashboard=%#v", m.viewer, m.dashboard)
 	}
+	pressDashboardKey(t, m, tea.Key{Code: tea.KeyEsc})
+	if m.dashboard == nil || m.dashboard.peekID != "" {
+		t.Fatalf("dashboard=%#v", m.dashboard)
+	}
 
-	m.viewer = nil
-	m.openDashboard()
 	m.dashboard.selected = dashboardRowIndex(t, m.dashboard.rows, dashboardSubagent, "sub-1")
 	updated, cmd = m.handleDashboardKey(tea.KeyPressMsg(tea.Key{Code: 'x', Text: "x"}))
 	m = updated.(*model)
@@ -71,6 +73,64 @@ func TestDashboardViewsAndStopsSubagent(t *testing.T) {
 	m = updated.(*model)
 	if running || m.dashboard == nil || dashboardRowStatus(m.dashboard.rows, "sub-1") != "completed" || m.status != "subagent stopped" {
 		t.Fatalf("running=%v dashboard=%#v status=%q", running, m.dashboard, m.status)
+	}
+}
+
+func TestDashboardPeeksStoredSessionWithoutSwitching(t *testing.T) {
+	m := &model{
+		runner:    dashboardFixtureRunner(),
+		workspace: "/work",
+		modelName: "grok",
+		dashboard: &dashboardState{sessions: []session.Info{{
+			SessionID: "stored", Title: "Stored", CWD: "/stored", ModelID: "grok-4",
+		}}},
+	}
+	m.refreshDashboard()
+	m.dashboard.selected = dashboardRowIndex(t, m.dashboard.rows, dashboardStoredSession, "stored")
+	pressDashboardKey(t, m, tea.Key{Code: 'p', Text: "p"})
+	if m.resumeSession != nil || m.dashboard.peekID != "stored" || m.dashboard.peekKind != dashboardStoredSession || !strings.Contains(m.dashboard.peekContent, "/stored") {
+		t.Fatalf("resume=%#v state=%#v", m.resumeSession, m.dashboard)
+	}
+	pressDashboardKey(t, m, tea.Key{Code: 'p', Text: "p"})
+	if m.dashboard == nil || m.dashboard.peekID != "" {
+		t.Fatalf("state=%#v", m.dashboard)
+	}
+}
+
+func TestDashboardPeeksSynchronousRows(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		row  dashboardRow
+		want string
+	}{
+		{name: "current session", row: dashboardRow{kind: dashboardSession, id: "current", title: "Current", cwd: "/work"}, want: "Session: `current`"},
+		{name: "process", row: dashboardRow{kind: dashboardProcess, id: "proc", status: "done", title: "Tests", detail: "shell · exit 0", process: tools.ProcessSnapshot{Command: "go test ./...", Output: "ok"}}, want: "go test ./..."},
+		{name: "scheduled", row: dashboardRow{kind: dashboardScheduled, id: "loop", scheduled: tools.ScheduledTaskCreated{HumanSchedule: "every hour", Prompt: "check deploy"}}, want: "check deploy"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			m := &model{runner: dashboardFixtureRunner(), workspace: "/work", modelName: "grok", dashboard: &dashboardState{}}
+			updated, command := m.openDashboardRow(test.row)
+			m = updated.(*model)
+			if command != nil || m.dashboard.peekID != test.row.id || m.dashboard.peekKind != test.row.kind || !strings.Contains(m.dashboard.peekContent, test.want) {
+				t.Fatalf("command=%v state=%#v", command != nil, m.dashboard)
+			}
+		})
+	}
+}
+
+func TestDashboardPeekRejectsUnavailableOrStaleSubagent(t *testing.T) {
+	m := &model{runner: &agent.Runner{SessionID: "current"}, dashboard: &dashboardState{}}
+	updated, command := m.peekDashboardRow(dashboardRow{kind: dashboardSubagent, id: "gone"})
+	m = updated.(*model)
+	if command != nil || m.dashboard.err != "Subagent details are unavailable" {
+		t.Fatalf("command=%v state=%#v", command != nil, m.dashboard)
+	}
+
+	m.dashboard.err = ""
+	updated, _ = m.Update(dashboardDoneEvent{action: "peek", id: "gone", text: "late"})
+	m = updated.(*model)
+	if m.dashboard.peekID != "" || m.dashboard.err != "Subagent no longer exists" || m.status != "dashboard action failed" {
+		t.Fatalf("state=%#v status=%q", m.dashboard, m.status)
 	}
 }
 

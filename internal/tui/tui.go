@@ -1427,11 +1427,19 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.err != nil {
 				m.dashboard.err = msg.err.Error()
 				m.status = "dashboard action failed"
-			} else if msg.action == "view" {
-				m.dashboard = nil
-				m.viewer = &readOnlyViewer{title: "Subagent: " + msg.id, content: msg.text}
-				m.scroll = 0
-				m.status = "subagent details"
+			} else if msg.action == "peek" {
+				if slices.ContainsFunc(m.dashboard.rows, func(row dashboardRow) bool {
+					return row.kind == dashboardSubagent && row.id == msg.id
+				}) {
+					m.dashboard.peekID = msg.id
+					m.dashboard.peekKind = dashboardSubagent
+					m.dashboard.peekTitle = "Subagent: " + msg.id
+					m.dashboard.peekContent = msg.text
+					m.status = "dashboard details"
+				} else {
+					m.dashboard.err = "Subagent no longer exists"
+					m.status = "dashboard action failed"
+				}
 			} else {
 				fallback := "task stopped"
 				statusText := msg.text

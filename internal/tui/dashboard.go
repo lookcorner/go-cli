@@ -66,6 +66,10 @@ type dashboardState struct {
 	dispatching    bool
 	dispatchInput  []rune
 	dispatchCursor int
+	peekID         string
+	peekKind       dashboardRowKind
+	peekTitle      string
+	peekContent    string
 	currentTitle   string
 	err            string
 }
@@ -256,6 +260,12 @@ func (m *model) refreshDashboard() {
 	m.sortDashboardRows(rows)
 	state.rows = rows
 	state.selected = min(state.selected, max(len(rows)-1, 0))
+	if state.peekID != "" && !slices.ContainsFunc(rows, func(row dashboardRow) bool {
+		return row.kind == state.peekKind && row.id == state.peekID
+	}) {
+		state.peekID, state.peekTitle, state.peekContent = "", "", ""
+		state.peekKind = 0
+	}
 	if hasSelection {
 		for i, row := range rows {
 			if row.kind == selected.kind && row.id == selected.id {
@@ -318,6 +328,9 @@ func (m *model) dashboardContent() string {
 		input := slices.Insert(slices.Clone(state.dispatchInput), state.dispatchCursor, '|')
 		out.WriteString("\nNew agent: " + string(input) + "\n")
 	}
+	if state.peekID != "" {
+		fmt.Fprintf(&out, "\n---\n\n## %s\n\n%s\n", state.peekTitle, state.peekContent)
+	}
 	if !state.loading && len(state.rows) == 0 {
 		out.WriteString("\nNo dashboard items match the current filter.\n")
 	}
@@ -337,7 +350,10 @@ func (m *model) dashboardHint() string {
 	if m.dashboard != nil && m.dashboard.dispatching {
 		return "Enter create and open | Esc cancel | Left/Right move cursor"
 	}
-	return "N new agent | Enter view/switch | Ctrl+/ search | Ctrl+G group | Ctrl+T pin | Shift+Up/Down reorder | Ctrl+R rename | X stop/cancel | D delete | R refresh | Esc close"
+	if m.dashboard != nil && m.dashboard.peekID != "" {
+		return "Esc close details"
+	}
+	return "N new agent | Enter view/switch | P peek | Ctrl+/ search | Ctrl+G group | Ctrl+T pin | Shift+Up/Down reorder | Ctrl+R rename | X stop/cancel | D delete | R refresh | Esc close"
 }
 
 func (m *model) handleDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -354,6 +370,14 @@ func (m *model) handleDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if state.dispatching {
 		return m.handleDashboardDispatchKey(msg)
+	}
+	if state.peekID != "" {
+		if stroke == "esc" || text == "q" || text == "p" {
+			state.peekID, state.peekTitle, state.peekContent = "", "", ""
+			state.peekKind = 0
+			m.status = "agent dashboard"
+		}
+		return m, nil
 	}
 	if state.pendingDelete != "" {
 		if text == "y" || stroke == "enter" {
@@ -418,6 +442,8 @@ func (m *model) handleDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	case stroke == "enter" && len(state.rows) > 0:
 		return m.openDashboardRow(state.rows[state.selected])
+	case text == "p" && len(state.rows) > 0:
+		return m.peekDashboardRow(state.rows[state.selected])
 	case text == "x" && len(state.rows) > 0:
 		return m.stopDashboardRow(state.rows[state.selected])
 	case text == "d" && len(state.rows) > 0:
@@ -974,8 +1000,7 @@ func (m *model) handleDashboardDispatchKey(msg tea.KeyPressMsg) (tea.Model, tea.
 func (m *model) openDashboardRow(row dashboardRow) (tea.Model, tea.Cmd) {
 	switch row.kind {
 	case dashboardSession:
-		m.dashboard = nil
-		m.viewer = &readOnlyViewer{title: "Current session", content: fmt.Sprintf("# Session info\n\n- Session: `%s`\n- Workspace: `%s`\n- Model: `%s`", row.id, m.workspace, m.modelName)}
+		return m.peekDashboardRow(row)
 	case dashboardStoredSession:
 		path, err := session.PathForID(m.dashboard.dir, row.id)
 		if err != nil {
@@ -986,27 +1011,48 @@ func (m *model) openDashboardRow(row dashboardRow) (tea.Model, tea.Cmd) {
 		m.status = "resuming session"
 		return m, tea.Quit
 	case dashboardSubagent:
+		return m.peekDashboardRow(row)
+	case dashboardProcess:
+		return m.peekDashboardRow(row)
+	case dashboardScheduled:
+		return m.peekDashboardRow(row)
+	}
+	return m, nil
+}
+
+func (m *model) peekDashboardRow(row dashboardRow) (tea.Model, tea.Cmd) {
+	state := m.dashboard
+	switch row.kind {
+	case dashboardSession, dashboardStoredSession:
+		model := dashboardFirst(row.session.ModelID, m.modelName, "unknown")
+		state.peekID, state.peekKind = row.id, row.kind
+		state.peekTitle = dashboardFirst(row.title, "Current session")
+		state.peekContent = fmt.Sprintf("- Session: `%s`\n- Workspace: `%s`\n- Model: `%s`", row.id, dashboardFirst(row.cwd, m.workspace), model)
+	case dashboardSubagent:
 		if m.runner.GetSubagent == nil {
-			m.dashboard.err = "Subagent details are unavailable"
+			state.err = "Subagent details are unavailable"
 			return m, nil
 		}
-		m.dashboard.busy = true
+		state.busy = true
 		ctx := m.ctx
 		if ctx == nil {
 			ctx = context.Background()
 		}
 		return m, func() tea.Msg {
 			result, err := m.runner.GetSubagent(ctx, row.id, 0)
-			return dashboardDoneEvent{action: "view", id: row.id, text: formatSubagentDetail(result), err: err}
+			return dashboardDoneEvent{action: "peek", id: row.id, text: formatSubagentDetail(result), err: err}
 		}
 	case dashboardProcess:
-		m.dashboard = nil
-		m.viewer = &readOnlyViewer{title: "Process: " + row.id, content: fmt.Sprintf("# %s\n\nCommand: `%s`\n\n%s", row.title, row.process.Command, dashboardFirst(row.process.Output, "No output."))}
+		state.peekID, state.peekKind = row.id, row.kind
+		state.peekTitle = dashboardFirst(row.title, "Process "+row.id)
+		state.peekContent = fmt.Sprintf("- Command: `%s`\n- Status: %s\n- Metrics: %s\n\n%s", row.process.Command, row.status, row.detail, dashboardFirst(row.process.Output, "No output."))
 	case dashboardScheduled:
-		m.dashboard = nil
-		m.viewer = &readOnlyViewer{title: "Scheduled task: " + row.id, content: fmt.Sprintf("# Scheduled task\n\n- Schedule: %s\n- Prompt: %s", row.scheduled.HumanSchedule, row.scheduled.Prompt)}
+		state.peekID, state.peekKind = row.id, row.kind
+		state.peekTitle = "Scheduled task"
+		state.peekContent = fmt.Sprintf("- Schedule: %s\n- Prompt: %s", row.scheduled.HumanSchedule, row.scheduled.Prompt)
 	}
-	m.scroll = 0
+	state.err = ""
+	m.status = "dashboard details"
 	return m, nil
 }
 
@@ -1053,7 +1099,7 @@ func (m *model) stopDashboardRow(row dashboardRow) (tea.Model, tea.Cmd) {
 }
 
 func formatSubagentDetail(result tools.SubagentResult) string {
-	return fmt.Sprintf("# %s\n\n- ID: `%s`\n- Status: %s\n- Turns: %d\n- Tool calls: %d\n- Tokens: %d\n\n%s", dashboardFirst(result.Description, result.Type), result.ID, result.Status, result.Turns, result.ToolCalls, result.TokensUsed, dashboardFirst(result.Output, "No output yet."))
+	return fmt.Sprintf("- ID: `%s`\n- Status: %s\n- Turns: %d\n- Tool calls: %d\n- Tokens: %d\n\n%s", result.ID, result.Status, result.Turns, result.ToolCalls, result.TokensUsed, dashboardFirst(result.Output, "No output yet."))
 }
 
 func dashboardFirst(values ...string) string {
