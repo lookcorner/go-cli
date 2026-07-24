@@ -49,6 +49,7 @@ var completionRoot = completionSpec{
 		"trace":   {flags: words("--local --output -o --json --session-dir")},
 		"version": {flags: []string{"--json"}},
 		"v":       {flags: []string{"--json"}},
+		"wrap":    {},
 		"worktree": {children: map[string]completionSpec{
 			"db": {children: leaves("path", "rebuild", "stats")},
 			"gc": {flags: words("--dry-run --force --max-age -f")}, "prune": {flags: words("--dry-run --force --max-age -f")},

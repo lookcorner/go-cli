@@ -302,6 +302,12 @@ Generate a completion script for the current CLI with `gork completions
 <bash|elvish|fish|powershell|zsh>`. The command is side-effect free, so it can
 be used directly by shell startup files and installers.
 
+Use `gork wrap <command> [args...]` to run a container, SSH client, or other
+interactive command in a local Unix PTY. OSC 52 clipboard writes, including
+tmux passthrough sequences, are copied to the local native clipboard and
+removed from visible output. Non-interactive and unsupported-platform runs
+execute the command directly, preserving its output and exit status.
+
 While the ACP server is running, model changes in `config.toml`, local/system
 `managed_config.toml`, and `requirements.toml` are detected automatically.
 The `x.ai/internal/reload_models` endpoint triggers the same disk reload for
