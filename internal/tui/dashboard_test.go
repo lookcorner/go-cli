@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -195,18 +196,34 @@ func TestDashboardViewsAndStopsSubagent(t *testing.T) {
 }
 
 func TestDashboardPeeksStoredSessionWithoutSwitching(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "stored.jsonl"), []byte(
+		"{\"kind\":\"user_prompt\",\"data\":{\"text\":\"inspect the release\"}}\n"+
+			"{\"kind\":\"model_response\",\"data\":{\"response_id\":\"r1\",\"text\":\"all checks passed\",\"tool_call_count\":0}}\n",
+	), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	m := &model{
 		runner:    dashboardFixtureRunner(),
 		workspace: "/work",
 		modelName: "grok",
-		dashboard: &dashboardState{sessions: []session.Info{{
+		dashboard: &dashboardState{dir: dir, sessions: []session.Info{{
 			SessionID: "stored", Title: "Stored", CWD: "/stored", ModelID: "grok-4",
 		}}},
 	}
 	m.refreshDashboard()
 	m.dashboard.selected = dashboardRowIndex(t, m.dashboard.rows, dashboardStoredSession, "stored")
-	pressDashboardKey(t, m, tea.Key{Code: 'p', Text: "p"})
-	if m.resumeSession != nil || m.dashboard.peekID != "stored" || m.dashboard.peekKind != dashboardStoredSession || !strings.Contains(m.dashboard.peekContent, "/stored") {
+	updated, command := m.handleDashboardKey(tea.KeyPressMsg(tea.Key{Code: 'p', Text: "p"}))
+	m = updated.(*model)
+	if command == nil || !m.dashboard.busy || m.resumeSession != nil {
+		t.Fatalf("command=%v resume=%#v state=%#v", command != nil, m.resumeSession, m.dashboard)
+	}
+	updated, _ = m.Update(command())
+	m = updated.(*model)
+	if m.dashboard.peekID != "stored" || m.dashboard.peekKind != dashboardStoredSession ||
+		!strings.Contains(m.dashboard.peekContent, "/stored") ||
+		!strings.Contains(m.dashboard.peekContent, "inspect the release") ||
+		!strings.Contains(m.dashboard.peekContent, "all checks passed") {
 		t.Fatalf("resume=%#v state=%#v", m.resumeSession, m.dashboard)
 	}
 	pressDashboardKey(t, m, tea.Key{Code: tea.KeyEnter})
@@ -220,6 +237,57 @@ func TestDashboardPeeksStoredSessionWithoutSwitching(t *testing.T) {
 	pressDashboardKey(t, m, tea.Key{Code: 'p', Text: "p"})
 	if m.dashboard == nil || m.dashboard.peekID != "" {
 		t.Fatalf("state=%#v", m.dashboard)
+	}
+}
+
+func TestDashboardCurrentSessionPeekUsesLiveTranscript(t *testing.T) {
+	m := &model{
+		runner:    dashboardFixtureRunner(),
+		workspace: "/work",
+		modelName: "grok",
+		dashboard: &dashboardState{},
+	}
+	m.transcript.WriteString("You\nwhat is running?\n\nGork\nA live response")
+	m.refreshDashboard()
+	updated, command := m.openDashboardRow(m.dashboard.rows[dashboardRowIndex(t, m.dashboard.rows, dashboardSession, "session-1")])
+	m = updated.(*model)
+	if command != nil || m.dashboard.peekID != "session-1" ||
+		!strings.Contains(m.dashboard.peekContent, "what is running?") ||
+		!strings.Contains(m.dashboard.peekContent, "A live response") {
+		t.Fatalf("command=%v state=%#v", command != nil, m.dashboard)
+	}
+	m.transcript.WriteString(" with another chunk")
+	m.refreshDashboard()
+	if !strings.Contains(m.dashboard.peekContent, "another chunk") {
+		t.Fatalf("live peek did not refresh: %q", m.dashboard.peekContent)
+	}
+}
+
+func TestDashboardStoredSessionPeekHandlesReadFailureAndStaleResult(t *testing.T) {
+	m := &model{
+		runner: dashboardFixtureRunner(),
+		dashboard: &dashboardState{dir: t.TempDir(), sessions: []session.Info{{
+			SessionID: "missing", Title: "Missing",
+		}}},
+	}
+	m.refreshDashboard()
+	row := m.dashboard.rows[dashboardRowIndex(t, m.dashboard.rows, dashboardStoredSession, "missing")]
+	updated, command := m.peekDashboardRow(row)
+	m = updated.(*model)
+	if command == nil || !m.dashboard.busy {
+		t.Fatalf("command=%v state=%#v", command != nil, m.dashboard)
+	}
+	updated, _ = m.Update(command())
+	m = updated.(*model)
+	if m.dashboard.busy || m.dashboard.peekID != "" || m.dashboard.err == "" || m.status != "dashboard action failed" {
+		t.Fatalf("state=%#v status=%q", m.dashboard, m.status)
+	}
+
+	m.dashboard.err = ""
+	updated, _ = m.Update(dashboardDoneEvent{action: "peek-session", id: "gone", text: "late"})
+	m = updated.(*model)
+	if m.dashboard.peekID != "" || m.dashboard.err != "Session no longer exists" || m.status != "dashboard action failed" {
+		t.Fatalf("state=%#v status=%q", m.dashboard, m.status)
 	}
 }
 

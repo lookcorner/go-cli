@@ -274,6 +274,14 @@ func (m *model) refreshDashboard() {
 		state.peekKind = 0
 		state.attached = false
 	}
+	if state.peekKind == dashboardSession {
+		if index := slices.IndexFunc(rows, func(row dashboardRow) bool {
+			return row.kind == dashboardSession && row.id == state.peekID
+		}); index >= 0 {
+			state.peekTitle = dashboardFirst(rows[index].title, "Current session")
+			state.peekContent = dashboardSessionDetail(rows[index], m.modelName, m.transcriptText())
+		}
+	}
 	if hasSelection {
 		for i, row := range rows {
 			if row.kind == selected.kind && row.id == selected.id {
@@ -1130,11 +1138,27 @@ func (m *model) openDashboardRow(row dashboardRow) (tea.Model, tea.Cmd) {
 func (m *model) peekDashboardRow(row dashboardRow) (tea.Model, tea.Cmd) {
 	state := m.dashboard
 	switch row.kind {
-	case dashboardSession, dashboardStoredSession:
-		model := dashboardFirst(row.session.ModelID, m.modelName, "unknown")
+	case dashboardSession:
 		state.peekID, state.peekKind = row.id, row.kind
 		state.peekTitle = dashboardFirst(row.title, "Current session")
-		state.peekContent = fmt.Sprintf("- Session: `%s`\n- Workspace: `%s`\n- Model: `%s`", row.id, dashboardFirst(row.cwd, m.workspace), model)
+		state.peekContent = dashboardSessionDetail(row, m.modelName, m.transcriptText())
+	case dashboardStoredSession:
+		path, err := session.PathForID(state.dir, row.id)
+		if err != nil {
+			state.err = err.Error()
+			return m, nil
+		}
+		state.busy = true
+		state.err = ""
+		return m, func() tea.Msg {
+			messages, err := session.TranscriptOrEmpty(path)
+			return dashboardDoneEvent{
+				action: "peek-session",
+				id:     row.id,
+				text:   dashboardSessionDetail(row, m.modelName, session.FormatTranscript(messages)),
+				err:    err,
+			}
+		}
 	case dashboardSubagent:
 		if m.runner.GetSubagent == nil {
 			state.err = "Subagent details are unavailable"
@@ -1162,6 +1186,18 @@ func (m *model) peekDashboardRow(row dashboardRow) (tea.Model, tea.Cmd) {
 	m.scroll = 0
 	m.status = "dashboard details"
 	return m, nil
+}
+
+func dashboardSessionDetail(row dashboardRow, currentModel, transcript string) string {
+	model := dashboardFirst(row.session.ModelID, currentModel, "unknown")
+	transcript = strings.TrimSpace(transcript)
+	if transcript == "" {
+		transcript = "No completed messages."
+	}
+	return fmt.Sprintf(
+		"- Session: `%s`\n- Workspace: `%s`\n- Model: `%s`\n\n## Transcript\n\n%s",
+		row.id, dashboardFirst(row.cwd, "unknown"), model, transcript,
+	)
 }
 
 func (m *model) maxDashboardScroll() int {

@@ -595,7 +595,9 @@ workspace; Enter starts it and stays on the dashboard, while `Ctrl+S` starts it
 and opens its details. Enter otherwise opens details or switches sessions,
 while `P` peeks any selected row without leaving the dashboard. `Ctrl+T` pins a
 session or subagent; Enter from a peek opens its full-screen detail, and Esc
-returns to the dashboard. `Shift+Up/Down` changes manual order, `Ctrl+R` renames
+returns to the dashboard. Session peeks include the current live transcript or
+the completed persisted transcript without switching workspaces.
+`Shift+Up/Down` changes manual order, `Ctrl+R` renames
 an active or stored session, `X` stops a selected running subagent or process,
 `D` confirms deletion of an idle session, `Ctrl+G` switches between state
 sections and a directory-sorted flat list, `Ctrl+/` filters live by text

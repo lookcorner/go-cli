@@ -1512,6 +1512,22 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 					m.dashboard.err = "Subagent no longer exists"
 					m.status = "dashboard action failed"
 				}
+			} else if msg.action == "peek-session" {
+				index := slices.IndexFunc(m.dashboard.rows, func(row dashboardRow) bool {
+					return (row.kind == dashboardSession || row.kind == dashboardStoredSession) && row.id == msg.id
+				})
+				if index >= 0 {
+					row := m.dashboard.rows[index]
+					m.dashboard.peekID = msg.id
+					m.dashboard.peekKind = row.kind
+					m.dashboard.peekTitle = dashboardFirst(row.title, "Session "+msg.id)
+					m.dashboard.peekContent = msg.text
+					m.scroll = 0
+					m.status = "dashboard details"
+				} else {
+					m.dashboard.err = "Session no longer exists"
+					m.status = "dashboard action failed"
+				}
 			} else if msg.action == "dispatch" {
 				m.dashboard.dispatching = false
 				m.dashboard.dispatchInput = nil
