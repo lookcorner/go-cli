@@ -217,6 +217,7 @@ type UIConfig struct {
 	ScrollLines          *uint8  `json:"scroll_lines,omitempty"`
 	InvertScroll         bool    `json:"invert_scroll,omitempty"`
 	PromptSuggestions    bool    `json:"prompt_suggestions"`
+	CursorBlink          *bool   `json:"cursor_blink,omitempty"`
 	PermissionMode       string  `json:"permission_mode"`
 }
 
@@ -475,6 +476,7 @@ type fileUIConfig struct {
 	ScrollLines                  *uint8  `json:"scroll_lines,omitempty" toml:"scroll_lines"`
 	InvertScroll                 *bool   `json:"invert_scroll,omitempty" toml:"invert_scroll"`
 	PromptSuggestions            *bool   `json:"prompt_suggestions,omitempty" toml:"prompt_suggestions"`
+	CursorBlink                  *bool   `json:"cursor_blink,omitempty" toml:"cursor_blink"`
 	PermissionMode               *string `json:"permission_mode,omitempty" toml:"permission_mode"`
 	SelectionHighlightDurationMS *uint64 `json:"selection_highlight_duration_ms,omitempty" toml:"selection_highlight_duration_ms"`
 	DoubleClickAction            *string `json:"double_click_action,omitempty" toml:"double_click_action"`
@@ -974,6 +976,10 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.UI.PromptSuggestions != nil {
 		cfg.UI.PromptSuggestions = *disk.UI.PromptSuggestions
+	}
+	if disk.UI.CursorBlink != nil {
+		value := *disk.UI.CursorBlink
+		cfg.UI.CursorBlink = &value
 	}
 	if disk.UI.PermissionMode != nil {
 		mode, err := normalizePermissionMode(*disk.UI.PermissionMode)

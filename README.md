@@ -749,6 +749,10 @@ wheel event, `[ui] scroll_speed` from 1 to 100 to scale movement (50 is the
 default), and `[ui] invert_scroll = true` for natural scrolling. The
 `GROK_SCROLL_LINES`, `GROK_SCROLL_SPEED`, and `GROK_INVERT_SCROLL` environment
 variables override them.
+
+`[ui] cursor_blink = true` forces a blinking block cursor at TUI startup, while
+`false` forces a steady block. Leaving it unset preserves the terminal's cursor
+style, and the TUI restores the terminal default after a forced style exits.
 The hidden, release-safe `/debug` command reports diagnostic state without a
 model turn. `/debug scroll` (also `/scroll-debug`) overlays live viewport and
 wheel state, `/debug fps` overlays bounded render-rate percentiles, and

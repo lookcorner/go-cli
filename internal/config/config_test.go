@@ -180,6 +180,7 @@ scroll_speed = 75
 scroll_lines = 5
 invert_scroll = true
 prompt_suggestions = false
+cursor_blink = false
 permission_mode = "auto"
 
 [[permission.rules]]
@@ -264,7 +265,7 @@ pattern = ".env*"
 	if len(cfg.Permission.Rules) != 2 || cfg.Permission.Rules[0].Action != "allow" || *cfg.Permission.Rules[1].Pattern != ".env*" {
 		t.Fatalf("unexpected permission config: %#v", cfg.Permission)
 	}
-	if cfg.UI.ScreenMode != "minimal" || cfg.UI.RenderMermaid != "off" || cfg.UI.KeepTextSelection != "word_select" || cfg.UI.WordSeparators == nil || *cfg.UI.WordSeparators != "./" || !cfg.UI.MouseReportingToggle || !cfg.UI.VimMode || cfg.UI.ScrollSpeed != 75 || cfg.UI.ScrollLines == nil || *cfg.UI.ScrollLines != 5 || !cfg.UI.InvertScroll || cfg.UI.PromptSuggestions || cfg.UI.PermissionMode != "auto" {
+	if cfg.UI.ScreenMode != "minimal" || cfg.UI.RenderMermaid != "off" || cfg.UI.KeepTextSelection != "word_select" || cfg.UI.WordSeparators == nil || *cfg.UI.WordSeparators != "./" || !cfg.UI.MouseReportingToggle || !cfg.UI.VimMode || cfg.UI.ScrollSpeed != 75 || cfg.UI.ScrollLines == nil || *cfg.UI.ScrollLines != 5 || !cfg.UI.InvertScroll || cfg.UI.PromptSuggestions || cfg.UI.CursorBlink == nil || *cfg.UI.CursorBlink || cfg.UI.PermissionMode != "auto" {
 		t.Fatalf("unexpected UI config: %#v", cfg.UI)
 	}
 	if strings.Join(cfg.Skills.Paths, ",") != "~/shared-skills,project-skills" || strings.Join(cfg.Skills.Ignore, ",") != "~/shared-skills/ignored" || strings.Join(cfg.Skills.Disabled, ",") != "manual-only" {
@@ -313,8 +314,32 @@ func TestVimModeDefaultsToFalse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.UI.VimMode || cfg.UI.ScrollSpeed != 50 || cfg.UI.ScrollLines != nil || cfg.UI.InvertScroll {
+	if cfg.UI.VimMode || cfg.UI.ScrollSpeed != 50 || cfg.UI.ScrollLines != nil || cfg.UI.InvertScroll || cfg.UI.CursorBlink != nil {
 		t.Fatalf("unexpected UI defaults: %#v", cfg.UI)
+	}
+}
+
+func TestCursorBlinkPreservesTriStateAcrossConfigFormats(t *testing.T) {
+	for _, test := range []struct {
+		name, filename, content string
+		want                    bool
+	}{
+		{name: "TOML blinking", filename: "config.toml", content: "[ui]\ncursor_blink = true\n", want: true},
+		{name: "JSON steady", filename: "config.json", content: `{"ui":{"cursor_blink":false}}`, want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), test.filename)
+			if err := os.WriteFile(path, []byte(test.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.UI.CursorBlink == nil || *cfg.UI.CursorBlink != test.want {
+				t.Fatalf("cursor_blink=%v want=%v", cfg.UI.CursorBlink, test.want)
+			}
+		})
 	}
 }
 

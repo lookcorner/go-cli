@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -713,6 +714,7 @@ type UIOptions struct {
 	ScrollLines          *uint8
 	InvertScroll         bool
 	PromptSuggestions    bool
+	CursorBlink          *bool
 	Theme                string
 	SetTheme             func(string) error
 	RenderMermaid        string
@@ -904,6 +906,8 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		m.minimalCommitted = m.transcript.Len()
 		m.minimalReset = false
 	}
+	restoreCursor := applyCursorBlink(os.Stdout, options.CursorBlink)
+	defer restoreCursor()
 	program := tea.NewProgram(m, tea.WithContext(ctx))
 	final, err := program.Run()
 	m.stopVoice()
