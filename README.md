@@ -624,6 +624,12 @@ when the input diverges, and ignores results made stale by a newer turn. Tab or
 Right accepts it at the end of the input; Esc dismisses it while the input is
 empty. `[ui] prompt_suggestions = false` disables the default-on behavior, and
 `GROK_PROMPT_SUGGESTIONS` overrides that setting.
+Typing `/` opens a capability-aware command menu. Continue typing to fuzzy
+filter it, use Up/Down or Ctrl-P/Ctrl-N to move, Tab to insert without
+executing, Enter to accept, and Esc to dismiss. Commands with known choices
+also complete models, reasoning effort, themes, guides, usage, privacy,
+memory, fork, announcement, and debug arguments. Enabled user-invocable skills
+join the same menu; conflicting names use their scope-qualified form.
 Left/Right, Home/End, Delete, Backspace, Ctrl-A,
 Ctrl-E, Ctrl-U, and Ctrl/Cmd-Z edit or undo the active prompt and structured
 response input. Shift/Alt-Enter inserts a newline; Ctrl-M, `/multiline`, or `/ml`

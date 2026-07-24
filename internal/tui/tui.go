@@ -564,6 +564,9 @@ type model struct {
 	promptSuggestion    string
 	suggestionsEnabled  bool
 	suggestionDismissed bool
+	slashSelected       int
+	slashQuery          string
+	slashDismissed      string
 
 	recapRunning  bool
 	pendingRecap  string
@@ -1723,7 +1726,13 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.status = "feedback cancelled"
 		return m, nil
 	}
+	slashAcceptedSend := false
 	if !m.running {
+		if consume, send := m.handleSlashMenuKey(msg); consume {
+			return m, nil
+		} else {
+			slashAcceptedSend = send
+		}
 		if remainder := m.promptSuggestionGhost(); remainder != "" && ((key.Code == tea.KeyTab && key.Mod == 0) || (key.Code == tea.KeyRight && key.Mod == 0)) {
 			m.insertInput(remainder)
 			m.promptSuggestion = ""
@@ -1802,7 +1811,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	if !m.rememberInput && m.insertNewlineForEnter(key) {
+	if !slashAcceptedSend && !m.rememberInput && m.insertNewlineForEnter(key) {
 		return m, nil
 	}
 	switch key.Code {
@@ -3618,12 +3627,18 @@ func (m *model) clearInput() {
 	m.input = nil
 	m.cursor = 0
 	m.inputUndo = nil
+	m.slashSelected = 0
+	m.slashQuery = ""
+	m.slashDismissed = ""
 }
 
 func (m *model) setInput(value string) {
 	m.input = []rune(value)
 	m.cursor = len(m.input)
 	m.inputUndo = nil
+	m.slashSelected = 0
+	m.slashQuery = ""
+	m.slashDismissed = ""
 }
 
 func (m *model) saveInputUndo() {
@@ -4229,7 +4244,11 @@ func (m *model) View() tea.View {
 		if m.running {
 			inputLines = []string{"> "}
 		} else {
-			inputLines = renderPromptInputWithGhost(m.input, m.cursor, m.promptSuggestionGhost(), width, m.visiblePromptInputRows())
+			ghost := m.slashGhost()
+			if ghost == "" {
+				ghost = m.promptSuggestionGhost()
+			}
+			inputLines = renderPromptInputWithGhost(m.input, m.cursor, ghost, width, m.visiblePromptInputRows())
 			if m.feedbackInput && len(inputLines) > 0 {
 				inputLines[0] = "~ " + strings.TrimPrefix(inputLines[0], "> ")
 			}
@@ -4238,7 +4257,9 @@ func (m *model) View() tea.View {
 		if m.multiline {
 			hint = "Shift/Alt-Enter send · Enter newline · Ctrl-M single-line · Ctrl-Z undo"
 		}
-		footer = strings.Join(inputLines, "\n") + "\n" + ansiDim + truncate(hint, width) + ansiReset
+		parts := m.slashMenuLines(width)
+		parts = append(parts, inputLines...)
+		footer = strings.Join(parts, "\n") + "\n" + ansiDim + truncate(hint, width) + ansiReset
 	}
 	status := ansiDim + truncate(m.status, width) + ansiReset
 	prefix := header + "\n"
@@ -4678,7 +4699,11 @@ func (m *model) contentHeight() int {
 	if !m.running {
 		rows = min(strings.Count(string(m.input), "\n")+1, m.visiblePromptInputRows())
 	}
-	return max(m.height-4-rows-banner, 3)
+	slashRows := 0
+	if !m.running {
+		slashRows = min(len(m.slashSuggestions()), m.slashMenuRowLimit())
+	}
+	return max(m.height-4-rows-banner-slashRows, 3)
 }
 
 func (m *model) announcementHeight() int {
