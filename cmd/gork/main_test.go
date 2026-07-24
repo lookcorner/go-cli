@@ -256,6 +256,40 @@ func TestRestartTUITranslatesResumeRequest(t *testing.T) {
 	}
 }
 
+func TestRestartTUITranslatesScreenModeRequest(t *testing.T) {
+	tests := []struct {
+		minimal bool
+		args    []string
+		want    []string
+	}{
+		{
+			minimal: true,
+			args:    []string{"--tui", "--fullscreen", "--resume", "old.jsonl", "old prompt"},
+			want:    []string{"--tui", "--resume", "/sessions/current.jsonl", "--workspace", "/project", "--minimal"},
+		},
+		{
+			args: []string{"-minimal=true", "--resume", "old.jsonl", "old prompt"},
+			want: []string{"--resume", "/sessions/current.jsonl", "--workspace", "/project", "--fullscreen"},
+		},
+	}
+	for _, test := range tests {
+		err := restartTUI(&tui.ScreenModeError{
+			Minimal: test.minimal, Path: "/sessions/current.jsonl", Workspace: "/project",
+		}, test.args, []string{"old prompt"})
+		var restart *sessionRestartRequest
+		if !errors.As(err, &restart) || !reflect.DeepEqual(restart.args, test.want) {
+			t.Fatalf("minimal=%v err=%v restart=%#v want=%#v", test.minimal, err, restart, test.want)
+		}
+	}
+}
+
+func TestScreenModeFlagsAreMutuallyExclusive(t *testing.T) {
+	err := runOnce([]string{"--minimal", "--fullscreen"}, strings.NewReader(""), io.Discard, io.Discard)
+	if err == nil || err.Error() != "--minimal and --fullscreen are mutually exclusive" {
+		t.Fatalf("err=%v", err)
+	}
+}
+
 func TestRestartTUITranslatesNewAgentPrompt(t *testing.T) {
 	fresh := &tui.NewSessionError{Prompt: "--check this branch"}
 	if !errors.Is(fresh, tui.ErrNewSession) {

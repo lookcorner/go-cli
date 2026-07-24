@@ -202,6 +202,7 @@ type AskUserQuestionConfig struct {
 
 type UIConfig struct {
 	Theme                string  `json:"theme"`
+	ScreenMode           string  `json:"screen_mode"`
 	KeepTextSelection    string  `json:"keep_text_selection"`
 	WordSeparators       *string `json:"word_separators,omitempty"`
 	MouseReportingToggle bool    `json:"mouse_reporting_toggle,omitempty"`
@@ -449,6 +450,7 @@ type fileHashlineConfig struct {
 
 type fileUIConfig struct {
 	Theme                        *string `json:"theme,omitempty" toml:"theme"`
+	ScreenMode                   *string `json:"screen_mode,omitempty" toml:"screen_mode"`
 	KeepTextSelection            any     `json:"keep_text_selection,omitempty" toml:"keep_text_selection"`
 	WordSeparators               *string `json:"word_separators,omitempty" toml:"word_separators"`
 	MouseReportingToggle         *bool   `json:"mouse_reporting_toggle,omitempty" toml:"mouse_reporting_toggle"`
@@ -670,7 +672,7 @@ func Load(path string) (Config, error) {
 		AskUserQuestion:             AskUserQuestionConfig{TimeoutEnabled: true, TimeoutSeconds: 30 * 60},
 		Toolset:                     ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}},
 		Goal:                        GoalConfig{VerifierCount: 3, ClassifierMaxRuns: 10, ReverifyAfter: 8},
-		UI:                          UIConfig{Theme: "groknight", KeepTextSelection: "flash", ShowTimestamps: true, PromptSuggestions: true, PermissionMode: "ask"},
+		UI:                          UIConfig{Theme: "groknight", ScreenMode: "fullscreen", KeepTextSelection: "flash", ShowTimestamps: true, PromptSuggestions: true, PermissionMode: "ask"},
 		Dashboard:                   DashboardConfig{Enabled: true, Grouping: "state"},
 		Pruning:                     PruningConfig{Enabled: true, KeepLastNTurns: 3, SoftTrimThreshold: 4000, SoftTrimHead: 1500, SoftTrimTail: 1500, HardClearAgeTurns: 10},
 		Memory:                      memory.DefaultConfig(),
@@ -884,6 +886,12 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 			return errors.New("ui theme must be auto, groknight, grokday, tokyonight, rosepine-moon, or oscura-midnight")
 		}
 		cfg.UI.Theme = canonical
+	}
+	if disk.UI.ScreenMode != nil {
+		cfg.UI.ScreenMode = strings.ToLower(strings.TrimSpace(*disk.UI.ScreenMode))
+		if cfg.UI.ScreenMode != "fullscreen" && cfg.UI.ScreenMode != "minimal" {
+			return errors.New("ui screen_mode must be fullscreen or minimal")
+		}
 	}
 	if disk.UI.KeepTextSelection != nil {
 		value, err := parseKeepTextSelection(disk.UI.KeepTextSelection)
@@ -2292,6 +2300,9 @@ func (c Config) Validate() error {
 		if _, ok := theme.Canonical(c.UI.Theme); !ok {
 			return errors.New("ui theme must be auto, groknight, grokday, tokyonight, rosepine-moon, or oscura-midnight")
 		}
+	}
+	if c.UI.ScreenMode != "" && c.UI.ScreenMode != "fullscreen" && c.UI.ScreenMode != "minimal" {
+		return errors.New("ui screen_mode must be fullscreen or minimal")
 	}
 	if c.Toolset.FileToolset != "" && c.Toolset.FileToolset != "standard" && c.Toolset.FileToolset != "hashline" {
 		return errors.New("toolset file_toolset must be standard or hashline")

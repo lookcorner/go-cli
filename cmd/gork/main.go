@@ -72,6 +72,8 @@ type options struct {
 	previousID         string
 	resume             string
 	tui                bool
+	minimal            bool
+	fullscreen         bool
 	goal               bool
 	goalRuns           int
 	acp                bool
@@ -156,7 +158,9 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	flags.BoolVar(&opts.interactive, "interactive", false, "start an interactive multi-turn session")
 	flags.StringVar(&opts.previousID, "previous-response-id", "", "continue a stored Responses API conversation")
 	flags.StringVar(&opts.resume, "resume", "", "resume a JSONL session path or 'latest'")
-	flags.BoolVar(&opts.tui, "tui", false, "start the full-screen terminal interface")
+	flags.BoolVar(&opts.tui, "tui", false, "start the terminal interface")
+	flags.BoolVar(&opts.minimal, "minimal", false, "start the scrollback-native terminal interface")
+	flags.BoolVar(&opts.fullscreen, "fullscreen", false, "force the full-screen terminal interface")
 	flags.BoolVar(&opts.goal, "goal", false, "keep running turns until update_goal completes or blocks the goal")
 	flags.IntVar(&opts.goalRuns, "goal-runs", 10, "maximum turns in --goal mode")
 	flags.BoolVar(&opts.acp, "acp", false, "serve Agent Client Protocol v1 over stdio")
@@ -175,6 +179,12 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			opts.approvalSet = true
 		}
 	})
+	if opts.minimal && opts.fullscreen {
+		return errors.New("--minimal and --fullscreen are mutually exclusive")
+	}
+	if opts.minimal || opts.fullscreen {
+		opts.tui = true
+	}
 	if opts.showVersion {
 		fmt.Fprintln(stdout, version.Current)
 		return nil
@@ -859,8 +869,11 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	defer waitRunnerMemory(runner)
 	if opts.tui {
 		_, forkGitErr := worktrees.GitRoot(ctx, ws.Root())
+		minimal := opts.minimal || !opts.fullscreen && cfg.UI.ScreenMode == "minimal"
 		err := tui.Run(ctx, runner, tuiBridge, prompt, opts.previousID, resumedTranscript, ws.Root(), cfg.Model, tui.UIOptions{
-			Mode: cfg.UI.KeepTextSelection, WordSeparators: cfg.UI.WordSeparators, MouseReportingToggle: cfg.UI.MouseReportingToggle, VimMode: cfg.UI.VimMode,
+			Minimal: minimal, ScreenMode: cfg.UI.ScreenMode,
+			SetScreenMode: func(mode string) error { return config.UpdateScreenMode(opts.configPath, mode) },
+			Mode:          cfg.UI.KeepTextSelection, WordSeparators: cfg.UI.WordSeparators, MouseReportingToggle: cfg.UI.MouseReportingToggle, VimMode: cfg.UI.VimMode,
 			ScrollLines: cfg.UI.ScrollLines, InvertScroll: cfg.UI.InvertScroll, PromptSuggestions: cfg.UI.PromptSuggestions,
 			CompactMode:       cfg.UI.CompactMode,
 			ShowTimestamps:    cfg.UI.ShowTimestamps,
@@ -946,6 +959,10 @@ func restartTUI(err error, args, positional []string) error {
 	var resume *tui.ResumeSessionError
 	if errors.As(err, &resume) {
 		return &sessionRestartRequest{args: restartSessionArgs(args, positional, resume.Path, resume.Workspace)}
+	}
+	var screen *tui.ScreenModeError
+	if errors.As(err, &screen) {
+		return &sessionRestartRequest{args: restartScreenModeArgs(args, positional, screen.Path, screen.Workspace, screen.Minimal)}
 	}
 	var fork *tui.ForkSessionError
 	if errors.As(err, &fork) {
@@ -1054,6 +1071,22 @@ func restartSessionArgs(args, positional []string, resumePath, workspace string)
 		result = append(result, "--workspace", workspace)
 	}
 	return result
+}
+
+func restartScreenModeArgs(args, positional []string, resumePath, workspace string, minimal bool) []string {
+	args = restartSessionArgs(args, positional, resumePath, workspace)
+	result := make([]string, 0, len(args)+1)
+	for _, arg := range args {
+		name := strings.TrimLeft(arg, "-")
+		if name == "minimal" || name == "fullscreen" || strings.HasPrefix(name, "minimal=") || strings.HasPrefix(name, "fullscreen=") {
+			continue
+		}
+		result = append(result, arg)
+	}
+	if minimal {
+		return append(result, "--minimal")
+	}
+	return append(result, "--fullscreen")
 }
 
 func newAuthTokenProvider(cfg config.Config, path string, authConfig auth.Config, stderr io.Writer) api.TokenProvider {

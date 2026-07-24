@@ -14,7 +14,7 @@ type settingsState struct {
 	err      string
 }
 
-const settingsCount = 5
+const settingsCount = 6
 
 func (m *model) openSettings() {
 	m.settings = &settingsState{}
@@ -74,6 +74,16 @@ func (m *model) applySetting(selected int) {
 			state.err = persistSetting(m.persistVimMode(m.vimMode), func() { m.vimMode = previous })
 		}
 	case 4:
+		previous := m.defaultMinimal
+		m.defaultMinimal = !previous
+		if m.persistScreenMode != nil {
+			mode := "fullscreen"
+			if m.defaultMinimal {
+				mode = "minimal"
+			}
+			state.err = persistSetting(m.persistScreenMode(mode), func() { m.defaultMinimal = previous })
+		}
+	case 5:
 		previousName, previousTheme := m.themeName, m.theme
 		m.themeName = nextTheme(m.themeName)
 		m.theme = paletteFor(m.themeName)
@@ -115,9 +125,10 @@ func (m *model) settingsContent() string {
 		settingLine("Timeline", m.showTimeline),
 		settingLine("Compact mode", m.compactMode),
 		settingLine("Vim navigation", m.vimMode),
+		settingLine("Minimal by default", m.defaultMinimal),
 		fmt.Sprintf("Theme: %s", m.themeName),
 	}
-	content := "# Settings\n\n" + selectedWindow(lines, m.settings.selected, max(m.contentHeight()-4, 1))
+	content := "# Settings\n\n" + selectedWindow(lines, m.settings.selected, max(m.contentHeight()-3, 1))
 	if m.settings.err != "" {
 		content += "\n\n**Error:** " + strings.ReplaceAll(sanitizeTerminalText(m.settings.err), "\n", " ")
 	}

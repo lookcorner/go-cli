@@ -483,6 +483,14 @@ Use `--tui` for the full-screen interface:
 ./gork --tui --workspace .
 ```
 
+Use `--minimal` for a scrollback-native interface. Completed turns are committed
+to the terminal's normal scrollback while only the active response and composer
+are redrawn, so native terminal selection and history continue to work. The
+default is fullscreen; `[ui].screen_mode` accepts `fullscreen` or `minimal`.
+Within a session, `/minimal` reopens the same session in minimal mode and
+`/fullscreen` (or `/full`) switches back without changing its conversation.
+`--fullscreen` explicitly overrides a configured minimal default.
+
 The TUI streams model output as it arrives, renders headings, emphasis, links,
 lists, quotes, pipe tables, and inline or fenced code, strips untrusted terminal
 control characters, and keeps a scrollable transcript.

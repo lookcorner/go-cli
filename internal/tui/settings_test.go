@@ -39,6 +39,7 @@ func TestSettingsPanelHidesConversationTimeline(t *testing.T) {
 func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 	var booleans []string
 	var themes []string
+	var screenModes []string
 	m := &model{
 		width: 70, height: 18, themeName: "groknight", theme: paletteFor("groknight"), settings: &settingsState{},
 		persistTimestamps: func(value bool) error { booleans = append(booleans, "timestamps"); return nil },
@@ -48,7 +49,11 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 			return nil
 		},
 		persistVimMode: func(value bool) error { booleans = append(booleans, "vim"); return nil },
-		persistTheme:   func(value string) error { themes = append(themes, value); return nil },
+		persistScreenMode: func(value string) error {
+			screenModes = append(screenModes, value)
+			return nil
+		},
+		persistTheme: func(value string) error { themes = append(themes, value); return nil },
 	}
 	for index := 0; index < settingsCount; index++ {
 		m.settings.selected = index
@@ -58,7 +63,7 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 			t.Fatalf("index=%d command=%v err=%q status=%q", index, command != nil, m.settings.err, m.status)
 		}
 	}
-	if !m.showTimestamps || !m.showTimeline || !m.compactMode || !m.vimMode || strings.Join(booleans, ",") != "timestamps,timeline,compact,vim" {
+	if !m.showTimestamps || !m.showTimeline || !m.compactMode || !m.vimMode || !m.defaultMinimal || strings.Join(booleans, ",") != "timestamps,timeline,compact,vim" || strings.Join(screenModes, ",") != "minimal" {
 		t.Fatalf("timestamps=%v timeline=%v compact=%v vim=%v persisted=%v", m.showTimestamps, m.showTimeline, m.compactMode, m.vimMode, booleans)
 	}
 	if m.themeName != "grokday" || m.theme.name != "grokday" || strings.Join(themes, ",") != "grokday" {
@@ -81,6 +86,14 @@ func TestSettingsPanelRollsBackFailedPersistence(t *testing.T) {
 	}
 
 	m.settings.selected = 4
+	m.persistScreenMode = func(string) error { return errors.New("read only") }
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.defaultMinimal || m.settings.err != "read only" {
+		t.Fatalf("command=%v minimal=%v err=%q", command != nil, m.defaultMinimal, m.settings.err)
+	}
+
+	m.settings.selected = 5
 	m.persistTheme = func(string) error { return errors.New("read only") }
 	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)

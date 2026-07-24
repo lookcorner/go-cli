@@ -702,6 +702,106 @@ func TestModelInputAndView(t *testing.T) {
 	}
 }
 
+func TestMinimalViewUsesNativeScrollback(t *testing.T) {
+	m := &model{
+		minimal: true, workspace: "/workspace", modelName: "test-model",
+		width: 60, height: 16, status: "ready",
+	}
+	m.transcript.WriteString("old response")
+	m.minimalCommitted = m.transcript.Len()
+	m.transcript.WriteString("\n\nnew response")
+	view := m.View()
+	if view.AltScreen || view.MouseMode != tea.MouseModeNone || view.OnMouse != nil {
+		t.Fatalf("minimal view still owns the alternate screen or mouse: %#v", view)
+	}
+	if strings.Contains(view.Content, "old response") || !strings.Contains(view.Content, "new response") {
+		t.Fatalf("minimal view did not isolate the uncommitted tail: %q", view.Content)
+	}
+	updated, command := m.Update(tea.WindowSizeMsg{Width: 60, Height: 16})
+	m = updated.(*model)
+	if command == nil || m.minimalCommitted != m.transcript.Len() || !strings.Contains(fmt.Sprintf("%T", command()), "printLineMessage") {
+		t.Fatalf("command=%v committed=%d transcript=%d", command != nil, m.minimalCommitted, m.transcript.Len())
+	}
+}
+
+func TestMinimalViewCommitsCompletedStreamingTurn(t *testing.T) {
+	m := &model{
+		minimal: true, running: true, workspace: "/workspace", modelName: "test-model",
+		width: 60, height: 16, status: "thinking",
+	}
+	m.transcript.WriteString("You\nquestion\n\nGork\nanswer")
+	if _, command := m.Update(tea.WindowSizeMsg{Width: 60, Height: 16}); command != nil || m.minimalCommitted != 0 {
+		t.Fatalf("streaming turn was committed early: command=%v committed=%d", command != nil, m.minimalCommitted)
+	}
+	updated, command := m.Update(turnDoneEvent{})
+	m = updated.(*model)
+	if command == nil || m.running || m.minimalCommitted != m.transcript.Len() {
+		t.Fatalf("command=%v running=%v committed=%d transcript=%d", command != nil, m.running, m.minimalCommitted, m.transcript.Len())
+	}
+}
+
+func TestMinimalViewCommitsFinishedTurnBeforeQueuedTurn(t *testing.T) {
+	m := &model{
+		ctx: context.Background(), runner: &agent.Runner{}, minimal: true, running: true,
+		workspace: "/workspace", modelName: "test-model", width: 60, height: 16,
+		pendingPrompts: []string{"next question"},
+	}
+	m.transcript.WriteString("You\nfirst question\n\nGork\nfirst answer")
+	firstLen := m.transcript.Len()
+	updated, command := m.Update(turnDoneEvent{})
+	m = updated.(*model)
+	if command == nil || !m.running || m.minimalCommitted <= firstLen || m.minimalCommitted >= m.transcript.Len() {
+		t.Fatalf("command=%v running=%v committed=%d first=%d transcript=%d", command != nil, m.running, m.minimalCommitted, firstLen, m.transcript.Len())
+	}
+	view := m.View().Content
+	if strings.Contains(view, "first question") || !strings.Contains(view, "next question") {
+		t.Fatalf("queued turn view=%q", view)
+	}
+}
+
+func TestMinimalViewResetsCommittedTranscriptAfterRewind(t *testing.T) {
+	m := &model{
+		minimal: true, workspace: "/workspace", modelName: "test-model",
+		width: 60, height: 16, status: "ready",
+	}
+	m.transcript.WriteString("a previously committed response")
+	m.minimalCommitted = m.transcript.Len()
+	m.replaceTranscript("short", nil)
+
+	updated, command := m.Update(tea.WindowSizeMsg{Width: 60, Height: 16})
+	m = updated.(*model)
+	if command == nil || m.minimalReset || m.minimalCommitted != m.transcript.Len() {
+		t.Fatalf("command=%v reset=%v committed=%d transcript=%d", command != nil, m.minimalReset, m.minimalCommitted, m.transcript.Len())
+	}
+}
+
+func TestScreenModeCommandsReopenCurrentSession(t *testing.T) {
+	runner := &agent.Runner{SessionPath: "/sessions/current.jsonl"}
+	m := &model{runner: runner, workspace: "/workspace", modelName: "test-model"}
+	m.setInput("/minimal ignored")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command == nil || m.screenMode == nil || !m.screenMode.Minimal || m.screenMode.Path != runner.SessionPath || m.screenMode.Workspace != "/workspace" {
+		t.Fatalf("command=%v request=%#v", command != nil, m.screenMode)
+	}
+
+	m = &model{runner: runner, workspace: "/workspace", modelName: "test-model", minimal: true}
+	m.setInput("/full ignored")
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command == nil || m.screenMode == nil || m.screenMode.Minimal {
+		t.Fatalf("command=%v request=%#v", command != nil, m.screenMode)
+	}
+
+	m = &model{runner: &agent.Runner{}, workspace: "/workspace", modelName: "test-model"}
+	m.setInput("/minimal")
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.screenMode != nil || m.status != "no active session to reopen in minimal mode" {
+		t.Fatalf("command=%v request=%#v status=%q", command != nil, m.screenMode, m.status)
+	}
+}
+
 func TestBusyModelQueuesPromptsAndShowsQueueWithoutModelTurn(t *testing.T) {
 	m := &model{ctx: context.Background(), runner: &agent.Runner{}, running: true, width: 70, height: 18, status: "thinking"}
 	m.setInput("first follow-up")

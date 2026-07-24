@@ -62,6 +62,19 @@ type ResumeSessionError struct {
 
 func (e *ResumeSessionError) Error() string { return "resume session " + e.Path }
 
+type ScreenModeError struct {
+	Minimal   bool
+	Path      string
+	Workspace string
+}
+
+func (e *ScreenModeError) Error() string {
+	if e.Minimal {
+		return "switch to minimal screen mode"
+	}
+	return "switch to fullscreen mode"
+}
+
 type textEvent struct{ text string }
 type statusEvent struct{ text string }
 type mouseSelectionPhase uint8
@@ -502,6 +515,8 @@ type model struct {
 	persistVimMode     func(bool) error
 	compactMode        bool
 	persistCompactMode func(bool) error
+	defaultMinimal     bool
+	persistScreenMode  func(string) error
 	showTimestamps     bool
 	persistTimestamps  func(bool) error
 	showTimeline       bool
@@ -541,6 +556,7 @@ type model struct {
 	newSession         bool
 	newSessionPrompt   string
 	resumeSession      *ResumeSessionError
+	screenMode         *ScreenModeError
 	forkResult         *ForkSessionError
 	forkSession        func(context.Context, bool) (ForkResult, error)
 	forkInGit          bool
@@ -564,6 +580,12 @@ type model struct {
 	claudeImport  *claudeImportState
 	extensions    *extensionsState
 	agentConfig   *agentConfigState
+
+	minimal          bool
+	minimalCommitted int
+	minimalFlushTo   int
+	minimalInitial   string
+	minimalReset     bool
 
 	dashboard         *dashboardState
 	dashboardDisabled bool
@@ -629,6 +651,9 @@ const (
 )
 
 type UIOptions struct {
+	Minimal              bool
+	ScreenMode           string
+	SetScreenMode        func(string) error
 	Mode                 string
 	WordSeparators       *string
 	MouseReportingToggle bool
@@ -758,11 +783,13 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 	m := &model{
 		ctx: ctx, runner: runner, bridge: bridge, workspace: workspace,
 		modelName: modelName, previousID: previousID, width: 80, height: 24,
+		minimal:       options.Minimal,
 		contextWindow: runner.ContextWindow,
 		status:        "ready", initial: strings.TrimSpace(initialPrompt), historyIndex: -1,
 		history: loadPromptHistory(runner, workspace), selectionMode: parseTextSelectionMode(options.Mode),
 		wordSeparators: defaultWordSeparators, mouseToggle: options.MouseReportingToggle, vimMode: options.VimMode, persistVimMode: options.SetVimMode,
 		compactMode: options.CompactMode, persistCompactMode: options.SetCompactMode,
+		defaultMinimal: options.ScreenMode == "minimal", persistScreenMode: options.SetScreenMode,
 		showTimestamps: options.ShowTimestamps, persistTimestamps: options.SetShowTimestamps,
 		showTimeline: options.ShowTimeline, persistTimeline: options.SetShowTimeline,
 		scrollLines: mouseWheelScrollLines, invertScroll: options.InvertScroll,
@@ -806,6 +833,11 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 			m.replaceTranscript(initialTranscript, messages)
 		}
 	}
+	if m.minimal && m.transcript.Len() > 0 {
+		m.minimalInitial = m.transcriptText()
+		m.minimalCommitted = m.transcript.Len()
+		m.minimalReset = false
+	}
 	program := tea.NewProgram(m, tea.WithContext(ctx))
 	final, err := program.Run()
 	if errors.Is(err, tea.ErrInterrupted) || errors.Is(err, context.Canceled) {
@@ -823,6 +855,9 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 	if current, ok := final.(*model); ok && current.resumeSession != nil {
 		return current.resumeSession
 	}
+	if current, ok := final.(*model); ok && current.screenMode != nil {
+		return current.screenMode
+	}
 	if current, ok := final.(*model); ok && current.forkResult != nil {
 		return current.forkResult
 	}
@@ -831,8 +866,13 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 
 func (m *model) Init() tea.Cmd {
 	wait := waitForBridge(m.bridge)
+	initial := tea.Cmd(nil)
+	if m.minimalInitial != "" {
+		initial = m.minimalPrint(m.minimalInitial)
+		m.minimalInitial = ""
+	}
 	if m.initial == "" {
-		return wait
+		return tea.Sequence(initial, wait)
 	}
 	prompt := m.initial
 	m.initial = ""
@@ -842,10 +882,35 @@ func (m *model) Init() tea.Cmd {
 	m.turnCancel = cancel
 	m.running = true
 	m.beginTurn(prompt)
-	return tea.Batch(wait, runTurn(turnCtx, m.runner, prompt, m.previousID))
+	return tea.Sequence(initial, tea.Batch(wait, runTurn(turnCtx, m.runner, prompt, m.previousID)))
 }
 
 func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
+	updated, command := m.update(message)
+	current, ok := updated.(*model)
+	if !ok || !current.minimal {
+		return updated, command
+	}
+	if current.minimalReset {
+		current.minimalCommitted = 0
+		current.minimalFlushTo = 0
+		current.minimalReset = false
+	}
+	flushTo := current.minimalFlushTo
+	if !current.running {
+		flushTo = current.transcript.Len()
+	}
+	flushTo = min(max(flushTo, current.minimalCommitted), current.transcript.Len())
+	if flushTo == current.minimalCommitted {
+		return updated, command
+	}
+	text := current.transcript.String()[current.minimalCommitted:flushTo]
+	current.minimalCommitted = flushTo
+	current.minimalFlushTo = 0
+	return updated, tea.Batch(current.minimalPrint(text), command)
+}
+
+func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := message.(type) {
 	case tea.WindowSizeMsg:
 		m.selection = nil
@@ -1819,12 +1884,40 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, runTurnParts(turnCtx, m.runner, command.Display, command.Instruction, m.previousID)
 		}
 		fields := strings.Fields(prompt)
+		sessionPath := ""
+		if m.runner != nil {
+			sessionPath = m.runner.SessionPath
+		}
 		switch fields[0] {
 		case "/quit", "/exit":
 			return m, tea.Quit
 		case "/new", "/clear", "/home", "/welcome":
 			m.newSession = true
 			m.status = "starting new session"
+			return m, tea.Quit
+		case "/minimal":
+			if m.minimal {
+				m.status = "already in minimal mode"
+				return m, nil
+			}
+			if sessionPath == "" {
+				m.status = "no active session to reopen in minimal mode"
+				return m, nil
+			}
+			m.screenMode = &ScreenModeError{Minimal: true, Path: sessionPath, Workspace: m.workspace}
+			m.status = "switching to minimal mode"
+			return m, tea.Quit
+		case "/fullscreen", "/full":
+			if !m.minimal {
+				m.status = "already in fullscreen mode"
+				return m, nil
+			}
+			if sessionPath == "" {
+				m.status = "no active session to reopen in fullscreen mode"
+				return m, nil
+			}
+			m.screenMode = &ScreenModeError{Path: sessionPath, Workspace: m.workspace}
+			m.status = "switching to fullscreen mode"
 			return m, tea.Quit
 		case "/login", "/logout":
 			if m.runner == nil {
@@ -1867,6 +1960,10 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.status = "changing workspace"
 			return m, runWorkspaceChange(turnCtx, m.runner, path)
 		case "/help":
+			screenCommand := " `/minimal`"
+			if m.minimal {
+				screenCommand = " `/fullscreen` (`/full`)"
+			}
 			permissionCommands := "`/always-approve`"
 			if m.bridge != nil && m.bridge.AutoModeAvailable() {
 				permissionCommands += " `/auto`"
@@ -1908,7 +2005,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 					imagineCommands += " `/imagine-video <description>`"
 				}
 			}
-			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + announcementCommand + agentCommands + " `/btw <question>` `/cd <path>` `/compact` `/compact-mode` `/context` `/copy [N]` `/dashboard` (`/sessions`, `/agents-dashboard`) `/docs [web|title]` `/dream` `/effort [level]` `/exit` `/export [filename]` `/home` `/login` `/logout`" + feedbackCommand + " `/find` `/flush` `/fork [--worktree|--no-worktree] [directive]` `/help` `/history`" + extensionCommands + imagineCommands + " `/jump` `/loop` `/memory`" + mcpCommand + " `/model [name] [effort]` (`/m`) `/multiline` `/new` (`/clear`) `/plan [description]` `/privacy [opt-out]` `/queue` `/recap` `/release-notes` (`/changelog`) `/remember` `/rename <title>` `/resume` `/rewind` `/session-info` (`/status`, `/info`) `/settings`" + shareCommand + " `/tasks` `/terminal-setup` `/theme [name]` (`/t`)" + mouseCommand + " `/timeline` `/timestamps` `/transcript` `/usage [show|manage]` (`/cost`) `/view-plan` `/vim-mode`")
+			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + announcementCommand + agentCommands + " `/btw <question>` `/cd <path>` `/compact` `/compact-mode` `/context` `/copy [N]` `/dashboard` (`/sessions`, `/agents-dashboard`) `/docs [web|title]` `/dream` `/effort [level]` `/exit` `/export [filename]` `/home` `/login` `/logout`" + feedbackCommand + " `/find` `/flush` `/fork [--worktree|--no-worktree] [directive]` `/help` `/history`" + extensionCommands + imagineCommands + " `/jump` `/loop` `/memory`" + mcpCommand + " `/model [name] [effort]` (`/m`) `/multiline` `/new` (`/clear`)" + screenCommand + " `/plan [description]` `/privacy [opt-out]` `/queue` `/recap` `/release-notes` (`/changelog`) `/remember` `/rename <title>` `/resume` `/rewind` `/session-info` (`/status`, `/info`) `/settings`" + shareCommand + " `/tasks` `/terminal-setup` `/theme [name]` (`/t`)" + mouseCommand + " `/timeline` `/timestamps` `/transcript` `/usage [show|manage]` (`/cost`) `/view-plan` `/vim-mode`")
 			m.status = "commands"
 			return m, nil
 		case "/docs", "/howto", "/guides":
@@ -3627,6 +3724,9 @@ func (m *model) editInput(message tea.KeyPressMsg) {
 
 func (m *model) replaceTranscript(text string, messages []session.Message) {
 	m.clearTranscriptAnchor()
+	if m.minimal {
+		m.minimalReset = true
+	}
 	text = strings.TrimSpace(text)
 	m.transcript.Reset()
 	m.transcript.WriteString(text)
@@ -3679,7 +3779,19 @@ func (m *model) effectiveCompact() bool {
 	return m.compactMode || m.height > 0 && m.height <= 20
 }
 
+func (m *model) minimalPrint(text string) tea.Cmd {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	lines := renderMarkdownTheme(text, m.transcriptRenderWidth(), m.hyperlinks, m.colors())
+	return tea.Println(strings.Join(lines, "\n"))
+}
+
 func (m *model) beginTurn(prompt string) {
+	if m.minimal && m.transcript.Len() > m.minimalCommitted {
+		m.minimalFlushTo = m.transcript.Len()
+	}
 	m.promptSerial++
 	m.clearPromptSuggestion()
 	m.clearTranscriptAnchor()
@@ -3964,38 +4076,57 @@ func (m *model) View() tea.View {
 	header = padRight(truncateANSIUnsafe(header, width), width)
 	banner := m.announcementBanner(width)
 	content := m.transcriptText()
+	showingTranscript := true
 	if m.planReview != nil {
+		showingTranscript = false
 		content = "# Review implementation plan\n\n" + m.planReview.event.event.PlanContent
 	} else if m.mcp != nil {
+		showingTranscript = false
 		content = m.mcpContent()
 	} else if m.claudeImport != nil {
+		showingTranscript = false
 		content = m.claudeImportContent()
 	} else if m.extensions != nil {
+		showingTranscript = false
 		content = m.extensionsContent()
 	} else if m.agentConfig != nil {
+		showingTranscript = false
 		content = m.agentConfigContent()
 	} else if m.dashboard != nil {
+		showingTranscript = false
 		content = m.dashboardContent()
 	} else if m.settings != nil {
+		showingTranscript = false
 		content = m.settingsContent()
 	} else if m.docs != nil {
+		showingTranscript = false
 		content = m.docsContent()
 	} else if m.sessionSelect != nil {
+		showingTranscript = false
 		content = m.sessionSelectContent()
 	} else if m.forkChoice != nil {
+		showingTranscript = false
 		content = m.forkChoiceContent()
 	} else if m.modelSelect != nil {
+		showingTranscript = false
 		content = m.modelSelectContent()
 	} else if m.rewind != nil {
+		showingTranscript = false
 		content = m.rewindContent()
 	} else if m.viewer != nil {
+		showingTranscript = false
 		content = m.viewerContent()
 	} else if m.remember != nil {
+		showingTranscript = false
 		label, note := "Raw", m.remember.raw
 		if m.remember.showEnhanced && m.remember.enhanced != "" {
 			label, note = "Enhanced", m.remember.enhanced
 		}
 		content = "# Memory Note\n\n**" + label + "**\n\n" + note
+	}
+	if m.minimal && showingTranscript {
+		raw := m.transcript.String()
+		content = raw[min(m.minimalCommitted, len(raw)):]
 	}
 	contentLines := renderMarkdownTheme(content, m.transcriptRenderWidth(), m.hyperlinks, m.colors())
 	if m.historySearch != nil {
@@ -4004,19 +4135,25 @@ func (m *model) View() tea.View {
 		contentLines = m.scrollSearch.highlighted(contentLines)
 	}
 	transcriptLineCount := len(contentLines)
-	if m.transcriptVisible() && m.scrollTail > 0 {
-		contentLines = append(contentLines, make([]string, m.scrollTail)...)
+	var timelineRail *timelineRail
+	var visible []string
+	if m.minimal {
+		visible = sliceFromBottom(contentLines, m.contentHeight(), 0)
+	} else {
+		if m.transcriptVisible() && m.scrollTail > 0 {
+			contentLines = append(contentLines, make([]string, m.scrollTail)...)
+		}
+		timelineRail = m.computeTimelineRail(transcriptLineCount)
+		visible = sliceFromBottom(contentLines, m.contentHeight(), m.scroll)
+		for len(visible) < m.contentHeight() {
+			visible = append(visible, "")
+		}
+		if m.jump != nil {
+			visible = m.jumpOverlay(visible, width)
+		}
+		visible = m.renderTimeline(visible, timelineRail)
+		visible = m.debug.overlay(visible, width, m.scroll, m.maxTranscriptScroll(), m.contentHeight(), transcriptLineCount, m.scrollLines, m.invertScroll, m.scrollFocused)
 	}
-	timelineRail := m.computeTimelineRail(transcriptLineCount)
-	visible := sliceFromBottom(contentLines, m.contentHeight(), m.scroll)
-	for len(visible) < m.contentHeight() {
-		visible = append(visible, "")
-	}
-	if m.jump != nil {
-		visible = m.jumpOverlay(visible, width)
-	}
-	visible = m.renderTimeline(visible, timelineRail)
-	visible = m.debug.overlay(visible, width, m.scroll, m.maxTranscriptScroll(), m.contentHeight(), transcriptLineCount, m.scrollLines, m.invertScroll, m.scrollFocused)
 	plainVisible := make([]string, len(visible))
 	for index, line := range visible {
 		plainVisible[index] = stripUIANSI(line)
@@ -4109,8 +4246,11 @@ func (m *model) View() tea.View {
 		prefix += strings.Join(banner, "\n") + "\n"
 	}
 	view := tea.NewView(prefix + body + status + "\n" + footer)
-	view.AltScreen = true
+	view.AltScreen = !m.minimal
 	view.MouseMode = tea.MouseModeNone
+	if m.minimal {
+		return view
+	}
 	if !m.mouseReleased {
 		view.MouseMode = tea.MouseModeCellMotion
 	}
