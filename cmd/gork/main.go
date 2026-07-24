@@ -93,6 +93,10 @@ type options struct {
 	worktree           string
 	worktreeSet        bool
 	worktreeRef        string
+	noPlan             bool
+	noSubagents        bool
+	noAskUser          bool
+	disableWebSearch   bool
 	tui                bool
 	dashboard          bool
 	minimal            bool
@@ -205,6 +209,10 @@ func parseRunOptions(args []string, stderr io.Writer) (options, *flag.FlagSet, e
 	flags.StringVar(&opts.worktree, "w", "", "start in an isolated Git worktree, optionally labeled")
 	flags.StringVar(&opts.worktreeRef, "worktree-ref", "", "Git ref for --worktree")
 	flags.StringVar(&opts.worktreeRef, "ref", "", "Git ref for --worktree")
+	flags.BoolVar(&opts.noPlan, "no-plan", false, "disable plan mode")
+	flags.BoolVar(&opts.noSubagents, "no-subagents", false, "disable subagent spawning")
+	flags.BoolVar(&opts.noAskUser, "no-ask-user", false, "disable structured user questions")
+	flags.BoolVar(&opts.disableWebSearch, "disable-web-search", false, "disable web search and fetch tools")
 	flags.BoolVar(&opts.tui, "tui", false, "start the terminal interface")
 	flags.BoolVar(&opts.minimal, "minimal", false, "start the scrollback-native terminal interface")
 	flags.BoolVar(&opts.fullscreen, "fullscreen", false, "force the full-screen terminal interface")
@@ -641,6 +649,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return err
 	}
 	registry := tools.NewRegistry(ws, approver)
+	applyRunToolDisables(registry, opts)
 	if err := registry.ConfigureSandbox(cfg.Sandbox.Profile); err != nil {
 		_ = registry.Close()
 		return err
@@ -665,7 +674,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		ProxyEndpoint: cfg.WebFetch.ProxyEndpoint, AllowedDomains: cfg.WebFetch.AllowedDomains,
 		RestrictDomains: cfg.WebFetch.DomainsConfigured,
 	})
-	registry.SetWebFetchEnabled(cfg.WebFetch.Enabled)
+	registry.SetWebFetchEnabled(cfg.WebFetch.Enabled && !opts.disableWebSearch)
 	if err := registry.ConfigureHunkState(artifactDir); err != nil {
 		_ = registry.Close()
 		return err
@@ -674,16 +683,18 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		_ = registry.Close()
 		return err
 	}
-	if err := registry.ConfigurePlanMode(artifactDir); err != nil {
-		_ = registry.Close()
-		return err
+	if !opts.noPlan {
+		if err := registry.ConfigurePlanMode(artifactDir); err != nil {
+			_ = registry.Close()
+			return err
+		}
 	}
 	if err := registry.ConfigureGoalVerification(artifactDir); err != nil {
 		_ = registry.Close()
 		return err
 	}
 	registry.SetGoalObserver(&sessionGoalObserver{logger: logger})
-	if search, enabled := cfg.WebSearchEndpoint(); enabled {
+	if search, enabled := cfg.WebSearchEndpoint(); enabled && !opts.disableWebSearch {
 		if err := registry.Register(tools.NewWebSearchTool(search.BaseURL, search.APIKey, search.Model, &http.Client{Timeout: cfg.HTTPTimeout})); err != nil {
 			return err
 		}
@@ -794,47 +805,50 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	subagents, err := subagent.New(subagent.Config{
-		Context: ctx, Catalog: agentCatalog, Tools: registry, WorkspaceRoot: ws.Root(), ParentModel: cfg.Model,
-		PermissionClassifier: permissionClassifier,
-		ContextWindow:        cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,
-		TwoPassCompaction: cfg.TwoPassCompaction,
-		ResolveModel:      resolveSubagentModel, AvailableModels: cfg.ModelSlugs(), Skills: skillCatalog,
-		SkillConfig: workspaceSkillsConfig(cfg, plugins), Worktrees: worktreeManager,
-		Observer:   &sessionSubagentObserver{sessionID: logger.ID(), logger: logger, autoWake: cfg.AutoWakeEnabled, wake: wakeSink},
-		SessionDir: filepath.Dir(logger.Path()), ParentSessionID: logger.ID(),
-		AutoWake: func(result tools.SubagentResult) bool {
-			return cfg.AutoWakeEnabled && wakeSink != nil && wakeSink.QueueWake(result.ID, formatLocalSubagentWake(result))
-		},
-		CancelWake: func(id string) {
-			if wakeSink != nil {
-				wakeSink.CancelWake(id)
-			}
-		},
-		DisablePermissionBypass: cfg.DisableBypassPermissionsMode,
-		ParentMCPServers:        mcpRuntime.Configs(),
-		StartMCPServers: func(childCtx context.Context, root string, childTools *tools.Registry, servers []mcp.ServerConfig) (func(), error) {
-			return startSubagentMCPServers(childCtx, cfg, root, childTools, approver, tokenProvider, statusOutput, servers)
-		},
-		NewClient: func(model subagent.ModelRuntime) (agent.ResponseStreamer, error) {
-			child := cfg
-			if model.Profile != "" {
-				child, _ = cfg.ResolveModel(model.Profile)
-			} else {
-				child.Model = model.Model
-			}
-			return newModelClient(child, tokenProvider)
-		}, Hooks: hookCatalog,
-	})
-	if err != nil {
-		return err
+	var subagents *subagent.Manager
+	if !opts.noSubagents {
+		subagents, err = subagent.New(subagent.Config{
+			Context: ctx, Catalog: agentCatalog, Tools: registry, WorkspaceRoot: ws.Root(), ParentModel: cfg.Model,
+			PermissionClassifier: permissionClassifier,
+			ContextWindow:        cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,
+			TwoPassCompaction: cfg.TwoPassCompaction,
+			ResolveModel:      resolveSubagentModel, AvailableModels: cfg.ModelSlugs(), Skills: skillCatalog,
+			SkillConfig: workspaceSkillsConfig(cfg, plugins), Worktrees: worktreeManager,
+			Observer:   &sessionSubagentObserver{sessionID: logger.ID(), logger: logger, autoWake: cfg.AutoWakeEnabled, wake: wakeSink},
+			SessionDir: filepath.Dir(logger.Path()), ParentSessionID: logger.ID(),
+			AutoWake: func(result tools.SubagentResult) bool {
+				return cfg.AutoWakeEnabled && wakeSink != nil && wakeSink.QueueWake(result.ID, formatLocalSubagentWake(result))
+			},
+			CancelWake: func(id string) {
+				if wakeSink != nil {
+					wakeSink.CancelWake(id)
+				}
+			},
+			DisablePermissionBypass: cfg.DisableBypassPermissionsMode,
+			ParentMCPServers:        mcpRuntime.Configs(),
+			StartMCPServers: func(childCtx context.Context, root string, childTools *tools.Registry, servers []mcp.ServerConfig) (func(), error) {
+				return startSubagentMCPServers(childCtx, cfg, root, childTools, approver, tokenProvider, statusOutput, servers)
+			},
+			NewClient: func(model subagent.ModelRuntime) (agent.ResponseStreamer, error) {
+				child := cfg
+				if model.Profile != "" {
+					child, _ = cfg.ResolveModel(model.Profile)
+				} else {
+					child.Model = model.Model
+				}
+				return newModelClient(child, tokenProvider)
+			}, Hooks: hookCatalog,
+		})
+		if err != nil {
+			return err
+		}
+		subagents.SetDefaultType(agentSettings.Default)
+		if err := registry.SetSubagentBackend(subagents); err != nil {
+			subagents.Close()
+			return err
+		}
+		defer subagents.Close()
 	}
-	subagents.SetDefaultType(agentSettings.Default)
-	if err := registry.SetSubagentBackend(subagents); err != nil {
-		subagents.Close()
-		return err
-	}
-	defer subagents.Close()
 	toggleMCPServer := func(updateCtx context.Context, name string, enabled bool) error {
 		found := false
 		for _, server := range mcpRuntime.Catalog() {
@@ -963,7 +977,9 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		hookCatalog.Reconfigure(hooks.Config{WorkspaceRoot: ws.Root(), Compat: reloaded.Compat, ProjectTrusted: projectTrusted, Plugins: nextEnabled})
 		nextSettings, _ := config.LoadAgentSettings(opts.configPath)
 		nextAgents, _ := agents.Discover(agents.Config{WorkspaceRoot: ws.Root(), ProjectTrusted: projectTrusted, Compat: reloaded.Compat, Plugins: nextEnabled, Toggles: nextSettings.Toggle})
-		subagents.SetCatalog(nextAgents)
+		if subagents != nil {
+			subagents.SetCatalog(nextAgents)
+		}
 		return append([]plugin.Plugin(nil), next...), nil
 	}
 	marketplaceAction := func(actionCtx context.Context, action marketplace.Action) (marketplace.Outcome, error) {
@@ -981,7 +997,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			extensionMu.Lock()
 			defer extensionMu.Unlock()
 			return append([]plugin.Plugin(nil), plugins...)
-		}, AgentDefinitions: subagents.Definitions, Personas: personas.New(ws.Root()),
+		}, Personas: personas.New(ws.Root()),
 		AgentSettings: func() (config.AgentSettings, error) { return config.LoadAgentSettings(opts.configPath) },
 		SetAgentEnabled: func(name string, enabled bool) error {
 			if err := config.UpdateAgentToggle(opts.configPath, name, enabled); err != nil {
@@ -999,14 +1015,18 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			for _, discoverErr := range errs {
 				fmt.Fprintln(statusOutput, "[gork] agent definition:", discoverErr)
 			}
-			subagents.SetCatalog(catalog)
+			if subagents != nil {
+				subagents.SetCatalog(catalog)
+			}
 			return nil
 		},
 		SetDefaultAgent: func(name string) error {
 			if err := config.UpdateDefaultAgent(opts.configPath, name); err != nil {
 				return err
 			}
-			subagents.SetDefaultType(name)
+			if subagents != nil {
+				subagents.SetDefaultType(name)
+			}
 			return nil
 		},
 		Login: func(context.Context) error {
@@ -1029,13 +1049,6 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			hookCatalog.Reconfigure(hooks.Config{WorkspaceRoot: ws.Root(), Compat: reloaded.Compat, ProjectTrusted: projectTrusted, Plugins: enabledPlugins(plugins)})
 			return nil
 		},
-		ListSubagents: subagents.List,
-		StartSubagent: func(ctx context.Context, prompt string) (tools.SubagentResult, error) {
-			return subagents.Start(ctx, tools.SubagentRequest{
-				Prompt: prompt, Description: prompt, Type: subagents.DefaultType(), Background: true, BackgroundSet: true,
-			})
-		},
-		GetSubagent: subagents.Output, KillSubagent: subagents.Kill,
 		ListTasks: registry.BackgroundTasks, KillTask: registry.KillBackgroundTask,
 		SessionID: logger.ID(), SessionPath: logger.Path(), Workspace: ws.Root(),
 		ModelID: acpSessionModelID(cfg, ""), Model: cfg.Model, ModelOptions: acpModelOptions(cfg), ReasoningEffort: cfg.ReasoningEffort,
@@ -1052,6 +1065,16 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		UpsertMCPServer: upsertMCPServer, DeleteMCPServer: deleteMCPServer,
 		UpdateSkills: updateSkills, UpdatePlugins: updatePlugins,
 		MarketplaceList: func() ([]marketplace.ScanResult, error) { return marketplace.List(opts.configPath, ws.Root()) }, MarketplaceAction: marketplaceAction,
+	}
+	if subagents != nil {
+		runner.AgentDefinitions = subagents.Definitions
+		runner.ListSubagents = subagents.List
+		runner.StartSubagent = func(ctx context.Context, prompt string) (tools.SubagentResult, error) {
+			return subagents.Start(ctx, tools.SubagentRequest{
+				Prompt: prompt, Description: prompt, Type: subagents.DefaultType(), Background: true, BackgroundSet: true,
+			})
+		}
+		runner.GetSubagent, runner.KillSubagent = subagents.Output, subagents.Kill
 	}
 	usage := newBillingService(cfg, tokenProvider, nil)
 	runner.FetchUsage, runner.OpenURL = usage.Usage, openBrowser
@@ -1087,7 +1110,9 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		}, nil
 	}
 	runner.OnModelChanged = func(runtime agent.ModelRuntime) {
-		subagents.SetParentModel(runtime.Model, runtime.ContextWindow, runtime.CompactThresholdPercent)
+		if subagents != nil {
+			subagents.SetParentModel(runtime.Model, runtime.ContextWindow, runtime.CompactThresholdPercent)
+		}
 		if _, resolved, ok := cfg.ResolveModelEntry(runtime.ID); ok {
 			registry.ConfigureGoalRoles(goalRoleConfig(resolved, true))
 		}
@@ -1221,6 +1246,14 @@ func applyRunOverrides(cfg *config.Config, opts options) {
 	}
 	if opts.maxSteps > 0 {
 		cfg.MaxSteps = opts.maxSteps
+	}
+}
+
+func applyRunToolDisables(registry *tools.Registry, opts options) {
+	registry.SetPlanEnabled(!opts.noPlan)
+	registry.SetUserQuestionsEnabled(!opts.noAskUser)
+	if opts.disableWebSearch {
+		registry.SetWebFetchEnabled(false)
 	}
 }
 
@@ -2938,6 +2971,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			return nil, nil, err
 		}
 		registry := tools.NewRegistry(ws, approver)
+		applyRunToolDisables(registry, opts)
 		if err := registry.ConfigureSandbox(sessionCfg.Sandbox.Profile); err != nil {
 			_ = registry.Close()
 			return nil, nil, err
@@ -2949,7 +2983,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		}
 		registry.ConfigureUserQuestions(sessionCfg.AskUserQuestion.TimeoutEnabled, time.Duration(sessionCfg.AskUserQuestion.TimeoutSeconds)*time.Second)
 		registry.ConfigureGoalRoles(goalRoleConfig(sessionCfg, true))
-		if search, enabled := cfg.WebSearchEndpoint(); enabled {
+		if search, enabled := cfg.WebSearchEndpoint(); enabled && !opts.disableWebSearch {
 			if err := registry.Register(tools.NewWebSearchTool(search.BaseURL, search.APIKey, search.Model, &http.Client{Timeout: cfg.HTTPTimeout})); err != nil {
 				_ = registry.Close()
 				return nil, nil, err
@@ -3003,10 +3037,12 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			_ = registry.Close()
 			return nil, nil, err
 		}
-		if err := registry.ConfigurePlanMode(artifactDir); err != nil {
-			_ = logger.Close()
-			_ = registry.Close()
-			return nil, nil, err
+		if !opts.noPlan {
+			if err := registry.ConfigurePlanMode(artifactDir); err != nil {
+				_ = logger.Close()
+				_ = registry.Close()
+				return nil, nil, err
+			}
 		}
 		if err := registry.ConfigureGoalVerification(artifactDir); err != nil {
 			_ = logger.Close()
@@ -3014,7 +3050,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			return nil, nil, err
 		}
 		registry.SetGoalObserver(&sessionGoalObserver{server: server, sessionID: logger.ID(), logger: logger})
-		registry.SetWebFetchEnabled(cfg.WebFetch.Enabled)
+		registry.SetWebFetchEnabled(cfg.WebFetch.Enabled && !opts.disableWebSearch)
 		if sessionConfig.ResumePath == "" {
 			metadata := sessionMetadataWithDisplay(ctx, ws.Root(), modelID, reasoningEffort, sessionConfig.DisplayCWD)
 			metadata["sandboxProfile"] = sessionCfg.Sandbox.Profile
@@ -3124,46 +3160,48 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			resolved, ok := catalog.ResolveModel(slug)
 			return subagent.ModelRuntime{Profile: slug, Model: resolved.Model, ContextWindow: resolved.ContextWindow, CompactThresholdPercent: resolved.AutoCompactThresholdPercent}, ok
 		}
-		subagentManager, err = subagent.New(subagent.Config{
-			Context: sessionCtx, Catalog: agentCatalog, Tools: registry, WorkspaceRoot: ws.Root(), ParentModel: sessionCfg.Model,
-			PermissionClassifier: permissionClassifier,
-			ContextWindow:        sessionCfg.ContextWindow, CompactThresholdPercent: sessionCfg.AutoCompactThresholdPercent,
-			TwoPassCompaction: sessionCfg.TwoPassCompaction,
-			ResolveModel:      resolveSubagentModel, AvailableModels: sessionCfg.ModelSlugs(), Skills: catalog,
-			SkillConfig: workspaceSkillsConfig(sessionCfg, plugins), Worktrees: server.WorktreeManager(),
-			Observer:   &sessionSubagentObserver{server: server, sessionID: logger.ID(), logger: logger},
-			SessionDir: filepath.Dir(logger.Path()), ParentSessionID: logger.ID(),
-			AutoWake: func(result tools.SubagentResult) bool {
-				return sessionCfg.AutoWakeEnabled && server.QueueSubagentWake(logger.ID(), result)
-			},
-			CancelWake:              func(id string) { server.CancelSubagentWake(logger.ID(), id) },
-			DisablePermissionBypass: sessionCfg.DisableBypassPermissionsMode,
-			ParentMCPServers:        mcpRuntime.Configs(),
-			StartMCPServers: func(childCtx context.Context, root string, childTools *tools.Registry, servers []mcp.ServerConfig) (func(), error) {
-				return startSubagentMCPServers(childCtx, sessionCfg, root, childTools, approver, sessionTokenProvider, statusOutput, servers)
-			},
-			NewClient: func(model subagent.ModelRuntime) (agent.ResponseStreamer, error) {
-				modelCatalogMu.RLock()
-				child := modelCatalog
-				modelCatalogMu.RUnlock()
-				if model.Profile != "" {
-					child, _ = child.ResolveModel(model.Profile)
-				} else {
-					child.Model = model.Model
-				}
-				return newModelClient(child, sessionTokenProvider)
-			}, Hooks: pluginState.hooks,
-		})
-		if err != nil {
-			cleanup()
-			return nil, nil, err
-		}
-		if settings, loadErr := config.LoadAgentSettings(opts.configPath); loadErr == nil {
-			subagentManager.SetDefaultType(settings.Default)
-		}
-		if err := registry.SetSubagentBackend(subagentManager); err != nil {
-			cleanup()
-			return nil, nil, err
+		if !opts.noSubagents {
+			subagentManager, err = subagent.New(subagent.Config{
+				Context: sessionCtx, Catalog: agentCatalog, Tools: registry, WorkspaceRoot: ws.Root(), ParentModel: sessionCfg.Model,
+				PermissionClassifier: permissionClassifier,
+				ContextWindow:        sessionCfg.ContextWindow, CompactThresholdPercent: sessionCfg.AutoCompactThresholdPercent,
+				TwoPassCompaction: sessionCfg.TwoPassCompaction,
+				ResolveModel:      resolveSubagentModel, AvailableModels: sessionCfg.ModelSlugs(), Skills: catalog,
+				SkillConfig: workspaceSkillsConfig(sessionCfg, plugins), Worktrees: server.WorktreeManager(),
+				Observer:   &sessionSubagentObserver{server: server, sessionID: logger.ID(), logger: logger},
+				SessionDir: filepath.Dir(logger.Path()), ParentSessionID: logger.ID(),
+				AutoWake: func(result tools.SubagentResult) bool {
+					return sessionCfg.AutoWakeEnabled && server.QueueSubagentWake(logger.ID(), result)
+				},
+				CancelWake:              func(id string) { server.CancelSubagentWake(logger.ID(), id) },
+				DisablePermissionBypass: sessionCfg.DisableBypassPermissionsMode,
+				ParentMCPServers:        mcpRuntime.Configs(),
+				StartMCPServers: func(childCtx context.Context, root string, childTools *tools.Registry, servers []mcp.ServerConfig) (func(), error) {
+					return startSubagentMCPServers(childCtx, sessionCfg, root, childTools, approver, sessionTokenProvider, statusOutput, servers)
+				},
+				NewClient: func(model subagent.ModelRuntime) (agent.ResponseStreamer, error) {
+					modelCatalogMu.RLock()
+					child := modelCatalog
+					modelCatalogMu.RUnlock()
+					if model.Profile != "" {
+						child, _ = child.ResolveModel(model.Profile)
+					} else {
+						child.Model = model.Model
+					}
+					return newModelClient(child, sessionTokenProvider)
+				}, Hooks: pluginState.hooks,
+			})
+			if err != nil {
+				cleanup()
+				return nil, nil, err
+			}
+			if settings, loadErr := config.LoadAgentSettings(opts.configPath); loadErr == nil {
+				subagentManager.SetDefaultType(settings.Default)
+			}
+			if err := registry.SetSubagentBackend(subagentManager); err != nil {
+				cleanup()
+				return nil, nil, err
+			}
 		}
 		watchCtx, stopSkills := context.WithCancel(sessionCtx)
 		catalog.Watch(watchCtx, time.Second)
@@ -3327,7 +3365,9 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 					Toggles: agentSettings.Toggle,
 				})
 				state.agents = agentCatalog
-				state.subagents.SetCatalog(agentCatalog)
+				if state.subagents != nil {
+					state.subagents.SetCatalog(agentCatalog)
+				}
 				state.updateMu.Unlock()
 			}
 			return pluginInventory(), nil
@@ -3401,15 +3441,8 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		}
 		runner := &agent.Runner{
 			Client: modelClient, Tools: registry, Skills: catalog, PluginInventory: pluginInventory,
-			AgentDefinitions: subagentManager.Definitions, Personas: personas.New(pluginState.root), Logger: logger,
+			Personas: personas.New(pluginState.root), Logger: logger,
 			HookCatalog: pluginState.hooks, HookPolicy: pluginState.hookRun,
-			ListSubagents: subagentManager.List,
-			StartSubagent: func(ctx context.Context, prompt string) (tools.SubagentResult, error) {
-				return subagentManager.Start(ctx, tools.SubagentRequest{
-					Prompt: prompt, Description: prompt, Type: subagentManager.DefaultType(), Background: true, BackgroundSet: true,
-				})
-			},
-			GetSubagent: subagentManager.Output, KillSubagent: subagentManager.Kill,
 			ListTasks: registry.BackgroundTasks, KillTask: registry.KillBackgroundTask,
 			ReloadHooks: func() error {
 				pluginState.updateMu.Lock()
@@ -3445,6 +3478,16 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			MarketplaceAction: marketplaceAction,
 			SessionID:         logger.ID(), SessionPath: logger.Path(), Workspace: ws.Root(), PromptWorkspace: sessionConfig.DisplayCWD,
 		}
+		if subagentManager != nil {
+			runner.AgentDefinitions = subagentManager.Definitions
+			runner.ListSubagents = subagentManager.List
+			runner.StartSubagent = func(ctx context.Context, prompt string) (tools.SubagentResult, error) {
+				return subagentManager.Start(ctx, tools.SubagentRequest{
+					Prompt: prompt, Description: prompt, Type: subagentManager.DefaultType(), Background: true, BackgroundSet: true,
+				})
+			}
+			runner.GetSubagent, runner.KillSubagent = subagentManager.Output, subagentManager.Kill
+		}
 		usage := newBillingService(cfg, sessionTokenProvider, getBillingMeta)
 		runner.FetchUsage, runner.OpenURL = usage.Usage, openBrowser
 		releaseNotes := newChangelogService()
@@ -3474,7 +3517,9 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			}, nil
 		}
 		runner.OnModelChanged = func(runtime agent.ModelRuntime) {
-			subagentManager.SetParentModel(runtime.Model, runtime.ContextWindow, runtime.CompactThresholdPercent)
+			if subagentManager != nil {
+				subagentManager.SetParentModel(runtime.Model, runtime.ContextWindow, runtime.CompactThresholdPercent)
+			}
 			modelCatalogMu.RLock()
 			catalog := modelCatalog
 			modelCatalogMu.RUnlock()
@@ -3512,7 +3557,9 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			}
 			modelCatalogMu.Unlock()
 			if changed {
-				subagentManager.SetAvailableModels(next.ModelSlugs())
+				if subagentManager != nil {
+					subagentManager.SetAvailableModels(next.ModelSlugs())
+				}
 			}
 			return agent.ModelCatalogUpdate{
 				Options: acpModelOptions(next), PreferredID: newPreferred,

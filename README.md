@@ -480,6 +480,11 @@ Reference-compatible aliases are available for common one-shot runs:
 instructions. `--always-approve`, `--yolo`, and
 `--dangerously-skip-permissions` select always-approve mode while preserving
 managed policy and explicit deny rules.
+`--no-plan` removes plan-mode tools and local plan entry, `--no-subagents`
+removes task spawning while preserving background shell tasks, `--no-ask-user`
+removes structured question prompts, and `--disable-web-search` removes both
+web search and fetch tools. These switches apply only to the current process
+and do not rewrite configuration.
 
 Headless runs also accept `--prompt-file PATH` and `--prompt-json JSON`.
 Files ending in `.json` use the same ACP text, image, resource-link, and

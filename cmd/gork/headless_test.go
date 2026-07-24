@@ -83,6 +83,10 @@ func TestParseRunOptionsSupportsSessionStartupAliases(t *testing.T) {
 		worktreeSet   bool
 		worktree      string
 		worktreeRef   string
+		noPlan        bool
+		noSubagents   bool
+		noAskUser     bool
+		disableWeb    bool
 		positionalLen int
 	}{
 		{args: []string{"--resume"}, resumeSet: true},
@@ -94,6 +98,7 @@ func TestParseRunOptionsSupportsSessionStartupAliases(t *testing.T) {
 		{args: []string{"--resume", "parent", "--fork-session"}, resume: "parent", resumeSet: true, fork: true},
 		{args: []string{"-w", "--ref", "main"}, worktreeSet: true, worktreeRef: "main"},
 		{args: []string{"--worktree", "feature", "--worktree-ref", "HEAD"}, worktreeSet: true, worktree: "feature", worktreeRef: "HEAD"},
+		{args: []string{"--no-plan", "--no-subagents", "--no-ask-user", "--disable-web-search"}, noPlan: true, noSubagents: true, noAskUser: true, disableWeb: true},
 	}
 	for _, test := range tests {
 		opts, flags, err := parseRunOptions(test.args, io.Discard)
@@ -104,6 +109,8 @@ func TestParseRunOptionsSupportsSessionStartupAliases(t *testing.T) {
 			opts.continueLast != test.continueLast || opts.sessionID != test.sessionID ||
 			opts.forkSession != test.fork || opts.worktreeSet != test.worktreeSet ||
 			opts.worktree != test.worktree || opts.worktreeRef != test.worktreeRef ||
+			opts.noPlan != test.noPlan || opts.noSubagents != test.noSubagents ||
+			opts.noAskUser != test.noAskUser || opts.disableWebSearch != test.disableWeb ||
 			len(flags.Args()) != test.positionalLen {
 			t.Fatalf("args=%v opts=%#v positional=%v", test.args, opts, flags.Args())
 		}

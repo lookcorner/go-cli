@@ -511,6 +511,67 @@ func TestHeadlessJSONPromptAndSchemaReachResponsesRequest(t *testing.T) {
 	}
 }
 
+func TestRunCapabilityFlagsRemoveOnlyRequestedTools(t *testing.T) {
+	home, root, sessionDir := t.TempDir(), t.TempDir(), t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	t.Setenv("HOME", home)
+	t.Setenv("GORK_API_KEY", "test-key")
+	t.Setenv("XAI_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	configPath := filepath.Join(home, "config.toml")
+	if err := os.WriteFile(configPath, []byte("[features]\nweb_fetch = true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var requests []api.ResponseRequest
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var body api.ResponseRequest
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		requests = append(requests, body)
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(writer, `{"id":"response-%d","output":[{"type":"message","content":[{"type":"output_text","text":"done"}]}]}`, len(requests))
+	}))
+	defer server.Close()
+
+	base := []string{
+		"--config", configPath, "--cwd", root, "--session-dir", sessionDir, "--base-url", server.URL,
+		"-m", "test-model", "-p", "inspect",
+	}
+	if err := runOnce(base, strings.NewReader(""), io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	disabled := append([]string{
+		"--no-plan", "--no-subagents", "--no-ask-user", "--disable-web-search",
+	}, base...)
+	if err := runOnce(disabled, strings.NewReader(""), io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("requests=%#v", requests)
+	}
+	names := func(definitions []api.ToolDefinition) map[string]bool {
+		result := make(map[string]bool, len(definitions))
+		for _, definition := range definitions {
+			result[definition.Name] = true
+		}
+		return result
+	}
+	defaults, limited := names(requests[0].Tools), names(requests[1].Tools)
+	for _, name := range []string{"enter_plan_mode", "exit_plan_mode", "ask_user_question", "task", "web_fetch", "web_search"} {
+		if !defaults[name] || limited[name] {
+			t.Fatalf("tool %q default=%v limited=%v", name, defaults[name], limited[name])
+		}
+	}
+	for _, name := range []string{"read_file", "shell", "get_task_output"} {
+		if !limited[name] {
+			t.Fatalf("base tool %q was removed: %#v", name, limited)
+		}
+	}
+}
+
 func TestSessionStartupFlagsCreateResumeAndFork(t *testing.T) {
 	home, root, sessionDir := t.TempDir(), t.TempDir(), t.TempDir()
 	t.Setenv("GROK_HOME", home)

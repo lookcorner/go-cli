@@ -129,6 +129,10 @@ and `--fork-session` creates an append-only child without changing its parent.
 `--worktree/-w [LABEL]` and `--worktree-ref/--ref REF` create isolated
 Git-backed startup sessions; combining worktree mode with resume copies the
 parent conversation into a child bound to the isolated workspace.
+Session-scoped `--no-plan`, `--no-subagents`, `--no-ask-user`, and
+`--disable-web-search` capability switches remove their corresponding runtime
+tools without rewriting configuration; disabling web search also removes web
+fetch.
 Explicit CLI values are reapplied after remote settings so command-line intent
 wins.
 Headless prompt files, ACP JSON text/image/resource blocks,

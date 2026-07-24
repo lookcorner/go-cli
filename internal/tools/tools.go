@@ -433,6 +433,33 @@ func (r *Registry) SetWebFetchEnabled(enabled bool) {
 	}
 }
 
+func (r *Registry) SetPlanEnabled(enabled bool) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if enabled {
+		return
+	}
+	delete(r.tools, "enter_plan_mode")
+	delete(r.tools, "exit_plan_mode")
+	r.plan = nil
+	if r.questions != nil {
+		r.questions.plan = nil
+	}
+}
+
+func (r *Registry) SetUserQuestionsEnabled(enabled bool) {
+	if r == nil || enabled {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.tools, "ask_user_question")
+	r.questions = nil
+}
+
 func (r *Registry) ConfigureHunkState(artifactDir string) error {
 	if artifactDir == "" {
 		return errors.New("session artifact directory is required")
@@ -748,6 +775,9 @@ func (r *Registry) ConfigureUserQuestions(timeoutEnabled bool, timeout time.Dura
 
 func (r *Registry) SetPlanMode(active bool) error {
 	if r == nil || r.plan == nil {
+		if !active {
+			return nil
+		}
 		return errors.New("plan mode unavailable")
 	}
 	return r.plan.SetActive(active)
@@ -755,6 +785,10 @@ func (r *Registry) SetPlanMode(active bool) error {
 
 func (r *Registry) PlanModeActive() bool {
 	return r != nil && r.plan != nil && r.plan.Active()
+}
+
+func (r *Registry) PlanModeAvailable() bool {
+	return r != nil && r.plan != nil
 }
 
 func (r *Registry) CurrentPlan() (string, error) {

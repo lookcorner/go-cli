@@ -69,6 +69,33 @@ func TestRegistryForWorkspaceRebindsCoreToolsAndKeepsExternalTools(t *testing.T)
 	}
 }
 
+func TestRegistryCapabilityDisablesPersistAcrossWorkspaceViews(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry(ws, PromptApprover{Mode: PermissionAuto})
+	defer registry.Close()
+	registry.SetPlanEnabled(false)
+	registry.SetUserQuestionsEnabled(false)
+	registry.SetWebFetchEnabled(false)
+	child := registry.ForWorkspace(ws)
+	defer child.Close()
+	for _, current := range []*Registry{registry, child} {
+		for _, name := range []string{"enter_plan_mode", "exit_plan_mode", "ask_user_question", "web_fetch"} {
+			if current.HasTool(name) {
+				t.Fatalf("disabled tool %q was present", name)
+			}
+		}
+		if err := current.SetPlanMode(true); err == nil {
+			t.Fatal("disabled plan mode was entered")
+		}
+		if err := current.SetPlanMode(false); err != nil {
+			t.Fatalf("default mode failed with plan disabled: %v", err)
+		}
+	}
+}
+
 func TestRegistryEnvironmentReachesForegroundBackgroundAndChild(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell fixture is Unix-specific")

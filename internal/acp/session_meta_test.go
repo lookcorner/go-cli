@@ -66,6 +66,72 @@ func TestSessionStartResponseMetadata(t *testing.T) {
 	}
 }
 
+func TestStoredPlanModeFallsBackWhenPlanIsDisabled(t *testing.T) {
+	sessionDir, cwd := t.TempDir(), t.TempDir()
+	logger, err := sessionlog.NewLoggerWithID(sessionDir, "disabled-plan")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append("session_metadata", map[string]any{"cwd": cwd}); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.AppendPrompt("stored question", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append("model_response", map[string]any{"response_id": "stored-response", "text": "stored answer"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append("session_mode", map[string]any{"mode_id": "plan"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	path, err := sessionlog.PathForID(sessionDir, "disabled-plan")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{
+		SessionDir: sessionDir,
+		sessions:   make(map[string]*session),
+		Factory: func(_ context.Context, cfg SessionConfig, approver tools.Approver, _, _ io.Writer) (*agent.Runner, func(), error) {
+			ws, err := workspace.Open(cfg.CWD)
+			if err != nil {
+				return nil, nil, err
+			}
+			registry := tools.NewRegistry(ws, approver)
+			registry.SetPlanEnabled(false)
+			resumed, _, err := sessionlog.Resume(cfg.ResumePath)
+			if err != nil {
+				_ = registry.Close()
+				return nil, nil, err
+			}
+			return &agent.Runner{Tools: registry, Logger: resumed}, func() {
+				_ = resumed.Close()
+				_ = registry.Close()
+			}, nil
+		},
+	}
+	current, err := server.startSession(context.Background(), "disabled-plan", SessionConfig{CWD: cwd, ResumePath: path}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.closeSession(current.id)
+	if mode := currentMode(current); mode != "default" {
+		t.Fatalf("mode=%q", mode)
+	}
+	modes := sessionStartResponse(current, currentMode(current))["modes"].(map[string]any)
+	available := modes["availableModes"].([]any)
+	if modes["currentModeId"] != "default" || len(available) != 2 {
+		t.Fatalf("modes=%#v", modes)
+	}
+	for _, item := range available {
+		if item.(map[string]any)["id"] == "plan" {
+			t.Fatalf("disabled plan mode was advertised: %#v", modes)
+		}
+	}
+}
+
 func TestNewSessionReturnsWorkspaceMetadata(t *testing.T) {
 	for _, gitRepo := range []bool{false, true} {
 		t.Run(map[bool]string{false: "non-git", true: "git"}[gitRepo], func(t *testing.T) {

@@ -267,6 +267,8 @@ func (m *model) slashCommandAvailable(name string) bool {
 		return runner != nil && runner.MCPServerCatalog != nil
 	case "loop":
 		return runner != nil && runner.Tools != nil && runner.Tools.HasTool("scheduler_create")
+	case "plan", "view-plan", "show-plan", "plan-view":
+		return runner != nil && runner.Tools != nil && runner.Tools.PlanModeAvailable()
 	case "imagine":
 		return runner != nil && runner.Tools != nil && runner.Tools.HasTool(imagine.ImageTool)
 	case "imagine-video":

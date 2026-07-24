@@ -1862,6 +1862,9 @@ func (s *Server) startSession(ctx context.Context, id string, sessionConfig Sess
 		closeRuntime()
 		return nil, modeErr
 	}
+	if mode == "plan" && !runner.Tools.PlanModeAvailable() {
+		mode = "default"
+	}
 	if err := runner.Tools.SetPlanMode(mode == "plan"); err != nil {
 		closeRuntime()
 		return nil, err
@@ -2750,15 +2753,15 @@ func validSessionMode(mode string) bool {
 	return mode == "default" || mode == "ask" || mode == "plan"
 }
 
-func sessionModes(current string) map[string]any {
-	return map[string]any{
-		"currentModeId": current,
-		"availableModes": []any{
-			map[string]any{"id": "default", "name": "Agent", "description": "Use tools to complete the task."},
-			map[string]any{"id": "ask", "name": "Ask", "description": "Answer without changing the workspace."},
-			map[string]any{"id": "plan", "name": "Plan", "description": "Investigate and produce an implementation plan without changing the workspace."},
-		},
+func sessionModes(current string, planAvailable bool) map[string]any {
+	available := []any{
+		map[string]any{"id": "default", "name": "Agent", "description": "Use tools to complete the task."},
+		map[string]any{"id": "ask", "name": "Ask", "description": "Answer without changing the workspace."},
 	}
+	if planAvailable {
+		available = append(available, map[string]any{"id": "plan", "name": "Plan", "description": "Investigate and produce an implementation plan without changing the workspace."})
+	}
+	return map[string]any{"currentModeId": current, "availableModes": available}
 }
 
 func instructionsForMode(base, mode string) string {

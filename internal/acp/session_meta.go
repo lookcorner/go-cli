@@ -30,9 +30,10 @@ func sessionStartResponse(current *session, mode string) map[string]any {
 	}
 	state := modelState(runner)
 	options := sessionConfigOptions(runner, state)
+	planAvailable := runner != nil && runner.Tools != nil && runner.Tools.PlanModeAvailable()
 	current.mu.Unlock()
 	return map[string]any{
-		"sessionId": id, "modes": sessionModes(mode), "models": state,
+		"sessionId": id, "modes": sessionModes(mode, planAvailable), "models": state,
 		"_meta": map[string]any{
 			"x.ai/sessionConfig": map[string]any{"options": options},
 			"x.ai/sessionDetail": sessionDetail{

@@ -10,6 +10,8 @@ import (
 
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/skills"
+	"github.com/lookcorner/go-cli/internal/tools"
+	"github.com/lookcorner/go-cli/internal/workspace"
 )
 
 func TestSlashMenuFuzzyCompletionAndExecution(t *testing.T) {
@@ -146,7 +148,7 @@ func TestSlashMenuRespectsCapabilitiesAndScreenMode(t *testing.T) {
 	m := &model{width: 70, height: 18, modelName: "test"}
 	m.setInput("/")
 	labels := slashLabels(m.slashSuggestions())
-	for _, hidden := range []string{"/auto", "/feedback", "/fullscreen", "/imagine", "/loop", "/share"} {
+	for _, hidden := range []string{"/auto", "/feedback", "/fullscreen", "/imagine", "/loop", "/plan", "/share", "/view-plan"} {
 		if strings.Contains(labels, hidden+"\n") {
 			t.Fatalf("unexpected %s in %q", hidden, labels)
 		}
@@ -160,6 +162,21 @@ func TestSlashMenuRespectsCapabilitiesAndScreenMode(t *testing.T) {
 	labels = slashLabels(m.slashSuggestions())
 	if strings.Contains(labels, "/minimal\n") || !strings.Contains(labels, "/fullscreen\n") {
 		t.Fatalf("screen commands=%q", labels)
+	}
+
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	m.runner = &agent.Runner{Tools: registry}
+	m.slashQuery = ""
+	labels = slashLabels(m.slashSuggestions())
+	for _, visible := range []string{"/plan\n", "/view-plan\n"} {
+		if !strings.Contains(labels, visible) {
+			t.Fatalf("%s missing from %q", strings.TrimSpace(visible), labels)
+		}
 	}
 }
 
