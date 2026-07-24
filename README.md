@@ -580,6 +580,9 @@ Outside the TUI, `gork sessions list`, `search <query>`, and
 `delete <session-id>` provide the reference local session-management commands.
 List and search are scoped to the current workspace and accept `-n`/`--limit`;
 delete resolves an exact validated session ID.
+`gork export <session-id> [output]` exports completed conversation history as
+Markdown, including compact tool summaries. Without an output path it writes to
+stdout; `-c`/`--clipboard` copies through the platform's native clipboard tool.
 `/fork [--worktree|--no-worktree] [directive]` copies the completed conversation
 into a child session without a model turn, then restarts the TUI in that child.
 The optional directive becomes the child's first prompt after restart. Without a

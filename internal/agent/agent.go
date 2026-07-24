@@ -323,11 +323,10 @@ func (r *Runner) ExportSession(filename, cwd string) (string, string, error) {
 	if strings.TrimSpace(r.SessionPath) == "" {
 		return "", "", errors.New("no active session to export")
 	}
-	messages, err := session.Transcript(r.SessionPath)
+	content, err := session.ExportMarkdown(r.SessionPath)
 	if err != nil {
 		return "", "", err
 	}
-	content := session.FormatTranscript(messages)
 	if strings.TrimSpace(content) == "" {
 		return "", "", errors.New("no conversation content to export")
 	}
