@@ -903,14 +903,19 @@ editor/IDE integrations:
 ```sh
 ./gork --acp
 ./gork agent stdio
+./gork agent --secret TOKEN serve
 ```
 
 `gork agent stdio` is the reference command form and uses the same ACP runtime
 as `--acp`. It accepts model, reasoning, permission, workspace, session,
-folder-trust, memory, and capability flags before `stdio`. Reference
-`agent headless`, `agent serve`, and `agent leader` modes require the separate
-WebSocket/leader protocol and currently fail explicitly instead of silently
-falling back to ACP or treating the mode as a prompt.
+folder-trust, memory, and capability flags before `stdio`. `agent serve`
+exposes the same persistent runtime at `ws://127.0.0.1:2419/ws` by default.
+Authenticate with `Authorization: Bearer TOKEN` or the `server-key=TOKEN`
+query parameter. Set the token with `--secret` or `GROK_AGENT_SECRET`; when
+neither is set, the command prints a generated 12-character token. Use
+`--bind ADDRESS` to change the listener. Text and UTF-8 binary JSON frames are
+accepted, and running sessions survive client reconnects. Reference
+`agent headless` and `agent leader` modes still fail explicitly.
 
 Each `session/new` gets its own workspace, tool state, model history, local
 session log, MCP/LSP processes, and cleanup lifecycle. New and restored session

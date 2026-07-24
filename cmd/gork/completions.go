@@ -30,8 +30,8 @@ var completionRoot = completionSpec{
 	},
 	children: map[string]completionSpec{
 		"agent": {
-			flags:    words("--always-approve --allow --config --cwd --deny --disable-web-search --effort --experimental-memory --model --no-ask-user --no-leader --no-memory --no-plan --no-subagents --permission-mode --reasoning-effort --session-dir --trust --workspace --yolo -m"),
-			children: leaves("stdio"),
+			flags:    words("--always-approve --allow --bind --config --cwd --deny --disable-web-search --effort --experimental-memory --model --no-ask-user --no-leader --no-memory --no-plan --no-subagents --permission-mode --reasoning-effort --secret --session-dir --trust --workspace --yolo -m"),
+			children: leaves("serve", "stdio"),
 		},
 		"completions": {children: leaves("bash", "elvish", "fish", "powershell", "zsh")},
 		"dashboard":   {flags: words("--config --fullscreen --minimal --session-dir --trust --workspace")},
@@ -75,14 +75,14 @@ var completionRoot = completionSpec{
 }
 
 var completionValueFlags = map[string]bool{
-	"--allow": true, "--approval": true, "--auth-file": true, "--audience": true,
+	"--allow": true, "--approval": true, "--auth-file": true, "--audience": true, "--bind": true,
 	"--append-system-prompt": true, "--backend": true, "--base-url": true, "--client-id": true, "--config": true, "--cwd": true,
 	"--deny": true, "--goal-runs": true, "--issuer": true, "--limit": true,
 	"--effort": true, "--json-schema": true, "--max-age": true, "--max-steps": true, "--max-turns": true, "--model": true,
 	"--load": true, "--output-format": true, "--permission-mode": true, "--previous-response-id": true, "--print": true,
 	"--prompt-file": true, "--prompt-json": true, "--reasoning-effort": true, "--rules": true, "--single": true,
 	"--args": true, "--command": true, "--env": true, "--header": true, "--repo": true, "--resume": true, "--sandbox": true, "--scope": true, "--scopes": true,
-	"--session-dir": true, "--session-id": true, "--system": true, "--system-prompt": true, "--system-prompt-override": true,
+	"--secret": true, "--session-dir": true, "--session-id": true, "--system": true, "--system-prompt": true, "--system-prompt-override": true,
 	"--timeout": true, "--type": true, "--transport": true, "--url": true, "--version": true, "--workspace": true, "-H": true, "-e": true, "-m": true,
 	"--worktree": true, "--worktree-ref": true, "--ref": true, "-n": true, "-p": true, "-r": true, "-s": true,
 	"-t": true, "-w": true,

@@ -51,7 +51,8 @@ implementation.
 - `internal/acp` translates ACP JSON-RPC requests and responses; feedback slash
   and extension inputs share one application persistence port, while review
   comments reuse the existing session event logger.
-- `cmd/gork` wires configuration, domains, and interactive or ACP transports.
+- `cmd/gork` wires configuration, domains, and interactive, ACP stdio, or
+  WebSocket transports.
 - `internal/tui` presents terminal state and emits typed lifecycle requests;
   `cmd/gork` performs runtime restart and coordinates session/worktree forks,
   while `internal/session` retains JSONL identity, copy, listing, path

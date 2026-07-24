@@ -30,8 +30,8 @@ func TestCompletionCandidatesFollowCommandTree(t *testing.T) {
 		want []string
 	}{
 		{nil, []string{"--always-approve", "--continue", "--cwd", "--disable-web-search", "--fork-session", "--json-schema", "--load", "--max-turns", "--no-ask-user", "--no-plan", "--no-subagents", "--output-format", "--prompt-file", "--prompt-json", "--reasoning-effort", "--ref", "--session-id", "--single", "--worktree", "--worktree-ref", "-c", "-m", "-p", "-r", "-s", "-w", "-V", "agent", "completions", "dashboard", "models", "plugin", "share", "trace", "update", "version", "wrap", "worktree"}},
-		{[]string{"agent", ""}, []string{"stdio"}},
-		{[]string{"agent", "--"}, []string{"--always-approve", "--model", "--no-leader", "--reasoning-effort"}},
+		{[]string{"agent", ""}, []string{"serve", "stdio"}},
+		{[]string{"agent", "--"}, []string{"--always-approve", "--bind", "--model", "--no-leader", "--reasoning-effort", "--secret"}},
 		{[]string{"dashboard", "--"}, []string{"--config", "--fullscreen", "--minimal", "--session-dir", "--trust", "--workspace"}},
 		{[]string{"completions", ""}, []string{"bash", "elvish", "fish", "powershell", "zsh"}},
 		{[]string{"plugin", ""}, []string{"details", "disable", "enable", "install", "list", "marketplace", "remove", "rm", "tag", "uninstall", "update", "validate"}},
