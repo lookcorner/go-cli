@@ -511,6 +511,88 @@ func TestHeadlessJSONPromptAndSchemaReachResponsesRequest(t *testing.T) {
 	}
 }
 
+func TestSessionStartupFlagsCreateResumeAndFork(t *testing.T) {
+	home, root, sessionDir := t.TempDir(), t.TempDir(), t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	t.Setenv("HOME", home)
+	t.Setenv("GORK_API_KEY", "test-key")
+	t.Setenv("XAI_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	var requests []api.ResponseRequest
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, httpRequest *http.Request) {
+		var request api.ResponseRequest
+		if err := json.NewDecoder(httpRequest.Body).Decode(&request); err != nil {
+			t.Error(err)
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		requests = append(requests, request)
+		id := fmt.Sprintf("response-%d", len(requests))
+		writer.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(writer).Encode(map[string]any{
+			"id": id,
+			"output": []any{map[string]any{
+				"type":    "message",
+				"content": []any{map[string]any{"type": "output_text", "text": "done"}},
+			}},
+		})
+	}))
+	defer server.Close()
+
+	parentID := "018f47a2-4df1-7d5b-8c2a-1f7d9e6b3a40"
+	childID := "018f47a2-4df1-4d5b-8c2a-1f7d9e6b3a41"
+	base := []string{
+		"--cwd", root, "--session-dir", sessionDir, "--base-url", server.URL,
+		"-m", "test-model",
+	}
+	if err := runOnce(append(append([]string(nil), base...), "-s", parentID, "-p", "first"),
+		strings.NewReader(""), io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	parentPath, err := session.PathForID(sessionDir, parentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentBefore, err := os.ReadFile(parentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runOnce(append(append([]string(nil), base...), "--load", parentID, "-p", "second"),
+		strings.NewReader(""), io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if err := runOnce(append(append([]string(nil), base...),
+		"-r", parentID, "--fork-session", "-s", childID, "-p", "forked"),
+		strings.NewReader(""), io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 3 || requests[0].PreviousResponseID != "" ||
+		requests[1].PreviousResponseID != "response-1" ||
+		requests[2].PreviousResponseID != "response-2" {
+		t.Fatalf("requests=%#v", requests)
+	}
+	parentAfter, err := os.ReadFile(parentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(parentBefore, parentAfter) {
+		t.Fatal("resume did not append to the parent session")
+	}
+	childPath, err := session.PathForID(sessionDir, childID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	childData, err := os.ReadFile(childPath)
+	if err != nil || !bytes.Contains(childData, []byte(`"kind":"session_forked"`)) ||
+		!bytes.Contains(childData, []byte(`"parent_session_id":"`+parentID+`"`)) {
+		t.Fatalf("child=%s err=%v", childData, err)
+	}
+	parentFinal, err := os.ReadFile(parentPath)
+	if err != nil || !bytes.Equal(parentAfter, parentFinal) {
+		t.Fatal("fork modified the parent session")
+	}
+}
+
 func TestRestartTUITranslatesNewAgentPrompt(t *testing.T) {
 	fresh := &tui.NewSessionError{Prompt: "--check this branch"}
 	if !errors.Is(fresh, tui.ErrNewSession) {
@@ -532,6 +614,19 @@ func TestRestartTUITranslatesForkRequestWithDirective(t *testing.T) {
 	want := []string{"--tui", "--resume", "/sessions/child.jsonl", "--workspace", "/forked", "--", "--check this branch"}
 	if !errors.As(err, &restart) || !reflect.DeepEqual(restart.args, want) {
 		t.Fatalf("err=%v restart=%#v", err, restart)
+	}
+}
+
+func TestRestartSessionArgsDropsSessionStartupAliases(t *testing.T) {
+	args := []string{
+		"--tui", "-r", "old", "--load=older", "-c",
+		"--session-id", "018f47a2-4df1-7d5b-8c2a-1f7d9e6b3a40",
+		"--fork-session", "--model", "test", "old prompt",
+	}
+	got := restartSessionArgs(args, []string{"old prompt"}, "/sessions/current.jsonl", "")
+	want := []string{"--tui", "--model", "test", "--resume", "/sessions/current.jsonl"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got=%#v want=%#v", got, want)
 	}
 }
 

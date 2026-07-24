@@ -1,21 +1,114 @@
 package main
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/api"
+	"github.com/lookcorner/go-cli/internal/session"
 )
+
+var sessionUUIDPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 type headlessPrompt struct {
 	text  string
 	parts []api.ContentPart
+}
+
+type sessionStartup struct {
+	resumePath string
+	newID      string
+	fork       bool
+}
+
+func normalizeOptionalResumeArgs(args []string) []string {
+	normalized := append([]string(nil), args...)
+	for index, arg := range normalized {
+		if arg != "--resume" && arg != "-r" {
+			continue
+		}
+		if index+1 == len(normalized) || normalized[index+1] == "--" || strings.HasPrefix(normalized[index+1], "-") {
+			normalized[index] = arg + "="
+		}
+	}
+	return normalized
+}
+
+func resolveSessionStartup(opts options, workspaceRoot string) (sessionStartup, error) {
+	hasResume := opts.resumeSet || opts.continueLast
+	if opts.continueLast && opts.resumeSet {
+		return sessionStartup{}, errors.New("--continue cannot be combined with --resume or --load")
+	}
+	if opts.sessionID != "" && !sessionUUIDPattern.MatchString(opts.sessionID) {
+		return sessionStartup{}, fmt.Errorf("--session-id must be a valid UUID (got %q)", cleanCLIText(opts.sessionID))
+	}
+	if opts.sessionID != "" && hasResume && !opts.forkSession {
+		return sessionStartup{}, errors.New("--session-id requires --fork-session when resuming")
+	}
+	if opts.forkSession && !hasResume {
+		return sessionStartup{}, errors.New("--fork-session requires --resume, --load, or --continue")
+	}
+
+	startup := sessionStartup{newID: opts.sessionID, fork: opts.forkSession}
+	if !hasResume {
+		return startup, nil
+	}
+	resume := opts.resume
+	if opts.continueLast || resume == "" {
+		items, err := session.List(opts.sessionDir, workspaceRoot)
+		if err != nil {
+			return sessionStartup{}, err
+		}
+		if len(items) == 0 {
+			return sessionStartup{}, errors.New("no session found for current workspace")
+		}
+		resume = items[0].SessionID
+	}
+	switch {
+	case resume == "latest":
+		path, err := session.Latest(opts.sessionDir)
+		if err != nil {
+			return sessionStartup{}, err
+		}
+		startup.resumePath = path
+	case filepath.IsAbs(resume) || strings.ContainsRune(resume, filepath.Separator) || filepath.Ext(resume) == ".jsonl":
+		startup.resumePath = resume
+	default:
+		path, err := session.PathForID(opts.sessionDir, resume)
+		if err != nil {
+			return sessionStartup{}, err
+		}
+		startup.resumePath = path
+	}
+	if startup.fork {
+		if startup.newID == "" {
+			id, err := newSessionUUID()
+			if err != nil {
+				return sessionStartup{}, err
+			}
+			startup.newID = id
+		}
+	}
+	return startup, nil
+}
+
+func newSessionUUID() (string, error) {
+	var value [16]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return "", fmt.Errorf("generate session ID: %w", err)
+	}
+	value[6] = value[6]&0x0f | 0x40
+	value[8] = value[8]&0x3f | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+		value[0:4], value[4:6], value[6:8], value[8:10], value[10:16]), nil
 }
 
 type headlessOutputFormat string

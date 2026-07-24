@@ -86,6 +86,10 @@ type options struct {
 	interactive        bool
 	previousID         string
 	resume             string
+	resumeSet          bool
+	continueLast       bool
+	sessionID          string
+	forkSession        bool
 	tui                bool
 	dashboard          bool
 	minimal            bool
@@ -141,6 +145,7 @@ func (r *sessionRestartRequest) Error() string { return "restart session" }
 
 func parseRunOptions(args []string, stderr io.Writer) (options, *flag.FlagSet, error) {
 	var opts options
+	args = normalizeOptionalResumeArgs(args)
 	if len(args) > 0 && args[0] == "dashboard" {
 		opts.dashboard = true
 		args = args[1:]
@@ -185,7 +190,14 @@ func parseRunOptions(args []string, stderr io.Writer) (options, *flag.FlagSet, e
 	flags.StringVar(&opts.jsonSchema, "json-schema", "", "JSON Schema for structured output")
 	flags.BoolVar(&opts.interactive, "interactive", false, "start an interactive multi-turn session")
 	flags.StringVar(&opts.previousID, "previous-response-id", "", "continue a stored Responses API conversation")
-	flags.StringVar(&opts.resume, "resume", "", "resume a JSONL session path or 'latest'")
+	flags.StringVar(&opts.resume, "resume", "", "resume a session ID/path, or the current workspace's latest session")
+	flags.StringVar(&opts.resume, "r", "", "resume a session ID/path")
+	flags.StringVar(&opts.resume, "load", "", "resume a session ID/path")
+	flags.BoolVar(&opts.continueLast, "continue", false, "continue the current workspace's latest session")
+	flags.BoolVar(&opts.continueLast, "c", false, "continue the current workspace's latest session")
+	flags.StringVar(&opts.sessionID, "session-id", "", "UUID for a new or forked session")
+	flags.StringVar(&opts.sessionID, "s", "", "UUID for a new or forked session")
+	flags.BoolVar(&opts.forkSession, "fork-session", false, "fork the resumed session")
 	flags.BoolVar(&opts.tui, "tui", false, "start the terminal interface")
 	flags.BoolVar(&opts.minimal, "minimal", false, "start the scrollback-native terminal interface")
 	flags.BoolVar(&opts.fullscreen, "fullscreen", false, "force the full-screen terminal interface")
@@ -218,6 +230,8 @@ func parseRunOptions(args []string, stderr io.Writer) (options, *flag.FlagSet, e
 			opts.promptFileSet = true
 		case "json-schema":
 			opts.jsonSchemaSet = true
+		case "resume", "r", "load":
+			opts.resumeSet = true
 		}
 	})
 	if opts.alwaysApprove {
@@ -438,7 +452,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		}
 	}
 	prompt := promptInput.text
-	resumingGoal := opts.goal && opts.resume != ""
+	resumingGoal := opts.goal && (opts.resumeSet || opts.continueLast)
 	if prompt == "" && !opts.interactive && !opts.tui && !resumingGoal {
 		data, err := io.ReadAll(io.LimitReader(inputReader, 4<<20))
 		if err != nil {
@@ -458,6 +472,11 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	startup, err := resolveSessionStartup(opts, ws.Root())
+	if err != nil {
+		return err
+	}
+	resuming := startup.resumePath != ""
 	instructionFiles, err := ws.LoadInstructions(cfg.Compat)
 	if err != nil {
 		return err
@@ -478,22 +497,16 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if opts.resume != "" && opts.previousID != "" {
+	if resuming && opts.previousID != "" {
 		return errors.New("--resume and --previous-response-id cannot be used together")
 	}
-	if opts.resume != "" && cfg.Backend != "responses" {
+	if resuming && cfg.Backend != "responses" {
 		return fmt.Errorf("--resume requires the responses backend; %s history is process-local", cfg.Backend)
 	}
 	var logger *session.Logger
 	var resumedTranscript string
-	if opts.resume != "" {
-		resumePath := opts.resume
-		if resumePath == "latest" {
-			resumePath, err = session.Latest(opts.sessionDir)
-			if err != nil {
-				return err
-			}
-		}
+	if resuming {
+		resumePath := startup.resumePath
 		cfg.Sandbox.Profile, err = resumeSandboxProfile(
 			resumePath, cfg.Sandbox.Profile,
 			opts.sandboxSet || strings.TrimSpace(os.Getenv("GROK_SANDBOX")) != "",
@@ -501,19 +514,37 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
+		forkCreated := false
+		if startup.fork {
+			forkDir := filepath.Dir(resumePath)
+			sourceID := strings.TrimSuffix(filepath.Base(resumePath), ".jsonl")
+			if _, _, err = session.Fork(forkDir, sourceID, startup.newID, ws.Root(), cfg.Model, nil); err != nil {
+				return err
+			}
+			resumePath, err = session.PathForID(forkDir, startup.newID)
+			if err != nil {
+				return err
+			}
+			forkCreated = true
+		}
 		var messages []session.Message
 		messages, err = session.Transcript(resumePath)
 		if err == nil {
 			resumedTranscript = session.FormatTranscript(messages)
 			logger, opts.previousID, err = session.Resume(resumePath)
 		}
+		if err != nil && forkCreated {
+			_ = os.Remove(resumePath)
+		}
+	} else if startup.newID != "" {
+		logger, err = session.NewLoggerWithID(opts.sessionDir, startup.newID)
 	} else {
 		logger, err = session.NewLogger(opts.sessionDir)
 	}
 	if err != nil {
 		return err
 	}
-	if opts.resume == "" {
+	if !resuming {
 		metadata := sessionMetadata(context.Background(), ws.Root(), cfg.Model, cfg.ReasoningEffort)
 		metadata["sandboxProfile"] = cfg.Sandbox.Profile
 		if err := logger.Append("session_metadata", metadata); err != nil {
@@ -1099,7 +1130,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 	if opts.goal {
 		snapshot := registry.GoalSnapshot()
-		if opts.resume != "" && snapshot.Objective != "" && snapshot.Status != "completed" {
+		if resuming && snapshot.Objective != "" && snapshot.Status != "completed" {
 			objective, err := registry.ResumeGoal()
 			if err != nil {
 				return err
@@ -1267,13 +1298,19 @@ func restartSessionArgs(args, positional []string, resumePath, workspace string)
 	for index := 0; index < len(flags); index++ {
 		arg := flags[index]
 		name := strings.TrimLeft(arg, "-")
-		dropValue := name == "resume" || name == "previous-response-id" || workspace != "" && name == "workspace"
+		dropValue := name == "resume" || name == "r" || name == "load" || name == "session-id" || name == "s" ||
+			name == "previous-response-id" || workspace != "" && name == "workspace"
 		if dropValue {
-			index++
+			if index+1 < len(flags) && !strings.HasPrefix(flags[index+1], "-") {
+				index++
+			}
 			continue
 		}
-		dropInline := strings.HasPrefix(name, "resume=") || strings.HasPrefix(name, "previous-response-id=") || workspace != "" && strings.HasPrefix(name, "workspace=")
-		if dropInline || arg == "--" {
+		dropInline := strings.HasPrefix(name, "resume=") || strings.HasPrefix(name, "r=") ||
+			strings.HasPrefix(name, "load=") || strings.HasPrefix(name, "session-id=") ||
+			strings.HasPrefix(name, "s=") || strings.HasPrefix(name, "previous-response-id=") ||
+			workspace != "" && strings.HasPrefix(name, "workspace=")
+		if dropInline || name == "continue" || name == "c" || name == "fork-session" || arg == "--" {
 			continue
 		}
 		result = append(result, arg)

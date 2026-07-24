@@ -122,8 +122,12 @@ OSC 52 writes into the native clipboard, and preserves output and exit status;
 non-interactive and unsupported-platform runs fall back to direct execution.
 Common reference run flags are supported, including cwd/model/reasoning,
 single-prompt, system-prompt/rules, turn-limit, permission-mode,
-always-approve, and version aliases. Explicit CLI values are reapplied after
-remote settings so command-line intent wins.
+always-approve, version, and session-startup aliases. `--resume/-r [ID]`,
+`--load ID`, and `--continue/-c` support strict ID/path resume or the current
+workspace's most recent session; `--session-id/-s UUID` names a new session,
+and `--fork-session` creates an append-only child without changing its parent.
+Explicit CLI values are reapplied after remote settings so command-line intent
+wins.
 Headless prompt files, ACP JSON text/image/resource blocks,
 plain/JSON/streaming-JSON output, and JSON Schema structured output are
 supported. Schemas map to

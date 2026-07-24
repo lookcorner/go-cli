@@ -1333,12 +1333,21 @@ preserving the current response-ID chain; ACP also exposes
 Each run is recorded as a mode-0600 JSONL event log under the user cache
 directory. `--session-dir` selects another location.
 
-Resume the most recent completed turn, or a specific session log, with:
+Resume the current workspace's most recent completed turn, or a specific
+session by ID or path, with:
 
 ```sh
-./gork --interactive --resume latest --workspace .
-./gork --resume /path/to/session.jsonl "continue the implementation"
+./gork --interactive --continue --workspace .
+./gork --resume SESSION_ID "continue the implementation"
+./gork --load /path/to/session.jsonl "continue the implementation"
 ```
+
+Bare `--resume` and `-c`/`--continue` select the most recently updated session
+whose recorded workspace matches `--workspace`. `--resume latest` retains the
+global latest-log behavior. `--session-id UUID` selects the ID for a new
+session; combine it with `--fork-session` and a resume option to create an
+append-only child while leaving the parent unchanged. When omitted for a fork,
+the child UUID is generated automatically.
 
 Resume refuses symlinks, oversized logs, malformed events, and sessions whose
 only model response still has pending tool calls. This prevents a new prompt
