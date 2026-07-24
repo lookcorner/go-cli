@@ -815,6 +815,33 @@ func TestAutoModeConfigDefaultsAndValidation(t *testing.T) {
 	}
 }
 
+func TestSessionLoadEnvrcConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	cfg, err := Load(filepath.Join(home, "missing.toml"))
+	if err != nil || !cfg.LoadEnvrc {
+		t.Fatalf("default load_envrc=%v err=%v", cfg.LoadEnvrc, err)
+	}
+	for _, test := range []struct {
+		name string
+		data string
+	}{
+		{name: "toml", data: "[session]\nload_envrc = false\nauto_compact_threshold_percent = 80\n"},
+		{name: "json", data: `{"session":{"load_envrc":false,"auto_compact_threshold_percent":80}}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(home, "config."+test.name)
+			if err := os.WriteFile(path, []byte(test.data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(path)
+			if err != nil || cfg.LoadEnvrc || cfg.AutoCompactThresholdPercent != 80 {
+				t.Fatalf("config=%#v err=%v", cfg, err)
+			}
+		})
+	}
+}
+
 func TestAutoModeConfigLayerPrecedence(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("GROK_HOME", home)

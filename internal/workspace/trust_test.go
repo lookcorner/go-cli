@@ -30,7 +30,8 @@ func TestProjectExecutionConfigKindsMatchesGate(t *testing.T) {
 	writeTrustFile(t, filepath.Join(root, ".grok", "lsp.json"), `{}`)
 	writeTrustFile(t, filepath.Join(root, ".grok", "hooks", "pre.json"), `{}`)
 	writeTrustFile(t, filepath.Join(root, ".grok", "agents", "review.md"), `review`)
-	want := []string{"mcp", "plugins", "lsp", "hooks", "agents"}
+	writeTrustFile(t, filepath.Join(root, ".envrc"), `export LOCAL=yes`)
+	want := []string{"envrc", "mcp", "plugins", "lsp", "hooks", "agents"}
 	if got := ProjectExecutionConfigKinds(root); !slices.Equal(got, want) {
 		t.Fatalf("config kinds=%v want %v", got, want)
 	}
@@ -182,6 +183,13 @@ func TestProjectExecutionConfigPresent(t *testing.T) {
 	root := t.TempDir()
 	if ProjectExecutionConfigPresent(root) {
 		t.Fatal("empty workspace reported execution config")
+	}
+	writeTrustFile(t, filepath.Join(root, ".envrc"), "export LOCAL=yes\n")
+	if !ProjectExecutionConfigPresent(root) {
+		t.Fatal("project .envrc did not trigger trust")
+	}
+	if err := os.Remove(filepath.Join(root, ".envrc")); err != nil {
+		t.Fatal(err)
 	}
 	writeTrustFile(t, filepath.Join(root, ".grok", "lsp.json"), `{"gopls":{"command":"gopls"}}`)
 	if !ProjectExecutionConfigPresent(root) {

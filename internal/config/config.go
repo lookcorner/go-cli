@@ -45,6 +45,7 @@ type Config struct {
 	AutoMode                        AutoModeConfig             `json:"auto_mode,omitempty"`
 	ContextWindow                   int                        `json:"context_window,omitempty"`
 	AutoCompactThresholdPercent     int                        `json:"auto_compact_threshold_percent,omitempty"`
+	LoadEnvrc                       bool                       `json:"load_envrc"`
 	TwoPassCompaction               bool                       `json:"two_pass_compaction,omitempty"`
 	Pruning                         PruningConfig              `json:"pruning"`
 	Memory                          memory.Config              `json:"memory"`
@@ -601,7 +602,8 @@ type modelConfig struct {
 }
 
 type sessionConfig struct {
-	AutoCompactThresholdPercent *int `json:"auto_compact_threshold_percent,omitempty" toml:"auto_compact_threshold_percent"`
+	AutoCompactThresholdPercent *int  `json:"auto_compact_threshold_percent,omitempty" toml:"auto_compact_threshold_percent"`
+	LoadEnvrc                   *bool `json:"load_envrc,omitempty" toml:"load_envrc"`
 }
 
 type fileCompactionConfig struct {
@@ -703,6 +705,7 @@ func Load(path string) (Config, error) {
 		HTTPTimeout:                 10 * time.Minute,
 		ContextWindow:               131072,
 		AutoCompactThresholdPercent: 85,
+		LoadEnvrc:                   true,
 		Compat:                      compat.Default(),
 		FolderTrustEnabled:          true,
 		AutoWakeEnabled:             true,
@@ -1092,6 +1095,9 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.Session.AutoCompactThresholdPercent != nil {
 		cfg.AutoCompactThresholdPercent = *disk.Session.AutoCompactThresholdPercent
+	}
+	if disk.Session.LoadEnvrc != nil {
+		cfg.LoadEnvrc = *disk.Session.LoadEnvrc
 	}
 	if disk.Features.TwoPassCompaction != nil {
 		cfg.TwoPassCompaction = *disk.Features.TwoPassCompaction

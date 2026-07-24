@@ -5,6 +5,12 @@ This file tracks behavioral compatibility against
 
 Status values: **done**, **partial**, **planned**.
 
+Trusted workspace roots load `.envrc` through `direnv export json` when
+available and otherwise through a Bash subshell with common direnv helpers.
+The default-on `[session].load_envrc` gate, fail-open execution, current-root
+scope, folder-trust enforcement, and explicit environment precedence match the
+reference behavior.
+
 ACP prompt queuing includes server-authoritative busy-turn FIFO execution,
 `x.ai/queue/changed` snapshots, versioned owner-aware remove/reorder/clear/edit
 and send-now operations, user-prompt priority over automatic wakes, and

@@ -140,6 +140,9 @@ func ProjectExecutionConfigKinds(cwd string) []string {
 	root := GitRoot(cwd)
 	found := make(map[string]bool)
 	add := func(kind string) { found[kind] = true }
+	if isFileTrust(filepath.Join(cwd, ".envrc")) {
+		add("envrc")
+	}
 	if isFileTrust(filepath.Join(cwd, ".grok", "lsp.json")) {
 		add("lsp")
 	}
@@ -180,7 +183,7 @@ func ProjectExecutionConfigKinds(cwd string) []string {
 		}
 	}
 	result := make([]string, 0, len(found))
-	for _, kind := range []string{"mcp", "plugins", "lsp", "hooks", "agents"} {
+	for _, kind := range []string{"envrc", "mcp", "plugins", "lsp", "hooks", "agents"} {
 		if found[kind] {
 			result = append(result, kind)
 		}

@@ -2133,6 +2133,36 @@ func TestDiscoverSkillsLoadsConfiguredPlugin(t *testing.T) {
 	}
 }
 
+func TestDiscoverWorkspaceLoadsTrustedEnvrcBelowExplicitEnvironment(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".envrc"), []byte("export ENVRC_ONLY=yes\nexport SHARED=envrc\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := config.Config{
+		Compat:     compat.Default(),
+		LoadEnvrc:  true,
+		Env:        map[string]string{"SHARED": "config"},
+		MCPServers: map[string]config.MCPServerConfig{},
+		LSPServers: map[string]config.LSPServerConfig{},
+	}
+	cfg, _, _, err := discoverWorkspace(root, source, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Env["ENVRC_ONLY"] != "yes" || cfg.Env["SHARED"] != "config" {
+		t.Fatalf("environment=%#v", cfg.Env)
+	}
+
+	source.LoadEnvrc = false
+	cfg, _, _, err = discoverWorkspace(root, source, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cfg.Env["ENVRC_ONLY"]; ok {
+		t.Fatalf("disabled .envrc environment=%#v", cfg.Env)
+	}
+}
+
 func TestStartLSPServersRegistersDynamicToolWithoutInitialServers(t *testing.T) {
 	root := t.TempDir()
 	ws, err := workspace.Open(root)

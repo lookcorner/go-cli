@@ -4092,7 +4092,11 @@ func discoverWorkspace(root string, cfg config.Config, projectTrusted bool) (con
 		}
 	}
 	cfg.MCPServers = config.DiscoverMCPServers(root, cfg, plugins, projectTrusted)
-	cfg.Env = config.DiscoverEnvironment(root, cfg, projectTrusted)
+	environment := workspace.LoadEnvrc(root, projectTrusted && cfg.LoadEnvrc)
+	for key, value := range config.DiscoverEnvironment(root, cfg, projectTrusted) {
+		environment[key] = value
+	}
+	cfg.Env = environment
 	cfg.LSPServers = config.DiscoverLSPServers(root, cfg, plugins, projectTrusted)
 	catalog, err := skills.Discover(root, workspaceSkillsConfig(cfg, plugins))
 	return cfg, catalog, inventory, err
