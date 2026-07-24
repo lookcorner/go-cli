@@ -289,6 +289,10 @@ exists. Individual `[model.<name>]` entries may also set `hidden = true`.
 `gork models` prints the active authentication source, resolved default, and
 available visible models using these same local and managed filters.
 
+Generate a completion script for the current CLI with `gork completions
+<bash|elvish|fish|powershell|zsh>`. The command is side-effect free, so it can
+be used directly by shell startup files and installers.
+
 While the ACP server is running, model changes in `config.toml`, local/system
 `managed_config.toml`, and `requirements.toml` are detected automatically.
 The `x.ai/internal/reload_models` endpoint triggers the same disk reload for

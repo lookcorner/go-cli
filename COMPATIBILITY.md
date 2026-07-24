@@ -111,6 +111,8 @@ REPL, TUI, and ACP sessions expose `/imagine <description>` only when
 `image_to_video` is registered. They preserve the slash command in session
 history while replacing the model input with the reference direct image or
 image-first video workflow; empty descriptions complete locally with usage.
+The side-effect-free top-level `gork completions` command emits Bash, Elvish,
+Fish, PowerShell, and Zsh scripts for the currently implemented command tree.
 
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |
