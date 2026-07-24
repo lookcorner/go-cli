@@ -379,9 +379,9 @@ func TestDashboardPinsSessionsAndPreservesSelection(t *testing.T) {
 		t.Fatalf("pins=%v state=%#v status=%q", m.dashboardPins, m.dashboard, m.status)
 	}
 
-	m.dashboard.selected = dashboardRowIndex(t, m.dashboard.rows, dashboardSubagent, "sub-1")
+	m.dashboard.selected = dashboardRowIndex(t, m.dashboard.rows, dashboardProcess, "proc-1")
 	pressDashboardKey(t, m, tea.Key{Code: 't', Mod: tea.ModCtrl})
-	if m.dashboard.err != "Only sessions can be pinned" {
+	if m.dashboard.err != "Only sessions and subagents can be pinned" {
 		t.Fatalf("state=%#v", m.dashboard)
 	}
 }
@@ -410,24 +410,75 @@ func TestDashboardReordersSessionsAndCleansStaleReferences(t *testing.T) {
 	}
 	m.dashboard.selected = dashboardRowIndex(t, m.dashboard.rows, dashboardStoredSession, "b")
 	pressDashboardKey(t, m, tea.Key{Code: tea.KeyDown, Mod: tea.ModShift})
-	if !slices.Equal(persisted, []string{"a", "b"}) || m.dashboard.rows[m.dashboard.selected].id != "b" || !slices.Equal(dashboardSessionRowIDs(m.dashboard.rows), []string{"session-1", "a", "b", "c"}) || m.status != "session moved down" {
+	if !slices.Equal(persisted, []string{"a", "b", "c"}) || m.dashboard.rows[m.dashboard.selected].id != "b" || !slices.Equal(dashboardSessionRowIDs(m.dashboard.rows), []string{"session-1", "a", "b", "c"}) || m.status != "session moved down" {
 		t.Fatalf("persisted=%v selected=%d rows=%#v status=%q", persisted, m.dashboard.selected, m.dashboard.rows, m.status)
 	}
 	pressDashboardKey(t, m, tea.Key{Code: tea.KeyUp, Mod: tea.ModShift})
-	if !slices.Equal(persisted, []string{"b", "a"}) || m.dashboard.rows[m.dashboard.selected].id != "b" || !slices.Equal(dashboardSessionRowIDs(m.dashboard.rows), []string{"session-1", "b", "a", "c"}) || m.status != "session moved up" {
+	if !slices.Equal(persisted, []string{"b", "a", "c"}) || m.dashboard.rows[m.dashboard.selected].id != "b" || !slices.Equal(dashboardSessionRowIDs(m.dashboard.rows), []string{"session-1", "b", "a", "c"}) || m.status != "session moved up" {
 		t.Fatalf("persisted=%v selected=%d rows=%#v status=%q", persisted, m.dashboard.selected, m.dashboard.rows, m.status)
 	}
 
 	m.persistOrder = func([]string) error { return errors.New("read only") }
 	pressDashboardKey(t, m, tea.Key{Code: tea.KeyDown, Mod: tea.ModShift})
-	if !slices.Equal(m.dashboardOrder, []string{"b", "a"}) || m.dashboard.err != "read only" || m.status != "reorder session failed" {
+	if !slices.Equal(m.dashboardOrder, []string{"b", "a", "c"}) || m.dashboard.err != "read only" || m.status != "reorder session failed" {
 		t.Fatalf("order=%v state=%#v status=%q", m.dashboardOrder, m.dashboard, m.status)
 	}
 
-	m.dashboard.selected = dashboardRowIndex(t, m.dashboard.rows, dashboardSubagent, "sub-1")
+	m.dashboard.selected = dashboardRowIndex(t, m.dashboard.rows, dashboardProcess, "proc-1")
 	pressDashboardKey(t, m, tea.Key{Code: tea.KeyUp, Mod: tea.ModShift})
-	if m.dashboard.err != "Only sessions can be reordered" {
+	if m.dashboard.err != "Only sessions and subagents can be reordered" {
 		t.Fatalf("state=%#v", m.dashboard)
+	}
+}
+
+func TestDashboardPinsAndReordersSubagentsByPersistentIdentity(t *testing.T) {
+	var pinned, ordered []string
+	ref := dashboardSubagentRef("session-1", "sub-1")
+	m := &model{
+		runner:        dashboardFixtureRunner(),
+		workspace:     "/work",
+		modelName:     "grok",
+		dashboardPins: map[string]bool{"sub:session-1:ghost": true},
+		dashboardOrder: []string{
+			"sub:session-1:ghost",
+		},
+		persistPins: func(ids []string) error {
+			pinned = slices.Clone(ids)
+			return nil
+		},
+		persistOrder: func(ids []string) error {
+			ordered = slices.Clone(ids)
+			return nil
+		},
+		dashboard: &dashboardState{},
+	}
+	m.refreshDashboard()
+	if m.dashboardPins["sub:session-1:ghost"] || len(m.dashboardOrder) != 0 {
+		t.Fatalf("pins=%v order=%v", m.dashboardPins, m.dashboardOrder)
+	}
+	m.dashboard.selected = dashboardRowIndex(t, m.dashboard.rows, dashboardSubagent, "sub-1")
+	pressDashboardKey(t, m, tea.Key{Code: 't', Mod: tea.ModCtrl})
+	if !slices.Equal(pinned, []string{ref}) || !m.dashboardPins[ref] || m.dashboard.rows[0].id != "sub-1" || m.dashboard.rows[m.dashboard.selected].id != "sub-1" || m.status != "subagent pinned" {
+		t.Fatalf("pinned=%v pins=%v selected=%d rows=%#v status=%q", pinned, m.dashboardPins, m.dashboard.selected, m.dashboard.rows, m.status)
+	}
+	pressDashboardKey(t, m, tea.Key{Code: 't', Mod: tea.ModCtrl})
+	if len(pinned) != 0 || m.dashboardPins[ref] || m.status != "subagent unpinned" {
+		t.Fatalf("pinned=%v pins=%v status=%q", pinned, m.dashboardPins, m.status)
+	}
+
+	pressDashboardKey(t, m, tea.Key{Code: tea.KeyUp, Mod: tea.ModShift})
+	if !slices.Equal(ordered, []string{ref, "session-1"}) || m.dashboard.rows[0].id != "sub-1" || m.dashboard.rows[m.dashboard.selected].id != "sub-1" || m.status != "subagent moved up" {
+		t.Fatalf("ordered=%v selected=%d rows=%#v status=%q", ordered, m.dashboard.selected, m.dashboard.rows, m.status)
+	}
+	pressDashboardKey(t, m, tea.Key{Code: tea.KeyDown, Mod: tea.ModShift})
+	if !slices.Equal(ordered, []string{"session-1", ref}) || m.dashboard.rows[0].id != "session-1" || m.dashboard.rows[m.dashboard.selected].id != "sub-1" || m.status != "subagent moved down" {
+		t.Fatalf("ordered=%v selected=%d rows=%#v status=%q", ordered, m.dashboard.selected, m.dashboard.rows, m.status)
+	}
+}
+
+func TestDashboardPinnedRowsShareAReorderGroup(t *testing.T) {
+	if got := dashboardReorderGroup(dashboardRow{pinned: true, status: "idle"}, "state"); got != "pinned" {
+		t.Fatalf("group=%q", got)
 	}
 }
 

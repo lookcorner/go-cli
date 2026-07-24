@@ -941,10 +941,10 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 		cfg.uiPermissionModeConfigured = true
 	}
 	if disk.Dashboard.Pinned != nil {
-		cfg.Dashboard.Pinned = cleanDashboardSessionIDs(disk.Dashboard.Pinned)
+		cfg.Dashboard.Pinned = cleanDashboardRefs(disk.Dashboard.Pinned)
 	}
 	if disk.Dashboard.Reorder != nil {
-		cfg.Dashboard.Reorder = cleanDashboardSessionOrder(disk.Dashboard.Reorder)
+		cfg.Dashboard.Reorder = cleanDashboardRefOrder(disk.Dashboard.Reorder)
 	}
 	cfg.Dashboard.Grouping = normalizeDashboardGrouping(disk.Dashboard.Grouping)
 	if disk.Goal.VerifierCount != nil {

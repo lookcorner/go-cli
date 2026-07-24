@@ -29,6 +29,7 @@ const (
 type dashboardRow struct {
 	kind      dashboardRowKind
 	id        string
+	ref       string
 	pinned    bool
 	status    string
 	title     string
@@ -190,8 +191,9 @@ func (m *model) refreshDashboard() {
 	}
 	m.dashboardGrouping = dashboardGrouping(m.dashboardGrouping)
 	state := m.dashboard
+	snapshot := m.runner.TaskSnapshot()
 	if !state.loading {
-		m.cleanDashboardRefs()
+		m.cleanDashboardRefs(snapshot.Subagents)
 	}
 	var selected dashboardRow
 	hasSelection := state.selected >= 0 && state.selected < len(state.rows)
@@ -199,7 +201,7 @@ func (m *model) refreshDashboard() {
 		selected = state.rows[state.selected]
 	}
 	state.err = ""
-	rows := []dashboardRow{{kind: dashboardSession, id: m.runner.SessionID, pinned: m.dashboardPins[m.runner.SessionID], status: "active", title: dashboardFirst(state.currentTitle, "Current session"), detail: m.modelName + " · " + m.workspace, cwd: m.workspace}}
+	rows := []dashboardRow{{kind: dashboardSession, id: m.runner.SessionID, ref: m.runner.SessionID, pinned: m.dashboardPins[m.runner.SessionID], status: "active", title: dashboardFirst(state.currentTitle, "Current session"), detail: m.modelName + " · " + m.workspace, cwd: m.workspace}}
 	for _, item := range state.sessions {
 		if item.SessionID == m.runner.SessionID {
 			continue
@@ -207,9 +209,8 @@ func (m *model) refreshDashboard() {
 		title := dashboardFirst(item.Title, item.SessionID)
 		cwd := dashboardFirst(item.DisplayCWD, item.CWD)
 		detail := dashboardFirst(item.ModelID, "unknown model") + " · " + cwd
-		rows = append(rows, dashboardRow{kind: dashboardStoredSession, id: item.SessionID, pinned: m.dashboardPins[item.SessionID], status: "idle", title: title, detail: detail, cwd: cwd, session: item})
+		rows = append(rows, dashboardRow{kind: dashboardStoredSession, id: item.SessionID, ref: item.SessionID, pinned: m.dashboardPins[item.SessionID], status: "idle", title: title, detail: detail, cwd: cwd, session: item})
 	}
-	snapshot := m.runner.TaskSnapshot()
 	subagents := slices.Clone(snapshot.Subagents)
 	sort.Slice(subagents, func(i, j int) bool {
 		if (subagents[i].Status == "running") != (subagents[j].Status == "running") {
@@ -218,7 +219,8 @@ func (m *model) refreshDashboard() {
 		return subagents[i].StartedAtMS > subagents[j].StartedAtMS
 	})
 	for _, item := range subagents {
-		rows = append(rows, dashboardRow{kind: dashboardSubagent, id: item.ID, status: dashboardFirst(item.Status, "done"), title: dashboardFirst(item.Description, item.Type), detail: dashboardSubagentMetrics(item), cwd: dashboardFirst(item.WorktreeDir, m.workspace)})
+		ref := dashboardSubagentRef(m.runner.SessionID, item.ID)
+		rows = append(rows, dashboardRow{kind: dashboardSubagent, id: item.ID, ref: ref, pinned: m.dashboardPins[ref], status: dashboardFirst(item.Status, "done"), title: dashboardFirst(item.Description, item.Type), detail: dashboardSubagentMetrics(item), cwd: dashboardFirst(item.WorktreeDir, m.workspace)})
 	}
 	processes := slices.Clone(snapshot.Processes)
 	sort.Slice(processes, func(i, j int) bool {
@@ -434,8 +436,8 @@ func (m *model) sortDashboardRows(rows []dashboardRow) {
 		} else if leftGroup, rightGroup := dashboardRowGroup(left), dashboardRowGroup(right); leftGroup != rightGroup {
 			return dashboardGroupRank(leftGroup) < dashboardGroupRank(rightGroup)
 		}
-		leftPos, leftOrdered := order[left.id]
-		rightPos, rightOrdered := order[right.id]
+		leftPos, leftOrdered := order[left.ref]
+		rightPos, rightOrdered := order[right.ref]
 		if leftOrdered != rightOrdered {
 			return leftOrdered
 		}
@@ -700,10 +702,17 @@ func (m *model) toggleDashboardGrouping() {
 	m.status = "dashboard grouped by " + m.dashboardGrouping
 }
 
-func (m *model) cleanDashboardRefs() {
+func dashboardSubagentRef(sessionID, subagentID string) string {
+	return "sub:" + sessionID + ":" + subagentID
+}
+
+func (m *model) cleanDashboardRefs(subagents []tools.SubagentResult) {
 	alive := map[string]bool{m.runner.SessionID: true}
 	for _, item := range m.dashboard.sessions {
 		alive[item.SessionID] = true
+	}
+	for _, item := range subagents {
+		alive[dashboardSubagentRef(m.runner.SessionID, item.ID)] = true
 	}
 	for id := range m.dashboardPins {
 		if !alive[id] {
@@ -723,78 +732,115 @@ func (m *model) cleanDashboardRefs() {
 
 func (m *model) reorderDashboard(row dashboardRow, up bool) {
 	state := m.dashboard
-	if row.kind != dashboardSession && row.kind != dashboardStoredSession {
-		state.err = "Only sessions can be reordered"
+	if !dashboardRowReorderable(row) {
+		state.err = "Only sessions and subagents can be reordered"
 		return
 	}
+	ref := row.ref
+	noun := dashboardRowNoun(row)
 	previous := slices.Clone(m.dashboardOrder)
-	position := slices.Index(m.dashboardOrder, row.id)
-	if up {
-		switch {
-		case position == 0:
-			m.dashboardOrder = m.dashboardOrder[1:]
-		case position > 0:
-			m.dashboardOrder[position], m.dashboardOrder[position-1] = m.dashboardOrder[position-1], m.dashboardOrder[position]
-		default:
-			m.dashboardOrder = append([]string{row.id}, m.dashboardOrder...)
-		}
-	} else {
-		switch {
-		case position >= 0 && position+1 < len(m.dashboardOrder):
-			m.dashboardOrder[position], m.dashboardOrder[position+1] = m.dashboardOrder[position+1], m.dashboardOrder[position]
-		case position < 0:
-			m.dashboardOrder = append(m.dashboardOrder, row.id)
+	group := dashboardReorderGroup(row, m.dashboardGrouping)
+	groupRows := make([]dashboardRow, 0, len(state.rows))
+	for _, candidate := range state.rows {
+		if candidate.ref != "" && dashboardRowReorderable(candidate) && candidate.pinned == row.pinned && dashboardReorderGroup(candidate, m.dashboardGrouping) == group {
+			groupRows = append(groupRows, candidate)
 		}
 	}
+	position := slices.IndexFunc(groupRows, func(candidate dashboardRow) bool { return candidate.ref == ref })
+	target := position - 1
+	if !up {
+		target = position + 1
+	}
+	if position < 0 || target < 0 || target >= len(groupRows) {
+		return
+	}
+	groupRows[position], groupRows[target] = groupRows[target], groupRows[position]
+	inGroup := make(map[string]bool, len(groupRows))
+	for _, candidate := range groupRows {
+		inGroup[candidate.ref] = true
+	}
+	order := m.dashboardOrder[:0]
+	for _, id := range m.dashboardOrder {
+		if !inGroup[id] {
+			order = append(order, id)
+		}
+	}
+	for _, candidate := range groupRows {
+		order = append(order, candidate.ref)
+	}
+	m.dashboardOrder = order
 	if m.persistOrder != nil {
 		if err := m.persistOrder(slices.Clone(m.dashboardOrder)); err != nil {
 			m.dashboardOrder = previous
 			state.err = err.Error()
-			m.status = "reorder session failed"
+			m.status = "reorder " + noun + " failed"
 			return
 		}
 	}
 	m.refreshDashboard()
 	if up {
-		m.status = "session moved up"
+		m.status = noun + " moved up"
 	} else {
-		m.status = "session moved down"
+		m.status = noun + " moved down"
 	}
+}
+
+func dashboardRowReorderable(row dashboardRow) bool {
+	return row.kind == dashboardSession || row.kind == dashboardStoredSession || row.kind == dashboardSubagent
+}
+
+func dashboardReorderGroup(row dashboardRow, grouping string) string {
+	if grouping == "directory" {
+		return row.cwd
+	}
+	if row.pinned {
+		return "pinned"
+	}
+	return dashboardRowGroup(row)
 }
 
 func (m *model) toggleDashboardPin(row dashboardRow) {
 	state := m.dashboard
-	if row.kind != dashboardSession && row.kind != dashboardStoredSession {
-		state.err = "Only sessions can be pinned"
+	if !dashboardRowReorderable(row) {
+		state.err = "Only sessions and subagents can be pinned"
 		return
 	}
+	ref := row.ref
+	noun := dashboardRowNoun(row)
 	if m.dashboardPins == nil {
 		m.dashboardPins = make(map[string]bool)
 	}
-	wasPinned := m.dashboardPins[row.id]
+	wasPinned := m.dashboardPins[ref]
 	if wasPinned {
-		delete(m.dashboardPins, row.id)
+		delete(m.dashboardPins, ref)
 	} else {
-		m.dashboardPins[row.id] = true
+		m.dashboardPins[ref] = true
 	}
 	if m.persistPins != nil {
 		if err := m.persistPins(m.dashboardPinnedIDs()); err != nil {
 			if wasPinned {
-				m.dashboardPins[row.id] = true
+				m.dashboardPins[ref] = true
 			} else {
-				delete(m.dashboardPins, row.id)
+				delete(m.dashboardPins, ref)
 			}
 			state.err = err.Error()
-			m.status = "pin session failed"
+			m.status = "pin " + noun + " failed"
 			return
 		}
 	}
 	m.refreshDashboard()
 	if wasPinned {
-		m.status = "session unpinned"
+		m.status = noun + " unpinned"
 	} else {
-		m.status = "session pinned"
+		m.status = noun + " pinned"
 	}
+}
+
+func dashboardRowNoun(row dashboardRow) string {
+	if row.kind == dashboardSubagent {
+		return "subagent"
+	}
+	return "session"
 }
 
 func (m *model) dashboardPinnedIDs() []string {

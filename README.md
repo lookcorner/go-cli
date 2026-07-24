@@ -583,11 +583,12 @@ without creating a model turn.
 `/dashboard` (also `/sessions` and `/agents-dashboard`) opens an interactive
 overview of active and stored sessions, subagents, background processes, and
 scheduled tasks. Enter opens details or switches sessions, `Ctrl+T` pins a
-session, `Shift+Up/Down` changes its manual order, `Ctrl+R` renames an active or
-stored session, `X` stops a selected running subagent or process, `D` confirms
-deletion of an idle session, `Ctrl+G` switches between state sections and a
-directory-sorted flat list, `Ctrl+/` filters live by text (`a:name` and
-`s:state` are supported), and `R` refreshes the snapshot. Enter keeps a search
+session or subagent, `Shift+Up/Down` changes its manual order, `Ctrl+R` renames
+an active or stored session, `X` stops a selected running subagent or process,
+`D` confirms deletion of an idle session, `Ctrl+G` switches between state
+sections and a directory-sorted flat list, `Ctrl+/` filters live by text
+(`a:name` and `s:state` are supported), and `R` refreshes the snapshot. Enter
+keeps a search
 filter and Esc clears it. `X` also cancels a selected scheduled task, and
 subagent rows update elapsed time, tool calls, tokens, turns, and context usage
 live. Pins, manual order, and grouping persist in `[dashboard]`.

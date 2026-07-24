@@ -6,7 +6,7 @@ import (
 )
 
 func UpdateDashboardPinned(path string, ids []string) error {
-	ids = cleanDashboardSessionIDs(ids)
+	ids = cleanDashboardRefs(ids)
 	return updateUserConfig(path, func(root map[string]any) error {
 		dashboard, _ := root["dashboard"].(map[string]any)
 		if dashboard == nil {
@@ -19,7 +19,7 @@ func UpdateDashboardPinned(path string, ids []string) error {
 }
 
 func UpdateDashboardReorder(path string, ids []string) error {
-	ids = cleanDashboardSessionOrder(ids)
+	ids = cleanDashboardRefOrder(ids)
 	return updateUserConfig(path, func(root map[string]any) error {
 		dashboard, _ := root["dashboard"].(map[string]any)
 		if dashboard == nil {
@@ -53,13 +53,13 @@ func normalizeDashboardGrouping(grouping string) string {
 	}
 }
 
-func cleanDashboardSessionIDs(ids []string) []string {
-	cleaned := cleanDashboardSessionOrder(ids)
+func cleanDashboardRefs(ids []string) []string {
+	cleaned := cleanDashboardRefOrder(ids)
 	sort.Strings(cleaned)
 	return cleaned
 }
 
-func cleanDashboardSessionOrder(ids []string) []string {
+func cleanDashboardRefOrder(ids []string) []string {
 	seen := make(map[string]struct{}, len(ids))
 	cleaned := make([]string, 0, len(ids))
 	for _, id := range ids {

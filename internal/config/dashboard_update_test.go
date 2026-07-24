@@ -57,3 +57,18 @@ func TestDashboardGroupingDefaultsToState(t *testing.T) {
 		}
 	}
 }
+
+func TestDashboardPersistenceKeepsSubagentReferences(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	ref := "sub:parent:child"
+	if err := UpdateDashboardPinned(path, []string{ref, ref}); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateDashboardReorder(path, []string{ref}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil || !reflect.DeepEqual(cfg.Dashboard.Pinned, []string{ref}) || !reflect.DeepEqual(cfg.Dashboard.Reorder, []string{ref}) {
+		t.Fatalf("dashboard=%#v err=%v", cfg.Dashboard, err)
+	}
+}
