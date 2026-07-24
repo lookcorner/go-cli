@@ -66,11 +66,29 @@ func TestFetchRemoteSettingsIncludesSessionIdentity(t *testing.T) {
 
 func TestRemoteSettingsDecodesACPClientFields(t *testing.T) {
 	var settings RemoteSettings
-	if err := json.Unmarshal([]byte(`{"sharing_enabled":true,"session_picker_grouped":false,"tips":["one"],"announcements":[{"id":"notice"}],"permission_mode":"auto","group_tool_verbs":true,"collapsed_edit_blocks":false,"subscription_watch_interval_secs":30}`), &settings); err != nil {
+	if err := json.Unmarshal([]byte(`{"sharing_enabled":true,"session_picker_grouped":false,"tips":["one"],"announcements":[{"id":"notice"}],"permission_mode":"auto","remember_tool_approvals":true,"group_tool_verbs":true,"collapsed_edit_blocks":false,"subscription_watch_interval_secs":30}`), &settings); err != nil {
 		t.Fatal(err)
 	}
-	if settings.SharingEnabled == nil || !*settings.SharingEnabled || settings.SessionPickerGrouped == nil || *settings.SessionPickerGrouped || len(settings.Tips) != 1 || len(settings.Announcements) != 1 || settings.PermissionMode == nil || *settings.PermissionMode != "auto" || settings.GroupToolVerbs == nil || !*settings.GroupToolVerbs || settings.CollapsedEditBlocks == nil || *settings.CollapsedEditBlocks || settings.SubscriptionWatchIntervalSeconds == nil || *settings.SubscriptionWatchIntervalSeconds != 30 {
+	if settings.SharingEnabled == nil || !*settings.SharingEnabled || settings.SessionPickerGrouped == nil || *settings.SessionPickerGrouped || len(settings.Tips) != 1 || len(settings.Announcements) != 1 || settings.PermissionMode == nil || *settings.PermissionMode != "auto" || settings.RememberToolApprovals == nil || !*settings.RememberToolApprovals || settings.GroupToolVerbs == nil || !*settings.GroupToolVerbs || settings.CollapsedEditBlocks == nil || *settings.CollapsedEditBlocks || settings.SubscriptionWatchIntervalSeconds == nil || *settings.SubscriptionWatchIntervalSeconds != 30 {
 		t.Fatalf("settings=%#v", settings)
+	}
+}
+
+func TestRememberToolApprovalsRemoteDefaultAndLocalPrecedence(t *testing.T) {
+	cfg := Config{}
+	cfg.ApplyRemoteSettings(&RemoteSettings{RememberToolApprovals: boolPointer(true)})
+	if !cfg.UI.RememberToolApprovals {
+		t.Fatal("remote setting was ignored")
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{})
+	if cfg.UI.RememberToolApprovals {
+		t.Fatal("missing remote setting did not restore default")
+	}
+
+	cfg = Config{UI: UIConfig{RememberToolApprovals: true}, uiRememberApprovalsConfigured: true}
+	cfg.ApplyRemoteSettings(&RemoteSettings{RememberToolApprovals: boolPointer(false)})
+	if !cfg.UI.RememberToolApprovals {
+		t.Fatal("remote setting replaced local config")
 	}
 }
 

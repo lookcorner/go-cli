@@ -315,7 +315,7 @@ func TestVimModeDefaultsToFalse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.UI.VimMode || cfg.UI.ScrollSpeed != 50 || cfg.UI.ScrollMode != "auto" || cfg.UI.ScrollLines != nil || cfg.UI.InvertScroll || cfg.UI.CursorBlink != nil {
+	if cfg.UI.VimMode || cfg.UI.ScrollSpeed != 50 || cfg.UI.ScrollMode != "auto" || cfg.UI.ScrollLines != nil || cfg.UI.InvertScroll || cfg.UI.RememberToolApprovals || cfg.UI.CursorBlink != nil {
 		t.Fatalf("unexpected UI defaults: %#v", cfg.UI)
 	}
 }
@@ -341,6 +341,27 @@ func TestScrollModeUsesStrictConfigAndEnvironmentPrecedence(t *testing.T) {
 				t.Fatalf("mode=%q want=%q err=%v", cfg.UI.ScrollMode, test.want, err)
 			}
 		})
+	}
+}
+
+func TestRememberToolApprovalsConfigEnvironmentAndRequirementsPrecedence(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[ui]\nremember_tool_approvals = true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil || !cfg.UI.RememberToolApprovals {
+		t.Fatalf("local config=%#v err=%v", cfg.UI, err)
+	}
+
+	t.Setenv("GROK_REMEMBER_TOOL_APPROVALS", "false")
+	cfg, err = Load(path)
+	if err != nil || cfg.UI.RememberToolApprovals {
+		t.Fatalf("environment config=%#v err=%v", cfg.UI, err)
+	}
+
+	if err := applyRequirementsData(&cfg, []byte("[ui]\nremember_tool_approvals = true\n"), "test", false, false); err != nil || !cfg.UI.RememberToolApprovals {
+		t.Fatalf("requirements config=%#v err=%v", cfg.UI, err)
 	}
 }
 

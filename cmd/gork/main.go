@@ -3105,7 +3105,9 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		authPath: authPath, scope: authConfig.Scope(), tokenProvider: tokenProvider, http: subscriptionHTTP, authMethod: authRuntime.Method,
 		config: runtimeConfigSnapshot, applySettings: applyRemoteSettings, refreshModels: catalogRefresher.Start,
 	}
-	server = &acp.Server{SessionDir: opts.sessionDir, FolderTrustEnabled: cfg.FolderTrustEnabled, BillingMeta: getBillingMeta, SharingEnabled: func() bool {
+	server = &acp.Server{SessionDir: opts.sessionDir, FolderTrustEnabled: cfg.FolderTrustEnabled, RememberToolApprovals: func() bool {
+		return runtimeConfigSnapshot().UI.RememberToolApprovals
+	}, BillingMeta: getBillingMeta, SharingEnabled: func() bool {
 		return runtimeConfigSnapshot().SharingEnabled
 	}, Auth: acp.AuthConfig{
 		Path: authPath, Scope: authConfig.Scope(), MethodID: authMethodID, Token: cfg.APIKey, Methods: authMethods, DefaultMethodID: defaultAuthMethodID, TokenProvider: tokenProvider,

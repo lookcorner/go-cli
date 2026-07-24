@@ -120,6 +120,7 @@ type Config struct {
 	uiSelectionHighlightDuration    *uint64
 	uiDoubleClickAction             *string
 	uiPermissionModeConfigured      bool
+	uiRememberApprovalsConfigured   bool
 	modelConfigured                 bool
 	defaultModelConfigured          bool
 	allowedModelsConfigured         bool
@@ -203,26 +204,27 @@ type AskUserQuestionConfig struct {
 }
 
 type UIConfig struct {
-	Theme                string  `json:"theme"`
-	AutoDarkTheme        string  `json:"auto_dark_theme"`
-	AutoLightTheme       string  `json:"auto_light_theme"`
-	HunkTrackerMode      string  `json:"hunk_tracker_mode"`
-	ScreenMode           string  `json:"screen_mode"`
-	RenderMermaid        string  `json:"render_mermaid"`
-	KeepTextSelection    string  `json:"keep_text_selection"`
-	WordSeparators       *string `json:"word_separators,omitempty"`
-	MouseReportingToggle bool    `json:"mouse_reporting_toggle,omitempty"`
-	VimMode              bool    `json:"vim_mode,omitempty"`
-	CompactMode          bool    `json:"compact_mode,omitempty"`
-	ShowTimestamps       bool    `json:"show_timestamps"`
-	ShowTimeline         bool    `json:"show_timeline,omitempty"`
-	ScrollSpeed          uint8   `json:"scroll_speed,omitempty"`
-	ScrollMode           string  `json:"scroll_mode"`
-	ScrollLines          *uint8  `json:"scroll_lines,omitempty"`
-	InvertScroll         bool    `json:"invert_scroll,omitempty"`
-	PromptSuggestions    bool    `json:"prompt_suggestions"`
-	CursorBlink          *bool   `json:"cursor_blink,omitempty"`
-	PermissionMode       string  `json:"permission_mode"`
+	Theme                 string  `json:"theme"`
+	AutoDarkTheme         string  `json:"auto_dark_theme"`
+	AutoLightTheme        string  `json:"auto_light_theme"`
+	HunkTrackerMode       string  `json:"hunk_tracker_mode"`
+	ScreenMode            string  `json:"screen_mode"`
+	RenderMermaid         string  `json:"render_mermaid"`
+	KeepTextSelection     string  `json:"keep_text_selection"`
+	WordSeparators        *string `json:"word_separators,omitempty"`
+	MouseReportingToggle  bool    `json:"mouse_reporting_toggle,omitempty"`
+	VimMode               bool    `json:"vim_mode,omitempty"`
+	CompactMode           bool    `json:"compact_mode,omitempty"`
+	ShowTimestamps        bool    `json:"show_timestamps"`
+	ShowTimeline          bool    `json:"show_timeline,omitempty"`
+	ScrollSpeed           uint8   `json:"scroll_speed,omitempty"`
+	ScrollMode            string  `json:"scroll_mode"`
+	ScrollLines           *uint8  `json:"scroll_lines,omitempty"`
+	InvertScroll          bool    `json:"invert_scroll,omitempty"`
+	RememberToolApprovals bool    `json:"remember_tool_approvals,omitempty"`
+	PromptSuggestions     bool    `json:"prompt_suggestions"`
+	CursorBlink           *bool   `json:"cursor_blink,omitempty"`
+	PermissionMode        string  `json:"permission_mode"`
 }
 
 type DashboardConfig struct {
@@ -483,6 +485,7 @@ type fileUIConfig struct {
 	ScrollMode                   *string `json:"scroll_mode,omitempty" toml:"scroll_mode"`
 	ScrollLines                  *uint8  `json:"scroll_lines,omitempty" toml:"scroll_lines"`
 	InvertScroll                 *bool   `json:"invert_scroll,omitempty" toml:"invert_scroll"`
+	RememberToolApprovals        *bool   `json:"remember_tool_approvals,omitempty" toml:"remember_tool_approvals"`
 	PromptSuggestions            *bool   `json:"prompt_suggestions,omitempty" toml:"prompt_suggestions"`
 	CursorBlink                  *bool   `json:"cursor_blink,omitempty" toml:"cursor_blink"`
 	PermissionMode               *string `json:"permission_mode,omitempty" toml:"permission_mode"`
@@ -516,8 +519,9 @@ type requirementsFile struct {
 		AskUserQuestion *fileAskUserQuestionConfig `toml:"ask_user_question"`
 	} `toml:"toolset"`
 	UI struct {
-		DisableBypassPermissionsMode any `toml:"disable_bypass_permissions_mode"`
-		Yolo                         any `toml:"yolo"`
+		DisableBypassPermissionsMode any   `toml:"disable_bypass_permissions_mode"`
+		Yolo                         any   `toml:"yolo"`
+		RememberToolApprovals        *bool `toml:"remember_tool_approvals"`
 	} `toml:"ui"`
 }
 
@@ -993,6 +997,10 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.UI.InvertScroll != nil {
 		cfg.UI.InvertScroll = *disk.UI.InvertScroll
+	}
+	if disk.UI.RememberToolApprovals != nil {
+		cfg.UI.RememberToolApprovals = *disk.UI.RememberToolApprovals
+		cfg.uiRememberApprovalsConfigured = true
 	}
 	if disk.UI.PromptSuggestions != nil {
 		cfg.UI.PromptSuggestions = *disk.UI.PromptSuggestions
@@ -1710,6 +1718,10 @@ func applyEnv(cfg *Config) {
 	} else if raw == "0" || raw == "false" {
 		cfg.UI.InvertScroll = false
 	}
+	if value, ok := envBool("GROK_REMEMBER_TOOL_APPROVALS"); ok {
+		cfg.UI.RememberToolApprovals = value
+		cfg.uiRememberApprovalsConfigured = true
+	}
 	if value := os.Getenv("GORK_WEB_SEARCH_API_KEY"); value != "" {
 		cfg.WebSearch.Enabled = true
 		cfg.WebSearch.APIKey = value
@@ -2149,6 +2161,10 @@ func applyRequirementsData(cfg *Config, data []byte, source string, envFailClose
 	}
 	if yolo, ok := requirement.UI.Yolo.(bool); ok && !yolo {
 		cfg.DisableBypassPermissionsMode = true
+	}
+	if requirement.UI.RememberToolApprovals != nil {
+		cfg.UI.RememberToolApprovals = *requirement.UI.RememberToolApprovals
+		cfg.uiRememberApprovalsConfigured = true
 	}
 	if requirement.GrokComConfig == nil {
 		return nil

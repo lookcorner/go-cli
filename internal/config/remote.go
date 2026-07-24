@@ -28,6 +28,7 @@ type RemoteSettings struct {
 	ShowResolvedModel                *bool                `json:"show_resolved_model"`
 	AutoMode                         *AutoModeConfig      `json:"auto_mode"`
 	PermissionMode                   *string              `json:"permission_mode"`
+	RememberToolApprovals            *bool                `json:"remember_tool_approvals"`
 	GroupToolVerbs                   *bool                `json:"group_tool_verbs"`
 	CollapsedEditBlocks              *bool                `json:"collapsed_edit_blocks"`
 	SubscriptionWatchIntervalSeconds *uint64              `json:"subscription_watch_interval_secs"`
@@ -176,6 +177,9 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 				c.UI.PermissionMode = mode
 			}
 		}
+	}
+	if !c.uiRememberApprovalsConfigured {
+		c.UI.RememberToolApprovals = remote.RememberToolApprovals != nil && *remote.RememberToolApprovals
 	}
 	if remote.OfficialMarketplaceAutoRegister != nil {
 		c.OfficialMarketplaceAutoRegister = *remote.OfficialMarketplaceAutoRegister

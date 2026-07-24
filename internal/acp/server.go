@@ -38,21 +38,22 @@ const ProtocolVersion = 1
 var clientSessionIDPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 type SessionConfig struct {
-	CWD             string
-	DisplayCWD      string
-	Title           string
-	Model           string
-	ReasoningEffort string
-	MCPServers      []MCPServer
-	MCPSDKServers   []MCPServer
-	SessionID       string
-	ResumePath      string
-	YoloMode        *bool
-	AutoMode        *bool
-	ClientHooks     []hooks.ClientHookGroup
-	HunkTrackerMode tools.HunkTrackerMode
-	MCPInitProgress func(total, connected int)
-	MCPReverseCall  MCPReverseCall
+	CWD                   string
+	DisplayCWD            string
+	Title                 string
+	Model                 string
+	ReasoningEffort       string
+	MCPServers            []MCPServer
+	MCPSDKServers         []MCPServer
+	SessionID             string
+	ResumePath            string
+	YoloMode              *bool
+	AutoMode              *bool
+	ClientHooks           []hooks.ClientHookGroup
+	HunkTrackerMode       tools.HunkTrackerMode
+	RememberToolApprovals bool
+	MCPInitProgress       func(total, connected int)
+	MCPReverseCall        MCPReverseCall
 }
 
 func sessionPermissionModeOverrides(meta map[string]any) (yoloMode, autoMode *bool) {
@@ -109,47 +110,48 @@ type mcpServerParam struct {
 type Factory func(context.Context, SessionConfig, tools.Approver, io.Writer, io.Writer) (*agent.Runner, func(), error)
 
 type Server struct {
-	Factory            Factory
-	Auth               AuthConfig
-	Bundle             BundleConfig
-	AuthChanged        func(context.Context, auth.LogoutResult) error
-	Initialized        func()
-	BillingMeta        func() (*bool, *string)
-	SharingEnabled     func() bool
-	SessionDir         string
-	FolderTrustEnabled bool
-	input              io.Reader
-	output             io.Writer
-	writeMu            sync.Mutex
-	pathRewriters      sync.Map
-	initializedOnce    sync.Once
-	initialized        atomic.Bool
-	announcements      announcementState
-	authMu             sync.RWMutex
-	mu                 sync.Mutex
-	sessions           map[string]*session
-	pending            map[string]chan permissionResult
-	pendingPlan        map[string]chan planApprovalResult
-	pendingQuestion    map[string]chan userQuestionResult
-	pendingHook        map[string]chan clientHookResult
-	pendingTrust       map[string]chan folderTrustResult
-	pendingMCP         map[string]chan mcpReverseResult
-	clientFS           *clientFSConfig
-	clientGitHead      bool
-	clientFolderTrust  bool
-	clientHunkMode     tools.HunkTrackerMode
-	trustMu            sync.Mutex
-	trustPrompted      map[string]bool
-	trustPromptTimeout time.Duration
-	trustContext       context.Context
-	trustCancel        context.CancelFunc
-	nextSession        atomic.Uint64
-	nextRequest        atomic.Uint64
-	closing            atomic.Bool
-	wg                 sync.WaitGroup
-	worktrees          *worktrees.Manager
-	terminals          *terminalManager
-	fuzzySearch        *workspace.FuzzySearchManager
+	Factory               Factory
+	Auth                  AuthConfig
+	Bundle                BundleConfig
+	AuthChanged           func(context.Context, auth.LogoutResult) error
+	Initialized           func()
+	BillingMeta           func() (*bool, *string)
+	SharingEnabled        func() bool
+	SessionDir            string
+	FolderTrustEnabled    bool
+	RememberToolApprovals func() bool
+	input                 io.Reader
+	output                io.Writer
+	writeMu               sync.Mutex
+	pathRewriters         sync.Map
+	initializedOnce       sync.Once
+	initialized           atomic.Bool
+	announcements         announcementState
+	authMu                sync.RWMutex
+	mu                    sync.Mutex
+	sessions              map[string]*session
+	pending               map[string]chan permissionResult
+	pendingPlan           map[string]chan planApprovalResult
+	pendingQuestion       map[string]chan userQuestionResult
+	pendingHook           map[string]chan clientHookResult
+	pendingTrust          map[string]chan folderTrustResult
+	pendingMCP            map[string]chan mcpReverseResult
+	clientFS              *clientFSConfig
+	clientGitHead         bool
+	clientFolderTrust     bool
+	clientHunkMode        tools.HunkTrackerMode
+	trustMu               sync.Mutex
+	trustPrompted         map[string]bool
+	trustPromptTimeout    time.Duration
+	trustContext          context.Context
+	trustCancel           context.CancelFunc
+	nextSession           atomic.Uint64
+	nextRequest           atomic.Uint64
+	closing               atomic.Bool
+	wg                    sync.WaitGroup
+	worktrees             *worktrees.Manager
+	terminals             *terminalManager
+	fuzzySearch           *workspace.FuzzySearchManager
 }
 
 type message struct {
@@ -1811,7 +1813,10 @@ func (s *Server) startSession(ctx context.Context, id string, sessionConfig Sess
 		s.NotifyMCPInitProgress(id, total, connected)
 	}
 	sessionConfig.MCPReverseCall = s.callMCPSDK
-	approver := &serverApprover{server: s, sessionID: id}
+	if s.RememberToolApprovals != nil {
+		sessionConfig.RememberToolApprovals = s.RememberToolApprovals()
+	}
+	approver := &serverApprover{server: s, sessionID: id, remember: sessionConfig.RememberToolApprovals}
 	writer := &sessionTextWriter{server: s, sessionID: id}
 	runner, closeRuntime, err := s.Factory(ctx, sessionConfig, approver, writer, io.Discard)
 	if err != nil {
@@ -3568,6 +3573,7 @@ func acpToolKind(name string) string {
 type serverApprover struct {
 	server    *Server
 	sessionID string
+	remember  bool
 	mu        sync.RWMutex
 	grants    map[permissionGrant]struct{}
 }
@@ -3597,16 +3603,19 @@ func (a *serverApprover) Approve(ctx context.Context, action, detail string) err
 	a.server.pending[id] = result
 	a.server.mu.Unlock()
 	defer func() { a.server.mu.Lock(); delete(a.server.pending, id); a.server.mu.Unlock() }()
+	options := []any{
+		map[string]any{"optionId": "allow_once", "name": "Allow once", "kind": "allow_once"},
+	}
+	if a.remember {
+		options = append(options, map[string]any{"optionId": "allow_always", "name": "Always allow this request", "kind": "allow_always"})
+	}
+	options = append(options, map[string]any{"optionId": "reject_once", "name": "Reject", "kind": "reject_once"})
 	a.server.write(map[string]any{
 		"jsonrpc": "2.0", "id": id, "method": "session/request_permission",
 		"params": map[string]any{
 			"sessionId": a.sessionID,
 			"toolCall":  map[string]any{"toolCallId": toolCallID, "title": action + ": " + detail, "status": "pending", "rawInput": detail},
-			"options": []any{
-				map[string]any{"optionId": "allow_once", "name": "Allow once", "kind": "allow_once"},
-				map[string]any{"optionId": "allow_always", "name": "Always allow this request", "kind": "allow_always"},
-				map[string]any{"optionId": "reject_once", "name": "Reject", "kind": "reject_once"},
-			},
+			"options":   options,
 		},
 	})
 	select {
@@ -3619,6 +3628,9 @@ func (a *serverApprover) Approve(ctx context.Context, action, detail string) err
 			case "allow_once":
 				return nil
 			case "allow_always":
+				if !a.remember {
+					break
+				}
 				a.mu.Lock()
 				if a.grants == nil {
 					a.grants = make(map[permissionGrant]struct{})

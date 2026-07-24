@@ -16,7 +16,7 @@ import (
 func TestServerApproverRemembersExactRequestUntilReset(t *testing.T) {
 	var output bytes.Buffer
 	server := &Server{output: &output, pending: make(map[string]chan permissionResult)}
-	approver := &serverApprover{server: server, sessionID: "permission-session"}
+	approver := &serverApprover{server: server, sessionID: "permission-session", remember: true}
 	approve := func(action, detail, option string) error {
 		t.Helper()
 		done := make(chan error, 1)
@@ -67,6 +67,85 @@ func TestServerApproverRemembersExactRequestUntilReset(t *testing.T) {
 	approver.reset()
 	if err := approve("shell", "git status", "allow_once"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestServerApproverHidesAndRejectsRememberedGrantWhenDisabled(t *testing.T) {
+	var output bytes.Buffer
+	server := &Server{output: &output, pending: make(map[string]chan permissionResult)}
+	approver := &serverApprover{server: server, sessionID: "permission-session"}
+	done := make(chan error, 1)
+	go func() { done <- approver.Approve(context.Background(), "shell", "git status") }()
+	deadline := time.Now().Add(time.Second)
+	var id string
+	var written []byte
+	for (id == "" || len(written) == 0) && time.Now().Before(deadline) {
+		server.mu.Lock()
+		for id = range server.pending {
+			break
+		}
+		server.mu.Unlock()
+		server.writeMu.Lock()
+		written = append(written[:0], output.Bytes()...)
+		server.writeMu.Unlock()
+		if id == "" || len(written) == 0 {
+			time.Sleep(time.Millisecond)
+		}
+	}
+	if id == "" || len(written) == 0 {
+		t.Fatal("permission request was not written")
+	}
+	messages := decodeACPOutput(t, written)
+	options := messages[0]["params"].(map[string]any)["options"].([]any)
+	if len(options) != 2 || options[0].(map[string]any)["optionId"] != "allow_once" || options[1].(map[string]any)["optionId"] != "reject_once" {
+		t.Fatalf("permission options=%#v", options)
+	}
+	server.handleClientResponse(message{
+		ID:     json.RawMessage(quoteJSON(id)),
+		Result: json.RawMessage(`{"outcome":{"outcome":"selected","optionId":"allow_always"}}`),
+	})
+	if err := <-done; !tools.IsPermissionDenied(err) {
+		t.Fatalf("disabled remembered grant err=%v", err)
+	}
+	if len(approver.grants) != 0 {
+		t.Fatalf("disabled gate stored grants: %#v", approver.grants)
+	}
+}
+
+func TestRememberToolApprovalsFreezesAtSessionStart(t *testing.T) {
+	enabled := false
+	var captured SessionConfig
+	server := &Server{
+		SessionDir:            t.TempDir(),
+		sessions:              make(map[string]*session),
+		RememberToolApprovals: func() bool { return enabled },
+		Factory: func(_ context.Context, cfg SessionConfig, approver tools.Approver, _, _ io.Writer) (*agent.Runner, func(), error) {
+			captured = cfg
+			ws, err := workspace.Open(cfg.CWD)
+			if err != nil {
+				return nil, nil, err
+			}
+			registry := tools.NewRegistry(ws, approver)
+			return &agent.Runner{Tools: registry}, func() { _ = registry.Close() }, nil
+		},
+	}
+	session, err := server.startSession(context.Background(), "remember-off", SessionConfig{CWD: t.TempDir()}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.close()
+	if captured.RememberToolApprovals || session.permissions.remember {
+		t.Fatalf("disabled session config=%#v approver=%#v", captured, session.permissions)
+	}
+
+	enabled = true
+	session, err = server.startSession(context.Background(), "remember-on", SessionConfig{CWD: t.TempDir()}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.close()
+	if !captured.RememberToolApprovals || !session.permissions.remember {
+		t.Fatalf("enabled session config=%#v approver=%#v", captured, session.permissions)
 	}
 }
 

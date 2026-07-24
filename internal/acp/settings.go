@@ -21,6 +21,7 @@ type settingsUpdate struct {
 	SubscriptionTierDisplay          *string                     `json:"subscription_tier_display"`
 	AutoPermissionModeEnabled        *bool                       `json:"auto_permission_mode_enabled"`
 	PermissionMode                   *string                     `json:"permission_mode"`
+	RememberToolApprovals            *bool                       `json:"remember_tool_approvals"`
 	GroupToolVerbs                   *bool                       `json:"group_tool_verbs"`
 	CollapsedEditBlocks              *bool                       `json:"collapsed_edit_blocks"`
 	SubscriptionWatchIntervalSeconds *uint64                     `json:"subscription_watch_interval_secs"`
@@ -59,7 +60,8 @@ func (s *Server) NotifySettingsUpdate(remote *config.RemoteSettings) {
 			Announcements: append([]config.RemoteAnnouncement(nil), remote.Announcements...), GateMessage: remote.GateMessage,
 			GateURL: remote.GateURL, GateLabel: remote.GateLabel, AllowAccess: remote.AllowAccess,
 			SubscriptionTierDisplay: remote.SubscriptionTierDisplay, AutoPermissionModeEnabled: autoModeEnabled,
-			PermissionMode: remote.PermissionMode, GroupToolVerbs: remote.GroupToolVerbs,
+			PermissionMode: remote.PermissionMode, RememberToolApprovals: remote.RememberToolApprovals,
+			GroupToolVerbs:                   remote.GroupToolVerbs,
 			CollapsedEditBlocks:              remote.CollapsedEditBlocks,
 			SubscriptionWatchIntervalSeconds: remote.SubscriptionWatchIntervalSeconds,
 		},
