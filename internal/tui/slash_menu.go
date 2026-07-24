@@ -43,6 +43,7 @@ var slashCommandCatalog = []slashCommandItem{
 	{name: "copy", placeholder: "[N]", description: "Copy an assistant response"},
 	{name: "find", placeholder: "[text]", description: "Search the transcript"},
 	{name: "history", description: "Search prompt history"},
+	{name: "voice", description: "Toggle voice dictation"},
 	{name: "export", placeholder: "[filename]", description: "Export the conversation"},
 	{name: "transcript", aliases: []string{"log"}, description: "View the stored transcript"},
 	{name: "context", description: "Show context usage"},
@@ -267,6 +268,8 @@ func (m *model) slashCommandAvailable(name string) bool {
 		return runner != nil && runner.Tools != nil && runner.Tools.HasTool(imagine.ImageTool)
 	case "imagine-video":
 		return runner != nil && runner.Tools != nil && runner.Tools.HasTool(imagine.VideoTool)
+	case "voice":
+		return m.voiceClient != nil
 	case "config-agents":
 		return runner != nil && runner.AgentDefinitions != nil
 	case "personas":

@@ -504,6 +504,14 @@ cancels the current turn with Ctrl-C, and presents write/Shell/MCP approval
 prompts inside the alternate screen. Shift-Tab toggles persisted Plan mode and
 shows a visible mode badge. `/always-approve` toggles automatic approval for
 otherwise unmatched tool actions while preserving explicit deny and ask rules.
+`/voice`, Ctrl-Space, or F8 toggles live voice dictation. Partial transcripts
+appear above the composer and final text is inserted at the current cursor;
+Esc stops recording, while Enter waits for the trailing final and sends the
+completed prompt. Voice uses the active login or API key with xAI's
+streaming STT endpoint. Native macOS and Windows builds capture the default
+microphone directly; Linux uses the first available `pw-record`, `parec`, or
+`arecord` executable. CGO-disabled non-Linux builds hide the command instead of
+advertising unavailable microphone support.
 When `[auto_mode]` is enabled, `/auto` toggles classifier-based approval and
 switches cleanly from always-approve; the command is unavailable when policy
 or configuration disables auto mode. Successful mode changes are atomically

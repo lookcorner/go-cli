@@ -31,6 +31,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/terminaldiag"
 	"github.com/lookcorner/go-cli/internal/tools"
+	"github.com/lookcorner/go-cli/internal/voice"
 )
 
 const (
@@ -211,6 +212,14 @@ type claudeImportDoneEvent struct {
 	result claudeimport.Result
 	env    map[string]string
 	err    error
+}
+type voiceStartedEvent struct {
+	session voice.Session
+	err     error
+}
+type voiceEvent struct {
+	event voice.Event
+	ok    bool
 }
 
 type Bridge struct {
@@ -591,6 +600,12 @@ type model struct {
 	minimalReset     bool
 	gboom            *gboomState
 	gboomEpoch       uint64
+	voiceClient      voiceStarter
+	voiceSession     voice.Session
+	voiceCancel      context.CancelFunc
+	voiceStarting    bool
+	voiceInterim     string
+	voiceSendOnStop  bool
 
 	dashboard         *dashboardState
 	dashboardDisabled bool
@@ -625,6 +640,10 @@ type claudeImportState struct {
 type inputSnapshot struct {
 	text   []rune
 	cursor int
+}
+
+type voiceStarter interface {
+	Start(context.Context) (voice.Session, error)
 }
 
 type textSelection struct {
@@ -684,6 +703,7 @@ type UIOptions struct {
 	SetDashboardReorder  func([]string) error
 	DashboardGrouping    string
 	SetDashboardGrouping func(string) error
+	Voice                *voice.Client
 }
 
 type transcriptMessage struct {
@@ -812,6 +832,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		persistOrder:       options.SetDashboardReorder,
 		dashboardGrouping:  dashboardGrouping(options.DashboardGrouping),
 		persistGrouping:    options.SetDashboardGrouping,
+		voiceClient:        options.Voice,
 		debug:              newDebugState(),
 	}
 	for _, id := range options.DashboardPinned {
@@ -845,6 +866,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 	}
 	program := tea.NewProgram(m, tea.WithContext(ctx))
 	final, err := program.Run()
+	m.stopVoice()
 	if errors.Is(err, tea.ErrInterrupted) || errors.Is(err, context.Canceled) {
 		return nil
 	}
@@ -1119,6 +1141,61 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.clearInput()
 		m.status = "review implementation plan"
 		return m, waitForBridge(m.bridge)
+	case voiceStartedEvent:
+		if !m.voiceStarting {
+			if msg.session != nil {
+				msg.session.Stop()
+			}
+			return m, nil
+		}
+		m.voiceStarting = false
+		m.voiceCancel = nil
+		if msg.err != nil {
+			m.status = "voice failed: " + msg.err.Error()
+			m.appendSystem("Voice input unavailable: " + msg.err.Error())
+			return m, nil
+		}
+		m.voiceSession = msg.session
+		m.voiceInterim = ""
+		m.status = "listening · Esc or /voice to stop"
+		return m, waitVoice(msg.session)
+	case voiceEvent:
+		if m.voiceSession == nil {
+			return m, nil
+		}
+		if !msg.ok {
+			m.voiceSession = nil
+			m.voiceInterim = ""
+			send := m.voiceSendOnStop
+			m.voiceSendOnStop = false
+			if m.running {
+				m.status = "thinking"
+			} else {
+				m.status = "ready"
+			}
+			if send {
+				return m, func() tea.Msg {
+					return tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter})
+				}
+			}
+			return m, nil
+		}
+		if msg.event.Err != nil {
+			m.stopVoice()
+			m.voiceSendOnStop = false
+			m.status = "voice failed: " + msg.event.Err.Error()
+			m.appendSystem("Voice input stopped: " + msg.event.Err.Error())
+			return m, nil
+		}
+		if msg.event.Final {
+			m.voiceInterim = ""
+			m.insertDictation(msg.event.Text)
+			m.status = "listening"
+		} else {
+			m.voiceInterim = msg.event.Text
+			m.status = "listening · " + truncate(msg.event.Text, max(m.width-14, 10))
+		}
+		return m, waitVoice(m.voiceSession)
 	case turnDoneEvent:
 		m.running = false
 		m.turnCancel = nil
@@ -1741,6 +1818,21 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Quit
 	}
+	if stroke == "ctrl+@" || stroke == "ctrl+space" || stroke == "f8" {
+		return m, m.toggleVoice()
+	}
+	if m.voiceSession != nil && key.Code == tea.KeyEsc {
+		m.voiceSendOnStop = false
+		m.finishVoice()
+		m.status = "finishing voice input"
+		return m, nil
+	}
+	if m.voiceSession != nil && key.Code == tea.KeyEnter {
+		m.voiceSendOnStop = true
+		m.finishVoice()
+		m.status = "finishing voice input"
+		return m, nil
+	}
 	if m.rememberInput && key.Code == tea.KeyEsc {
 		m.rememberInput = false
 		m.clearInput()
@@ -1930,6 +2022,10 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "/gboom":
 			if prompt == "/gboom" {
 				return m, m.openGboom()
+			}
+		case "/voice":
+			if prompt == "/voice" {
+				return m, m.toggleVoice()
 			}
 		case "/new", "/clear", "/home", "/welcome":
 			m.newSession = true
@@ -2544,6 +2640,9 @@ func (m *model) handleRunningKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "/dashboard", "/sessions", "/agents-dashboard":
 			m.clearInput()
 			return m, m.openDashboard()
+		case "/voice":
+			m.clearInput()
+			return m, m.toggleVoice()
 		case "/recap":
 			m.clearInput()
 			return m, m.startRecap()
@@ -3663,6 +3762,82 @@ func (m *model) clearInput() {
 	m.slashDismissed = ""
 }
 
+func (m *model) toggleVoice() tea.Cmd {
+	if m.voiceSession != nil {
+		m.finishVoice()
+		m.status = "finishing voice input"
+		return nil
+	}
+	if m.voiceStarting {
+		if m.voiceCancel != nil {
+			m.voiceCancel()
+		}
+		m.voiceStarting = false
+		m.voiceCancel = nil
+		m.status = "voice input cancelled"
+		return nil
+	}
+	if m.voiceClient == nil {
+		m.status = "voice input unavailable"
+		m.appendSystem("Voice input is unavailable in this session.")
+		return nil
+	}
+	ctx, cancel := context.WithCancel(m.ctx)
+	m.voiceStarting = true
+	m.voiceCancel = cancel
+	m.voiceInterim = ""
+	m.status = "connecting voice input"
+	return startVoice(ctx, m.voiceClient)
+}
+
+func (m *model) finishVoice() {
+	if m.voiceSession != nil {
+		m.voiceSession.Stop()
+	}
+}
+
+func (m *model) stopVoice() {
+	if m.voiceCancel != nil {
+		m.voiceCancel()
+	}
+	if m.voiceSession != nil {
+		m.voiceSession.Stop()
+	}
+	m.voiceCancel = nil
+	m.voiceSession = nil
+	m.voiceStarting = false
+	m.voiceInterim = ""
+	m.voiceSendOnStop = false
+}
+
+func (m *model) insertDictation(text string) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	if m.cursor > 0 && !unicode.IsSpace(m.input[m.cursor-1]) {
+		text = " " + text
+	}
+	if m.cursor < len(m.input) && !unicode.IsSpace(m.input[m.cursor]) {
+		text += " "
+	}
+	m.insertInput(text)
+}
+
+func startVoice(ctx context.Context, client voiceStarter) tea.Cmd {
+	return func() tea.Msg {
+		session, err := client.Start(ctx)
+		return voiceStartedEvent{session: session, err: err}
+	}
+}
+
+func waitVoice(session voice.Session) tea.Cmd {
+	return func() tea.Msg {
+		event, ok := <-session.Events()
+		return voiceEvent{event: event, ok: ok}
+	}
+}
+
 func (m *model) setInput(value string) {
 	m.input = []rune(value)
 	m.cursor = len(m.input)
@@ -4297,7 +4472,15 @@ func (m *model) View() tea.View {
 		if m.multiline {
 			hint = "Shift/Alt-Enter send · Enter newline · Ctrl-M single-line · Ctrl-Z undo"
 		}
+		if m.voiceStarting {
+			hint = "Connecting microphone · Ctrl-Space/F8 cancel"
+		} else if m.voiceSession != nil {
+			hint = "Recording · Esc or Ctrl-Space/F8 stop"
+		}
 		parts := m.slashMenuLines(width)
+		if m.voiceInterim != "" {
+			parts = append(parts, ansiDim+"🎙 "+truncate(m.voiceInterim, max(width-3, 1))+ansiReset)
+		}
 		parts = append(parts, inputLines...)
 		footer = strings.Join(parts, "\n") + "\n" + ansiDim + truncate(hint, width) + ansiReset
 	}

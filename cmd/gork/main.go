@@ -51,6 +51,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/tools"
 	"github.com/lookcorner/go-cli/internal/tui"
 	"github.com/lookcorner/go-cli/internal/version"
+	"github.com/lookcorner/go-cli/internal/voice"
 	"github.com/lookcorner/go-cli/internal/workspace"
 	worktrees "github.com/lookcorner/go-cli/internal/worktree"
 )
@@ -870,6 +871,10 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if opts.tui {
 		_, forkGitErr := worktrees.GitRoot(ctx, ws.Root())
 		minimal := opts.minimal || !opts.fullscreen && cfg.UI.ScreenMode == "minimal"
+		var voiceClient *voice.Client
+		if voice.Supported() {
+			voiceClient = voice.New(voice.Config{BaseURL: cfg.BaseURL}, cfg.APIKey, voice.TokenProvider(tokenProvider))
+		}
 		err := tui.Run(ctx, runner, tuiBridge, prompt, opts.previousID, resumedTranscript, ws.Root(), cfg.Model, tui.UIOptions{
 			Minimal: minimal, ScreenMode: cfg.UI.ScreenMode,
 			SetScreenMode: func(mode string) error { return config.UpdateScreenMode(opts.configPath, mode) },
@@ -896,6 +901,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			SetDashboardGrouping: func(grouping string) error {
 				return config.UpdateDashboardGrouping(opts.configPath, grouping)
 			},
+			Voice:     voiceClient,
 			SetTheme:  func(value string) error { return config.UpdateTheme(opts.configPath, value) },
 			ForkInGit: forkGitErr == nil,
 			ForkSession: func(forkCtx context.Context, isolated bool) (tui.ForkResult, error) {
