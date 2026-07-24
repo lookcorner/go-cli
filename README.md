@@ -586,8 +586,10 @@ scheduled tasks. Enter opens details or switches sessions, `Ctrl+T` pins a
 session, `Shift+Up/Down` changes its manual order, `Ctrl+R` renames an active or
 stored session, `X` stops a selected running subagent or process, `D` confirms
 deletion of an idle session, `Ctrl+G` switches between state sections and a
-directory-sorted flat list, and `R` refreshes the snapshot. Pins, manual order,
-and grouping persist in `[dashboard]`.
+directory-sorted flat list, `Ctrl+/` filters live by text (`a:name` and
+`s:state` are supported), and `R` refreshes the snapshot. Enter keeps a search
+filter and Esc clears it. Pins, manual order, and grouping persist in
+`[dashboard]`.
 While open, the dashboard refreshes live task metrics and stored sessions once
 per second; polling stops when the dashboard closes.
 `/recap` makes a tool-free, display-only model call against the current

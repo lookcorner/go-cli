@@ -494,6 +494,127 @@ func TestDashboardStateGroupingKeepsPinnedSectionFirst(t *testing.T) {
 	}
 }
 
+func TestDashboardSearchFiltersLiveAndKeepsConfirmedFilter(t *testing.T) {
+	done := true
+	runner := &agent.Runner{
+		SessionID: "current",
+		ListTasks: func() []tools.ProcessSnapshot {
+			return []tools.ProcessSnapshot{{TaskID: "tests", Description: "Release Tests", Completed: done, CWD: "/release"}}
+		},
+	}
+	m := &model{
+		runner:    runner,
+		workspace: "/work",
+		modelName: "grok",
+		dashboard: &dashboardState{sessions: []session.Info{
+			{SessionID: "auth", Title: "Auth Flow", CWD: "/services/auth"},
+			{SessionID: "docs", Title: "Write Docs", CWD: "/docs"},
+		}},
+	}
+	m.refreshDashboard()
+	pressDashboardKey(t, m, tea.Key{Code: '/', Mod: tea.ModCtrl})
+	if !m.dashboard.searching || m.status != "search dashboard" {
+		t.Fatalf("state=%#v status=%q", m.dashboard, m.status)
+	}
+	pressDashboardKey(t, m, tea.Key{Code: 'a', Text: "auth"})
+	if len(m.dashboard.rows) != 1 || m.dashboard.rows[0].id != "auth" || !strings.Contains(m.dashboardContent(), "Search: auth|") {
+		t.Fatalf("rows=%#v\n%s", m.dashboard.rows, m.dashboardContent())
+	}
+	pressDashboardKey(t, m, tea.Key{Code: tea.KeyEnter})
+	if m.dashboard.searching || m.dashboard.filterKind != "text" || m.dashboard.filterValue != "auth" || m.status != "dashboard filter applied" {
+		t.Fatalf("state=%#v status=%q", m.dashboard, m.status)
+	}
+	if !strings.Contains(m.dashboardContent(), "Filter: auth") {
+		t.Fatalf("content=%q", m.dashboardContent())
+	}
+	pressDashboardKey(t, m, tea.Key{Code: tea.KeyEsc})
+	if m.dashboard == nil || m.dashboard.filterKind != "" || len(m.dashboard.rows) != 4 || m.status != "dashboard filter cleared" {
+		t.Fatalf("state=%#v status=%q", m.dashboard, m.status)
+	}
+}
+
+func TestDashboardSearchSupportsAgentAndStateFilters(t *testing.T) {
+	runner := &agent.Runner{
+		SessionID: "current",
+		ListSubagents: func() []tools.SubagentResult {
+			return []tools.SubagentResult{{ID: "sub", Description: "Implementer", Status: "completed"}}
+		},
+	}
+	m := &model{
+		runner:    runner,
+		workspace: "/work",
+		modelName: "grok",
+		dashboard: &dashboardState{sessions: []session.Info{{SessionID: "review", Title: "Reviewer", CWD: "/review"}}},
+	}
+	m.refreshDashboard()
+	pressDashboardKey(t, m, tea.Key{Code: '/', Mod: tea.ModCtrl})
+	pressDashboardKey(t, m, tea.Key{Code: 'a', Text: "a:implement"})
+	if len(m.dashboard.rows) != 1 || m.dashboard.rows[0].id != "sub" {
+		t.Fatalf("agent filter rows=%#v", m.dashboard.rows)
+	}
+	pressDashboardKey(t, m, tea.Key{Code: '/', Mod: tea.ModCtrl})
+	if m.dashboard.searching || m.dashboard.filterKind != "" || len(m.dashboard.rows) != 3 {
+		t.Fatalf("cancel state=%#v", m.dashboard)
+	}
+	pressDashboardKey(t, m, tea.Key{Code: '/', Mod: tea.ModCtrl})
+	pressDashboardKey(t, m, tea.Key{Code: 's', Text: "s:done"})
+	if len(m.dashboard.rows) != 1 || m.dashboard.rows[0].id != "sub" || m.dashboard.filterKind != "state" || m.dashboard.filterValue != "done" {
+		t.Fatalf("state filter rows=%#v state=%#v", m.dashboard.rows, m.dashboard)
+	}
+	pressDashboardKey(t, m, tea.Key{Code: tea.KeyEsc})
+	if m.dashboard.searching || m.dashboard.filterKind != "" || len(m.dashboard.rows) != 3 {
+		t.Fatalf("escape state=%#v", m.dashboard)
+	}
+}
+
+func TestDashboardSearchEditsUnicodeAndTreatsJKAsText(t *testing.T) {
+	m := &model{
+		runner:    &agent.Runner{SessionID: "current"},
+		workspace: "/工作/jk",
+		modelName: "grok",
+		dashboard: &dashboardState{},
+	}
+	m.refreshDashboard()
+	pressDashboardKey(t, m, tea.Key{Code: '/', Mod: tea.ModCtrl})
+	pressDashboardKey(t, m, tea.Key{Code: 'j', Text: "jk"})
+	pressDashboardKey(t, m, tea.Key{Code: tea.KeyHome})
+	pressDashboardKey(t, m, tea.Key{Code: '工', Text: "工"})
+	pressDashboardKey(t, m, tea.Key{Code: tea.KeyRight})
+	pressDashboardKey(t, m, tea.Key{Code: tea.KeyDelete})
+	if string(m.dashboard.searchInput) != "工j" || m.dashboard.searchCursor != 2 || len(m.dashboard.rows) != 0 {
+		t.Fatalf("input=%q cursor=%d rows=%#v", m.dashboard.searchInput, m.dashboard.searchCursor, m.dashboard.rows)
+	}
+	pressDashboardKey(t, m, tea.Key{Code: tea.KeyDown})
+	pressDashboardKey(t, m, tea.Key{Code: tea.KeyUp})
+	if m.dashboard.selected != 0 {
+		t.Fatalf("empty filter selection=%d", m.dashboard.selected)
+	}
+}
+
+func TestDashboardFilterParsing(t *testing.T) {
+	tests := []struct {
+		query string
+		kind  string
+		value string
+	}{
+		{"", "", ""},
+		{"a: Reviewer ", "agent", "Reviewer"},
+		{"a:", "", ""},
+		{"s:needs_input", "state", "awaiting"},
+		{"s:busy", "state", "working"},
+		{"s:completed", "state", "done"},
+		{"s:paused", "state", "blocked"},
+		{"s:unknown", "text", "unknown"},
+		{"#42", "text", "#42"},
+	}
+	for _, test := range tests {
+		kind, value := dashboardFilter(test.query)
+		if kind != test.kind || value != test.value {
+			t.Fatalf("query=%q got=(%q,%q) want=(%q,%q)", test.query, kind, value, test.kind, test.value)
+		}
+	}
+}
+
 func dashboardSessionRowIDs(rows []dashboardRow) []string {
 	ids := make([]string, 0, len(rows))
 	for _, row := range rows {

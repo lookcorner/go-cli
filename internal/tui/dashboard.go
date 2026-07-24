@@ -55,6 +55,11 @@ type dashboardState struct {
 	renameKind    dashboardRowKind
 	renameInput   []rune
 	renameCursor  int
+	searching     bool
+	searchInput   []rune
+	searchCursor  int
+	filterKind    string
+	filterValue   string
 	currentTitle  string
 	err           string
 }
@@ -240,6 +245,7 @@ func (m *model) refreshDashboard() {
 	for _, item := range snapshot.Scheduled {
 		rows = append(rows, dashboardRow{kind: dashboardScheduled, id: item.TaskID, status: "scheduled", title: firstNonemptyLine(item.Prompt), detail: item.HumanSchedule, cwd: m.workspace, scheduled: item})
 	}
+	rows = filterDashboardRows(rows, state.filterKind, state.filterValue)
 	m.sortDashboardRows(rows)
 	state.rows = rows
 	state.selected = min(state.selected, max(len(rows)-1, 0))
@@ -295,6 +301,15 @@ func (m *model) dashboardContent() string {
 		input := slices.Insert(slices.Clone(state.renameInput), state.renameCursor, '|')
 		out.WriteString("\nRename: " + string(input) + "\n")
 	}
+	if state.searching {
+		input := slices.Insert(slices.Clone(state.searchInput), state.searchCursor, '|')
+		out.WriteString("\nSearch: " + string(input) + "\n")
+	} else if state.filterKind != "" {
+		out.WriteString("\nFilter: " + dashboardFilterDisplay(state.filterKind, state.filterValue) + "\n")
+	}
+	if !state.loading && len(state.rows) == 0 {
+		out.WriteString("\nNo dashboard items match the current filter.\n")
+	}
 	return strings.TrimSpace(out.String())
 }
 
@@ -305,7 +320,10 @@ func (m *model) dashboardHint() string {
 	if m.dashboard != nil && m.dashboard.renameID != "" {
 		return "Enter save | Esc cancel | Left/Right move cursor"
 	}
-	return "Enter view/switch | Ctrl+G group | Ctrl+T pin | Shift+Up/Down reorder | Ctrl+R rename | X stop | D delete | R refresh | Esc close"
+	if m.dashboard != nil && m.dashboard.searching {
+		return "Type to filter | Enter keep | Esc cancel | Ctrl+/ cancel"
+	}
+	return "Enter view/switch | Ctrl+/ search | Ctrl+G group | Ctrl+T pin | Shift+Up/Down reorder | Ctrl+R rename | X stop | D delete | R refresh | Esc close"
 }
 
 func (m *model) handleDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -317,6 +335,9 @@ func (m *model) handleDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if state.renameID != "" {
 		return m.handleDashboardRenameKey(msg)
 	}
+	if state.searching {
+		return m.handleDashboardSearchKey(msg)
+	}
 	if state.pendingDelete != "" {
 		if text == "y" || stroke == "enter" {
 			id, dir := state.pendingDelete, state.dir
@@ -327,6 +348,16 @@ func (m *model) handleDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			state.pendingDelete = ""
 			return m, nil
 		}
+		return m, nil
+	}
+	if stroke == "ctrl+/" {
+		m.startDashboardSearch()
+		return m, nil
+	}
+	if stroke == "esc" && state.filterKind != "" {
+		state.filterKind, state.filterValue = "", ""
+		m.refreshDashboard()
+		m.status = "dashboard filter cleared"
 		return m, nil
 	}
 	if stroke == "esc" || text == "q" {
@@ -342,9 +373,9 @@ func (m *model) handleDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.toggleDashboardGrouping()
 	case (stroke == "shift+up" || stroke == "shift+down") && len(state.rows) > 0:
 		m.reorderDashboard(state.rows[state.selected], stroke == "shift+up")
-	case stroke == "up" || text == "k":
+	case (stroke == "up" || text == "k") && len(state.rows) > 0:
 		state.selected = max(0, state.selected-1)
-	case stroke == "down" || text == "j":
+	case (stroke == "down" || text == "j") && len(state.rows) > 0:
 		state.selected = min(len(state.rows)-1, state.selected+1)
 	case text == "r":
 		m.refreshDashboard()
@@ -421,9 +452,13 @@ func dashboardGrouping(value string) string {
 
 func dashboardRowGroup(row dashboardRow) string {
 	switch row.status {
+	case "needs-input", "needs_input", "awaiting":
+		return "awaiting"
 	case "active", "running":
 		return "working"
-	case "failed", "killed", "cancelled", "error":
+	case "blocked", "paused":
+		return "blocked"
+	case "failed", "killed", "cancelled", "canceled", "error", "errored":
 		return "failed"
 	case "done", "completed":
 		return "done"
@@ -434,14 +469,18 @@ func dashboardRowGroup(row dashboardRow) string {
 
 func dashboardGroupRank(group string) int {
 	switch group {
-	case "working":
+	case "awaiting":
 		return 0
-	case "idle":
+	case "working":
 		return 1
-	case "done":
+	case "blocked":
 		return 2
-	default:
+	case "idle":
 		return 3
+	case "done":
+		return 4
+	default:
+		return 5
 	}
 }
 
@@ -449,8 +488,12 @@ func dashboardGroupLabel(group string) string {
 	switch group {
 	case "pinned":
 		return "Pinned"
+	case "awaiting":
+		return "Awaiting"
 	case "working":
 		return "Working"
+	case "blocked":
+		return "Blocked"
 	case "idle":
 		return "Idle"
 	case "done":
@@ -473,6 +516,117 @@ func dashboardGroupCount(rows []dashboardRow, group string) int {
 		count++
 	}
 	return count
+}
+
+func filterDashboardRows(rows []dashboardRow, kind, value string) []dashboardRow {
+	if kind == "" {
+		return rows
+	}
+	value = strings.ToLower(value)
+	return slices.DeleteFunc(rows, func(row dashboardRow) bool {
+		switch kind {
+		case "agent":
+			return !strings.Contains(strings.ToLower(row.title), value)
+		case "state":
+			return dashboardRowGroup(row) != value
+		default:
+			text := strings.ToLower(row.title + "\n" + row.cwd)
+			return !strings.Contains(text, value)
+		}
+	})
+}
+
+func dashboardFilter(query string) (string, string) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return "", ""
+	}
+	if value, ok := strings.CutPrefix(query, "a:"); ok {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return "", ""
+		}
+		return "agent", value
+	}
+	if value, ok := strings.CutPrefix(query, "s:"); ok {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return "", ""
+		}
+		if state := dashboardFilterState(value); state != "" {
+			return "state", state
+		}
+		return "text", value
+	}
+	return "text", query
+}
+
+func dashboardFilterState(value string) string {
+	value = strings.ToLower(value)
+	value = strings.NewReplacer("-", "", "_", "", " ", "").Replace(value)
+	switch value {
+	case "needsinput", "needs", "input":
+		return "awaiting"
+	case "working", "busy", "running":
+		return "working"
+	case "idle", "inactive", "dormant", "scheduled":
+		return "idle"
+	case "completed", "done":
+		return "done"
+	case "failed", "errored", "cancelled", "canceled":
+		return "failed"
+	case "blocked", "paused":
+		return "blocked"
+	default:
+		return ""
+	}
+}
+
+func dashboardFilterDisplay(kind, value string) string {
+	switch kind {
+	case "agent":
+		return "a:" + value
+	case "state":
+		return "s:" + value
+	default:
+		return value
+	}
+}
+
+func (m *model) startDashboardSearch() {
+	state := m.dashboard
+	state.searching = true
+	state.searchInput = nil
+	state.searchCursor = 0
+	state.filterKind, state.filterValue = "", ""
+	state.err = ""
+	m.refreshDashboard()
+	m.status = "search dashboard"
+}
+
+func (m *model) handleDashboardSearchKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	state := m.dashboard
+	key := msg.Key()
+	if key.Code == tea.KeyEsc || msg.Keystroke() == "ctrl+/" {
+		state.searching = false
+		state.searchInput = nil
+		state.searchCursor = 0
+		state.filterKind, state.filterValue = "", ""
+		m.refreshDashboard()
+		m.status = "agent dashboard"
+		return m, nil
+	}
+	if key.Code == tea.KeyEnter {
+		state.searching = false
+		state.searchInput = nil
+		state.searchCursor = 0
+		m.status = "dashboard filter applied"
+		return m, nil
+	}
+	state.searchInput, state.searchCursor = editDashboardText(state.searchInput, state.searchCursor, key)
+	state.filterKind, state.filterValue = dashboardFilter(string(state.searchInput))
+	m.refreshDashboard()
+	return m, nil
 }
 
 func (m *model) toggleDashboardGrouping() {
@@ -629,35 +783,39 @@ func (m *model) handleDashboardRenameKey(msg tea.KeyPressMsg) (tea.Model, tea.Cm
 			return dashboardDoneEvent{action: "rename", id: id, text: title, err: err}
 		}
 	}
-	switch key.Code {
-	case tea.KeyBackspace:
-		if state.renameCursor > 0 {
-			state.renameInput = append(state.renameInput[:state.renameCursor-1], state.renameInput[state.renameCursor:]...)
-			state.renameCursor--
-		}
-	case tea.KeyDelete:
-		if state.renameCursor < len(state.renameInput) {
-			state.renameInput = append(state.renameInput[:state.renameCursor], state.renameInput[state.renameCursor+1:]...)
-		}
-	case tea.KeyLeft:
-		state.renameCursor = max(0, state.renameCursor-1)
-	case tea.KeyRight:
-		state.renameCursor = min(len(state.renameInput), state.renameCursor+1)
-	case tea.KeyHome:
-		state.renameCursor = 0
-	case tea.KeyEnd:
-		state.renameCursor = len(state.renameInput)
-	default:
-		if key.Text != "" && key.Mod == 0 && len(state.renameInput) < 100 {
-			chars := []rune(key.Text)
-			chars = slices.DeleteFunc(chars, unicode.IsControl)
-			chars = chars[:min(len(chars), 100-len(state.renameInput))]
-			state.renameInput = slices.Insert(state.renameInput, state.renameCursor, chars...)
-			state.renameCursor += len(chars)
-		}
-	}
+	state.renameInput, state.renameCursor = editDashboardText(state.renameInput, state.renameCursor, key)
 	state.err = ""
 	return m, nil
+}
+
+func editDashboardText(input []rune, cursor int, key tea.Key) ([]rune, int) {
+	switch key.Code {
+	case tea.KeyBackspace:
+		if cursor > 0 {
+			input = append(input[:cursor-1], input[cursor:]...)
+			cursor--
+		}
+	case tea.KeyDelete:
+		if cursor < len(input) {
+			input = append(input[:cursor], input[cursor+1:]...)
+		}
+	case tea.KeyLeft:
+		cursor = max(0, cursor-1)
+	case tea.KeyRight:
+		cursor = min(len(input), cursor+1)
+	case tea.KeyHome:
+		cursor = 0
+	case tea.KeyEnd:
+		cursor = len(input)
+	default:
+		if key.Text != "" && key.Mod == 0 && len(input) < 100 {
+			chars := slices.DeleteFunc([]rune(key.Text), unicode.IsControl)
+			chars = chars[:min(len(chars), 100-len(input))]
+			input = slices.Insert(input, cursor, chars...)
+			cursor += len(chars)
+		}
+	}
+	return input, cursor
 }
 
 func (m *model) openDashboardRow(row dashboardRow) (tea.Model, tea.Cmd) {
