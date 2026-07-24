@@ -23,6 +23,7 @@ var completionRoot = completionSpec{
 	},
 	children: map[string]completionSpec{
 		"completions": {children: leaves("bash", "elvish", "fish", "powershell", "zsh")},
+		"dashboard":   {flags: words("--config --fullscreen --minimal --session-dir --trust --workspace")},
 		"export":      {flags: []string{"--clipboard", "-c"}},
 		"inspect":     {flags: words("--config --json")},
 		"login":       {flags: words("--auth-file --audience --client-id --config --device-auth --issuer --no-browser --oauth --scopes")},

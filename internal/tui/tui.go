@@ -611,6 +611,7 @@ type model struct {
 	toolExpand       []string
 
 	dashboard         *dashboardState
+	startupDashboard  bool
 	dashboardDisabled bool
 	dashboardPins     map[string]bool
 	persistPins       func([]string) error
@@ -702,6 +703,7 @@ type UIOptions struct {
 	ForkSession          func(context.Context, bool) (ForkResult, error)
 	ForkInGit            bool
 	DashboardPinned      []string
+	OpenDashboard        bool
 	DashboardDisabled    bool
 	SetDashboardPinned   func([]string) error
 	DashboardReorder     []string
@@ -835,6 +837,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		persistMermaid:     options.SetRenderMermaid,
 		forkSession:        options.ForkSession,
 		forkInGit:          options.ForkInGit,
+		startupDashboard:   options.OpenDashboard,
 		dashboardDisabled:  options.DashboardDisabled,
 		dashboardPins:      make(map[string]bool, len(options.DashboardPinned)),
 		persistPins:        options.SetDashboardPinned,
@@ -914,6 +917,10 @@ func (m *model) Init() tea.Cmd {
 	if m.minimalInitial != "" {
 		initial = m.minimalPrint(m.minimalInitial)
 		m.minimalInitial = ""
+	}
+	if m.startupDashboard {
+		m.startupDashboard = false
+		return tea.Sequence(initial, m.openDashboard(), wait)
 	}
 	if m.initial == "" {
 		return tea.Sequence(initial, wait)

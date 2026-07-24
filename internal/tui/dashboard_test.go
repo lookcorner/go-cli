@@ -1148,6 +1148,38 @@ func TestDashboardReportsUnavailableScheduledCancellation(t *testing.T) {
 	}
 }
 
+func TestDashboardOpensAtStartupWithoutStartingTurn(t *testing.T) {
+	m := &model{
+		ctx:              context.Background(),
+		runner:           dashboardFixtureRunner(),
+		initial:          "must not run",
+		startupDashboard: true,
+		status:           "ready",
+	}
+	if command := m.Init(); command == nil {
+		t.Fatal("startup command is nil")
+	}
+	if m.dashboard == nil || m.status != "agent dashboard" || m.running || m.initial != "must not run" || m.startupDashboard {
+		t.Fatalf("dashboard=%#v status=%q running=%v initial=%q startup=%v", m.dashboard, m.status, m.running, m.initial, m.startupDashboard)
+	}
+}
+
+func TestDisabledDashboardDoesNotOpenAtStartup(t *testing.T) {
+	m := &model{
+		ctx:               context.Background(),
+		runner:            dashboardFixtureRunner(),
+		startupDashboard:  true,
+		dashboardDisabled: true,
+		status:            "ready",
+	}
+	if command := m.Init(); command == nil {
+		t.Fatal("startup command is nil")
+	}
+	if m.dashboard != nil || m.status != "agent dashboard is disabled" || m.running {
+		t.Fatalf("dashboard=%#v status=%q running=%v", m.dashboard, m.status, m.running)
+	}
+}
+
 func dashboardSessionRowIDs(rows []dashboardRow) []string {
 	ids := make([]string, 0, len(rows))
 	for _, row := range rows {

@@ -75,6 +75,7 @@ type options struct {
 	previousID         string
 	resume             string
 	tui                bool
+	dashboard          bool
 	minimal            bool
 	fullscreen         bool
 	goal               bool
@@ -176,6 +177,10 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return runMemory(args[1:], cwd, stdin, stdout, stderr)
 	}
 	var opts options
+	if len(args) > 0 && args[0] == "dashboard" {
+		opts.dashboard = true
+		args = args[1:]
+	}
 	flags := flag.NewFlagSet("gork", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.StringVar(&opts.configPath, "config", "", "path to JSON config file")
@@ -205,7 +210,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	flags.BoolVar(&opts.experimentalMemory, "experimental-memory", false, "enable cross-session workspace memory")
 	flags.BoolVar(&opts.noMemory, "no-memory", false, "disable cross-session memory")
 	flags.Usage = func() {
-		fmt.Fprintf(stderr, "Usage: gork [flags] [prompt]\n       gork login [--oauth|--device-auth]\n       gork logout\n       gork setup\n       gork inspect [--json] [--config path]\n       gork mcp <list|add|remove|doctor>\n       gork models [--config path]\n       gork share <session-id>\n       gork trace <session-id> [--local] [-o path] [--json]\n       gork version [--json]\n       gork completions <bash|elvish|fish|powershell|zsh>\n       gork plugin <list|install|update|uninstall|marketplace>\n       gork sessions <list|search|delete>\n       gork export <session-id> [output] [-c|--clipboard]\n       gork worktree <list|show|rm|gc|db>\n       gork memory clear [--workspace|--global|--all] [-y|--yes]\n\n")
+		fmt.Fprintf(stderr, "Usage: gork [flags] [prompt]\n       gork dashboard [flags]\n       gork login [--oauth|--device-auth]\n       gork logout\n       gork setup\n       gork inspect [--json] [--config path]\n       gork mcp <list|add|remove|doctor>\n       gork models [--config path]\n       gork share <session-id>\n       gork trace <session-id> [--local] [-o path] [--json]\n       gork version [--json]\n       gork completions <bash|elvish|fish|powershell|zsh>\n       gork plugin <list|install|update|uninstall|marketplace>\n       gork sessions <list|search|delete>\n       gork export <session-id> [output] [-c|--clipboard]\n       gork worktree <list|show|rm|gc|db>\n       gork memory clear [--workspace|--global|--all] [-y|--yes]\n\n")
 		flags.PrintDefaults()
 	}
 	if err := flags.Parse(args); err != nil {
@@ -219,6 +224,12 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			opts.sandboxSet = true
 		}
 	})
+	if opts.dashboard && len(flags.Args()) > 0 {
+		return errors.New("dashboard does not accept positional arguments")
+	}
+	if opts.dashboard {
+		opts.tui = true
+	}
 	if opts.minimal && opts.fullscreen {
 		return errors.New("--minimal and --fullscreen are mutually exclusive")
 	}
@@ -248,6 +259,9 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 	if err := prepareManagedPolicy(&cfg, opts.configPath, stderr); err != nil {
 		return err
+	}
+	if opts.dashboard && dashboardDisabled(cfg.Dashboard) {
+		return errors.New("the Agent Dashboard is disabled. Enable it by removing `[dashboard] enabled = false` from ~/.grok/config.toml and unsetting GROK_AGENT_DASHBOARD=0")
 	}
 	if opts.noMemory {
 		cfg.OverrideMemory(false)
@@ -942,6 +956,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			CompactMode:       cfg.UI.CompactMode,
 			ShowTimestamps:    cfg.UI.ShowTimestamps,
 			ShowTimeline:      cfg.UI.ShowTimeline,
+			OpenDashboard:     opts.dashboard,
 			DashboardDisabled: dashboardDisabled(cfg.Dashboard),
 			DashboardPinned:   cfg.Dashboard.Pinned,
 			DashboardReorder:  cfg.Dashboard.Reorder,

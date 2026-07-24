@@ -52,6 +52,38 @@ func TestDashboardDisabledUsesConfigAndEnvironmentOverride(t *testing.T) {
 	}
 }
 
+func TestDashboardCommandRejectsPositionalArguments(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := runOnce([]string{"dashboard", "prompt"}, strings.NewReader(""), &stdout, &stderr)
+	if err == nil || err.Error() != "dashboard does not accept positional arguments" {
+		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestDashboardCommandRejectsDisabledDashboard(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	path := filepath.Join(home, "config.toml")
+	if err := os.WriteFile(path, []byte("[dashboard]\nenabled = false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	err := runOnce([]string{"dashboard", "--config", path}, strings.NewReader(""), &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "the Agent Dashboard is disabled") {
+		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestDashboardCommandHonorsEnvironmentDisable(t *testing.T) {
+	t.Setenv("GROK_HOME", t.TempDir())
+	t.Setenv("GROK_AGENT_DASHBOARD", "0")
+	var stdout, stderr bytes.Buffer
+	err := runOnce([]string{"dashboard"}, strings.NewReader(""), &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "the Agent Dashboard is disabled") {
+		t.Fatalf("error=%v", err)
+	}
+}
+
 type samplingStreamer struct {
 	request api.ResponseRequest
 }
