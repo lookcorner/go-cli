@@ -546,6 +546,8 @@ type model struct {
 	showTimeline       bool
 	persistTimeline    func(bool) error
 	themeName          string
+	autoDarkTheme      string
+	autoLightTheme     string
 	theme              themePalette
 	persistTheme       func(string) error
 	mermaidMode        string
@@ -716,6 +718,8 @@ type UIOptions struct {
 	PromptSuggestions    bool
 	CursorBlink          *bool
 	Theme                string
+	AutoDarkTheme        string
+	AutoLightTheme       string
 	SetTheme             func(string) error
 	RenderMermaid        string
 	SetRenderMermaid     func(string) error
@@ -850,7 +854,9 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		suggestionsEnabled: options.PromptSuggestions,
 		hyperlinks:         detectTerminalHyperlinks(),
 		themeName:          options.Theme,
-		theme:              paletteFor(options.Theme),
+		autoDarkTheme:      options.AutoDarkTheme,
+		autoLightTheme:     options.AutoLightTheme,
+		theme:              paletteForAuto(options.Theme, options.AutoDarkTheme, options.AutoLightTheme),
 		persistTheme:       options.SetTheme,
 		mermaidMode:        options.RenderMermaid,
 		persistMermaid:     options.SetRenderMermaid,

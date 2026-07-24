@@ -99,7 +99,7 @@ func (m *model) applySetting(selected int) {
 	case 6:
 		previousName, previousTheme := m.themeName, m.theme
 		m.themeName = nextTheme(m.themeName)
-		m.theme = paletteFor(m.themeName)
+		m.theme = paletteForAuto(m.themeName, m.autoDarkTheme, m.autoLightTheme)
 		if m.persistTheme != nil {
 			state.err = persistSetting(m.persistTheme(m.themeName), func() { m.themeName, m.theme = previousName, previousTheme })
 		}

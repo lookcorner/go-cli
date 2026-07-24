@@ -204,6 +204,8 @@ type AskUserQuestionConfig struct {
 
 type UIConfig struct {
 	Theme                string  `json:"theme"`
+	AutoDarkTheme        string  `json:"auto_dark_theme"`
+	AutoLightTheme       string  `json:"auto_light_theme"`
 	ScreenMode           string  `json:"screen_mode"`
 	RenderMermaid        string  `json:"render_mermaid"`
 	KeepTextSelection    string  `json:"keep_text_selection"`
@@ -463,6 +465,8 @@ type fileHashlineConfig struct {
 
 type fileUIConfig struct {
 	Theme                        *string `json:"theme,omitempty" toml:"theme"`
+	AutoDarkTheme                *string `json:"auto_dark_theme,omitempty" toml:"auto_dark_theme"`
+	AutoLightTheme               *string `json:"auto_light_theme,omitempty" toml:"auto_light_theme"`
 	ScreenMode                   *string `json:"screen_mode,omitempty" toml:"screen_mode"`
 	RenderMermaid                *string `json:"render_mermaid,omitempty" toml:"render_mermaid"`
 	KeepTextSelection            any     `json:"keep_text_selection,omitempty" toml:"keep_text_selection"`
@@ -688,7 +692,7 @@ func Load(path string) (Config, error) {
 		AskUserQuestion:             AskUserQuestionConfig{TimeoutEnabled: true, TimeoutSeconds: 30 * 60},
 		Toolset:                     ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}},
 		Goal:                        GoalConfig{VerifierCount: 3, ClassifierMaxRuns: 10, ReverifyAfter: 8},
-		UI:                          UIConfig{Theme: "groknight", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, ScrollSpeed: 50, PromptSuggestions: true, PermissionMode: "ask"},
+		UI:                          UIConfig{Theme: "groknight", AutoDarkTheme: "groknight", AutoLightTheme: "grokday", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, ScrollSpeed: 50, PromptSuggestions: true, PermissionMode: "ask"},
 		Dashboard:                   DashboardConfig{Enabled: true, Grouping: "state"},
 		Sandbox:                     SandboxConfig{Profile: "off"},
 		Pruning:                     PruningConfig{Enabled: true, KeepLastNTurns: 3, SoftTrimThreshold: 4000, SoftTrimHead: 1500, SoftTrimTail: 1500, HardClearAgeTurns: 10},
@@ -906,6 +910,12 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 			return errors.New("ui theme must be auto, groknight, grokday, tokyonight, rosepine-moon, or oscura-midnight")
 		}
 		cfg.UI.Theme = canonical
+	}
+	if disk.UI.AutoDarkTheme != nil {
+		cfg.UI.AutoDarkTheme = concreteTheme(*disk.UI.AutoDarkTheme, "groknight")
+	}
+	if disk.UI.AutoLightTheme != nil {
+		cfg.UI.AutoLightTheme = concreteTheme(*disk.UI.AutoLightTheme, "grokday")
 	}
 	if disk.UI.ScreenMode != nil {
 		cfg.UI.ScreenMode = strings.ToLower(strings.TrimSpace(*disk.UI.ScreenMode))
@@ -1822,6 +1832,14 @@ func normalizedScrollLines(value uint8) *uint8 {
 
 func normalizedScrollSpeed(value uint8) uint8 {
 	return min(max(value, 1), 100)
+}
+
+func concreteTheme(value, fallback string) string {
+	canonical, ok := theme.Canonical(value)
+	if !ok || canonical == "auto" {
+		return fallback
+	}
+	return canonical
 }
 
 func parseKeepTextSelection(value any) (string, error) {

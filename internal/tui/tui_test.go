@@ -1722,6 +1722,39 @@ func TestThemeCommandAutoInvalidAndPersistenceFailure(t *testing.T) {
 	}
 }
 
+func TestAutomaticThemeUsesConfiguredDarkAndLightMappings(t *testing.T) {
+	t.Setenv("COLORFGBG", "")
+	for _, test := range []struct {
+		name, background, dark, light, want string
+	}{
+		{name: "dark", background: "dark", dark: "tokyonight", light: "rosepine-moon", want: "tokyonight"},
+		{name: "light", background: "light", dark: "tokyonight", light: "rosepine-moon", want: "rosepine-moon"},
+		{name: "invalid fallback", background: "light", dark: "auto", light: "missing", want: "grokday"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("TERM_BACKGROUND", test.background)
+			if got := paletteForAuto("auto", test.dark, test.light).name; got != test.want {
+				t.Fatalf("theme=%q want=%q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestThemeCommandAutoUsesConfiguredMapping(t *testing.T) {
+	t.Setenv("TERM_BACKGROUND", "dark")
+	t.Setenv("COLORFGBG", "")
+	m := &model{
+		ctx: context.Background(), runner: &agent.Runner{}, width: 60, height: 16,
+		themeName: "grokday", theme: paletteFor("grokday"), autoDarkTheme: "tokyonight", autoLightTheme: "rosepine-moon",
+	}
+	m.setInput("/theme auto")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.themeName != "auto" || m.theme.name != "tokyonight" || m.status != "theme: auto (tokyonight)" {
+		t.Fatalf("command=%v name=%q palette=%q status=%q", command != nil, m.themeName, m.theme.name, m.status)
+	}
+}
+
 func TestNewSessionCommandsExitWithoutModelTurn(t *testing.T) {
 	for _, prompt := range []string{"/new", "/clear ignored"} {
 		m := &model{ctx: context.Background(), runner: &agent.Runner{}, width: 60, height: 16, status: "ready"}

@@ -28,12 +28,16 @@ func rgb(hex string) string {
 }
 
 func paletteFor(preference string) themePalette {
+	return paletteForAuto(preference, "groknight", "grokday")
+}
+
+func paletteForAuto(preference, darkTheme, lightTheme string) themePalette {
 	name, ok := uitheme.Canonical(preference)
 	if !ok {
 		name = "groknight"
 	}
 	if name == "auto" {
-		name = automaticTheme()
+		name = automaticTheme(darkTheme, lightTheme)
 	}
 	switch name {
 	case "grokday":
@@ -49,18 +53,28 @@ func paletteFor(preference string) themePalette {
 	}
 }
 
-func automaticTheme() string {
+func automaticTheme(darkTheme, lightTheme string) string {
+	darkTheme = concreteAutomaticTheme(darkTheme, "groknight")
+	lightTheme = concreteAutomaticTheme(lightTheme, "grokday")
 	background := strings.ToLower(strings.TrimSpace(os.Getenv("TERM_BACKGROUND")))
 	if background == "light" {
-		return "grokday"
+		return lightTheme
 	}
 	parts := strings.Split(os.Getenv("COLORFGBG"), ";")
 	if len(parts) > 0 {
 		if color, err := strconv.Atoi(parts[len(parts)-1]); err == nil && color >= 7 {
-			return "grokday"
+			return lightTheme
 		}
 	}
-	return "groknight"
+	return darkTheme
+}
+
+func concreteAutomaticTheme(value, fallback string) string {
+	canonical, ok := uitheme.Canonical(value)
+	if !ok || canonical == "auto" {
+		return fallback
+	}
+	return canonical
 }
 
 func (m *model) colors() themePalette {
@@ -95,7 +109,7 @@ func (m *model) applyThemeCommand(value string) {
 		return
 	}
 	previousName, previousTheme := m.themeName, m.theme
-	m.themeName, m.theme = canonical, paletteFor(canonical)
+	m.themeName, m.theme = canonical, paletteForAuto(canonical, m.autoDarkTheme, m.autoLightTheme)
 	if m.persistTheme != nil {
 		if err := m.persistTheme(canonical); err != nil {
 			m.themeName, m.theme = previousName, previousTheme

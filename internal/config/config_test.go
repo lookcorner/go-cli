@@ -1035,6 +1035,31 @@ func TestThemeConfigCanonicalizationAndUpdate(t *testing.T) {
 	}
 }
 
+func TestAutomaticThemeMappingsCanonicalizeAndFallback(t *testing.T) {
+	for _, test := range []struct {
+		name, filename, content, wantDark, wantLight string
+	}{
+		{name: "defaults", filename: "config.toml", content: "[ui]\n", wantDark: "groknight", wantLight: "grokday"},
+		{name: "TOML aliases", filename: "config.toml", content: "[ui]\nauto_dark_theme = \"tokyo\"\nauto_light_theme = \"rose-pine\"\n", wantDark: "tokyonight", wantLight: "rosepine-moon"},
+		{name: "JSON concrete", filename: "config.json", content: `{"ui":{"auto_dark_theme":"oscura","auto_light_theme":"light"}}`, wantDark: "oscura-midnight", wantLight: "grokday"},
+		{name: "circular and unknown fallback", filename: "config.toml", content: "[ui]\nauto_dark_theme = \"auto\"\nauto_light_theme = \"missing\"\n", wantDark: "groknight", wantLight: "grokday"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), test.filename)
+			if err := os.WriteFile(path, []byte(test.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.UI.AutoDarkTheme != test.wantDark || cfg.UI.AutoLightTheme != test.wantLight {
+				t.Fatalf("dark=%q light=%q want=%q/%q", cfg.UI.AutoDarkTheme, cfg.UI.AutoLightTheme, test.wantDark, test.wantLight)
+			}
+		})
+	}
+}
+
 func TestLoadTextSelectionCompatibility(t *testing.T) {
 	for _, test := range []struct {
 		name, config, want string

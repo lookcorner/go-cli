@@ -1165,6 +1165,8 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			DashboardReorder:  cfg.Dashboard.Reorder,
 			DashboardGrouping: cfg.Dashboard.Grouping,
 			Theme:             cfg.UI.Theme,
+			AutoDarkTheme:     cfg.UI.AutoDarkTheme,
+			AutoLightTheme:    cfg.UI.AutoLightTheme,
 			SetVimMode:        func(enabled bool) error { return config.UpdateVimMode(opts.configPath, enabled) },
 			SetCompactMode:    func(enabled bool) error { return config.UpdateCompactMode(opts.configPath, enabled) },
 			SetShowTimestamps: func(enabled bool) error { return config.UpdateShowTimestamps(opts.configPath, enabled) },
