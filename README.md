@@ -286,6 +286,8 @@ model pickers while remaining explicitly selectable by catalog ID. Disabled
 models cannot be resolved. If the configured default is filtered out, new ACP
 sessions use the first visible, selectable catalog entry instead when one
 exists. Individual `[model.<name>]` entries may also set `hidden = true`.
+`gork models` prints the active authentication source, resolved default, and
+available visible models using these same local and managed filters.
 
 While the ACP server is running, model changes in `config.toml`, local/system
 `managed_config.toml`, and `requirements.toml` are detected automatically.
