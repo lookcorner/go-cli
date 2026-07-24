@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -35,15 +37,23 @@ func (b *Bridge) ToolFinished(call api.ToolCall, result tools.ExecutionResult, e
 }
 
 func (m *model) finishTool(event toolFinishedEvent) {
+	if m.collapsedEditBlocks {
+		if summary, ok := collapsedEditSummary(event.call.Name, event.call.Arguments, event.result.Output, event.err != nil); ok {
+			full, _ := renderToolBlock(event.call, event.result, event.err, false)
+			m.appendSystem(summary)
+			m.rememberToolExpansion(full)
+			if m.minimal {
+				m.minimalFlushTo = m.transcript.Len()
+			}
+			m.status = "tool finished: " + event.call.Name
+			return
+		}
+	}
 	compact, folded := renderToolBlock(event.call, event.result, event.err, true)
 	full, _ := renderToolBlock(event.call, event.result, event.err, false)
 	m.appendSystem(compact)
 	if folded {
-		m.toolExpand = append(m.toolExpand, full)
-		if len(m.toolExpand) > toolExpandLimit {
-			copy(m.toolExpand, m.toolExpand[len(m.toolExpand)-toolExpandLimit:])
-			m.toolExpand = m.toolExpand[:toolExpandLimit]
-		}
+		m.rememberToolExpansion(full)
 	}
 	if m.minimal {
 		m.minimalFlushTo = m.transcript.Len()
@@ -52,6 +62,14 @@ func (m *model) finishTool(event toolFinishedEvent) {
 		m.status = "tool failed: " + event.call.Name
 	} else {
 		m.status = "tool finished: " + event.call.Name
+	}
+}
+
+func (m *model) rememberToolExpansion(full string) {
+	m.toolExpand = append(m.toolExpand, full)
+	if len(m.toolExpand) > toolExpandLimit {
+		copy(m.toolExpand, m.toolExpand[len(m.toolExpand)-toolExpandLimit:])
+		m.toolExpand = m.toolExpand[:toolExpandLimit]
 	}
 }
 
@@ -133,7 +151,7 @@ func renderStoredToolBlock(tool session.DisplayTool, compact bool) (string, bool
 	return fmt.Sprintf("#### %s: `%s`\n\n%s", title, tool.Name, strings.Join(sections, "\n\n")), folded
 }
 
-func sessionDisplayTranscript(path string) (string, []transcriptMessage, []string, error) {
+func sessionDisplayTranscript(path string, collapsedEditBlocks bool) (string, []transcriptMessage, []string, error) {
 	entries, err := session.DisplayTimeline(path)
 	if err != nil {
 		return "", nil, nil, err
@@ -180,6 +198,18 @@ func sessionDisplayTranscript(path string) (string, []transcriptMessage, []strin
 			if entry.Kind == "assistant" {
 				text.WriteString(entry.Text)
 			} else if entry.Tool != nil {
+				if collapsedEditBlocks {
+					if summary, ok := collapsedEditSummary(entry.Tool.Name, entry.Tool.Arguments, entry.Tool.Output, entry.Tool.Failed); ok {
+						text.WriteString(summary)
+						full, _ := renderStoredToolBlock(*entry.Tool, false)
+						expands = append(expands, full)
+						if len(expands) > toolExpandLimit {
+							expands = expands[len(expands)-toolExpandLimit:]
+						}
+						lastKind = entry.Kind
+						continue
+					}
+				}
 				compact, folded := renderStoredToolBlock(*entry.Tool, true)
 				text.WriteString(compact)
 				if folded {
@@ -194,6 +224,173 @@ func sessionDisplayTranscript(path string) (string, []transcriptMessage, []strin
 		}
 	}
 	return strings.TrimSpace(text.String()), messages, expands, nil
+}
+
+func collapsedEditSummary(name string, arguments json.RawMessage, output string, failed bool) (string, bool) {
+	if failed {
+		return "", false
+	}
+	path, added, removed, ok := editDiffstat(name, arguments, output)
+	if !ok {
+		return "", false
+	}
+	return fmt.Sprintf("Edit `%s` +%d/-%d", filepath.Base(path), added, removed), true
+}
+
+func editDiffstat(name string, raw json.RawMessage, output string) (string, int, int, bool) {
+	switch name {
+	case "edit_file":
+		var args struct {
+			Path       string `json:"path"`
+			OldText    string `json:"old_text"`
+			NewText    string `json:"new_text"`
+			ReplaceAll bool   `json:"replace_all"`
+		}
+		if json.Unmarshal(raw, &args) != nil || strings.TrimSpace(args.Path) == "" || args.OldText == "" {
+			return "", 0, 0, false
+		}
+		count := 1
+		if args.ReplaceAll {
+			count = replacementCount(output)
+			if count == 0 {
+				return "", 0, 0, false
+			}
+		}
+		return args.Path, lineCount(args.NewText) * count, lineCount(args.OldText) * count, true
+	case "search_replace":
+		var args struct {
+			FilePath   string `json:"file_path"`
+			OldString  string `json:"old_string"`
+			NewString  string `json:"new_string"`
+			ReplaceAll bool   `json:"replace_all"`
+		}
+		if json.Unmarshal(raw, &args) != nil || strings.TrimSpace(args.FilePath) == "" || args.OldString == "" {
+			return "", 0, 0, false
+		}
+		count := 1
+		if args.ReplaceAll {
+			count = replacementCount(output)
+			if count == 0 {
+				return "", 0, 0, false
+			}
+		}
+		return args.FilePath, lineCount(args.NewString) * count, lineCount(args.OldString) * count, true
+	case "hashline_edit":
+		path, edits, err := decodeDisplayHashlineEdits(raw)
+		if err != nil {
+			return "", 0, 0, false
+		}
+		added, removed := 0, 0
+		for _, edit := range edits {
+			switch edit.Op {
+			case "replace":
+				start, ok := displayAnchorLine(edit.Anchor)
+				if !ok {
+					return "", 0, 0, false
+				}
+				end := start
+				if edit.EndAnchor != "" {
+					end, ok = displayAnchorLine(edit.EndAnchor)
+					if !ok || end < start {
+						return "", 0, 0, false
+					}
+				}
+				added += lineCount(edit.Content)
+				removed += end - start + 1
+			case "insert_after":
+				added += insertedLineCount(edit.Content)
+			default:
+				return "", 0, 0, false
+			}
+		}
+		return path, added, removed, true
+	default:
+		return "", 0, 0, false
+	}
+}
+
+type displayHashlineEdit struct {
+	Op        string `json:"op"`
+	Anchor    string `json:"anchor"`
+	EndAnchor string `json:"end_anchor"`
+	Content   string `json:"content"`
+}
+
+func decodeDisplayHashlineEdits(raw json.RawMessage) (string, []displayHashlineEdit, error) {
+	var input struct {
+		FilePath string          `json:"file_path"`
+		Edits    json.RawMessage `json:"edits"`
+	}
+	if err := json.Unmarshal(raw, &input); err != nil || strings.TrimSpace(input.FilePath) == "" {
+		return "", nil, fmt.Errorf("invalid hashline edit")
+	}
+	editsRaw := input.Edits
+	if len(editsRaw) > 0 && editsRaw[0] == '"' {
+		var encoded string
+		if err := json.Unmarshal(editsRaw, &encoded); err != nil {
+			return "", nil, err
+		}
+		editsRaw = []byte(encoded)
+	}
+	var edits []displayHashlineEdit
+	if len(editsRaw) > 0 && editsRaw[0] == '{' {
+		var edit displayHashlineEdit
+		if err := json.Unmarshal(editsRaw, &edit); err != nil {
+			return "", nil, err
+		}
+		edits = []displayHashlineEdit{edit}
+	} else if err := json.Unmarshal(editsRaw, &edits); err != nil {
+		return "", nil, err
+	}
+	if len(edits) == 0 {
+		return "", nil, fmt.Errorf("missing hashline edits")
+	}
+	return input.FilePath, edits, nil
+}
+
+func displayAnchorLine(anchor string) (int, bool) {
+	value, _, ok := strings.Cut(anchor, ":")
+	if !ok {
+		return 0, false
+	}
+	line, err := strconv.Atoi(value)
+	return line, err == nil && line > 0
+}
+
+func replacementCount(output string) int {
+	const suffix = " replacement(s)"
+	before, _, ok := strings.Cut(output, suffix)
+	if !ok {
+		return 0
+	}
+	start := strings.LastIndex(before, "(")
+	if start < 0 {
+		return 0
+	}
+	count, err := strconv.Atoi(before[start+1:])
+	if err != nil || count < 1 {
+		return 0
+	}
+	return count
+}
+
+func lineCount(value string) int {
+	if value == "" {
+		return 0
+	}
+	value = strings.ReplaceAll(value, "\r\n", "\n")
+	value = strings.TrimSuffix(value, "\n")
+	if value == "" {
+		return 1
+	}
+	return strings.Count(value, "\n") + 1
+}
+
+func insertedLineCount(value string) int {
+	if value == "" {
+		return 1
+	}
+	return lineCount(value)
 }
 
 func displayPromptBody(entry session.DisplayEntry) string {

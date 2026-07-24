@@ -81,6 +81,87 @@ func TestToolResultCanBeExpandedInMinimalMode(t *testing.T) {
 	}
 }
 
+func TestCollapsedEditBlockUsesExactDiffstatAndKeepsExpansion(t *testing.T) {
+	m := &model{minimal: true, collapsedEditBlocks: true, width: 80, height: 20}
+	m.finishTool(toolFinishedEvent{
+		call: api.ToolCall{
+			Name:      "search_replace",
+			Arguments: json.RawMessage(`{"file_path":"internal/greet.py","old_string":"return \"hi\"","new_string":"name = \"grok\"\nreturn name"}`),
+		},
+		result: tools.ExecutionResult{Output: "edited internal/greet.py (1 replacement(s))"},
+	})
+	text := m.transcript.String()
+	if !strings.Contains(text, "Edit `greet.py` +2/-1") || strings.Contains(text, "Arguments") || len(m.toolExpand) != 1 {
+		t.Fatalf("collapsed edit=%q expansions=%d", text, len(m.toolExpand))
+	}
+	m.expandLastTool()
+	if !strings.Contains(m.transcript.String(), "search_replace") || !strings.Contains(m.transcript.String(), "return name") {
+		t.Fatalf("expanded edit lost full tool details:\n%s", m.transcript.String())
+	}
+}
+
+func TestCollapsedEditBlockCountsReplaceAllAndHashlineRanges(t *testing.T) {
+	tests := []struct {
+		name   string
+		tool   string
+		args   string
+		output string
+		want   string
+	}{
+		{
+			name:   "replace all",
+			tool:   "edit_file",
+			args:   `{"path":"repeat.txt","old_text":"old\nvalue\n","new_text":"new\n","replace_all":true}`,
+			output: "edited repeat.txt (3 replacement(s))",
+			want:   "Edit `repeat.txt` +3/-6",
+		},
+		{
+			name: "hashline range and insert",
+			tool: "hashline_edit",
+			args: `{"file_path":"main.go","edits":[` +
+				`{"op":"replace","anchor":"2:aaa","end_anchor":"4:bbb","content":"one\ntwo"},` +
+				`{"op":"insert_after","anchor":"8:ccc","content":"three"}]}`,
+			output: "applied 2 edit(s) to main.go",
+			want:   "Edit `main.go` +3/-3",
+		},
+		{
+			name:   "hashline empty line insert",
+			tool:   "hashline_edit",
+			args:   `{"file_path":"main.go","edits":[{"op":"insert_after","anchor":"2:aaa","content":""}]}`,
+			output: "applied 1 edit(s) to main.go",
+			want:   "Edit `main.go` +1/-0",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := collapsedEditSummary(test.tool, json.RawMessage(test.args), test.output, false)
+			if !ok || got != test.want {
+				t.Fatalf("summary=%q ok=%v want=%q", got, ok, test.want)
+			}
+		})
+	}
+}
+
+func TestCollapsedEditBlockLeavesFailuresAndUnknownWritesExpanded(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		tool   string
+		args   string
+		output string
+		failed bool
+	}{
+		{name: "failure", tool: "edit_file", args: `{"path":"main.go","old_text":"a","new_text":"b"}`, failed: true},
+		{name: "whole file write", tool: "write_file", args: `{"path":"main.go","content":"package main"}`, output: "wrote 12 bytes to main.go"},
+		{name: "hashline whole file write", tool: "hashline_edit", args: `{"file_path":"main.go","edits":[{"op":"write","content":"package main"}]}`, output: "applied 1 edit(s) to main.go"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got, ok := collapsedEditSummary(test.tool, json.RawMessage(test.args), test.output, test.failed); ok {
+				t.Fatalf("unexpected summary %q", got)
+			}
+		})
+	}
+}
+
 func TestExpandOutsideMinimalModeExplainsRestriction(t *testing.T) {
 	m := &model{}
 	m.expandLastTool()
@@ -168,7 +249,7 @@ func TestSessionDisplayTranscriptRestoresToolsInOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	text, messages, expands, err := sessionDisplayTranscript(path)
+	text, messages, expands, err := sessionDisplayTranscript(path, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,6 +268,45 @@ func TestSessionDisplayTranscriptRestoresToolsInOrder(t *testing.T) {
 		text[messages[1].start:messages[1].offset] != "Gork" ||
 		messages[0].at.IsZero() || messages[1].at.Before(messages[0].at) {
 		t.Fatalf("timestamp labels were not restored: %#v", messages)
+	}
+}
+
+func TestSessionDisplayTranscriptRestoresCollapsedEdit(t *testing.T) {
+	logger, err := session.NewLoggerWithID(t.TempDir(), "collapsed-edit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.AppendPrompt("edit", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append("model_response", map[string]any{"response_id": "r1", "tool_call_count": 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append("tool_call", map[string]any{
+		"call_id": "call-1", "name": "edit_file",
+		"arguments": json.RawMessage(`{"path":"src/main.go","old_text":"old","new_text":"new\nline"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append("tool_result", map[string]any{
+		"call_id": "call-1", "name": "edit_file", "output": "edited src/main.go (1 replacement(s))",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append("model_response", map[string]any{"response_id": "r2", "text": "done", "tool_call_count": 0}); err != nil {
+		t.Fatal(err)
+	}
+	path := logger.Path()
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	text, _, expands, err := sessionDisplayTranscript(path, true)
+	if err != nil || !strings.Contains(text, "Edit `main.go` +2/-1") || strings.Contains(text, "Arguments") {
+		t.Fatalf("text=%q err=%v", text, err)
+	}
+	if len(expands) != 1 || !strings.Contains(expands[0], `"old_text": "old"`) {
+		t.Fatalf("expansions=%#v", expands)
 	}
 }
 
@@ -214,7 +334,7 @@ func TestSessionDisplayTranscriptKeepsSyntheticAssistantBoundary(t *testing.T) {
 	if err := logger.Close(); err != nil {
 		t.Fatal(err)
 	}
-	text, messages, _, err := sessionDisplayTranscript(path)
+	text, messages, _, err := sessionDisplayTranscript(path, false)
 	if err != nil || strings.Count(text, "Gork\n") != 2 || strings.Contains(text, "internal") || len(messages) != 3 {
 		t.Fatalf("text=%q messages=%#v err=%v", text, messages, err)
 	}

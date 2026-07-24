@@ -181,6 +181,9 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 	if !c.uiRememberApprovalsConfigured {
 		c.UI.RememberToolApprovals = remote.RememberToolApprovals != nil && *remote.RememberToolApprovals
 	}
+	if !c.uiCollapsedEditsConfigured {
+		c.UI.CollapsedEditBlocks = remote.CollapsedEditBlocks != nil && *remote.CollapsedEditBlocks
+	}
 	if remote.OfficialMarketplaceAutoRegister != nil {
 		c.OfficialMarketplaceAutoRegister = *remote.OfficialMarketplaceAutoRegister
 	}

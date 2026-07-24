@@ -365,6 +365,37 @@ func TestRememberToolApprovalsConfigEnvironmentAndRequirementsPrecedence(t *test
 	}
 }
 
+func TestCollapsedEditBlocksConfigRemoteAndRequirementsPrecedence(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[ui]\ncollapsed_edit_blocks = true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil || !cfg.UI.CollapsedEditBlocks {
+		t.Fatalf("local collapsed edits=%v err=%v", cfg.UI.CollapsedEditBlocks, err)
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{CollapsedEditBlocks: boolPointer(false)})
+	if !cfg.UI.CollapsedEditBlocks {
+		t.Fatal("remote settings overrode local collapsed edits")
+	}
+	if err := applyRequirementsData(&cfg, []byte("[ui]\ncollapsed_edit_blocks = false\n"), "test", false, false); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.UI.CollapsedEditBlocks {
+		t.Fatal("requirements did not override local collapsed edits")
+	}
+
+	remote := Config{}
+	remote.ApplyRemoteSettings(&RemoteSettings{CollapsedEditBlocks: boolPointer(true)})
+	if !remote.UI.CollapsedEditBlocks {
+		t.Fatal("remote collapsed edit default was not applied")
+	}
+	remote.ApplyRemoteSettings(&RemoteSettings{})
+	if remote.UI.CollapsedEditBlocks {
+		t.Fatal("missing remote setting did not restore the default")
+	}
+}
+
 func TestDefaultSelectedPermissionConfigAndEnvironmentPrecedence(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte("[ui]\ndefault_selected_permission = \" REJECT \"\n"), 0o600); err != nil {

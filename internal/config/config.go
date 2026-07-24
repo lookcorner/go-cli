@@ -121,6 +121,7 @@ type Config struct {
 	uiDoubleClickAction             *string
 	uiPermissionModeConfigured      bool
 	uiRememberApprovalsConfigured   bool
+	uiCollapsedEditsConfigured      bool
 	modelConfigured                 bool
 	defaultModelConfigured          bool
 	allowedModelsConfigured         bool
@@ -223,6 +224,7 @@ type UIConfig struct {
 	InvertScroll              bool    `json:"invert_scroll,omitempty"`
 	DefaultSelectedPermission string  `json:"default_selected_permission"`
 	RememberToolApprovals     bool    `json:"remember_tool_approvals,omitempty"`
+	CollapsedEditBlocks       bool    `json:"collapsed_edit_blocks,omitempty"`
 	PromptSuggestions         bool    `json:"prompt_suggestions"`
 	CursorBlink               *bool   `json:"cursor_blink,omitempty"`
 	PermissionMode            string  `json:"permission_mode"`
@@ -488,6 +490,7 @@ type fileUIConfig struct {
 	InvertScroll                 *bool   `json:"invert_scroll,omitempty" toml:"invert_scroll"`
 	DefaultSelectedPermission    *string `json:"default_selected_permission,omitempty" toml:"default_selected_permission"`
 	RememberToolApprovals        *bool   `json:"remember_tool_approvals,omitempty" toml:"remember_tool_approvals"`
+	CollapsedEditBlocks          *bool   `json:"collapsed_edit_blocks,omitempty" toml:"collapsed_edit_blocks"`
 	PromptSuggestions            *bool   `json:"prompt_suggestions,omitempty" toml:"prompt_suggestions"`
 	CursorBlink                  *bool   `json:"cursor_blink,omitempty" toml:"cursor_blink"`
 	PermissionMode               *string `json:"permission_mode,omitempty" toml:"permission_mode"`
@@ -524,6 +527,7 @@ type requirementsFile struct {
 		DisableBypassPermissionsMode any   `toml:"disable_bypass_permissions_mode"`
 		Yolo                         any   `toml:"yolo"`
 		RememberToolApprovals        *bool `toml:"remember_tool_approvals"`
+		CollapsedEditBlocks          *bool `toml:"collapsed_edit_blocks"`
 	} `toml:"ui"`
 }
 
@@ -1006,6 +1010,10 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	if disk.UI.RememberToolApprovals != nil {
 		cfg.UI.RememberToolApprovals = *disk.UI.RememberToolApprovals
 		cfg.uiRememberApprovalsConfigured = true
+	}
+	if disk.UI.CollapsedEditBlocks != nil {
+		cfg.UI.CollapsedEditBlocks = *disk.UI.CollapsedEditBlocks
+		cfg.uiCollapsedEditsConfigured = true
 	}
 	if disk.UI.PromptSuggestions != nil {
 		cfg.UI.PromptSuggestions = *disk.UI.PromptSuggestions
@@ -2195,6 +2203,10 @@ func applyRequirementsData(cfg *Config, data []byte, source string, envFailClose
 	if requirement.UI.RememberToolApprovals != nil {
 		cfg.UI.RememberToolApprovals = *requirement.UI.RememberToolApprovals
 		cfg.uiRememberApprovalsConfigured = true
+	}
+	if requirement.UI.CollapsedEditBlocks != nil {
+		cfg.UI.CollapsedEditBlocks = *requirement.UI.CollapsedEditBlocks
+		cfg.uiCollapsedEditsConfigured = true
 	}
 	if requirement.GrokComConfig == nil {
 		return nil

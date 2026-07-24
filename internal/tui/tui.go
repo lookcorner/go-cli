@@ -640,85 +640,86 @@ func (w bridgeWriter) Write(data []byte) (int, error) {
 }
 
 type model struct {
-	ctx                context.Context
-	runner             *agent.Runner
-	bridge             *Bridge
-	workspace          string
-	modelName          string
-	previousID         string
-	inputTokens        int
-	contextWindow      int
-	transcript         strings.Builder
-	input              []rune
-	cursor             int
-	inputUndo          []inputSnapshot
-	multiline          bool
-	history            []string
-	historyIndex       int
-	historyActive      bool
-	historySearch      *historySearchState
-	scrollSearch       *scrollSearchState
-	selection          *textSelection
-	selectionNonce     uint64
-	selectionMode      textSelectionMode
-	wordSeparators     string
-	mouseToggle        bool
-	vimMode            bool
-	persistVimMode     func(bool) error
-	compactMode        bool
-	persistCompactMode func(bool) error
-	defaultMinimal     bool
-	persistScreenMode  func(string) error
-	showTimestamps     bool
-	persistTimestamps  func(bool) error
-	showTimeline       bool
-	persistTimeline    func(bool) error
-	themeName          string
-	autoDarkTheme      string
-	autoLightTheme     string
-	theme              themePalette
-	persistTheme       func(string) error
-	mermaidMode        string
-	persistMermaid     func(string) error
-	transcriptMessages []transcriptMessage
-	scrollLines        int
-	scrollSpeed        uint8
-	scrollCarry        float64
-	scrollInput        scrollInput
-	invertScroll       bool
-	mouseReleased      bool
-	hyperlinks         bool
-	scrollFocused      bool
-	selectionClick     selectionClickState
-	width              int
-	height             int
-	scroll             int
-	scrollTail         int
-	scrollAnchor       *int
-	running            bool
-	status             string
-	approval           *approvalEvent
-	question           *questionState
-	planMode           bool
-	planReview         *planReviewState
-	viewer             *readOnlyViewer
-	remember           *rememberReviewState
-	rememberInput      bool
-	feedbackInput      bool
-	rememberNonce      uint64
-	turnCancel         context.CancelFunc
-	initial            string
-	pendingPrompts     []string
-	scheduled          []tools.ScheduledTaskFired
-	activeTask         string
-	promptSerial       uint64
-	newSession         bool
-	newSessionPrompt   string
-	resumeSession      *ResumeSessionError
-	screenMode         *ScreenModeError
-	forkResult         *ForkSessionError
-	forkSession        func(context.Context, bool) (ForkResult, error)
-	forkInGit          bool
+	ctx                 context.Context
+	runner              *agent.Runner
+	bridge              *Bridge
+	workspace           string
+	modelName           string
+	previousID          string
+	inputTokens         int
+	contextWindow       int
+	transcript          strings.Builder
+	input               []rune
+	cursor              int
+	inputUndo           []inputSnapshot
+	multiline           bool
+	history             []string
+	historyIndex        int
+	historyActive       bool
+	historySearch       *historySearchState
+	scrollSearch        *scrollSearchState
+	selection           *textSelection
+	selectionNonce      uint64
+	selectionMode       textSelectionMode
+	wordSeparators      string
+	mouseToggle         bool
+	vimMode             bool
+	persistVimMode      func(bool) error
+	compactMode         bool
+	persistCompactMode  func(bool) error
+	defaultMinimal      bool
+	persistScreenMode   func(string) error
+	showTimestamps      bool
+	persistTimestamps   func(bool) error
+	showTimeline        bool
+	persistTimeline     func(bool) error
+	themeName           string
+	autoDarkTheme       string
+	autoLightTheme      string
+	theme               themePalette
+	persistTheme        func(string) error
+	mermaidMode         string
+	persistMermaid      func(string) error
+	transcriptMessages  []transcriptMessage
+	scrollLines         int
+	scrollSpeed         uint8
+	scrollCarry         float64
+	scrollInput         scrollInput
+	invertScroll        bool
+	collapsedEditBlocks bool
+	mouseReleased       bool
+	hyperlinks          bool
+	scrollFocused       bool
+	selectionClick      selectionClickState
+	width               int
+	height              int
+	scroll              int
+	scrollTail          int
+	scrollAnchor        *int
+	running             bool
+	status              string
+	approval            *approvalEvent
+	question            *questionState
+	planMode            bool
+	planReview          *planReviewState
+	viewer              *readOnlyViewer
+	remember            *rememberReviewState
+	rememberInput       bool
+	feedbackInput       bool
+	rememberNonce       uint64
+	turnCancel          context.CancelFunc
+	initial             string
+	pendingPrompts      []string
+	scheduled           []tools.ScheduledTaskFired
+	activeTask          string
+	promptSerial        uint64
+	newSession          bool
+	newSessionPrompt    string
+	resumeSession       *ResumeSessionError
+	screenMode          *ScreenModeError
+	forkResult          *ForkSessionError
+	forkSession         func(context.Context, bool) (ForkResult, error)
+	forkInGit           bool
 
 	promptSuggestion    string
 	suggestionsEnabled  bool
@@ -845,6 +846,7 @@ type UIOptions struct {
 	ScrollMode           string
 	ScrollLines          *uint8
 	InvertScroll         bool
+	CollapsedEditBlocks  bool
 	PromptSuggestions    bool
 	CursorBlink          *bool
 	Theme                string
@@ -981,27 +983,28 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		showTimestamps: options.ShowTimestamps, persistTimestamps: options.SetShowTimestamps,
 		showTimeline: options.ShowTimeline, persistTimeline: options.SetShowTimeline,
 		scrollLines: mouseWheelScrollLines, scrollSpeed: options.ScrollSpeed, scrollInput: scrollInput{mode: options.ScrollMode}, invertScroll: options.InvertScroll,
-		suggestionsEnabled: options.PromptSuggestions,
-		hyperlinks:         detectTerminalHyperlinks(),
-		themeName:          options.Theme,
-		autoDarkTheme:      options.AutoDarkTheme,
-		autoLightTheme:     options.AutoLightTheme,
-		theme:              paletteForAuto(options.Theme, options.AutoDarkTheme, options.AutoLightTheme),
-		persistTheme:       options.SetTheme,
-		mermaidMode:        options.RenderMermaid,
-		persistMermaid:     options.SetRenderMermaid,
-		forkSession:        options.ForkSession,
-		forkInGit:          options.ForkInGit,
-		startupDashboard:   options.OpenDashboard,
-		dashboardDisabled:  options.DashboardDisabled,
-		dashboardPins:      make(map[string]bool, len(options.DashboardPinned)),
-		persistPins:        options.SetDashboardPinned,
-		dashboardOrder:     append([]string(nil), options.DashboardReorder...),
-		persistOrder:       options.SetDashboardReorder,
-		dashboardGrouping:  dashboardGrouping(options.DashboardGrouping),
-		persistGrouping:    options.SetDashboardGrouping,
-		voiceClient:        options.Voice,
-		debug:              newDebugState(),
+		collapsedEditBlocks: options.CollapsedEditBlocks,
+		suggestionsEnabled:  options.PromptSuggestions,
+		hyperlinks:          detectTerminalHyperlinks(),
+		themeName:           options.Theme,
+		autoDarkTheme:       options.AutoDarkTheme,
+		autoLightTheme:      options.AutoLightTheme,
+		theme:               paletteForAuto(options.Theme, options.AutoDarkTheme, options.AutoLightTheme),
+		persistTheme:        options.SetTheme,
+		mermaidMode:         options.RenderMermaid,
+		persistMermaid:      options.SetRenderMermaid,
+		forkSession:         options.ForkSession,
+		forkInGit:           options.ForkInGit,
+		startupDashboard:    options.OpenDashboard,
+		dashboardDisabled:   options.DashboardDisabled,
+		dashboardPins:       make(map[string]bool, len(options.DashboardPinned)),
+		persistPins:         options.SetDashboardPinned,
+		dashboardOrder:      append([]string(nil), options.DashboardReorder...),
+		persistOrder:        options.SetDashboardReorder,
+		dashboardGrouping:   dashboardGrouping(options.DashboardGrouping),
+		persistGrouping:     options.SetDashboardGrouping,
+		voiceClient:         options.Voice,
+		debug:               newDebugState(),
 	}
 	if m.mermaidMode == "" {
 		m.mermaidMode = "auto"
@@ -1033,7 +1036,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 	m.replaceTranscript(initialTranscript, nil)
 	if runner != nil && strings.TrimSpace(runner.SessionPath) != "" {
 		if messages, err := session.Transcript(runner.SessionPath); err == nil && strings.TrimSpace(session.FormatTranscript(messages)) == strings.TrimSpace(initialTranscript) {
-			if text, displayMessages, expands, displayErr := sessionDisplayTranscript(runner.SessionPath); displayErr == nil {
+			if text, displayMessages, expands, displayErr := sessionDisplayTranscript(runner.SessionPath, m.collapsedEditBlocks); displayErr == nil {
 				m.replaceDisplayTranscript(text, displayMessages, expands)
 			} else {
 				m.replaceTranscript(initialTranscript, messages)
@@ -1475,7 +1478,7 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		mode := msg.result.Mode
 		if mode == agent.RewindAll || mode == agent.RewindConversationOnly {
 			m.previousID = msg.result.PreviousResponseID
-			if text, messages, expands, err := sessionDisplayTranscript(m.runner.SessionPath); err == nil {
+			if text, messages, expands, err := sessionDisplayTranscript(m.runner.SessionPath, m.collapsedEditBlocks); err == nil {
 				m.replaceDisplayTranscript(text, messages, expands)
 			} else {
 				m.replaceTranscript(session.FormatTranscript(msg.result.Messages), msg.result.Messages)
@@ -2647,7 +2650,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.status = "no active session to view"
 				return m, nil
 			}
-			content, _, _, err := sessionDisplayTranscript(m.runner.SessionPath)
+			content, _, _, err := sessionDisplayTranscript(m.runner.SessionPath, m.collapsedEditBlocks)
 			if err != nil {
 				m.status = "transcript failed: " + err.Error()
 				return m, nil

@@ -767,6 +767,15 @@ session. Set `[ui] remember_tool_approvals = true` to show the request-scoped
 session. `GROK_REMEMBER_TOOL_APPROVALS` overrides the local gate; managed
 requirements have final precedence.
 
+Set `[ui] collapsed_edit_blocks = true` to show successful exact-text and
+hashline edits as compact `Edit file +N/-M` rows in the live TUI, resumed
+sessions, transcript viewer, and dashboard previews. The default is `false`.
+The full tool arguments and result remain available through `/expand` or
+Ctrl-E in minimal mode. Local configuration overrides the remote setting,
+while managed requirements have final precedence. Whole-file writes and
+failed edits stay expanded because their previous contents or diagnostics
+cannot be summarized safely.
+
 `[ui] cursor_blink = true` forces a blinking block cursor at TUI startup, while
 `false` forces a steady block. Leaving it unset preserves the terminal's cursor
 style, and the TUI restores the terminal default after a forced style exits.
