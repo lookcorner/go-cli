@@ -7,6 +7,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 
 	tea "charm.land/bubbletea/v2"
@@ -42,6 +43,10 @@ type dashboardState struct {
 	selected      int
 	busy          bool
 	loading       bool
+	polling       bool
+	ticking       bool
+	epoch         uint64
+	sessionSeq    uint64
 	dir           string
 	sessions      []session.Info
 	pendingDelete string
@@ -62,6 +67,16 @@ type dashboardDoneEvent struct {
 
 type dashboardLoadedEvent struct {
 	dir      string
+	seq      uint64
+	sessions []session.Info
+	err      error
+}
+
+type dashboardTickEvent struct{ epoch uint64 }
+
+type dashboardPollEvent struct {
+	epoch    uint64
+	seq      uint64
 	sessions []session.Info
 	err      error
 }
@@ -71,43 +86,96 @@ func (m *model) openDashboard() tea.Cmd {
 		m.status = "no active session"
 		return nil
 	}
-	state := &dashboardState{}
+	m.dashboardEpoch++
+	state := &dashboardState{epoch: m.dashboardEpoch}
 	if strings.TrimSpace(m.runner.SessionPath) != "" {
 		state.dir = filepath.Dir(m.runner.SessionPath)
 		state.loading = true
+		state.sessionSeq++
 	}
 	m.dashboard = state
 	m.refreshDashboard()
 	m.scroll = 0
 	m.status = "agent dashboard"
 	if state.dir == "" {
-		return nil
+		state.ticking = true
+		return dashboardTick(state.epoch)
 	}
+	seq := state.sessionSeq
 	return func() tea.Msg {
 		items, err := session.List(state.dir, "")
-		return dashboardLoadedEvent{dir: state.dir, sessions: items, err: err}
+		return dashboardLoadedEvent{dir: state.dir, seq: seq, sessions: items, err: err}
 	}
 }
 
-func (m *model) finishDashboardLoad(event dashboardLoadedEvent) {
+func (m *model) finishDashboardLoad(event dashboardLoadedEvent) tea.Cmd {
 	state := m.dashboard
-	if state == nil || state.dir != event.dir {
-		return
+	if state == nil || state.dir != event.dir || state.sessionSeq != event.seq {
+		return nil
 	}
 	state.loading = false
 	if event.err != nil {
 		state.err = event.err.Error()
 		m.status = "dashboard load failed"
-		return
+	} else {
+		m.applyDashboardSessions(event.sessions)
 	}
-	state.sessions = event.sessions
-	for _, item := range event.sessions {
+	if !state.ticking {
+		state.ticking = true
+		return dashboardTick(state.epoch)
+	}
+	return nil
+}
+
+func (m *model) applyDashboardSessions(items []session.Info) {
+	state := m.dashboard
+	state.sessions = items
+	for _, item := range items {
 		if item.SessionID == m.runner.SessionID {
 			state.currentTitle = item.Title
 			break
 		}
 	}
 	m.refreshDashboard()
+}
+
+func dashboardTick(epoch uint64) tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return dashboardTickEvent{epoch: epoch} })
+}
+
+func (m *model) handleDashboardTick(event dashboardTickEvent) tea.Cmd {
+	state := m.dashboard
+	if state == nil || state.epoch != event.epoch {
+		return nil
+	}
+	currentErr := state.err
+	m.refreshDashboard()
+	state.err = currentErr
+	next := dashboardTick(state.epoch)
+	if state.dir == "" || state.loading || state.polling {
+		return next
+	}
+	state.polling = true
+	state.sessionSeq++
+	dir, epoch, seq := state.dir, state.epoch, state.sessionSeq
+	return tea.Batch(next, func() tea.Msg {
+		items, err := session.List(dir, "")
+		return dashboardPollEvent{epoch: epoch, seq: seq, sessions: items, err: err}
+	})
+}
+
+func (m *model) finishDashboardPoll(event dashboardPollEvent) {
+	state := m.dashboard
+	if state == nil || state.epoch != event.epoch {
+		return
+	}
+	state.polling = false
+	if state.sessionSeq != event.seq || event.err != nil {
+		return
+	}
+	currentErr := state.err
+	m.applyDashboardSessions(event.sessions)
+	state.err = currentErr
 }
 
 func (m *model) refreshDashboard() {
@@ -284,9 +352,11 @@ func (m *model) handleDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.status = "dashboard refreshed"
 		if state.dir != "" {
 			state.loading = true
+			state.sessionSeq++
+			dir, seq := state.dir, state.sessionSeq
 			return m, func() tea.Msg {
-				items, err := session.List(state.dir, "")
-				return dashboardLoadedEvent{dir: state.dir, sessions: items, err: err}
+				items, err := session.List(dir, "")
+				return dashboardLoadedEvent{dir: dir, seq: seq, sessions: items, err: err}
 			}
 		}
 	case stroke == "enter" && len(state.rows) > 0:

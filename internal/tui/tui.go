@@ -564,6 +564,7 @@ type model struct {
 	persistPins    func([]string) error
 	dashboardOrder []string
 	persistOrder   func([]string) error
+	dashboardEpoch uint64
 
 	debug         debugState
 	lastEmptyEsc  time.Time
@@ -1441,7 +1442,11 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case dashboardLoadedEvent:
-		m.finishDashboardLoad(msg)
+		return m, m.finishDashboardLoad(msg)
+	case dashboardTickEvent:
+		return m, m.handleDashboardTick(msg)
+	case dashboardPollEvent:
+		m.finishDashboardPoll(msg)
 	case sessionSelectLoadedEvent:
 		m.finishSessionSelectLoad(msg)
 	case sessionSelectSearchRequestEvent:

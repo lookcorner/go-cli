@@ -23,7 +23,7 @@ func TestDashboardAliasesOpenTaskOverview(t *testing.T) {
 		m.setInput(command)
 		updated, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 		m = updated.(*model)
-		if cmd != nil || m.dashboard == nil || len(m.dashboard.rows) != 3 || !strings.Contains(m.dashboardContent(), "Agent Dashboard") {
+		if cmd == nil || m.dashboard == nil || len(m.dashboard.rows) != 3 || !strings.Contains(m.dashboardContent(), "Agent Dashboard") {
 			t.Fatalf("command=%s dashboard=%#v async=%v", command, m.dashboard, cmd != nil)
 		}
 	}
@@ -81,6 +81,78 @@ func TestDashboardRequiresActiveSession(t *testing.T) {
 	}
 }
 
+func TestDashboardLiveRefreshRejectsStaleTicks(t *testing.T) {
+	completed := false
+	runner := dashboardFixtureRunner()
+	runner.ListTasks = func() []tools.ProcessSnapshot {
+		return []tools.ProcessSnapshot{{TaskID: "proc-1", Description: "tests", Completed: completed}}
+	}
+	m := &model{runner: runner, workspace: "/work", modelName: "grok"}
+	if tick := m.openDashboard(); tick == nil || !m.dashboard.ticking {
+		t.Fatalf("tick=%v state=%#v", tick != nil, m.dashboard)
+	}
+	epoch := m.dashboard.epoch
+	m.dashboard.err = "keep this error"
+	completed = true
+	updated, next := m.Update(dashboardTickEvent{epoch: epoch})
+	m = updated.(*model)
+	if next == nil || dashboardRowStatus(m.dashboard.rows, "proc-1") != "done" || m.dashboard.err != "keep this error" {
+		t.Fatalf("next=%v rows=%#v state=%#v", next != nil, m.dashboard.rows, m.dashboard)
+	}
+
+	pressDashboardKey(t, m, tea.Key{Code: tea.KeyEsc})
+	completed = false
+	m.openDashboard()
+	if m.dashboard.epoch == epoch || dashboardRowStatus(m.dashboard.rows, "proc-1") != "running" {
+		t.Fatalf("epoch=%d old=%d rows=%#v", m.dashboard.epoch, epoch, m.dashboard.rows)
+	}
+	completed = true
+	updated, stale := m.Update(dashboardTickEvent{epoch: epoch})
+	m = updated.(*model)
+	if stale != nil || dashboardRowStatus(m.dashboard.rows, "proc-1") != "running" {
+		t.Fatalf("stale=%v rows=%#v", stale != nil, m.dashboard.rows)
+	}
+}
+
+func TestDashboardPollRejectsOlderSessionSnapshot(t *testing.T) {
+	runner := dashboardFixtureRunner()
+	m := &model{
+		runner:    runner,
+		workspace: "/work",
+		modelName: "grok",
+		dashboard: &dashboardState{
+			epoch:      3,
+			sessionSeq: 2,
+			polling:    true,
+			sessions:   []session.Info{{SessionID: "old", Title: "Old"}},
+		},
+	}
+	m.finishDashboardPoll(dashboardPollEvent{
+		epoch: 3, seq: 1,
+		sessions: []session.Info{{SessionID: "stale", Title: "Stale"}},
+	})
+	if m.dashboard.polling || m.dashboard.sessions[0].SessionID != "old" {
+		t.Fatalf("state=%#v", m.dashboard)
+	}
+	m.dashboard.polling = true
+	m.finishDashboardPoll(dashboardPollEvent{
+		epoch: 3, seq: 2,
+		sessions: []session.Info{{SessionID: "fresh", Title: "Fresh"}},
+	})
+	if m.dashboard.polling || m.dashboard.sessions[0].SessionID != "fresh" {
+		t.Fatalf("state=%#v", m.dashboard)
+	}
+}
+
+func dashboardRowStatus(rows []dashboardRow, id string) string {
+	for _, row := range rows {
+		if row.id == id {
+			return row.status
+		}
+	}
+	return ""
+}
+
 func TestDashboardLoadsSwitchesAndDeletesStoredSessions(t *testing.T) {
 	dir := t.TempDir()
 	current, err := session.NewLoggerWithID(dir, "current")
@@ -114,9 +186,9 @@ func TestDashboardLoadsSwitchesAndDeletesStoredSessions(t *testing.T) {
 	if load == nil || !m.dashboard.loading {
 		t.Fatalf("load=%v state=%#v", load != nil, m.dashboard)
 	}
-	updated, _ := m.Update(load())
+	updated, live := m.Update(load())
 	m = updated.(*model)
-	if m.dashboard.loading || len(m.dashboard.rows) != 4 || m.dashboard.rows[1].kind != dashboardStoredSession || m.dashboard.rows[1].title != "Other work" {
+	if live == nil || !m.dashboard.ticking || m.dashboard.loading || len(m.dashboard.rows) != 4 || m.dashboard.rows[1].kind != dashboardStoredSession || m.dashboard.rows[1].title != "Other work" {
 		t.Fatalf("rows=%#v", m.dashboard.rows)
 	}
 	m.dashboard.selected = 1
