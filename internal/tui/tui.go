@@ -860,7 +860,11 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 	m.replaceTranscript(initialTranscript, nil)
 	if runner != nil && strings.TrimSpace(runner.SessionPath) != "" {
 		if messages, err := session.Transcript(runner.SessionPath); err == nil && strings.TrimSpace(session.FormatTranscript(messages)) == strings.TrimSpace(initialTranscript) {
-			m.replaceTranscript(initialTranscript, messages)
+			if text, displayMessages, expands, displayErr := sessionDisplayTranscript(runner.SessionPath); displayErr == nil {
+				m.replaceDisplayTranscript(text, displayMessages, expands)
+			} else {
+				m.replaceTranscript(initialTranscript, messages)
+			}
 		}
 	}
 	if m.minimal && m.transcript.Len() > 0 {
@@ -1281,7 +1285,11 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		mode := msg.result.Mode
 		if mode == agent.RewindAll || mode == agent.RewindConversationOnly {
 			m.previousID = msg.result.PreviousResponseID
-			m.replaceTranscript(session.FormatTranscript(msg.result.Messages), msg.result.Messages)
+			if text, messages, expands, err := sessionDisplayTranscript(m.runner.SessionPath); err == nil {
+				m.replaceDisplayTranscript(text, messages, expands)
+			} else {
+				m.replaceTranscript(session.FormatTranscript(msg.result.Messages), msg.result.Messages)
+			}
 			m.setInput(msg.result.PromptText)
 			m.history = loadPromptHistory(m.runner, m.workspace)
 			m.historyActive, m.historyIndex = false, -1
@@ -2409,12 +2417,12 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.status = "no active session to view"
 				return m, nil
 			}
-			messages, err := session.Transcript(m.runner.SessionPath)
+			content, _, _, err := sessionDisplayTranscript(m.runner.SessionPath)
 			if err != nil {
 				m.status = "transcript failed: " + err.Error()
 				return m, nil
 			}
-			m.viewer = &readOnlyViewer{title: "Conversation transcript", content: session.FormatTranscript(messages)}
+			m.viewer = &readOnlyViewer{title: "Conversation transcript", content: content}
 			m.status = "transcript"
 			m.scroll = 0
 			return m, nil
@@ -3988,6 +3996,12 @@ func (m *model) replaceTranscript(text string, messages []session.Message) {
 		m.transcriptMessages = append(m.transcriptMessages, transcriptMessage{start: offset, offset: offset + len(label), at: message.Time, role: message.Role})
 		offset += len(session.FormatTranscript([]session.Message{message}))
 	}
+}
+
+func (m *model) replaceDisplayTranscript(text string, messages []transcriptMessage, expands []string) {
+	m.replaceTranscript(text, nil)
+	m.transcriptMessages = messages
+	m.toolExpand = expands
 }
 
 func (m *model) transcriptText() string {

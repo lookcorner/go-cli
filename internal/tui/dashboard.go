@@ -1151,11 +1151,19 @@ func (m *model) peekDashboardRow(row dashboardRow) (tea.Model, tea.Cmd) {
 		state.busy = true
 		state.err = ""
 		return m, func() tea.Msg {
-			messages, err := session.TranscriptOrEmpty(path)
+			transcript, _, _, err := sessionDisplayTranscript(path)
+			if err != nil {
+				messages, fallbackErr := session.TranscriptOrEmpty(path)
+				if fallbackErr != nil {
+					err = fallbackErr
+				} else {
+					transcript, err = session.FormatTranscript(messages), nil
+				}
+			}
 			return dashboardDoneEvent{
 				action: "peek-session",
 				id:     row.id,
-				text:   dashboardSessionDetail(row, m.modelName, session.FormatTranscript(messages)),
+				text:   dashboardSessionDetail(row, m.modelName, transcript),
 				err:    err,
 			}
 		}

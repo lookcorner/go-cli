@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/lookcorner/go-cli/internal/api"
+	"github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/tools"
 )
 
@@ -128,5 +130,95 @@ func TestBridgePublishesToolLifecycle(t *testing.T) {
 	finished, ok := (<-bridge.events).(toolFinishedEvent)
 	if !ok || !errors.Is(finished.err, toolErr) || finished.result.Output != "failed" {
 		t.Fatalf("finished event = %#v", finished)
+	}
+}
+
+func TestSessionDisplayTranscriptRestoresToolsInOrder(t *testing.T) {
+	logger, err := session.NewLoggerWithID(t.TempDir(), "tool-display")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.AppendPrompt("inspect", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append("model_response", map[string]any{
+		"response_id": "r1", "text": "before", "tool_call_count": 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append("tool_call", map[string]any{
+		"call_id": "call-1", "name": "shell", "arguments": json.RawMessage(`{"command":"check"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	output := strings.Repeat("result line\n", toolCompactLines+1)
+	if err := logger.Append("tool_result", map[string]any{
+		"call_id": "call-1", "name": "shell", "output": output, "failed": true,
+		"image_count": 2,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append("model_response", map[string]any{
+		"response_id": "r2", "text": "after", "tool_call_count": 0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	path := logger.Path()
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	text, messages, expands, err := sessionDisplayTranscript(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, tool, after := strings.Index(text, "before"), strings.Index(text, "#### Tool failed: `shell`"), strings.Index(text, "after")
+	if before < 0 || tool <= before || after <= tool {
+		t.Fatalf("tool order was not restored:\n%s", text)
+	}
+	if !strings.Contains(text, "2 image attachment(s)") || !strings.Contains(text, "output folded") {
+		t.Fatalf("persisted metadata or compact output missing:\n%s", text)
+	}
+	if len(expands) != 1 || !strings.Contains(expands[0], strings.Repeat("result line\n", toolCompactLines)) {
+		t.Fatalf("full output was not retained: %#v", expands)
+	}
+	if len(messages) != 2 || messages[0].role != "user" || messages[1].role != "assistant" ||
+		text[messages[0].start:messages[0].offset] != "You" ||
+		text[messages[1].start:messages[1].offset] != "Gork" ||
+		messages[0].at.IsZero() || messages[1].at.Before(messages[0].at) {
+		t.Fatalf("timestamp labels were not restored: %#v", messages)
+	}
+}
+
+func TestSessionDisplayTranscriptKeepsSyntheticAssistantBoundary(t *testing.T) {
+	logger, err := session.NewLoggerWithID(t.TempDir(), "tool-boundary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.AppendPrompt("start", nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []struct {
+		kind string
+		data map[string]any
+	}{
+		{"model_response", map[string]any{"response_id": "r1", "text": "first", "tool_call_count": 1}},
+		{"user_prompt", map[string]any{"text": "internal", "synthetic": true}},
+		{"model_response", map[string]any{"response_id": "r2", "text": "second", "tool_call_count": 0}},
+	} {
+		if err := logger.Append(event.kind, event.data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := logger.Path()
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	text, messages, _, err := sessionDisplayTranscript(path)
+	if err != nil || strings.Count(text, "Gork\n") != 2 || strings.Contains(text, "internal") || len(messages) != 3 {
+		t.Fatalf("text=%q messages=%#v err=%v", text, messages, err)
+	}
+	if messages[1].at.After(time.Now()) {
+		t.Fatalf("unexpected future timestamp: %v", messages[1].at)
 	}
 }

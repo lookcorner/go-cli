@@ -1004,8 +1004,15 @@ func TestRunnerForwardsReadFileImages(t *testing.T) {
 		}},
 		{ResponseID: "resp_2", Text: "done"},
 	}}
+	logger, err := session.NewLoggerWithID(t.TempDir(), "image-tools")
+	if err != nil {
+		t.Fatal(err)
+	}
 	observer := &recordingToolObserver{}
-	runner := Runner{Client: streamer, Tools: tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto}), ToolObserver: observer, Model: "test", MaxSteps: 2}
+	runner := Runner{
+		Client: streamer, Tools: tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto}),
+		Logger: logger, ToolObserver: observer, Model: "test", MaxSteps: 2,
+	}
 	defer runner.Tools.Close()
 	if _, err := runner.Run(context.Background(), "inspect image"); err != nil {
 		t.Fatal(err)
@@ -1020,6 +1027,25 @@ func TestRunnerForwardsReadFileImages(t *testing.T) {
 	}
 	if len(observer.results) != 2 || len(observer.results[0].Images) != 1 || observer.results[0].Images[0].MediaType != "image/png" {
 		t.Fatalf("tool observer lost image attachments: %#v", observer.results)
+	}
+	path := logger.Path()
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	timeline, err := session.DisplayTimeline(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persisted *session.DisplayTool
+	for _, entry := range timeline {
+		if entry.Tool != nil {
+			persisted = entry.Tool
+			break
+		}
+	}
+	if persisted == nil || len(persisted.Images) != 1 || persisted.Images[0].MediaType != "image/png" ||
+		persisted.Images[0].Width != 1 || persisted.Images[0].Height != 1 || persisted.Images[0].Bytes != len(pngData) {
+		t.Fatalf("tool image metadata was not persisted: %#v", persisted)
 	}
 }
 

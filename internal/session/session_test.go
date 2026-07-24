@@ -158,6 +158,52 @@ func TestTranscriptStopsAtLastCompletedTurn(t *testing.T) {
 	}
 }
 
+func TestDisplayTimelineRestoresCompletedToolEvents(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	content := "" +
+		`{"time":"2026-07-23T01:00:00Z","kind":"user_prompt","data":{"text":"inspect"}}` + "\n" +
+		`{"time":"2026-07-23T01:00:01Z","kind":"model_response","data":{"response_id":"r1","text":"checking ","tool_call_count":1}}` + "\n" +
+		`{"kind":"tool_call","data":{"call_id":"call-1","name":"shell","arguments":{"id":9007199254740993}}}` + "\n" +
+		`{"time":"2026-07-23T01:00:02Z","kind":"tool_result","data":{"call_id":"call-1","name":"shell","output":"ok","image_count":1,"images":[{"media_type":"image/png","width":10,"height":20,"bytes":30}]}}` + "\n" +
+		`{"time":"2026-07-23T01:00:03Z","kind":"model_response","data":{"response_id":"r2","text":"done","tool_call_count":0}}` + "\n" +
+		`{"kind":"user_prompt","data":{"text":"pending"}}` + "\n" +
+		`{"kind":"tool_call","data":{"call_id":"call-pending","name":"shell","arguments":{}}}` + "\n" +
+		`{"kind":"tool_result","data":{"call_id":"call-pending","name":"shell","output":"ignore"}}` + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := DisplayTimeline(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 4 || entries[0].Kind != "user" || entries[1].Kind != "assistant" || entries[2].Kind != "tool" || entries[3].Kind != "assistant" {
+		t.Fatalf("unexpected display timeline: %#v", entries)
+	}
+	tool := entries[2].Tool
+	if tool == nil || tool.Name != "shell" || !strings.Contains(string(tool.Arguments), "9007199254740993") ||
+		tool.Output != "ok" || tool.ImageCount != 1 || len(tool.Images) != 1 || tool.Images[0].Bytes != 30 {
+		t.Fatalf("tool event lost persisted details: %#v", tool)
+	}
+	if entries[3].Text != "done" || !entries[3].Time.Equal(time.Date(2026, 7, 23, 1, 0, 3, 0, time.UTC)) {
+		t.Fatalf("final response = %#v", entries[3])
+	}
+}
+
+func TestDisplayTimelineSkipsOrphanToolResult(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	content := "" +
+		`{"kind":"user_prompt","data":{"text":"hello"}}` + "\n" +
+		`{"kind":"tool_result","data":{"call_id":"orphan","name":"shell","output":"duplicate"}}` + "\n" +
+		`{"kind":"model_response","data":{"response_id":"r1","text":"done","tool_call_count":0}}` + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := DisplayTimeline(path)
+	if err != nil || len(entries) != 2 || entries[1].Kind != "assistant" {
+		t.Fatalf("timeline=%#v err=%v", entries, err)
+	}
+}
+
 func TestTranscriptPreservesMessageTimesWithoutChangingFormatting(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "session.jsonl")
 	content := "" +

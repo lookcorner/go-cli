@@ -841,9 +841,16 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 				publish()
 				output = "ERROR: " + toolErr.Error()
 			}
+			imageLog := make([]session.DisplayImage, 0, len(toolResult.Images))
+			for _, image := range toolResult.Images {
+				imageLog = append(imageLog, session.DisplayImage{
+					MediaType: image.MediaType, Width: image.Width, Height: image.Height, Bytes: len(image.Data),
+				})
+			}
 			r.log("tool_result", map[string]any{
 				"step": step, "call_id": call.CallID, "name": call.Name,
 				"output": output, "failed": toolErr != nil, "image_count": len(toolResult.Images),
+				"images": imageLog,
 			})
 			if prefire != nil {
 				appendCompactTrace(&compactTrace, "Tool result: "+output+"\n")

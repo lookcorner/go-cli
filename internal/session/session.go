@@ -31,6 +31,32 @@ type Event struct {
 	Data any       `json:"data,omitempty"`
 }
 
+type DisplayEntry struct {
+	Time      time.Time
+	Kind      string
+	Text      string
+	Content   []Content
+	Synthetic bool
+	Tool      *DisplayTool
+}
+
+type DisplayTool struct {
+	CallID     string
+	Name       string
+	Arguments  json.RawMessage
+	Output     string
+	Failed     bool
+	ImageCount int
+	Images     []DisplayImage
+}
+
+type DisplayImage struct {
+	MediaType string `json:"media_type"`
+	Width     int    `json:"width"`
+	Height    int    `json:"height"`
+	Bytes     int    `json:"bytes"`
+}
+
 type UserFeedback struct {
 	SessionID       string          `json:"sessionId"`
 	TurnNumber      *int64          `json:"turnNumber,omitempty"`
@@ -740,6 +766,97 @@ func Events(path string, kinds ...string) ([]Event, error) {
 			}
 		}
 		result = append(result, Event{Time: event.Time, Kind: event.Kind, Data: data})
+	}
+	return result, nil
+}
+
+// DisplayTimeline returns completed conversation events for presentation.
+// Transcript remains the model-history API; this view additionally preserves
+// tool calls without feeding their display text back to the model.
+func DisplayTimeline(path string) ([]DisplayEntry, error) {
+	events, _, _, err := liveTimeline(path)
+	if err != nil {
+		return nil, err
+	}
+	completed := -1
+	for index, event := range events {
+		if event.Kind != "model_response" {
+			continue
+		}
+		var data struct {
+			ResponseID    string `json:"response_id"`
+			ToolCallCount int    `json:"tool_call_count"`
+		}
+		if json.Unmarshal(event.Data, &data) == nil && data.ResponseID != "" && data.ToolCallCount == 0 {
+			completed = index
+		}
+	}
+	if completed < 0 {
+		return nil, errors.New("session has no completed transcript to display")
+	}
+
+	pending := make(map[string]*DisplayTool)
+	result := make([]DisplayEntry, 0, completed+1)
+	for index, event := range events[:completed+1] {
+		line := index + 1
+		switch event.Kind {
+		case "user_prompt":
+			var data struct {
+				Text      string    `json:"text"`
+				Content   []Content `json:"content"`
+				Synthetic bool      `json:"synthetic"`
+			}
+			if err := json.Unmarshal(event.Data, &data); err != nil {
+				return nil, fmt.Errorf("parse display prompt on session line %d: %w", line, err)
+			}
+			result = append(result, DisplayEntry{
+				Time: event.Time, Kind: "user", Text: data.Text, Content: data.Content, Synthetic: data.Synthetic,
+			})
+		case "model_response":
+			var data struct {
+				Text string `json:"text"`
+			}
+			if err := json.Unmarshal(event.Data, &data); err != nil {
+				return nil, fmt.Errorf("parse display response on session line %d: %w", line, err)
+			}
+			if data.Text != "" {
+				result = append(result, DisplayEntry{Time: event.Time, Kind: "assistant", Text: data.Text})
+			}
+		case "tool_call":
+			var data struct {
+				CallID    string          `json:"call_id"`
+				Name      string          `json:"name"`
+				Arguments json.RawMessage `json:"arguments"`
+			}
+			if err := json.Unmarshal(event.Data, &data); err != nil {
+				return nil, fmt.Errorf("parse display tool call on session line %d: %w", line, err)
+			}
+			if data.CallID != "" {
+				pending[data.CallID] = &DisplayTool{CallID: data.CallID, Name: data.Name, Arguments: data.Arguments}
+			}
+		case "tool_result":
+			var data struct {
+				CallID     string         `json:"call_id"`
+				Name       string         `json:"name"`
+				Output     string         `json:"output"`
+				Failed     bool           `json:"failed"`
+				ImageCount int            `json:"image_count"`
+				Images     []DisplayImage `json:"images"`
+			}
+			if err := json.Unmarshal(event.Data, &data); err != nil {
+				return nil, fmt.Errorf("parse display tool result on session line %d: %w", line, err)
+			}
+			tool := pending[data.CallID]
+			if tool == nil {
+				continue
+			}
+			delete(pending, data.CallID)
+			if tool.Name == "" {
+				tool.Name = data.Name
+			}
+			tool.Output, tool.Failed, tool.ImageCount, tool.Images = data.Output, data.Failed, data.ImageCount, data.Images
+			result = append(result, DisplayEntry{Time: event.Time, Kind: "tool", Tool: tool})
+		}
 	}
 	return result, nil
 }

@@ -494,11 +494,13 @@ Within a session, `/minimal` reopens the same session in minimal mode and
 The TUI streams model output as it arrives, renders headings, emphasis, links,
 lists, quotes, pipe tables, and inline or fenced code, strips untrusted terminal
 control characters, and keeps a scrollable transcript.
-Tool calls are rendered into the live transcript with formatted arguments,
-results, errors, and image metadata. Output beyond 20 lines or 4,000 characters
-is folded to keep navigation responsive. In minimal mode, `/expand` or Ctrl-E
-reprints the newest folded tool block in full beneath the native scrollback;
-repeated use walks backward through up to 256 folded results.
+Tool calls are rendered into the transcript with formatted arguments, results,
+errors, and image metadata. Their persisted event history is reconstructed after
+resume and rewind without adding presentation text to the model's conversation
+history. Output beyond 20 lines or 4,000 characters is folded to keep navigation
+responsive. In minimal mode, `/expand` or Ctrl-E reprints the newest folded tool
+block in full beneath the native scrollback; repeated use walks backward through
+up to 256 folded results.
 On directly supported terminals, Markdown links, bare HTTP(S)/FTP/email URLs, and quoted
 absolute file paths use safe OSC 8 targets; spaces in file paths are preserved and
 percent-encoded. The same links remain available through tmux 3.4 or newer when
