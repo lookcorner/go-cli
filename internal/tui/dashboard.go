@@ -7,6 +7,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"unicode"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -43,6 +44,11 @@ type dashboardState struct {
 	dir           string
 	sessions      []session.Info
 	pendingDelete string
+	renameID      string
+	renameKind    dashboardRowKind
+	renameInput   []rune
+	renameCursor  int
+	currentTitle  string
 	err           string
 }
 
@@ -94,6 +100,12 @@ func (m *model) finishDashboardLoad(event dashboardLoadedEvent) {
 		return
 	}
 	state.sessions = event.sessions
+	for _, item := range event.sessions {
+		if item.SessionID == m.runner.SessionID {
+			state.currentTitle = item.Title
+			break
+		}
+	}
 	m.refreshDashboard()
 }
 
@@ -103,7 +115,7 @@ func (m *model) refreshDashboard() {
 	}
 	state := m.dashboard
 	state.err = ""
-	rows := []dashboardRow{{kind: dashboardSession, id: m.runner.SessionID, status: "active", title: "Current session", detail: m.modelName + " · " + m.workspace}}
+	rows := []dashboardRow{{kind: dashboardSession, id: m.runner.SessionID, status: "active", title: dashboardFirst(state.currentTitle, "Current session"), detail: m.modelName + " · " + m.workspace}}
 	for _, item := range state.sessions {
 		if item.SessionID == m.runner.SessionID {
 			continue
@@ -175,6 +187,10 @@ func (m *model) dashboardContent() string {
 	if state.pendingDelete != "" {
 		out.WriteString("\nDelete session " + state.pendingDelete + "? Press Y to confirm or N to cancel.\n")
 	}
+	if state.renameID != "" {
+		input := slices.Insert(slices.Clone(state.renameInput), state.renameCursor, '|')
+		out.WriteString("\nRename: " + string(input) + "\n")
+	}
 	return strings.TrimSpace(out.String())
 }
 
@@ -182,7 +198,10 @@ func (m *model) dashboardHint() string {
 	if m.dashboard != nil && m.dashboard.busy {
 		return "Working... | Esc close"
 	}
-	return "Enter view/switch | X stop running | D delete idle session | R refresh | Esc close"
+	if m.dashboard != nil && m.dashboard.renameID != "" {
+		return "Enter save | Esc cancel | Left/Right move cursor"
+	}
+	return "Enter view/switch | E rename session | X stop running | D delete idle session | R refresh | Esc close"
 }
 
 func (m *model) handleDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -191,6 +210,9 @@ func (m *model) handleDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	stroke, text := msg.Keystroke(), strings.ToLower(msg.Key().Text)
+	if state.renameID != "" {
+		return m.handleDashboardRenameKey(msg)
+	}
 	if state.pendingDelete != "" {
 		if text == "y" || stroke == "enter" {
 			id, dir := state.pendingDelete, state.dir
@@ -237,7 +259,75 @@ func (m *model) handleDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		} else {
 			state.pendingDelete = row.id
 		}
+	case (text == "e" || stroke == "ctrl+r") && len(state.rows) > 0:
+		row := state.rows[state.selected]
+		if row.kind != dashboardSession && row.kind != dashboardStoredSession {
+			state.err = "Only sessions can be renamed"
+		} else {
+			state.renameID, state.renameKind = row.id, row.kind
+			state.renameInput = []rune(row.title)
+			state.renameCursor = len(state.renameInput)
+			state.err = ""
+			m.status = "rename session"
+		}
 	}
+	return m, nil
+}
+
+func (m *model) handleDashboardRenameKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	state := m.dashboard
+	key := msg.Key()
+	if key.Code == tea.KeyEsc {
+		state.renameID, state.renameInput, state.renameCursor = "", nil, 0
+		m.status = "agent dashboard"
+		return m, nil
+	}
+	if key.Code == tea.KeyEnter {
+		title := strings.TrimSpace(string(state.renameInput))
+		if title == "" {
+			state.err = "Session title must not be blank"
+			return m, nil
+		}
+		id, kind, dir := state.renameID, state.renameKind, state.dir
+		state.renameID, state.renameInput, state.renameCursor, state.busy = "", nil, 0, true
+		return m, func() tea.Msg {
+			var err error
+			if kind == dashboardSession {
+				err = m.runner.RenameSession(title)
+			} else {
+				err = session.Rename(dir, id, title)
+			}
+			return dashboardDoneEvent{action: "rename", id: id, text: title, err: err}
+		}
+	}
+	switch key.Code {
+	case tea.KeyBackspace:
+		if state.renameCursor > 0 {
+			state.renameInput = append(state.renameInput[:state.renameCursor-1], state.renameInput[state.renameCursor:]...)
+			state.renameCursor--
+		}
+	case tea.KeyDelete:
+		if state.renameCursor < len(state.renameInput) {
+			state.renameInput = append(state.renameInput[:state.renameCursor], state.renameInput[state.renameCursor+1:]...)
+		}
+	case tea.KeyLeft:
+		state.renameCursor = max(0, state.renameCursor-1)
+	case tea.KeyRight:
+		state.renameCursor = min(len(state.renameInput), state.renameCursor+1)
+	case tea.KeyHome:
+		state.renameCursor = 0
+	case tea.KeyEnd:
+		state.renameCursor = len(state.renameInput)
+	default:
+		if key.Text != "" && key.Mod == 0 && len(state.renameInput) < 100 {
+			chars := []rune(key.Text)
+			chars = slices.DeleteFunc(chars, unicode.IsControl)
+			chars = chars[:min(len(chars), 100-len(state.renameInput))]
+			state.renameInput = slices.Insert(state.renameInput, state.renameCursor, chars...)
+			state.renameCursor += len(chars)
+		}
+	}
+	state.err = ""
 	return m, nil
 }
 

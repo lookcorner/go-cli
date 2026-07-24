@@ -1399,12 +1399,26 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				m.status = "subagent details"
 			} else {
 				fallback := "task stopped"
+				statusText := msg.text
 				if msg.action == "delete" {
 					m.dashboard.sessions = removeSession(m.dashboard.sessions, msg.id)
 					fallback = "session deleted"
+				} else if msg.action == "rename" {
+					if msg.id == m.runner.SessionID {
+						m.dashboard.currentTitle = msg.text
+					} else {
+						for i := range m.dashboard.sessions {
+							if m.dashboard.sessions[i].SessionID == msg.id {
+								m.dashboard.sessions[i].Title = msg.text
+								break
+							}
+						}
+					}
+					fallback = "session renamed"
+					statusText = ""
 				}
 				m.refreshDashboard()
-				m.status = dashboardFirst(msg.text, fallback)
+				m.status = dashboardFirst(statusText, fallback)
 			}
 		}
 	case dashboardLoadedEvent:
