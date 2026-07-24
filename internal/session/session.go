@@ -314,6 +314,7 @@ type Info struct {
 	ReasoningEffort string    `json:"reasoningEffort,omitempty"`
 	SandboxProfile  string    `json:"sandboxProfile,omitempty"`
 	Title           string    `json:"title,omitempty"`
+	CreatedAt       time.Time `json:"createdAt"`
 	UpdatedAt       time.Time `json:"updatedAt"`
 }
 
@@ -374,11 +375,15 @@ func readInfo(path, id string) (Info, error) {
 	scanner.Buffer(make([]byte, 64<<10), 8<<20)
 	for scanner.Scan() {
 		var event struct {
+			Time time.Time       `json:"time"`
 			Kind string          `json:"kind"`
 			Data json.RawMessage `json:"data"`
 		}
 		if json.Unmarshal(scanner.Bytes(), &event) != nil {
 			continue
+		}
+		if info.CreatedAt.IsZero() && !event.Time.IsZero() {
+			info.CreatedAt = event.Time
 		}
 		switch event.Kind {
 		case "session_metadata":
@@ -433,6 +438,9 @@ func readInfo(path, id string) (Info, error) {
 				info.Title = strings.TrimSpace(data.Title)
 			}
 		}
+	}
+	if info.CreatedAt.IsZero() && stat != nil {
+		info.CreatedAt = stat.ModTime().UTC()
 	}
 	return info, scanner.Err()
 }

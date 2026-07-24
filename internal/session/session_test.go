@@ -333,7 +333,7 @@ func TestNamedSessionMetadataAndList(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(items) != 1 || items[0].SessionID != "acp-session-1" || items[0].Title != "Implement the persistent session support" || items[0].HeadCommit != "abc123" || items[0].HeadBranch != "main" {
+	if len(items) != 1 || items[0].SessionID != "acp-session-1" || items[0].Title != "Implement the persistent session support" || items[0].HeadCommit != "abc123" || items[0].HeadBranch != "main" || items[0].CreatedAt.IsZero() || items[0].CreatedAt.After(items[0].UpdatedAt) {
 		t.Fatalf("unexpected session list: %#v", items)
 	}
 	path, err := PathForID(dir, "acp-session-1")

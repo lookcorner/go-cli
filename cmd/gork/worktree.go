@@ -39,7 +39,7 @@ func runWorktreeCommand(ctx context.Context, manager *worktrees.Manager, args []
 		}
 		record, ok := manager.Show(args[1])
 		if !ok {
-			return fmt.Errorf("worktree not found: %s", cleanWorktreeText(args[1]))
+			return fmt.Errorf("worktree not found: %s", cleanCLIText(args[1]))
 		}
 		printWorktree(stdout, record)
 		return nil
@@ -51,7 +51,7 @@ func runWorktreeCommand(ctx context.Context, manager *worktrees.Manager, args []
 		return runWorktreeDB(ctx, manager, args[1:], stdout)
 	default:
 		worktreeUsage(stderr)
-		return fmt.Errorf("unknown worktree command %q", cleanWorktreeText(args[0]))
+		return fmt.Errorf("unknown worktree command %q", cleanCLIText(args[0]))
 	}
 }
 
@@ -89,7 +89,7 @@ func runWorktreeList(manager *worktrees.Manager, args []string, stdout, stderr i
 		return err
 	}
 	if flags.NArg() != 0 {
-		return fmt.Errorf("unexpected worktree list argument %q", cleanWorktreeText(flags.Arg(0)))
+		return fmt.Errorf("unexpected worktree list argument %q", cleanCLIText(flags.Arg(0)))
 	}
 	records := manager.List(repo, types, all)
 	if asJSON {
@@ -119,7 +119,7 @@ func runWorktreeRemove(ctx context.Context, manager *worktrees.Manager, args []s
 			dryRun = true
 		default:
 			if strings.HasPrefix(arg, "-") {
-				return fmt.Errorf("unknown worktree rm option %q", cleanWorktreeText(arg))
+				return fmt.Errorf("unknown worktree rm option %q", cleanCLIText(arg))
 			}
 			ids = append(ids, arg)
 		}
@@ -130,10 +130,10 @@ func runWorktreeRemove(ctx context.Context, manager *worktrees.Manager, args []s
 	for _, id := range ids {
 		removed, path, err := manager.Remove(ctx, worktrees.RemoveRequest{IDOrPath: id, Force: force, DryRun: dryRun})
 		if err != nil {
-			fmt.Fprintf(stderr, "  error removing %s: %s\n", cleanWorktreeText(id), cleanWorktreeText(err.Error()))
+			fmt.Fprintf(stderr, "  error removing %s: %s\n", cleanCLIText(id), cleanCLIText(err.Error()))
 			continue
 		}
-		path = cleanWorktreeText(path)
+		path = cleanCLIText(path)
 		if dryRun {
 			fmt.Fprintf(stdout, "  would remove: %s\n", path)
 		} else if removed {
@@ -164,7 +164,7 @@ func runWorktreeGC(ctx context.Context, manager *worktrees.Manager, args []strin
 			maxAgeText = strings.TrimPrefix(arg, "--max-age=")
 			maxAgeSet = true
 		default:
-			return fmt.Errorf("unknown worktree gc option %q", cleanWorktreeText(arg))
+			return fmt.Errorf("unknown worktree gc option %q", cleanCLIText(arg))
 		}
 	}
 	var maxAge *time.Duration
@@ -231,7 +231,7 @@ func runWorktreeDB(ctx context.Context, manager *worktrees.Manager, args []strin
 		fmt.Fprintf(stdout, "  Registered:      %d\n", report.Registered)
 		fmt.Fprintf(stdout, "  Already tracked: %d\n", report.AlreadyTracked)
 	default:
-		return fmt.Errorf("unknown worktree db command %q", cleanWorktreeText(args[0]))
+		return fmt.Errorf("unknown worktree db command %q", cleanCLIText(args[0]))
 	}
 	return nil
 }
@@ -255,11 +255,11 @@ func printWorktreeTable(output io.Writer, records []worktrees.Record) {
 			branch = "(detached)"
 		}
 		fmt.Fprintf(output, "  %-*s %-8s %-6s %-*s %-20s %-10s %s\n",
-			idWidth, cleanWorktreeText(record.ID),
-			truncateWorktreeText(cleanWorktreeText(record.Kind), 8),
-			truncateWorktreeText(cleanWorktreeText(record.RepoName), 6),
-			labelWidth, truncateWorktreeText(cleanWorktreeText(record.Label), labelWidth),
-			truncateWorktreeText(cleanWorktreeText(branch), 20),
+			idWidth, cleanCLIText(record.ID),
+			truncateCLIText(cleanCLIText(record.Kind), 8),
+			truncateCLIText(cleanCLIText(record.RepoName), 6),
+			labelWidth, truncateCLIText(cleanCLIText(record.Label), labelWidth),
+			truncateCLIText(cleanCLIText(branch), 20),
 			formatWorktreeAge(record.CreatedAt),
 			abbreviateWorktreePath(record.Path),
 		)
@@ -271,22 +271,22 @@ func printWorktreeTable(output io.Writer, records []worktrees.Record) {
 	sort.Strings(kinds)
 	parts := make([]string, len(kinds))
 	for index, kind := range kinds {
-		parts[index] = fmt.Sprintf("%d %s", counts[kind], cleanWorktreeText(kind))
+		parts[index] = fmt.Sprintf("%d %s", counts[kind], cleanCLIText(kind))
 	}
 	fmt.Fprintf(output, "  %d worktrees (%s)\n", len(records), strings.Join(parts, ", "))
 }
 
 func printWorktree(output io.Writer, record worktrees.Record) {
-	fmt.Fprintf(output, "  Path:           %s\n", cleanWorktreeText(record.Path))
-	fmt.Fprintf(output, "  ID:             %s\n", cleanWorktreeText(record.ID))
-	fmt.Fprintf(output, "  Type:           %s\n", cleanWorktreeText(record.Kind))
-	fmt.Fprintf(output, "  Source Repo:    %s\n", cleanWorktreeText(record.SourceRepo))
-	fmt.Fprintf(output, "  Creation Mode:  %s\n", cleanWorktreeText(record.CreationMode))
+	fmt.Fprintf(output, "  Path:           %s\n", cleanCLIText(record.Path))
+	fmt.Fprintf(output, "  ID:             %s\n", cleanCLIText(record.ID))
+	fmt.Fprintf(output, "  Type:           %s\n", cleanCLIText(record.Kind))
+	fmt.Fprintf(output, "  Source Repo:    %s\n", cleanCLIText(record.SourceRepo))
+	fmt.Fprintf(output, "  Creation Mode:  %s\n", cleanCLIText(record.CreationMode))
 	if record.GitRef != "" {
-		fmt.Fprintf(output, "  Git Ref:        %s\n", cleanWorktreeText(record.GitRef))
+		fmt.Fprintf(output, "  Git Ref:        %s\n", cleanCLIText(record.GitRef))
 	}
 	if record.HeadCommit != "" {
-		commit := []rune(cleanWorktreeText(record.HeadCommit))
+		commit := []rune(cleanCLIText(record.HeadCommit))
 		if len(commit) > 12 {
 			commit = commit[:12]
 		}
@@ -295,14 +295,14 @@ func printWorktree(output io.Writer, record worktrees.Record) {
 	fmt.Fprintf(output, "  Created:        %s\n", record.CreatedAt.UTC().Format("2006-01-02 15:04:05 UTC"))
 	fmt.Fprintf(output, "  Last Accessed:  %s\n", record.LastAccessedAt.UTC().Format("2006-01-02 15:04:05 UTC"))
 	if record.SessionID != "" {
-		fmt.Fprintf(output, "  Session ID:     %s\n", cleanWorktreeText(record.SessionID))
+		fmt.Fprintf(output, "  Session ID:     %s\n", cleanCLIText(record.SessionID))
 	}
 	if record.CreatorPID != 0 {
 		fmt.Fprintf(output, "  Creator PID:    %d\n", record.CreatorPID)
 	}
-	fmt.Fprintf(output, "  Status:         %s\n", cleanWorktreeText(record.Status))
+	fmt.Fprintf(output, "  Status:         %s\n", cleanCLIText(record.Status))
 	if record.Label != "" {
-		fmt.Fprintf(output, "  Label:          %s\n", cleanWorktreeText(record.Label))
+		fmt.Fprintf(output, "  Label:          %s\n", cleanCLIText(record.Label))
 	}
 	if size, err := worktreeDirSize(record.Path); err == nil {
 		fmt.Fprintf(output, "  Disk Usage:     %s\n", formatWorktreeBytes(size))
@@ -356,7 +356,7 @@ func formatWorktreeBytes(bytes uint64) string {
 	return fmt.Sprintf("%.1f TB", value)
 }
 
-func truncateWorktreeText(value string, width int) string {
+func truncateCLIText(value string, width int) string {
 	runes := []rune(value)
 	if len(runes) <= width {
 		return value
@@ -368,7 +368,7 @@ func truncateWorktreeText(value string, width int) string {
 }
 
 func abbreviateWorktreePath(path string) string {
-	path = cleanWorktreeText(path)
+	path = cleanCLIText(path)
 	home, err := os.UserHomeDir()
 	if err == nil && (path == home || strings.HasPrefix(path, home+string(filepath.Separator))) {
 		return "~" + strings.TrimPrefix(path, home)
@@ -376,9 +376,11 @@ func abbreviateWorktreePath(path string) string {
 	return path
 }
 
-func cleanWorktreeText(value string) string {
+func cleanCLIText(value string) string {
 	return strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
+		if unicode.IsControl(r) || r >= '\u200b' && r <= '\u200f' ||
+			r >= '\u202a' && r <= '\u202e' || r >= '\u2066' && r <= '\u2069' ||
+			r == '\ufeff' {
 			return -1
 		}
 		return r

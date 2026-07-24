@@ -576,6 +576,10 @@ workspace without a model turn; selecting the active session is a no-op. Search
 matches session titles and conversation content. `d` in Vim navigation mode or
 Ctrl-D while searching arms deletion, which requires `y` confirmation and cannot
 delete the active session.
+Outside the TUI, `gork sessions list`, `search <query>`, and
+`delete <session-id>` provide the reference local session-management commands.
+List and search are scoped to the current workspace and accept `-n`/`--limit`;
+delete resolves an exact validated session ID.
 `/fork [--worktree|--no-worktree] [directive]` copies the completed conversation
 into a child session without a model turn, then restarts the TUI in that child.
 The optional directive becomes the child's first prompt after restart. Without a

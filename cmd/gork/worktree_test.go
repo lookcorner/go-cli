@@ -121,7 +121,7 @@ func TestWorktreeCLIRejectsInvalidArgumentsAndSanitizesOutput(t *testing.T) {
 			t.Fatalf("args=%v unexpectedly succeeded", args)
 		}
 	}
-	if got := cleanWorktreeText("safe\x1b[31m\nnext"); got != "safe[31mnext" {
+	if got := cleanCLIText("safe\x1b[31m\nnext\u202e"); got != "safe[31mnext" {
 		t.Fatalf("sanitized=%q", got)
 	}
 	if duration, err := parseWorktreeAge("1.5d"); err != nil || duration != 36*time.Hour {
