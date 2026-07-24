@@ -1744,7 +1744,7 @@ func runSetup(args []string, stdout, stderr io.Writer) error {
 
 func runPlugin(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("plugin command is required: list, install, update, uninstall, enable, disable, details, validate, or marketplace")
+		return errors.New("plugin command is required: list, install, update, uninstall, enable, disable, details, validate, tag, or marketplace")
 	}
 	switch args[0] {
 	case "list":
@@ -1970,6 +1970,27 @@ func runPlugin(args []string, stdout, stderr io.Writer) error {
 		}
 		printPluginComponents(stdout, result.Components)
 		return nil
+	case "tag":
+		path, push, force, dryRun, err := parsePluginTagArgs(args[1:])
+		if err != nil {
+			return err
+		}
+		result, err := plugin.Tag(path, push, force, dryRun)
+		if err != nil {
+			return err
+		}
+		if result.DryRun {
+			fmt.Fprintf(stdout, "Would create tag: %s\n", result.Tag)
+			if result.Push {
+				fmt.Fprintln(stdout, "Would push tag to remote.")
+			}
+			return nil
+		}
+		fmt.Fprintf(stdout, "Created tag: %s\n", result.Tag)
+		if result.Pushed {
+			fmt.Fprintf(stdout, "Pushed tag %s to origin.\n", result.Tag)
+		}
+		return nil
 	case "marketplace":
 		return runMarketplace(args[1:], stdout, stderr)
 	default:
@@ -1992,6 +2013,27 @@ func parsePluginInstallArgs(args []string) (string, bool, error) {
 		}
 	}
 	return source, trust, nil
+}
+
+func parsePluginTagArgs(args []string) (path string, push, force, dryRun bool, err error) {
+	path = "."
+	pathSet := false
+	for _, arg := range args {
+		switch arg {
+		case "--push":
+			push = true
+		case "--force", "-f":
+			force = true
+		case "--dry-run":
+			dryRun = true
+		default:
+			if strings.HasPrefix(arg, "-") || pathSet {
+				return "", false, false, false, errors.New("usage: gork plugin tag [--push] [--force|-f] [--dry-run] [path]")
+			}
+			path, pathSet = arg, true
+		}
+	}
+	return path, push, force, dryRun, nil
 }
 
 type pluginInstalledJSON struct {

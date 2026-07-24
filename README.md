@@ -1702,6 +1702,7 @@ gork plugin enable plugin-name
 gork plugin disable plugin-name
 gork plugin details plugin-name
 gork plugin validate [path]
+gork plugin tag [--push] [--force|-f] [--dry-run] [path]
 gork plugin marketplace list [--json]
 gork plugin marketplace add <git-url-or-local-path>
 gork plugin marketplace remove <git-url-or-local-path>

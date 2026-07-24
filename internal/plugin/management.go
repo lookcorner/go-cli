@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 type ComponentSummary struct {
@@ -50,6 +52,79 @@ type ListEntry struct {
 	Path        string
 	Source      string
 	Marketplace string
+}
+
+type TagResult struct {
+	Tag     string
+	DryRun  bool
+	Push    bool
+	Created bool
+	Pushed  bool
+}
+
+func Tag(path string, push, force, dryRun bool) (TagResult, error) {
+	info, err := os.Stat(path)
+	if err != nil || !info.IsDir() {
+		return TagResult{}, fmt.Errorf("not a directory: %s", path)
+	}
+	root, err := filepath.Abs(path)
+	if err != nil {
+		return TagResult{}, err
+	}
+	value, found, err := loadManifestStrict(root)
+	if err != nil {
+		return TagResult{}, err
+	}
+	if !found {
+		return TagResult{}, fmt.Errorf("no plugin.json found in %s", path)
+	}
+	version := strings.TrimSpace(value.Version)
+	if version == "" {
+		return TagResult{}, errors.New("no `version` field in plugin.json; set a version to use `gork plugin tag`")
+	}
+	tag := "v" + strings.TrimPrefix(strings.TrimPrefix(version, "v"), "V")
+	result := TagResult{Tag: tag, DryRun: dryRun, Push: push}
+	if !force {
+		status, err := runGitCommand(root, "status", "--porcelain")
+		if err != nil {
+			return TagResult{}, err
+		}
+		if status != "" {
+			return TagResult{}, errors.New("working tree is dirty; commit changes first, or use --force")
+		}
+	}
+	if dryRun {
+		return result, nil
+	}
+	args := []string{"tag", tag}
+	if force {
+		args = append(args, "--force")
+	}
+	if _, err := runGitCommand(root, args...); err != nil {
+		return TagResult{}, fmt.Errorf("failed to create tag: %w", err)
+	}
+	result.Created = true
+	if push {
+		args = []string{"push", "origin", tag}
+		if force {
+			args = append(args, "--force")
+		}
+		if _, err := runGitCommand(root, args...); err != nil {
+			return result, fmt.Errorf("failed to push tag: %w", err)
+		}
+		result.Pushed = true
+	}
+	return result, nil
+}
+
+func runGitCommand(root string, args ...string) (string, error) {
+	command := exec.Command("git", args...)
+	command.Dir = root
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git %s failed: %s", strings.Join(args, " "), strings.TrimSpace(string(output)))
+	}
+	return strings.TrimSpace(string(output)), nil
 }
 
 func ListInstalled() ([]ListEntry, error) {

@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -103,4 +104,84 @@ func TestListInstalledIsStableAndIncludesProvenance(t *testing.T) {
 		entries[2].RepoKey != "z-repo" || entries[2].Name != "zeta" {
 		t.Fatalf("entries=%#v", entries)
 	}
+}
+
+func TestTagCreatesDryRunsForcesAndPushesVersionTag(t *testing.T) {
+	root := t.TempDir()
+	tagGit(t, root, "init", "-b", "main")
+	tagGit(t, root, "config", "user.email", "test@example.com")
+	tagGit(t, root, "config", "user.name", "Test")
+	mustWrite(t, filepath.Join(root, "plugin.json"), `{"name":"tag-plugin","version":"V1.2.3"}`)
+	tagGit(t, root, "add", "plugin.json")
+	tagGit(t, root, "commit", "-m", "initial")
+
+	result, err := Tag(root, true, false, true)
+	if err != nil || result.Tag != "v1.2.3" || !result.DryRun || !result.Push || result.Created || result.Pushed {
+		t.Fatalf("dry-run result=%#v err=%v", result, err)
+	}
+	if output := tagGitOutput(t, root, "tag", "--list"); output != "" {
+		t.Fatalf("dry-run created tag %q", output)
+	}
+
+	result, err = Tag(root, false, false, false)
+	if err != nil || !result.Created || result.Pushed || tagGitOutput(t, root, "tag", "--list") != "v1.2.3" {
+		t.Fatalf("create result=%#v tags=%q err=%v", result, tagGitOutput(t, root, "tag", "--list"), err)
+	}
+	if _, err := Tag(root, false, false, false); err == nil || !strings.Contains(err.Error(), "failed to create tag") {
+		t.Fatalf("existing tag error=%v", err)
+	}
+
+	mustWrite(t, filepath.Join(root, "dirty.txt"), "dirty")
+	if _, err := Tag(root, false, false, false); err == nil || !strings.Contains(err.Error(), "working tree is dirty") {
+		t.Fatalf("dirty tree error=%v", err)
+	}
+	if result, err = Tag(root, false, true, false); err != nil || !result.Created {
+		t.Fatalf("forced result=%#v err=%v", result, err)
+	}
+
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	tagGit(t, filepath.Dir(remote), "init", "--bare", remote)
+	tagGit(t, root, "remote", "add", "origin", remote)
+	if result, err = Tag(root, true, true, false); err != nil || !result.Pushed {
+		t.Fatalf("push result=%#v err=%v", result, err)
+	}
+	if output := tagGitOutput(t, remote, "show-ref", "--tags"); !strings.Contains(output, "refs/tags/v1.2.3") {
+		t.Fatalf("remote tags=%q", output)
+	}
+}
+
+func TestTagRejectsInvalidPluginDirectories(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing")
+	if _, err := Tag(missing, false, false, false); err == nil || !strings.Contains(err.Error(), "not a directory") {
+		t.Fatalf("missing directory error=%v", err)
+	}
+	root := t.TempDir()
+	tagGit(t, root, "init")
+	if _, err := Tag(root, false, false, false); err == nil || !strings.Contains(err.Error(), "no plugin.json") {
+		t.Fatalf("missing manifest error=%v", err)
+	}
+	mustWrite(t, filepath.Join(root, "plugin.json"), `{"name":"tag-plugin"}`)
+	if _, err := Tag(root, false, false, false); err == nil || !strings.Contains(err.Error(), "version") {
+		t.Fatalf("missing version error=%v", err)
+	}
+}
+
+func tagGit(t *testing.T, root string, args ...string) {
+	t.Helper()
+	command := exec.Command("git", args...)
+	command.Dir = root
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v: %s", args, err, output)
+	}
+}
+
+func tagGitOutput(t *testing.T, root string, args ...string) string {
+	t.Helper()
+	command := exec.Command("git", args...)
+	command.Dir = root
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v: %s", args, err, output)
+	}
+	return strings.TrimSpace(string(output))
 }

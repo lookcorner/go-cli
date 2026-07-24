@@ -2387,6 +2387,27 @@ func TestRunPluginListJSONIncludesAvailableMarketplacePlugins(t *testing.T) {
 	}
 }
 
+func TestRunPluginTagDryRun(t *testing.T) {
+	root := newGitRepo(t)
+	if err := os.WriteFile(filepath.Join(root, "plugin.json"), []byte(`{"name":"tag-plugin","version":"v2.4.0"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, root, "add", "plugin.json")
+	runGitTest(t, root, "commit", "-m", "plugin manifest")
+	var stdout, stderr bytes.Buffer
+	if err := runPlugin([]string{"tag", root, "--dry-run", "--push"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != "Would create tag: v2.4.0\nWould push tag to remote.\n" || stderr.Len() != 0 {
+		t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	command := exec.Command("git", "tag", "--list")
+	command.Dir = root
+	if output, err := command.Output(); err != nil || len(output) != 0 {
+		t.Fatalf("dry-run tags=%q err=%v", output, err)
+	}
+}
+
 func TestApplyMarketplacePlugins(t *testing.T) {
 	settings := plugin.Settings{Enabled: []string{"old", "keep"}, Disabled: []string{"new"}}
 	applyMarketplacePlugins(&settings, "update", marketplace.Outcome{Plugins: []string{"new"}, RemovedPlugins: []string{"old"}})

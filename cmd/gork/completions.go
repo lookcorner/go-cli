@@ -45,7 +45,7 @@ var completionRoot = completionSpec{
 		"plugin": {children: map[string]completionSpec{
 			"details": {}, "disable": {}, "enable": {}, "install": {flags: words("--trust")},
 			"list": {flags: words("--available --json")}, "remove": {flags: words("--confirm --keep-data")},
-			"rm": {flags: words("--confirm --keep-data")}, "update": {},
+			"rm": {flags: words("--confirm --keep-data")}, "tag": {flags: words("--dry-run --force --push -f")}, "update": {},
 			"uninstall": {flags: words("--confirm --keep-data")}, "validate": {},
 			"marketplace": {children: map[string]completionSpec{
 				"add": {}, "list": {flags: []string{"--json"}}, "remove": {}, "update": {},
