@@ -1435,6 +1435,7 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 					m.dashboard.peekKind = dashboardSubagent
 					m.dashboard.peekTitle = "Subagent: " + msg.id
 					m.dashboard.peekContent = msg.text
+					m.scroll = 0
 					m.status = "dashboard details"
 				} else {
 					m.dashboard.err = "Subagent no longer exists"

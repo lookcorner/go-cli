@@ -91,9 +91,44 @@ func TestDashboardPeeksStoredSessionWithoutSwitching(t *testing.T) {
 	if m.resumeSession != nil || m.dashboard.peekID != "stored" || m.dashboard.peekKind != dashboardStoredSession || !strings.Contains(m.dashboard.peekContent, "/stored") {
 		t.Fatalf("resume=%#v state=%#v", m.resumeSession, m.dashboard)
 	}
+	pressDashboardKey(t, m, tea.Key{Code: tea.KeyEnter})
+	if !m.dashboard.attached || !strings.HasPrefix(m.dashboardContent(), "# Stored") || strings.Contains(m.dashboardContent(), "Agent Dashboard") {
+		t.Fatalf("state=%#v content=%q", m.dashboard, m.dashboardContent())
+	}
+	pressDashboardKey(t, m, tea.Key{Code: tea.KeyEsc})
+	if m.dashboard.attached || m.dashboard.peekID != "stored" {
+		t.Fatalf("state=%#v", m.dashboard)
+	}
 	pressDashboardKey(t, m, tea.Key{Code: 'p', Text: "p"})
 	if m.dashboard == nil || m.dashboard.peekID != "" {
 		t.Fatalf("state=%#v", m.dashboard)
+	}
+}
+
+func TestDashboardAttachedDetailScrollsAndReturns(t *testing.T) {
+	m := &model{
+		runner: dashboardFixtureRunner(), width: 40, height: 12,
+		dashboard: &dashboardState{
+			peekID: "session-1", peekKind: dashboardSession, peekTitle: "Current",
+			peekContent: strings.Repeat("detail line\n", 40), attached: true,
+		},
+	}
+	pressDashboardKey(t, m, tea.Key{Code: tea.KeyUp})
+	if m.scroll == 0 || m.scroll > m.maxDashboardScroll() {
+		t.Fatalf("scroll=%d max=%d", m.scroll, m.maxDashboardScroll())
+	}
+	pressDashboardKey(t, m, tea.Key{Code: tea.KeyEnd})
+	if m.scroll != 0 {
+		t.Fatalf("scroll=%d", m.scroll)
+	}
+	pressDashboardKey(t, m, tea.Key{Code: tea.KeyEsc})
+	if m.dashboard.attached || m.dashboard.peekID != "session-1" || m.status != "dashboard details" {
+		t.Fatalf("state=%#v status=%q", m.dashboard, m.status)
+	}
+	m.dashboard.peekID, m.dashboard.peekKind, m.dashboard.attached = "gone", dashboardStoredSession, true
+	m.refreshDashboard()
+	if m.dashboard.peekID != "" || m.dashboard.attached {
+		t.Fatalf("stale attached detail survived refresh: %#v", m.dashboard)
 	}
 }
 

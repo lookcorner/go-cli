@@ -585,7 +585,8 @@ overview of active and stored sessions, subagents, background processes, and
 scheduled tasks. `N` opens a prompt editor that creates and enters a new agent
 session in the current workspace. Enter opens details or switches sessions,
 while `P` peeks any selected row without leaving the dashboard. `Ctrl+T` pins a
-session or subagent, `Shift+Up/Down` changes its manual order, `Ctrl+R` renames
+session or subagent; Enter from a peek opens its full-screen detail, and Esc
+returns to the dashboard. `Shift+Up/Down` changes manual order, `Ctrl+R` renames
 an active or stored session, `X` stops a selected running subagent or process,
 `D` confirms deletion of an idle session, `Ctrl+G` switches between state
 sections and a directory-sorted flat list, `Ctrl+/` filters live by text

@@ -70,6 +70,7 @@ type dashboardState struct {
 	peekKind       dashboardRowKind
 	peekTitle      string
 	peekContent    string
+	attached       bool
 	currentTitle   string
 	err            string
 }
@@ -265,6 +266,7 @@ func (m *model) refreshDashboard() {
 	}) {
 		state.peekID, state.peekTitle, state.peekContent = "", "", ""
 		state.peekKind = 0
+		state.attached = false
 	}
 	if hasSelection {
 		for i, row := range rows {
@@ -280,6 +282,9 @@ func (m *model) dashboardContent() string {
 	state := m.dashboard
 	if state == nil {
 		return ""
+	}
+	if state.attached && state.peekID != "" {
+		return strings.TrimSpace("# " + state.peekTitle + "\n\n" + state.peekContent)
 	}
 	var out strings.Builder
 	out.WriteString("# Agent Dashboard\n\n")
@@ -350,8 +355,11 @@ func (m *model) dashboardHint() string {
 	if m.dashboard != nil && m.dashboard.dispatching {
 		return "Enter create and open | Esc cancel | Left/Right move cursor"
 	}
+	if m.dashboard != nil && m.dashboard.attached {
+		return "Esc return to dashboard | Up/Down scroll"
+	}
 	if m.dashboard != nil && m.dashboard.peekID != "" {
-		return "Esc close details"
+		return "Enter open full screen | Esc close details"
 	}
 	return "N new agent | Enter view/switch | P peek | Ctrl+/ search | Ctrl+G group | Ctrl+T pin | Shift+Up/Down reorder | Ctrl+R rename | X stop/cancel | D delete | R refresh | Esc close"
 }
@@ -371,10 +379,33 @@ func (m *model) handleDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if state.dispatching {
 		return m.handleDashboardDispatchKey(msg)
 	}
+	if state.attached {
+		switch {
+		case stroke == "esc" || text == "q":
+			state.attached = false
+			m.scroll = 0
+			m.status = "dashboard details"
+		case stroke == "up" || stroke == "ctrl+k" || stroke == "pgup":
+			m.scroll = min(m.scroll+max(m.contentHeight()/2, 1), m.maxDashboardScroll())
+		case stroke == "down" || stroke == "ctrl+j" || stroke == "pgdown":
+			m.scroll = max(m.scroll-max(m.contentHeight()/2, 1), 0)
+		case msg.Key().Code == tea.KeyHome:
+			m.scroll = m.maxDashboardScroll()
+		case msg.Key().Code == tea.KeyEnd:
+			m.scroll = 0
+		}
+		return m, nil
+	}
 	if state.peekID != "" {
-		if stroke == "esc" || text == "q" || text == "p" {
+		if stroke == "enter" {
+			state.attached = true
+			m.scroll = 0
+			m.status = "dashboard detail"
+		} else if stroke == "esc" || text == "q" || text == "p" {
 			state.peekID, state.peekTitle, state.peekContent = "", "", ""
 			state.peekKind = 0
+			state.attached = false
+			m.scroll = 0
 			m.status = "agent dashboard"
 		}
 		return m, nil
@@ -1052,8 +1083,13 @@ func (m *model) peekDashboardRow(row dashboardRow) (tea.Model, tea.Cmd) {
 		state.peekContent = fmt.Sprintf("- Schedule: %s\n- Prompt: %s", row.scheduled.HumanSchedule, row.scheduled.Prompt)
 	}
 	state.err = ""
+	m.scroll = 0
 	m.status = "dashboard details"
 	return m, nil
+}
+
+func (m *model) maxDashboardScroll() int {
+	return max(len(renderMarkdownTheme(m.dashboardContent(), max(m.width, 20), false, m.colors()))-m.contentHeight(), 0)
 }
 
 func (m *model) stopDashboardRow(row dashboardRow) (tea.Model, tea.Cmd) {
