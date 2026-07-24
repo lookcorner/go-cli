@@ -43,7 +43,10 @@ var completionRoot = completionSpec{
 		"sessions": {children: map[string]completionSpec{
 			"delete": {}, "list": {flags: words("--limit -n")}, "search": {flags: words("--limit -n")},
 		}},
-		"setup": {flags: words("--config --json")},
+		"share":   {flags: words("--config --session-dir")},
+		"setup":   {flags: words("--config --json")},
+		"version": {flags: []string{"--json"}},
+		"v":       {flags: []string{"--json"}},
 		"worktree": {children: map[string]completionSpec{
 			"db": {children: leaves("path", "rebuild", "stats")},
 			"gc": {flags: words("--dry-run --force --max-age -f")}, "prune": {flags: words("--dry-run --force --max-age -f")},

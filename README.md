@@ -8,6 +8,9 @@ the privacy-oriented community build of the Grok Build coding agent.
 
 Use `gork inspect` for a redacted configuration and component report, or
 `gork inspect --json` for machine-readable output.
+Use `gork version [--json]` for reference-shaped version information and
+`gork share <session-id>` to create a share URL for an authenticated,
+share-enabled local session.
 
 The project is under active compatibility development. The current runtime is
 a usable headless coding agent with a Responses-compatible streaming client,
