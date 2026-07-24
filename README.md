@@ -1142,6 +1142,10 @@ strings such as `7d`, `24h`, `30m`, and `60s`; `dryRun` reports candidates
 without changing disk or registry state, while non-forced collection protects
 worktrees whose creator process is still alive. Database rebuild discovers
 linked and standalone worktrees under the managed worktree directory.
+The same registry is available without starting ACP through
+`gork worktree list|show|rm|gc|db`. `list` supports repository/type filters,
+JSON, and dead records; `rm` and `gc` support dry runs, and `gc` also accepts
+the `prune` alias.
 
 Local session-aware worktree flows are available through
 `x.ai/session/resolve_local_for_worktree_resume`,
