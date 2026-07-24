@@ -559,12 +559,14 @@ type model struct {
 	extensions    *extensionsState
 	agentConfig   *agentConfigState
 
-	dashboard      *dashboardState
-	dashboardPins  map[string]bool
-	persistPins    func([]string) error
-	dashboardOrder []string
-	persistOrder   func([]string) error
-	dashboardEpoch uint64
+	dashboard         *dashboardState
+	dashboardPins     map[string]bool
+	persistPins       func([]string) error
+	dashboardOrder    []string
+	persistOrder      func([]string) error
+	dashboardGrouping string
+	persistGrouping   func(string) error
+	dashboardEpoch    uint64
 
 	debug         debugState
 	lastEmptyEsc  time.Time
@@ -642,6 +644,8 @@ type UIOptions struct {
 	SetDashboardPinned   func([]string) error
 	DashboardReorder     []string
 	SetDashboardReorder  func([]string) error
+	DashboardGrouping    string
+	SetDashboardGrouping func(string) error
 }
 
 type transcriptMessage struct {
@@ -765,6 +769,8 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		persistPins:        options.SetDashboardPinned,
 		dashboardOrder:     append([]string(nil), options.DashboardReorder...),
 		persistOrder:       options.SetDashboardReorder,
+		dashboardGrouping:  dashboardGrouping(options.DashboardGrouping),
+		persistGrouping:    options.SetDashboardGrouping,
 		debug:              newDebugState(),
 	}
 	for _, id := range options.DashboardPinned {

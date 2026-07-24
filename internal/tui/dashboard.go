@@ -33,6 +33,7 @@ type dashboardRow struct {
 	status    string
 	title     string
 	detail    string
+	cwd       string
 	process   tools.ProcessSnapshot
 	scheduled tools.ScheduledTaskCreated
 	session   session.Info
@@ -182,6 +183,7 @@ func (m *model) refreshDashboard() {
 	if m.dashboard == nil || m.runner == nil {
 		return
 	}
+	m.dashboardGrouping = dashboardGrouping(m.dashboardGrouping)
 	state := m.dashboard
 	if !state.loading {
 		m.cleanDashboardRefs()
@@ -192,33 +194,16 @@ func (m *model) refreshDashboard() {
 		selected = state.rows[state.selected]
 	}
 	state.err = ""
-	rows := []dashboardRow{{kind: dashboardSession, id: m.runner.SessionID, pinned: m.dashboardPins[m.runner.SessionID], status: "active", title: dashboardFirst(state.currentTitle, "Current session"), detail: m.modelName + " · " + m.workspace}}
+	rows := []dashboardRow{{kind: dashboardSession, id: m.runner.SessionID, pinned: m.dashboardPins[m.runner.SessionID], status: "active", title: dashboardFirst(state.currentTitle, "Current session"), detail: m.modelName + " · " + m.workspace, cwd: m.workspace}}
 	for _, item := range state.sessions {
 		if item.SessionID == m.runner.SessionID {
 			continue
 		}
 		title := dashboardFirst(item.Title, item.SessionID)
-		detail := dashboardFirst(item.ModelID, "unknown model") + " · " + dashboardFirst(item.DisplayCWD, item.CWD)
-		rows = append(rows, dashboardRow{kind: dashboardStoredSession, id: item.SessionID, pinned: m.dashboardPins[item.SessionID], status: "idle", title: title, detail: detail, session: item})
+		cwd := dashboardFirst(item.DisplayCWD, item.CWD)
+		detail := dashboardFirst(item.ModelID, "unknown model") + " · " + cwd
+		rows = append(rows, dashboardRow{kind: dashboardStoredSession, id: item.SessionID, pinned: m.dashboardPins[item.SessionID], status: "idle", title: title, detail: detail, cwd: cwd, session: item})
 	}
-	order := make(map[string]int, len(m.dashboardOrder))
-	for i, id := range m.dashboardOrder {
-		order[id] = i
-	}
-	sort.SliceStable(rows, func(i, j int) bool {
-		if rows[i].pinned != rows[j].pinned {
-			return rows[i].pinned
-		}
-		if rows[i].status != rows[j].status {
-			return rows[i].status == "active"
-		}
-		iPos, iOrdered := order[rows[i].id]
-		jPos, jOrdered := order[rows[j].id]
-		if iOrdered != jOrdered {
-			return iOrdered
-		}
-		return iOrdered && iPos < jPos
-	})
 	snapshot := m.runner.TaskSnapshot()
 	subagents := slices.Clone(snapshot.Subagents)
 	sort.Slice(subagents, func(i, j int) bool {
@@ -228,7 +213,7 @@ func (m *model) refreshDashboard() {
 		return subagents[i].StartedAtMS > subagents[j].StartedAtMS
 	})
 	for _, item := range subagents {
-		rows = append(rows, dashboardRow{kind: dashboardSubagent, id: item.ID, status: dashboardFirst(item.Status, "done"), title: dashboardFirst(item.Description, item.Type), detail: item.Type})
+		rows = append(rows, dashboardRow{kind: dashboardSubagent, id: item.ID, status: dashboardFirst(item.Status, "done"), title: dashboardFirst(item.Description, item.Type), detail: item.Type, cwd: dashboardFirst(item.WorktreeDir, m.workspace)})
 	}
 	processes := slices.Clone(snapshot.Processes)
 	sort.Slice(processes, func(i, j int) bool {
@@ -250,11 +235,12 @@ func (m *model) refreshDashboard() {
 				status = "failed"
 			}
 		}
-		rows = append(rows, dashboardRow{kind: dashboardProcess, id: item.TaskID, status: status, title: dashboardFirst(firstNonemptyLine(item.Description), firstNonemptyLine(item.Command)), detail: dashboardFirst(item.Kind, "process"), process: item})
+		rows = append(rows, dashboardRow{kind: dashboardProcess, id: item.TaskID, status: status, title: dashboardFirst(firstNonemptyLine(item.Description), firstNonemptyLine(item.Command)), detail: dashboardFirst(item.Kind, "process"), cwd: dashboardFirst(item.CWD, m.workspace), process: item})
 	}
 	for _, item := range snapshot.Scheduled {
-		rows = append(rows, dashboardRow{kind: dashboardScheduled, id: item.TaskID, status: "scheduled", title: firstNonemptyLine(item.Prompt), detail: item.HumanSchedule, scheduled: item})
+		rows = append(rows, dashboardRow{kind: dashboardScheduled, id: item.TaskID, status: "scheduled", title: firstNonemptyLine(item.Prompt), detail: item.HumanSchedule, cwd: m.workspace, scheduled: item})
 	}
+	m.sortDashboardRows(rows)
 	state.rows = rows
 	state.selected = min(state.selected, max(len(rows)-1, 0))
 	if hasSelection {
@@ -274,7 +260,18 @@ func (m *model) dashboardContent() string {
 	}
 	var out strings.Builder
 	out.WriteString("# Agent Dashboard\n\n")
+	lastGroup := ""
 	for index, row := range state.rows {
+		if m.dashboardGrouping == "state" {
+			group := dashboardRowGroup(row)
+			if row.pinned {
+				group = "pinned"
+			}
+			if group != lastGroup {
+				fmt.Fprintf(&out, "  %s (%d)\n", dashboardGroupLabel(group), dashboardGroupCount(state.rows[index:], group))
+				lastGroup = group
+			}
+		}
 		cursor := "  "
 		if index == state.selected {
 			cursor = "> "
@@ -308,7 +305,7 @@ func (m *model) dashboardHint() string {
 	if m.dashboard != nil && m.dashboard.renameID != "" {
 		return "Enter save | Esc cancel | Left/Right move cursor"
 	}
-	return "Enter view/switch | Ctrl+T pin | Shift+Up/Down reorder | Ctrl+R rename | X stop | D delete | R refresh | Esc close"
+	return "Enter view/switch | Ctrl+G group | Ctrl+T pin | Shift+Up/Down reorder | Ctrl+R rename | X stop | D delete | R refresh | Esc close"
 }
 
 func (m *model) handleDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -341,6 +338,8 @@ func (m *model) handleDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	switch {
+	case stroke == "ctrl+g":
+		m.toggleDashboardGrouping()
 	case (stroke == "shift+up" || stroke == "shift+down") && len(state.rows) > 0:
 		m.reorderDashboard(state.rows[state.selected], stroke == "shift+up")
 	case stroke == "up" || text == "k":
@@ -385,6 +384,115 @@ func (m *model) handleDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+func (m *model) sortDashboardRows(rows []dashboardRow) {
+	order := make(map[string]int, len(m.dashboardOrder))
+	for i, id := range m.dashboardOrder {
+		order[id] = i
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		left, right := rows[i], rows[j]
+		if left.pinned != right.pinned {
+			return left.pinned
+		}
+		if m.dashboardGrouping == "directory" {
+			if left.cwd != right.cwd {
+				return left.cwd < right.cwd
+			}
+		} else if leftGroup, rightGroup := dashboardRowGroup(left), dashboardRowGroup(right); leftGroup != rightGroup {
+			return dashboardGroupRank(leftGroup) < dashboardGroupRank(rightGroup)
+		}
+		leftPos, leftOrdered := order[left.id]
+		rightPos, rightOrdered := order[right.id]
+		if leftOrdered != rightOrdered {
+			return leftOrdered
+		}
+		return leftOrdered && leftPos < rightPos
+	})
+}
+
+func dashboardGrouping(value string) string {
+	if strings.EqualFold(strings.TrimSpace(value), "directory") || strings.EqualFold(strings.TrimSpace(value), "dir") {
+		return "directory"
+	}
+	return "state"
+}
+
+func dashboardRowGroup(row dashboardRow) string {
+	switch row.status {
+	case "active", "running":
+		return "working"
+	case "failed", "killed", "cancelled", "error":
+		return "failed"
+	case "done", "completed":
+		return "done"
+	default:
+		return "idle"
+	}
+}
+
+func dashboardGroupRank(group string) int {
+	switch group {
+	case "working":
+		return 0
+	case "idle":
+		return 1
+	case "done":
+		return 2
+	default:
+		return 3
+	}
+}
+
+func dashboardGroupLabel(group string) string {
+	switch group {
+	case "pinned":
+		return "Pinned"
+	case "working":
+		return "Working"
+	case "idle":
+		return "Idle"
+	case "done":
+		return "Done"
+	default:
+		return "Failed"
+	}
+}
+
+func dashboardGroupCount(rows []dashboardRow, group string) int {
+	count := 0
+	for _, row := range rows {
+		current := dashboardRowGroup(row)
+		if row.pinned {
+			current = "pinned"
+		}
+		if current != group {
+			break
+		}
+		count++
+	}
+	return count
+}
+
+func (m *model) toggleDashboardGrouping() {
+	state := m.dashboard
+	previous := m.dashboardGrouping
+	if previous == "state" {
+		m.dashboardGrouping = "directory"
+	} else {
+		m.dashboardGrouping = "state"
+	}
+	if m.persistGrouping != nil {
+		if err := m.persistGrouping(m.dashboardGrouping); err != nil {
+			m.dashboardGrouping = previous
+			state.err = err.Error()
+			m.status = "dashboard grouping failed"
+			return
+		}
+	}
+	m.refreshDashboard()
+	m.status = "dashboard grouped by " + m.dashboardGrouping
 }
 
 func (m *model) cleanDashboardRefs() {

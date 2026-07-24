@@ -46,7 +46,7 @@ func TestDashboardViewsAndStopsSubagent(t *testing.T) {
 
 	m := &model{runner: runner, workspace: "/work", modelName: "grok"}
 	m.openDashboard()
-	m.dashboard.selected = 1
+	m.dashboard.selected = dashboardRowIndex(t, m.dashboard.rows, dashboardSubagent, "sub-1")
 	updated, cmd := m.handleDashboardKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)
 	if cmd == nil || !m.dashboard.busy {
@@ -60,7 +60,7 @@ func TestDashboardViewsAndStopsSubagent(t *testing.T) {
 
 	m.viewer = nil
 	m.openDashboard()
-	m.dashboard.selected = 1
+	m.dashboard.selected = dashboardRowIndex(t, m.dashboard.rows, dashboardSubagent, "sub-1")
 	updated, cmd = m.handleDashboardKey(tea.KeyPressMsg(tea.Key{Code: 'x', Text: "x"}))
 	m = updated.(*model)
 	if cmd == nil || !m.dashboard.busy {
@@ -68,7 +68,7 @@ func TestDashboardViewsAndStopsSubagent(t *testing.T) {
 	}
 	updated, _ = m.Update(cmd())
 	m = updated.(*model)
-	if running || m.dashboard == nil || m.dashboard.rows[1].status != "completed" || m.status != "subagent stopped" {
+	if running || m.dashboard == nil || dashboardRowStatus(m.dashboard.rows, "sub-1") != "completed" || m.status != "subagent stopped" {
 		t.Fatalf("running=%v dashboard=%#v status=%q", running, m.dashboard, m.status)
 	}
 }
@@ -153,6 +153,17 @@ func dashboardRowStatus(rows []dashboardRow, id string) string {
 	return ""
 }
 
+func dashboardRowIndex(t *testing.T, rows []dashboardRow, kind dashboardRowKind, id string) int {
+	t.Helper()
+	for index, row := range rows {
+		if row.kind == kind && row.id == id {
+			return index
+		}
+	}
+	t.Fatalf("dashboard row kind=%d id=%q not found in %#v", kind, id, rows)
+	return -1
+}
+
 func TestDashboardLoadsSwitchesAndDeletesStoredSessions(t *testing.T) {
 	dir := t.TempDir()
 	current, err := session.NewLoggerWithID(dir, "current")
@@ -188,10 +199,11 @@ func TestDashboardLoadsSwitchesAndDeletesStoredSessions(t *testing.T) {
 	}
 	updated, live := m.Update(load())
 	m = updated.(*model)
-	if live == nil || !m.dashboard.ticking || m.dashboard.loading || len(m.dashboard.rows) != 4 || m.dashboard.rows[1].kind != dashboardStoredSession || m.dashboard.rows[1].title != "Other work" {
+	otherIndex := dashboardRowIndex(t, m.dashboard.rows, dashboardStoredSession, "other")
+	if live == nil || !m.dashboard.ticking || m.dashboard.loading || len(m.dashboard.rows) != 4 || m.dashboard.rows[otherIndex].title != "Other work" {
 		t.Fatalf("rows=%#v", m.dashboard.rows)
 	}
-	m.dashboard.selected = 1
+	m.dashboard.selected = otherIndex
 	updated, quit := m.handleDashboardKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)
 	if quit == nil || m.resumeSession == nil || m.resumeSession.Path != other.Path() || m.resumeSession.Workspace != "/other" {
@@ -202,7 +214,7 @@ func TestDashboardLoadsSwitchesAndDeletesStoredSessions(t *testing.T) {
 	load = m.openDashboard()
 	updated, _ = m.Update(load())
 	m = updated.(*model)
-	m.dashboard.selected = 1
+	m.dashboard.selected = dashboardRowIndex(t, m.dashboard.rows, dashboardStoredSession, "other")
 	updated, _ = m.handleDashboardKey(tea.KeyPressMsg(tea.Key{Code: 'd', Text: "d"}))
 	m = updated.(*model)
 	if m.dashboard.pendingDelete != "other" {
@@ -288,13 +300,14 @@ func TestDashboardRenamesStoredSessionAndCancelsEditing(t *testing.T) {
 	load := m.openDashboard()
 	updated, _ := m.Update(load())
 	m = updated.(*model)
-	m.dashboard.selected = 1
+	m.dashboard.selected = dashboardRowIndex(t, m.dashboard.rows, dashboardStoredSession, "other")
 
 	pressDashboardKey(t, m, tea.Key{Code: 'e', Text: "e"})
 	m.dashboard.renameInput, m.dashboard.renameCursor = []rune("After"), 5
 	pressDashboardKey(t, m, tea.Key{Code: tea.KeyEsc})
-	if m.dashboard.renameID != "" || m.dashboard.rows[1].title != "Before" {
-		t.Fatalf("rename=%q row=%#v", m.dashboard.renameID, m.dashboard.rows[1])
+	otherIndex := dashboardRowIndex(t, m.dashboard.rows, dashboardStoredSession, "other")
+	if m.dashboard.renameID != "" || m.dashboard.rows[otherIndex].title != "Before" {
+		t.Fatalf("rename=%q row=%#v", m.dashboard.renameID, m.dashboard.rows[otherIndex])
 	}
 
 	pressDashboardKey(t, m, tea.Key{Code: 'e', Text: "e"})
@@ -304,7 +317,8 @@ func TestDashboardRenamesStoredSessionAndCancelsEditing(t *testing.T) {
 	updated, _ = m.Update(rename())
 	m = updated.(*model)
 	info, err := session.InfoByID(dir, "other")
-	if err != nil || info.Title != "After" || m.dashboard.rows[1].title != "After" {
+	otherIndex = dashboardRowIndex(t, m.dashboard.rows, dashboardStoredSession, "other")
+	if err != nil || info.Title != "After" || m.dashboard.rows[otherIndex].title != "After" {
 		t.Fatalf("info=%#v err=%v rows=%#v", info, err, m.dashboard.rows)
 	}
 }
@@ -312,7 +326,7 @@ func TestDashboardRenamesStoredSessionAndCancelsEditing(t *testing.T) {
 func TestDashboardRejectsInvalidRenameTargetsAndBlankTitles(t *testing.T) {
 	m := &model{runner: dashboardFixtureRunner(), workspace: "/work", modelName: "grok"}
 	m.openDashboard()
-	m.dashboard.selected = 1
+	m.dashboard.selected = dashboardRowIndex(t, m.dashboard.rows, dashboardSubagent, "sub-1")
 	pressDashboardKey(t, m, tea.Key{Code: 'e', Text: "e"})
 	if m.dashboard.err != "Only sessions can be renamed" || m.dashboard.renameID != "" {
 		t.Fatalf("state=%#v", m.dashboard)
@@ -364,7 +378,7 @@ func TestDashboardPinsSessionsAndPreservesSelection(t *testing.T) {
 		t.Fatalf("pins=%v state=%#v status=%q", m.dashboardPins, m.dashboard, m.status)
 	}
 
-	m.dashboard.selected = 2
+	m.dashboard.selected = dashboardRowIndex(t, m.dashboard.rows, dashboardSubagent, "sub-1")
 	pressDashboardKey(t, m, tea.Key{Code: 't', Mod: tea.ModCtrl})
 	if m.dashboard.err != "Only sessions can be pinned" {
 		t.Fatalf("state=%#v", m.dashboard)
@@ -390,16 +404,16 @@ func TestDashboardReordersSessionsAndCleansStaleReferences(t *testing.T) {
 		}},
 	}
 	m.refreshDashboard()
-	if m.dashboardPins["ghost"] || !slices.Equal(m.dashboardOrder, []string{"b", "a"}) || m.dashboard.rows[1].id != "b" {
+	if m.dashboardPins["ghost"] || !slices.Equal(m.dashboardOrder, []string{"b", "a"}) || !slices.Equal(dashboardSessionRowIDs(m.dashboard.rows), []string{"session-1", "b", "a", "c"}) {
 		t.Fatalf("pins=%v order=%v rows=%#v", m.dashboardPins, m.dashboardOrder, m.dashboard.rows)
 	}
-	m.dashboard.selected = 1
+	m.dashboard.selected = dashboardRowIndex(t, m.dashboard.rows, dashboardStoredSession, "b")
 	pressDashboardKey(t, m, tea.Key{Code: tea.KeyDown, Mod: tea.ModShift})
-	if !slices.Equal(persisted, []string{"a", "b"}) || m.dashboard.rows[m.dashboard.selected].id != "b" || m.dashboard.selected != 2 || m.status != "session moved down" {
+	if !slices.Equal(persisted, []string{"a", "b"}) || m.dashboard.rows[m.dashboard.selected].id != "b" || !slices.Equal(dashboardSessionRowIDs(m.dashboard.rows), []string{"session-1", "a", "b", "c"}) || m.status != "session moved down" {
 		t.Fatalf("persisted=%v selected=%d rows=%#v status=%q", persisted, m.dashboard.selected, m.dashboard.rows, m.status)
 	}
 	pressDashboardKey(t, m, tea.Key{Code: tea.KeyUp, Mod: tea.ModShift})
-	if !slices.Equal(persisted, []string{"b", "a"}) || m.dashboard.rows[m.dashboard.selected].id != "b" || m.dashboard.selected != 1 || m.status != "session moved up" {
+	if !slices.Equal(persisted, []string{"b", "a"}) || m.dashboard.rows[m.dashboard.selected].id != "b" || !slices.Equal(dashboardSessionRowIDs(m.dashboard.rows), []string{"session-1", "b", "a", "c"}) || m.status != "session moved up" {
 		t.Fatalf("persisted=%v selected=%d rows=%#v status=%q", persisted, m.dashboard.selected, m.dashboard.rows, m.status)
 	}
 
@@ -409,11 +423,85 @@ func TestDashboardReordersSessionsAndCleansStaleReferences(t *testing.T) {
 		t.Fatalf("order=%v state=%#v status=%q", m.dashboardOrder, m.dashboard, m.status)
 	}
 
-	m.dashboard.selected = 4
+	m.dashboard.selected = dashboardRowIndex(t, m.dashboard.rows, dashboardSubagent, "sub-1")
 	pressDashboardKey(t, m, tea.Key{Code: tea.KeyUp, Mod: tea.ModShift})
 	if m.dashboard.err != "Only sessions can be reordered" {
 		t.Fatalf("state=%#v", m.dashboard)
 	}
+}
+
+func TestDashboardGroupingPersistsAndPreservesSelection(t *testing.T) {
+	var persisted string
+	runner := &agent.Runner{
+		SessionID:     "current",
+		ListSubagents: func() []tools.SubagentResult { return nil },
+		ListTasks:     func() []tools.ProcessSnapshot { return nil },
+	}
+	m := &model{
+		runner:            runner,
+		workspace:         "/middle",
+		modelName:         "grok",
+		dashboardGrouping: "state",
+		dashboardOrder:    []string{"z", "a"},
+		persistGrouping: func(grouping string) error {
+			persisted = grouping
+			return nil
+		},
+		dashboard: &dashboardState{sessions: []session.Info{
+			{SessionID: "z", Title: "Z", CWD: "/z"},
+			{SessionID: "a", Title: "A", CWD: "/a"},
+		}},
+	}
+	m.refreshDashboard()
+	if ids := dashboardSessionRowIDs(m.dashboard.rows); !slices.Equal(ids, []string{"current", "z", "a"}) {
+		t.Fatalf("state rows=%v", ids)
+	}
+	content := m.dashboardContent()
+	if !strings.Contains(content, "Working (1)") || !strings.Contains(content, "Idle (2)") {
+		t.Fatalf("missing state sections:\n%s", content)
+	}
+	m.dashboard.selected = 2
+	pressDashboardKey(t, m, tea.Key{Code: 'g', Mod: tea.ModCtrl})
+	if persisted != "directory" || m.dashboardGrouping != "directory" || m.dashboard.rows[m.dashboard.selected].id != "a" {
+		t.Fatalf("persisted=%q grouping=%q selected=%d rows=%#v", persisted, m.dashboardGrouping, m.dashboard.selected, m.dashboard.rows)
+	}
+	if ids := dashboardSessionRowIDs(m.dashboard.rows); !slices.Equal(ids, []string{"a", "current", "z"}) {
+		t.Fatalf("directory rows=%v", ids)
+	}
+	if strings.Contains(m.dashboardContent(), "Working (") || m.status != "dashboard grouped by directory" {
+		t.Fatalf("content=%q status=%q", m.dashboardContent(), m.status)
+	}
+
+	m.persistGrouping = func(string) error { return errors.New("read only") }
+	pressDashboardKey(t, m, tea.Key{Code: 'g', Mod: tea.ModCtrl})
+	if m.dashboardGrouping != "directory" || m.dashboard.err != "read only" || m.status != "dashboard grouping failed" {
+		t.Fatalf("grouping=%q state=%#v status=%q", m.dashboardGrouping, m.dashboard, m.status)
+	}
+}
+
+func TestDashboardStateGroupingKeepsPinnedSectionFirst(t *testing.T) {
+	m := &model{
+		runner:        &agent.Runner{SessionID: "current"},
+		workspace:     "/work",
+		modelName:     "grok",
+		dashboardPins: map[string]bool{"idle": true},
+		dashboard:     &dashboardState{sessions: []session.Info{{SessionID: "idle", Title: "Idle", CWD: "/idle"}}},
+	}
+	m.refreshDashboard()
+	content := m.dashboardContent()
+	if m.dashboard.rows[0].id != "idle" || strings.Index(content, "Pinned (1)") > strings.Index(content, "Working (1)") {
+		t.Fatalf("rows=%#v\n%s", m.dashboard.rows, content)
+	}
+}
+
+func dashboardSessionRowIDs(rows []dashboardRow) []string {
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		if row.kind == dashboardSession || row.kind == dashboardStoredSession {
+			ids = append(ids, row.id)
+		}
+	}
+	return ids
 }
 
 func pressDashboardKey(t *testing.T, m *model, key tea.Key) {

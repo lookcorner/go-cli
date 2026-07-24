@@ -216,8 +216,9 @@ type UIConfig struct {
 }
 
 type DashboardConfig struct {
-	Pinned  []string `json:"pinned,omitempty" toml:"pinned"`
-	Reorder []string `json:"reorder,omitempty" toml:"reorder"`
+	Pinned   []string `json:"pinned,omitempty" toml:"pinned"`
+	Reorder  []string `json:"reorder,omitempty" toml:"reorder"`
+	Grouping string   `json:"grouping,omitempty" toml:"grouping"`
 }
 
 type GoalConfig struct {
@@ -662,6 +663,7 @@ func Load(path string) (Config, error) {
 		Toolset:                     ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}},
 		Goal:                        GoalConfig{VerifierCount: 3, ClassifierMaxRuns: 10, ReverifyAfter: 8},
 		UI:                          UIConfig{Theme: "groknight", KeepTextSelection: "flash", ShowTimestamps: true, PromptSuggestions: true, PermissionMode: "ask"},
+		Dashboard:                   DashboardConfig{Grouping: "state"},
 		Pruning:                     PruningConfig{Enabled: true, KeepLastNTurns: 3, SoftTrimThreshold: 4000, SoftTrimHead: 1500, SoftTrimTail: 1500, HardClearAgeTurns: 10},
 		Memory:                      memory.DefaultConfig(),
 	}
@@ -944,6 +946,7 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	if disk.Dashboard.Reorder != nil {
 		cfg.Dashboard.Reorder = cleanDashboardSessionOrder(disk.Dashboard.Reorder)
 	}
+	cfg.Dashboard.Grouping = normalizeDashboardGrouping(disk.Dashboard.Grouping)
 	if disk.Goal.VerifierCount != nil {
 		cfg.Goal.VerifierCount = normalizedGoalVerifierCount(*disk.Goal.VerifierCount)
 		cfg.goalVerifierConfigured = true

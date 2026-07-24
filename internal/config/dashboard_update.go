@@ -31,6 +31,28 @@ func UpdateDashboardReorder(path string, ids []string) error {
 	})
 }
 
+func UpdateDashboardGrouping(path, grouping string) error {
+	grouping = normalizeDashboardGrouping(grouping)
+	return updateUserConfig(path, func(root map[string]any) error {
+		dashboard, _ := root["dashboard"].(map[string]any)
+		if dashboard == nil {
+			dashboard = make(map[string]any)
+		}
+		dashboard["grouping"] = grouping
+		root["dashboard"] = dashboard
+		return nil
+	})
+}
+
+func normalizeDashboardGrouping(grouping string) string {
+	switch strings.ToLower(strings.TrimSpace(grouping)) {
+	case "directory", "dir":
+		return "directory"
+	default:
+		return "state"
+	}
+}
+
 func cleanDashboardSessionIDs(ids []string) []string {
 	cleaned := cleanDashboardSessionOrder(ids)
 	sort.Strings(cleaned)

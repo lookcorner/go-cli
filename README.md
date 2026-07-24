@@ -585,8 +585,9 @@ overview of active and stored sessions, subagents, background processes, and
 scheduled tasks. Enter opens details or switches sessions, `Ctrl+T` pins a
 session, `Shift+Up/Down` changes its manual order, `Ctrl+R` renames an active or
 stored session, `X` stops a selected running subagent or process, `D` confirms
-deletion of an idle session, and `R` refreshes the snapshot. Pinned and manually
-ordered session IDs persist in `[dashboard].pinned` and `[dashboard].reorder`.
+deletion of an idle session, `Ctrl+G` switches between state sections and a
+directory-sorted flat list, and `R` refreshes the snapshot. Pins, manual order,
+and grouping persist in `[dashboard]`.
 While open, the dashboard refreshes live task metrics and stored sessions once
 per second; polling stops when the dashboard closes.
 `/recap` makes a tool-free, display-only model call against the current

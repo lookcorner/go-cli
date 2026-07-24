@@ -861,6 +861,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			ShowTimeline:      cfg.UI.ShowTimeline,
 			DashboardPinned:   cfg.Dashboard.Pinned,
 			DashboardReorder:  cfg.Dashboard.Reorder,
+			DashboardGrouping: cfg.Dashboard.Grouping,
 			Theme:             cfg.UI.Theme,
 			SetVimMode:        func(enabled bool) error { return config.UpdateVimMode(opts.configPath, enabled) },
 			SetCompactMode:    func(enabled bool) error { return config.UpdateCompactMode(opts.configPath, enabled) },
@@ -871,6 +872,9 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			},
 			SetDashboardReorder: func(ids []string) error {
 				return config.UpdateDashboardReorder(opts.configPath, ids)
+			},
+			SetDashboardGrouping: func(grouping string) error {
+				return config.UpdateDashboardGrouping(opts.configPath, grouping)
 			},
 			SetTheme:  func(value string) error { return config.UpdateTheme(opts.configPath, value) },
 			ForkInGit: forkGitErr == nil,
