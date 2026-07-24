@@ -211,8 +211,14 @@ type btwDoneEvent struct {
 type scheduledFiredEvent struct{ event tools.ScheduledTaskFired }
 type wakeCancelledEvent struct{ id string }
 type mouseScrollEvent struct {
-	lines int
-	scale bool
+	lines     int
+	direction int
+	at        time.Time
+	scale     bool
+}
+type mouseScrollFlushEvent struct {
+	serial uint64
+	at     time.Time
 }
 type mouseClickEvent struct {
 	action string
@@ -556,6 +562,7 @@ type model struct {
 	scrollLines        int
 	scrollSpeed        uint8
 	scrollCarry        float64
+	scrollInput        scrollInput
 	invertScroll       bool
 	mouseReleased      bool
 	hyperlinks         bool
@@ -713,6 +720,7 @@ type UIOptions struct {
 	ShowTimeline         bool
 	SetShowTimeline      func(bool) error
 	ScrollSpeed          uint8
+	ScrollMode           string
 	ScrollLines          *uint8
 	InvertScroll         bool
 	PromptSuggestions    bool
@@ -850,7 +858,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		defaultMinimal: options.ScreenMode == "minimal", persistScreenMode: options.SetScreenMode,
 		showTimestamps: options.ShowTimestamps, persistTimestamps: options.SetShowTimestamps,
 		showTimeline: options.ShowTimeline, persistTimeline: options.SetShowTimeline,
-		scrollLines: mouseWheelScrollLines, scrollSpeed: options.ScrollSpeed, invertScroll: options.InvertScroll,
+		scrollLines: mouseWheelScrollLines, scrollSpeed: options.ScrollSpeed, scrollInput: scrollInput{mode: options.ScrollMode}, invertScroll: options.InvertScroll,
 		suggestionsEnabled: options.PromptSuggestions,
 		hyperlinks:         detectTerminalHyperlinks(),
 		themeName:          options.Theme,
@@ -890,6 +898,9 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 	}
 	if m.scrollSpeed == 0 {
 		m.scrollSpeed = 50
+	}
+	if m.scrollInput.mode == "" {
+		m.scrollInput.mode = "auto"
 	}
 	if current, ok := runner.CurrentModel(); ok && strings.TrimSpace(current.Name) != "" {
 		m.modelName = current.Name
@@ -1021,21 +1032,31 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitForBridge(m.bridge)
 	case mouseScrollEvent:
 		if msg.scale {
-			scaled := float64(msg.lines)*scrollSpeedMultiplier(m.scrollSpeed) + m.scrollCarry
-			msg.lines = int(scaled)
-			m.scrollCarry = scaled - float64(msg.lines)
-			if msg.lines == 0 {
-				return m, nil
+			lines := float64(msg.lines)
+			if msg.direction != 0 {
+				linesPerTick := m.scrollLines
+				if linesPerTick == 0 {
+					linesPerTick = mouseWheelScrollLines
+				}
+				var serial uint64
+				lines, serial = m.scrollInput.event(msg.direction, linesPerTick, msg.at)
+				if serial != 0 {
+					updated, _ := m.applyMouseScroll(m.scaledScrollLines(lines))
+					return updated, tea.Tick(trackpadEventWindow, func(at time.Time) tea.Msg {
+						return mouseScrollFlushEvent{serial: serial, at: at}
+					})
+				}
 			}
+			msg.lines = m.scaledScrollLines(lines)
 		}
-		m.selection = nil
-		m.selectionClick = selectionClickState{}
-		m.timelineHover = nil
-		m.clearTranscriptAnchor()
-		before := m.scroll
-		m.scroll = max(0, m.scroll+msg.lines)
-		m.debug.recordScroll("wheel", msg.lines, before, m.scroll, m.maxTranscriptScroll(), m.contentHeight())
-		return m, nil
+		return m.applyMouseScroll(msg.lines)
+	case mouseScrollFlushEvent:
+		linesPerTick := m.scrollLines
+		if linesPerTick == 0 {
+			linesPerTick = mouseWheelScrollLines
+		}
+		lines := m.scrollInput.flush(msg.serial, msg.at, linesPerTick)
+		return m.applyMouseScroll(m.scaledScrollLines(lines))
 	case timelineHoverEvent:
 		m.timelineHover = msg.hit
 		return m, nil
@@ -1753,6 +1774,27 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
+	return m, nil
+}
+
+func (m *model) scaledScrollLines(lines float64) int {
+	scaled := lines*scrollSpeedMultiplier(m.scrollSpeed) + m.scrollCarry
+	result := int(scaled)
+	m.scrollCarry = scaled - float64(result)
+	return result
+}
+
+func (m *model) applyMouseScroll(lines int) (tea.Model, tea.Cmd) {
+	if lines == 0 {
+		return m, nil
+	}
+	m.selection = nil
+	m.selectionClick = selectionClickState{}
+	m.timelineHover = nil
+	m.clearTranscriptAnchor()
+	before := m.scroll
+	m.scroll = max(0, m.scroll+lines)
+	m.debug.recordScroll("wheel", lines, before, m.scroll, m.maxTranscriptScroll(), m.contentHeight())
 	return m, nil
 }
 
@@ -4609,23 +4651,21 @@ func (m *model) View() tea.View {
 			if mouse.Y < bannerHeight+1 || mouse.Y > bodyEnd {
 				return nil
 			}
-			scrollLines := m.scrollLines
-			if scrollLines == 0 {
-				scrollLines = mouseWheelScrollLines
-			}
-			if m.invertScroll {
-				scrollLines = -scrollLines
-			}
-			lines := 0
+			direction := 0
 			switch mouse.Button {
 			case tea.MouseWheelUp:
-				lines = scrollLines
+				direction = 1
 			case tea.MouseWheelDown:
-				lines = -scrollLines
+				direction = -1
 			default:
 				return nil
 			}
-			return func() tea.Msg { return mouseScrollEvent{lines: lines, scale: true} }
+			if m.invertScroll {
+				direction = -direction
+			}
+			return func() tea.Msg {
+				return mouseScrollEvent{direction: direction, at: time.Now(), scale: true}
+			}
 		case tea.MouseClickMsg:
 			if mouse.Button != tea.MouseLeft {
 				return nil

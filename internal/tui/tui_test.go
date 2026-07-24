@@ -3717,6 +3717,80 @@ func TestScrollSpeedUsesReferenceCurve(t *testing.T) {
 	}
 }
 
+func TestScrollModesChangeRuntimePricing(t *testing.T) {
+	base := time.Unix(100, 0)
+	run := func(mode string, interval time.Duration) int {
+		m := &model{
+			width: 60, height: 16, scrollLines: 3, scrollSpeed: 50,
+			scrollInput: scrollInput{mode: mode},
+		}
+		for i := range 3 {
+			updated, _ := m.Update(mouseScrollEvent{
+				direction: 1,
+				at:        base.Add(time.Duration(i) * interval),
+				scale:     true,
+			})
+			m = updated.(*model)
+		}
+		if mode == "auto" {
+			updated, _ := m.Update(mouseScrollFlushEvent{
+				serial: m.scrollInput.serial,
+				at:     m.scrollInput.last.Add(trackpadEventWindow),
+			})
+			m = updated.(*model)
+		}
+		return m.scroll
+	}
+
+	if got := run("wheel", 5*time.Millisecond); got != 9 {
+		t.Fatalf("forced wheel scroll=%d want=9", got)
+	}
+	if got := run("trackpad", 5*time.Millisecond); got != 3 {
+		t.Fatalf("forced trackpad scroll=%d want=3", got)
+	}
+	if got := run("auto", 5*time.Millisecond); got != 3 {
+		t.Fatalf("rapid auto scroll=%d want=3", got)
+	}
+	if got := run("auto", 100*time.Millisecond); got != 9 {
+		t.Fatalf("isolated auto scroll=%d want=9", got)
+	}
+}
+
+func TestTrackpadScrollResetsAndAcceleratesPerStream(t *testing.T) {
+	input := scrollInput{mode: "trackpad"}
+	base := time.Unix(100, 0)
+	total := 0.0
+	for i := range 10 {
+		lines, _ := input.event(1, 3, base.Add(time.Duration(i)*5*time.Millisecond))
+		total += lines
+	}
+	if total <= 10 {
+		t.Fatalf("continuous trackpad stream did not accelerate: %g", total)
+	}
+	if got, _ := input.event(-1, 3, base.Add(50*time.Millisecond)); got != -1 {
+		t.Fatalf("direction change did not reset stream: %g", got)
+	}
+	if got, _ := input.event(-1, 3, base.Add(200*time.Millisecond)); got != -1 {
+		t.Fatalf("stream gap did not reset acceleration: %g", got)
+	}
+}
+
+func TestAutoScrollFlushIgnoresStaleTimers(t *testing.T) {
+	input := scrollInput{mode: "auto"}
+	base := time.Unix(100, 0)
+	_, first := input.event(1, 3, base)
+	_, second := input.event(-1, 3, base.Add(5*time.Millisecond))
+	if first == second {
+		t.Fatal("direction change did not start a new auto stream")
+	}
+	if got := input.flush(first, base.Add(time.Second), 3); got != 0 {
+		t.Fatalf("stale timer flushed %g lines", got)
+	}
+	if got := input.flush(second, base.Add(35*time.Millisecond), 3); got != -3 {
+		t.Fatalf("active single-event stream flushed %g want=-3", got)
+	}
+}
+
 func TestTextSelectionCopiesRenderedTranscript(t *testing.T) {
 	lines := []string{"alpha beta", "second 你好"}
 	if got := (&textSelection{}).text(); got != "" {

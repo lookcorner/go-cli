@@ -217,6 +217,7 @@ type UIConfig struct {
 	ShowTimestamps       bool    `json:"show_timestamps"`
 	ShowTimeline         bool    `json:"show_timeline,omitempty"`
 	ScrollSpeed          uint8   `json:"scroll_speed,omitempty"`
+	ScrollMode           string  `json:"scroll_mode"`
 	ScrollLines          *uint8  `json:"scroll_lines,omitempty"`
 	InvertScroll         bool    `json:"invert_scroll,omitempty"`
 	PromptSuggestions    bool    `json:"prompt_suggestions"`
@@ -479,6 +480,7 @@ type fileUIConfig struct {
 	ShowTimestamps               *bool   `json:"show_timestamps,omitempty" toml:"show_timestamps"`
 	ShowTimeline                 *bool   `json:"show_timeline,omitempty" toml:"show_timeline"`
 	ScrollSpeed                  *uint8  `json:"scroll_speed,omitempty" toml:"scroll_speed"`
+	ScrollMode                   *string `json:"scroll_mode,omitempty" toml:"scroll_mode"`
 	ScrollLines                  *uint8  `json:"scroll_lines,omitempty" toml:"scroll_lines"`
 	InvertScroll                 *bool   `json:"invert_scroll,omitempty" toml:"invert_scroll"`
 	PromptSuggestions            *bool   `json:"prompt_suggestions,omitempty" toml:"prompt_suggestions"`
@@ -694,7 +696,7 @@ func Load(path string) (Config, error) {
 		AskUserQuestion:             AskUserQuestionConfig{TimeoutEnabled: true, TimeoutSeconds: 30 * 60},
 		Toolset:                     ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}},
 		Goal:                        GoalConfig{VerifierCount: 3, ClassifierMaxRuns: 10, ReverifyAfter: 8},
-		UI:                          UIConfig{Theme: "groknight", AutoDarkTheme: "groknight", AutoLightTheme: "grokday", HunkTrackerMode: "agent_only", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, ScrollSpeed: 50, PromptSuggestions: true, PermissionMode: "ask"},
+		UI:                          UIConfig{Theme: "groknight", AutoDarkTheme: "groknight", AutoLightTheme: "grokday", HunkTrackerMode: "agent_only", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, ScrollSpeed: 50, ScrollMode: "auto", PromptSuggestions: true, PermissionMode: "ask"},
 		Dashboard:                   DashboardConfig{Enabled: true, Grouping: "state"},
 		Sandbox:                     SandboxConfig{Profile: "off"},
 		Pruning:                     PruningConfig{Enabled: true, KeepLastNTurns: 3, SoftTrimThreshold: 4000, SoftTrimHead: 1500, SoftTrimTail: 1500, HardClearAgeTurns: 10},
@@ -982,6 +984,9 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.UI.ScrollSpeed != nil {
 		cfg.UI.ScrollSpeed = normalizedScrollSpeed(*disk.UI.ScrollSpeed)
+	}
+	if disk.UI.ScrollMode != nil {
+		cfg.UI.ScrollMode = normalizeScrollMode(*disk.UI.ScrollMode)
 	}
 	if disk.UI.ScrollLines != nil {
 		cfg.UI.ScrollLines = normalizedScrollLines(*disk.UI.ScrollLines)
@@ -1697,6 +1702,9 @@ func applyEnv(cfg *Config) {
 			cfg.UI.ScrollSpeed = normalizedScrollSpeed(uint8(value))
 		}
 	}
+	if raw := strings.TrimSpace(os.Getenv("GROK_SCROLL_MODE")); raw != "" {
+		cfg.UI.ScrollMode = normalizeScrollMode(raw)
+	}
 	if raw := strings.TrimSpace(os.Getenv("GROK_INVERT_SCROLL")); raw == "1" || raw == "true" {
 		cfg.UI.InvertScroll = true
 	} else if raw == "0" || raw == "false" {
@@ -1840,6 +1848,15 @@ func normalizedScrollLines(value uint8) *uint8 {
 
 func normalizedScrollSpeed(value uint8) uint8 {
 	return min(max(value, 1), 100)
+}
+
+func normalizeScrollMode(value string) string {
+	switch value {
+	case "wheel", "trackpad":
+		return value
+	default:
+		return "auto"
+	}
 }
 
 func normalizeHunkTrackerMode(value string) string {
@@ -2397,6 +2414,9 @@ func (c Config) Validate() error {
 	}
 	if c.UI.HunkTrackerMode != "" && c.UI.HunkTrackerMode != "agent_only" && c.UI.HunkTrackerMode != "all_dirty" && c.UI.HunkTrackerMode != "off" {
 		return errors.New("ui hunk_tracker_mode must be agent_only, all_dirty, or off")
+	}
+	if c.UI.ScrollMode != "" && c.UI.ScrollMode != "auto" && c.UI.ScrollMode != "wheel" && c.UI.ScrollMode != "trackpad" {
+		return errors.New("ui scroll_mode must be auto, wheel, or trackpad")
 	}
 	if c.Toolset.FileToolset != "" && c.Toolset.FileToolset != "standard" && c.Toolset.FileToolset != "hashline" {
 		return errors.New("toolset file_toolset must be standard or hashline")

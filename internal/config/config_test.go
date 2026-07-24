@@ -177,6 +177,7 @@ word_separators = "./"
 mouse_reporting_toggle = true
 vim_mode = true
 scroll_speed = 75
+scroll_mode = "trackpad"
 scroll_lines = 5
 invert_scroll = true
 prompt_suggestions = false
@@ -265,7 +266,7 @@ pattern = ".env*"
 	if len(cfg.Permission.Rules) != 2 || cfg.Permission.Rules[0].Action != "allow" || *cfg.Permission.Rules[1].Pattern != ".env*" {
 		t.Fatalf("unexpected permission config: %#v", cfg.Permission)
 	}
-	if cfg.UI.ScreenMode != "minimal" || cfg.UI.RenderMermaid != "off" || cfg.UI.KeepTextSelection != "word_select" || cfg.UI.WordSeparators == nil || *cfg.UI.WordSeparators != "./" || !cfg.UI.MouseReportingToggle || !cfg.UI.VimMode || cfg.UI.ScrollSpeed != 75 || cfg.UI.ScrollLines == nil || *cfg.UI.ScrollLines != 5 || !cfg.UI.InvertScroll || cfg.UI.PromptSuggestions || cfg.UI.CursorBlink == nil || *cfg.UI.CursorBlink || cfg.UI.PermissionMode != "auto" {
+	if cfg.UI.ScreenMode != "minimal" || cfg.UI.RenderMermaid != "off" || cfg.UI.KeepTextSelection != "word_select" || cfg.UI.WordSeparators == nil || *cfg.UI.WordSeparators != "./" || !cfg.UI.MouseReportingToggle || !cfg.UI.VimMode || cfg.UI.ScrollSpeed != 75 || cfg.UI.ScrollMode != "trackpad" || cfg.UI.ScrollLines == nil || *cfg.UI.ScrollLines != 5 || !cfg.UI.InvertScroll || cfg.UI.PromptSuggestions || cfg.UI.CursorBlink == nil || *cfg.UI.CursorBlink || cfg.UI.PermissionMode != "auto" {
 		t.Fatalf("unexpected UI config: %#v", cfg.UI)
 	}
 	if strings.Join(cfg.Skills.Paths, ",") != "~/shared-skills,project-skills" || strings.Join(cfg.Skills.Ignore, ",") != "~/shared-skills/ignored" || strings.Join(cfg.Skills.Disabled, ",") != "manual-only" {
@@ -314,8 +315,32 @@ func TestVimModeDefaultsToFalse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.UI.VimMode || cfg.UI.ScrollSpeed != 50 || cfg.UI.ScrollLines != nil || cfg.UI.InvertScroll || cfg.UI.CursorBlink != nil {
+	if cfg.UI.VimMode || cfg.UI.ScrollSpeed != 50 || cfg.UI.ScrollMode != "auto" || cfg.UI.ScrollLines != nil || cfg.UI.InvertScroll || cfg.UI.CursorBlink != nil {
 		t.Fatalf("unexpected UI defaults: %#v", cfg.UI)
+	}
+}
+
+func TestScrollModeUsesStrictConfigAndEnvironmentPrecedence(t *testing.T) {
+	for _, test := range []struct {
+		name, content, environment, want string
+	}{
+		{name: "default", content: "[ui]\n", want: "auto"},
+		{name: "config wheel", content: "[ui]\nscroll_mode = \"wheel\"\n", want: "wheel"},
+		{name: "config is case sensitive", content: "[ui]\nscroll_mode = \"WHEEL\"\n", want: "auto"},
+		{name: "environment wins", content: "[ui]\nscroll_mode = \"wheel\"\n", environment: "trackpad", want: "trackpad"},
+		{name: "invalid environment resets default", content: "[ui]\nscroll_mode = \"wheel\"\n", environment: "mouse", want: "auto"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("GROK_SCROLL_MODE", test.environment)
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, []byte(test.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(path)
+			if err != nil || cfg.UI.ScrollMode != test.want {
+				t.Fatalf("mode=%q want=%q err=%v", cfg.UI.ScrollMode, test.want, err)
+			}
+		})
 	}
 }
 

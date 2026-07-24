@@ -748,8 +748,12 @@ Set `[ui] mouse_reporting_toggle = true` (or `GROK_MOUSE_REPORTING_TOGGLE=true`)
 to let Ctrl-R release mouse capture while scrollback is focused and press Ctrl-R again
 to restore it.
 Set `[ui] scroll_lines` from 1 to 10 to choose the number of transcript lines per
-wheel event, `[ui] scroll_speed` from 1 to 100 to scale movement (50 is the
-default), and `[ui] invert_scroll = true` for natural scrolling. The
+scroll tick, `[ui] scroll_speed` from 1 to 100 to scale movement (50 is the
+default), and `[ui] invert_scroll = true` for natural scrolling. Set
+`[ui] scroll_mode` to `auto` (default), `wheel`, or `trackpad`; auto classifies
+short event streams by timing, wheel uses fixed lines per event, and trackpad
+uses fractional accumulation with acceleration. `GROK_SCROLL_MODE` overrides
+the persisted mode. The
 `GROK_SCROLL_LINES`, `GROK_SCROLL_SPEED`, and `GROK_INVERT_SCROLL` environment
 variables override them.
 
