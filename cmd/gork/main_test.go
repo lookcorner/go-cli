@@ -38,6 +38,20 @@ import (
 	worktrees "github.com/lookcorner/go-cli/internal/worktree"
 )
 
+func TestDashboardDisabledUsesConfigAndEnvironmentOverride(t *testing.T) {
+	t.Setenv("GROK_AGENT_DASHBOARD", "")
+	if dashboardDisabled(config.DashboardConfig{Enabled: true}) {
+		t.Fatal("enabled dashboard was disabled")
+	}
+	if !dashboardDisabled(config.DashboardConfig{}) {
+		t.Fatal("disabled config was ignored")
+	}
+	t.Setenv("GROK_AGENT_DASHBOARD", "0")
+	if !dashboardDisabled(config.DashboardConfig{Enabled: true}) {
+		t.Fatal("environment override was ignored")
+	}
+}
+
 type samplingStreamer struct {
 	request api.ResponseRequest
 }

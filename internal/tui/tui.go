@@ -566,6 +566,7 @@ type model struct {
 	agentConfig   *agentConfigState
 
 	dashboard         *dashboardState
+	dashboardDisabled bool
 	dashboardPins     map[string]bool
 	persistPins       func([]string) error
 	dashboardOrder    []string
@@ -647,6 +648,7 @@ type UIOptions struct {
 	ForkSession          func(context.Context, bool) (ForkResult, error)
 	ForkInGit            bool
 	DashboardPinned      []string
+	DashboardDisabled    bool
 	SetDashboardPinned   func([]string) error
 	DashboardReorder     []string
 	SetDashboardReorder  func([]string) error
@@ -771,6 +773,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		persistTheme:       options.SetTheme,
 		forkSession:        options.ForkSession,
 		forkInGit:          options.ForkInGit,
+		dashboardDisabled:  options.DashboardDisabled,
 		dashboardPins:      make(map[string]bool, len(options.DashboardPinned)),
 		persistPins:        options.SetDashboardPinned,
 		dashboardOrder:     append([]string(nil), options.DashboardReorder...),

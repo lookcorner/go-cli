@@ -859,6 +859,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			CompactMode:       cfg.UI.CompactMode,
 			ShowTimestamps:    cfg.UI.ShowTimestamps,
 			ShowTimeline:      cfg.UI.ShowTimeline,
+			DashboardDisabled: dashboardDisabled(cfg.Dashboard),
 			DashboardPinned:   cfg.Dashboard.Pinned,
 			DashboardReorder:  cfg.Dashboard.Reorder,
 			DashboardGrouping: cfg.Dashboard.Grouping,
@@ -2082,6 +2083,10 @@ func formatLocalTaskWake(snapshot tools.ProcessSnapshot) string {
 		status = "with failure"
 	}
 	return fmt.Sprintf("<system-reminder>\nBackground task %q completed %s.\nCommand: %s\nUse get_task_output with task_ids [%q] to retrieve the full output.\n</system-reminder>", snapshot.TaskID, status, snapshot.Command, snapshot.TaskID)
+}
+
+func dashboardDisabled(cfg config.DashboardConfig) bool {
+	return !cfg.Enabled || os.Getenv("GROK_AGENT_DASHBOARD") == "0"
 }
 
 func resolveACPSessionPermissionMode(defaultMode tools.PermissionMode, yoloMode, autoMode *bool, disableBypass, autoEnabled bool) tools.PermissionMode {

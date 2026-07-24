@@ -595,6 +595,9 @@ Enter keeps a search filter and Esc clears it. `X` also cancels a selected
 scheduled task, and
 subagent rows update elapsed time, tool calls, tokens, turns, and context usage
 live. Pins, manual order, and grouping persist in `[dashboard]`.
+The dashboard is enabled by default; set `[dashboard].enabled = false` to hide
+it for a configured installation, or `GROK_AGENT_DASHBOARD=0` to disable it for
+one process. The environment override takes precedence over the saved setting.
 While open, the dashboard refreshes live task metrics and stored sessions once
 per second; polling stops when the dashboard closes.
 `/recap` makes a tool-free, display-only model call against the current

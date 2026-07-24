@@ -30,6 +30,18 @@ func TestDashboardAliasesOpenTaskOverview(t *testing.T) {
 	}
 }
 
+func TestDashboardAliasesRespectDisabledGate(t *testing.T) {
+	for _, command := range []string{"/dashboard", "/sessions", "/agents-dashboard"} {
+		m := &model{runner: dashboardFixtureRunner(), dashboardDisabled: true}
+		m.setInput(command)
+		updated, async := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+		m = updated.(*model)
+		if async != nil || m.dashboard != nil || m.status != "agent dashboard is disabled" {
+			t.Fatalf("command=%s dashboard=%#v async=%v status=%q", command, m.dashboard, async != nil, m.status)
+		}
+	}
+}
+
 func TestDashboardSurfacesApproval(t *testing.T) {
 	reply := make(chan bool, 1)
 	m := &model{

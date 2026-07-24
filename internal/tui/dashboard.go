@@ -99,6 +99,10 @@ type dashboardPollEvent struct {
 }
 
 func (m *model) openDashboard() tea.Cmd {
+	if m.dashboardDisabled {
+		m.status = "agent dashboard is disabled"
+		return nil
+	}
 	if m.runner == nil || strings.TrimSpace(m.runner.SessionID) == "" {
 		m.status = "no active session"
 		return nil

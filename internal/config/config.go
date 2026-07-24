@@ -216,6 +216,7 @@ type UIConfig struct {
 }
 
 type DashboardConfig struct {
+	Enabled  bool     `json:"enabled"`
 	Pinned   []string `json:"pinned,omitempty" toml:"pinned"`
 	Reorder  []string `json:"reorder,omitempty" toml:"reorder"`
 	Grouping string   `json:"grouping,omitempty" toml:"grouping"`
@@ -428,9 +429,16 @@ type fileConfig struct {
 	} `json:"toolset,omitempty" toml:"toolset"`
 	Goal        fileGoalConfig        `json:"goal,omitempty" toml:"goal"`
 	UI          fileUIConfig          `json:"ui,omitempty" toml:"ui"`
-	Dashboard   DashboardConfig       `json:"dashboard,omitempty" toml:"dashboard"`
+	Dashboard   fileDashboardConfig   `json:"dashboard,omitempty" toml:"dashboard"`
 	Endpoints   fileEndpointsConfig   `json:"endpoints,omitempty" toml:"endpoints"`
 	FolderTrust fileFolderTrustConfig `json:"folder_trust,omitempty" toml:"folder_trust"`
+}
+
+type fileDashboardConfig struct {
+	Enabled  *bool    `json:"enabled,omitempty" toml:"enabled"`
+	Pinned   []string `json:"pinned,omitempty" toml:"pinned"`
+	Reorder  []string `json:"reorder,omitempty" toml:"reorder"`
+	Grouping string   `json:"grouping,omitempty" toml:"grouping"`
 }
 
 type fileHashlineConfig struct {
@@ -663,7 +671,7 @@ func Load(path string) (Config, error) {
 		Toolset:                     ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}},
 		Goal:                        GoalConfig{VerifierCount: 3, ClassifierMaxRuns: 10, ReverifyAfter: 8},
 		UI:                          UIConfig{Theme: "groknight", KeepTextSelection: "flash", ShowTimestamps: true, PromptSuggestions: true, PermissionMode: "ask"},
-		Dashboard:                   DashboardConfig{Grouping: "state"},
+		Dashboard:                   DashboardConfig{Enabled: true, Grouping: "state"},
 		Pruning:                     PruningConfig{Enabled: true, KeepLastNTurns: 3, SoftTrimThreshold: 4000, SoftTrimHead: 1500, SoftTrimTail: 1500, HardClearAgeTurns: 10},
 		Memory:                      memory.DefaultConfig(),
 	}
@@ -939,6 +947,9 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 		}
 		cfg.UI.PermissionMode = mode
 		cfg.uiPermissionModeConfigured = true
+	}
+	if disk.Dashboard.Enabled != nil {
+		cfg.Dashboard.Enabled = *disk.Dashboard.Enabled
 	}
 	if disk.Dashboard.Pinned != nil {
 		cfg.Dashboard.Pinned = cleanDashboardRefs(disk.Dashboard.Pinned)
