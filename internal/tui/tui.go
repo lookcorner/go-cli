@@ -589,6 +589,8 @@ type model struct {
 	minimalFlushTo   int
 	minimalInitial   string
 	minimalReset     bool
+	gboom            *gboomState
+	gboomEpoch       uint64
 
 	dashboard         *dashboardState
 	dashboardDisabled bool
@@ -1574,6 +1576,12 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handleDashboardTick(msg)
 	case dashboardPollEvent:
 		m.finishDashboardPoll(msg)
+	case gboomTickEvent:
+		return m, m.handleGboomTick(msg)
+	case gboomMouseEvent:
+		if m.gboom != nil {
+			m.gboom.handleMouse(msg)
+		}
 	case sessionSelectLoadedEvent:
 		m.finishSessionSelectLoad(msg)
 	case sessionSelectSearchRequestEvent:
@@ -1602,6 +1610,9 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := msg.Key()
 	stroke := msg.Keystroke()
+	if m.gboom != nil {
+		return m.handleGboomKey(msg)
+	}
 	if key.Code == tea.KeyEsc && m.selection != nil && m.scrollSearch == nil {
 		m.selection = nil
 		m.selectionClick = selectionClickState{}
@@ -1916,6 +1927,10 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		switch fields[0] {
 		case "/quit", "/exit":
 			return m, tea.Quit
+		case "/gboom":
+			if prompt == "/gboom" {
+				return m, m.openGboom()
+			}
 		case "/new", "/clear", "/home", "/welcome":
 			m.newSession = true
 			m.status = "starting new session"
@@ -4108,7 +4123,10 @@ func (m *model) View() tea.View {
 	banner := m.announcementBanner(width)
 	content := m.transcriptText()
 	showingTranscript := true
-	if m.planReview != nil {
+	gboomVisible := m.gboom != nil
+	if gboomVisible {
+		showingTranscript = false
+	} else if m.planReview != nil {
 		showingTranscript = false
 		content = "# Review implementation plan\n\n" + m.planReview.event.event.PlanContent
 	} else if m.mcp != nil {
@@ -4160,6 +4178,9 @@ func (m *model) View() tea.View {
 		content = raw[min(m.minimalCommitted, len(raw)):]
 	}
 	contentLines := renderMarkdownTheme(content, m.transcriptRenderWidth(), m.hyperlinks, m.colors())
+	if gboomVisible {
+		contentLines = m.gboom.lines(width, m.contentHeight(), colors)
+	}
 	if m.historySearch != nil {
 		contentLines = m.historySearchLines(m.transcriptRenderWidth(), m.contentHeight())
 	} else if m.scrollSearch != nil {
@@ -4195,7 +4216,10 @@ func (m *model) View() tea.View {
 	body := strings.Join(visible, "\n")
 
 	var footer string
-	if m.approval != nil {
+	if m.gboom != nil {
+		footer = fmt.Sprintf("%s%s GBOOM %s  HP %d · KILLS %d/%d\n%sWASD/↑↓ move · ←→ turn · Space/click fire · Esc quit%s",
+			ansiBold, colors.error, ansiReset, m.gboom.hp, m.gboom.kills, len(m.gboom.enemies), ansiDim, ansiReset)
+	} else if m.approval != nil {
 		footer = fmt.Sprintf("%s%sApprove %s?%s %s\n%s[y] allow  [n/esc] deny%s", ansiBold, colors.modal, m.approval.action, ansiReset, truncate(m.approval.detail, width-20), ansiDim, ansiReset)
 	} else if m.planReview != nil {
 		if m.planReview.editing {
@@ -4296,6 +4320,17 @@ func (m *model) View() tea.View {
 	bodyEnd := bannerHeight + contentHeight
 	view.OnMouse = func(message tea.MouseMsg) tea.Cmd {
 		mouse := message.Mouse()
+		if m.gboom != nil {
+			switch message.(type) {
+			case tea.MouseClickMsg:
+				if mouse.Button == tea.MouseLeft {
+					return func() tea.Msg { return gboomMouseEvent{x: mouse.X, fire: true} }
+				}
+			case tea.MouseMotionMsg:
+				return func() tea.Msg { return gboomMouseEvent{x: mouse.X, moved: true} }
+			}
+			return nil
+		}
 		bodyRow := mouse.Y - bannerHeight - 1
 		switch message.(type) {
 		case tea.MouseWheelMsg:
