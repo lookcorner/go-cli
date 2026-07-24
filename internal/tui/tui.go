@@ -50,6 +50,11 @@ var selectionURLPattern = regexp.MustCompile(`(?i)\b(?:https?|ftp|file)://[^\s\x
 
 var ErrNewSession = errors.New("start a new session")
 
+type NewSessionError struct{ Prompt string }
+
+func (e *NewSessionError) Error() string { return ErrNewSession.Error() }
+func (e *NewSessionError) Unwrap() error { return ErrNewSession }
+
 type ResumeSessionError struct {
 	Path      string
 	Workspace string
@@ -534,6 +539,7 @@ type model struct {
 	activeTask         string
 	promptSerial       uint64
 	newSession         bool
+	newSessionPrompt   string
 	resumeSession      *ResumeSessionError
 	forkResult         *ForkSessionError
 	forkSession        func(context.Context, bool) (ForkResult, error)
@@ -806,6 +812,9 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		return err
 	}
 	if current, ok := final.(*model); ok && current.newSession {
+		if current.newSessionPrompt != "" {
+			return &NewSessionError{Prompt: current.newSessionPrompt}
+		}
 		return ErrNewSession
 	}
 	if current, ok := final.(*model); ok && current.resumeSession != nil {

@@ -928,6 +928,11 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 }
 
 func restartTUI(err error, args, positional []string) error {
+	var fresh *tui.NewSessionError
+	if errors.As(err, &fresh) {
+		restart := restartSessionArgs(args, positional, "", "")
+		return &sessionRestartRequest{args: append(restart, "--", fresh.Prompt)}
+	}
 	if errors.Is(err, tui.ErrNewSession) {
 		return &sessionRestartRequest{args: restartSessionArgs(args, positional, "", "")}
 	}

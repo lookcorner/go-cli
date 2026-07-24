@@ -16,6 +16,8 @@ import (
 	"github.com/lookcorner/go-cli/internal/tools"
 )
 
+const maxDashboardDispatchRunes = 4000
+
 type dashboardRowKind uint8
 
 const (
@@ -41,28 +43,31 @@ type dashboardRow struct {
 }
 
 type dashboardState struct {
-	rows          []dashboardRow
-	selected      int
-	busy          bool
-	loading       bool
-	polling       bool
-	ticking       bool
-	epoch         uint64
-	sessionSeq    uint64
-	dir           string
-	sessions      []session.Info
-	pendingDelete string
-	renameID      string
-	renameKind    dashboardRowKind
-	renameInput   []rune
-	renameCursor  int
-	searching     bool
-	searchInput   []rune
-	searchCursor  int
-	filterKind    string
-	filterValue   string
-	currentTitle  string
-	err           string
+	rows           []dashboardRow
+	selected       int
+	busy           bool
+	loading        bool
+	polling        bool
+	ticking        bool
+	epoch          uint64
+	sessionSeq     uint64
+	dir            string
+	sessions       []session.Info
+	pendingDelete  string
+	renameID       string
+	renameKind     dashboardRowKind
+	renameInput    []rune
+	renameCursor   int
+	searching      bool
+	searchInput    []rune
+	searchCursor   int
+	filterKind     string
+	filterValue    string
+	dispatching    bool
+	dispatchInput  []rune
+	dispatchCursor int
+	currentTitle   string
+	err            string
 }
 
 type dashboardDoneEvent struct {
@@ -309,6 +314,10 @@ func (m *model) dashboardContent() string {
 	} else if state.filterKind != "" {
 		out.WriteString("\nFilter: " + dashboardFilterDisplay(state.filterKind, state.filterValue) + "\n")
 	}
+	if state.dispatching {
+		input := slices.Insert(slices.Clone(state.dispatchInput), state.dispatchCursor, '|')
+		out.WriteString("\nNew agent: " + string(input) + "\n")
+	}
 	if !state.loading && len(state.rows) == 0 {
 		out.WriteString("\nNo dashboard items match the current filter.\n")
 	}
@@ -325,7 +334,10 @@ func (m *model) dashboardHint() string {
 	if m.dashboard != nil && m.dashboard.searching {
 		return "Type to filter | Enter keep | Esc cancel | Ctrl+/ cancel"
 	}
-	return "Enter view/switch | Ctrl+/ search | Ctrl+G group | Ctrl+T pin | Shift+Up/Down reorder | Ctrl+R rename | X stop/cancel | D delete | R refresh | Esc close"
+	if m.dashboard != nil && m.dashboard.dispatching {
+		return "Enter create and open | Esc cancel | Left/Right move cursor"
+	}
+	return "N new agent | Enter view/switch | Ctrl+/ search | Ctrl+G group | Ctrl+T pin | Shift+Up/Down reorder | Ctrl+R rename | X stop/cancel | D delete | R refresh | Esc close"
 }
 
 func (m *model) handleDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -339,6 +351,9 @@ func (m *model) handleDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if state.searching {
 		return m.handleDashboardSearchKey(msg)
+	}
+	if state.dispatching {
+		return m.handleDashboardDispatchKey(msg)
 	}
 	if state.pendingDelete != "" {
 		if text == "y" || stroke == "enter" {
@@ -371,6 +386,16 @@ func (m *model) handleDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	switch {
+	case text == "n":
+		if m.running {
+			state.err = "Wait for the current request before creating a new agent"
+		} else {
+			state.dispatching = true
+			state.dispatchInput = nil
+			state.dispatchCursor = 0
+			state.err = ""
+			m.status = "new agent prompt"
+		}
 	case stroke == "ctrl+g":
 		m.toggleDashboardGrouping()
 	case (stroke == "shift+up" || stroke == "shift+down") && len(state.rows) > 0:
@@ -886,6 +911,10 @@ func (m *model) handleDashboardRenameKey(msg tea.KeyPressMsg) (tea.Model, tea.Cm
 }
 
 func editDashboardText(input []rune, cursor int, key tea.Key) ([]rune, int) {
+	return editDashboardTextLimit(input, cursor, key, 100)
+}
+
+func editDashboardTextLimit(input []rune, cursor int, key tea.Key, limit int) ([]rune, int) {
 	switch key.Code {
 	case tea.KeyBackspace:
 		if cursor > 0 {
@@ -905,14 +934,41 @@ func editDashboardText(input []rune, cursor int, key tea.Key) ([]rune, int) {
 	case tea.KeyEnd:
 		cursor = len(input)
 	default:
-		if key.Text != "" && key.Mod == 0 && len(input) < 100 {
+		if key.Text != "" && key.Mod == 0 && len(input) < limit {
 			chars := slices.DeleteFunc([]rune(key.Text), unicode.IsControl)
-			chars = chars[:min(len(chars), 100-len(input))]
+			chars = chars[:min(len(chars), limit-len(input))]
 			input = slices.Insert(input, cursor, chars...)
 			cursor += len(chars)
 		}
 	}
 	return input, cursor
+}
+
+func (m *model) handleDashboardDispatchKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	state := m.dashboard
+	key := msg.Key()
+	if key.Code == tea.KeyEsc {
+		state.dispatching = false
+		state.dispatchInput = nil
+		state.dispatchCursor = 0
+		state.err = ""
+		m.status = "agent dashboard"
+		return m, nil
+	}
+	if key.Code == tea.KeyEnter {
+		prompt := strings.TrimSpace(string(state.dispatchInput))
+		if prompt == "" {
+			state.err = "Prompt is required"
+			return m, nil
+		}
+		m.newSession = true
+		m.newSessionPrompt = prompt
+		m.status = "starting new agent"
+		return m, tea.Quit
+	}
+	state.dispatchInput, state.dispatchCursor = editDashboardTextLimit(state.dispatchInput, state.dispatchCursor, key, maxDashboardDispatchRunes)
+	state.err = ""
+	return m, nil
 }
 
 func (m *model) openDashboardRow(row dashboardRow) (tea.Model, tea.Cmd) {

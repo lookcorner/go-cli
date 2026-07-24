@@ -82,6 +82,46 @@ func TestDashboardRequiresActiveSession(t *testing.T) {
 	}
 }
 
+func TestDashboardCreatesNewAgentWithEditedPrompt(t *testing.T) {
+	m := &model{runner: dashboardFixtureRunner(), workspace: "/work", modelName: "grok"}
+	m.openDashboard()
+	pressDashboardKey(t, m, tea.Key{Code: 'n', Text: "n"})
+	if !m.dashboard.dispatching || m.status != "new agent prompt" || !strings.Contains(m.dashboardContent(), "New agent: |") {
+		t.Fatalf("state=%#v status=%q content=%q", m.dashboard, m.status, m.dashboardContent())
+	}
+	pressDashboardKey(t, m, tea.Key{Code: tea.KeyEnter})
+	if m.dashboard.err != "Prompt is required" || m.newSession {
+		t.Fatalf("state=%#v new=%v", m.dashboard, m.newSession)
+	}
+	pressDashboardKey(t, m, tea.Key{Code: '界', Text: "检查部署"})
+	pressDashboardKey(t, m, tea.Key{Code: tea.KeyHome})
+	pressDashboardKey(t, m, tea.Key{Code: tea.KeyRight})
+	pressDashboardKey(t, m, tea.Key{Code: tea.KeyDelete})
+	pressDashboardKey(t, m, tea.Key{Code: '查', Text: "查"})
+	updated, quit := m.handleDashboardKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if quit == nil || !m.newSession || m.newSessionPrompt != "检查部署" || m.status != "starting new agent" {
+		t.Fatalf("quit=%v new=%v prompt=%q status=%q", quit != nil, m.newSession, m.newSessionPrompt, m.status)
+	}
+}
+
+func TestDashboardCancelsOrRejectsNewAgentComposer(t *testing.T) {
+	m := &model{runner: dashboardFixtureRunner(), workspace: "/work", modelName: "grok"}
+	m.openDashboard()
+	pressDashboardKey(t, m, tea.Key{Code: 'n', Text: "n"})
+	pressDashboardKey(t, m, tea.Key{Code: 'x', Text: "draft"})
+	pressDashboardKey(t, m, tea.Key{Code: tea.KeyEsc})
+	if m.dashboard == nil || m.dashboard.dispatching || len(m.dashboard.dispatchInput) != 0 || m.status != "agent dashboard" {
+		t.Fatalf("state=%#v status=%q", m.dashboard, m.status)
+	}
+
+	m.running = true
+	pressDashboardKey(t, m, tea.Key{Code: 'n', Text: "n"})
+	if m.dashboard.dispatching || m.dashboard.err != "Wait for the current request before creating a new agent" {
+		t.Fatalf("state=%#v", m.dashboard)
+	}
+}
+
 func TestDashboardLiveRefreshRejectsStaleTicks(t *testing.T) {
 	completed := false
 	runner := dashboardFixtureRunner()

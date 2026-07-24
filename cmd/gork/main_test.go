@@ -242,6 +242,19 @@ func TestRestartTUITranslatesResumeRequest(t *testing.T) {
 	}
 }
 
+func TestRestartTUITranslatesNewAgentPrompt(t *testing.T) {
+	fresh := &tui.NewSessionError{Prompt: "--check this branch"}
+	if !errors.Is(fresh, tui.ErrNewSession) {
+		t.Fatalf("fresh error does not wrap ErrNewSession: %v", fresh)
+	}
+	err := restartTUI(fresh, []string{"--tui", "--resume", "old.jsonl", "old prompt"}, []string{"old prompt"})
+	var restart *sessionRestartRequest
+	want := []string{"--tui", "--", "--check this branch"}
+	if !errors.As(err, &restart) || !reflect.DeepEqual(restart.args, want) {
+		t.Fatalf("err=%v restart=%#v", err, restart)
+	}
+}
+
 func TestRestartTUITranslatesForkRequestWithDirective(t *testing.T) {
 	err := restartTUI(&tui.ForkSessionError{
 		Path: "/sessions/child.jsonl", Workspace: "/forked", Directive: "--check this branch",
