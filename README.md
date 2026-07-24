@@ -1695,6 +1695,7 @@ The same direct-install lifecycle is available outside ACP:
 ```sh
 gork plugin install ./local-plugin --trust
 gork plugin install owner/repository@v1.2.0 --trust
+gork plugin install plugin-name[@marketplace] --trust
 gork plugin list [--json [--available]]
 gork plugin update [plugin-name]
 gork plugin uninstall|rm|remove [--confirm] [--keep-data] plugin-name

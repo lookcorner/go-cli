@@ -2408,6 +2408,61 @@ func TestRunPluginTagDryRun(t *testing.T) {
 	}
 }
 
+func TestRunPluginInstallMarketplaceReference(t *testing.T) {
+	grokHome := filepath.Join(t.TempDir(), ".grok")
+	t.Setenv("GROK_HOME", grokHome)
+	t.Setenv("HOME", filepath.Dir(grokHome))
+	root := t.TempDir()
+	pluginRoot := filepath.Join(root, "plugins", "demo")
+	if err := os.MkdirAll(pluginRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginRoot, "plugin.json"), []byte(`{"name":"market-demo","version":"1.0.0"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.UpdateMarketplace("", func(settings *config.MarketplaceConfig) {
+		settings.Sources = []config.MarketplaceSourceConfig{{Name: "Team Catalog", Path: root}}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if err := config.UpdateMarketplace("", func(settings *config.MarketplaceConfig) {
+		settings.Sources = append(settings.Sources, config.MarketplaceSourceConfig{Name: "Missing", Path: filepath.Join(root, "missing")})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runPlugin([]string{"install", "market-demo"}, &stdout, &stderr); err == nil || !strings.Contains(err.Error(), "retry with --trust") {
+		t.Fatalf("untrusted marketplace install error=%v", err)
+	}
+	registry, err := plugin.LoadInstallRegistry()
+	if err != nil || len(registry.Repos) != 0 {
+		t.Fatalf("untrusted registry=%#v err=%v", registry, err)
+	}
+	if err := config.UpdateMarketplace("", func(settings *config.MarketplaceConfig) {
+		settings.Sources = settings.Sources[:1]
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runPlugin([]string{"install", "market-demo@local/team-catalog", "--trust"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "Installed 1 plugin(s) from Team Catalog: market-demo") {
+		t.Fatalf("install output=%q", stdout.String())
+	}
+	cfg, err := config.Load("")
+	if err != nil || strings.Join(cfg.Plugins.Enabled, "|") != "market-demo" {
+		t.Fatalf("plugins=%#v err=%v", cfg.Plugins, err)
+	}
+	stdout.Reset()
+	if err := runPlugin([]string{"install", "--trust", "market-demo"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), `Plugin "market-demo" is already installed from Team Catalog`) ||
+		!strings.Contains(stdout.String(), "gork plugin update market-demo") {
+		t.Fatalf("repeat output=%q", stdout.String())
+	}
+}
+
 func TestApplyMarketplacePlugins(t *testing.T) {
 	settings := plugin.Settings{Enabled: []string{"old", "keep"}, Disabled: []string{"new"}}
 	applyMarketplacePlugins(&settings, "update", marketplace.Outcome{Plugins: []string{"new"}, RemovedPlugins: []string{"old"}})

@@ -65,6 +65,83 @@ func TestLocalMarketplaceLifecycle(t *testing.T) {
 	}
 }
 
+func TestResolveInstallReferenceSelectsBareAndQualifiedSources(t *testing.T) {
+	grokHome := filepath.Join(t.TempDir(), ".grok")
+	t.Setenv("GROK_HOME", grokHome)
+	t.Setenv("HOME", filepath.Dir(grokHome))
+	first := filepath.Join(t.TempDir(), "first")
+	second := filepath.Join(t.TempDir(), "second")
+	for _, root := range []string{first, second} {
+		mustWrite(t, filepath.Join(root, "plugins", "demo", "plugin.json"), `{"name":"demo","version":"1.0.0"}`)
+	}
+	configPath := filepath.Join(grokHome, "config.toml")
+	if err := config.UpdateMarketplace(configPath, func(settings *config.MarketplaceConfig) {
+		settings.Sources = []config.MarketplaceSourceConfig{
+			{Name: "Team Catalog", Path: first},
+			{Name: "Other Catalog", Path: second},
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, recognized, err := ResolveInstallReference(configPath, t.TempDir(), "demo"); !recognized || err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("bare resolution recognized=%t err=%v", recognized, err)
+	}
+	resolved, recognized, err := ResolveInstallReference(configPath, t.TempDir(), "demo@local/team-catalog")
+	if err != nil || !recognized || resolved.Name != "demo" || resolved.SourceName != "Team Catalog" ||
+		resolved.Action.SourceURLOrPath != first || resolved.Action.PluginRelativePath != "plugins/demo" {
+		t.Fatalf("qualified resolution=%#v recognized=%t err=%v", resolved, recognized, err)
+	}
+	for _, source := range []string{
+		"./demo", "/demo", `C:\demo`, `sub\demo`, "owner/repo@v1.0",
+		"https://example.com/repo", "git@example.com:owner/repo.git", "demo#sub",
+	} {
+		if _, recognized, err := ResolveInstallReference(configPath, t.TempDir(), source); recognized || err != nil {
+			t.Fatalf("direct source %q recognized=%t err=%v", source, recognized, err)
+		}
+	}
+	if _, recognized, err := ResolveInstallReference(configPath, t.TempDir(), "demo@missing"); !recognized || err == nil || !strings.Contains(err.Error(), "qualifier") {
+		t.Fatalf("missing qualifier recognized=%t err=%v", recognized, err)
+	}
+}
+
+func TestResolveInstallReferencePrefersOfficialSource(t *testing.T) {
+	official := Source{Name: "Official", Git: OfficialSourceGit}
+	other := Source{Name: "Other", Path: "/other"}
+	selected, err := selectInstallReference("demo", []InstallReference{
+		installReference(official, Entry{Name: "demo", RelativePath: "plugins/demo"}, 0),
+		installReference(other, Entry{Name: "demo", RelativePath: "plugins/demo"}, 0),
+	}, []string{"Flaky"})
+	if err != nil || selected.SourceName != "Official" || selected.OtherCopies != 1 ||
+		strings.Join(selected.SkippedSources, "|") != "Flaky" {
+		t.Fatalf("official selection=%#v err=%v", selected, err)
+	}
+	if _, err := selectInstallReference("demo", []InstallReference{
+		installReference(other, Entry{Name: "demo", RelativePath: "plugins/demo"}, 0),
+	}, []string{"Flaky"}); err == nil || !strings.Contains(err.Error(), "safely") {
+		t.Fatalf("partial non-official selection error=%v", err)
+	}
+}
+
+func TestMatchingSourcesSupportsReferenceQualifiers(t *testing.T) {
+	sources := []Source{
+		{Name: "GitHub Catalog", Git: "https://github.com/acme/plugins.git"},
+		{Name: "Enterprise Tools", Git: "https://git.example.com/team/tools.git"},
+		{Name: "Local Dev", Path: "/catalog"},
+	}
+	for qualifier, want := range map[string]string{
+		"acme/plugins":         "GitHub Catalog",
+		"git/enterprise-tools": "Enterprise Tools",
+		"local/local-dev":      "Local Dev",
+		"enterprise-tools":     "Enterprise Tools",
+		"Enterprise Tools":     "Enterprise Tools",
+	} {
+		matched := matchingSources(sources, qualifier)
+		if len(matched) != 1 || matched[0].Name != want {
+			t.Fatalf("qualifier %q matched %#v; want %q", qualifier, matched, want)
+		}
+	}
+}
+
 func TestExtraSourcesUseReferenceOrderAndDeduplication(t *testing.T) {
 	home := t.TempDir()
 	grokRoot := filepath.Join(home, ".grok")

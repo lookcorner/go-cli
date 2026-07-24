@@ -67,12 +67,175 @@ type Action struct {
 }
 
 type Outcome struct {
-	Status          string   `json:"status"`
-	Message         string   `json:"message"`
-	RequiresReload  bool     `json:"requiresReload"`
-	RequiresRestart bool     `json:"requiresRestart"`
-	Plugins         []string `json:"-"`
-	RemovedPlugins  []string `json:"-"`
+	Status           string   `json:"status"`
+	Message          string   `json:"message"`
+	RequiresReload   bool     `json:"requiresReload"`
+	RequiresRestart  bool     `json:"requiresRestart"`
+	Plugins          []string `json:"-"`
+	RemovedPlugins   []string `json:"-"`
+	AlreadyInstalled bool     `json:"-"`
+}
+
+type InstallReference struct {
+	Name           string
+	SourceName     string
+	OtherCopies    int
+	SkippedSources []string
+	Action         Action
+}
+
+func ResolveInstallReference(configPath, cwd, raw string) (InstallReference, bool, error) {
+	name, qualifier, ok := parseInstallReference(raw)
+	if !ok {
+		return InstallReference{}, false, nil
+	}
+	sources, err := Sources(configPath, cwd)
+	if err != nil {
+		return InstallReference{}, true, err
+	}
+	if qualifier != "" {
+		matches := matchingSources(sources, qualifier)
+		if len(matches) == 0 {
+			return InstallReference{}, true, fmt.Errorf("marketplace qualifier %q not found", qualifier)
+		}
+		if len(matches) > 1 {
+			return InstallReference{}, true, fmt.Errorf("marketplace qualifier %q is ambiguous", qualifier)
+		}
+		entry, found, err := findSourceEntry(matches[0], name)
+		if err != nil {
+			return InstallReference{}, true, err
+		}
+		if !found {
+			return InstallReference{}, true, fmt.Errorf("marketplace plugin %q not found in %s", name, matches[0].Name)
+		}
+		return installReference(matches[0], entry, 0), true, nil
+	}
+	var found []InstallReference
+	var skipped []string
+	for _, source := range sources {
+		entry, matched, err := findSourceEntry(source, name)
+		if err != nil {
+			skipped = append(skipped, source.Name)
+		} else if matched {
+			found = append(found, installReference(source, entry, 0))
+		}
+	}
+	if len(found) == 0 {
+		if len(skipped) > 0 {
+			return InstallReference{}, true, fmt.Errorf("marketplace plugin %q could not be resolved because %d source(s) could not be scanned: %s",
+				name, len(skipped), strings.Join(skipped, ", "))
+		}
+		return InstallReference{}, true, fmt.Errorf("marketplace plugin %q not found", name)
+	}
+	selected, err := selectInstallReference(name, found, skipped)
+	return selected, true, err
+}
+
+func selectInstallReference(name string, found []InstallReference, skipped []string) (InstallReference, error) {
+	if len(found) == 1 {
+		if len(skipped) > 0 && !isOfficialSource(found[0].Action.SourceURLOrPath) {
+			return InstallReference{}, fmt.Errorf("marketplace plugin %q could not be resolved safely because %d source(s) could not be scanned: %s",
+				name, len(skipped), strings.Join(skipped, ", "))
+		}
+		found[0].SkippedSources = skipped
+		return found[0], nil
+	}
+	var official []InstallReference
+	for _, item := range found {
+		if isOfficialSource(item.Action.SourceURLOrPath) {
+			official = append(official, item)
+		}
+	}
+	if len(official) == 1 {
+		official[0].OtherCopies = len(found) - 1
+		official[0].SkippedSources = skipped
+		return official[0], nil
+	}
+	if len(skipped) > 0 {
+		return InstallReference{}, fmt.Errorf("marketplace plugin %q could not be resolved safely because %d source(s) could not be scanned: %s",
+			name, len(skipped), strings.Join(skipped, ", "))
+	}
+	return InstallReference{}, fmt.Errorf("marketplace plugin %q is ambiguous; qualify it as name@marketplace", name)
+}
+
+func parseInstallReference(raw string) (name, qualifier string, ok bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || strings.Contains(raw, "://") || strings.HasPrefix(raw, "git@") ||
+		strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "\\") || strings.HasPrefix(raw, ".") ||
+		strings.HasPrefix(raw, "~") || strings.Contains(raw, "#") ||
+		len(raw) >= 2 && ((raw[0] >= 'a' && raw[0] <= 'z') || (raw[0] >= 'A' && raw[0] <= 'Z')) && raw[1] == ':' {
+		return "", "", false
+	}
+	name, qualifier, _ = strings.Cut(raw, "@")
+	if name == "" || strings.ContainsAny(name, `/\`) || qualifier == "" && strings.Contains(raw, "@") {
+		return "", "", false
+	}
+	return name, qualifier, true
+}
+
+func matchingSources(sources []Source, qualifier string) []Source {
+	want := strings.ToLower(strings.TrimSuffix(strings.TrimSuffix(strings.TrimSpace(qualifier), "/"), ".git"))
+	localSlug := strings.TrimPrefix(want, "local/")
+	gitSlug := strings.TrimPrefix(want, "git/")
+	var result []Source
+	for _, source := range sources {
+		nameSlug := slugify(source.Name)
+		ownerRepo := githubOwnerRepo(source.Git)
+		match := strings.EqualFold(source.Name, qualifier) || nameSlug == slugify(qualifier) || ownerRepo == want
+		match = match || source.Path != "" && strings.HasPrefix(want, "local/") && nameSlug == localSlug
+		match = match || source.Git != "" && strings.HasPrefix(want, "git/") && nameSlug == gitSlug
+		if match {
+			result = append(result, source)
+		}
+	}
+	return result
+}
+
+func findSourceEntry(source Source, name string) (Entry, bool, error) {
+	root, err := sourceRoot(source, false)
+	if err != nil {
+		return Entry{}, false, err
+	}
+	var matches []Entry
+	for _, entry := range scanRoot(root, sourceIdentity(source)) {
+		if strings.EqualFold(entry.Name, name) {
+			matches = append(matches, entry)
+		}
+	}
+	if len(matches) == 0 {
+		return Entry{}, false, nil
+	}
+	if len(matches) > 1 {
+		return Entry{}, false, fmt.Errorf("marketplace plugin %q is duplicated in %s", name, source.Name)
+	}
+	return matches[0], true, nil
+}
+
+func installReference(source Source, entry Entry, otherCopies int) InstallReference {
+	return InstallReference{
+		Name: entry.Name, SourceName: source.Name, OtherCopies: otherCopies,
+		Action: Action{Type: "install", SourceURLOrPath: sourceIdentity(source), PluginRelativePath: entry.RelativePath},
+	}
+}
+
+func slugify(value string) string {
+	return strings.Join(strings.Fields(strings.ToLower(value)), "-")
+}
+
+func githubOwnerRepo(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.TrimSuffix(strings.TrimSuffix(value, "/"), ".git")
+	for _, prefix := range []string{"https://", "http://", "ssh://", "git@"} {
+		value = strings.TrimPrefix(value, prefix)
+	}
+	value = strings.TrimPrefix(value, "www.")
+	if strings.HasPrefix(value, "github.com/") {
+		return strings.TrimPrefix(value, "github.com/")
+	}
+	if strings.HasPrefix(value, "github.com:") {
+		return strings.TrimPrefix(value, "github.com:")
+	}
+	return ""
 }
 
 func Sources(configPath, cwd string) ([]Source, error) {
@@ -354,6 +517,18 @@ func installEntry(configPath, cwd string, sources []Source, action Action) (Outc
 	installSource, err := entryInstallSource(root, entry, action.PluginRelativePath)
 	if err != nil {
 		return Outcome{Status: "validation_error", Message: err.Error()}, nil
+	}
+	if entry.InstallStatus == "installed" {
+		_, name, ok, err := plugin.FindMarketplace(sourceIdentity(source), action.PluginRelativePath)
+		if err != nil {
+			return Outcome{}, err
+		}
+		if ok {
+			return Outcome{
+				Status: "success", Message: fmt.Sprintf("Plugin %q is already installed from %s.", entry.Name, source.Name),
+				Plugins: []string{name}, AlreadyInstalled: true,
+			}, nil
+		}
 	}
 	installed, err := plugin.Install(installSource, cwd)
 	if err != nil {

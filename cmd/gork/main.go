@@ -1835,6 +1835,42 @@ func runPlugin(args []string, stdout, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
+		reference, marketplaceRef, err := marketplace.ResolveInstallReference("", cwd, source)
+		if err != nil {
+			return err
+		}
+		if marketplaceRef {
+			outcome, err := marketplace.Execute("", cwd, reference.Action)
+			if err != nil {
+				return err
+			}
+			if outcome.Status != "success" {
+				return errors.New(outcome.Message)
+			}
+			if outcome.AlreadyInstalled {
+				fmt.Fprintf(stdout, "Plugin %q is already installed from %s. Run `gork plugin update %s` to update it.\n",
+					reference.Name, reference.SourceName, outcome.Plugins[0])
+				return nil
+			}
+			if err := config.UpdatePlugins("", func(settings *config.PluginsConfig) {
+				for _, name := range outcome.Plugins {
+					if !slices.Contains(settings.Enabled, name) {
+						settings.Enabled = append(settings.Enabled, name)
+					}
+					settings.Disabled = slices.DeleteFunc(settings.Disabled, func(value string) bool { return value == name })
+				}
+			}); err != nil {
+				return err
+			}
+			if reference.OtherCopies > 0 {
+				fmt.Fprintf(stdout, "Using %s; %d other marketplace copy/copies were skipped.\n", reference.SourceName, reference.OtherCopies)
+			}
+			for _, name := range reference.SkippedSources {
+				fmt.Fprintf(stderr, "Marketplace source %q could not be scanned and was skipped.\n", name)
+			}
+			fmt.Fprintf(stdout, "Installed %d plugin(s) from %s: %s\n", len(outcome.Plugins), reference.SourceName, strings.Join(outcome.Plugins, ", "))
+			return nil
+		}
 		outcome, err := plugin.Install(source, cwd)
 		if err != nil {
 			return err
