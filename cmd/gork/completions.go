@@ -57,6 +57,7 @@ var completionRoot = completionSpec{
 		"share":   {flags: words("--config --session-dir")},
 		"setup":   {flags: words("--config --json")},
 		"trace":   {flags: words("--local --output -o --json --session-dir")},
+		"update":  {flags: words("--alpha --check --force-reinstall --json --stable --version")},
 		"version": {flags: []string{"--json"}},
 		"v":       {flags: []string{"--json"}},
 		"wrap":    {},
@@ -78,7 +79,7 @@ var completionValueFlags = map[string]bool{
 	"--prompt-file": true, "--prompt-json": true, "--reasoning-effort": true, "--rules": true, "--single": true,
 	"--args": true, "--command": true, "--env": true, "--header": true, "--repo": true, "--resume": true, "--sandbox": true, "--scope": true, "--scopes": true,
 	"--session-dir": true, "--session-id": true, "--system": true, "--system-prompt": true, "--system-prompt-override": true,
-	"--timeout": true, "--type": true, "--transport": true, "--url": true, "--workspace": true, "-H": true, "-e": true, "-m": true,
+	"--timeout": true, "--type": true, "--transport": true, "--url": true, "--version": true, "--workspace": true, "-H": true, "-e": true, "-m": true,
 	"--worktree": true, "--worktree-ref": true, "--ref": true, "-n": true, "-p": true, "-r": true, "-s": true,
 	"-t": true, "-w": true,
 }

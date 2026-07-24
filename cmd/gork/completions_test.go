@@ -29,7 +29,7 @@ func TestCompletionCandidatesFollowCommandTree(t *testing.T) {
 		args []string
 		want []string
 	}{
-		{nil, []string{"--always-approve", "--continue", "--cwd", "--disable-web-search", "--fork-session", "--json-schema", "--load", "--max-turns", "--no-ask-user", "--no-plan", "--no-subagents", "--output-format", "--prompt-file", "--prompt-json", "--reasoning-effort", "--ref", "--session-id", "--single", "--worktree", "--worktree-ref", "-c", "-m", "-p", "-r", "-s", "-w", "-V", "completions", "dashboard", "models", "plugin", "share", "trace", "version", "wrap", "worktree"}},
+		{nil, []string{"--always-approve", "--continue", "--cwd", "--disable-web-search", "--fork-session", "--json-schema", "--load", "--max-turns", "--no-ask-user", "--no-plan", "--no-subagents", "--output-format", "--prompt-file", "--prompt-json", "--reasoning-effort", "--ref", "--session-id", "--single", "--worktree", "--worktree-ref", "-c", "-m", "-p", "-r", "-s", "-w", "-V", "completions", "dashboard", "models", "plugin", "share", "trace", "update", "version", "wrap", "worktree"}},
 		{[]string{"dashboard", "--"}, []string{"--config", "--fullscreen", "--minimal", "--session-dir", "--trust", "--workspace"}},
 		{[]string{"completions", ""}, []string{"bash", "elvish", "fish", "powershell", "zsh"}},
 		{[]string{"plugin", ""}, []string{"details", "disable", "enable", "install", "list", "marketplace", "remove", "rm", "tag", "uninstall", "update", "validate"}},
@@ -44,6 +44,7 @@ func TestCompletionCandidatesFollowCommandTree(t *testing.T) {
 		{[]string{"sessions", "search", "query", "--l"}, []string{"--limit"}},
 		{[]string{"worktree", "db", ""}, []string{"path", "rebuild", "stats"}},
 		{[]string{"worktree", "p"}, []string{"prune"}},
+		{[]string{"update", "--"}, []string{"--alpha", "--check", "--force-reinstall", "--json", "--stable", "--version"}},
 	}
 	for _, test := range tests {
 		choices := strings.Join(completionCandidates(test.args), " ")

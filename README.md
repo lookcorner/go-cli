@@ -302,6 +302,19 @@ Generate a completion script for the current CLI with `gork completions
 <bash|elvish|fish|powershell|zsh>`. The command is side-effect free, so it can
 be used directly by shell startup files and installers.
 
+Check the community build's update policy and current release channel with:
+
+```sh
+gork update --check
+gork update --check --json
+gork update --check --alpha
+```
+
+Channel switches are stored atomically in `[cli].channel`. As in the reference
+privacy build, `gork update` never downloads or installs vendor binaries because
+that would replace Gork with the official distribution. It instead points to
+the community Releases page and the local source-build command.
+
 Use `gork wrap <command> [args...]` to run a container, SSH client, or other
 interactive command in a local Unix PTY. OSC 52 clipboard writes, including
 tmux passthrough sequences, are copied to the local native clipboard and
