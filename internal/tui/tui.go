@@ -109,12 +109,23 @@ type selectionClearEvent struct{ nonce uint64 }
 type contextualUndoClearEvent struct{ nonce uint64 }
 type planNudgeClearEvent struct{ nonce uint64 }
 type sendNowClearEvent struct{ nonce uint64 }
+type smallScreenHintTickEvent struct{ nonce uint64 }
 
 type contextualHintState struct {
 	enabled bool
 	shown   int
 	nonce   uint64
 	persist func(bool) error
+}
+
+type smallScreenHintState struct {
+	enabled   bool
+	measured  bool
+	evaluated bool
+	active    bool
+	remaining time.Duration
+	nonce     uint64
+	persist   func(bool) error
 }
 
 type approvalChoice string
@@ -673,6 +684,7 @@ type model struct {
 	undoHint            contextualHintState
 	planModeHint        contextualHintState
 	sendNowHint         contextualHintState
+	smallScreenHint     smallScreenHintState
 	multiline           bool
 	history             []string
 	historyIndex        int
@@ -918,6 +930,8 @@ type UIOptions struct {
 	SetContextualPlan    func(bool) error
 	ContextualSendNow    bool
 	SetContextualSendNow func(bool) error
+	ContextualSmall      bool
+	SetContextualSmall   func(bool) error
 	DefaultPermission    string
 	SetDefaultPermission func(string) error
 	CancelSubs           string
@@ -1107,6 +1121,10 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 			enabled: options.ContextualSendNow,
 			persist: options.SetContextualSendNow,
 		},
+		smallScreenHint: smallScreenHintState{
+			enabled: options.ContextualSmall,
+			persist: options.SetContextualSmall,
+		},
 		defaultPermission:    options.DefaultPermission,
 		persistPermission:    options.SetDefaultPermission,
 		cancelSubagents:      options.CancelSubs,
@@ -1241,6 +1259,11 @@ func (m *model) Init() tea.Cmd {
 func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	updated, command := m.update(message)
 	current, ok := updated.(*model)
+	if ok {
+		if hintCommand := current.maybeStartSmallScreenHint(); hintCommand != nil {
+			command = tea.Batch(command, hintCommand)
+		}
+	}
 	if !ok || !current.minimal {
 		return updated, command
 	}
@@ -1270,6 +1293,7 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.selectionClick = selectionClickState{}
 		m.width = max(msg.Width, 20)
 		m.height = max(msg.Height, 10)
+		m.smallScreenHint.measured = true
 		if m.timelineWidth() == 0 {
 			m.timelineHover = nil
 		}
@@ -1434,6 +1458,18 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "thinking"
 		}
 		return m, nil
+	case smallScreenHintTickEvent:
+		if !m.smallScreenHint.active || m.smallScreenHint.nonce != msg.nonce {
+			return m, nil
+		}
+		if m.smallScreenHintCanRender() {
+			m.smallScreenHint.remaining -= 100 * time.Millisecond
+			if m.smallScreenHint.remaining <= 0 {
+				m.smallScreenHint.active = false
+				return m, nil
+			}
+		}
+		return m, m.smallScreenHintTick()
 	case mouseClickEvent:
 		switch msg.action {
 		case "approval_option":
@@ -4532,6 +4568,45 @@ func (m *model) shouldShowPlanNudge(key tea.Key, beforePlanning bool) bool {
 	return !beforePlanning && promptMentionsPlanning(text) && !strings.HasPrefix(text, "/") && !strings.HasPrefix(text, "!")
 }
 
+func (m *model) maybeStartSmallScreenHint() tea.Cmd {
+	if m.smallScreenHint.evaluated || !m.smallScreenHint.measured {
+		return nil
+	}
+	if !smallScreenBandContains(m.height) || m.compactMode || !m.smallScreenHint.enabled {
+		m.smallScreenHint.evaluated = true
+		return nil
+	}
+	if !m.smallScreenHintCanRender() {
+		return nil
+	}
+	m.smallScreenHint.evaluated = true
+	m.smallScreenHint.active = true
+	m.smallScreenHint.remaining = 3 * time.Second
+	m.smallScreenHint.nonce++
+	return m.smallScreenHintTick()
+}
+
+func smallScreenBandContains(rows int) bool {
+	return rows > 20 && rows <= 28
+}
+
+func (m *model) smallScreenHintTick() tea.Cmd {
+	nonce := m.smallScreenHint.nonce
+	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
+		return smallScreenHintTickEvent{nonce: nonce}
+	})
+}
+
+func (m *model) smallScreenHintCanRender() bool {
+	return m.announcementHeight() == 0 && m.approval == nil && m.planReview == nil &&
+		m.cancelTurn == nil && m.question == nil && m.mcp == nil && m.claudeImport == nil &&
+		m.extensions == nil && m.agentConfig == nil && m.dashboard == nil && m.settings == nil &&
+		m.docs == nil && m.sessionSelect == nil && m.forkChoice == nil && m.modelSelect == nil &&
+		m.rewind == nil && m.jump == nil && m.remember == nil && !m.rememberInput &&
+		m.historySearch == nil && m.scrollSearch == nil && m.viewer == nil &&
+		len(m.slashSuggestions()) == 0
+}
+
 func isPasteKey(key tea.Key) bool {
 	return key.Mod&(tea.ModCtrl|tea.ModSuper) != 0 &&
 		(key.Code == 'v' || strings.EqualFold(key.Text, "v"))
@@ -5179,7 +5254,11 @@ func (m *model) View() tea.View {
 		parts = append(parts, inputLines...)
 		footer = strings.Join(parts, "\n") + "\n" + ansiDim + truncate(hint, width) + ansiReset
 	}
-	status := ansiDim + truncate(m.status, width) + ansiReset
+	statusText := m.status
+	if m.smallScreenHint.active && m.smallScreenHintCanRender() {
+		statusText = "Tight on space? Try /compact-mode"
+	}
+	status := ansiDim + truncate(statusText, width) + ansiReset
 	prefix := header + "\n"
 	if len(banner) > 0 {
 		prefix += strings.Join(banner, "\n") + "\n"

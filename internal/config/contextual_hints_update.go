@@ -12,6 +12,10 @@ func UpdateContextualSendNowHint(path string, enabled bool) error {
 	return updateContextualHint(path, "send_now", enabled)
 }
 
+func UpdateContextualSmallScreenHint(path string, enabled bool) error {
+	return updateContextualHint(path, "small_screen", enabled)
+}
+
 func updateContextualHint(path, name string, enabled bool) error {
 	return updateUserConfig(path, func(root map[string]any) error {
 		ui, _ := root["ui"].(map[string]any)

@@ -1175,6 +1175,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			ContextualUndo:      cfg.UI.ContextualHints.Undo,
 			ContextualPlan:      cfg.UI.ContextualHints.PlanMode,
 			ContextualSendNow:   cfg.UI.ContextualHints.SendNow,
+			ContextualSmall:     cfg.UI.ContextualHints.SmallScreen,
 			DefaultPermission:   cfg.UI.DefaultSelectedPermission,
 			CancelSubs:          cfg.UI.CancelSubagents,
 			DefaultModelID:      cfg.DefaultModelID,
@@ -1220,6 +1221,9 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			},
 			SetContextualSendNow: func(enabled bool) error {
 				return config.UpdateContextualSendNowHint(opts.configPath, enabled)
+			},
+			SetContextualSmall: func(enabled bool) error {
+				return config.UpdateContextualSmallScreenHint(opts.configPath, enabled)
 			},
 			SetDefaultPermission: func(value string) error {
 				if err := config.UpdateDefaultSelectedPermission(opts.configPath, value); err != nil {

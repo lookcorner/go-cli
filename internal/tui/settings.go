@@ -24,7 +24,7 @@ type settingsNumber struct {
 	large int
 }
 
-const settingsCount = 28
+const settingsCount = 29
 
 func (m *model) openSettings() {
 	m.settings = &settingsState{}
@@ -281,6 +281,12 @@ func (m *model) applySetting(selected int) {
 		if m.sendNowHint.persist != nil {
 			state.err = persistSetting(m.sendNowHint.persist(m.sendNowHint.enabled), func() { m.sendNowHint.enabled = previous })
 		}
+	case 28:
+		previous := m.smallScreenHint.enabled
+		m.smallScreenHint.enabled = !previous
+		if m.smallScreenHint.persist != nil {
+			state.err = persistSetting(m.smallScreenHint.persist(m.smallScreenHint.enabled), func() { m.smallScreenHint.enabled = previous })
+		}
 	}
 	if state.err != "" {
 		m.status = "setting update failed"
@@ -470,6 +476,7 @@ func (m *model) settingsContent() string {
 		settingLine("Undo hint", m.undoHint.enabled),
 		settingLine("Plan-mode hint", m.planModeHint.enabled),
 		settingLine("Send-now hint", m.sendNowHint.enabled),
+		settingLine("Small-screen hint", m.smallScreenHint.enabled),
 	}
 	if m.planModeAvailable() {
 		lines = append(lines, settingLine("Plan mode", m.planMode))

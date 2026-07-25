@@ -76,9 +76,10 @@ type RemoteSettings struct {
 }
 
 type RemoteHints struct {
-	Undo     *bool `json:"undo"`
-	PlanMode *bool `json:"plan_mode"`
-	SendNow  *bool `json:"send_now"`
+	Undo        *bool `json:"undo"`
+	PlanMode    *bool `json:"plan_mode"`
+	SendNow     *bool `json:"send_now"`
+	SmallScreen *bool `json:"small_screen"`
 }
 
 type RemoteAnnouncement = announcement.Announcement
@@ -202,6 +203,9 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 	}
 	if !c.uiContextualSendNowConfigured {
 		c.UI.ContextualHints.SendNow = remote.ContextualHints == nil || remote.ContextualHints.SendNow == nil || *remote.ContextualHints.SendNow
+	}
+	if !c.uiContextualSmallConfigured {
+		c.UI.ContextualHints.SmallScreen = remote.ContextualHints == nil || remote.ContextualHints.SmallScreen == nil || *remote.ContextualHints.SmallScreen
 	}
 	applyContextualHintsEnvironment(c)
 	if remote.OfficialMarketplaceAutoRegister != nil {

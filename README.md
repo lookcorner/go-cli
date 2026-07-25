@@ -788,6 +788,11 @@ When an idle prompt first crosses into a planning keyword such as `plan`,
 `Planning? Check out plan mode via shift+tab` up to three times per session.
 Whole-word matching avoids near neighbours such as `explain` and `planet`.
 Set `plan_mode = false` under `[ui.contextual_hints]` to hide the nudge.
+On the first measured terminal size, heights from 21 through 28 rows show
+`Tight on space? Try /compact-mode` once per session when compact mode is off.
+The three-second visible lifetime pauses while a modal or announcement covers
+the status row, and submitting a prompt does not dismiss it. Set
+`small_screen = false` under `[ui.contextual_hints]` to hide this hint.
 While a turn is running, Enter queues a non-empty follow-up. The TUI then
 shows `Queued · Enter to send now`; pressing Enter again with an empty composer
 injects the oldest queued follow-up into the current turn. Set

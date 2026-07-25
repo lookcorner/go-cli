@@ -112,6 +112,12 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 				return nil
 			},
 		},
+		smallScreenHint: smallScreenHintState{
+			persist: func(value bool) error {
+				booleans = append(booleans, "small-screen-hint")
+				return nil
+			},
+		},
 		persistQuestionTime: func(value bool) error {
 			booleans = append(booleans, "question-timeout")
 			return nil
@@ -188,8 +194,8 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 			t.Fatalf("index=%d command=%v err=%q status=%q", index, command != nil, m.settings.err, m.status)
 		}
 	}
-	if !m.showTimestamps || !m.showTimeline || !m.compactMode || !m.vimMode || !m.defaultMinimal || !m.groupToolVerbs || !m.collapsedEditBlocks || !m.suggestionsEnabled || !m.rememberApprovals || !m.questionTimeout || !m.multiline || !m.invertScroll || !m.undoHint.enabled || !m.planModeHint.enabled || !m.sendNowHint.enabled ||
-		strings.Join(booleans, ",") != "timestamps,timeline,compact,vim,group,edits,suggestions,remember,question-timeout,invert-scroll,undo-hint,plan-mode-hint,send-now-hint" || strings.Join(screenModes, ",") != "minimal" {
+	if !m.showTimestamps || !m.showTimeline || !m.compactMode || !m.vimMode || !m.defaultMinimal || !m.groupToolVerbs || !m.collapsedEditBlocks || !m.suggestionsEnabled || !m.rememberApprovals || !m.questionTimeout || !m.multiline || !m.invertScroll || !m.undoHint.enabled || !m.planModeHint.enabled || !m.sendNowHint.enabled || !m.smallScreenHint.enabled ||
+		strings.Join(booleans, ",") != "timestamps,timeline,compact,vim,group,edits,suggestions,remember,question-timeout,invert-scroll,undo-hint,plan-mode-hint,send-now-hint,small-screen-hint" || strings.Join(screenModes, ",") != "minimal" {
 		t.Fatalf("timestamps=%v timeline=%v compact=%v vim=%v persisted=%v", m.showTimestamps, m.showTimeline, m.compactMode, m.vimMode, booleans)
 	}
 	if m.themeName != "grokday" || m.theme.name != "grokday" || strings.Join(themes, ",") != "grokday" {
@@ -269,6 +275,23 @@ func TestSettingsContextualPlanModeHintRollsBackPersistenceFailure(t *testing.T)
 	m = updated.(*model)
 	if command != nil || !m.planModeHint.enabled || m.settings.err != "read only" || m.status != "setting update failed" {
 		t.Fatalf("command=%v enabled=%v err=%q status=%q", command != nil, m.planModeHint.enabled, m.settings.err, m.status)
+	}
+}
+
+func TestSettingsContextualSmallScreenHintRollsBackPersistenceFailure(t *testing.T) {
+	m := &model{
+		smallScreenHint: smallScreenHintState{
+			enabled: true,
+			persist: func(bool) error {
+				return errors.New("read only")
+			},
+		},
+		settings: &settingsState{selected: 28},
+	}
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || !m.smallScreenHint.enabled || m.settings.err != "read only" || m.status != "setting update failed" {
+		t.Fatalf("command=%v enabled=%v err=%q status=%q", command != nil, m.smallScreenHint.enabled, m.settings.err, m.status)
 	}
 }
 
