@@ -131,6 +131,28 @@ type mermaidRequirementRelation struct {
 	kind string
 }
 
+type mermaidC4Shape struct {
+	alias    string
+	kind     string
+	label    string
+	tech     string
+	detail   string
+	boundary string
+}
+
+type mermaidC4Boundary struct {
+	alias string
+	label string
+	kind  string
+}
+
+type mermaidC4Relation struct {
+	from  string
+	to    string
+	label string
+	tech  string
+}
+
 var mermaidOperators = []string{
 	"||--o{", "||--|{", "}o--o{", "}o..o{", "}o--||", "}|..|{",
 	"<|--", "<-->", "--|>", "-.->", "-->>", "->>", "--x", "--o", "-x", "==>", "-->", "<--",
@@ -178,6 +200,9 @@ func renderMermaid(source string, width int, theme themePalette) ([]string, bool
 	}
 	if firstToken == "requirementDiagram" {
 		return renderMermaidRequirement(source, width, theme)
+	}
+	if strings.HasPrefix(firstToken, "C4") {
+		return renderMermaidC4(source, width, theme)
 	}
 	statements, complete := mermaidStatements(source)
 	if !complete || len(statements) < 1 {
@@ -326,6 +351,262 @@ func renderMermaidRequirement(source string, width int, theme themePalette) ([]s
 		rendered = append(rendered, theme.code+mermaidFit(relation.from+" ─<<"+relation.kind+">>→ "+relation.to, width)+ansiReset)
 	}
 	return rendered, true
+}
+
+func renderMermaidC4(source string, width int, theme themePalette) ([]string, bool) {
+	validHeaders := map[string]bool{
+		"C4Context": true, "C4Container": true, "C4Component": true,
+		"C4Dynamic": true, "C4Deployment": true,
+	}
+	shapeKinds := map[string]string{
+		"Person": "person", "Person_Ext": "external_person",
+		"System": "system", "System_Ext": "external_system",
+		"SystemDb": "system_db", "SystemDb_Ext": "external_system_db",
+		"SystemQueue": "system_queue", "SystemQueue_Ext": "external_system_queue",
+		"Container": "container", "Container_Ext": "external_container",
+		"ContainerDb": "container_db", "ContainerDb_Ext": "external_container_db",
+		"ContainerQueue": "container_queue", "ContainerQueue_Ext": "external_container_queue",
+		"Component": "component", "Component_Ext": "external_component",
+		"ComponentDb": "component_db", "ComponentDb_Ext": "external_component_db",
+		"ComponentQueue": "component_queue", "ComponentQueue_Ext": "external_component_queue",
+	}
+	boundaryKinds := map[string]bool{
+		"Boundary": true, "Enterprise_Boundary": true, "System_Boundary": true,
+		"Container_Boundary": true, "Deployment_Node": true,
+		"Deployment_Node_L": true, "Deployment_Node_R": true,
+	}
+	relationKinds := map[string]bool{
+		"Rel": true, "Rel_U": true, "Rel_D": true, "Rel_L": true,
+		"Rel_R": true, "Rel_Back": true, "Rel_Neighbor": true,
+	}
+	biRelationKinds := map[string]bool{
+		"BiRel": true, "BiRel_U": true, "BiRel_D": true,
+		"BiRel_L": true, "BiRel_R": true, "BiRel_Neighbor": true,
+	}
+	lines := strings.Split(source, "\n")
+	statements := 0
+	for _, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if line != "" && !strings.HasPrefix(line, "%%") {
+			statements++
+			if statements > maxMermaidStatements {
+				return nil, false
+			}
+		}
+	}
+
+	header := ""
+	title := ""
+	shapes := make([]mermaidC4Shape, 0)
+	boundaries := make([]mermaidC4Boundary, 0)
+	relations := make([]mermaidC4Relation, 0)
+	boundaryStack := []string{"global"}
+	for _, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "%%") {
+			continue
+		}
+		if header == "" {
+			token := strings.Fields(line)[0]
+			if !validHeaders[token] {
+				return nil, false
+			}
+			header = token
+			continue
+		}
+		if value, ok := strings.CutPrefix(line, "title "); ok {
+			title = strings.TrimSpace(value)
+			continue
+		}
+		if line == "title" {
+			continue
+		}
+		if line == "}" || line == "end" {
+			if len(boundaryStack) > 1 {
+				boundaryStack = boundaryStack[:len(boundaryStack)-1]
+			}
+			continue
+		}
+		name, args, ok := mermaidC4Statement(line)
+		if !ok {
+			continue
+		}
+		if kind, ok := shapeKinds[name]; ok {
+			if len(shapes)+len(boundaries) == maxMermaidNodes {
+				return nil, false
+			}
+			shape := mermaidC4Shape{alias: mermaidC4Arg(args, 0), kind: kind, label: mermaidC4Arg(args, 1), boundary: boundaryStack[len(boundaryStack)-1]}
+			if strings.HasPrefix(name, "Person") || strings.HasPrefix(name, "System") {
+				shape.detail = mermaidC4Arg(args, 2)
+			} else {
+				shape.tech = mermaidC4Arg(args, 2)
+				shape.detail = mermaidC4Arg(args, 3)
+			}
+			shapes = append(shapes, shape)
+			continue
+		}
+		if boundaryKinds[name] {
+			if len(shapes)+len(boundaries) == maxMermaidNodes {
+				return nil, false
+			}
+			boundary := mermaidC4Boundary{alias: mermaidC4Arg(args, 0), label: mermaidC4Arg(args, 1), kind: mermaidC4Arg(args, 2)}
+			boundaries = append(boundaries, boundary)
+			boundaryStack = append(boundaryStack, boundary.alias)
+			continue
+		}
+		if relationKinds[name] || biRelationKinds[name] {
+			if len(relations) == maxMermaidRelations {
+				return nil, false
+			}
+			relations = append(relations, mermaidC4Relation{
+				from: mermaidC4Arg(args, 0), to: mermaidC4Arg(args, 1),
+				label: mermaidC4Arg(args, 2), tech: mermaidC4Arg(args, 3),
+			})
+		}
+	}
+	if header == "" {
+		return nil, false
+	}
+
+	boundaryByAlias := make(map[string]mermaidC4Boundary, len(boundaries))
+	for _, boundary := range boundaries {
+		boundaryByAlias[boundary.alias] = boundary
+	}
+	shapeAliases := make(map[string]bool, len(shapes))
+	usedBoundaries := make(map[string]bool, len(boundaries))
+	for _, shape := range shapes {
+		shapeAliases[shape.alias] = true
+		usedBoundaries[shape.boundary] = true
+	}
+	rendered := []string{ansiDim + mermaidFit("◇ mermaid C4", width) + ansiReset}
+	rendered = append(rendered, theme.heading+mermaidFit(header, width)+ansiReset)
+	if title != "" {
+		rendered = append(rendered, theme.heading+mermaidFit(title, width)+ansiReset)
+	}
+	for _, boundary := range boundaries {
+		if !usedBoundaries[boundary.alias] {
+			continue
+		}
+		label := boundary.label
+		if boundary.kind != "" {
+			label += " [" + boundary.kind + "]"
+		}
+		rendered = append(rendered, theme.heading+mermaidFit("boundary: "+label, width)+ansiReset)
+	}
+	for _, shape := range shapes {
+		line := "<<" + shape.kind + ">> " + shape.alias
+		if shape.label != "" {
+			line += ": " + shape.label
+		}
+		if shape.tech != "" {
+			line += " [" + shape.tech + "]"
+		}
+		rendered = append(rendered, theme.code+mermaidFit(line, width)+ansiReset)
+		if shape.detail != "" {
+			rendered = append(rendered, ansiDim+mermaidFit("  "+shape.detail, width)+ansiReset)
+		}
+		if boundary, ok := boundaryByAlias[shape.boundary]; ok {
+			rendered = append(rendered, ansiDim+mermaidFit("  in: "+boundary.label, width)+ansiReset)
+		}
+	}
+	for index, relation := range relations {
+		if !shapeAliases[relation.from] || !shapeAliases[relation.to] {
+			continue
+		}
+		label := relation.label
+		if header == "C4Dynamic" {
+			label = strconv.Itoa(index+1) + ": " + label
+		}
+		line := relation.from + " → " + relation.to
+		if label != "" {
+			line += ": " + label
+		}
+		if relation.tech != "" {
+			line += " [" + relation.tech + "]"
+		}
+		rendered = append(rendered, theme.code+mermaidFit(line, width)+ansiReset)
+	}
+	return rendered, true
+}
+
+func mermaidC4Statement(line string) (string, []string, bool) {
+	open := strings.IndexByte(strings.TrimSpace(line), '(')
+	line = strings.TrimSpace(line)
+	if open <= 0 {
+		return "", nil, false
+	}
+	name := strings.TrimSpace(line[:open])
+	depth := 0
+	quoted := false
+	close := -1
+	for offset, char := range line[open+1:] {
+		switch char {
+		case '"':
+			quoted = !quoted
+		case '(':
+			if !quoted {
+				depth++
+			}
+		case ')':
+			if !quoted {
+				if depth == 0 {
+					close = open + 1 + offset
+				} else {
+					depth--
+				}
+			}
+		}
+		if close >= 0 {
+			break
+		}
+	}
+	if close < 0 {
+		return "", nil, false
+	}
+	return name, mermaidC4Args(line[open+1 : close]), true
+}
+
+func mermaidC4Args(value string) []string {
+	args := make([]string, 0)
+	var current strings.Builder
+	depth := 0
+	quoted := false
+	for _, char := range value {
+		switch char {
+		case '"':
+			quoted = !quoted
+		case '(':
+			if !quoted {
+				depth++
+			}
+			current.WriteRune(char)
+		case ')':
+			if !quoted {
+				depth--
+			}
+			current.WriteRune(char)
+		case ',':
+			if !quoted && depth == 0 {
+				args = append(args, strings.TrimSpace(current.String()))
+				current.Reset()
+			} else {
+				current.WriteRune(char)
+			}
+		default:
+			current.WriteRune(char)
+		}
+	}
+	if last := strings.TrimSpace(current.String()); last != "" {
+		args = append(args, last)
+	}
+	return args
+}
+
+func mermaidC4Arg(args []string, index int) string {
+	if index >= len(args) {
+		return ""
+	}
+	return args[index]
 }
 
 func mermaidRequirementParseNode(lines []string, start int) (mermaidRequirementNode, int, bool, bool) {

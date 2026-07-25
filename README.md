@@ -560,9 +560,9 @@ Within a session, `/minimal` reopens the same session in minimal mode and
 The TUI streams model output as it arrives, renders headings, emphasis, links,
 lists, quotes, pipe tables, and inline or fenced code, strips untrusted terminal
 control characters, and keeps a scrollable transcript. Closed Mermaid fences for
-flowcharts, graphs, state, sequence, class, entity-relationship, requirement, info, pie, timeline, journey,
+flowcharts, graphs, state, sequence, class, entity-relationship, C4, requirement, info, pie, timeline, journey,
 Gantt, packet, block, Kanban, Git graph, Sankey, quadrant, radar, XY chart, and mindmap diagrams are rendered as width-bounded
-Unicode relationship, requirement, version, percentage, chronology, task, bit-range,
+Unicode relationship, architecture, requirement, version, percentage, chronology, task, bit-range,
 commit-history, flow, grid, board, coordinate, axis/value, series, or hierarchy art.
 Unknown diagram kinds,
 unparseable input, incomplete streaming fences, and terminals narrower than five

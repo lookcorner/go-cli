@@ -316,6 +316,143 @@ func TestRenderMermaidRequirement(t *testing.T) {
 	}
 }
 
+func TestRenderMermaidC4(t *testing.T) {
+	source := "C4Context extra\ntitle System Context\nPerson(customer, \"Customer\", \"Uses the system\")\nSystem(system, \"Internet Banking\", \"Handles accounts\")\nRel(customer, system, \"Uses\", \"HTTPS\")"
+	lines, ok := renderMermaid(source, 48, paletteFor("groknight"))
+	if !ok {
+		t.Fatal("supported Mermaid C4 diagram was rejected")
+	}
+	rendered := stripUIANSI(strings.Join(lines, "\n"))
+	for _, expected := range []string{
+		"◇ mermaid C4", "C4Context", "System Context", "<<person>> customer: Customer",
+		"Uses the system", "<<system>> system: Internet Banking", "Handles accounts",
+		"customer → system: Uses [HTTPS]",
+	} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("rendered C4 diagram missing %q:\n%s", expected, rendered)
+		}
+	}
+	for _, line := range lines {
+		if displayWidth(stripUIANSI(line)) > 48 {
+			t.Fatalf("C4 diagram line exceeds width: %q", stripUIANSI(line))
+		}
+	}
+}
+
+func TestRenderMermaidC4SupportsReferenceShapes(t *testing.T) {
+	source := "C4Container\nPerson_Ext(p, \"External Person\")\nSystemDb(db, \"System DB\")\nSystemQueue_Ext(sq, \"External Queue\")\nContainer(c, \"API\", \"Go\", \"Serves requests\")\nContainerDb_Ext(cd, \"Store\", \"Postgres\")\nContainerQueue(cq, \"Jobs\", \"NATS\")\nComponent(comp, \"Handler\", \"Go\")\nComponentDb_Ext(cdb, \"Cache\", \"Redis\")\nComponentQueue_Ext(cq2, \"Events\", \"Kafka\")"
+	lines, ok := renderMermaid(source, 60, paletteFor("groknight"))
+	if !ok {
+		t.Fatal("reference C4 shapes were rejected")
+	}
+	rendered := stripUIANSI(strings.Join(lines, "\n"))
+	for _, expected := range []string{
+		"<<external_person>> p", "<<system_db>> db", "<<external_system_queue>> sq",
+		"<<container>> c: API [Go]", "Serves requests", "<<external_container_db>> cd",
+		"<<container_queue>> cq", "<<component>> comp", "<<external_component_db>> cdb",
+		"<<external_component_queue>> cq2",
+	} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("rendered C4 diagram missing %q:\n%s", expected, rendered)
+		}
+	}
+}
+
+func TestRenderMermaidC4SupportsBoundariesAndRelations(t *testing.T) {
+	source := "C4Deployment\nEnterprise_Boundary(ent, \"Enterprise\", \"Company\") {\nSystem_Boundary(sys, \"Platform\") {\nContainer(api, \"API\", \"Go\")\n}\n}\nDeployment_Node(node, \"Cloud\", \"AWS\") {\nContainer(worker, \"Worker\", \"Go\")\nend\nBiRel_L(api, worker, \"Sync\", \"gRPC\")\nRel_Back(missing, api, \"Ignored\")\nUpdateElementStyle(api, $bgColor=red)\nUnknown(foo)\nnot a statement"
+	lines, ok := renderMermaid(source, 56, paletteFor("groknight"))
+	if !ok {
+		t.Fatal("reference C4 boundary diagram was rejected")
+	}
+	rendered := stripUIANSI(strings.Join(lines, "\n"))
+	for _, expected := range []string{
+		"C4Deployment", "boundary: Platform", "<<container>> api",
+		"in: Platform", "boundary: Cloud [AWS]", "<<container>> worker",
+		"in: Cloud", "api → worker: Sync [gRPC]",
+	} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("rendered C4 diagram missing %q:\n%s", expected, rendered)
+		}
+	}
+	if strings.Contains(rendered, "boundary: Enterprise") {
+		t.Fatalf("boundary without direct shapes was rendered:\n%s", rendered)
+	}
+	for _, unexpected := range []string{"Ignored", "UpdateElementStyle", "Unknown", "not a statement"} {
+		if strings.Contains(rendered, unexpected) {
+			t.Fatalf("rendered C4 diagram contains ignored text %q:\n%s", unexpected, rendered)
+		}
+	}
+}
+
+func TestRenderMermaidC4DynamicNumbersRelations(t *testing.T) {
+	source := "C4Dynamic\nSystem(a, \"A\")\nSystem(b, \"B\")\nRel(missing, b, \"Skipped\")\nRel(a, b, \"First\")\nRel_R(a, b, \"Second\")"
+	lines, ok := renderMermaid(source, 40, paletteFor("groknight"))
+	if !ok {
+		t.Fatal("C4Dynamic diagram was rejected")
+	}
+	rendered := stripUIANSI(strings.Join(lines, "\n"))
+	for _, expected := range []string{"a → b: 2: First", "a → b: 3: Second"} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("rendered dynamic C4 missing %q:\n%s", expected, rendered)
+		}
+	}
+	if strings.Contains(rendered, "Skipped") {
+		t.Fatalf("dynamic C4 rendered a relation with a missing endpoint:\n%s", rendered)
+	}
+}
+
+func TestRenderMermaidC4MatchesReferenceArgumentParsing(t *testing.T) {
+	source := "C4Component\ntitle\nComponent(c, \"Label, with (details)\", \"Go\", \"Description, too\")\nPerson(p, 'Single quoted', ignored)\nMalformed(\"missing close\"\nUnknown(nested(a,b), \"ignored\")"
+	lines, ok := renderMermaid(source, 64, paletteFor("groknight"))
+	if !ok {
+		t.Fatal("reference-compatible C4 arguments were rejected")
+	}
+	rendered := stripUIANSI(strings.Join(lines, "\n"))
+	for _, expected := range []string{"Label, with (details)", "[Go]", "Description, too", "<<person>> p: 'Single quoted'"} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("rendered C4 diagram missing %q:\n%s", expected, rendered)
+		}
+	}
+}
+
+func TestRenderMermaidC4AcceptsEveryHeaderAndEmptyDiagram(t *testing.T) {
+	for _, header := range []string{"C4Context", "C4Container", "C4Component", "C4Dynamic", "C4Deployment"} {
+		lines, ok := renderMermaid("%% comment\n"+header, 24, paletteFor("groknight"))
+		if !ok || !strings.Contains(stripUIANSI(strings.Join(lines, "\n")), header) {
+			t.Fatalf("empty %s diagram was rejected", header)
+		}
+	}
+}
+
+func TestRenderMermaidC4RejectsOtherHeadersAndBoundsStatements(t *testing.T) {
+	for _, source := range []string{"", "%% comment", "C4Unknown", "flowchart TD"} {
+		if _, ok := renderMermaidC4(source, 40, paletteFor("groknight")); ok {
+			t.Fatalf("invalid C4 diagram was accepted: %q", source)
+		}
+	}
+	var source strings.Builder
+	source.WriteString("C4Context\n")
+	for index := 0; index < maxMermaidStatements; index++ {
+		source.WriteString("title value\n")
+	}
+	if _, ok := renderMermaid(source.String(), 40, paletteFor("groknight")); ok {
+		t.Fatal("C4 diagram exceeding the statement limit was accepted")
+	}
+}
+
+func TestRenderMarkdownRendersClosedMermaidC4(t *testing.T) {
+	source := "Before\n```mermaid\nC4Context\nPerson(user, \"User\")\n```\nAfter"
+	rendered := stripUIANSI(strings.Join(renderMarkdown(source, 32), "\n"))
+	for _, expected := range []string{"Before", "◇ mermaid C4", "C4Context", "User", "After"} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("rendered Markdown missing %q:\n%s", expected, rendered)
+		}
+	}
+	if strings.Contains(rendered, "```mermaid") || strings.Contains(rendered, "Person(user") {
+		t.Fatalf("closed Mermaid C4 source was not replaced:\n%s", rendered)
+	}
+}
+
 func TestRenderMermaidRequirementMatchesReferenceParsing(t *testing.T) {
 	source := "%% before\nrequirementDiagram\ndirection TD\nfunctionalRequirement func {\n risk: MEDIUM\n verifymethod: analysis\n}\ninterfaceRequirement iface {\n risk: custom\n verifyMethod: custom\n}\nperformanceRequirement perf {\n}\nphysicalRequirement physical\n%% gap\n{\n}\ndesignConstraint design {\n}\nelement part {\n docRef: REF-2\n}\niface <- traces - func"
 	lines, ok := renderMermaid(source, 64, paletteFor("groknight"))
