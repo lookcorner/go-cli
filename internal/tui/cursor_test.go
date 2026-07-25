@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -28,8 +29,14 @@ func TestApplyCursorBlinkPreservesOrRestoresTerminalStyle(t *testing.T) {
 			var output strings.Builder
 			restore := applyCursorBlink(&output, test.blink)
 			restore()
-			if got := output.String(); got != test.want {
-				t.Fatalf("output=%q want=%q", got, test.want)
+			want := test.want
+			if runtime.GOOS == "windows" {
+				// Windows enables VT sequences only on a real console; a
+				// non-console writer receives nothing.
+				want = ""
+			}
+			if got := output.String(); got != want {
+				t.Fatalf("output=%q want=%q", got, want)
 			}
 		})
 	}
