@@ -203,6 +203,84 @@ func TestRenderMermaidRadar(t *testing.T) {
 	}
 }
 
+func TestRenderMermaidMindmap(t *testing.T) {
+	source := "mindmap\n  root((Product))\n    Discovery\n      Interviews\n      Research\n    Delivery\n      Build\n      Ship"
+	lines, ok := renderMermaid(source, 36, paletteFor("groknight"))
+	if !ok {
+		t.Fatal("supported Mermaid mindmap was rejected")
+	}
+	rendered := stripUIANSI(strings.Join(lines, "\n"))
+	for _, expected := range []string{
+		"◇ mermaid mindmap", "○ Product", "├─• Discovery", "│ ├─• Interviews",
+		"│ └─• Research", "└─• Delivery", "  ├─• Build", "  └─• Ship",
+	} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("rendered mindmap missing %q:\n%s", expected, rendered)
+		}
+	}
+	for _, line := range lines {
+		if displayWidth(stripUIANSI(line)) > 36 {
+			t.Fatalf("mindmap line exceeds width: %q", stripUIANSI(line))
+		}
+	}
+}
+
+func TestRenderMermaidMindmapMatchesReferenceParsing(t *testing.T) {
+	source := "%% comment\nmindmap extra\n  plain root\n    rect[Rectangle]\n    round(Rounded)\n    circle((Circle))\n    hex{{Hexagon}}\n    bang))Bang((\n    ::icon(fa fa-book)\n    empty(())\n  sibling root"
+	lines, ok := renderMermaid(source, 48, paletteFor("groknight"))
+	if !ok {
+		t.Fatal("reference-compatible Mermaid mindmap was rejected")
+	}
+	rendered := stripUIANSI(strings.Join(lines, "\n"))
+	for _, expected := range []string{
+		"● plain root", "├─□ Rectangle", "├─▢ Rounded", "├─○ Circle",
+		"├─⬡ Hexagon", "├─✦ Bang", "├─▢ ()", "└─• sibling root",
+	} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("mindmap parsing differs from reference, missing %q:\n%s", expected, rendered)
+		}
+	}
+	if strings.Contains(rendered, "::icon") {
+		t.Fatalf("mindmap rendered ignored decoration:\n%s", rendered)
+	}
+}
+
+func TestRenderMermaidMindmapRejectsReferenceParseErrors(t *testing.T) {
+	for _, source := range []string{
+		"mindmap",
+		"%% comment only",
+		"flowchart TD\n  A --> B",
+	} {
+		if _, ok := renderMermaidMindmap(source, 40, paletteFor("groknight")); ok {
+			t.Fatalf("invalid mindmap was accepted: %q", source)
+		}
+	}
+}
+
+func TestRenderMermaidMindmapBoundsStatements(t *testing.T) {
+	var source strings.Builder
+	source.WriteString("mindmap\n  root\n")
+	for index := 0; index < maxMermaidStatements-1; index++ {
+		source.WriteString("    child\n")
+	}
+	if _, ok := renderMermaid(source.String(), 40, paletteFor("groknight")); ok {
+		t.Fatal("mindmap exceeding the statement limit was accepted")
+	}
+}
+
+func TestRenderMarkdownRendersClosedMermaidMindmap(t *testing.T) {
+	source := "Before\n```mermaid\nmindmap\n  root\n    child\n```\nAfter"
+	rendered := stripUIANSI(strings.Join(renderMarkdown(source, 32), "\n"))
+	for _, expected := range []string{"Before", "◇ mermaid mindmap", "● root", "└─• child", "After"} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("rendered Mermaid mindmap missing %q:\n%s", expected, rendered)
+		}
+	}
+	if strings.Contains(rendered, "mindmap\n  root") {
+		t.Fatalf("closed Mermaid mindmap source was not replaced:\n%s", rendered)
+	}
+}
+
 func TestRenderMermaidXYChart(t *testing.T) {
 	source := "xychart-beta\ntitle \"Weekly users\"\nx-axis \"Month\" [Jan, 'Feb, early', Mar]\ny-axis \"Users\" 0 --> 40\nline [20.3, 22.6, 24.2]\nline [3.2, 6.3, 10]"
 	lines, ok := renderMermaid(source, 52, paletteFor("groknight"))

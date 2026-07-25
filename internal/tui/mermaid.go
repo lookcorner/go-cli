@@ -94,6 +94,12 @@ type mermaidXYAxis struct {
 	numeric    bool
 }
 
+type mermaidMindmapNode struct {
+	label    string
+	shape    string
+	children []*mermaidMindmapNode
+}
+
 var mermaidOperators = []string{
 	"||--o{", "||--|{", "}o--o{", "}o..o{", "}o--||", "}|..|{",
 	"<|--", "<-->", "--|>", "-.->", "-->>", "->>", "--x", "--o", "-x", "==>", "-->", "<--",
@@ -126,6 +132,9 @@ func renderMermaid(source string, width int, theme themePalette) ([]string, bool
 	}
 	if firstToken == "xychart-beta" {
 		return renderMermaidXYChart(source, width, theme)
+	}
+	if firstToken == "mindmap" {
+		return renderMermaidMindmap(source, width, theme)
 	}
 	statements, complete := mermaidStatements(source)
 	if !complete || len(statements) < 1 {
@@ -177,6 +186,102 @@ func renderMermaid(source string, width int, theme themePalette) ([]string, bool
 		}
 	}
 	return lines, true
+}
+
+func renderMermaidMindmap(source string, width int, theme themePalette) ([]string, bool) {
+	type stackEntry struct {
+		indent int
+		node   *mermaidMindmapNode
+	}
+	stack := make([]stackEntry, 0)
+	foundHeader := false
+	statements := 0
+	for _, raw := range strings.Split(source, "\n") {
+		text := strings.TrimSpace(raw)
+		if text == "" || strings.HasPrefix(strings.TrimLeft(raw, " \t"), "%%") {
+			continue
+		}
+		statements++
+		if statements > maxMermaidStatements {
+			return nil, false
+		}
+		if !foundHeader {
+			if strings.Fields(text)[0] != "mindmap" {
+				return nil, false
+			}
+			foundHeader = true
+			continue
+		}
+		if strings.HasPrefix(text, "::") {
+			continue
+		}
+		indent := len(raw) - len(strings.TrimLeft(raw, " \t"))
+		isRoot := len(stack) == 0
+		for len(stack) > 0 && stack[len(stack)-1].indent >= indent {
+			child := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			if len(stack) == 0 {
+				stack = append(stack, stackEntry{indent: indent, node: child.node})
+				break
+			}
+			parent := stack[len(stack)-1].node
+			parent.children = append(parent.children, child.node)
+		}
+		label, shape := mermaidMindmapLabel(text)
+		if isRoot && shape == "•" {
+			shape = "●"
+		}
+		stack = append(stack, stackEntry{indent: indent, node: &mermaidMindmapNode{label: label, shape: shape}})
+	}
+	for len(stack) > 1 {
+		child := stack[len(stack)-1].node
+		stack = stack[:len(stack)-1]
+		parent := stack[len(stack)-1].node
+		parent.children = append(parent.children, child)
+	}
+	if len(stack) == 0 {
+		return nil, false
+	}
+	lines := []string{ansiDim + mermaidFit("◇ mermaid mindmap", width) + ansiReset}
+	root := stack[0].node
+	lines = append(lines, theme.heading+mermaidFit(root.shape+" "+root.label, width)+ansiReset)
+	var renderChildren func(*mermaidMindmapNode, string)
+	renderChildren = func(parent *mermaidMindmapNode, prefix string) {
+		for index, child := range parent.children {
+			last := index == len(parent.children)-1
+			connector := "├─"
+			nextPrefix := prefix + "│ "
+			if last {
+				connector = "└─"
+				nextPrefix = prefix + "  "
+			}
+			lines = append(lines, theme.code+mermaidFit(prefix+connector+child.shape+" "+child.label, width)+ansiReset)
+			renderChildren(child, nextPrefix)
+		}
+	}
+	renderChildren(root, "")
+	return lines, true
+}
+
+func mermaidMindmapLabel(text string) (string, string) {
+	text = strings.TrimSpace(text)
+	for _, shape := range []struct {
+		open   string
+		close  string
+		symbol string
+	}{
+		{open: "((", close: "))", symbol: "○"},
+		{open: "{{", close: "}}", symbol: "⬡"},
+		{open: "))", close: "((", symbol: "✦"},
+		{open: "[", close: "]", symbol: "□"},
+		{open: "(", close: ")", symbol: "▢"},
+	} {
+		start := strings.Index(text, shape.open)
+		if start >= 0 && strings.HasSuffix(text, shape.close) && start+len(shape.open) < len(text)-len(shape.close) {
+			return strings.TrimSpace(text[start+len(shape.open) : len(text)-len(shape.close)]), shape.symbol
+		}
+	}
+	return text, "•"
 }
 
 func renderMermaidXYChart(source string, width int, theme themePalette) ([]string, bool) {
