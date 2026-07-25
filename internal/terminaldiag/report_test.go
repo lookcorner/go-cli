@@ -35,6 +35,21 @@ func TestBuildSnapshotJSONShape(t *testing.T) {
 }
 
 func TestBuildReportDescribesTerminalAndRoutes(t *testing.T) {
+	prev := probeTmuxOption
+	probeTmuxOption = func(option string, window bool) (string, bool) {
+		switch option {
+		case "set-clipboard":
+			return "external", true
+		case "allow-passthrough":
+			return "on", true
+		case "extended-keys":
+			return "on", true
+		default:
+			return "", false
+		}
+	}
+	t.Cleanup(func() { probeTmuxOption = prev })
+
 	env := map[string]string{
 		"TERM_PROGRAM": "WezTerm", "TERM": "xterm-256color", "COLORTERM": "truecolor",
 		"TMUX": "/tmp/tmux", "SSH_CONNECTION": "client server",
@@ -45,7 +60,38 @@ func TestBuildReportDescribesTerminalAndRoutes(t *testing.T) {
 		}
 		return "", errors.New("missing")
 	}, "darwin")
-	for _, want := range []string{"terminal     WezTerm", "multiplexer  tmux", "ssh          yes", "color        truecolor", "native       active (tool: pbcopy)", "osc 52       active", "No issues found."} {
+	for _, want := range []string{"terminal     WezTerm", "multiplexer  tmux", "ssh          yes", "color        truecolor", "set-clipboard external", "allow-passthrough on", "extended-keys on", "native       active (tool: pbcopy)", "osc 52       active", "No issues found."} {
+		if !strings.Contains(report, want) {
+			t.Errorf("missing %q in %q", want, report)
+		}
+	}
+}
+
+func TestBuildReportWarnsForUnhealthyTmuxOptions(t *testing.T) {
+	prev := probeTmuxOption
+	probeTmuxOption = func(option string, _ bool) (string, bool) {
+		switch option {
+		case "set-clipboard":
+			return "off", true
+		case "allow-passthrough":
+			return "off", true
+		case "extended-keys":
+			return "off", true
+		default:
+			return "", false
+		}
+	}
+	t.Cleanup(func() { probeTmuxOption = prev })
+
+	env := map[string]string{"TERM": "xterm-256color", "COLORTERM": "truecolor", "TMUX": "yes"}
+	snapshot := BuildSnapshot(func(key string) string { return env[key] }, func(string) (string, error) {
+		return "/bin/pbcopy", nil
+	}, "darwin")
+	if snapshot.Counts.Issues != 3 {
+		t.Fatalf("issues=%d findings=%v", snapshot.Counts.Issues, snapshot.Findings)
+	}
+	report := snapshot.Human()
+	for _, want := range []string{"gork doctor fix tmux-clipboard", "gork doctor fix dcs-passthrough", "gork doctor fix tmux-extended-keys"} {
 		if !strings.Contains(report, want) {
 			t.Errorf("missing %q in %q", want, report)
 		}
@@ -65,6 +111,10 @@ func TestBuildReportExplainsDegradedEnvironment(t *testing.T) {
 }
 
 func TestBuildReportWarnsForBasicTmuxColor(t *testing.T) {
+	prev := probeTmuxOption
+	probeTmuxOption = func(string, bool) (string, bool) { return "", false }
+	t.Cleanup(func() { probeTmuxOption = prev })
+
 	env := map[string]string{"TERM": "screen", "TMUX": "yes", "BYOBU_BACKEND": "tmux"}
 	report := buildReport(func(key string) string { return env[key] }, func(name string) (string, error) {
 		if name == "wl-copy" {

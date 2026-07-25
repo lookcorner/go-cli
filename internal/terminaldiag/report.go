@@ -19,14 +19,17 @@ type Snapshot struct {
 }
 
 type Facts struct {
-	Terminal      string `json:"terminal"`
-	Multiplexer   string `json:"multiplexer"`
-	SSH           bool   `json:"ssh"`
-	Color         string `json:"color"`
-	NativeClip    bool   `json:"nativeClipboard"`
-	ClipboardTool string `json:"clipboardTool,omitempty"`
-	OSC52         bool   `json:"osc52"`
-	GOOS          string `json:"goos"`
+	Terminal         string `json:"terminal"`
+	Multiplexer      string `json:"multiplexer"`
+	SSH              bool   `json:"ssh"`
+	Color            string `json:"color"`
+	NativeClip       bool   `json:"nativeClipboard"`
+	ClipboardTool    string `json:"clipboardTool,omitempty"`
+	OSC52            bool   `json:"osc52"`
+	GOOS             string `json:"goos"`
+	SetClipboard     string `json:"tmuxSetClipboard,omitempty"`
+	AllowPassthrough string `json:"tmuxAllowPassthrough,omitempty"`
+	ExtendedKeys     string `json:"tmuxExtendedKeys,omitempty"`
 }
 
 type Counts struct {
@@ -62,12 +65,15 @@ func BuildSnapshot(getenv func(string) string, lookPath func(string) (string, er
 	color := colorSupport(getenv, term)
 	clipboard, clipboardTool := nativeClipboard(lookPath, goos)
 	osc52 := term != "dumb" && (term != "" || brand != "unknown")
+	tmux := collectTmuxProbe(getenv)
 	findings := terminalWarnings(term, color, multiplexer, clipboard, osc52)
+	findings = append(findings, tmuxProbeFindings(tmux)...)
 	return Snapshot{
 		SchemaVersion: SchemaVersion,
 		Facts: Facts{
 			Terminal: brand, Multiplexer: multiplexer, SSH: ssh, Color: color,
 			NativeClip: clipboard, ClipboardTool: clipboardTool, OSC52: osc52, GOOS: goos,
+			SetClipboard: tmux.SetClipboard, AllowPassthrough: tmux.AllowPassthrough, ExtendedKeys: tmux.ExtendedKeys,
 		},
 		Findings: findings,
 		Counts:   Counts{Issues: len(findings)},
@@ -78,6 +84,10 @@ func (s Snapshot) Human() string {
 	var out strings.Builder
 	fmt.Fprintf(&out, "Environment\n  terminal     %s\n  multiplexer  %s\n  ssh          %s\n  color        %s\n",
 		s.Facts.Terminal, s.Facts.Multiplexer, yesNo(s.Facts.SSH), s.Facts.Color)
+	if s.Facts.Multiplexer == "tmux" || strings.Contains(s.Facts.Multiplexer, "tmux") {
+		fmt.Fprintf(&out, "  set-clipboard %s\n  allow-passthrough %s\n  extended-keys %s\n",
+			tmuxFactOrUnknown(s.Facts.SetClipboard), tmuxFactOrUnknown(s.Facts.AllowPassthrough), tmuxFactOrUnknown(s.Facts.ExtendedKeys))
+	}
 	fmt.Fprintf(&out, "\nClipboard routes\n  native       %s", activeOff(s.Facts.NativeClip))
 	if s.Facts.ClipboardTool != "" {
 		fmt.Fprintf(&out, " (tool: %s)", s.Facts.ClipboardTool)
@@ -92,6 +102,13 @@ func (s Snapshot) Human() string {
 		fmt.Fprintf(&out, "\n  [!] %s", warning)
 	}
 	return out.String()
+}
+
+func tmuxFactOrUnknown(value string) string {
+	if value == "" {
+		return "unknown"
+	}
+	return value
 }
 
 func buildReport(getenv func(string) string, lookPath func(string) (string, error), goos string) string {

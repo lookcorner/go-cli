@@ -49,6 +49,7 @@ func TestDoctorCLIRejectsArguments(t *testing.T) {
 }
 
 func TestDoctorEarlyDispatch(t *testing.T) {
+	t.Setenv("TMUX", "")
 	var stdout, stderr bytes.Buffer
 	if err := runOnce([]string{"doctor", "--json"}, strings.NewReader(""), &stdout, &stderr); err != nil {
 		t.Fatal(err)
