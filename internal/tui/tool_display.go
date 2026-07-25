@@ -54,6 +54,19 @@ type toolVerbGroup struct {
 	rendered    bool
 }
 
+type collapsedEditMember struct {
+	path           string
+	added, removed int
+	full           string
+}
+
+type collapsedEditGroup struct {
+	prefix      string
+	members     []collapsedEditMember
+	expandIndex int
+	rendered    bool
+}
+
 func (b *Bridge) ToolStarted(call api.ToolCall) {
 	b.send(toolStartedEvent{call: call})
 }
@@ -66,6 +79,7 @@ func (m *model) finishTool(event toolFinishedEvent) {
 	full, _ := renderToolBlock(event.call, event.result, event.err, false)
 	if m.groupToolVerbs {
 		if kind, ok := classifyToolVerb(event.call.Name, event.call.Arguments); ok {
+			m.finishCollapsedEditGroup()
 			m.addToolVerbMember(toolVerbMember{kind: kind, failed: event.err != nil, full: full})
 			m.status = "tool finished: " + event.call.Name
 			return
@@ -73,16 +87,13 @@ func (m *model) finishTool(event toolFinishedEvent) {
 	}
 	m.finishToolVerbGroup()
 	if m.collapsedEditBlocks {
-		if summary, ok := collapsedEditSummary(event.call.Name, event.call.Arguments, event.result.Output, event.err != nil); ok {
-			m.appendToolDisplay(summary)
-			m.rememberToolExpansion(full)
-			if m.minimal {
-				m.minimalFlushTo = m.transcript.Len()
-			}
+		if member, ok := collapsedEditMemberFor(event.call.Name, event.call.Arguments, event.result.Output, event.err != nil, full); ok {
+			m.addCollapsedEditMember(member)
 			m.status = "tool finished: " + event.call.Name
 			return
 		}
 	}
+	m.finishCollapsedEditGroup()
 	compact, folded := renderToolBlock(event.call, event.result, event.err, true)
 	m.appendToolDisplay(compact)
 	if folded {
@@ -142,6 +153,46 @@ func (m *model) finishToolVerbGroup() {
 		m.minimalFlushTo = m.transcript.Len()
 	}
 	m.toolVerbGroup = nil
+}
+
+func (m *model) addCollapsedEditMember(member collapsedEditMember) {
+	if group := m.collapsedEditGroup; group != nil && !sameEditPath(group.members[0].path, member.path, m.workspace) {
+		m.finishCollapsedEditGroup()
+	}
+	if m.collapsedEditGroup == nil {
+		m.collapsedEditGroup = &collapsedEditGroup{prefix: m.transcript.String(), expandIndex: -1}
+	}
+	group := m.collapsedEditGroup
+	group.members = append(group.members, member)
+	label := collapsedEditGroupLabel(group.members)
+	full := collapsedEditGroupExpansion(group.members)
+	if m.minimal {
+		return
+	}
+	if group.rendered {
+		m.transcript.Reset()
+		m.transcript.WriteString(group.prefix)
+	}
+	m.appendToolDisplay(label)
+	group.rendered = true
+	if group.expandIndex < 0 {
+		group.expandIndex = m.rememberToolExpansion(full)
+	} else if group.expandIndex < len(m.toolExpand) {
+		m.toolExpand[group.expandIndex] = full
+	}
+}
+
+func (m *model) finishCollapsedEditGroup() {
+	group := m.collapsedEditGroup
+	if group == nil {
+		return
+	}
+	if m.minimal {
+		m.appendToolDisplay(collapsedEditGroupLabel(group.members))
+		m.rememberToolExpansion(collapsedEditGroupExpansion(group.members))
+		m.minimalFlushTo = m.transcript.Len()
+	}
+	m.collapsedEditGroup = nil
 }
 
 func (m *model) expandLastTool() {
@@ -222,7 +273,7 @@ func renderStoredToolBlock(tool session.DisplayTool, compact bool) (string, bool
 	return fmt.Sprintf("#### %s: `%s`\n\n%s", title, tool.Name, strings.Join(sections, "\n\n")), folded
 }
 
-func sessionDisplayTranscript(path string, collapsedEditBlocks, groupToolVerbs bool) (string, []transcriptMessage, []string, error) {
+func sessionDisplayTranscript(path, workspace string, collapsedEditBlocks, groupToolVerbs bool) (string, []transcriptMessage, []string, error) {
 	entries, err := session.DisplayTimeline(path)
 	if err != nil {
 		return "", nil, nil, err
@@ -233,6 +284,7 @@ func sessionDisplayTranscript(path string, collapsedEditBlocks, groupToolVerbs b
 	assistantOpen := false
 	lastKind := ""
 	var verbGroup []session.DisplayTool
+	var editGroup []collapsedEditMember
 	separate := func() {
 		if text.Len() > 0 {
 			text.WriteString("\n\n")
@@ -245,14 +297,6 @@ func sessionDisplayTranscript(path string, collapsedEditBlocks, groupToolVerbs b
 		text.WriteByte('\n')
 	}
 	writeTool := func(tool session.DisplayTool) {
-		if collapsedEditBlocks {
-			if summary, ok := collapsedEditSummary(tool.Name, tool.Arguments, tool.Output, tool.Failed); ok {
-				text.WriteString(summary)
-				full, _ := renderStoredToolBlock(tool, false)
-				expands = appendBoundedExpansion(expands, full)
-				return
-			}
-		}
 		compact, folded := renderStoredToolBlock(tool, true)
 		text.WriteString(compact)
 		if folded {
@@ -278,10 +322,23 @@ func sessionDisplayTranscript(path string, collapsedEditBlocks, groupToolVerbs b
 		verbGroup = nil
 		lastKind = "tool"
 	}
+	flushEditGroup := func() {
+		if len(editGroup) == 0 {
+			return
+		}
+		if lastKind != "" {
+			text.WriteString("\n\n")
+		}
+		text.WriteString(collapsedEditGroupLabel(editGroup))
+		expands = appendBoundedExpansion(expands, collapsedEditGroupExpansion(editGroup))
+		editGroup = nil
+		lastKind = "tool"
+	}
 	for _, entry := range entries {
 		switch entry.Kind {
 		case "user":
 			flushVerbGroup()
+			flushEditGroup()
 			if entry.Synthetic {
 				assistantOpen = false
 				lastKind = ""
@@ -301,6 +358,7 @@ func sessionDisplayTranscript(path string, collapsedEditBlocks, groupToolVerbs b
 			}
 			if entry.Kind == "assistant" {
 				flushVerbGroup()
+				flushEditGroup()
 				if lastKind == "tool" {
 					text.WriteString("\n\n")
 				}
@@ -308,11 +366,23 @@ func sessionDisplayTranscript(path string, collapsedEditBlocks, groupToolVerbs b
 			} else if entry.Tool != nil {
 				if groupToolVerbs {
 					if _, ok := classifyToolVerb(entry.Tool.Name, entry.Tool.Arguments); ok {
+						flushEditGroup()
 						verbGroup = append(verbGroup, *entry.Tool)
 						continue
 					}
 				}
 				flushVerbGroup()
+				if collapsedEditBlocks {
+					full, _ := renderStoredToolBlock(*entry.Tool, false)
+					if member, ok := collapsedEditMemberFor(entry.Tool.Name, entry.Tool.Arguments, entry.Tool.Output, entry.Tool.Failed, full); ok {
+						if len(editGroup) > 0 && !sameEditPath(editGroup[0].path, member.path, workspace) {
+							flushEditGroup()
+						}
+						editGroup = append(editGroup, member)
+						continue
+					}
+				}
+				flushEditGroup()
 				if lastKind != "" {
 					text.WriteString("\n\n")
 				}
@@ -322,6 +392,7 @@ func sessionDisplayTranscript(path string, collapsedEditBlocks, groupToolVerbs b
 		}
 	}
 	flushVerbGroup()
+	flushEditGroup()
 	return strings.TrimSpace(text.String()), messages, expands, nil
 }
 
@@ -436,14 +507,46 @@ func toolVerbGroupExpansion(members []toolVerbMember) string {
 }
 
 func collapsedEditSummary(name string, arguments json.RawMessage, output string, failed bool) (string, bool) {
-	if failed {
-		return "", false
-	}
-	path, added, removed, ok := editDiffstat(name, arguments, output)
+	member, ok := collapsedEditMemberFor(name, arguments, output, failed, "")
 	if !ok {
 		return "", false
 	}
-	return fmt.Sprintf("Edit `%s` +%d/-%d", filepath.Base(path), added, removed), true
+	return collapsedEditGroupLabel([]collapsedEditMember{member}), true
+}
+
+func collapsedEditMemberFor(name string, arguments json.RawMessage, output string, failed bool, full string) (collapsedEditMember, bool) {
+	if failed {
+		return collapsedEditMember{}, false
+	}
+	path, added, removed, ok := editDiffstat(name, arguments, output)
+	return collapsedEditMember{path: path, added: added, removed: removed, full: full}, ok
+}
+
+func collapsedEditGroupLabel(members []collapsedEditMember) string {
+	added, removed := 0, 0
+	for _, member := range members {
+		added += member.added
+		removed += member.removed
+	}
+	return fmt.Sprintf("Edit `%s` +%d/-%d", filepath.Base(members[0].path), added, removed)
+}
+
+func collapsedEditGroupExpansion(members []collapsedEditMember) string {
+	blocks := make([]string, 0, len(members))
+	for _, member := range members {
+		blocks = append(blocks, member.full)
+	}
+	return strings.Join(blocks, "\n\n")
+}
+
+func sameEditPath(left, right, workspace string) bool {
+	normalize := func(path string) string {
+		if workspace != "" && !filepath.IsAbs(path) {
+			path = filepath.Join(workspace, path)
+		}
+		return filepath.Clean(path)
+	}
+	return normalize(left) == normalize(right)
 }
 
 func editDiffstat(name string, raw json.RawMessage, output string) (string, int, int, bool) {

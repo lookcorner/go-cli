@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -158,6 +159,7 @@ func TestCollapsedEditBlockUsesExactDiffstatAndKeepsExpansion(t *testing.T) {
 		},
 		result: tools.ExecutionResult{Output: "edited internal/greet.py (1 replacement(s))"},
 	})
+	m.finishCollapsedEditGroup()
 	text := m.transcript.String()
 	if !strings.Contains(text, "Edit `greet.py` +2/-1") || strings.Contains(text, "Arguments") || len(m.toolExpand) != 1 {
 		t.Fatalf("collapsed edit=%q expansions=%d", text, len(m.toolExpand))
@@ -165,6 +167,81 @@ func TestCollapsedEditBlockUsesExactDiffstatAndKeepsExpansion(t *testing.T) {
 	m.expandLastTool()
 	if !strings.Contains(m.transcript.String(), "search_replace") || !strings.Contains(m.transcript.String(), "return name") {
 		t.Fatalf("expanded edit lost full tool details:\n%s", m.transcript.String())
+	}
+}
+
+func TestCollapsedEditBlocksCoalesceAdjacentSameFile(t *testing.T) {
+	m := &model{collapsedEditBlocks: true, workspace: "/tmp/project", width: 80, height: 20}
+	for _, test := range []struct {
+		path, oldText, newText string
+	}{
+		{path: "src/main.go", oldText: "old", newText: "new\nline"},
+		{path: "/tmp/project/src/main.go", oldText: "other\nold", newText: "other"},
+	} {
+		m.finishTool(toolFinishedEvent{
+			call: api.ToolCall{
+				Name: "edit_file",
+				Arguments: json.RawMessage(fmt.Sprintf(
+					`{"path":%q,"old_text":%q,"new_text":%q}`, test.path, test.oldText, test.newText,
+				)),
+			},
+			result: tools.ExecutionResult{Output: "edited " + test.path + " (1 replacement(s))"},
+		})
+	}
+	if got, want := m.transcript.String(), "Edit `main.go` +3/-3\n"; got != want {
+		t.Fatalf("coalesced edit=%q want=%q", got, want)
+	}
+	if len(m.toolExpand) != 1 || strings.Count(m.toolExpand[0], "#### Tool: `edit_file`") != 2 {
+		t.Fatalf("expansion=%#v", m.toolExpand)
+	}
+	m.finishTool(toolFinishedEvent{
+		call:   api.ToolCall{Name: "shell", Arguments: json.RawMessage(`{"command":"true"}`)},
+		result: tools.ExecutionResult{Output: "ok"},
+	})
+	if m.collapsedEditGroup != nil || strings.Count(m.transcript.String(), "Edit `main.go`") != 1 {
+		t.Fatalf("boundary did not finish edit group:\n%s", m.transcript.String())
+	}
+}
+
+func TestCollapsedEditBlocksKeepDifferentFilesAndFailuresSeparate(t *testing.T) {
+	m := &model{collapsedEditBlocks: true, width: 80, height: 20}
+	m.finishTool(toolFinishedEvent{
+		call:   api.ToolCall{Name: "edit_file", Arguments: json.RawMessage(`{"path":"a.go","old_text":"a","new_text":"b"}`)},
+		result: tools.ExecutionResult{Output: "edited a.go (1 replacement(s))"},
+	})
+	m.finishTool(toolFinishedEvent{
+		call:   api.ToolCall{Name: "edit_file", Arguments: json.RawMessage(`{"path":"b.go","old_text":"a","new_text":"b"}`)},
+		result: tools.ExecutionResult{Output: "edited b.go (1 replacement(s))"},
+	})
+	m.finishTool(toolFinishedEvent{
+		call: api.ToolCall{Name: "edit_file", Arguments: json.RawMessage(`{"path":"b.go","old_text":"b","new_text":"c"}`)},
+		err:  errors.New("stale"),
+	})
+	if text := m.transcript.String(); strings.Count(text, "Edit `a.go`") != 1 || strings.Count(text, "Edit `b.go`") != 1 ||
+		!strings.Contains(text, "#### Tool failed: `edit_file`") {
+		t.Fatalf("separate edits:\n%s", text)
+	}
+}
+
+func TestMinimalCollapsedEditGroupPrintsAtBoundary(t *testing.T) {
+	m := &model{minimal: true, collapsedEditBlocks: true, width: 80, height: 20}
+	for _, oldText := range []string{"a", "b"} {
+		m.finishTool(toolFinishedEvent{
+			call: api.ToolCall{Name: "edit_file", Arguments: json.RawMessage(
+				fmt.Sprintf(`{"path":"main.go","old_text":%q,"new_text":"next"}`, oldText),
+			)},
+			result: tools.ExecutionResult{Output: "edited main.go (1 replacement(s))"},
+		})
+	}
+	if m.transcript.Len() != 0 || len(m.toolExpand) != 0 {
+		t.Fatalf("minimal edit printed before boundary: %q", m.transcript.String())
+	}
+	m.finishCollapsedEditGroup()
+	if got := m.transcript.String(); got != "Edit `main.go` +2/-2\n" {
+		t.Fatalf("minimal group=%q", got)
+	}
+	if len(m.toolExpand) != 1 || strings.Count(m.toolExpand[0], "#### Tool: `edit_file`") != 2 {
+		t.Fatalf("minimal expansion=%#v", m.toolExpand)
 	}
 }
 
@@ -317,7 +394,7 @@ func TestSessionDisplayTranscriptRestoresToolsInOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	text, messages, expands, err := sessionDisplayTranscript(path, false, false)
+	text, messages, expands, err := sessionDisplayTranscript(path, "", false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -369,11 +446,53 @@ func TestSessionDisplayTranscriptRestoresCollapsedEdit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	text, _, expands, err := sessionDisplayTranscript(path, true, false)
+	text, _, expands, err := sessionDisplayTranscript(path, "", true, false)
 	if err != nil || !strings.Contains(text, "Edit `main.go` +2/-1") || strings.Contains(text, "Arguments") {
 		t.Fatalf("text=%q err=%v", text, err)
 	}
 	if len(expands) != 1 || !strings.Contains(expands[0], `"old_text": "old"`) {
+		t.Fatalf("expansions=%#v", expands)
+	}
+}
+
+func TestSessionDisplayTranscriptCoalescesAdjacentSameFileEdits(t *testing.T) {
+	logger, err := session.NewLoggerWithID(t.TempDir(), "coalesced-edits")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.AppendPrompt("edit", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append("model_response", map[string]any{"response_id": "r1", "tool_call_count": 2}); err != nil {
+		t.Fatal(err)
+	}
+	workspace := t.TempDir()
+	for index, editPath := range []string{"src/main.go", filepath.Join(workspace, "src", "main.go")} {
+		id := fmt.Sprintf("call-%d", index)
+		if err := logger.Append("tool_call", map[string]any{
+			"call_id": id, "name": "edit_file",
+			"arguments": json.RawMessage(fmt.Sprintf(`{"path":%q,"old_text":"old","new_text":"new"}`, editPath)),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := logger.Append("tool_result", map[string]any{
+			"call_id": id, "name": "edit_file", "output": "edited " + editPath + " (1 replacement(s))",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := logger.Append("model_response", map[string]any{"response_id": "r2", "text": "done", "tool_call_count": 0}); err != nil {
+		t.Fatal(err)
+	}
+	path := logger.Path()
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	text, _, expands, err := sessionDisplayTranscript(path, workspace, true, false)
+	if err != nil || strings.Count(text, "Edit `main.go`") != 1 || !strings.Contains(text, "Edit `main.go` +2/-2") {
+		t.Fatalf("text=%q err=%v", text, err)
+	}
+	if len(expands) != 1 || strings.Count(expands[0], "#### Tool: `edit_file`") != 2 {
 		t.Fatalf("expansions=%#v", expands)
 	}
 }
@@ -419,7 +538,7 @@ func TestSessionDisplayTranscriptGroupsConsecutiveToolVerbs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	text, _, expands, err := sessionDisplayTranscript(path, true, true)
+	text, _, expands, err := sessionDisplayTranscript(path, "", true, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -432,7 +551,7 @@ func TestSessionDisplayTranscriptGroupsConsecutiveToolVerbs(t *testing.T) {
 		t.Fatalf("expansions=%#v", expands)
 	}
 
-	ungrouped, _, _, err := sessionDisplayTranscript(path, true, false)
+	ungrouped, _, _, err := sessionDisplayTranscript(path, "", true, false)
 	if err != nil || strings.Contains(ungrouped, first) || !strings.Contains(ungrouped, "#### Tool failed: `grep`") {
 		t.Fatalf("ungrouped transcript=%q err=%v", ungrouped, err)
 	}
@@ -462,7 +581,7 @@ func TestSessionDisplayTranscriptKeepsSyntheticAssistantBoundary(t *testing.T) {
 	if err := logger.Close(); err != nil {
 		t.Fatal(err)
 	}
-	text, messages, _, err := sessionDisplayTranscript(path, false, false)
+	text, messages, _, err := sessionDisplayTranscript(path, "", false, false)
 	if err != nil || strings.Count(text, "Gork\n") != 2 || strings.Contains(text, "internal") || len(messages) != 3 {
 		t.Fatalf("text=%q messages=%#v err=%v", text, messages, err)
 	}

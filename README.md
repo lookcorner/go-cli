@@ -774,6 +774,9 @@ requirements have final precedence.
 Set `[ui] collapsed_edit_blocks = true` to show successful exact-text and
 hashline edits as compact `Edit file +N/-M` rows in the live TUI, resumed
 sessions, transcript viewer, and dashboard previews. The default is `false`.
+Adjacent successful edits to the same normalized path share one row with
+summed counts; assistant text, another tool, a failure, or a different file
+ends the row. The expansion preserves every original tool call in order.
 The full tool arguments and result remain available through `/expand` or
 Ctrl-E in minimal mode. Local configuration overrides the remote setting,
 while managed requirements have final precedence. Whole-file writes and

@@ -745,21 +745,22 @@ type model struct {
 	extensions    *extensionsState
 	agentConfig   *agentConfigState
 
-	minimal          bool
-	minimalCommitted int
-	minimalFlushTo   int
-	minimalInitial   string
-	minimalReset     bool
-	gboom            *gboomState
-	gboomEpoch       uint64
-	voiceClient      voiceStarter
-	voiceSession     voice.Session
-	voiceCancel      context.CancelFunc
-	voiceStarting    bool
-	voiceInterim     string
-	voiceSendOnStop  bool
-	toolExpand       []string
-	toolVerbGroup    *toolVerbGroup
+	minimal            bool
+	minimalCommitted   int
+	minimalFlushTo     int
+	minimalInitial     string
+	minimalReset       bool
+	gboom              *gboomState
+	gboomEpoch         uint64
+	voiceClient        voiceStarter
+	voiceSession       voice.Session
+	voiceCancel        context.CancelFunc
+	voiceStarting      bool
+	voiceInterim       string
+	voiceSendOnStop    bool
+	toolExpand         []string
+	toolVerbGroup      *toolVerbGroup
+	collapsedEditGroup *collapsedEditGroup
 
 	dashboard         *dashboardState
 	startupDashboard  bool
@@ -1040,7 +1041,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 	m.replaceTranscript(initialTranscript, nil)
 	if runner != nil && strings.TrimSpace(runner.SessionPath) != "" {
 		if messages, err := session.Transcript(runner.SessionPath); err == nil && strings.TrimSpace(session.FormatTranscript(messages)) == strings.TrimSpace(initialTranscript) {
-			if text, displayMessages, expands, displayErr := sessionDisplayTranscript(runner.SessionPath, m.collapsedEditBlocks, m.groupToolVerbs); displayErr == nil {
+			if text, displayMessages, expands, displayErr := sessionDisplayTranscript(runner.SessionPath, m.workspace, m.collapsedEditBlocks, m.groupToolVerbs); displayErr == nil {
 				m.replaceDisplayTranscript(text, displayMessages, expands)
 			} else {
 				m.replaceTranscript(initialTranscript, messages)
@@ -1147,6 +1148,7 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshScrollSearch()
 	case textEvent:
 		m.finishToolVerbGroup()
+		m.finishCollapsedEditGroup()
 		m.selection = nil
 		m.selectionClick = selectionClickState{}
 		before := 0
@@ -1410,6 +1412,7 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitVoice(m.voiceSession)
 	case turnDoneEvent:
 		m.finishToolVerbGroup()
+		m.finishCollapsedEditGroup()
 		m.running = false
 		m.turnCancel = nil
 		m.transcript.WriteString("\n")
@@ -1484,7 +1487,7 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		mode := msg.result.Mode
 		if mode == agent.RewindAll || mode == agent.RewindConversationOnly {
 			m.previousID = msg.result.PreviousResponseID
-			if text, messages, expands, err := sessionDisplayTranscript(m.runner.SessionPath, m.collapsedEditBlocks, m.groupToolVerbs); err == nil {
+			if text, messages, expands, err := sessionDisplayTranscript(m.runner.SessionPath, m.workspace, m.collapsedEditBlocks, m.groupToolVerbs); err == nil {
 				m.replaceDisplayTranscript(text, messages, expands)
 			} else {
 				m.replaceTranscript(session.FormatTranscript(msg.result.Messages), msg.result.Messages)
@@ -2656,7 +2659,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.status = "no active session to view"
 				return m, nil
 			}
-			content, _, _, err := sessionDisplayTranscript(m.runner.SessionPath, m.collapsedEditBlocks, m.groupToolVerbs)
+			content, _, _, err := sessionDisplayTranscript(m.runner.SessionPath, m.workspace, m.collapsedEditBlocks, m.groupToolVerbs)
 			if err != nil {
 				m.status = "transcript failed: " + err.Error()
 				return m, nil
@@ -2873,6 +2876,7 @@ func (m *model) setPlanMode(active bool) error {
 
 func (m *model) appendSystem(text string) {
 	m.finishToolVerbGroup()
+	m.finishCollapsedEditGroup()
 	m.appendToolDisplay(text)
 }
 
@@ -4290,6 +4294,7 @@ func (m *model) minimalPrint(text string) tea.Cmd {
 
 func (m *model) beginTurn(prompt string) {
 	m.finishToolVerbGroup()
+	m.finishCollapsedEditGroup()
 	if m.minimal && m.transcript.Len() > m.minimalCommitted {
 		m.minimalFlushTo = m.transcript.Len()
 	}
