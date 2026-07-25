@@ -408,6 +408,12 @@ func (b *Bridge) ConfigurePermissionPrompts(defaultSelected string, remember boo
 	b.modeMu.Unlock()
 }
 
+func (b *Bridge) SetDefaultSelectedPermission(value string) {
+	b.modeMu.Lock()
+	b.defaultApproval = parseApprovalChoice(value)
+	b.modeMu.Unlock()
+}
+
 func (b *Bridge) SetPromptApprover(asker tools.Approver) {
 	b.modeMu.Lock()
 	b.asker = asker
@@ -679,6 +685,8 @@ type model struct {
 	persistSuggestions  func(bool) error
 	rememberApprovals   bool
 	persistRemember     func(bool) error
+	defaultPermission   string
+	persistPermission   func(string) error
 	questionTimeout     bool
 	persistQuestionTime func(bool) error
 	persistInvertScroll func(bool) error
@@ -880,6 +888,8 @@ type UIOptions struct {
 	SetPromptSuggestions func(bool) error
 	RememberApprovals    bool
 	SetRememberApprovals func(bool) error
+	DefaultPermission    string
+	SetDefaultPermission func(string) error
 	QuestionTimeout      bool
 	SetQuestionTimeout   func(bool) error
 	CursorBlink          *bool
@@ -1048,6 +1058,8 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		persistSuggestions:   options.SetPromptSuggestions,
 		rememberApprovals:    options.RememberApprovals,
 		persistRemember:      options.SetRememberApprovals,
+		defaultPermission:    options.DefaultPermission,
+		persistPermission:    options.SetDefaultPermission,
 		questionTimeout:      options.QuestionTimeout,
 		persistQuestionTime:  options.SetQuestionTimeout,
 		hyperlinks:           detectTerminalHyperlinks(),

@@ -2183,6 +2183,9 @@ func TestUIConfigPersistenceAndPermissionPrecedence(t *testing.T) {
 	if err := UpdateRememberToolApprovals(path, true); err != nil {
 		t.Fatal(err)
 	}
+	if err := UpdateDefaultSelectedPermission(path, "reject"); err != nil {
+		t.Fatal(err)
+	}
 	if err := UpdateQuestionTimeout(path, false); err != nil {
 		t.Fatal(err)
 	}
@@ -2207,7 +2210,7 @@ func TestUIConfigPersistenceAndPermissionPrecedence(t *testing.T) {
 	}
 	remoteMode := "always-approve"
 	cfg.ApplyRemoteSettings(&RemoteSettings{PermissionMode: &remoteMode})
-	if cfg.UI.PermissionMode != "auto" || cfg.UI.VimMode || !cfg.UI.CompactMode || cfg.UI.ShowTimestamps || !cfg.UI.ShowTimeline || cfg.UI.GroupToolVerbs || !cfg.UI.CollapsedEditBlocks || cfg.UI.PromptSuggestions || !cfg.UI.RememberToolApprovals || cfg.AskUserQuestion.TimeoutEnabled || !cfg.UI.InvertScroll || cfg.UI.ScrollSpeed != 75 || cfg.UI.ScrollMode != "wheel" || cfg.UI.ScrollLines == nil || *cfg.UI.ScrollLines != 5 || cfg.UI.KeepTextSelection != "hold" || cfg.DefaultModelID != "local" || cfg.Model != "local-api" {
+	if cfg.UI.PermissionMode != "auto" || cfg.UI.VimMode || !cfg.UI.CompactMode || cfg.UI.ShowTimestamps || !cfg.UI.ShowTimeline || cfg.UI.GroupToolVerbs || !cfg.UI.CollapsedEditBlocks || cfg.UI.PromptSuggestions || !cfg.UI.RememberToolApprovals || cfg.UI.DefaultSelectedPermission != "reject" || cfg.AskUserQuestion.TimeoutEnabled || !cfg.UI.InvertScroll || cfg.UI.ScrollSpeed != 75 || cfg.UI.ScrollMode != "wheel" || cfg.UI.ScrollLines == nil || *cfg.UI.ScrollLines != 5 || cfg.UI.KeepTextSelection != "hold" || cfg.DefaultModelID != "local" || cfg.Model != "local-api" {
 		t.Fatalf("config=%#v", cfg)
 	}
 	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o640 {
@@ -2238,6 +2241,9 @@ func TestUIConfigPersistenceAndPermissionPrecedence(t *testing.T) {
 	if err := UpdateRememberToolApprovals(emptyPath, true); err != nil {
 		t.Fatal(err)
 	}
+	if err := UpdateDefaultSelectedPermission(emptyPath, "allow_once"); err != nil {
+		t.Fatal(err)
+	}
 	if err := UpdateQuestionTimeout(emptyPath, false); err != nil {
 		t.Fatal(err)
 	}
@@ -2257,7 +2263,7 @@ func TestUIConfigPersistenceAndPermissionPrecedence(t *testing.T) {
 		t.Fatal(err)
 	}
 	emptyConfig, err := Load(emptyPath)
-	if err != nil || !emptyConfig.UI.VimMode || !emptyConfig.UI.CompactMode || emptyConfig.UI.ShowTimestamps || !emptyConfig.UI.ShowTimeline || emptyConfig.UI.GroupToolVerbs || !emptyConfig.UI.CollapsedEditBlocks || emptyConfig.UI.PromptSuggestions || !emptyConfig.UI.RememberToolApprovals || emptyConfig.AskUserQuestion.TimeoutEnabled || !emptyConfig.UI.InvertScroll || emptyConfig.UI.ScrollSpeed != 75 || emptyConfig.UI.ScrollMode != "wheel" || emptyConfig.UI.ScrollLines == nil || *emptyConfig.UI.ScrollLines != 5 || emptyConfig.UI.KeepTextSelection != "hold" {
+	if err != nil || !emptyConfig.UI.VimMode || !emptyConfig.UI.CompactMode || emptyConfig.UI.ShowTimestamps || !emptyConfig.UI.ShowTimeline || emptyConfig.UI.GroupToolVerbs || !emptyConfig.UI.CollapsedEditBlocks || emptyConfig.UI.PromptSuggestions || !emptyConfig.UI.RememberToolApprovals || emptyConfig.UI.DefaultSelectedPermission != "allow_once" || emptyConfig.AskUserQuestion.TimeoutEnabled || !emptyConfig.UI.InvertScroll || emptyConfig.UI.ScrollSpeed != 75 || emptyConfig.UI.ScrollMode != "wheel" || emptyConfig.UI.ScrollLines == nil || *emptyConfig.UI.ScrollLines != 5 || emptyConfig.UI.KeepTextSelection != "hold" {
 		t.Fatalf("new config=%#v err=%v", emptyConfig, err)
 	}
 
@@ -2292,6 +2298,9 @@ func TestUIConfigPersistenceAndPermissionPrecedence(t *testing.T) {
 	if err := UpdateRememberToolApprovals(jsonPath, true); err != nil {
 		t.Fatal(err)
 	}
+	if err := UpdateDefaultSelectedPermission(jsonPath, "allow_command_always"); err != nil {
+		t.Fatal(err)
+	}
 	if err := UpdateQuestionTimeout(jsonPath, false); err != nil {
 		t.Fatal(err)
 	}
@@ -2311,8 +2320,14 @@ func TestUIConfigPersistenceAndPermissionPrecedence(t *testing.T) {
 		t.Fatal(err)
 	}
 	jsonConfig, err := Load(jsonPath)
-	if err != nil || jsonConfig.UI.PermissionMode != "always-approve" || jsonConfig.UI.VimMode || jsonConfig.UI.CompactMode || jsonConfig.UI.ShowTimestamps || !jsonConfig.UI.ShowTimeline || jsonConfig.UI.GroupToolVerbs || !jsonConfig.UI.CollapsedEditBlocks || jsonConfig.UI.PromptSuggestions || !jsonConfig.UI.RememberToolApprovals || jsonConfig.AskUserQuestion.TimeoutEnabled || !jsonConfig.UI.InvertScroll || jsonConfig.UI.ScrollSpeed != 75 || jsonConfig.UI.ScrollMode != "trackpad" || jsonConfig.UI.ScrollLines == nil || *jsonConfig.UI.ScrollLines != 5 || jsonConfig.UI.KeepTextSelection != "word_select" {
+	if err != nil || jsonConfig.UI.PermissionMode != "always-approve" || jsonConfig.UI.VimMode || jsonConfig.UI.CompactMode || jsonConfig.UI.ShowTimestamps || !jsonConfig.UI.ShowTimeline || jsonConfig.UI.GroupToolVerbs || !jsonConfig.UI.CollapsedEditBlocks || jsonConfig.UI.PromptSuggestions || !jsonConfig.UI.RememberToolApprovals || jsonConfig.UI.DefaultSelectedPermission != "allow_command_always" || jsonConfig.AskUserQuestion.TimeoutEnabled || !jsonConfig.UI.InvertScroll || jsonConfig.UI.ScrollSpeed != 75 || jsonConfig.UI.ScrollMode != "trackpad" || jsonConfig.UI.ScrollLines == nil || *jsonConfig.UI.ScrollLines != 5 || jsonConfig.UI.KeepTextSelection != "word_select" {
 		t.Fatalf("JSON config=%#v err=%v", jsonConfig, err)
+	}
+	if err := UpdateDefaultSelectedPermission(jsonPath, "invalid"); err == nil {
+		t.Fatal("invalid default selected permission was accepted")
+	}
+	if err := UpdateDefaultSelectedPermission(jsonPath, " REJECT "); err == nil {
+		t.Fatal("non-canonical default selected permission was accepted")
 	}
 	if err := UpdateTextSelection(jsonPath, "invalid"); err == nil {
 		t.Fatal("invalid text selection mode was accepted")

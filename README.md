@@ -615,9 +615,10 @@ default screen mode, grouped tool verbs, collapsed edit blocks, prompt
 suggestions, remembered tool approvals, ask-question timeouts, session multiline
 input, inverted scrolling, scroll speed, scroll-input classification, scroll
 lines, text-selection behavior, Mermaid rendering, restart-scoped hunk tracking,
-automatic dark/light theme mappings, the terminal theme, and voice language
-when voice capture is available. Sessions with Plan tools also expose the live,
-session-scoped Plan mode. Enter or Space changes the selected value.
+automatic dark/light theme mappings, the terminal theme, the default permission
+selection, and voice language when voice capture is available. Sessions with
+Plan tools also expose the live, session-scoped Plan mode. Enter or Space
+changes the selected value.
 Scroll speed and line count open a bounded arrow-key stepper and commit with
 Enter; persisted settings use atomic configuration writers with rollback on
 write failure. Changing
@@ -627,6 +628,7 @@ clears the current ghost text, while inverted scrolling, scroll-input
 classification, and selection lifetime apply to the next interaction. Multiline
 input applies to the current session, while remembered tool approval,
 ask-question timeout, and hunk tracker changes apply to new sessions.
+Default permission selection changes apply to the next permission prompt.
 Plan mode changes immediately through the same registry path as Shift-Tab and
 does not write a user preference.
 Automatic dark/light mapping changes apply immediately only while `theme=auto`

@@ -24,7 +24,7 @@ type settingsNumber struct {
 	large int
 }
 
-const settingsCount = 21
+const settingsCount = 22
 
 func (m *model) openSettings() {
 	m.settings = &settingsState{}
@@ -245,6 +245,12 @@ func (m *model) applySetting(selected int) {
 		if m.persistTheme != nil {
 			state.err = persistSetting(m.persistTheme(m.themeName), func() { m.themeName, m.theme = previousName, previousTheme })
 		}
+	case 21:
+		previous := m.defaultPermission
+		m.defaultPermission = nextDefaultSelectedPermission(previous)
+		if m.persistPermission != nil {
+			state.err = persistSetting(m.persistPermission(m.defaultPermission), func() { m.defaultPermission = previous })
+		}
 	}
 	if state.err != "" {
 		m.status = "setting update failed"
@@ -364,6 +370,19 @@ func nextScrollMode(current string) string {
 	}
 }
 
+func nextDefaultSelectedPermission(current string) string {
+	switch current {
+	case "always_allow_all_sessions":
+		return "allow_command_always"
+	case "allow_command_always":
+		return "allow_once"
+	case "allow_once":
+		return "reject"
+	default:
+		return "always_allow_all_sessions"
+	}
+}
+
 func (m *model) settingsContent() string {
 	if m.settings == nil {
 		return ""
@@ -394,6 +413,7 @@ func (m *model) settingsContent() string {
 		fmt.Sprintf("Auto dark theme: %s", concreteAutomaticTheme(m.autoDarkTheme, "groknight")),
 		fmt.Sprintf("Auto light theme: %s", concreteAutomaticTheme(m.autoLightTheme, "grokday")),
 		fmt.Sprintf("Theme: %s", m.themeName),
+		fmt.Sprintf("Default selected permission: %s", m.defaultPermission),
 	}
 	if m.planModeAvailable() {
 		lines = append(lines, settingLine("Plan mode", m.planMode))

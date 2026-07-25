@@ -1172,6 +1172,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			CollapsedEditBlocks: cfg.UI.CollapsedEditBlocks,
 			GroupToolVerbs:      cfg.UI.GroupToolVerbs,
 			RememberApprovals:   cfg.UI.RememberToolApprovals,
+			DefaultPermission:   cfg.UI.DefaultSelectedPermission,
 			QuestionTimeout:     cfg.AskUserQuestion.TimeoutEnabled,
 			CursorBlink:         cfg.UI.CursorBlink,
 			CompactMode:         cfg.UI.CompactMode,
@@ -1204,6 +1205,13 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			},
 			SetRememberApprovals: func(enabled bool) error {
 				return config.UpdateRememberToolApprovals(opts.configPath, enabled)
+			},
+			SetDefaultPermission: func(value string) error {
+				if err := config.UpdateDefaultSelectedPermission(opts.configPath, value); err != nil {
+					return err
+				}
+				tuiBridge.SetDefaultSelectedPermission(value)
+				return nil
 			},
 			SetQuestionTimeout: func(enabled bool) error {
 				return config.UpdateQuestionTimeout(opts.configPath, enabled)

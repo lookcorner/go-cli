@@ -65,6 +65,7 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 	var autoDarkThemes []string
 	var autoLightThemes []string
 	var hunkTrackerModes []string
+	var defaultPermissions []string
 	m := &model{
 		width: 70, height: 18, themeName: "groknight", theme: paletteFor("groknight"), mermaidMode: "auto",
 		autoDarkTheme: "groknight", autoLightTheme: "grokday", hunkTrackerMode: "agent_only",
@@ -134,6 +135,11 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 			hunkTrackerModes = append(hunkTrackerModes, value)
 			return nil
 		},
+		defaultPermission: "always_allow_all_sessions",
+		persistPermission: func(value string) error {
+			defaultPermissions = append(defaultPermissions, value)
+			return nil
+		},
 	}
 	for index := 0; index < settingsCount; index++ {
 		m.settings.selected = index
@@ -171,6 +177,9 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 	}
 	if m.hunkTrackerMode != "all_dirty" || strings.Join(hunkTrackerModes, ",") != "all_dirty" {
 		t.Fatalf("hunk tracker=%q persisted=%v", m.hunkTrackerMode, hunkTrackerModes)
+	}
+	if m.defaultPermission != "allow_command_always" || strings.Join(defaultPermissions, ",") != "allow_command_always" {
+		t.Fatalf("default permission=%q persisted=%v", m.defaultPermission, defaultPermissions)
 	}
 	if m.selectionMode != selectionHold || strings.Join(selectionModes, ",") != "hold" {
 		t.Fatalf("selection=%q persisted=%v", m.selectionMode.canonical(), selectionModes)
@@ -222,6 +231,15 @@ func TestSettingsPanelRollsBackFailedPersistence(t *testing.T) {
 	m = updated.(*model)
 	if command != nil || m.themeName != "auto" || m.settings.err != "read only" {
 		t.Fatalf("command=%v theme=%q err=%q", command != nil, m.themeName, m.settings.err)
+	}
+
+	m.settings.selected = 21
+	m.defaultPermission = "always_allow_all_sessions"
+	m.persistPermission = func(string) error { return errors.New("read only") }
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.defaultPermission != "always_allow_all_sessions" || m.settings.err != "read only" {
+		t.Fatalf("command=%v default permission=%q err=%q", command != nil, m.defaultPermission, m.settings.err)
 	}
 
 	m.settings.selected = 17
@@ -554,6 +572,52 @@ func TestSettingsRememberToolApprovalsAppliesAfterRestart(t *testing.T) {
 	request.reply <- approvalOnce
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSettingsDefaultSelectedPermissionAppliesToNextPrompt(t *testing.T) {
+	bridge := NewBridge(context.Background(), tools.PermissionPrompt)
+	defer bridge.Close()
+	bridge.ConfigurePermissionPrompts("always_allow_all_sessions", true)
+	var persisted string
+	m := &model{
+		width: 60, height: 16, bridge: bridge,
+		defaultPermission: "always_allow_all_sessions",
+		settings:          &settingsState{selected: 21},
+		persistPermission: func(value string) error {
+			persisted = value
+			bridge.SetDefaultSelectedPermission(value)
+			return nil
+		},
+	}
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || persisted != "allow_command_always" || m.status != "settings updated" {
+		t.Fatalf("command=%v persisted=%q status=%q", command != nil, persisted, m.status)
+	}
+	done := make(chan error, 1)
+	go func() { done <- bridge.Approve(context.Background(), "shell", "git status") }()
+	request := (<-bridge.events).(approvalEvent)
+	if request.options[request.selected].choice != approvalCommandAlways {
+		t.Fatalf("selected=%d options=%#v", request.selected, request.options)
+	}
+	request.reply <- approvalOnce
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNextDefaultSelectedPermissionCyclesAllChoices(t *testing.T) {
+	value := "always_allow_all_sessions"
+	want := []string{"allow_command_always", "allow_once", "reject", "always_allow_all_sessions"}
+	for index, expected := range want {
+		value = nextDefaultSelectedPermission(value)
+		if value != expected {
+			t.Fatalf("step=%d value=%q want=%q", index, value, expected)
+		}
+	}
+	if value := nextDefaultSelectedPermission("invalid"); value != "always_allow_all_sessions" {
+		t.Fatalf("invalid value normalized to %q", value)
 	}
 }
 

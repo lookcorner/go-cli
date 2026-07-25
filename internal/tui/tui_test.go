@@ -165,6 +165,32 @@ func TestPermissionPromptSelectionAndRememberedExactRequest(t *testing.T) {
 	}
 }
 
+func TestDefaultSelectedPermissionUpdatePreservesStickyChoice(t *testing.T) {
+	bridge := NewBridge(context.Background(), tools.PermissionPrompt)
+	defer bridge.Close()
+	bridge.ConfigurePermissionPrompts("always_allow_all_sessions", true)
+
+	first := make(chan error, 1)
+	go func() { first <- bridge.Approve(context.Background(), "shell", "git status") }()
+	request := (<-bridge.events).(approvalEvent)
+	request.reply <- approvalOnce
+	if err := <-first; err != nil {
+		t.Fatal(err)
+	}
+
+	bridge.SetDefaultSelectedPermission("reject")
+	second := make(chan error, 1)
+	go func() { second <- bridge.Approve(context.Background(), "shell", "git diff") }()
+	request = (<-bridge.events).(approvalEvent)
+	if request.options[request.selected].choice != approvalOnce {
+		t.Fatalf("updated default replaced sticky choice: selected=%d options=%#v", request.selected, request.options)
+	}
+	request.reply <- approvalOnce
+	if err := <-second; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestExplicitAskRuleReusesRememberedRequest(t *testing.T) {
 	bridge := NewBridge(context.Background(), tools.PermissionAlwaysApprove)
 	defer bridge.Close()
