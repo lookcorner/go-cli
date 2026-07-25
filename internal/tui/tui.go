@@ -690,6 +690,8 @@ type model struct {
 	autoLightTheme      string
 	theme               themePalette
 	persistTheme        func(string) error
+	persistAutoDark     func(string) error
+	persistAutoLight    func(string) error
 	mermaidMode         string
 	persistMermaid      func(string) error
 	transcriptMessages  []transcriptMessage
@@ -881,6 +883,8 @@ type UIOptions struct {
 	AutoDarkTheme        string
 	AutoLightTheme       string
 	SetTheme             func(string) error
+	SetAutoDarkTheme     func(string) error
+	SetAutoLightTheme    func(string) error
 	RenderMermaid        string
 	SetRenderMermaid     func(string) error
 	ForkSession          func(context.Context, bool) (ForkResult, error)
@@ -1044,6 +1048,8 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		autoLightTheme:      options.AutoLightTheme,
 		theme:               paletteForAuto(options.Theme, options.AutoDarkTheme, options.AutoLightTheme),
 		persistTheme:        options.SetTheme,
+		persistAutoDark:     options.SetAutoDarkTheme,
+		persistAutoLight:    options.SetAutoLightTheme,
 		mermaidMode:         options.RenderMermaid,
 		persistMermaid:      options.SetRenderMermaid,
 		forkSession:         options.ForkSession,

@@ -1189,6 +1189,8 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			SetScrollSpeed:      func(value uint8) error { return config.UpdateScrollSpeed(opts.configPath, value) },
 			SetScrollMode:       func(mode string) error { return config.UpdateScrollMode(opts.configPath, mode) },
 			SetScrollLines:      func(value uint8) error { return config.UpdateScrollLines(opts.configPath, value) },
+			SetAutoDarkTheme:    func(value string) error { return config.UpdateAutoDarkTheme(opts.configPath, value) },
+			SetAutoLightTheme:   func(value string) error { return config.UpdateAutoLightTheme(opts.configPath, value) },
 			SetGroupToolVerbs:   func(enabled bool) error { return config.UpdateGroupToolVerbs(opts.configPath, enabled) },
 			SetCollapsedEdits: func(enabled bool) error {
 				return config.UpdateCollapsedEditBlocks(opts.configPath, enabled)

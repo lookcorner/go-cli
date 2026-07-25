@@ -23,7 +23,7 @@ type settingsNumber struct {
 	large int
 }
 
-const settingsCount = 18
+const settingsCount = 20
 
 func (m *model) openSettings() {
 	m.settings = &settingsState{}
@@ -199,6 +199,20 @@ func (m *model) applySetting(selected int) {
 			state.err = persistSetting(m.persistMermaid(m.mermaidMode), func() { m.mermaidMode = previous })
 		}
 	case 17:
+		previousName, previousTheme := m.autoDarkTheme, m.theme
+		m.autoDarkTheme = nextConcreteTheme(concreteAutomaticTheme(previousName, "groknight"))
+		m.theme = paletteForAuto(m.themeName, m.autoDarkTheme, m.autoLightTheme)
+		if m.persistAutoDark != nil {
+			state.err = persistSetting(m.persistAutoDark(m.autoDarkTheme), func() { m.autoDarkTheme, m.theme = previousName, previousTheme })
+		}
+	case 18:
+		previousName, previousTheme := m.autoLightTheme, m.theme
+		m.autoLightTheme = nextConcreteTheme(concreteAutomaticTheme(previousName, "grokday"))
+		m.theme = paletteForAuto(m.themeName, m.autoDarkTheme, m.autoLightTheme)
+		if m.persistAutoLight != nil {
+			state.err = persistSetting(m.persistAutoLight(m.autoLightTheme), func() { m.autoLightTheme, m.theme = previousName, previousTheme })
+		}
+	case 19:
 		previousName, previousTheme := m.themeName, m.theme
 		m.themeName = nextTheme(m.themeName)
 		m.theme = paletteForAuto(m.themeName, m.autoDarkTheme, m.autoLightTheme)
@@ -274,6 +288,15 @@ func nextTheme(current string) string {
 	return names[0]
 }
 
+func nextConcreteTheme(current string) string {
+	for index, name := range uitheme.Names {
+		if name == current {
+			return uitheme.Names[(index+1)%len(uitheme.Names)]
+		}
+	}
+	return uitheme.Names[0]
+}
+
 func nextScrollMode(current string) string {
 	switch current {
 	case "auto":
@@ -311,6 +334,8 @@ func (m *model) settingsContent() string {
 		fmt.Sprintf("Scroll lines: %d", m.settingNumberValue(14, m.effectiveScrollLines())),
 		fmt.Sprintf("Text selection: %s", m.selectionMode.canonical()),
 		fmt.Sprintf("Mermaid rendering: %s", mermaidMode),
+		fmt.Sprintf("Auto dark theme: %s", concreteAutomaticTheme(m.autoDarkTheme, "groknight")),
+		fmt.Sprintf("Auto light theme: %s", concreteAutomaticTheme(m.autoLightTheme, "grokday")),
 		fmt.Sprintf("Theme: %s", m.themeName),
 	}
 	content := "# Settings\n\n" + selectedWindow(lines, m.settings.selected, max(m.contentHeight()-3, 1))

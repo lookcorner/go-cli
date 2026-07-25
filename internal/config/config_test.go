@@ -1206,12 +1206,24 @@ func TestThemeConfigCanonicalizationAndUpdate(t *testing.T) {
 	if err := UpdateTheme(path, "rose-pine"); err != nil {
 		t.Fatal(err)
 	}
+	if err := UpdateAutoDarkTheme(path, "tokyo"); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateAutoLightTheme(path, "oscura"); err != nil {
+		t.Fatal(err)
+	}
 	cfg, err = Load(path)
-	if err != nil || cfg.UI.Theme != "rosepine-moon" {
-		t.Fatalf("updated theme=%q err=%v", cfg.UI.Theme, err)
+	if err != nil || cfg.UI.Theme != "rosepine-moon" || cfg.UI.AutoDarkTheme != "tokyonight" || cfg.UI.AutoLightTheme != "oscura-midnight" {
+		t.Fatalf("updated UI=%#v err=%v", cfg.UI, err)
 	}
 	if err := UpdateTheme(path, "missing"); err == nil {
 		t.Fatal("unknown theme was accepted")
+	}
+	if err := UpdateAutoDarkTheme(path, "auto"); err == nil {
+		t.Fatal("auto dark theme accepted auto")
+	}
+	if err := UpdateAutoLightTheme(path, "missing"); err == nil {
+		t.Fatal("unknown auto light theme was accepted")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -1221,7 +1233,8 @@ func TestThemeConfigCanonicalizationAndUpdate(t *testing.T) {
 	if err := toml.Unmarshal(data, &raw); err != nil {
 		t.Fatal(err)
 	}
-	if raw["models"].(map[string]any)["default"] != "local" || raw["ui"].(map[string]any)["theme"] != "rosepine-moon" {
+	ui := raw["ui"].(map[string]any)
+	if raw["models"].(map[string]any)["default"] != "local" || ui["theme"] != "rosepine-moon" || ui["auto_dark_theme"] != "tokyonight" || ui["auto_light_theme"] != "oscura-midnight" {
 		t.Fatalf("updated config=%#v", raw)
 	}
 	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o640 {

@@ -62,8 +62,11 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 	var scrollModes []string
 	var scrollSpeeds []uint8
 	var scrollLines []uint8
+	var autoDarkThemes []string
+	var autoLightThemes []string
 	m := &model{
 		width: 70, height: 18, themeName: "groknight", theme: paletteFor("groknight"), mermaidMode: "auto",
+		autoDarkTheme: "groknight", autoLightTheme: "grokday",
 		scrollSpeed: 50, scrollLines: 3, scrollInput: scrollInput{mode: "auto"}, settings: &settingsState{},
 		persistTimestamps: func(value bool) error { booleans = append(booleans, "timestamps"); return nil },
 		persistTimeline:   func(value bool) error { booleans = append(booleans, "timeline"); return nil },
@@ -118,6 +121,14 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 		},
 		persistMermaid: func(value string) error { mermaidModes = append(mermaidModes, value); return nil },
 		persistTheme:   func(value string) error { themes = append(themes, value); return nil },
+		persistAutoDark: func(value string) error {
+			autoDarkThemes = append(autoDarkThemes, value)
+			return nil
+		},
+		persistAutoLight: func(value string) error {
+			autoLightThemes = append(autoLightThemes, value)
+			return nil
+		},
 	}
 	for index := 0; index < settingsCount; index++ {
 		m.settings.selected = index
@@ -147,6 +158,9 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 	if m.themeName != "grokday" || m.theme.name != "grokday" || strings.Join(themes, ",") != "grokday" {
 		t.Fatalf("theme=%q palette=%q persisted=%v", m.themeName, m.theme.name, themes)
 	}
+	if m.autoDarkTheme != "grokday" || m.autoLightTheme != "tokyonight" || strings.Join(autoDarkThemes, ",") != "grokday" || strings.Join(autoLightThemes, ",") != "tokyonight" {
+		t.Fatalf("auto themes=%q/%q persisted=%v/%v", m.autoDarkTheme, m.autoLightTheme, autoDarkThemes, autoLightThemes)
+	}
 	if m.mermaidMode != "on" || strings.Join(mermaidModes, ",") != "on" {
 		t.Fatalf("Mermaid=%q persisted=%v", m.mermaidMode, mermaidModes)
 	}
@@ -162,6 +176,8 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 }
 
 func TestSettingsPanelRollsBackFailedPersistence(t *testing.T) {
+	t.Setenv("TERM_BACKGROUND", "dark")
+	t.Setenv("COLORFGBG", "")
 	m := &model{
 		width: 60, height: 16, showTimeline: true, themeName: "auto", theme: paletteFor("auto"), settings: &settingsState{selected: 1},
 		persistTimeline: func(bool) error { return errors.New("disk full") },
@@ -192,12 +208,32 @@ func TestSettingsPanelRollsBackFailedPersistence(t *testing.T) {
 		t.Fatalf("command=%v Mermaid=%q err=%q", command != nil, m.mermaidMode, m.settings.err)
 	}
 
-	m.settings.selected = 17
+	m.settings.selected = 19
 	m.persistTheme = func(string) error { return errors.New("read only") }
 	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)
 	if command != nil || m.themeName != "auto" || m.settings.err != "read only" {
 		t.Fatalf("command=%v theme=%q err=%q", command != nil, m.themeName, m.settings.err)
+	}
+
+	m.settings.selected = 17
+	m.autoDarkTheme = "groknight"
+	m.themeName = "auto"
+	m.theme = paletteForAuto("auto", "groknight", "grokday")
+	m.persistAutoDark = func(string) error { return errors.New("read only") }
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.autoDarkTheme != "groknight" || m.theme.name != "groknight" || m.settings.err != "read only" {
+		t.Fatalf("command=%v auto dark=%q palette=%q err=%q", command != nil, m.autoDarkTheme, m.theme.name, m.settings.err)
+	}
+
+	m.settings.selected = 18
+	m.autoLightTheme = "grokday"
+	m.persistAutoLight = func(string) error { return errors.New("read only") }
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.autoLightTheme != "grokday" || m.theme.name != "groknight" || m.settings.err != "read only" {
+		t.Fatalf("command=%v auto light=%q palette=%q err=%q", command != nil, m.autoLightTheme, m.theme.name, m.settings.err)
 	}
 
 	m.settings.selected = 5
@@ -711,5 +747,65 @@ func TestSettingsScrollNumberSteppers(t *testing.T) {
 	m = updated.(*model)
 	if m.scrollSpeed != 56 || m.settings.number != nil || len(speeds) != 1 || m.status != "settings" {
 		t.Fatalf("cancel speed=%d persisted=%v settings=%#v status=%q", m.scrollSpeed, speeds, m.settings, m.status)
+	}
+}
+
+func TestSettingsAutomaticThemesApplyOnlyWhenLive(t *testing.T) {
+	t.Setenv("COLORFGBG", "")
+	var persisted []string
+
+	t.Setenv("TERM_BACKGROUND", "dark")
+	m := &model{
+		width: 60, height: 16, themeName: "auto", autoDarkTheme: "groknight", autoLightTheme: "grokday",
+		theme:            paletteForAuto("auto", "groknight", "grokday"),
+		settings:         &settingsState{selected: 17},
+		persistAutoDark:  func(value string) error { persisted = append(persisted, "dark:"+value); return nil },
+		persistAutoLight: func(value string) error { persisted = append(persisted, "light:"+value); return nil },
+	}
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if m.autoDarkTheme != "grokday" || m.theme.name != "grokday" {
+		t.Fatalf("live dark mapping=%q palette=%q", m.autoDarkTheme, m.theme.name)
+	}
+
+	m.settings.selected = 18
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if m.autoLightTheme != "tokyonight" || m.theme.name != "grokday" {
+		t.Fatalf("inactive light mapping=%q palette=%q", m.autoLightTheme, m.theme.name)
+	}
+
+	m.themeName = "oscura-midnight"
+	m.theme = paletteFor("oscura-midnight")
+	m.settings.selected = 17
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if m.autoDarkTheme != "tokyonight" || m.theme.name != "oscura-midnight" {
+		t.Fatalf("concrete theme mapping=%q palette=%q", m.autoDarkTheme, m.theme.name)
+	}
+	if strings.Join(persisted, ",") != "dark:grokday,light:tokyonight,dark:tokyonight" {
+		t.Fatalf("persisted=%v", persisted)
+	}
+}
+
+func TestSettingsAutomaticThemesUseDefaultsWhenMappingsAreEmpty(t *testing.T) {
+	t.Setenv("TERM_BACKGROUND", "dark")
+	t.Setenv("COLORFGBG", "")
+
+	var persisted string
+	m := &model{
+		width: 60, height: 16, themeName: "auto",
+		theme:           paletteForAuto("auto", "", ""),
+		settings:        &settingsState{selected: 17},
+		persistAutoDark: func(value string) error { persisted = value; return nil },
+	}
+	if content := m.settingsContent(); !strings.Contains(content, "Auto dark theme: groknight") || !strings.Contains(content, "Auto light theme: grokday") {
+		t.Fatalf("settings content=%q", content)
+	}
+
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if m.autoDarkTheme != "grokday" || m.theme.name != "grokday" || persisted != "grokday" {
+		t.Fatalf("auto dark=%q palette=%q persisted=%q", m.autoDarkTheme, m.theme.name, persisted)
 	}
 }
