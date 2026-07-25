@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -118,7 +119,11 @@ func TestDebugScrollLogRecordsKeyboardAndWheelEvents(t *testing.T) {
 	if records[0].Timestamp == "" || records[0].Maximum <= 0 || records[0].Viewport != m.contentHeight() {
 		t.Fatalf("missing real-time metrics: %#v", records[0])
 	}
-	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
+	wantMode := os.FileMode(0o600)
+	if runtime.GOOS == "windows" {
+		wantMode = 0o666
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != wantMode {
 		t.Fatalf("log permissions info=%#v err=%v", info, err)
 	}
 }

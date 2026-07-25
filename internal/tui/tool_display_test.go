@@ -210,12 +210,13 @@ func TestCollapsedEditBlockUsesExactDiffstatAndKeepsExpansion(t *testing.T) {
 }
 
 func TestCollapsedEditBlocksCoalesceAdjacentSameFile(t *testing.T) {
-	m := &model{collapsedEditBlocks: true, workspace: "/tmp/project", width: 80, height: 20}
+	root := t.TempDir()
+	m := &model{collapsedEditBlocks: true, workspace: root, width: 80, height: 20}
 	for _, test := range []struct {
 		path, oldText, newText string
 	}{
 		{path: "src/main.go", oldText: "old", newText: "new\nline"},
-		{path: "/tmp/project/src/main.go", oldText: "other\nold", newText: "other"},
+		{path: filepath.Join(root, "src", "main.go"), oldText: "other\nold", newText: "other"},
 	} {
 		m.finishTool(toolFinishedEvent{
 			call: api.ToolCall{
