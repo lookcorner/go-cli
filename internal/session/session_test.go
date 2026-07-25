@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -283,7 +284,7 @@ func TestPromptImagesPersistOutsideJSONLAndReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	if info.Mode().Perm() != sessionTestWantMode(0o600) {
 		t.Fatalf("unexpected asset permissions: %v", info.Mode().Perm())
 	}
 	messages, err := Transcript(filepath.Join(dir, "images.jsonl"))
@@ -320,7 +321,7 @@ func TestTranscriptRejectsSymlinkedAssetsDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(outside, filepath.Join(dir, "assets")); err != nil {
-		t.Fatal(err)
+		t.Skipf("symlinks unavailable: %v", err)
 	}
 	path := filepath.Join(dir, "unsafe.jsonl")
 	content := "" +
@@ -678,4 +679,13 @@ func TestCurrentModeSurvivesConversationRewind(t *testing.T) {
 	if mode, err := CurrentMode(path); err != nil || mode != "plan" {
 		t.Fatalf("mode=%q err=%v", mode, err)
 	}
+}
+
+// sessionTestWantMode maps a Unix permission expectation to what the platform
+// reports; Windows ignores permission bits on create.
+func sessionTestWantMode(unix os.FileMode) os.FileMode {
+	if runtime.GOOS == "windows" {
+		return 0o666
+	}
+	return unix
 }

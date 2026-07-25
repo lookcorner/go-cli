@@ -102,7 +102,7 @@ func TestLoggerRepairHistoryReopensForAppend(t *testing.T) {
 		t.Fatalf("events=%#v err=%v", events, err)
 	}
 	info, err := os.Stat(logger.Path())
-	if err != nil || info.Mode().Perm() != 0o600 {
+	if err != nil || info.Mode().Perm() != sessionTestWantMode(0o600) {
 		t.Fatalf("mode=%v err=%v", info.Mode(), err)
 	}
 }
