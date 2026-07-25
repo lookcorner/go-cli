@@ -155,6 +155,83 @@ func TestRenderMermaidSankey(t *testing.T) {
 	}
 }
 
+func TestRenderMermaidQuadrant(t *testing.T) {
+	source := "quadrantChart\ntitle Campaign reach\nx-axis Low reach --> High reach\ny-axis Low engagement --> High engagement\nquadrant-1 Expand\nquadrant-2 Promote\nquadrant-3 Rework\nquadrant-4 Improve\nAlpha: [0.8, 0.9]\nBeta: [0.2, 0.7]\nGamma: [0.1, 0.1]\nDelta: [0.9, 0.2]"
+	lines, ok := renderMermaid(source, 48, paletteFor("groknight"))
+	if !ok {
+		t.Fatal("supported Mermaid quadrantChart was rejected")
+	}
+	rendered := stripUIANSI(strings.Join(lines, "\n"))
+	for _, expected := range []string{
+		"◇ mermaid quadrant", "Campaign reach",
+		"x: Low reach → High reach", "y: Low engagement → High engagement",
+		"Q1: Expand", "Q2: Promote", "Q3: Rework", "Q4: Improve",
+		"Q1 • Alpha [0.8, 0.9]", "Q2 • Beta [0.2, 0.7]",
+		"Q3 • Gamma [0.1, 0.1]", "Q4 • Delta [0.9, 0.2]",
+	} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("rendered quadrantChart missing %q:\n%s", expected, rendered)
+		}
+	}
+	for _, line := range lines {
+		if displayWidth(stripUIANSI(line)) > 48 {
+			t.Fatalf("quadrantChart line exceeds width: %q", stripUIANSI(line))
+		}
+	}
+}
+
+func TestRenderMermaidQuadrantMatchesReferenceParsing(t *testing.T) {
+	source := "%% comment\nquadrantChart extra\ntitle First\ntitle Final\nx-axis left --> right --> extra\nquadrant-1 Old\nquadrant-1 New\nquadrant-5 Hidden\n\"Double quoted\": [-2, 3]\n'Single quoted': [0.5, 0.5]\n: [NaN, 0.2]"
+	lines, ok := renderMermaid(source, 56, paletteFor("groknight"))
+	if !ok {
+		t.Fatal("reference-compatible quadrantChart was rejected")
+	}
+	rendered := stripUIANSI(strings.Join(lines, "\n"))
+	for _, expected := range []string{
+		"Final", "x: left → right --> extra", "Q1: New",
+		"Q2 • Double quoted [-2, 3]", "Q1 • 'Single quoted' [0.5, 0.5]", "Q? •  [NaN, 0.2]",
+	} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("quadrantChart parsing differs from reference, missing %q:\n%s", expected, rendered)
+		}
+	}
+	for _, unexpected := range []string{"First", "Q1: Old", "Hidden"} {
+		if strings.Contains(rendered, unexpected) {
+			t.Fatalf("quadrantChart retained overwritten or non-rendered value %q:\n%s", unexpected, rendered)
+		}
+	}
+}
+
+func TestRenderMermaidQuadrantRejectsReferenceParseErrors(t *testing.T) {
+	for _, source := range []string{
+		"quadrantChart",
+		"quadrantChart\nx-axis left-right\nA: [0, 0]",
+		"quadrantChart\nquadrant-x Bad\nA: [0, 0]",
+		"quadrantChart\nquadrant-1\nA: [0, 0]",
+		"quadrantChart\nA 0, 0",
+		"quadrantChart\nA: 0, 0",
+		"quadrantChart\nA: [0]",
+		"quadrantChart\nA: [0, nope]",
+	} {
+		if _, ok := renderMermaid(source, 40, paletteFor("groknight")); ok {
+			t.Fatalf("invalid quadrantChart was accepted: %q", source)
+		}
+	}
+}
+
+func TestRenderMarkdownRendersClosedMermaidQuadrant(t *testing.T) {
+	source := "Before\n```mermaid\nquadrantChart\nquadrant-1 Ship\nIdea: [0.7, 0.8]\n```\nAfter"
+	rendered := stripUIANSI(strings.Join(renderMarkdown(source, 36), "\n"))
+	for _, expected := range []string{"Before", "◇ mermaid quadrant", "Q1: Ship", "Q1 • Idea [0.7, 0.8]", "After"} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("rendered Mermaid quadrantChart missing %q:\n%s", expected, rendered)
+		}
+	}
+	if strings.Contains(rendered, "Idea: [0.7, 0.8]") {
+		t.Fatalf("closed Mermaid quadrantChart source was not replaced:\n%s", rendered)
+	}
+}
+
 func TestRenderMermaidSankeyMatchesReferenceParsing(t *testing.T) {
 	source := "%% comment\nsankey-beta extra\n,B,-1\nB,A,1e3\nA,B,2.5"
 	lines, ok := renderMermaid(source, 40, paletteFor("groknight"))

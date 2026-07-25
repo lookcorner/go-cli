@@ -73,6 +73,12 @@ type mermaidSankeyLink struct {
 	value  float64
 }
 
+type mermaidQuadrantPoint struct {
+	label string
+	x     float64
+	y     float64
+}
+
 var mermaidOperators = []string{
 	"||--o{", "||--|{", "}o--o{", "}o..o{", "}o--||", "}|..|{",
 	"<|--", "<-->", "--|>", "-.->", "-->>", "->>", "--x", "--o", "-x", "==>", "-->", "<--",
@@ -96,6 +102,9 @@ func renderMermaid(source string, width int, theme themePalette) ([]string, bool
 	}
 	if firstToken == "sankey-beta" {
 		return renderMermaidSankey(source, width, theme)
+	}
+	if firstToken == "quadrantChart" {
+		return renderMermaidQuadrant(source, width, theme)
 	}
 	statements, complete := mermaidStatements(source)
 	if !complete || len(statements) < 1 {
@@ -147,6 +156,123 @@ func renderMermaid(source string, width int, theme themePalette) ([]string, bool
 		}
 	}
 	return lines, true
+}
+
+func renderMermaidQuadrant(source string, width int, theme themePalette) ([]string, bool) {
+	title := ""
+	axes := make(map[string][2]string)
+	quadrants := make(map[int]string)
+	points := make([]mermaidQuadrantPoint, 0)
+	foundHeader := false
+	statements := 0
+	for _, raw := range strings.Split(source, "\n") {
+		statement := strings.TrimSpace(raw)
+		if statement == "" || strings.HasPrefix(statement, "%%") {
+			continue
+		}
+		statements++
+		if statements > maxMermaidStatements {
+			return nil, false
+		}
+		if !foundHeader {
+			if strings.Fields(statement)[0] != "quadrantChart" {
+				return nil, false
+			}
+			foundHeader = true
+			continue
+		}
+		if value, ok := strings.CutPrefix(statement, "title "); ok {
+			if value = strings.TrimSpace(value); value != "" {
+				title = value
+			}
+			continue
+		}
+		if axis, value, ok := mermaidQuadrantAxis(statement); ok {
+			low, high, valid := strings.Cut(value, "-->")
+			if !valid {
+				return nil, false
+			}
+			axes[axis] = [2]string{strings.TrimSpace(low), strings.TrimSpace(high)}
+			continue
+		}
+		if value, ok := strings.CutPrefix(statement, "quadrant-"); ok {
+			number, label, valid := strings.Cut(value, " ")
+			index, err := strconv.Atoi(strings.TrimSpace(number))
+			if !valid || err != nil {
+				return nil, false
+			}
+			quadrants[index] = strings.TrimSpace(label)
+			continue
+		}
+		label, coordinates, ok := strings.Cut(statement, ":")
+		coordinates = strings.TrimSpace(coordinates)
+		if !ok || len(coordinates) < 2 || coordinates[0] != '[' || coordinates[len(coordinates)-1] != ']' {
+			return nil, false
+		}
+		parts := strings.Split(coordinates[1:len(coordinates)-1], ",")
+		if len(parts) != 2 {
+			return nil, false
+		}
+		x, xErr := strconv.ParseFloat(strings.TrimSpace(parts[0]), 64)
+		y, yErr := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
+		if xErr != nil || yErr != nil {
+			return nil, false
+		}
+		label = strings.TrimSpace(label)
+		if len(label) >= 2 && label[0] == '"' && label[len(label)-1] == '"' {
+			label = label[1 : len(label)-1]
+		}
+		points = append(points, mermaidQuadrantPoint{label: label, x: x, y: y})
+	}
+	if len(points) == 0 {
+		return nil, false
+	}
+	lines := []string{ansiDim + mermaidFit("◇ mermaid quadrant", width) + ansiReset}
+	if title != "" {
+		lines = append(lines, theme.heading+mermaidFit(title, width)+ansiReset)
+	}
+	for _, axis := range []string{"x", "y"} {
+		if labels, ok := axes[axis]; ok {
+			lines = append(lines, theme.code+mermaidFit(axis+": "+labels[0]+" → "+labels[1], width)+ansiReset)
+		}
+	}
+	for index := 1; index <= 4; index++ {
+		if label, ok := quadrants[index]; ok {
+			lines = append(lines, theme.heading+mermaidFit("Q"+strconv.Itoa(index)+": "+label, width)+ansiReset)
+		}
+	}
+	for _, point := range points {
+		quadrant := mermaidPointQuadrant(point.x, point.y)
+		text := quadrant + " • " + point.label + " [" + strconv.FormatFloat(point.x, 'g', -1, 64) + ", " + strconv.FormatFloat(point.y, 'g', -1, 64) + "]"
+		lines = append(lines, theme.code+mermaidFit(text, width)+ansiReset)
+	}
+	return lines, true
+}
+
+func mermaidQuadrantAxis(statement string) (string, string, bool) {
+	for _, axis := range []string{"x", "y"} {
+		if value, ok := strings.CutPrefix(statement, axis+"-axis "); ok {
+			return axis, strings.TrimSpace(value), true
+		}
+	}
+	return "", "", false
+}
+
+func mermaidPointQuadrant(x, y float64) string {
+	x = math.Max(0, math.Min(1, x))
+	y = math.Max(0, math.Min(1, y))
+	switch {
+	case math.IsNaN(x) || math.IsNaN(y):
+		return "Q?"
+	case x >= .5 && y >= .5:
+		return "Q1"
+	case x < .5 && y >= .5:
+		return "Q2"
+	case x < .5 && y < .5:
+		return "Q3"
+	default:
+		return "Q4"
+	}
 }
 
 func renderMermaidSankey(source string, width int, theme themePalette) ([]string, bool) {
