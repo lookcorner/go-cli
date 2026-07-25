@@ -34,6 +34,12 @@ type mermaidPieSlice struct {
 	value float64
 }
 
+type mermaidTimelineEntry struct {
+	period  string
+	events  []string
+	section string
+}
+
 var mermaidOperators = []string{
 	"||--o{", "||--|{", "}o--o{", "}o..o{", "}o--||", "}|..|{",
 	"<|--", "<-->", "--|>", "-.->", "-->>", "->>", "--x", "--o", "-x", "==>", "-->", "<--",
@@ -58,6 +64,9 @@ func renderMermaid(source string, width int, theme themePalette) ([]string, bool
 	}
 	if header[0] == "pie" {
 		return renderMermaidPie(statements, width, theme)
+	}
+	if header[0] == "timeline" {
+		return renderMermaidTimeline(statements, width, theme)
 	}
 	var relations []mermaidRelation
 	var nodes []mermaidNode
@@ -86,6 +95,92 @@ func renderMermaid(source string, width int, theme themePalette) ([]string, bool
 	for _, node := range nodes {
 		for _, line := range mermaidBox(node.label, min(max(width, 4), maxMermaidLabelWidth+4)) {
 			lines = append(lines, theme.code+line+ansiReset)
+		}
+	}
+	return lines, true
+}
+
+func renderMermaidTimeline(statements []string, width int, theme themePalette) ([]string, bool) {
+	title := ""
+	section := ""
+	sections := make([]string, 0)
+	entries := make([]mermaidTimelineEntry, 0, len(statements)-1)
+	for _, statement := range statements[1:] {
+		if strings.HasPrefix(statement, "#") {
+			continue
+		}
+		if value, ok := strings.CutPrefix(statement, "title "); ok {
+			title = mermaidCleanLabel(value)
+			continue
+		}
+		if value, ok := strings.CutPrefix(statement, "section "); ok {
+			section = mermaidCleanLabel(value)
+			known := false
+			for _, name := range sections {
+				known = known || name == section
+			}
+			if section != "" && !known {
+				sections = append(sections, section)
+			}
+			continue
+		}
+		if value, ok := strings.CutPrefix(statement, ": "); ok {
+			if event := mermaidCleanLabel(value); event != "" && len(entries) > 0 {
+				entries[len(entries)-1].events = append(entries[len(entries)-1].events, event)
+			}
+			continue
+		}
+		period, event, found := strings.Cut(statement, ":")
+		period = mermaidCleanLabel(period)
+		if period == "" {
+			continue
+		}
+		entry := mermaidTimelineEntry{period: period, section: section}
+		if found {
+			if event = mermaidCleanLabel(event); event != "" {
+				entry.events = []string{event}
+			}
+		}
+		entries = append(entries, entry)
+	}
+	if len(entries) == 0 {
+		return nil, false
+	}
+	if len(sections) > 0 {
+		grouped := make([]mermaidTimelineEntry, 0, len(entries))
+		for _, name := range sections {
+			for _, entry := range entries {
+				if entry.section == name {
+					grouped = append(grouped, entry)
+				}
+			}
+		}
+		entries = grouped
+	}
+	if len(entries) == 0 {
+		return nil, false
+	}
+	lines := []string{ansiDim + mermaidFit("◇ mermaid timeline", width) + ansiReset}
+	if title != "" {
+		lines = append(lines, theme.heading+mermaidFit(title, width)+ansiReset)
+	}
+	lastSection := ""
+	for index, entry := range entries {
+		if entry.section != "" && entry.section != lastSection {
+			lines = append(lines, theme.heading+mermaidFit(entry.section, width)+ansiReset)
+		}
+		lastSection = entry.section
+		marker := "├─ "
+		if index == len(entries)-1 {
+			marker = "└─ "
+		}
+		lines = append(lines, theme.code+mermaidFit(marker+entry.period, width)+ansiReset)
+		for eventIndex, event := range entry.events {
+			eventMarker := "│  ├─ "
+			if eventIndex == len(entry.events)-1 {
+				eventMarker = "│  └─ "
+			}
+			lines = append(lines, theme.code+mermaidFit(eventMarker+event, width)+ansiReset)
 		}
 	}
 	return lines, true

@@ -133,13 +133,75 @@ func TestRenderMermaidPieRejectsInvalidCharts(t *testing.T) {
 	}
 }
 
-func TestRenderMarkdownKeepsIncompleteAndUnsupportedMermaidSource(t *testing.T) {
+func TestRenderMermaidTimeline(t *testing.T) {
+	source := "timeline\ntitle Release history\nsection Build\n2025 : Prototype\n: Tests\nsection Operate\nNow\nsection Build\n2026 : Launch"
+	lines, ok := renderMermaid(source, 28, paletteFor("groknight"))
+	if !ok {
+		t.Fatal("supported Mermaid timeline was rejected")
+	}
+	rendered := stripUIANSI(strings.Join(lines, "\n"))
+	for _, expected := range []string{"◇ mermaid timeline", "Release history", "Build", "2025", "Prototype", "Tests", "2026", "Launch", "Operate", "Now"} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("rendered timeline missing %q:\n%s", expected, rendered)
+		}
+	}
+	if strings.Index(rendered, "2025") > strings.Index(rendered, "2026") || strings.Index(rendered, "2026") > strings.Index(rendered, "Now") {
+		t.Fatalf("timeline order changed:\n%s", rendered)
+	}
+	for _, line := range lines {
+		if displayWidth(stripUIANSI(line)) > 28 {
+			t.Fatalf("timeline line exceeds width: %q", stripUIANSI(line))
+		}
+	}
+}
+
+func TestRenderMarkdownRendersClosedMermaidTimeline(t *testing.T) {
+	source := "Before\n```mermaid\ntimeline\n2025 : Build\n2026 : Ship\n```\nAfter"
+	rendered := stripUIANSI(strings.Join(renderMarkdown(source, 32), "\n"))
+	for _, expected := range []string{"Before", "◇ mermaid timeline", "2025", "Build", "2026", "Ship", "After"} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("rendered Mermaid timeline missing %q:\n%s", expected, rendered)
+		}
+	}
+	if strings.Contains(rendered, "2025 : Build") || strings.Contains(rendered, "2026 : Ship") {
+		t.Fatalf("closed Mermaid timeline source was not replaced:\n%s", rendered)
+	}
+}
+
+func TestRenderMermaidTimelineRejectsEmptyInput(t *testing.T) {
 	for _, source := range []string{
-		"```mermaid\nflowchart TD\nA --> B",
-		"```mermaid\npie\n  \"A\" : nope\n```",
+		"timeline",
+		"timeline\ntitle Empty",
+		"timeline\n%% comment\n# comment",
 	} {
-		rendered := stripUIANSI(strings.Join(renderMarkdown(source, 80), "\n"))
-		if strings.Contains(rendered, "◇ mermaid") || !strings.Contains(rendered, "mermaid") || !strings.Contains(rendered, "A") {
+		if _, ok := renderMermaid(source, 40, paletteFor("groknight")); ok {
+			t.Fatalf("empty timeline was accepted: %q", source)
+		}
+	}
+}
+
+func TestRenderMermaidTimelineIgnoresEntriesOutsideSections(t *testing.T) {
+	lines, ok := renderMermaid("timeline\nBefore\nsection Later\nAfter", 40, paletteFor("groknight"))
+	if !ok {
+		t.Fatal("sectioned timeline was rejected")
+	}
+	rendered := stripUIANSI(strings.Join(lines, "\n"))
+	if strings.Contains(rendered, "Before") || !strings.Contains(rendered, "Later") || !strings.Contains(rendered, "After") {
+		t.Fatalf("section filtering differs from the reference:\n%s", rendered)
+	}
+}
+
+func TestRenderMarkdownKeepsIncompleteAndUnsupportedMermaidSource(t *testing.T) {
+	for _, test := range []struct {
+		source string
+		want   string
+	}{
+		{source: "```mermaid\nflowchart TD\nA --> B", want: "A"},
+		{source: "```mermaid\npie\n  \"A\" : nope\n```", want: "A"},
+		{source: "```mermaid\ntimeline\ntitle Empty\n```", want: "Empty"},
+	} {
+		rendered := stripUIANSI(strings.Join(renderMarkdown(test.source, 80), "\n"))
+		if strings.Contains(rendered, "◇ mermaid") || !strings.Contains(rendered, "mermaid") || !strings.Contains(rendered, test.want) {
 			t.Fatalf("source fallback failed:\n%s", rendered)
 		}
 	}
