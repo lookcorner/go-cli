@@ -647,7 +647,14 @@ Sessions with Plan tools also expose the live, session-scoped Plan mode. Enter
 or Space changes the selected value.
 Scroll speed and line count open a bounded arrow-key stepper and commit with
 Enter; persisted settings use atomic configuration writers with rollback on
-write failure. Changing
+write failure. The restart-scoped `Match display refresh rate` setting persists
+`[ui.display_refresh].auto_cadence_enabled` and is off by default. When enabled,
+fullscreen startup probes the primary display on macOS and Windows and adjusts
+the renderer within the configured 8-16 ms and 55-165 Hz bounds; unsupported,
+remote, indeterminate, or out-of-range displays safely stay at 60 FPS.
+`GROK_DISPLAY_REFRESH_PROBE_ENABLED` and
+`GROK_DISPLAY_REFRESH_AUTO_CADENCE` override the booleans, while
+`GROK_MIN_DRAW_MS` directly pins the renderer cadence. Changing
 grouped tool verbs or collapsed edit blocks immediately rebuilds the full-screen
 transcript from the local session log; disabling prompt suggestions immediately
 clears the current ghost text, while inverted scrolling, scroll-input

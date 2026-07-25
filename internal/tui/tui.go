@@ -752,6 +752,8 @@ type model struct {
 	persistTimeline     func(bool) error
 	showThinking        bool
 	persistThinking     func(bool) error
+	matchRefresh        bool
+	persistRefresh      func(bool) error
 	thoughtOpen         bool
 	thoughtLineStart    bool
 	persistGroupTools   func(bool) error
@@ -963,6 +965,7 @@ const (
 
 type UIOptions struct {
 	Minimal              bool
+	RendererFPS          int
 	ScreenMode           string
 	SetScreenMode        func(string) error
 	Mode                 string
@@ -979,6 +982,8 @@ type UIOptions struct {
 	SetShowTimeline      func(bool) error
 	ShowThinkingBlocks   bool
 	SetShowThinking      func(bool) error
+	MatchRefresh         bool
+	SetMatchRefresh      func(bool) error
 	ScrollSpeed          uint8
 	SetScrollSpeed       func(uint8) error
 	ScrollMode           string
@@ -1180,6 +1185,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		showTimestamps: options.ShowTimestamps, persistTimestamps: options.SetShowTimestamps,
 		showTimeline: options.ShowTimeline, persistTimeline: options.SetShowTimeline,
 		showThinking: options.ShowThinkingBlocks, persistThinking: options.SetShowThinking,
+		matchRefresh: options.MatchRefresh, persistRefresh: options.SetMatchRefresh,
 		scrollLines: mouseWheelScrollLines, scrollSpeed: options.ScrollSpeed, persistScrollSpeed: options.SetScrollSpeed,
 		scrollInput: scrollInput{mode: options.ScrollMode}, persistScrollMode: options.SetScrollMode, persistScrollLines: options.SetScrollLines,
 		invertScroll: options.InvertScroll, persistInvertScroll: options.SetInvertScroll,
@@ -1294,7 +1300,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 	}
 	restoreCursor := applyCursorBlink(os.Stdout, options.CursorBlink)
 	defer restoreCursor()
-	program := tea.NewProgram(m, tea.WithContext(ctx))
+	program := tea.NewProgram(m, tea.WithContext(ctx), tea.WithFPS(options.RendererFPS))
 	final, err := program.Run()
 	m.stopVoice()
 	if errors.Is(err, tea.ErrInterrupted) || errors.Is(err, context.Canceled) {

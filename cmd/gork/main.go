@@ -1159,7 +1159,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			voiceClient = voice.New(voice.Config{BaseURL: cfg.BaseURL, Language: cfg.UI.VoiceSTTLanguage}, cfg.APIKey, voice.TokenProvider(tokenProvider))
 		}
 		err := tui.Run(ctx, runner, tuiBridge, prompt, opts.previousID, resumedTranscript, ws.Root(), cfg.Model, tui.UIOptions{
-			Minimal: minimal, ScreenMode: cfg.UI.ScreenMode,
+			Minimal: minimal, RendererFPS: tui.RendererFPS(cfg.UI.DisplayRefresh), ScreenMode: cfg.UI.ScreenMode,
 			SetScreenMode: func(mode string) error { return config.UpdateScreenMode(opts.configPath, mode) },
 			SetSelectionMode: func(mode string) error {
 				return config.UpdateTextSelection(opts.configPath, mode)
@@ -1192,6 +1192,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			CompactMode:         cfg.UI.CompactMode,
 			ShowTimestamps:      cfg.UI.ShowTimestamps,
 			ShowThinkingBlocks:  cfg.UI.ShowThinkingBlocks,
+			MatchRefresh:        cfg.UI.DisplayRefresh.AutoCadenceEnabled,
 			ShowTimeline:        cfg.UI.ShowTimeline,
 			OpenDashboard:       opts.dashboard,
 			Foreign: session.ForeignSources{
@@ -1210,6 +1211,9 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			SetCompactMode:    func(enabled bool) error { return config.UpdateCompactMode(opts.configPath, enabled) },
 			SetShowTimestamps: func(enabled bool) error { return config.UpdateShowTimestamps(opts.configPath, enabled) },
 			SetShowThinking:   func(enabled bool) error { return config.UpdateShowThinkingBlocks(opts.configPath, enabled) },
+			SetMatchRefresh: func(enabled bool) error {
+				return config.UpdateDisplayRefreshAutoCadence(opts.configPath, enabled)
+			},
 			SetShowTimeline:   func(enabled bool) error { return config.UpdateShowTimeline(opts.configPath, enabled) },
 			SetInvertScroll:   func(enabled bool) error { return config.UpdateInvertScroll(opts.configPath, enabled) },
 			SetScrollSpeed:    func(value uint8) error { return config.UpdateScrollSpeed(opts.configPath, value) },

@@ -127,6 +127,7 @@ type Config struct {
 	uiRememberApprovalsConfigured   bool
 	uiCollapsedEditsConfigured      bool
 	uiGroupToolVerbsConfigured      bool
+	uiRefreshConfigured             refreshConfigured
 	uiContextualUndoConfigured      bool
 	uiContextualPlanModeConfigured  bool
 	uiContextualSendNowConfigured   bool
@@ -216,36 +217,50 @@ type AskUserQuestionConfig struct {
 }
 
 type UIConfig struct {
-	Theme                     string  `json:"theme"`
-	AutoDarkTheme             string  `json:"auto_dark_theme"`
-	AutoLightTheme            string  `json:"auto_light_theme"`
-	HunkTrackerMode           string  `json:"hunk_tracker_mode"`
-	ScreenMode                string  `json:"screen_mode"`
-	RenderMermaid             string  `json:"render_mermaid"`
-	KeepTextSelection         string  `json:"keep_text_selection"`
-	WordSeparators            *string `json:"word_separators,omitempty"`
-	MouseReportingToggle      bool    `json:"mouse_reporting_toggle,omitempty"`
-	VimMode                   bool    `json:"vim_mode,omitempty"`
-	CompactMode               bool    `json:"compact_mode,omitempty"`
-	ShowTimestamps            bool    `json:"show_timestamps"`
-	ShowTimeline              bool    `json:"show_timeline,omitempty"`
-	ShowThinkingBlocks        bool    `json:"show_thinking_blocks"`
-	ScrollSpeed               uint8   `json:"scroll_speed,omitempty"`
-	ScrollMode                string  `json:"scroll_mode"`
-	ScrollLines               *uint8  `json:"scroll_lines,omitempty"`
-	InvertScroll              bool    `json:"invert_scroll,omitempty"`
-	DefaultSelectedPermission string  `json:"default_selected_permission"`
-	CancelSubagents           string  `json:"cancel_subagents_on_turn_cancel,omitempty"`
-	ForkSecondaryModel        string  `json:"fork_secondary_model,omitempty"`
-	RememberToolApprovals     bool    `json:"remember_tool_approvals,omitempty"`
-	CollapsedEditBlocks       bool    `json:"collapsed_edit_blocks,omitempty"`
-	GroupToolVerbs            bool    `json:"group_tool_verbs"`
-	PromptSuggestions         bool    `json:"prompt_suggestions"`
-	ContextualHints           Hints   `json:"contextual_hints"`
-	CursorBlink               *bool   `json:"cursor_blink,omitempty"`
-	VoiceCaptureMode          string  `json:"voice_capture_mode"`
-	VoiceSTTLanguage          string  `json:"voice_stt_language"`
-	PermissionMode            string  `json:"permission_mode"`
+	Theme                     string               `json:"theme"`
+	AutoDarkTheme             string               `json:"auto_dark_theme"`
+	AutoLightTheme            string               `json:"auto_light_theme"`
+	HunkTrackerMode           string               `json:"hunk_tracker_mode"`
+	ScreenMode                string               `json:"screen_mode"`
+	RenderMermaid             string               `json:"render_mermaid"`
+	KeepTextSelection         string               `json:"keep_text_selection"`
+	WordSeparators            *string              `json:"word_separators,omitempty"`
+	MouseReportingToggle      bool                 `json:"mouse_reporting_toggle,omitempty"`
+	VimMode                   bool                 `json:"vim_mode,omitempty"`
+	CompactMode               bool                 `json:"compact_mode,omitempty"`
+	ShowTimestamps            bool                 `json:"show_timestamps"`
+	ShowTimeline              bool                 `json:"show_timeline,omitempty"`
+	ShowThinkingBlocks        bool                 `json:"show_thinking_blocks"`
+	DisplayRefresh            DisplayRefreshConfig `json:"display_refresh"`
+	ScrollSpeed               uint8                `json:"scroll_speed,omitempty"`
+	ScrollMode                string               `json:"scroll_mode"`
+	ScrollLines               *uint8               `json:"scroll_lines,omitempty"`
+	InvertScroll              bool                 `json:"invert_scroll,omitempty"`
+	DefaultSelectedPermission string               `json:"default_selected_permission"`
+	CancelSubagents           string               `json:"cancel_subagents_on_turn_cancel,omitempty"`
+	ForkSecondaryModel        string               `json:"fork_secondary_model,omitempty"`
+	RememberToolApprovals     bool                 `json:"remember_tool_approvals,omitempty"`
+	CollapsedEditBlocks       bool                 `json:"collapsed_edit_blocks,omitempty"`
+	GroupToolVerbs            bool                 `json:"group_tool_verbs"`
+	PromptSuggestions         bool                 `json:"prompt_suggestions"`
+	ContextualHints           Hints                `json:"contextual_hints"`
+	CursorBlink               *bool                `json:"cursor_blink,omitempty"`
+	VoiceCaptureMode          string               `json:"voice_capture_mode"`
+	VoiceSTTLanguage          string               `json:"voice_stt_language"`
+	PermissionMode            string               `json:"permission_mode"`
+}
+
+type DisplayRefreshConfig struct {
+	ProbeEnabled       bool   `json:"probe_enabled" toml:"probe_enabled"`
+	AutoCadenceEnabled bool   `json:"auto_cadence_enabled" toml:"auto_cadence_enabled"`
+	FloorMS            uint32 `json:"floor_ms" toml:"floor_ms"`
+	CeilingMS          uint32 `json:"ceiling_ms" toml:"ceiling_ms"`
+	MinHz              uint32 `json:"min_hz" toml:"min_hz"`
+	MaxHz              uint32 `json:"max_hz" toml:"max_hz"`
+}
+
+type refreshConfigured struct {
+	probe, auto, floor, ceiling, minHz, maxHz bool
 }
 
 type Hints struct {
@@ -498,38 +513,48 @@ type fileHashlineConfig struct {
 }
 
 type fileUIConfig struct {
-	Theme                        *string `json:"theme,omitempty" toml:"theme"`
-	AutoDarkTheme                *string `json:"auto_dark_theme,omitempty" toml:"auto_dark_theme"`
-	AutoLightTheme               *string `json:"auto_light_theme,omitempty" toml:"auto_light_theme"`
-	HunkTrackerMode              *string `json:"hunk_tracker_mode,omitempty" toml:"hunk_tracker_mode"`
-	ScreenMode                   *string `json:"screen_mode,omitempty" toml:"screen_mode"`
-	RenderMermaid                *string `json:"render_mermaid,omitempty" toml:"render_mermaid"`
-	KeepTextSelection            any     `json:"keep_text_selection,omitempty" toml:"keep_text_selection"`
-	WordSeparators               *string `json:"word_separators,omitempty" toml:"word_separators"`
-	MouseReportingToggle         *bool   `json:"mouse_reporting_toggle,omitempty" toml:"mouse_reporting_toggle"`
-	VimMode                      *bool   `json:"vim_mode,omitempty" toml:"vim_mode"`
-	CompactMode                  *bool   `json:"compact_mode,omitempty" toml:"compact_mode"`
-	ShowTimestamps               *bool   `json:"show_timestamps,omitempty" toml:"show_timestamps"`
-	ShowTimeline                 *bool   `json:"show_timeline,omitempty" toml:"show_timeline"`
-	ShowThinkingBlocks           *bool   `json:"show_thinking_blocks,omitempty" toml:"show_thinking_blocks"`
-	ScrollSpeed                  *uint8  `json:"scroll_speed,omitempty" toml:"scroll_speed"`
-	ScrollMode                   *string `json:"scroll_mode,omitempty" toml:"scroll_mode"`
-	ScrollLines                  *uint8  `json:"scroll_lines,omitempty" toml:"scroll_lines"`
-	InvertScroll                 *bool   `json:"invert_scroll,omitempty" toml:"invert_scroll"`
-	DefaultSelectedPermission    *string `json:"default_selected_permission,omitempty" toml:"default_selected_permission"`
-	CancelSubagents              *string `json:"cancel_subagents_on_turn_cancel,omitempty" toml:"cancel_subagents_on_turn_cancel"`
-	ForkSecondaryModel           *string `json:"fork_secondary_model,omitempty" toml:"fork_secondary_model"`
-	RememberToolApprovals        *bool   `json:"remember_tool_approvals,omitempty" toml:"remember_tool_approvals"`
-	CollapsedEditBlocks          *bool   `json:"collapsed_edit_blocks,omitempty" toml:"collapsed_edit_blocks"`
-	GroupToolVerbs               *bool   `json:"group_tool_verbs,omitempty" toml:"group_tool_verbs"`
-	PromptSuggestions            *bool   `json:"prompt_suggestions,omitempty" toml:"prompt_suggestions"`
-	ContextualHints              *hints  `json:"contextual_hints,omitempty" toml:"contextual_hints"`
-	CursorBlink                  *bool   `json:"cursor_blink,omitempty" toml:"cursor_blink"`
-	VoiceCaptureMode             *string `json:"voice_capture_mode,omitempty" toml:"voice_capture_mode"`
-	VoiceSTTLanguage             *string `json:"voice_stt_language,omitempty" toml:"voice_stt_language"`
-	PermissionMode               *string `json:"permission_mode,omitempty" toml:"permission_mode"`
-	SelectionHighlightDurationMS *uint64 `json:"selection_highlight_duration_ms,omitempty" toml:"selection_highlight_duration_ms"`
-	DoubleClickAction            *string `json:"double_click_action,omitempty" toml:"double_click_action"`
+	Theme                        *string          `json:"theme,omitempty" toml:"theme"`
+	AutoDarkTheme                *string          `json:"auto_dark_theme,omitempty" toml:"auto_dark_theme"`
+	AutoLightTheme               *string          `json:"auto_light_theme,omitempty" toml:"auto_light_theme"`
+	HunkTrackerMode              *string          `json:"hunk_tracker_mode,omitempty" toml:"hunk_tracker_mode"`
+	ScreenMode                   *string          `json:"screen_mode,omitempty" toml:"screen_mode"`
+	RenderMermaid                *string          `json:"render_mermaid,omitempty" toml:"render_mermaid"`
+	KeepTextSelection            any              `json:"keep_text_selection,omitempty" toml:"keep_text_selection"`
+	WordSeparators               *string          `json:"word_separators,omitempty" toml:"word_separators"`
+	MouseReportingToggle         *bool            `json:"mouse_reporting_toggle,omitempty" toml:"mouse_reporting_toggle"`
+	VimMode                      *bool            `json:"vim_mode,omitempty" toml:"vim_mode"`
+	CompactMode                  *bool            `json:"compact_mode,omitempty" toml:"compact_mode"`
+	ShowTimestamps               *bool            `json:"show_timestamps,omitempty" toml:"show_timestamps"`
+	ShowTimeline                 *bool            `json:"show_timeline,omitempty" toml:"show_timeline"`
+	ShowThinkingBlocks           *bool            `json:"show_thinking_blocks,omitempty" toml:"show_thinking_blocks"`
+	DisplayRefresh               *RefreshSettings `json:"display_refresh,omitempty" toml:"display_refresh"`
+	ScrollSpeed                  *uint8           `json:"scroll_speed,omitempty" toml:"scroll_speed"`
+	ScrollMode                   *string          `json:"scroll_mode,omitempty" toml:"scroll_mode"`
+	ScrollLines                  *uint8           `json:"scroll_lines,omitempty" toml:"scroll_lines"`
+	InvertScroll                 *bool            `json:"invert_scroll,omitempty" toml:"invert_scroll"`
+	DefaultSelectedPermission    *string          `json:"default_selected_permission,omitempty" toml:"default_selected_permission"`
+	CancelSubagents              *string          `json:"cancel_subagents_on_turn_cancel,omitempty" toml:"cancel_subagents_on_turn_cancel"`
+	ForkSecondaryModel           *string          `json:"fork_secondary_model,omitempty" toml:"fork_secondary_model"`
+	RememberToolApprovals        *bool            `json:"remember_tool_approvals,omitempty" toml:"remember_tool_approvals"`
+	CollapsedEditBlocks          *bool            `json:"collapsed_edit_blocks,omitempty" toml:"collapsed_edit_blocks"`
+	GroupToolVerbs               *bool            `json:"group_tool_verbs,omitempty" toml:"group_tool_verbs"`
+	PromptSuggestions            *bool            `json:"prompt_suggestions,omitempty" toml:"prompt_suggestions"`
+	ContextualHints              *hints           `json:"contextual_hints,omitempty" toml:"contextual_hints"`
+	CursorBlink                  *bool            `json:"cursor_blink,omitempty" toml:"cursor_blink"`
+	VoiceCaptureMode             *string          `json:"voice_capture_mode,omitempty" toml:"voice_capture_mode"`
+	VoiceSTTLanguage             *string          `json:"voice_stt_language,omitempty" toml:"voice_stt_language"`
+	PermissionMode               *string          `json:"permission_mode,omitempty" toml:"permission_mode"`
+	SelectionHighlightDurationMS *uint64          `json:"selection_highlight_duration_ms,omitempty" toml:"selection_highlight_duration_ms"`
+	DoubleClickAction            *string          `json:"double_click_action,omitempty" toml:"double_click_action"`
+}
+
+type RefreshSettings struct {
+	ProbeEnabled       *bool   `json:"probe_enabled,omitempty" toml:"probe_enabled"`
+	AutoCadenceEnabled *bool   `json:"auto_cadence_enabled,omitempty" toml:"auto_cadence_enabled"`
+	FloorMS            *uint32 `json:"floor_ms,omitempty" toml:"floor_ms"`
+	CeilingMS          *uint32 `json:"ceiling_ms,omitempty" toml:"ceiling_ms"`
+	MinHz              *uint32 `json:"min_hz,omitempty" toml:"min_hz"`
+	MaxHz              *uint32 `json:"max_hz,omitempty" toml:"max_hz"`
 }
 
 type hints struct {
@@ -566,12 +591,13 @@ type requirementsFile struct {
 		AskUserQuestion *fileAskUserQuestionConfig `toml:"ask_user_question"`
 	} `toml:"toolset"`
 	UI struct {
-		DisableBypassPermissionsMode any    `toml:"disable_bypass_permissions_mode"`
-		Yolo                         any    `toml:"yolo"`
-		RememberToolApprovals        *bool  `toml:"remember_tool_approvals"`
-		CollapsedEditBlocks          *bool  `toml:"collapsed_edit_blocks"`
-		GroupToolVerbs               *bool  `toml:"group_tool_verbs"`
-		ContextualHints              *hints `toml:"contextual_hints"`
+		DisableBypassPermissionsMode any              `toml:"disable_bypass_permissions_mode"`
+		Yolo                         any              `toml:"yolo"`
+		RememberToolApprovals        *bool            `toml:"remember_tool_approvals"`
+		CollapsedEditBlocks          *bool            `toml:"collapsed_edit_blocks"`
+		GroupToolVerbs               *bool            `toml:"group_tool_verbs"`
+		ContextualHints              *hints           `toml:"contextual_hints"`
+		DisplayRefresh               *RefreshSettings `toml:"display_refresh"`
 	} `toml:"ui"`
 }
 
@@ -755,7 +781,7 @@ func Load(path string) (Config, error) {
 		CancelRewindEnabled:         true,
 		Toolset:                     ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}},
 		Goal:                        GoalConfig{VerifierCount: 3, ClassifierMaxRuns: 10, ReverifyAfter: 8},
-		UI:                          UIConfig{Theme: "groknight", AutoDarkTheme: "groknight", AutoLightTheme: "grokday", HunkTrackerMode: "agent_only", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, ShowThinkingBlocks: true, ScrollSpeed: 50, ScrollMode: "auto", DefaultSelectedPermission: "always_allow_all_sessions", GroupToolVerbs: true, PromptSuggestions: true, ContextualHints: Hints{Undo: true, PlanMode: true, SendNow: true, SmallScreen: true, WordSelect: true}, VoiceCaptureMode: "hold", VoiceSTTLanguage: "en", PermissionMode: "ask"},
+		UI:                          UIConfig{Theme: "groknight", AutoDarkTheme: "groknight", AutoLightTheme: "grokday", HunkTrackerMode: "agent_only", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, ShowThinkingBlocks: true, DisplayRefresh: DisplayRefreshConfig{ProbeEnabled: true, FloorMS: 8, CeilingMS: 16, MinHz: 55, MaxHz: 165}, ScrollSpeed: 50, ScrollMode: "auto", DefaultSelectedPermission: "always_allow_all_sessions", GroupToolVerbs: true, PromptSuggestions: true, ContextualHints: Hints{Undo: true, PlanMode: true, SendNow: true, SmallScreen: true, WordSelect: true}, VoiceCaptureMode: "hold", VoiceSTTLanguage: "en", PermissionMode: "ask"},
 		Dashboard:                   DashboardConfig{Enabled: true, Grouping: "state"},
 		Sandbox:                     SandboxConfig{Profile: "off"},
 		Pruning:                     PruningConfig{Enabled: true, KeepLastNTurns: 3, SoftTrimThreshold: 4000, SoftTrimHead: 1500, SoftTrimTail: 1500, HardClearAgeTurns: 10},
@@ -1048,6 +1074,7 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	if disk.UI.ShowThinkingBlocks != nil {
 		cfg.UI.ShowThinkingBlocks = *disk.UI.ShowThinkingBlocks
 	}
+	applyDisplayRefreshFile(cfg, disk.UI.DisplayRefresh)
 	if disk.UI.ScrollSpeed != nil {
 		cfg.UI.ScrollSpeed = normalizedScrollSpeed(*disk.UI.ScrollSpeed)
 	}
@@ -1853,6 +1880,14 @@ func applyEnv(cfg *Config) {
 	if value, ok := envBool("GROK_PROMPT_SUGGESTIONS"); ok {
 		cfg.UI.PromptSuggestions = value
 	}
+	if value, ok := envBool("GROK_DISPLAY_REFRESH_PROBE_ENABLED"); ok {
+		cfg.UI.DisplayRefresh.ProbeEnabled = value
+		cfg.uiRefreshConfigured.probe = true
+	}
+	if value, ok := envBool("GROK_DISPLAY_REFRESH_AUTO_CADENCE"); ok {
+		cfg.UI.DisplayRefresh.AutoCadenceEnabled = value
+		cfg.uiRefreshConfigured.auto = true
+	}
 	if value, ok := envBool("GROK_CONTEXTUAL_HINTS"); ok {
 		cfg.UI.ContextualHints = Hints{Undo: value, PlanMode: value, SendNow: value, SmallScreen: value, WordSelect: value}
 		cfg.uiContextualHintsEnvironment = &value
@@ -2349,6 +2384,7 @@ func applyRequirementsData(cfg *Config, data []byte, source string, envFailClose
 		cfg.UI.GroupToolVerbs = *requirement.UI.GroupToolVerbs
 		cfg.uiGroupToolVerbsConfigured = true
 	}
+	applyDisplayRefreshFile(cfg, requirement.UI.DisplayRefresh)
 	if requirement.UI.ContextualHints != nil && requirement.UI.ContextualHints.Undo != nil {
 		cfg.UI.ContextualHints.Undo = *requirement.UI.ContextualHints.Undo
 		cfg.uiContextualUndoConfigured = true

@@ -32,6 +32,7 @@ type RemoteSettings struct {
 	GroupToolVerbs                   *bool                `json:"group_tool_verbs"`
 	CollapsedEditBlocks              *bool                `json:"collapsed_edit_blocks"`
 	ContextualHints                  *RemoteHints         `json:"contextual_hints"`
+	DisplayRefresh                   *RefreshSettings     `json:"display_refresh"`
 	SubscriptionWatchIntervalSeconds *uint64              `json:"subscription_watch_interval_secs"`
 	OfficialMarketplaceAutoRegister  *bool                `json:"official_marketplace_auto_register"`
 	WebFetchEnabled                  *bool                `json:"web_fetch_enabled"`
@@ -201,6 +202,7 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 	if !c.uiGroupToolVerbsConfigured {
 		c.UI.GroupToolVerbs = remote.GroupToolVerbs == nil || *remote.GroupToolVerbs
 	}
+	applyRemoteDisplayRefresh(c, remote.DisplayRefresh)
 	if !c.uiContextualUndoConfigured {
 		c.UI.ContextualHints.Undo = remote.ContextualHints == nil || remote.ContextualHints.Undo == nil || *remote.ContextualHints.Undo
 	}

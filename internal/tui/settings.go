@@ -24,7 +24,7 @@ type settingsNumber struct {
 	large int
 }
 
-const settingsCount = 31
+const settingsCount = 32
 
 func (m *model) openSettings() {
 	m.settings = &settingsState{}
@@ -81,11 +81,12 @@ func (m *model) applySetting(selected int) {
 	state := m.settings
 	state.err = ""
 	restartRequired := false
-	if selected >= settingsCount {
+	fixedCount := m.fixedSettingsCount()
+	if selected >= fixedCount {
 		switch {
-		case selected == settingsCount && m.planModeAvailable():
+		case selected == fixedCount && m.planModeAvailable():
 			state.err = errorString(m.setPlanMode(!m.planMode))
-		case selected == settingsCount+m.planSettingCount() && m.voiceModeSettingAvailable():
+		case selected == fixedCount+m.planSettingCount() && m.voiceModeSettingAvailable():
 			previous := m.voiceCaptureMode
 			if previous == "hold" {
 				m.voiceCaptureMode = "toggle"
@@ -95,7 +96,7 @@ func (m *model) applySetting(selected int) {
 			if m.persistVoiceMode != nil {
 				state.err = persistSetting(m.persistVoiceMode(m.voiceCaptureMode), func() { m.voiceCaptureMode = previous })
 			}
-		case selected == settingsCount+m.planSettingCount()+m.voiceModeSettingCount() && m.voiceClient != nil:
+		case selected == fixedCount+m.planSettingCount()+m.voiceModeSettingCount() && m.voiceClient != nil:
 			previous := m.voiceLanguage
 			m.voiceLanguage = nextVoiceLanguage(previous)
 			if m.persistVoiceLanguage != nil {
@@ -315,6 +316,16 @@ func (m *model) applySetting(selected int) {
 		if state.err == "" && !m.minimal {
 			m.refreshToolDisplay(m.collapsedEditBlocks, m.groupToolVerbs, previous)
 		}
+	case 31:
+		if m.minimal {
+			return
+		}
+		previous := m.matchRefresh
+		m.matchRefresh = !previous
+		if m.persistRefresh != nil {
+			state.err = persistSetting(m.persistRefresh(m.matchRefresh), func() { m.matchRefresh = previous })
+		}
+		restartRequired = true
 	}
 	if state.err != "" {
 		m.status = "setting update failed"
@@ -508,6 +519,9 @@ func (m *model) settingsContent() string {
 		settingLine("Word-select hint", m.wordSelectHint.enabled),
 		settingLine("Show thinking blocks", m.showThinking),
 	}
+	if !m.minimal {
+		lines = append(lines, settingLine("Match display refresh rate (restart)", m.matchRefresh))
+	}
 	if m.planModeAvailable() {
 		lines = append(lines, settingLine("Plan mode", m.planMode))
 	}
@@ -550,11 +564,18 @@ func (m *model) modelOptionName(id string) string {
 }
 
 func (m *model) settingsCount() int {
-	count := settingsCount + m.planSettingCount()
+	count := m.fixedSettingsCount() + m.planSettingCount()
 	if m.voiceClient != nil {
 		count += 1 + m.voiceModeSettingCount()
 	}
 	return count
+}
+
+func (m *model) fixedSettingsCount() int {
+	if m.minimal {
+		return settingsCount - 1
+	}
+	return settingsCount
 }
 
 func (m *model) voiceModeSettingCount() int {
