@@ -14,7 +14,7 @@ type settingsState struct {
 	err      string
 }
 
-const settingsCount = 7
+const settingsCount = 8
 
 func (m *model) openSettings() {
 	m.settings = &settingsState{}
@@ -84,6 +84,15 @@ func (m *model) applySetting(selected int) {
 			state.err = persistSetting(m.persistScreenMode(mode), func() { m.defaultMinimal = previous })
 		}
 	case 5:
+		previous := m.groupToolVerbs
+		m.groupToolVerbs = !previous
+		if m.persistGroupTools != nil {
+			state.err = persistSetting(m.persistGroupTools(m.groupToolVerbs), func() { m.groupToolVerbs = previous })
+		}
+		if state.err == "" && !m.minimal {
+			m.refreshToolDisplay()
+		}
+	case 6:
 		previous := m.mermaidMode
 		switch m.mermaidMode {
 		case "auto":
@@ -96,7 +105,7 @@ func (m *model) applySetting(selected int) {
 		if m.persistMermaid != nil {
 			state.err = persistSetting(m.persistMermaid(m.mermaidMode), func() { m.mermaidMode = previous })
 		}
-	case 6:
+	case 7:
 		previousName, previousTheme := m.themeName, m.theme
 		m.themeName = nextTheme(m.themeName)
 		m.theme = paletteForAuto(m.themeName, m.autoDarkTheme, m.autoLightTheme)
@@ -143,6 +152,7 @@ func (m *model) settingsContent() string {
 		settingLine("Compact mode", m.compactMode),
 		settingLine("Vim navigation", m.vimMode),
 		settingLine("Minimal by default", m.defaultMinimal),
+		settingLine("Group tool verbs", m.groupToolVerbs),
 		fmt.Sprintf("Mermaid rendering: %s", mermaidMode),
 		fmt.Sprintf("Theme: %s", m.themeName),
 	}
@@ -151,6 +161,24 @@ func (m *model) settingsContent() string {
 		content += "\n\n**Error:** " + strings.ReplaceAll(sanitizeTerminalText(m.settings.err), "\n", " ")
 	}
 	return content
+}
+
+func (m *model) refreshToolDisplay() {
+	if m.runner == nil || strings.TrimSpace(m.runner.SessionPath) == "" {
+		return
+	}
+	previous, _, _, err := sessionDisplayTranscript(
+		m.runner.SessionPath, m.workspace, m.collapsedEditBlocks, !m.groupToolVerbs,
+	)
+	if err != nil || strings.TrimSpace(m.transcript.String()) != strings.TrimSpace(previous) {
+		return
+	}
+	text, messages, expands, err := sessionDisplayTranscript(
+		m.runner.SessionPath, m.workspace, m.collapsedEditBlocks, m.groupToolVerbs,
+	)
+	if err == nil {
+		m.replaceDisplayTranscript(text, messages, expands)
+	}
 }
 
 func settingLine(name string, enabled bool) string {

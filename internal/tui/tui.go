@@ -673,6 +673,7 @@ type model struct {
 	persistTimestamps   func(bool) error
 	showTimeline        bool
 	persistTimeline     func(bool) error
+	persistGroupTools   func(bool) error
 	themeName           string
 	autoDarkTheme       string
 	autoLightTheme      string
@@ -851,6 +852,7 @@ type UIOptions struct {
 	InvertScroll         bool
 	CollapsedEditBlocks  bool
 	GroupToolVerbs       bool
+	SetGroupToolVerbs    func(bool) error
 	PromptSuggestions    bool
 	CursorBlink          *bool
 	Theme                string
@@ -989,6 +991,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		scrollLines: mouseWheelScrollLines, scrollSpeed: options.ScrollSpeed, scrollInput: scrollInput{mode: options.ScrollMode}, invertScroll: options.InvertScroll,
 		collapsedEditBlocks: options.CollapsedEditBlocks,
 		groupToolVerbs:      options.GroupToolVerbs,
+		persistGroupTools:   options.SetGroupToolVerbs,
 		suggestionsEnabled:  options.PromptSuggestions,
 		hyperlinks:          detectTerminalHyperlinks(),
 		themeName:           options.Theme,

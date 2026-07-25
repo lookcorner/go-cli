@@ -1,11 +1,15 @@
 package tui
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/lookcorner/go-cli/internal/agent"
+	"github.com/lookcorner/go-cli/internal/session"
 )
 
 func TestSettingsCommandAliasesOpenAndClose(t *testing.T) {
@@ -17,7 +21,7 @@ func TestSettingsCommandAliasesOpenAndClose(t *testing.T) {
 		if command != nil || m.settings == nil || m.running || m.status != "settings" {
 			t.Fatalf("prompt=%q command=%v settings=%v running=%v status=%q", prompt, command != nil, m.settings != nil, m.running, m.status)
 		}
-		if content := stripUIANSI(m.View().Content); !strings.Contains(content, "Settings") || !strings.Contains(content, "Timestamps: off") || !strings.Contains(content, "Mermaid rendering: auto") {
+		if content := stripUIANSI(m.View().Content); !strings.Contains(content, "Settings") || !strings.Contains(content, "Timestamps: off") || !strings.Contains(content, "Group tool verbs: off") {
 			t.Fatalf("prompt=%q content=%q", prompt, content)
 		}
 		updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
@@ -50,6 +54,10 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 			return nil
 		},
 		persistVimMode: func(value bool) error { booleans = append(booleans, "vim"); return nil },
+		persistGroupTools: func(value bool) error {
+			booleans = append(booleans, "group")
+			return nil
+		},
 		persistScreenMode: func(value string) error {
 			screenModes = append(screenModes, value)
 			return nil
@@ -65,7 +73,8 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 			t.Fatalf("index=%d command=%v err=%q status=%q", index, command != nil, m.settings.err, m.status)
 		}
 	}
-	if !m.showTimestamps || !m.showTimeline || !m.compactMode || !m.vimMode || !m.defaultMinimal || strings.Join(booleans, ",") != "timestamps,timeline,compact,vim" || strings.Join(screenModes, ",") != "minimal" {
+	if !m.showTimestamps || !m.showTimeline || !m.compactMode || !m.vimMode || !m.defaultMinimal || !m.groupToolVerbs ||
+		strings.Join(booleans, ",") != "timestamps,timeline,compact,vim,group" || strings.Join(screenModes, ",") != "minimal" {
 		t.Fatalf("timestamps=%v timeline=%v compact=%v vim=%v persisted=%v", m.showTimestamps, m.showTimeline, m.compactMode, m.vimMode, booleans)
 	}
 	if m.themeName != "grokday" || m.theme.name != "grokday" || strings.Join(themes, ",") != "grokday" {
@@ -98,7 +107,7 @@ func TestSettingsPanelRollsBackFailedPersistence(t *testing.T) {
 		t.Fatalf("command=%v minimal=%v err=%q", command != nil, m.defaultMinimal, m.settings.err)
 	}
 
-	m.settings.selected = 5
+	m.settings.selected = 6
 	m.mermaidMode = "auto"
 	m.persistMermaid = func(string) error { return errors.New("read only") }
 	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
@@ -107,11 +116,102 @@ func TestSettingsPanelRollsBackFailedPersistence(t *testing.T) {
 		t.Fatalf("command=%v Mermaid=%q err=%q", command != nil, m.mermaidMode, m.settings.err)
 	}
 
-	m.settings.selected = 6
+	m.settings.selected = 7
 	m.persistTheme = func(string) error { return errors.New("read only") }
 	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)
 	if command != nil || m.themeName != "auto" || m.settings.err != "read only" {
 		t.Fatalf("command=%v theme=%q err=%q", command != nil, m.themeName, m.settings.err)
+	}
+
+	m.settings.selected = 5
+	m.groupToolVerbs = true
+	m.persistGroupTools = func(bool) error { return errors.New("read only") }
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || !m.groupToolVerbs || m.settings.err != "read only" {
+		t.Fatalf("command=%v grouped=%v err=%q", command != nil, m.groupToolVerbs, m.settings.err)
+	}
+}
+
+func TestSettingsGroupToolVerbsRefoldsTranscriptImmediately(t *testing.T) {
+	logger, err := session.NewLoggerWithID(t.TempDir(), "settings-groups")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.AppendPrompt("inspect", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append("model_response", map[string]any{
+		"response_id": "response-1", "tool_call_count": 2,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, call := range []struct{ id, path string }{{"read-1", "a.go"}, {"read-2", "b.go"}} {
+		if err := logger.Append("tool_call", map[string]any{
+			"call_id": call.id, "name": "read_file",
+			"arguments": json.RawMessage(`{"target_file":"` + call.path + `"}`),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := logger.Append("tool_result", map[string]any{
+			"call_id": call.id, "name": "read_file", "output": "package test",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := logger.Append("model_response", map[string]any{
+		"response_id": "response-2", "text": "done", "tool_call_count": 0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	path := logger.Path()
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	grouped, messages, expands, err := sessionDisplayTranscript(path, "", false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	persisted := true
+	m := &model{
+		width: 80, height: 20, runner: &agent.Runner{SessionPath: path},
+		groupToolVerbs: true, settings: &settingsState{selected: 5},
+		persistGroupTools: func(value bool) error { persisted = value; return nil },
+	}
+	m.replaceDisplayTranscript(grouped, messages, expands)
+	if !strings.Contains(m.transcript.String(), "Read 2 files") {
+		t.Fatalf("initial transcript=%q", m.transcript.String())
+	}
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.groupToolVerbs || persisted || strings.Contains(m.transcript.String(), "Read 2 files") ||
+		strings.Count(m.transcript.String(), "#### Tool: `read_file`") != 2 {
+		t.Fatalf("command=%v grouped=%v persisted=%v transcript=%q", command != nil, m.groupToolVerbs, persisted, m.transcript.String())
+	}
+}
+
+func TestSettingsGroupToolVerbsPreservesLocalTranscriptContent(t *testing.T) {
+	logger, err := session.NewLoggerWithID(t.TempDir(), "settings-local-content")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.AppendPrompt("inspect", nil); err != nil {
+		t.Fatal(err)
+	}
+	path := logger.Path()
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	m := &model{
+		width: 80, height: 20, runner: &agent.Runner{SessionPath: path},
+		groupToolVerbs: true, settings: &settingsState{selected: 5},
+		persistGroupTools: func(bool) error { return nil },
+	}
+	m.transcript.WriteString("local help output")
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if m.groupToolVerbs || m.transcript.String() != "local help output" {
+		t.Fatalf("grouped=%v transcript=%q", m.groupToolVerbs, m.transcript.String())
 	}
 }

@@ -606,10 +606,11 @@ columns wide, conversations with two or more turns reserve a two-column rail:
 the highlighted tick follows the turn at the viewport top, chevrons step between
 turns, clicking a tick top-aligns it, and hovering shows the prompt preview.
 `/settings` (aliases `/config`, `/preferences`, and `/prefs`) opens a keyboard
-settings panel for timestamps, the timeline, compact mode, Vim navigation, and
-the terminal theme. Enter or Space changes the selected value through the same
-atomic configuration writers as the individual commands, including rollback on
-write failure.
+settings panel for timestamps, the timeline, compact mode, Vim navigation,
+default screen mode, grouped tool verbs, Mermaid rendering, and the terminal
+theme. Enter or Space changes the selected value through atomic configuration
+writers, including rollback on write failure. Changing grouped tool verbs
+immediately rebuilds the full-screen transcript from the local session log.
 `/docs` (aliases `/howto` and `/guides`) opens a 24-entry in-TUI guide picker.
 Enter opens the selected guide and Esc returns to the preserved list; a guide
 title opens it directly with a case-insensitive exact match. `/docs web` and its
