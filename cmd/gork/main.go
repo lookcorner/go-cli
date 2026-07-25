@@ -1198,6 +1198,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			Foreign: session.ForeignSources{
 				Claude: cfg.Compat.Claude.Sessions && skillCatalog.Has("resume-claude"),
 				Codex:  cfg.Compat.Codex.Sessions && skillCatalog.Has("resume-codex"),
+				Cursor: cfg.Compat.Cursor.Sessions && skillCatalog.Has("resume-cursor"),
 			},
 			DashboardDisabled: dashboardDisabled(cfg.Dashboard),
 			DashboardPinned:   cfg.Dashboard.Pinned,

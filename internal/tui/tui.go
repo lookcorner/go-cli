@@ -1359,7 +1359,7 @@ func (m *model) Init() tea.Cmd {
 	}
 	if m.initial == "" {
 		commands := []tea.Cmd{wait}
-		if m.foreignResumeReady && (m.foreignSessions.Claude || m.foreignSessions.Codex) {
+		if m.foreignResumeReady && (m.foreignSessions.Claude || m.foreignSessions.Codex || m.foreignSessions.Cursor) {
 			workspace, sources := m.workspace, m.foreignSessions
 			commands = append(commands, func() tea.Msg {
 				return foreignResumeEvent{session: session.MostRecentForeignSession(workspace, sources, 10*time.Minute)}
@@ -5981,9 +5981,9 @@ func (m *model) View() tea.View {
 		if minutes > 0 {
 			when = fmt.Sprintf("%dm ago", minutes)
 		}
-		label := "Codex"
-		if m.foreignResume.Source == "claude" {
-			label = "Claude Code"
+		label := map[string]string{"claude": "Claude Code", "codex": "Codex", "cursor": "Cursor"}[m.foreignResume.Source]
+		if label == "" {
+			label = m.foreignResume.Source
 		}
 		statusText = fmt.Sprintf("Coming from %s? Resume your session from %s · Ctrl-U", label, when)
 	} else if m.wordSelectHint.active && m.wordSelectHintCanRender() {

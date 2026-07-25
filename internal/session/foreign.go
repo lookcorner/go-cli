@@ -24,6 +24,7 @@ var foreignUUID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]
 type ForeignSources struct {
 	Claude bool
 	Codex  bool
+	Cursor bool
 }
 
 type ForeignSummary struct {
@@ -55,6 +56,9 @@ func ForeignSummaries(cwd string, enabled ForeignSources) []ForeignSummary {
 	}
 	if enabled.Codex {
 		summaries = append(summaries, scanCodex(cwd, now)...)
+	}
+	if enabled.Cursor {
+		summaries = append(summaries, scanCursor(cwd, now)...)
 	}
 	sort.Slice(summaries, func(i, j int) bool {
 		if summaries[i].UpdatedAt.Equal(summaries[j].UpdatedAt) {

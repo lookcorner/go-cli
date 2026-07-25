@@ -2406,6 +2406,18 @@ func TestResumePickerStartsForeignSessionThroughResumeSkill(t *testing.T) {
 	}
 }
 
+func TestResumePickerStartsCursorSessionThroughResumeSkill(t *testing.T) {
+	m := &model{
+		runner: &agent.Runner{SessionID: "current"}, status: "select a session",
+		sessionSelect: &sessionSelectState{sessions: []session.Info{{SessionID: "11111111-1111-4111-8111-111111111111", Source: "cursor", CWD: "/work", Title: "Foreign"}}, searchInput: true},
+	}
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command == nil || !m.newSession || m.newSessionPrompt != "/resume-cursor 11111111-1111-4111-8111-111111111111" || m.sessionSelect != nil {
+		t.Fatalf("command=%v new=%v prompt=%q picker=%#v", command != nil, m.newSession, m.newSessionPrompt, m.sessionSelect)
+	}
+}
+
 func TestResumePickerTreatsMatchingForeignIDAsExternal(t *testing.T) {
 	m := &model{runner: &agent.Runner{SessionID: "same"}, sessionSelect: &sessionSelectState{sessions: []session.Info{{SessionID: "same", Source: "codex"}}}}
 	m.sessionSelect.resetSelection("same")

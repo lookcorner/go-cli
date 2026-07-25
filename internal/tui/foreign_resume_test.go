@@ -63,6 +63,7 @@ func TestForeignResumeHintViewLabelsSourceAndAge(t *testing.T) {
 	}{
 		{name: "claude moments", source: "claude", want: "Coming from Claude Code?", when: "moments ago"},
 		{name: "codex minutes", source: "codex", age: 2 * time.Minute, want: "Coming from Codex?", when: "2m ago"},
+		{name: "cursor minutes", source: "cursor", age: 3 * time.Minute, want: "Coming from Cursor?", when: "3m ago"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			m := &model{
@@ -74,6 +75,18 @@ func TestForeignResumeHintViewLabelsSourceAndAge(t *testing.T) {
 				t.Fatalf("content=%q", content)
 			}
 		})
+	}
+}
+
+func TestForeignResumeCtrlUStartsCursorResumeSession(t *testing.T) {
+	m := &model{
+		foreignResumeReady: true,
+		foreignResume:      &session.RecentForeignSession{ForeignSummary: session.ForeignSummary{ID: "abc-123", Source: "cursor"}},
+	}
+	updated, command := m.handleKey(tea.KeyPressMsg(tea.Key{Code: 'u', Mod: tea.ModCtrl}))
+	m = updated.(*model)
+	if command == nil || m.newSessionPrompt != "/resume-cursor abc-123" {
+		t.Fatalf("command=%v prompt=%q", command != nil, m.newSessionPrompt)
 	}
 }
 
