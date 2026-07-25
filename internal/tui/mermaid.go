@@ -119,6 +119,18 @@ type mermaidKanbanTask struct {
 	ticket   *string
 }
 
+type mermaidRequirementNode struct {
+	name string
+	kind string
+	body []string
+}
+
+type mermaidRequirementRelation struct {
+	from string
+	to   string
+	kind string
+}
+
 var mermaidOperators = []string{
 	"||--o{", "||--|{", "}o--o{", "}o..o{", "}o--||", "}|..|{",
 	"<|--", "<-->", "--|>", "-.->", "-->>", "->>", "--x", "--o", "-x", "==>", "-->", "<--",
@@ -163,6 +175,9 @@ func renderMermaid(source string, width int, theme themePalette) ([]string, bool
 	}
 	if firstToken == "info" {
 		return renderMermaidInfo(source, width, theme)
+	}
+	if firstToken == "requirementDiagram" {
+		return renderMermaidRequirement(source, width, theme)
 	}
 	statements, complete := mermaidStatements(source)
 	if !complete || len(statements) < 1 {
@@ -224,6 +239,227 @@ func renderMermaidInfo(source string, width int, theme themePalette) ([]string, 
 		ansiDim + mermaidFit("◇ mermaid info", width) + ansiReset,
 		theme.heading + mermaidFit("v11.12.2", width) + ansiReset,
 	}, true
+}
+
+func renderMermaidRequirement(source string, width int, theme themePalette) ([]string, bool) {
+	lines := strings.Split(source, "\n")
+	statements := 0
+	for _, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if line != "" && !strings.HasPrefix(line, "%%") {
+			statements++
+			if statements > maxMermaidStatements {
+				return nil, false
+			}
+		}
+	}
+	nodes := make([]mermaidRequirementNode, 0)
+	nodeIndex := make(map[string]int)
+	relations := make([]mermaidRequirementRelation, 0)
+	direction := "TB"
+	foundHeader := false
+	for index := 0; index < len(lines); {
+		line := strings.TrimSpace(lines[index])
+		index++
+		if line == "" || strings.HasPrefix(line, "%%") {
+			continue
+		}
+		if !foundHeader {
+			if strings.Fields(line)[0] != "requirementDiagram" {
+				return nil, false
+			}
+			foundHeader = true
+			continue
+		}
+		if value, ok := strings.CutPrefix(line, "direction "); ok {
+			value = strings.ToUpper(strings.TrimSpace(value))
+			switch value {
+			case "TB", "TD":
+				direction = "TB"
+			case "BT", "LR", "RL":
+				direction = value
+			default:
+				return nil, false
+			}
+			continue
+		}
+		if node, next, ok, valid := mermaidRequirementParseNode(lines, index-1); ok {
+			if !valid {
+				return nil, false
+			}
+			if existing, exists := nodeIndex[node.name]; exists {
+				nodes[existing] = node
+			} else {
+				if len(nodes) == maxMermaidNodes {
+					return nil, false
+				}
+				nodeIndex[node.name] = len(nodes)
+				nodes = append(nodes, node)
+			}
+			index = next
+			continue
+		}
+		if relation, ok := mermaidRequirementParseRelation(line); ok {
+			if len(relations) == maxMermaidRelations {
+				return nil, false
+			}
+			relations = append(relations, relation)
+			continue
+		}
+		return nil, false
+	}
+	if !foundHeader {
+		return nil, false
+	}
+
+	rendered := []string{
+		ansiDim + mermaidFit("◇ mermaid requirement", width) + ansiReset,
+		theme.heading + mermaidFit("direction: "+direction, width) + ansiReset,
+	}
+	for _, node := range nodes {
+		rendered = append(rendered, theme.code+mermaidFit("<<"+node.kind+">> "+node.name, width)+ansiReset)
+		for _, property := range node.body {
+			rendered = append(rendered, ansiDim+mermaidFit("  "+property, width)+ansiReset)
+		}
+	}
+	for _, relation := range relations {
+		rendered = append(rendered, theme.code+mermaidFit(relation.from+" ─<<"+relation.kind+">>→ "+relation.to, width)+ansiReset)
+	}
+	return rendered, true
+}
+
+func mermaidRequirementParseNode(lines []string, start int) (mermaidRequirementNode, int, bool, bool) {
+	fields := strings.Fields(strings.TrimSpace(lines[start]))
+	if len(fields) < 2 {
+		return mermaidRequirementNode{}, start + 1, false, true
+	}
+	kinds := map[string]string{
+		"requirement":            "Requirement",
+		"functionalrequirement":  "Functional Requirement",
+		"interfacerequirement":   "Interface Requirement",
+		"performancerequirement": "Performance Requirement",
+		"physicalrequirement":    "Physical Requirement",
+		"designconstraint":       "Design Constraint",
+		"element":                "Element",
+	}
+	kind, ok := kinds[strings.ToLower(fields[0])]
+	if !ok {
+		return mermaidRequirementNode{}, start + 1, false, true
+	}
+	name := strings.TrimSpace(strings.TrimSuffix(fields[1], "{"))
+	if name == "" {
+		return mermaidRequirementNode{}, start + 1, true, false
+	}
+	hasBrace := strings.Contains(strings.Join(fields[2:], " "), "{") || strings.HasSuffix(fields[1], "{")
+	index := start + 1
+	if !hasBrace {
+		for index < len(lines) {
+			line := strings.TrimSpace(lines[index])
+			if line == "" || strings.HasPrefix(line, "%%") {
+				index++
+				continue
+			}
+			if strings.HasPrefix(line, "{") {
+				index++
+				break
+			}
+			return mermaidRequirementNode{}, start + 1, false, true
+		}
+	}
+	properties := make(map[string]string)
+	for index < len(lines) {
+		line := strings.TrimSpace(lines[index])
+		index++
+		if line == "" || strings.HasPrefix(line, "%%") {
+			continue
+		}
+		if strings.HasPrefix(line, "}") {
+			break
+		}
+		key, value, ok := strings.Cut(line, ":")
+		if !ok {
+			return mermaidRequirementNode{}, index, true, false
+		}
+		properties[strings.TrimSpace(key)] = mermaidRequirementValue(value)
+	}
+	body := make([]string, 0, 4)
+	if kind == "Element" {
+		if value := properties["type"]; value != "" {
+			body = append(body, "Type: "+value)
+		}
+		value, exists := properties["docref"]
+		if !exists {
+			value = properties["docRef"]
+		}
+		if value != "" {
+			body = append(body, "Doc Ref: "+value)
+		}
+	} else {
+		if value := properties["id"]; value != "" {
+			body = append(body, "ID: "+value)
+		}
+		if value := properties["text"]; value != "" {
+			body = append(body, "Text: "+value)
+		}
+		if value := properties["risk"]; value != "" {
+			body = append(body, "Risk: "+mermaidRequirementTitle(value, "low", "medium", "high"))
+		}
+		value, exists := properties["verifyMethod"]
+		if !exists {
+			value = properties["verifymethod"]
+		}
+		if value != "" {
+			body = append(body, "Verification: "+mermaidRequirementTitle(value, "analysis", "demonstration", "inspection", "test"))
+		}
+	}
+	return mermaidRequirementNode{name: name, kind: kind, body: body}, index, true, true
+}
+
+func mermaidRequirementValue(value string) string {
+	value = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(value), ","))
+	if len(value) >= 2 && (value[0] == '"' && value[len(value)-1] == '"' || value[0] == '\'' && value[len(value)-1] == '\'') {
+		return value[1 : len(value)-1]
+	}
+	return value
+}
+
+func mermaidRequirementTitle(value string, known ...string) string {
+	trimmed := strings.TrimSpace(value)
+	for _, candidate := range known {
+		if strings.EqualFold(trimmed, candidate) {
+			return strings.ToUpper(candidate[:1]) + candidate[1:]
+		}
+	}
+	return trimmed
+}
+
+func mermaidRequirementParseRelation(line string) (mermaidRequirementRelation, bool) {
+	if left, right, ok := strings.Cut(line, "->"); ok {
+		tokens := mermaidRequirementRelationTokens(left)
+		if len(tokens) < 2 || strings.TrimSpace(right) == "" {
+			return mermaidRequirementRelation{}, false
+		}
+		return mermaidRequirementRelation{from: tokens[0], to: strings.TrimSpace(right), kind: tokens[1]}, true
+	}
+	if left, right, ok := strings.Cut(line, "<-"); ok {
+		tokens := mermaidRequirementRelationTokens(right)
+		if len(tokens) < 2 || strings.TrimSpace(left) == "" {
+			return mermaidRequirementRelation{}, false
+		}
+		return mermaidRequirementRelation{from: tokens[1], to: strings.TrimSpace(left), kind: tokens[0]}, true
+	}
+	return mermaidRequirementRelation{}, false
+}
+
+func mermaidRequirementRelationTokens(value string) []string {
+	tokens := strings.Fields(value)
+	filtered := tokens[:0]
+	for _, token := range tokens {
+		if token != "-" {
+			filtered = append(filtered, token)
+		}
+	}
+	return filtered
 }
 
 func renderMermaidKanban(source string, width int, theme themePalette) ([]string, bool) {

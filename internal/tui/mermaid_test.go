@@ -293,6 +293,124 @@ func TestRenderMermaidInfo(t *testing.T) {
 	}
 }
 
+func TestRenderMermaidRequirement(t *testing.T) {
+	source := "requirementDiagram extra\ndirection LR\nrequirement req1 {\n id: 1,\n text: \"The system shall work\"\n risk: high\n verifyMethod: test\n}\nelement el1 {\n type: 'Subsystem'\n docref: DOC-1\n}\nreq1 - satisfies -> el1"
+	lines, ok := renderMermaid(source, 56, paletteFor("groknight"))
+	if !ok {
+		t.Fatal("supported Mermaid requirement diagram was rejected")
+	}
+	rendered := stripUIANSI(strings.Join(lines, "\n"))
+	for _, expected := range []string{
+		"◇ mermaid requirement", "direction: LR", "<<Requirement>> req1", "ID: 1",
+		"Text: The system shall work", "Risk: High", "Verification: Test",
+		"<<Element>> el1", "Type: Subsystem", "Doc Ref: DOC-1", "req1 ─<<satisfies>>→ el1",
+	} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("rendered requirement diagram missing %q:\n%s", expected, rendered)
+		}
+	}
+	for _, line := range lines {
+		if displayWidth(stripUIANSI(line)) > 56 {
+			t.Fatalf("requirement diagram line exceeds width: %q", stripUIANSI(line))
+		}
+	}
+}
+
+func TestRenderMermaidRequirementMatchesReferenceParsing(t *testing.T) {
+	source := "%% before\nrequirementDiagram\ndirection TD\nfunctionalRequirement func {\n risk: MEDIUM\n verifymethod: analysis\n}\ninterfaceRequirement iface {\n risk: custom\n verifyMethod: custom\n}\nperformanceRequirement perf {\n}\nphysicalRequirement physical\n%% gap\n{\n}\ndesignConstraint design {\n}\nelement part {\n docRef: REF-2\n}\niface <- traces - func"
+	lines, ok := renderMermaid(source, 64, paletteFor("groknight"))
+	if !ok {
+		t.Fatal("reference-compatible Mermaid requirement diagram was rejected")
+	}
+	rendered := stripUIANSI(strings.Join(lines, "\n"))
+	for _, expected := range []string{
+		"direction: TB", "<<Functional Requirement>> func", "Risk: Medium", "Verification: Analysis",
+		"<<Interface Requirement>> iface", "Risk: custom", "Verification: custom",
+		"<<Performance Requirement>> perf", "<<Physical Requirement>> physical",
+		"<<Design Constraint>> design", "<<Element>> part", "Doc Ref: REF-2", "func ─<<traces>>→ iface",
+	} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("rendered requirement diagram missing %q:\n%s", expected, rendered)
+		}
+	}
+}
+
+func TestRenderMermaidRequirementOverwritesDuplicateNodes(t *testing.T) {
+	source := "requirementDiagram\nrequirement same {\n text: Old\n}\nelement same {\n type: New\n}"
+	lines, ok := renderMermaid(source, 40, paletteFor("groknight"))
+	if !ok {
+		t.Fatal("requirement diagram with duplicate node was rejected")
+	}
+	rendered := stripUIANSI(strings.Join(lines, "\n"))
+	if strings.Count(rendered, ">> same") != 1 || strings.Contains(rendered, "Old") || !strings.Contains(rendered, "<<Element>> same") || !strings.Contains(rendered, "Type: New") {
+		t.Fatalf("duplicate node did not use the reference last-write behavior:\n%s", rendered)
+	}
+}
+
+func TestRenderMermaidRequirementPreservesReferenceAliasPrecedence(t *testing.T) {
+	source := "requirementDiagram\nrequirement req {\n verifyMethod: ''\n verifymethod: test\n}\nelement el {\n docref: ''\n docRef: REF-2\n}"
+	lines, ok := renderMermaid(source, 48, paletteFor("groknight"))
+	if !ok {
+		t.Fatal("requirement diagram with empty preferred aliases was rejected")
+	}
+	rendered := stripUIANSI(strings.Join(lines, "\n"))
+	if strings.Contains(rendered, "Verification: Test") || strings.Contains(rendered, "Doc Ref: REF-2") {
+		t.Fatalf("empty preferred aliases did not take precedence:\n%s", rendered)
+	}
+}
+
+func TestRenderMermaidRequirementAcceptsEmptyAndOpenEndedNodes(t *testing.T) {
+	for _, source := range []string{
+		"requirementDiagram",
+		"requirementDiagram\nrequirement final",
+		"requirementDiagram\nrequirement final {\n text: value",
+	} {
+		if _, ok := renderMermaid(source, 40, paletteFor("groknight")); !ok {
+			t.Fatalf("reference-compatible requirement diagram was rejected: %q", source)
+		}
+	}
+}
+
+func TestRenderMermaidRequirementRejectsReferenceParseErrors(t *testing.T) {
+	for _, source := range []string{
+		"flowchart TD\nA --> B",
+		"requirementDiagram\ndirection sideways",
+		"requirementDiagram\nrequirement\n{\n}",
+		"requirementDiagram\nrequirement req\nnot a brace",
+		"requirementDiagram\nrequirement req {\ninvalid property\n}",
+		"requirementDiagram\nsource - relation ->",
+		"requirementDiagram\nunknown line",
+	} {
+		if _, ok := renderMermaidRequirement(source, 48, paletteFor("groknight")); ok {
+			t.Fatalf("invalid requirement diagram was accepted: %q", source)
+		}
+	}
+}
+
+func TestRenderMermaidRequirementBoundsStatements(t *testing.T) {
+	var source strings.Builder
+	source.WriteString("requirementDiagram\n")
+	for index := 0; index < maxMermaidStatements; index++ {
+		source.WriteString("direction TB\n")
+	}
+	if _, ok := renderMermaid(source.String(), 48, paletteFor("groknight")); ok {
+		t.Fatal("requirement diagram exceeding the statement limit was accepted")
+	}
+}
+
+func TestRenderMarkdownRendersClosedMermaidRequirement(t *testing.T) {
+	source := "Before\n```mermaid\nrequirementDiagram\nrequirement req {\n text: Ship safely\n}\n```\nAfter"
+	rendered := stripUIANSI(strings.Join(renderMarkdown(source, 40), "\n"))
+	for _, expected := range []string{"Before", "◇ mermaid requirement", "<<Requirement>> req", "Text: Ship safely", "After"} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("rendered Markdown missing %q:\n%s", expected, rendered)
+		}
+	}
+	if strings.Contains(rendered, "```mermaid") || strings.Contains(rendered, "requirement req {") {
+		t.Fatalf("closed Mermaid requirement source was not replaced:\n%s", rendered)
+	}
+}
+
 func TestRenderMermaidInfoRejectsOtherDeclarations(t *testing.T) {
 	for _, source := range []string{"", "%% comment", "information", "flowchart TD\nA --> B"} {
 		if _, ok := renderMermaidInfo(source, 20, paletteFor("groknight")); ok {
