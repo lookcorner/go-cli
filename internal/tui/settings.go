@@ -23,7 +23,7 @@ type settingsNumber struct {
 	large int
 }
 
-const settingsCount = 20
+const settingsCount = 21
 
 func (m *model) openSettings() {
 	m.settings = &settingsState{}
@@ -199,20 +199,27 @@ func (m *model) applySetting(selected int) {
 			state.err = persistSetting(m.persistMermaid(m.mermaidMode), func() { m.mermaidMode = previous })
 		}
 	case 17:
+		previous := m.hunkTrackerMode
+		m.hunkTrackerMode = nextHunkTrackerMode(previous)
+		if m.persistHunkTracker != nil {
+			state.err = persistSetting(m.persistHunkTracker(m.hunkTrackerMode), func() { m.hunkTrackerMode = previous })
+		}
+		restartRequired = state.err == ""
+	case 18:
 		previousName, previousTheme := m.autoDarkTheme, m.theme
 		m.autoDarkTheme = nextConcreteTheme(concreteAutomaticTheme(previousName, "groknight"))
 		m.theme = paletteForAuto(m.themeName, m.autoDarkTheme, m.autoLightTheme)
 		if m.persistAutoDark != nil {
 			state.err = persistSetting(m.persistAutoDark(m.autoDarkTheme), func() { m.autoDarkTheme, m.theme = previousName, previousTheme })
 		}
-	case 18:
+	case 19:
 		previousName, previousTheme := m.autoLightTheme, m.theme
 		m.autoLightTheme = nextConcreteTheme(concreteAutomaticTheme(previousName, "grokday"))
 		m.theme = paletteForAuto(m.themeName, m.autoDarkTheme, m.autoLightTheme)
 		if m.persistAutoLight != nil {
 			state.err = persistSetting(m.persistAutoLight(m.autoLightTheme), func() { m.autoLightTheme, m.theme = previousName, previousTheme })
 		}
-	case 19:
+	case 20:
 		previousName, previousTheme := m.themeName, m.theme
 		m.themeName = nextTheme(m.themeName)
 		m.theme = paletteForAuto(m.themeName, m.autoDarkTheme, m.autoLightTheme)
@@ -297,6 +304,26 @@ func nextConcreteTheme(current string) string {
 	return uitheme.Names[0]
 }
 
+func nextHunkTrackerMode(current string) string {
+	switch currentHunkTrackerMode(current) {
+	case "agent_only":
+		return "all_dirty"
+	case "all_dirty":
+		return "off"
+	default:
+		return "agent_only"
+	}
+}
+
+func currentHunkTrackerMode(current string) string {
+	switch current {
+	case "all_dirty", "off":
+		return current
+	default:
+		return "agent_only"
+	}
+}
+
 func nextScrollMode(current string) string {
 	switch current {
 	case "auto":
@@ -334,6 +361,7 @@ func (m *model) settingsContent() string {
 		fmt.Sprintf("Scroll lines: %d", m.settingNumberValue(14, m.effectiveScrollLines())),
 		fmt.Sprintf("Text selection: %s", m.selectionMode.canonical()),
 		fmt.Sprintf("Mermaid rendering: %s", mermaidMode),
+		fmt.Sprintf("Hunk tracker (restart): %s", currentHunkTrackerMode(m.hunkTrackerMode)),
 		fmt.Sprintf("Auto dark theme: %s", concreteAutomaticTheme(m.autoDarkTheme, "groknight")),
 		fmt.Sprintf("Auto light theme: %s", concreteAutomaticTheme(m.autoLightTheme, "grokday")),
 		fmt.Sprintf("Theme: %s", m.themeName),

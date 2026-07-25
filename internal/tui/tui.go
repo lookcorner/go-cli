@@ -694,6 +694,8 @@ type model struct {
 	persistAutoLight    func(string) error
 	mermaidMode         string
 	persistMermaid      func(string) error
+	hunkTrackerMode     string
+	persistHunkTracker  func(string) error
 	transcriptMessages  []transcriptMessage
 	scrollLines         int
 	scrollSpeed         uint8
@@ -887,6 +889,8 @@ type UIOptions struct {
 	SetAutoLightTheme    func(string) error
 	RenderMermaid        string
 	SetRenderMermaid     func(string) error
+	HunkTrackerMode      string
+	SetHunkTrackerMode   func(string) error
 	ForkSession          func(context.Context, bool) (ForkResult, error)
 	ForkInGit            bool
 	DashboardPinned      []string
@@ -1052,6 +1056,8 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		persistAutoLight:    options.SetAutoLightTheme,
 		mermaidMode:         options.RenderMermaid,
 		persistMermaid:      options.SetRenderMermaid,
+		hunkTrackerMode:     options.HunkTrackerMode,
+		persistHunkTracker:  options.SetHunkTrackerMode,
 		forkSession:         options.ForkSession,
 		forkInGit:           options.ForkInGit,
 		startupDashboard:    options.OpenDashboard,

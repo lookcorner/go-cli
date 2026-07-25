@@ -1163,6 +1163,10 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			SetRenderMermaid: func(mode string) error {
 				return config.UpdateRenderMermaid(opts.configPath, mode)
 			},
+			HunkTrackerMode: cfg.UI.HunkTrackerMode,
+			SetHunkTrackerMode: func(mode string) error {
+				return config.UpdateHunkTrackerMode(opts.configPath, mode)
+			},
 			Mode: cfg.UI.KeepTextSelection, WordSeparators: cfg.UI.WordSeparators, MouseReportingToggle: cfg.UI.MouseReportingToggle, VimMode: cfg.UI.VimMode,
 			ScrollSpeed: cfg.UI.ScrollSpeed, ScrollMode: cfg.UI.ScrollMode, ScrollLines: cfg.UI.ScrollLines, InvertScroll: cfg.UI.InvertScroll, PromptSuggestions: cfg.UI.PromptSuggestions,
 			CollapsedEditBlocks: cfg.UI.CollapsedEditBlocks,

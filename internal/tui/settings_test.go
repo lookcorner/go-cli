@@ -64,9 +64,10 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 	var scrollLines []uint8
 	var autoDarkThemes []string
 	var autoLightThemes []string
+	var hunkTrackerModes []string
 	m := &model{
 		width: 70, height: 18, themeName: "groknight", theme: paletteFor("groknight"), mermaidMode: "auto",
-		autoDarkTheme: "groknight", autoLightTheme: "grokday",
+		autoDarkTheme: "groknight", autoLightTheme: "grokday", hunkTrackerMode: "agent_only",
 		scrollSpeed: 50, scrollLines: 3, scrollInput: scrollInput{mode: "auto"}, settings: &settingsState{},
 		persistTimestamps: func(value bool) error { booleans = append(booleans, "timestamps"); return nil },
 		persistTimeline:   func(value bool) error { booleans = append(booleans, "timeline"); return nil },
@@ -129,6 +130,10 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 			autoLightThemes = append(autoLightThemes, value)
 			return nil
 		},
+		persistHunkTracker: func(value string) error {
+			hunkTrackerModes = append(hunkTrackerModes, value)
+			return nil
+		},
 	}
 	for index := 0; index < settingsCount; index++ {
 		m.settings.selected = index
@@ -144,7 +149,7 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 			m = updated.(*model)
 		}
 		wantStatus := "settings updated"
-		if index == 8 || index == 9 {
+		if index == 8 || index == 9 || index == 17 {
 			wantStatus = "settings updated; restart to apply"
 		}
 		if command != nil || m.settings.err != "" || m.status != wantStatus {
@@ -163,6 +168,9 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 	}
 	if m.mermaidMode != "on" || strings.Join(mermaidModes, ",") != "on" {
 		t.Fatalf("Mermaid=%q persisted=%v", m.mermaidMode, mermaidModes)
+	}
+	if m.hunkTrackerMode != "all_dirty" || strings.Join(hunkTrackerModes, ",") != "all_dirty" {
+		t.Fatalf("hunk tracker=%q persisted=%v", m.hunkTrackerMode, hunkTrackerModes)
 	}
 	if m.selectionMode != selectionHold || strings.Join(selectionModes, ",") != "hold" {
 		t.Fatalf("selection=%q persisted=%v", m.selectionMode.canonical(), selectionModes)
@@ -208,7 +216,7 @@ func TestSettingsPanelRollsBackFailedPersistence(t *testing.T) {
 		t.Fatalf("command=%v Mermaid=%q err=%q", command != nil, m.mermaidMode, m.settings.err)
 	}
 
-	m.settings.selected = 19
+	m.settings.selected = 20
 	m.persistTheme = func(string) error { return errors.New("read only") }
 	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)
@@ -217,6 +225,15 @@ func TestSettingsPanelRollsBackFailedPersistence(t *testing.T) {
 	}
 
 	m.settings.selected = 17
+	m.hunkTrackerMode = "agent_only"
+	m.persistHunkTracker = func(string) error { return errors.New("read only") }
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.hunkTrackerMode != "agent_only" || m.settings.err != "read only" {
+		t.Fatalf("command=%v hunk tracker=%q err=%q", command != nil, m.hunkTrackerMode, m.settings.err)
+	}
+
+	m.settings.selected = 18
 	m.autoDarkTheme = "groknight"
 	m.themeName = "auto"
 	m.theme = paletteForAuto("auto", "groknight", "grokday")
@@ -227,7 +244,7 @@ func TestSettingsPanelRollsBackFailedPersistence(t *testing.T) {
 		t.Fatalf("command=%v auto dark=%q palette=%q err=%q", command != nil, m.autoDarkTheme, m.theme.name, m.settings.err)
 	}
 
-	m.settings.selected = 18
+	m.settings.selected = 19
 	m.autoLightTheme = "grokday"
 	m.persistAutoLight = func(string) error { return errors.New("read only") }
 	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
@@ -758,7 +775,7 @@ func TestSettingsAutomaticThemesApplyOnlyWhenLive(t *testing.T) {
 	m := &model{
 		width: 60, height: 16, themeName: "auto", autoDarkTheme: "groknight", autoLightTheme: "grokday",
 		theme:            paletteForAuto("auto", "groknight", "grokday"),
-		settings:         &settingsState{selected: 17},
+		settings:         &settingsState{selected: 18},
 		persistAutoDark:  func(value string) error { persisted = append(persisted, "dark:"+value); return nil },
 		persistAutoLight: func(value string) error { persisted = append(persisted, "light:"+value); return nil },
 	}
@@ -768,7 +785,7 @@ func TestSettingsAutomaticThemesApplyOnlyWhenLive(t *testing.T) {
 		t.Fatalf("live dark mapping=%q palette=%q", m.autoDarkTheme, m.theme.name)
 	}
 
-	m.settings.selected = 18
+	m.settings.selected = 19
 	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)
 	if m.autoLightTheme != "tokyonight" || m.theme.name != "grokday" {
@@ -777,7 +794,7 @@ func TestSettingsAutomaticThemesApplyOnlyWhenLive(t *testing.T) {
 
 	m.themeName = "oscura-midnight"
 	m.theme = paletteFor("oscura-midnight")
-	m.settings.selected = 17
+	m.settings.selected = 18
 	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)
 	if m.autoDarkTheme != "tokyonight" || m.theme.name != "oscura-midnight" {
@@ -796,7 +813,7 @@ func TestSettingsAutomaticThemesUseDefaultsWhenMappingsAreEmpty(t *testing.T) {
 	m := &model{
 		width: 60, height: 16, themeName: "auto",
 		theme:           paletteForAuto("auto", "", ""),
-		settings:        &settingsState{selected: 17},
+		settings:        &settingsState{selected: 18},
 		persistAutoDark: func(value string) error { persisted = value; return nil },
 	}
 	if content := m.settingsContent(); !strings.Contains(content, "Auto dark theme: groknight") || !strings.Contains(content, "Auto light theme: grokday") {
@@ -807,5 +824,28 @@ func TestSettingsAutomaticThemesUseDefaultsWhenMappingsAreEmpty(t *testing.T) {
 	m = updated.(*model)
 	if m.autoDarkTheme != "grokday" || m.theme.name != "grokday" || persisted != "grokday" {
 		t.Fatalf("auto dark=%q palette=%q persisted=%q", m.autoDarkTheme, m.theme.name, persisted)
+	}
+}
+
+func TestSettingsHunkTrackerUsesDefaultAndCycles(t *testing.T) {
+	var persisted []string
+	m := &model{
+		width: 60, height: 16,
+		settings:           &settingsState{selected: 17},
+		persistHunkTracker: func(value string) error { persisted = append(persisted, value); return nil },
+	}
+	if content := m.settingsContent(); !strings.Contains(content, "Hunk tracker (restart): agent_only") {
+		t.Fatalf("settings content=%q", content)
+	}
+
+	for range 3 {
+		updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+		m = updated.(*model)
+		if m.status != "settings updated; restart to apply" {
+			t.Fatalf("status=%q", m.status)
+		}
+	}
+	if m.hunkTrackerMode != "agent_only" || strings.Join(persisted, ",") != "all_dirty,off,agent_only" {
+		t.Fatalf("hunk tracker=%q persisted=%v", m.hunkTrackerMode, persisted)
 	}
 }

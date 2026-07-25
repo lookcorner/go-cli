@@ -610,8 +610,9 @@ settings panel for timestamps, the timeline, compact mode, Vim navigation,
 default screen mode, grouped tool verbs, collapsed edit blocks, prompt
 suggestions, remembered tool approvals, ask-question timeouts, session multiline
 input, inverted scrolling, scroll speed, scroll-input classification, scroll
-lines, text-selection behavior, Mermaid rendering, automatic dark/light theme
-mappings, and the terminal theme. Enter or Space changes the selected value.
+lines, text-selection behavior, Mermaid rendering, restart-scoped hunk tracking,
+automatic dark/light theme mappings, and the terminal theme. Enter or Space
+changes the selected value.
 Scroll speed and line count open a bounded arrow-key stepper and commit with
 Enter; persisted settings use atomic configuration writers with rollback on
 write failure. Changing
@@ -619,8 +620,8 @@ grouped tool verbs or collapsed edit blocks immediately rebuilds the full-screen
 transcript from the local session log; disabling prompt suggestions immediately
 clears the current ghost text, while inverted scrolling, scroll-input
 classification, and selection lifetime apply to the next interaction. Multiline
-input applies to the current session, while remembered tool approval and
-ask-question timeout changes apply to new sessions.
+input applies to the current session, while remembered tool approval,
+ask-question timeout, and hunk tracker changes apply to new sessions.
 Automatic dark/light mapping changes apply immediately only while `theme=auto`
 and the matching system appearance is active.
 `/docs` (aliases `/howto` and `/guides`) opens a 24-entry in-TUI guide picker.
