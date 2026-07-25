@@ -3290,8 +3290,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.status = "context usage unavailable"
 				return m, nil
 			}
-			percent := m.inputTokens * 100 / m.contextWindow
-			m.appendSystem(fmt.Sprintf("# Context usage\n\n%d / %d tokens (%d%%)", m.inputTokens, m.contextWindow, percent))
+			m.appendSystem(m.runner.ContextSnapshot(m.inputTokens).Markdown(m.modelName))
 			m.status = "context usage"
 			return m, nil
 		}

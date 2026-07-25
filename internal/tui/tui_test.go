@@ -2906,7 +2906,7 @@ func TestInstantInfoCommandsDoNotRunModelTurn(t *testing.T) {
 		{prompt: "/session-info ignored", want: "session-1", status: "session info"},
 		{prompt: "/status ignored", want: "Turn: 0", status: "session info"},
 		{prompt: "/info ignored", want: "Context: 250 / 1000 tokens (25%)", status: "session info"},
-		{prompt: "/context ignored", want: "250 / 1000 tokens (25%)", status: "context usage"},
+		{prompt: "/context ignored", want: "Tool definitions:", status: "context usage"},
 	}
 	for _, test := range tests {
 		t.Run(test.prompt, func(t *testing.T) {

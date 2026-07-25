@@ -856,12 +856,17 @@ func TestSessionStatusSlashCommandsUseLiveStateWithoutModelTurn(t *testing.T) {
 	}
 
 	messages := request(10, "/context ignored")
+	contextText := ""
 	for _, item := range messages {
 		params, _ := item["params"].(map[string]any)
 		update, _ := params["update"].(map[string]any)
 		if update["sessionUpdate"] == "agent_message_chunk" {
-			t.Fatalf("context command emitted text: %#v", messages)
+			content, _ := update["content"].(map[string]any)
+			contextText, _ = content["text"].(string)
 		}
+	}
+	if !strings.Contains(contextText, "# Context usage") || !strings.Contains(contextText, "Tool definitions:") {
+		t.Fatalf("context text=%q messages=%#v", contextText, messages)
 	}
 	if result := messages[len(messages)-1]["result"].(map[string]any); result["stopReason"] != "end_turn" {
 		t.Fatalf("context messages=%#v", messages)
@@ -871,7 +876,7 @@ func TestSessionStatusSlashCommandsUseLiveStateWithoutModelTurn(t *testing.T) {
 	server.handleSessionAdmin(message{ID: json.RawMessage("20"), Method: "x.ai/session/info", Params: json.RawMessage(`{"sessionId":"status-session"}`)})
 	info := decodeACPOutput(t, output.Bytes())[0]["result"].(map[string]any)["result"].(map[string]any)
 	contextInfo := info["context"].(map[string]any)
-	if contextInfo["used"] != float64(250) || contextInfo["total"] != float64(1000) || contextInfo["usagePct"] != float64(25) || current.promptIndex != 2 {
+	if contextInfo["used"] != float64(250) || contextInfo["total"] != float64(1000) || contextInfo["usagePct"] != float64(25) || contextInfo["toolDefinitionsCount"].(float64) < 1 || contextInfo["toolDefinitionsTokens"].(float64) < 1 || contextInfo["compactionCount"] != float64(0) || contextInfo["turnCount"] != float64(2) || current.promptIndex != 2 {
 		t.Fatalf("info=%#v promptIndex=%d", info, current.promptIndex)
 	}
 

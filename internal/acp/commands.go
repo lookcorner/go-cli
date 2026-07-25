@@ -401,6 +401,9 @@ func (s *Server) handleSessionStatusPrompt(incoming message, current *session, l
 			text = "**Title:** " + title + "\n\n" + text
 		}
 		s.notify(id, map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": text}})
+	} else if command == "context" && total > 0 {
+		text := current.runner.ContextSnapshot(used).Markdown(model)
+		s.notify(id, map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": text}})
 	}
 	s.finishPrompt(incoming, current, lifecycle, "end_turn", agent.Result{}, nil, "")
 }

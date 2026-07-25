@@ -529,17 +529,20 @@ func (s *Server) handleSessionAdmin(incoming message) {
 		}
 		if current := s.lookupSession(id); current != nil {
 			current.mu.Lock()
-			used, total := current.inputTokens, current.runner.ContextWindow
+			used := current.inputTokens
 			turns, turnIndex := current.promptIndex, current.activePrompt
+			runner, cwd := current.runner, current.cwd
 			if turnIndex < 0 {
 				turnIndex = turns
 			}
-			result := map[string]any{
-				"sessionId": id, "cwd": current.cwd, "model": current.runner.Model,
-				"turns": turns, "turnIndex": turnIndex,
-				"context": sessionContextWire(used, total, turns),
-			}
 			current.mu.Unlock()
+			contextInfo := runner.ContextSnapshot(used)
+			contextInfo.TurnCount = turns
+			result := map[string]any{
+				"sessionId": id, "cwd": cwd, "model": runner.Model,
+				"turns": turns, "turnIndex": turnIndex,
+				"context": contextInfo,
+			}
 			extResult(result, nil)
 			return
 		}

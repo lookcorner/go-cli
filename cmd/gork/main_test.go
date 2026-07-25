@@ -191,7 +191,7 @@ func TestInteractiveSessionInfoAliasesAndContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	output := stderr.String()
-	if streamer.calls != 1 || strings.Count(output, "[gork] session: interactive-status") != 2 || !strings.Contains(output, "[gork] workspace: "+root) || !strings.Contains(output, "[gork] model: grok-build") || !strings.Contains(output, "[gork] turn: 0") || !strings.Contains(output, "[gork] turn: 1") || strings.Count(output, "[gork] context: 0 / 1000 tokens (0%)") != 2 || strings.Count(output, "[gork] context: 250 / 1000 tokens (25%)") != 2 {
+	if streamer.calls != 1 || strings.Count(output, "[gork] session: interactive-status") != 2 || !strings.Contains(output, "[gork] workspace: "+root) || !strings.Contains(output, "[gork] model: grok-build") || !strings.Contains(output, "[gork] turn: 0") || !strings.Contains(output, "[gork] turn: 1") || strings.Count(output, "[gork] context: 0 / 1000 tokens (0%)") != 1 || strings.Count(output, "[gork] context: 250 / 1000 tokens (25%)") != 1 || !strings.Contains(output, "0 / 1000 tokens (0%)") || !strings.Contains(output, "250 / 1000 tokens (25%)") || strings.Count(output, "Tool definitions:") != 2 || strings.Count(output, "# Context usage") != 2 {
 		t.Fatalf("calls=%d output=%q", streamer.calls, output)
 	}
 }

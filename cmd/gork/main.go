@@ -4826,7 +4826,11 @@ func interactiveLoop(
 				if contextWindow <= 0 {
 					fmt.Fprintln(stderr, "[gork] context usage unavailable")
 				} else {
-					fmt.Fprintf(stderr, "[gork] context: %d / %d tokens (%d%%)\n", inputTokens, contextWindow, inputTokens*100/contextWindow)
+					model := runner.ModelID
+					if model == "" {
+						model = runner.Model
+					}
+					fmt.Fprintln(stderr, runner.ContextSnapshot(inputTokens).Markdown(valueOrUnknown(model)))
 				}
 				prompt = ""
 				continue

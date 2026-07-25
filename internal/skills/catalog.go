@@ -1062,21 +1062,26 @@ func patternMatches(pattern, rel string) bool {
 }
 
 func (c *Catalog) Summary() string {
+	text, _ := c.ListingSnapshot()
+	return text
+}
+
+func (c *Catalog) ListingSnapshot() (string, int) {
 	if c == nil {
-		return ""
+		return "", 0
 	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	names := c.modelSkillNamesLocked()
 	if len(names) == 0 {
-		return ""
+		return "", 0
 	}
 	var output strings.Builder
 	output.WriteString("The following skills are available for use:\n\n")
 	for _, name := range names {
 		writeSkillListing(&output, c.byName[name])
 	}
-	return output.String()
+	return output.String(), len(names)
 }
 
 func writeSkillListing(output *strings.Builder, skill Skill) {
