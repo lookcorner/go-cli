@@ -55,6 +55,12 @@ type mermaidGanttTask struct {
 	duration int
 }
 
+type mermaidPacketBlock struct {
+	start uint64
+	end   uint64
+	label string
+}
+
 var mermaidOperators = []string{
 	"||--o{", "||--|{", "}o--o{", "}o..o{", "}o--||", "}|..|{",
 	"<|--", "<-->", "--|>", "-.->", "-->>", "->>", "--x", "--o", "-x", "==>", "-->", "<--",
@@ -68,6 +74,9 @@ func renderMermaid(source string, width int, theme themePalette) ([]string, bool
 	source = sanitizeTerminalText(source)
 	if len(source) > maxMermaidSource {
 		return nil, false
+	}
+	if mermaidFirstToken(source) == "packet-beta" {
+		return renderMermaidPacket(source, width, theme)
 	}
 	statements, complete := mermaidStatements(source)
 	if !complete || len(statements) < 1 {
@@ -119,6 +128,123 @@ func renderMermaid(source string, width int, theme themePalette) ([]string, bool
 		}
 	}
 	return lines, true
+}
+
+func renderMermaidPacket(source string, width int, theme themePalette) ([]string, bool) {
+	title := ""
+	blocks := make([]mermaidPacketBlock, 0)
+	var lastEnd uint64
+	hasLast := false
+	foundHeader := false
+	statements := 0
+	for _, raw := range strings.Split(source, "\n") {
+		statement := strings.TrimSpace(raw)
+		if statement == "" || strings.HasPrefix(statement, "%%") {
+			continue
+		}
+		statements++
+		if statements > maxMermaidStatements {
+			return nil, false
+		}
+		if !foundHeader {
+			if strings.Fields(statement)[0] != "packet-beta" {
+				return nil, false
+			}
+			foundHeader = true
+			continue
+		}
+		if value, ok := strings.CutPrefix(statement, "title "); ok {
+			if value = strings.TrimSpace(value); value != "" {
+				title = value
+			}
+			continue
+		}
+		rawRange, rawLabel, ok := strings.Cut(statement, ":")
+		start, end, valid := mermaidPacketRange(rawRange)
+		label, labelOK := mermaidPacketLabel(rawLabel)
+		if !ok || !valid || !labelOK || hasLast && start != lastEnd+1 {
+			return nil, false
+		}
+		for start <= end {
+			if len(blocks) == maxMermaidRelations {
+				return nil, false
+			}
+			rowEnd := (start/32+1)*32 - 1
+			blockEnd := min(end, rowEnd)
+			blocks = append(blocks, mermaidPacketBlock{start: start, end: blockEnd, label: label})
+			start = blockEnd + 1
+		}
+		lastEnd = end
+		hasLast = true
+	}
+	if len(blocks) == 0 {
+		return nil, false
+	}
+	lines := []string{ansiDim + mermaidFit("◇ mermaid packet", width) + ansiReset}
+	if title != "" {
+		lines = append(lines, theme.heading+mermaidFit(title, width)+ansiReset)
+	}
+	var lastRow uint64
+	hasRow := false
+	for _, block := range blocks {
+		row := block.start / 32
+		if !hasRow || row != lastRow {
+			if hasRow {
+				lines = append(lines, "")
+			}
+			lastRow = row
+			hasRow = true
+		}
+		bits := strconv.FormatUint(block.start, 10)
+		if block.end != block.start {
+			bits += "-" + strconv.FormatUint(block.end, 10)
+		}
+		lines = append(lines, theme.code+mermaidFit(bits+" │ "+block.label, width)+ansiReset)
+	}
+	return lines, true
+}
+
+func mermaidFirstToken(source string) string {
+	for _, raw := range strings.Split(source, "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "%%") {
+			continue
+		}
+		if fields := strings.Fields(line); len(fields) > 0 {
+			return fields[0]
+		}
+	}
+	return ""
+}
+
+func mermaidPacketRange(value string) (uint64, uint64, bool) {
+	parts := strings.Split(strings.TrimSpace(value), "-")
+	if len(parts) < 1 || len(parts) > 2 {
+		return 0, 0, false
+	}
+	start, err := strconv.ParseUint(strings.TrimSpace(parts[0]), 10, 32)
+	if err != nil {
+		return 0, 0, false
+	}
+	end := start
+	if len(parts) == 2 {
+		end, err = strconv.ParseUint(strings.TrimSpace(parts[1]), 10, 32)
+		if err != nil {
+			return 0, 0, false
+		}
+	}
+	if end < start {
+		return 0, 0, false
+	}
+	return start, end, true
+}
+
+func mermaidPacketLabel(value string) (string, bool) {
+	value = strings.TrimSpace(value)
+	if len(value) >= 2 && (value[0] == '"' && value[len(value)-1] == '"' || value[0] == '\'' && value[len(value)-1] == '\'') {
+		return value[1 : len(value)-1], true
+	}
+	return value, value != ""
 }
 
 func renderMermaidJourney(statements []string, width int, theme themePalette) ([]string, bool) {

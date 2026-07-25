@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -88,6 +89,92 @@ func TestRenderMermaidPie(t *testing.T) {
 		if displayWidth(stripUIANSI(line)) > 24 {
 			t.Fatalf("pie line exceeds width: %q", stripUIANSI(line))
 		}
+	}
+}
+
+func TestRenderMermaidPacket(t *testing.T) {
+	source := "packet-beta\ntitle IPv4 header\n0-3: Version\n4-7: IHL\n8-31: Payload size\n32-39: 'Next row'"
+	lines, ok := renderMermaid(source, 28, paletteFor("groknight"))
+	if !ok {
+		t.Fatal("supported Mermaid packet was rejected")
+	}
+	rendered := stripUIANSI(strings.Join(lines, "\n"))
+	for _, expected := range []string{"◇ mermaid packet", "IPv4 header", "0-3 │ Version", "4-7 │ IHL", "8-31 │ Payload size", "32-39 │ Next row"} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("rendered packet missing %q:\n%s", expected, rendered)
+		}
+	}
+	for _, line := range lines {
+		if displayWidth(stripUIANSI(line)) > 28 {
+			t.Fatalf("packet line exceeds width: %q", stripUIANSI(line))
+		}
+	}
+}
+
+func TestRenderMermaidPacketSplitsBlocksAtReferenceRowBoundary(t *testing.T) {
+	lines, ok := renderMermaid("packet-beta\n16-47: Wide field", 32, paletteFor("groknight"))
+	if !ok {
+		t.Fatal("cross-row Mermaid packet was rejected")
+	}
+	rendered := stripUIANSI(strings.Join(lines, "\n"))
+	for _, expected := range []string{"16-31 │ Wide field", "32-47 │ Wide field"} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("packet boundary split missing %q:\n%s", expected, rendered)
+		}
+	}
+}
+
+func TestRenderMermaidPacketRejectsReferenceParseErrors(t *testing.T) {
+	for _, source := range []string{
+		"packet-beta",
+		"packet-beta\n0-3 Header",
+		"packet-beta\n3-1: Backwards",
+		"packet-beta\n0-3: First\n5-7: Gap",
+		"packet-beta\n0-3:",
+		"packet-beta\n-1: Negative",
+	} {
+		if _, ok := renderMermaid(source, 40, paletteFor("groknight")); ok {
+			t.Fatalf("invalid packet was accepted: %q", source)
+		}
+	}
+}
+
+func TestRenderMermaidPacketAcceptsFullReferenceBitRange(t *testing.T) {
+	lines, ok := renderMermaid("packet-beta\n4294967295: Max bit", 32, paletteFor("groknight"))
+	if !ok {
+		t.Fatal("full u32 packet bit range was rejected")
+	}
+	rendered := stripUIANSI(strings.Join(lines, "\n"))
+	if !strings.Contains(rendered, "4294967295 │ Max bit") {
+		t.Fatalf("full u32 packet bit was not preserved:\n%s", rendered)
+	}
+}
+
+func TestRenderMermaidPacketKeepsBoundedOutput(t *testing.T) {
+	var statements strings.Builder
+	statements.WriteString("packet-beta\n")
+	for bit := 0; bit < maxMermaidStatements; bit++ {
+		statements.WriteString(strconv.Itoa(bit))
+		statements.WriteString(": Bit\n")
+	}
+	if _, ok := renderMermaid(statements.String(), 40, paletteFor("groknight")); ok {
+		t.Fatal("packet over the statement limit was accepted")
+	}
+	if _, ok := renderMermaid("packet-beta\n0-20000: Huge", 40, paletteFor("groknight")); ok {
+		t.Fatal("packet over the rendered block limit was accepted")
+	}
+}
+
+func TestRenderMarkdownRendersClosedMermaidPacket(t *testing.T) {
+	source := "Before\n```mermaid\npacket-beta\n0-3: Header\n4-7: Data\n```\nAfter"
+	rendered := stripUIANSI(strings.Join(renderMarkdown(source, 32), "\n"))
+	for _, expected := range []string{"Before", "◇ mermaid packet", "0-3 │ Header", "4-7 │ Data", "After"} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("rendered Mermaid packet missing %q:\n%s", expected, rendered)
+		}
+	}
+	if strings.Contains(rendered, "0-3: Header") || strings.Contains(rendered, "4-7: Data") {
+		t.Fatalf("closed Mermaid packet source was not replaced:\n%s", rendered)
 	}
 }
 
