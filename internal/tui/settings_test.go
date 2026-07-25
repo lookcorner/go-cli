@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -59,9 +60,11 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 	var mermaidModes []string
 	var selectionModes []string
 	var scrollModes []string
+	var scrollSpeeds []uint8
+	var scrollLines []uint8
 	m := &model{
 		width: 70, height: 18, themeName: "groknight", theme: paletteFor("groknight"), mermaidMode: "auto",
-		scrollInput: scrollInput{mode: "auto"}, settings: &settingsState{},
+		scrollSpeed: 50, scrollLines: 3, scrollInput: scrollInput{mode: "auto"}, settings: &settingsState{},
 		persistTimestamps: func(value bool) error { booleans = append(booleans, "timestamps"); return nil },
 		persistTimeline:   func(value bool) error { booleans = append(booleans, "timeline"); return nil },
 		persistCompactMode: func(value bool) error {
@@ -101,6 +104,14 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 			scrollModes = append(scrollModes, value)
 			return nil
 		},
+		persistScrollSpeed: func(value uint8) error {
+			scrollSpeeds = append(scrollSpeeds, value)
+			return nil
+		},
+		persistScrollLines: func(value uint8) error {
+			scrollLines = append(scrollLines, value)
+			return nil
+		},
 		persistScreenMode: func(value string) error {
 			screenModes = append(screenModes, value)
 			return nil
@@ -112,6 +123,15 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 		m.settings.selected = index
 		updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 		m = updated.(*model)
+		if index == 12 || index == 14 {
+			if command != nil || m.settings.number == nil || m.status != "editing setting" {
+				t.Fatalf("index=%d did not open number editor: command=%v settings=%#v status=%q", index, command != nil, m.settings, m.status)
+			}
+			updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
+			m = updated.(*model)
+			updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+			m = updated.(*model)
+		}
 		wantStatus := "settings updated"
 		if index == 8 || index == 9 {
 			wantStatus = "settings updated; restart to apply"
@@ -135,6 +155,9 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 	}
 	if m.scrollInput.mode != "wheel" || strings.Join(scrollModes, ",") != "wheel" {
 		t.Fatalf("scroll mode=%q persisted=%v", m.scrollInput.mode, scrollModes)
+	}
+	if m.scrollSpeed != 51 || m.scrollLines != 4 || !reflect.DeepEqual(scrollSpeeds, []uint8{51}) || !reflect.DeepEqual(scrollLines, []uint8{4}) {
+		t.Fatalf("scroll speed=%d lines=%d persisted=%v/%v", m.scrollSpeed, m.scrollLines, scrollSpeeds, scrollLines)
 	}
 }
 
@@ -160,7 +183,7 @@ func TestSettingsPanelRollsBackFailedPersistence(t *testing.T) {
 		t.Fatalf("command=%v minimal=%v err=%q", command != nil, m.defaultMinimal, m.settings.err)
 	}
 
-	m.settings.selected = 14
+	m.settings.selected = 16
 	m.mermaidMode = "auto"
 	m.persistMermaid = func(string) error { return errors.New("read only") }
 	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
@@ -169,7 +192,7 @@ func TestSettingsPanelRollsBackFailedPersistence(t *testing.T) {
 		t.Fatalf("command=%v Mermaid=%q err=%q", command != nil, m.mermaidMode, m.settings.err)
 	}
 
-	m.settings.selected = 15
+	m.settings.selected = 17
 	m.persistTheme = func(string) error { return errors.New("read only") }
 	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)
@@ -229,7 +252,7 @@ func TestSettingsPanelRollsBackFailedPersistence(t *testing.T) {
 		t.Fatalf("command=%v invert=%v err=%q", command != nil, m.invertScroll, m.settings.err)
 	}
 
-	m.settings.selected = 13
+	m.settings.selected = 15
 	m.persistSelection = func(string) error { return errors.New("read only") }
 	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)
@@ -237,13 +260,40 @@ func TestSettingsPanelRollsBackFailedPersistence(t *testing.T) {
 		t.Fatalf("command=%v selection=%q err=%q", command != nil, m.selectionMode.canonical(), m.settings.err)
 	}
 
-	m.settings.selected = 12
+	m.settings.selected = 13
 	m.scrollInput = scrollInput{mode: "auto", events: 2}
 	m.persistScrollMode = func(string) error { return errors.New("read only") }
 	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)
 	if command != nil || m.scrollInput.mode != "auto" || m.scrollInput.events != 2 || m.settings.err != "read only" {
 		t.Fatalf("command=%v scroll input=%#v err=%q", command != nil, m.scrollInput, m.settings.err)
+	}
+
+	m.scrollSpeed = 50
+	m.scrollCarry = 0.75
+	m.settings.selected = 12
+	m.persistScrollSpeed = func(uint8) error { return errors.New("read only") }
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
+	m = updated.(*model)
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.scrollSpeed != 50 || m.scrollCarry != 0.75 || m.settings.number != nil || m.settings.err != "read only" {
+		t.Fatalf("command=%v speed=%d carry=%g settings=%#v", command != nil, m.scrollSpeed, m.scrollCarry, m.settings)
+	}
+
+	m.scrollLines = 3
+	m.settings.selected = 14
+	m.persistScrollLines = func(uint8) error { return errors.New("read only") }
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
+	m = updated.(*model)
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.scrollLines != 3 || m.settings.number != nil || m.settings.err != "read only" {
+		t.Fatalf("command=%v lines=%d settings=%#v", command != nil, m.scrollLines, m.settings)
 	}
 }
 
@@ -532,7 +582,7 @@ func TestSettingsTextSelectionAppliesImmediately(t *testing.T) {
 	var persisted []string
 	m := &model{
 		width: 60, height: 16, selectionMode: selectionFlash,
-		settings:         &settingsState{selected: 13},
+		settings:         &settingsState{selected: 15},
 		persistSelection: func(value string) error { persisted = append(persisted, value); return nil },
 	}
 	for _, want := range []textSelectionMode{selectionHold, selectionWord, selectionFlash} {
@@ -559,7 +609,7 @@ func TestSettingsScrollModeAppliesImmediately(t *testing.T) {
 	m := &model{
 		width: 60, height: 16, scrollLines: 3, scrollSpeed: 50,
 		scrollInput:       scrollInput{mode: "auto", events: 2, serial: 7},
-		settings:          &settingsState{selected: 12},
+		settings:          &settingsState{selected: 13},
 		persistScrollMode: func(value string) error { persisted = append(persisted, value); return nil },
 	}
 	serial := m.scrollInput.serial
@@ -581,12 +631,85 @@ func TestSettingsScrollModeAppliesImmediately(t *testing.T) {
 	}
 
 	m.scrollInput = scrollInput{mode: "auto"}
-	m.settings = &settingsState{selected: 12}
+	m.settings = &settingsState{selected: 13}
 	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)
 	updated, command := m.Update(mouseScrollEvent{direction: 1, at: time.Unix(100, 0), scale: true})
 	m = updated.(*model)
 	if command != nil || m.scroll != 3 {
 		t.Fatalf("forced wheel command=%v scroll=%d", command != nil, m.scroll)
+	}
+}
+
+func TestSettingsScrollNumberSteppers(t *testing.T) {
+	defaults := &model{width: 60, height: 16, settings: &settingsState{selected: 13}}
+	content := defaults.settingsContent()
+	if !strings.Contains(content, "Scroll speed: 50") || !strings.Contains(content, "Scroll lines: 3") {
+		t.Fatalf("default scroll settings=%q", content)
+	}
+
+	var speeds []uint8
+	var lines []uint8
+	m := &model{
+		width: 60, height: 16, scrollSpeed: 50, scrollLines: 3,
+		scrollInput:        scrollInput{mode: "auto", events: 2, serial: 7},
+		settings:           &settingsState{selected: 12},
+		persistScrollSpeed: func(value uint8) error { speeds = append(speeds, value); return nil },
+		persistScrollLines: func(value uint8) error { lines = append(lines, value); return nil },
+	}
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	for _, key := range []tea.Key{
+		{Code: tea.KeyRight},
+		{Code: tea.KeyUp},
+		{Code: tea.KeyEnter},
+	} {
+		updated, _ = m.Update(tea.KeyPressMsg(key))
+		m = updated.(*model)
+	}
+	if m.scrollSpeed != 56 || m.scrollCarry != 0 || !reflect.DeepEqual(speeds, []uint8{56}) {
+		t.Fatalf("speed=%d carry=%g persisted=%v", m.scrollSpeed, m.scrollCarry, speeds)
+	}
+	updated, _ = m.Update(mouseScrollFlushEvent{serial: 7, at: time.Unix(200, 0)})
+	m = updated.(*model)
+	if m.scroll != 0 || m.scrollInput.serial != 8 {
+		t.Fatalf("stale speed flush scroll=%d input=%#v", m.scroll, m.scrollInput)
+	}
+
+	m.settings.selected = 14
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	for range 20 {
+		updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
+		m = updated.(*model)
+	}
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if m.scrollLines != 10 || !reflect.DeepEqual(lines, []uint8{10}) {
+		t.Fatalf("lines=%d persisted=%v", m.scrollLines, lines)
+	}
+	updated, command := m.Update(mouseScrollEvent{direction: 1, at: time.Unix(100, 0), scale: true})
+	m = updated.(*model)
+	if command == nil {
+		t.Fatal("auto scroll did not schedule a flush")
+	}
+	updated, _ = m.Update(mouseScrollFlushEvent{
+		serial: m.scrollInput.serial,
+		at:     m.scrollInput.last.Add(trackpadEventWindow),
+	})
+	m = updated.(*model)
+	if m.scroll != 16 {
+		t.Fatalf("live scroll=%d want=16", m.scroll)
+	}
+
+	m.settings.selected = 12
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyLeft}))
+	m = updated.(*model)
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
+	m = updated.(*model)
+	if m.scrollSpeed != 56 || m.settings.number != nil || len(speeds) != 1 || m.status != "settings" {
+		t.Fatalf("cancel speed=%d persisted=%v settings=%#v status=%q", m.scrollSpeed, speeds, m.settings, m.status)
 	}
 }

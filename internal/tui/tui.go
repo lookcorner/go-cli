@@ -682,7 +682,9 @@ type model struct {
 	questionTimeout     bool
 	persistQuestionTime func(bool) error
 	persistInvertScroll func(bool) error
+	persistScrollSpeed  func(uint8) error
 	persistScrollMode   func(string) error
+	persistScrollLines  func(uint8) error
 	themeName           string
 	autoDarkTheme       string
 	autoLightTheme      string
@@ -857,9 +859,11 @@ type UIOptions struct {
 	ShowTimeline         bool
 	SetShowTimeline      func(bool) error
 	ScrollSpeed          uint8
+	SetScrollSpeed       func(uint8) error
 	ScrollMode           string
 	SetScrollMode        func(string) error
 	ScrollLines          *uint8
+	SetScrollLines       func(uint8) error
 	InvertScroll         bool
 	SetInvertScroll      func(bool) error
 	CollapsedEditBlocks  bool
@@ -1021,7 +1025,8 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		defaultMinimal: options.ScreenMode == "minimal", persistScreenMode: options.SetScreenMode,
 		showTimestamps: options.ShowTimestamps, persistTimestamps: options.SetShowTimestamps,
 		showTimeline: options.ShowTimeline, persistTimeline: options.SetShowTimeline,
-		scrollLines: mouseWheelScrollLines, scrollSpeed: options.ScrollSpeed, scrollInput: scrollInput{mode: options.ScrollMode}, persistScrollMode: options.SetScrollMode,
+		scrollLines: mouseWheelScrollLines, scrollSpeed: options.ScrollSpeed, persistScrollSpeed: options.SetScrollSpeed,
+		scrollInput: scrollInput{mode: options.ScrollMode}, persistScrollMode: options.SetScrollMode, persistScrollLines: options.SetScrollLines,
 		invertScroll: options.InvertScroll, persistInvertScroll: options.SetInvertScroll,
 		collapsedEditBlocks: options.CollapsedEditBlocks,
 		persistEditBlocks:   options.SetCollapsedEdits,

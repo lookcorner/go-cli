@@ -12,9 +12,18 @@ import (
 type settingsState struct {
 	selected int
 	err      string
+	number   *settingsNumber
 }
 
-const settingsCount = 16
+type settingsNumber struct {
+	value int
+	min   int
+	max   int
+	small int
+	large int
+}
+
+const settingsCount = 18
 
 func (m *model) openSettings() {
 	m.settings = &settingsState{}
@@ -24,6 +33,9 @@ func (m *model) openSettings() {
 
 func (m *model) handleSettingsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := msg.Key()
+	if m.settings.number != nil {
+		return m.handleSettingsNumber(key)
+	}
 	if key.Code == tea.KeyEsc {
 		m.settings = nil
 		m.status = "ready"
@@ -41,6 +53,26 @@ func (m *model) handleSettingsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.applySetting(m.settings.selected)
+	return m, nil
+}
+
+func (m *model) handleSettingsNumber(key tea.Key) (tea.Model, tea.Cmd) {
+	number := m.settings.number
+	switch {
+	case key.Code == tea.KeyEsc:
+		m.settings.number = nil
+		m.status = "settings"
+	case key.Code == tea.KeyUp || key.Text == "k":
+		number.value = min(number.value+number.small, number.max)
+	case key.Code == tea.KeyDown || key.Text == "j":
+		number.value = max(number.value-number.small, number.min)
+	case key.Code == tea.KeyRight || key.Text == "l":
+		number.value = min(number.value+number.large, number.max)
+	case key.Code == tea.KeyLeft || key.Text == "h":
+		number.value = max(number.value-number.large, number.min)
+	case key.Code == tea.KeyEnter:
+		m.commitSettingsNumber(number.value)
+	}
 	return m, nil
 }
 
@@ -134,18 +166,26 @@ func (m *model) applySetting(selected int) {
 			state.err = persistSetting(m.persistInvertScroll(m.invertScroll), func() { m.invertScroll = previous })
 		}
 	case 12:
+		m.settings.number = &settingsNumber{value: m.effectiveScrollSpeed(), min: 1, max: 100, small: 1, large: 5}
+		m.status = "editing setting"
+		return
+	case 13:
 		previous := m.scrollInput
 		m.scrollInput = scrollInput{mode: nextScrollMode(previous.mode), serial: previous.serial + 1}
 		if m.persistScrollMode != nil {
 			state.err = persistSetting(m.persistScrollMode(m.scrollInput.mode), func() { m.scrollInput = previous })
 		}
-	case 13:
+	case 14:
+		m.settings.number = &settingsNumber{value: m.effectiveScrollLines(), min: 1, max: 10, small: 1, large: 1}
+		m.status = "editing setting"
+		return
+	case 15:
 		previous := m.selectionMode
 		m.selectionMode = previous.next()
 		if m.persistSelection != nil {
 			state.err = persistSetting(m.persistSelection(m.selectionMode.canonical()), func() { m.selectionMode = previous })
 		}
-	case 14:
+	case 16:
 		previous := m.mermaidMode
 		switch m.mermaidMode {
 		case "auto":
@@ -158,7 +198,7 @@ func (m *model) applySetting(selected int) {
 		if m.persistMermaid != nil {
 			state.err = persistSetting(m.persistMermaid(m.mermaidMode), func() { m.mermaidMode = previous })
 		}
-	case 15:
+	case 17:
 		previousName, previousTheme := m.themeName, m.theme
 		m.themeName = nextTheme(m.themeName)
 		m.theme = paletteForAuto(m.themeName, m.autoDarkTheme, m.autoLightTheme)
@@ -173,6 +213,47 @@ func (m *model) applySetting(selected int) {
 	} else {
 		m.status = "settings updated"
 	}
+}
+
+func (m *model) commitSettingsNumber(value int) {
+	state := m.settings
+	state.err = ""
+	switch state.selected {
+	case 12:
+		if m.persistScrollSpeed != nil {
+			state.err = errorString(m.persistScrollSpeed(uint8(value)))
+		}
+		if state.err == "" {
+			m.scrollSpeed = uint8(value)
+			m.scrollCarry = 0
+			m.resetScrollInput()
+		}
+	case 14:
+		if m.persistScrollLines != nil {
+			state.err = errorString(m.persistScrollLines(uint8(value)))
+		}
+		if state.err == "" {
+			m.scrollLines = value
+			m.resetScrollInput()
+		}
+	}
+	state.number = nil
+	if state.err != "" {
+		m.status = "setting update failed"
+	} else {
+		m.status = "settings updated"
+	}
+}
+
+func (m *model) resetScrollInput() {
+	m.scrollInput = scrollInput{mode: m.scrollInput.mode, serial: m.scrollInput.serial + 1}
+}
+
+func errorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func persistSetting(err error, rollback func()) string {
@@ -225,7 +306,9 @@ func (m *model) settingsContent() string {
 		settingLine("Ask-question timeout (restart)", m.questionTimeout),
 		settingLine("Multiline input", m.multiline),
 		settingLine("Invert scroll", m.invertScroll),
+		fmt.Sprintf("Scroll speed: %d", m.settingNumberValue(12, m.effectiveScrollSpeed())),
 		fmt.Sprintf("Scroll input: %s", scrollModeName(m.scrollInput.mode)),
+		fmt.Sprintf("Scroll lines: %d", m.settingNumberValue(14, m.effectiveScrollLines())),
 		fmt.Sprintf("Text selection: %s", m.selectionMode.canonical()),
 		fmt.Sprintf("Mermaid rendering: %s", mermaidMode),
 		fmt.Sprintf("Theme: %s", m.themeName),
@@ -235,6 +318,27 @@ func (m *model) settingsContent() string {
 		content += "\n\n**Error:** " + strings.ReplaceAll(sanitizeTerminalText(m.settings.err), "\n", " ")
 	}
 	return content
+}
+
+func (m *model) effectiveScrollSpeed() int {
+	if m.scrollSpeed == 0 {
+		return 50
+	}
+	return int(m.scrollSpeed)
+}
+
+func (m *model) effectiveScrollLines() int {
+	if m.scrollLines == 0 {
+		return mouseWheelScrollLines
+	}
+	return m.scrollLines
+}
+
+func (m *model) settingNumberValue(selected, current int) int {
+	if m.settings.selected == selected && m.settings.number != nil {
+		return m.settings.number.value
+	}
+	return current
 }
 
 func scrollModeName(mode string) string {
