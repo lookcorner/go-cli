@@ -1,9 +1,13 @@
 package terminaldiag
 
 import (
+	"context"
 	"os/exec"
 	"strings"
+	"time"
 )
+
+const tmuxProbeTimeout = 500 * time.Millisecond
 
 type tmuxProbe struct {
 	SetClipboard     string
@@ -15,11 +19,13 @@ type tmuxProbe struct {
 var probeTmuxOption = liveTmuxOption
 
 func liveTmuxOption(option string, window bool) (string, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), tmuxProbeTimeout)
+	defer cancel()
 	args := []string{"show-options", "-gv", option}
 	if window {
 		args = []string{"show-options", "-gwv", option}
 	}
-	cmd := exec.Command("tmux", args...)
+	cmd := exec.CommandContext(ctx, "tmux", args...)
 	out, err := cmd.Output()
 	if err != nil {
 		return "", false
