@@ -1165,6 +1165,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			CollapsedEditBlocks: cfg.UI.CollapsedEditBlocks,
 			GroupToolVerbs:      cfg.UI.GroupToolVerbs,
 			RememberApprovals:   cfg.UI.RememberToolApprovals,
+			QuestionTimeout:     cfg.AskUserQuestion.TimeoutEnabled,
 			CursorBlink:         cfg.UI.CursorBlink,
 			CompactMode:         cfg.UI.CompactMode,
 			ShowTimestamps:      cfg.UI.ShowTimestamps,
@@ -1190,6 +1191,9 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			},
 			SetRememberApprovals: func(enabled bool) error {
 				return config.UpdateRememberToolApprovals(opts.configPath, enabled)
+			},
+			SetQuestionTimeout: func(enabled bool) error {
+				return config.UpdateQuestionTimeout(opts.configPath, enabled)
 			},
 			SetDashboardPinned: func(ids []string) error {
 				return config.UpdateDashboardPinned(opts.configPath, ids)

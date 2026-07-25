@@ -678,6 +678,8 @@ type model struct {
 	persistSuggestions  func(bool) error
 	rememberApprovals   bool
 	persistRemember     func(bool) error
+	questionTimeout     bool
+	persistQuestionTime func(bool) error
 	themeName           string
 	autoDarkTheme       string
 	autoLightTheme      string
@@ -862,6 +864,8 @@ type UIOptions struct {
 	SetPromptSuggestions func(bool) error
 	RememberApprovals    bool
 	SetRememberApprovals func(bool) error
+	QuestionTimeout      bool
+	SetQuestionTimeout   func(bool) error
 	CursorBlink          *bool
 	Theme                string
 	AutoDarkTheme        string
@@ -1005,6 +1009,8 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		persistSuggestions:  options.SetPromptSuggestions,
 		rememberApprovals:   options.RememberApprovals,
 		persistRemember:     options.SetRememberApprovals,
+		questionTimeout:     options.QuestionTimeout,
+		persistQuestionTime: options.SetQuestionTimeout,
 		hyperlinks:          detectTerminalHyperlinks(),
 		themeName:           options.Theme,
 		autoDarkTheme:       options.AutoDarkTheme,

@@ -7,13 +7,22 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/tools"
+	"github.com/lookcorner/go-cli/internal/workspace"
 )
+
+type settingsQuestionObserver struct{ hasDeadline bool }
+
+func (o *settingsQuestionObserver) AskUserQuestion(ctx context.Context, _ tools.UserQuestionRequest) (tools.UserQuestionResponse, error) {
+	_, o.hasDeadline = ctx.Deadline()
+	return tools.UserQuestionResponse{Outcome: "cancelled"}, nil
+}
 
 func TestSettingsCommandAliasesOpenAndClose(t *testing.T) {
 	for _, prompt := range []string{"/settings", "/config ignored", "/preferences", "/prefs anything"} {
@@ -73,6 +82,10 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 			booleans = append(booleans, "remember")
 			return nil
 		},
+		persistQuestionTime: func(value bool) error {
+			booleans = append(booleans, "question-timeout")
+			return nil
+		},
 		persistScreenMode: func(value string) error {
 			screenModes = append(screenModes, value)
 			return nil
@@ -85,15 +98,15 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 		updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 		m = updated.(*model)
 		wantStatus := "settings updated"
-		if index == 8 {
+		if index == 8 || index == 9 {
 			wantStatus = "settings updated; restart to apply"
 		}
 		if command != nil || m.settings.err != "" || m.status != wantStatus {
 			t.Fatalf("index=%d command=%v err=%q status=%q", index, command != nil, m.settings.err, m.status)
 		}
 	}
-	if !m.showTimestamps || !m.showTimeline || !m.compactMode || !m.vimMode || !m.defaultMinimal || !m.groupToolVerbs || !m.collapsedEditBlocks || !m.suggestionsEnabled || !m.rememberApprovals || !m.multiline ||
-		strings.Join(booleans, ",") != "timestamps,timeline,compact,vim,group,edits,suggestions,remember" || strings.Join(screenModes, ",") != "minimal" {
+	if !m.showTimestamps || !m.showTimeline || !m.compactMode || !m.vimMode || !m.defaultMinimal || !m.groupToolVerbs || !m.collapsedEditBlocks || !m.suggestionsEnabled || !m.rememberApprovals || !m.questionTimeout || !m.multiline ||
+		strings.Join(booleans, ",") != "timestamps,timeline,compact,vim,group,edits,suggestions,remember,question-timeout" || strings.Join(screenModes, ",") != "minimal" {
 		t.Fatalf("timestamps=%v timeline=%v compact=%v vim=%v persisted=%v", m.showTimestamps, m.showTimeline, m.compactMode, m.vimMode, booleans)
 	}
 	if m.themeName != "grokday" || m.theme.name != "grokday" || strings.Join(themes, ",") != "grokday" {
@@ -126,7 +139,7 @@ func TestSettingsPanelRollsBackFailedPersistence(t *testing.T) {
 		t.Fatalf("command=%v minimal=%v err=%q", command != nil, m.defaultMinimal, m.settings.err)
 	}
 
-	m.settings.selected = 10
+	m.settings.selected = 11
 	m.mermaidMode = "auto"
 	m.persistMermaid = func(string) error { return errors.New("read only") }
 	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
@@ -135,7 +148,7 @@ func TestSettingsPanelRollsBackFailedPersistence(t *testing.T) {
 		t.Fatalf("command=%v Mermaid=%q err=%q", command != nil, m.mermaidMode, m.settings.err)
 	}
 
-	m.settings.selected = 11
+	m.settings.selected = 12
 	m.persistTheme = func(string) error { return errors.New("read only") }
 	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)
@@ -176,6 +189,15 @@ func TestSettingsPanelRollsBackFailedPersistence(t *testing.T) {
 	m = updated.(*model)
 	if command != nil || m.rememberApprovals || m.settings.err != "read only" {
 		t.Fatalf("command=%v remember=%v err=%q", command != nil, m.rememberApprovals, m.settings.err)
+	}
+
+	m.settings.selected = 9
+	m.questionTimeout = true
+	m.persistQuestionTime = func(bool) error { return errors.New("read only") }
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || !m.questionTimeout || m.settings.err != "read only" {
+		t.Fatalf("command=%v timeout=%v err=%q", command != nil, m.questionTimeout, m.settings.err)
 	}
 }
 
@@ -389,7 +411,7 @@ func TestSettingsRememberToolApprovalsAppliesAfterRestart(t *testing.T) {
 func TestSettingsMultilineInputAppliesImmediately(t *testing.T) {
 	m := &model{
 		ctx: context.Background(), runner: &agent.Runner{},
-		width: 60, height: 16, settings: &settingsState{selected: 9},
+		width: 60, height: 16, settings: &settingsState{selected: 10},
 	}
 	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)
@@ -403,5 +425,34 @@ func TestSettingsMultilineInputAppliesImmediately(t *testing.T) {
 	m = updated.(*model)
 	if command != nil || string(m.input) != "first\n" || m.running {
 		t.Fatalf("command=%v input=%q running=%v", command != nil, m.input, m.running)
+	}
+}
+
+func TestSettingsQuestionTimeoutAppliesAfterRestart(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	observer := &settingsQuestionObserver{}
+	registry.SetUserQuestionObserver(observer)
+	registry.ConfigureUserQuestions(true, time.Minute)
+	persisted := true
+	m := &model{
+		width: 60, height: 16, runner: &agent.Runner{Tools: registry},
+		questionTimeout: true, settings: &settingsState{selected: 9},
+		persistQuestionTime: func(value bool) error { persisted = value; return nil },
+	}
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.questionTimeout || persisted || m.status != "settings updated; restart to apply" {
+		t.Fatalf("command=%v timeout=%v persisted=%v status=%q", command != nil, m.questionTimeout, persisted, m.status)
+	}
+	if _, err := registry.Execute(context.Background(), "ask_user_question", json.RawMessage(`{"questions":[{"question":"Continue?","options":[]}]}`)); err != nil {
+		t.Fatal(err)
+	}
+	if !observer.hasDeadline {
+		t.Fatal("restart-scoped timeout change applied to current session")
 	}
 }

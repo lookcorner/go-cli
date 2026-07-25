@@ -773,6 +773,20 @@ func TestAskUserQuestionConfigPrecedence(t *testing.T) {
 	}
 }
 
+func TestUpdateQuestionTimeoutPreservesSeconds(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[toolset.ask_user_question]\ntimeout_enabled = true\ntimeout_secs = 45\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateQuestionTimeout(path, false); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil || cfg.AskUserQuestion.TimeoutEnabled || cfg.AskUserQuestion.TimeoutSeconds != 45 {
+		t.Fatalf("config=%#v err=%v", cfg.AskUserQuestion, err)
+	}
+}
+
 func TestAutoModeConfigDefaultsAndValidation(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("GROK_HOME", home)
@@ -2156,13 +2170,16 @@ func TestUIConfigPersistenceAndPermissionPrecedence(t *testing.T) {
 	if err := UpdateRememberToolApprovals(path, true); err != nil {
 		t.Fatal(err)
 	}
+	if err := UpdateQuestionTimeout(path, false); err != nil {
+		t.Fatal(err)
+	}
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	remoteMode := "always-approve"
 	cfg.ApplyRemoteSettings(&RemoteSettings{PermissionMode: &remoteMode})
-	if cfg.UI.PermissionMode != "auto" || cfg.UI.VimMode || !cfg.UI.CompactMode || cfg.UI.ShowTimestamps || !cfg.UI.ShowTimeline || cfg.UI.GroupToolVerbs || !cfg.UI.CollapsedEditBlocks || cfg.UI.PromptSuggestions || !cfg.UI.RememberToolApprovals || cfg.DefaultModelID != "local" || cfg.Model != "local-api" {
+	if cfg.UI.PermissionMode != "auto" || cfg.UI.VimMode || !cfg.UI.CompactMode || cfg.UI.ShowTimestamps || !cfg.UI.ShowTimeline || cfg.UI.GroupToolVerbs || !cfg.UI.CollapsedEditBlocks || cfg.UI.PromptSuggestions || !cfg.UI.RememberToolApprovals || cfg.AskUserQuestion.TimeoutEnabled || cfg.DefaultModelID != "local" || cfg.Model != "local-api" {
 		t.Fatalf("config=%#v", cfg)
 	}
 	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o640 {
@@ -2193,8 +2210,11 @@ func TestUIConfigPersistenceAndPermissionPrecedence(t *testing.T) {
 	if err := UpdateRememberToolApprovals(emptyPath, true); err != nil {
 		t.Fatal(err)
 	}
+	if err := UpdateQuestionTimeout(emptyPath, false); err != nil {
+		t.Fatal(err)
+	}
 	emptyConfig, err := Load(emptyPath)
-	if err != nil || !emptyConfig.UI.VimMode || !emptyConfig.UI.CompactMode || emptyConfig.UI.ShowTimestamps || !emptyConfig.UI.ShowTimeline || emptyConfig.UI.GroupToolVerbs || !emptyConfig.UI.CollapsedEditBlocks || emptyConfig.UI.PromptSuggestions || !emptyConfig.UI.RememberToolApprovals {
+	if err != nil || !emptyConfig.UI.VimMode || !emptyConfig.UI.CompactMode || emptyConfig.UI.ShowTimestamps || !emptyConfig.UI.ShowTimeline || emptyConfig.UI.GroupToolVerbs || !emptyConfig.UI.CollapsedEditBlocks || emptyConfig.UI.PromptSuggestions || !emptyConfig.UI.RememberToolApprovals || emptyConfig.AskUserQuestion.TimeoutEnabled {
 		t.Fatalf("new config=%#v err=%v", emptyConfig, err)
 	}
 
@@ -2229,8 +2249,11 @@ func TestUIConfigPersistenceAndPermissionPrecedence(t *testing.T) {
 	if err := UpdateRememberToolApprovals(jsonPath, true); err != nil {
 		t.Fatal(err)
 	}
+	if err := UpdateQuestionTimeout(jsonPath, false); err != nil {
+		t.Fatal(err)
+	}
 	jsonConfig, err := Load(jsonPath)
-	if err != nil || jsonConfig.UI.PermissionMode != "always-approve" || jsonConfig.UI.VimMode || jsonConfig.UI.CompactMode || jsonConfig.UI.ShowTimestamps || !jsonConfig.UI.ShowTimeline || jsonConfig.UI.GroupToolVerbs || !jsonConfig.UI.CollapsedEditBlocks || jsonConfig.UI.PromptSuggestions || !jsonConfig.UI.RememberToolApprovals {
+	if err != nil || jsonConfig.UI.PermissionMode != "always-approve" || jsonConfig.UI.VimMode || jsonConfig.UI.CompactMode || jsonConfig.UI.ShowTimestamps || !jsonConfig.UI.ShowTimeline || jsonConfig.UI.GroupToolVerbs || !jsonConfig.UI.CollapsedEditBlocks || jsonConfig.UI.PromptSuggestions || !jsonConfig.UI.RememberToolApprovals || jsonConfig.AskUserQuestion.TimeoutEnabled {
 		t.Fatalf("JSON config=%#v err=%v", jsonConfig, err)
 	}
 
