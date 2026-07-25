@@ -3,6 +3,7 @@ package acp
 import (
 	"encoding/json"
 	"net/url"
+	pathpkg "path"
 	"path/filepath"
 	"strings"
 )
@@ -34,14 +35,14 @@ func (r *pathRewriter) rewritePath(path string) string {
 	if r == nil || path == "" {
 		return path
 	}
-	if !filepath.IsAbs(path) {
-		return filepath.Join(r.display, filepath.FromSlash(path))
+	if !filepath.IsAbs(path) && !strings.HasPrefix(path, "/") {
+		return pathpkg.Join(r.display, filepath.ToSlash(path))
 	}
 	relative, err := filepath.Rel(r.real, filepath.Clean(path))
 	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return filepath.Clean(path)
+		return filepath.ToSlash(filepath.Clean(path))
 	}
-	return filepath.Join(r.display, relative)
+	return pathpkg.Join(r.display, filepath.ToSlash(relative))
 }
 
 func displayEquivalentPath(realCWD, displayCWD, path string) string {

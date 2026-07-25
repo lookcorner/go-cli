@@ -869,6 +869,10 @@ func (s *Server) handleGit(ctx context.Context, incoming message) {
 			s.respond(incoming.ID, "NotGitRepo")
 			return
 		}
+		// Report canonical roots; git prints forward-slash separators on Windows.
+		if resolved, resolveErr := filepath.EvalSymlinks(root); resolveErr == nil {
+			root = resolved
+		}
 		s.respond(incoming.ID, map[string]any{"GitRepo": map[string]any{"gitRoot": root}})
 		return
 	}

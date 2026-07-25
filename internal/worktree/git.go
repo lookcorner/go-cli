@@ -254,6 +254,11 @@ func Info(ctx context.Context, root string) (GitInfo, error) {
 	if err != nil {
 		return GitInfo{}, err
 	}
+	// Compare canonical paths: git prints forward-slash separators on
+	// Windows while mainRepositoryRoot resolves symlinks.
+	if canonical, err := filepath.EvalSymlinks(resolved); err == nil {
+		resolved = canonical
+	}
 	info := GitInfo{Root: resolved, CurrentBranch: optionalGit(ctx, resolved, "symbolic-ref", "--short", "-q", "HEAD"), VCSKind: "git"}
 	names := strings.Fields(optionalGit(ctx, resolved, "remote"))
 	seen := make(map[string]bool)
