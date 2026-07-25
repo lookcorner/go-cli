@@ -3036,6 +3036,33 @@ func TestAuthTokenProviderFallsBackToStoredAPIKey(t *testing.T) {
 	}
 }
 
+func TestAuthTokenProviderPrefersSessionOverStaticAPIKey(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	t.Setenv("XAI_API_KEY", "environment-key")
+	path := filepath.Join(home, "auth.json")
+	authConfig := auth.DefaultConfig()
+	if err := auth.Save(path, authConfig.Scope(), auth.Credential{Key: "session-token"}); err != nil {
+		t.Fatal(err)
+	}
+	provider := newAuthTokenProvider(config.Config{APIKey: "environment-key", HTTPTimeout: time.Second}, path, authConfig, io.Discard)
+	if key, err := provider(context.Background(), ""); err != nil || key != "session-token" {
+		t.Fatalf("key=%q err=%v", key, err)
+	}
+}
+
+func TestAuthTokenProviderFallsBackToConfiguredAPIKey(t *testing.T) {
+	t.Setenv("XAI_API_KEY", "")
+	t.Setenv("GROK_CODE_XAI_API_KEY", "")
+	provider := newAuthTokenProvider(config.Config{APIKey: "configured-key", HTTPTimeout: time.Second}, filepath.Join(t.TempDir(), "missing.json"), auth.DefaultConfig(), io.Discard)
+	if key, err := provider(context.Background(), ""); err != nil || key != "configured-key" {
+		t.Fatalf("key=%q err=%v", key, err)
+	}
+	if _, err := provider(context.Background(), "configured-key"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rejected configured key was retried: %v", err)
+	}
+}
+
 func TestPreferredAPIKeyUsesStoredCredential(t *testing.T) {
 	requireLoopback(t)
 	home, root, sessionDir := t.TempDir(), t.TempDir(), t.TempDir()

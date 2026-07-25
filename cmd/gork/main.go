@@ -448,7 +448,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		}
 	}
 	var tokenProvider api.TokenProvider
-	if cfg.APIKey == "" && cfg.PreferredAuthMethod != "api_key" && isXAIBaseURL(cfg.BaseURL) {
+	if cfg.PreferredAuthMethod != "api_key" && isXAIBaseURL(cfg.BaseURL) {
 		var pathErr error
 		authPath, pathErr = auth.DefaultPath()
 		if pathErr != nil {
@@ -467,7 +467,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			cancel()
 			cfg.ApplyRemoteSettings(remote)
 			applyRunOverrides(&cfg, opts)
-		} else if !errors.Is(authErr, os.ErrNotExist) {
+		} else if cfg.APIKey == "" && !errors.Is(authErr, os.ErrNotExist) {
 			return fmt.Errorf("load dynamic credentials: %w", authErr)
 		}
 	}
@@ -1657,6 +1657,9 @@ func newAuthTokenProvider(cfg config.Config, path string, authConfig auth.Config
 			err = externalErr
 		}
 		if !cfg.DisableAPIKeyAuth && !cfg.ForceLoginTeamConfigured && cfg.PreferredAuthMethod != "oidc" {
+			if key := strings.TrimSpace(cfg.APIKey); key != "" && key != rejectedToken {
+				return key, nil
+			}
 			if key, keyErr := auth.ResolveAPIKey(path); keyErr == nil && key != rejectedToken {
 				return key, nil
 			}
