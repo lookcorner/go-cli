@@ -1194,6 +1194,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			Theme:               cfg.UI.Theme,
 			AutoDarkTheme:       cfg.UI.AutoDarkTheme,
 			AutoLightTheme:      cfg.UI.AutoLightTheme,
+			VoiceCaptureMode:    cfg.UI.VoiceCaptureMode,
 			SetVimMode:          func(enabled bool) error { return config.UpdateVimMode(opts.configPath, enabled) },
 			SetCompactMode:      func(enabled bool) error { return config.UpdateCompactMode(opts.configPath, enabled) },
 			SetShowTimestamps:   func(enabled bool) error { return config.UpdateShowTimestamps(opts.configPath, enabled) },
@@ -1256,6 +1257,9 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			},
 			Voice:         voiceClient,
 			VoiceLanguage: cfg.UI.VoiceSTTLanguage,
+			SetVoiceCaptureMode: func(mode string) error {
+				return config.UpdateVoiceCaptureMode(opts.configPath, mode)
+			},
 			SetVoiceLanguage: func(language string) error {
 				if err := config.UpdateVoiceSTTLanguage(opts.configPath, language); err != nil {
 					return err

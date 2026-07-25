@@ -85,7 +85,17 @@ func (m *model) applySetting(selected int) {
 		switch {
 		case selected == settingsCount && m.planModeAvailable():
 			state.err = errorString(m.setPlanMode(!m.planMode))
-		case selected == settingsCount+m.planSettingCount() && m.voiceClient != nil:
+		case selected == settingsCount+m.planSettingCount() && m.voiceModeSettingAvailable():
+			previous := m.voiceCaptureMode
+			if previous == "hold" {
+				m.voiceCaptureMode = "toggle"
+			} else {
+				m.voiceCaptureMode = "hold"
+			}
+			if m.persistVoiceMode != nil {
+				state.err = persistSetting(m.persistVoiceMode(m.voiceCaptureMode), func() { m.voiceCaptureMode = previous })
+			}
+		case selected == settingsCount+m.planSettingCount()+m.voiceModeSettingCount() && m.voiceClient != nil:
 			previous := m.voiceLanguage
 			m.voiceLanguage = nextVoiceLanguage(previous)
 			if m.persistVoiceLanguage != nil {
@@ -492,6 +502,9 @@ func (m *model) settingsContent() string {
 		lines = append(lines, settingLine("Plan mode", m.planMode))
 	}
 	if m.voiceClient != nil {
+		if m.voiceModeSettingAvailable() {
+			lines = append(lines, fmt.Sprintf("Voice capture: %s", canonicalVoiceCaptureMode(m.voiceCaptureMode)))
+		}
 		lines = append(lines, fmt.Sprintf("Voice language: %s", voice.CanonicalLanguage(m.voiceLanguage)))
 	}
 	content := "# Settings\n\n" + selectedWindow(lines, m.settings.selected, max(m.contentHeight()-3, 1))
@@ -529,9 +542,20 @@ func (m *model) modelOptionName(id string) string {
 func (m *model) settingsCount() int {
 	count := settingsCount + m.planSettingCount()
 	if m.voiceClient != nil {
-		count++
+		count += 1 + m.voiceModeSettingCount()
 	}
 	return count
+}
+
+func (m *model) voiceModeSettingCount() int {
+	if m.voiceModeSettingAvailable() {
+		return 1
+	}
+	return 0
+}
+
+func (m *model) voiceModeSettingAvailable() bool {
+	return m.voiceClient != nil && m.voiceKeyReleases
 }
 
 func (m *model) planSettingCount() int {

@@ -1277,6 +1277,37 @@ func TestSettingsVoiceLanguageIsCapabilityGatedAndRollsBack(t *testing.T) {
 	}
 }
 
+func TestSettingsVoiceCaptureModeRequiresKeyReleasesAndRollsBack(t *testing.T) {
+	m := &model{
+		width: 60, height: 16,
+		voiceClient:      fakeVoiceStarter{},
+		voiceCaptureMode: "hold",
+		settings:         &settingsState{selected: settingsCount},
+	}
+	if strings.Contains(m.settingsContent(), "Voice capture:") {
+		t.Fatal("voice capture setting shown without key releases")
+	}
+
+	var persisted string
+	m.voiceKeyReleases = true
+	m.persistVoiceMode = func(value string) error { persisted = value; return nil }
+	if m.settingsCount() != settingsCount+2 || !strings.Contains(m.settingsContent(), "Voice capture: hold") {
+		t.Fatalf("count=%d content=%q", m.settingsCount(), m.settingsContent())
+	}
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.voiceCaptureMode != "toggle" || persisted != "toggle" || m.status != "settings updated" {
+		t.Fatalf("mode=%q persisted=%q status=%q", m.voiceCaptureMode, persisted, m.status)
+	}
+
+	m.persistVoiceMode = func(string) error { return errors.New("read only") }
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.voiceCaptureMode != "toggle" || m.settings.err != "read only" || m.status != "setting update failed" {
+		t.Fatalf("rollback mode=%q err=%q status=%q", m.voiceCaptureMode, m.settings.err, m.status)
+	}
+}
+
 func TestSettingsPlanModeIsCapabilityGatedAndUsesRegistry(t *testing.T) {
 	withoutPlan := &model{width: 60, height: 16, settings: &settingsState{}}
 	if withoutPlan.settingsCount() != settingsCount || strings.Contains(withoutPlan.settingsContent(), "Plan mode:") {

@@ -86,6 +86,46 @@ func TestVoiceEscapeStopsWithoutSubmitting(t *testing.T) {
 	}
 }
 
+func TestVoiceHoldModeStartsOnPressAndStopsOnRelease(t *testing.T) {
+	session := &fakeVoiceSession{events: make(chan voice.Event)}
+	m := &model{
+		ctx: context.Background(), runner: &agent.Runner{},
+		voiceClient: fakeVoiceStarter{session: session}, voiceCaptureMode: "hold", voiceKeyReleases: true,
+	}
+	updated, command := m.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyF8}))
+	m = updated.(*model)
+	if command == nil || !m.voiceStarting || !m.voiceHoldOwned {
+		t.Fatalf("press command=%v starting=%v owned=%v", command != nil, m.voiceStarting, m.voiceHoldOwned)
+	}
+	updated, wait := m.Update(command())
+	m = updated.(*model)
+	if wait == nil || m.voiceSession != session {
+		t.Fatal("voice session did not start")
+	}
+	updated, command = m.Update(tea.KeyReleaseMsg(tea.Key{Code: tea.KeyF8}))
+	m = updated.(*model)
+	if command != nil || session.stopped != 1 || m.voiceHoldOwned || m.status != "finishing voice input" {
+		t.Fatalf("release command=%v stopped=%d owned=%v status=%q", command != nil, session.stopped, m.voiceHoldOwned, m.status)
+	}
+}
+
+func TestVoiceHoldModeFallsBackToToggleWithoutKeyReleases(t *testing.T) {
+	session := &fakeVoiceSession{events: make(chan voice.Event)}
+	m := &model{
+		ctx: context.Background(), runner: &agent.Runner{},
+		voiceClient: fakeVoiceStarter{session: session}, voiceCaptureMode: "hold",
+	}
+	updated, command := m.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyF8}))
+	m = updated.(*model)
+	updated, _ = m.Update(command())
+	m = updated.(*model)
+	updated, command = m.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyF8}))
+	m = updated.(*model)
+	if command != nil || session.stopped != 1 || m.voiceHoldOwned {
+		t.Fatalf("fallback command=%v stopped=%d owned=%v", command != nil, session.stopped, m.voiceHoldOwned)
+	}
+}
+
 func TestVoiceCommandIsOnlySuggestedWhenAvailable(t *testing.T) {
 	m := &model{ctx: context.Background(), runner: &agent.Runner{}, width: 80, height: 20, status: "ready"}
 	m.setInput("/voi")

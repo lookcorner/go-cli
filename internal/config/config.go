@@ -240,6 +240,7 @@ type UIConfig struct {
 	PromptSuggestions         bool    `json:"prompt_suggestions"`
 	ContextualHints           Hints   `json:"contextual_hints"`
 	CursorBlink               *bool   `json:"cursor_blink,omitempty"`
+	VoiceCaptureMode          string  `json:"voice_capture_mode"`
 	VoiceSTTLanguage          string  `json:"voice_stt_language"`
 	PermissionMode            string  `json:"permission_mode"`
 }
@@ -519,6 +520,7 @@ type fileUIConfig struct {
 	PromptSuggestions            *bool   `json:"prompt_suggestions,omitempty" toml:"prompt_suggestions"`
 	ContextualHints              *hints  `json:"contextual_hints,omitempty" toml:"contextual_hints"`
 	CursorBlink                  *bool   `json:"cursor_blink,omitempty" toml:"cursor_blink"`
+	VoiceCaptureMode             *string `json:"voice_capture_mode,omitempty" toml:"voice_capture_mode"`
 	VoiceSTTLanguage             *string `json:"voice_stt_language,omitempty" toml:"voice_stt_language"`
 	PermissionMode               *string `json:"permission_mode,omitempty" toml:"permission_mode"`
 	SelectionHighlightDurationMS *uint64 `json:"selection_highlight_duration_ms,omitempty" toml:"selection_highlight_duration_ms"`
@@ -745,7 +747,7 @@ func Load(path string) (Config, error) {
 		AskUserQuestion:             AskUserQuestionConfig{TimeoutEnabled: true, TimeoutSeconds: 30 * 60},
 		Toolset:                     ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}},
 		Goal:                        GoalConfig{VerifierCount: 3, ClassifierMaxRuns: 10, ReverifyAfter: 8},
-		UI:                          UIConfig{Theme: "groknight", AutoDarkTheme: "groknight", AutoLightTheme: "grokday", HunkTrackerMode: "agent_only", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, ScrollSpeed: 50, ScrollMode: "auto", DefaultSelectedPermission: "always_allow_all_sessions", GroupToolVerbs: true, PromptSuggestions: true, ContextualHints: Hints{Undo: true, PlanMode: true, SendNow: true, SmallScreen: true, WordSelect: true}, VoiceSTTLanguage: "en", PermissionMode: "ask"},
+		UI:                          UIConfig{Theme: "groknight", AutoDarkTheme: "groknight", AutoLightTheme: "grokday", HunkTrackerMode: "agent_only", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, ScrollSpeed: 50, ScrollMode: "auto", DefaultSelectedPermission: "always_allow_all_sessions", GroupToolVerbs: true, PromptSuggestions: true, ContextualHints: Hints{Undo: true, PlanMode: true, SendNow: true, SmallScreen: true, WordSelect: true}, VoiceCaptureMode: "hold", VoiceSTTLanguage: "en", PermissionMode: "ask"},
 		Dashboard:                   DashboardConfig{Enabled: true, Grouping: "state"},
 		Sandbox:                     SandboxConfig{Profile: "off"},
 		Pruning:                     PruningConfig{Enabled: true, KeepLastNTurns: 3, SoftTrimThreshold: 4000, SoftTrimHead: 1500, SoftTrimTail: 1500, HardClearAgeTurns: 10},
@@ -1091,6 +1093,9 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	if disk.UI.CursorBlink != nil {
 		value := *disk.UI.CursorBlink
 		cfg.UI.CursorBlink = &value
+	}
+	if disk.UI.VoiceCaptureMode != nil {
+		cfg.UI.VoiceCaptureMode = canonicalVoiceCaptureMode(*disk.UI.VoiceCaptureMode)
 	}
 	if disk.UI.VoiceSTTLanguage != nil {
 		cfg.UI.VoiceSTTLanguage = voice.CanonicalLanguage(*disk.UI.VoiceSTTLanguage)

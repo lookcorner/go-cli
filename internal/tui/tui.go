@@ -825,6 +825,10 @@ type model struct {
 	gboom                *gboomState
 	gboomEpoch           uint64
 	voiceClient          voiceStarter
+	voiceCaptureMode     string
+	persistVoiceMode     func(string) error
+	voiceKeyReleases     bool
+	voiceHoldOwned       bool
 	voiceLanguage        string
 	persistVoiceLanguage func(string) error
 	voiceSession         voice.Session
@@ -978,6 +982,8 @@ type UIOptions struct {
 	DashboardGrouping    string
 	SetDashboardGrouping func(string) error
 	Voice                *voice.Client
+	VoiceCaptureMode     string
+	SetVoiceCaptureMode  func(string) error
 	VoiceLanguage        string
 	SetVoiceLanguage     func(string) error
 }
@@ -1175,6 +1181,8 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		dashboardGrouping:    dashboardGrouping(options.DashboardGrouping),
 		persistGrouping:      options.SetDashboardGrouping,
 		voiceClient:          options.Voice,
+		voiceCaptureMode:     canonicalVoiceCaptureMode(options.VoiceCaptureMode),
+		persistVoiceMode:     options.SetVoiceCaptureMode,
 		voiceLanguage:        options.VoiceLanguage,
 		persistVoiceLanguage: options.SetVoiceLanguage,
 		debug:                newDebugState(),
@@ -2127,6 +2135,10 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
+	case tea.KeyReleaseMsg:
+		return m.handleVoiceRelease(msg)
+	case tea.KeyboardEnhancementsMsg:
+		m.voiceKeyReleases = msg.SupportsEventTypes()
 	}
 	return m, nil
 }
@@ -2320,7 +2332,13 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Quit
 	}
-	if stroke == "ctrl+@" || stroke == "ctrl+space" || stroke == "f8" {
+	if isVoiceChord(stroke) {
+		if m.voiceCaptureMode == "hold" && m.voiceKeyReleases {
+			if m.voiceHoldOwned {
+				return m, nil
+			}
+			m.voiceHoldOwned = true
+		}
 		return m, m.toggleVoice()
 	}
 	if stroke == "ctrl+e" && m.minimal {
@@ -4428,6 +4446,34 @@ func (m *model) toggleVoice() tea.Cmd {
 	return startVoice(ctx, m.voiceClient)
 }
 
+func (m *model) handleVoiceRelease(msg tea.KeyReleaseMsg) (tea.Model, tea.Cmd) {
+	if !m.voiceHoldOwned {
+		return m, nil
+	}
+	if stroke := msg.Keystroke(); !isVoiceChord(stroke) && stroke != "space" {
+		return m, nil
+	}
+	m.voiceHoldOwned = false
+	if m.voiceSession != nil {
+		m.finishVoice()
+		m.status = "finishing voice input"
+	} else if m.voiceStarting {
+		return m, m.toggleVoice()
+	}
+	return m, nil
+}
+
+func isVoiceChord(stroke string) bool {
+	return stroke == "ctrl+@" || stroke == "ctrl+space" || stroke == "f8"
+}
+
+func canonicalVoiceCaptureMode(value string) string {
+	if strings.EqualFold(strings.TrimSpace(value), "toggle") {
+		return "toggle"
+	}
+	return "hold"
+}
+
 func (m *model) finishVoice() {
 	if m.voiceSession != nil {
 		m.voiceSession.Stop()
@@ -4444,6 +4490,7 @@ func (m *model) stopVoice() {
 	m.voiceCancel = nil
 	m.voiceSession = nil
 	m.voiceStarting = false
+	m.voiceHoldOwned = false
 	m.voiceInterim = ""
 	m.voiceSendOnStop = false
 }
@@ -5353,6 +5400,7 @@ func (m *model) View() tea.View {
 	view := tea.NewView(prefix + body + status + "\n" + footer)
 	view.AltScreen = !m.minimal
 	view.MouseMode = tea.MouseModeNone
+	view.KeyboardEnhancements.ReportEventTypes = true
 	if m.minimal {
 		return view
 	}
