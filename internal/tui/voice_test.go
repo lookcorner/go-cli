@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -62,27 +63,91 @@ func TestVoiceDictationUpdatesPromptAndStops(t *testing.T) {
 
 	updated, _ = m.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)
-	if session.stopped != 1 || !m.voiceSendOnStop || m.status != "finishing voice input" {
+	if session.stopped != 1 || m.voiceSession != nil {
 		t.Fatalf("voice stop failed: stopped=%d status=%q", session.stopped, m.status)
 	}
-	close(session.events)
-	updated, submit := m.Update(wait())
-	m = updated.(*model)
-	if submit == nil || m.voiceSession != nil || m.voiceSendOnStop {
-		t.Fatal("voice Enter did not wait for the final transcript before submitting")
+}
+
+func TestVoiceEnterCommitsInterimBeforeSubmit(t *testing.T) {
+	tests := []struct {
+		name    string
+		draft   string
+		interim string
+		want    string
+	}{
+		{name: "draft", draft: "hello", interim: "world", want: "hello world"},
+		{name: "interim only", interim: "ghost only", want: "ghost only"},
+		{name: "blank draft", draft: "  \n", interim: "spoken", want: "spoken"},
+		{name: "trailing whitespace", draft: "hello\n", interim: "world", want: "hello\nworld"},
 	}
-	if key, ok := submit().(tea.KeyPressMsg); !ok || key.Key().Code != tea.KeyEnter {
-		t.Fatalf("submit message = %#v", key)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			session := &fakeVoiceSession{events: make(chan voice.Event)}
+			m := &model{ctx: context.Background(), runner: &agent.Runner{}, voiceSession: session, voiceInterim: test.interim}
+			m.setInput(test.draft)
+
+			updated, _ := m.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+			m = updated.(*model)
+
+			if got := string(m.input); got != "" {
+				t.Fatalf("input after submit = %q, want cleared", got)
+			}
+			if !strings.Contains(m.transcript.String(), test.want) {
+				t.Fatalf("submitted transcript = %q, want %q", m.transcript.String(), test.want)
+			}
+			if session.stopped != 1 || m.voiceSession != nil || m.voiceInterim != "" {
+				t.Fatalf("voice state after submit: stopped=%d session=%v interim=%q", session.stopped, m.voiceSession, m.voiceInterim)
+			}
+		})
+	}
+}
+
+func TestVoiceEnterIgnoresLateFinal(t *testing.T) {
+	session := &fakeVoiceSession{events: make(chan voice.Event)}
+	m := &model{ctx: context.Background(), runner: &agent.Runner{}, voiceSession: session, voiceInterim: "world"}
+	m.setInput("hello")
+
+	updated, _ := m.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	updated, _ = m.Update(voiceEvent{event: voice.Event{Text: "world", Final: true}, ok: true})
+	m = updated.(*model)
+
+	if got := m.transcript.String(); strings.Count(got, "hello world") != 1 {
+		t.Fatalf("late final changed submitted prompt: %q", got)
+	}
+}
+
+func TestVoiceFinalAppendsAtEndAndPreservesCursor(t *testing.T) {
+	tests := []struct {
+		name       string
+		draft      string
+		cursor     int
+		want       string
+		wantCursor int
+	}{
+		{name: "cursor at end follows", draft: "hello", cursor: 5, want: "hello world", wantCursor: 11},
+		{name: "mid text cursor stays", draft: "hello again", cursor: 5, want: "hello again world", wantCursor: 5},
+		{name: "blank draft replaced", draft: " \n", cursor: 0, want: "world", wantCursor: 5},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			m := &model{input: []rune(test.draft), cursor: test.cursor}
+			m.insertDictation("world")
+			if got := string(m.input); got != test.want || m.cursor != test.wantCursor {
+				t.Fatalf("dictation = %q cursor=%d, want %q cursor=%d", got, m.cursor, test.want, test.wantCursor)
+			}
+		})
 	}
 }
 
 func TestVoiceEscapeStopsWithoutSubmitting(t *testing.T) {
 	session := &fakeVoiceSession{events: make(chan voice.Event)}
-	m := &model{ctx: context.Background(), runner: &agent.Runner{}, voiceSession: session}
+	m := &model{ctx: context.Background(), runner: &agent.Runner{}, voiceSession: session, voiceInterim: "discard me"}
+	m.setInput("draft")
 	updated, command := m.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
 	m = updated.(*model)
-	if command != nil || session.stopped != 1 || m.voiceSendOnStop {
-		t.Fatalf("Esc stop = command:%v stopped:%d send:%v", command != nil, session.stopped, m.voiceSendOnStop)
+	if command != nil || session.stopped != 1 || m.voiceInterim != "" || string(m.input) != "draft" {
+		t.Fatalf("Esc stop = command:%v stopped:%d interim:%q input:%q", command != nil, session.stopped, m.voiceInterim, string(m.input))
 	}
 }
 

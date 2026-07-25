@@ -895,7 +895,6 @@ type model struct {
 	voiceCancel          context.CancelFunc
 	voiceStarting        bool
 	voiceInterim         string
-	voiceSendOnStop      bool
 	toolExpand           []string
 	toolFolds            []toolFold
 	toolVerbGroup        *toolVerbGroup
@@ -1778,23 +1777,15 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if !msg.ok {
 			m.voiceSession = nil
 			m.voiceInterim = ""
-			send := m.voiceSendOnStop
-			m.voiceSendOnStop = false
 			if m.running {
 				m.status = "thinking"
 			} else {
 				m.status = "ready"
 			}
-			if send {
-				return m, func() tea.Msg {
-					return tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter})
-				}
-			}
 			return m, nil
 		}
 		if msg.event.Err != nil {
 			m.stopVoice()
-			m.voiceSendOnStop = false
 			m.status = "voice failed: " + msg.event.Err.Error()
 			m.appendSystem("Voice input stopped: " + msg.event.Err.Error())
 			return m, nil
@@ -2597,16 +2588,13 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.voiceSession != nil && key.Code == tea.KeyEsc {
-		m.voiceSendOnStop = false
-		m.finishVoice()
-		m.status = "finishing voice input"
+		m.stopVoice()
+		m.status = "voice input stopped"
 		return m, nil
 	}
 	if m.voiceSession != nil && key.Code == tea.KeyEnter {
-		m.voiceSendOnStop = true
-		m.finishVoice()
-		m.status = "finishing voice input"
-		return m, nil
+		m.insertDictation(m.voiceInterim)
+		m.stopVoice()
 	}
 	if m.rememberInput && key.Code == tea.KeyEsc {
 		m.rememberInput = false
@@ -4900,7 +4888,6 @@ func (m *model) stopVoice() {
 	m.voiceStarting = false
 	m.voiceHoldOwned = false
 	m.voiceInterim = ""
-	m.voiceSendOnStop = false
 }
 
 func (m *model) insertDictation(text string) {
@@ -4908,13 +4895,23 @@ func (m *model) insertDictation(text string) {
 	if text == "" {
 		return
 	}
-	if m.cursor > 0 && !unicode.IsSpace(m.input[m.cursor-1]) {
-		text = " " + text
+	cursor := min(max(m.cursor, 0), len(m.input))
+	blank := strings.TrimSpace(string(m.input)) == ""
+	followEnd := blank || cursor == len(m.input)
+	m.saveInputUndo()
+	if blank {
+		m.input = []rune(text)
+	} else {
+		if !unicode.IsSpace(m.input[len(m.input)-1]) {
+			m.input = append(m.input, ' ')
+		}
+		m.input = append(m.input, []rune(text)...)
 	}
-	if m.cursor < len(m.input) && !unicode.IsSpace(m.input[m.cursor]) {
-		text += " "
+	if followEnd {
+		m.cursor = len(m.input)
+	} else {
+		m.cursor = cursor
 	}
-	m.insertInput(text)
 }
 
 func startVoice(ctx context.Context, client voiceStarter) tea.Cmd {
