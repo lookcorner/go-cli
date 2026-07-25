@@ -60,3 +60,18 @@ func TestStoreAPIKey(t *testing.T) {
 		t.Fatalf("preserved credential=%#v err=%v", other, err)
 	}
 }
+
+func TestResolveAPIKeyFallsBackFromEnvironmentToStore(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "auth.json")
+	if err := StoreAPIKey(path, " stored-key "); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XAI_API_KEY", " environment-key ")
+	if key, err := ResolveAPIKey(path); err != nil || key != "environment-key" {
+		t.Fatalf("environment key=%q err=%v", key, err)
+	}
+	t.Setenv("XAI_API_KEY", "")
+	if key, err := ResolveAPIKey(path); err != nil || key != "stored-key" {
+		t.Fatalf("stored key=%q err=%v", key, err)
+	}
+}

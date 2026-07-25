@@ -3012,6 +3012,64 @@ func TestPreferredAuthMethodFailsClosed(t *testing.T) {
 	}
 }
 
+func TestAuthTokenProviderFallsBackToStoredAPIKey(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	t.Setenv("XAI_API_KEY", "")
+	t.Setenv("GROK_CODE_XAI_API_KEY", "")
+	path := filepath.Join(home, "auth.json")
+	if err := auth.StoreAPIKey(path, "stored-key"); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{HTTPTimeout: time.Second}
+	provider := newAuthTokenProvider(cfg, path, auth.DefaultConfig(), io.Discard)
+	if key, err := provider(context.Background(), ""); err != nil || key != "stored-key" {
+		t.Fatalf("key=%q err=%v", key, err)
+	}
+	if _, err := provider(context.Background(), "stored-key"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rejected static key was retried: %v", err)
+	}
+	cfg.DisableAPIKeyAuth = true
+	provider = newAuthTokenProvider(cfg, path, auth.DefaultConfig(), io.Discard)
+	if _, err := provider(context.Background(), ""); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("disabled policy fallback error=%v", err)
+	}
+}
+
+func TestPreferredAPIKeyUsesStoredCredential(t *testing.T) {
+	requireLoopback(t)
+	home, root, sessionDir := t.TempDir(), t.TempDir(), t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	t.Setenv("GORK_API_KEY", "")
+	t.Setenv("XAI_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	path, err := auth.DefaultPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := auth.StoreAPIKey(path, "stored-key"); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("Authorization") != "Bearer stored-key" {
+			t.Errorf("authorization=%q", request.Header.Get("Authorization"))
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{"id":"response-1","output":[{"type":"message","content":[{"type":"output_text","text":"done"}]}]}`)
+	}))
+	defer server.Close()
+	configPath := filepath.Join(home, "config.toml")
+	data := []byte("[auth]\npreferred_method = \"api_key\"\n")
+	if err := os.WriteFile(configPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	err = runOnce([]string{"--config", configPath, "--cwd", root, "--session-dir", sessionDir, "--base-url", server.URL, "-m", "test", "-p", "hello"}, strings.NewReader(""), &stdout, io.Discard)
+	if err != nil || stdout.String() != "done\n" {
+		t.Fatalf("stdout=%q err=%v", stdout.String(), err)
+	}
+}
+
 func TestRequirementsDenyCannotBeOverriddenByCLIAllow(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("GROK_HOME", home)

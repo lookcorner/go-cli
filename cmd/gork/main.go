@@ -434,21 +434,35 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if cfg.DisableAPIKeyAuth || cfg.ForceLoginTeamConfigured || cfg.PreferredAuthMethod == "oidc" {
 		cfg.APIKey = ""
 	}
+	authPath := ""
+	if cfg.APIKey == "" && cfg.PreferredAuthMethod == "api_key" {
+		var pathErr error
+		authPath, pathErr = auth.DefaultPath()
+		if pathErr != nil {
+			return pathErr
+		}
+		if key, keyErr := auth.ResolveAPIKey(authPath); keyErr == nil {
+			cfg.APIKey = key
+		} else if !errors.Is(keyErr, os.ErrNotExist) {
+			return fmt.Errorf("load API key: %w", keyErr)
+		}
+	}
 	var tokenProvider api.TokenProvider
 	if cfg.APIKey == "" && cfg.PreferredAuthMethod != "api_key" && isXAIBaseURL(cfg.BaseURL) {
-		path, pathErr := auth.DefaultPath()
+		var pathErr error
+		authPath, pathErr = auth.DefaultPath()
 		if pathErr != nil {
 			return pathErr
 		}
 		authConfig := auth.DefaultConfig()
 		applyAuthPolicy(&authConfig, cfg)
-		resolveToken := newAuthTokenProvider(cfg, path, authConfig, stderr)
+		resolveToken := newAuthTokenProvider(cfg, authPath, authConfig, stderr)
 		token, authErr := resolveToken(context.Background(), "")
 		if authErr == nil {
 			tokenProvider = resolveToken
 			cfg.APIKey = token
 			settingsCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			credential, _ := auth.Load(path, authConfig.Scope())
+			credential, _ := auth.Load(authPath, authConfig.Scope())
 			remote := config.FetchRemoteSettingsForSession(settingsCtx, cfg.ProxyBaseURL, cfg.APIKey, credential.UserID, credential.Email, &http.Client{Timeout: 3 * time.Second})
 			cancel()
 			cfg.ApplyRemoteSettings(remote)
@@ -1632,10 +1646,22 @@ func newAuthTokenProvider(cfg config.Config, path string, authConfig auth.Config
 	}
 	return func(ctx context.Context, rejectedToken string) (string, error) {
 		token, err := authClient.ResolveRejected(ctx, path, authConfig, rejectedToken)
-		if err == nil || external.Command == "" {
-			return token, err
+		if err == nil {
+			return token, nil
 		}
-		return external.Resolve(ctx, rejectedToken)
+		if external.Command != "" {
+			var externalErr error
+			if token, externalErr = external.Resolve(ctx, rejectedToken); externalErr == nil {
+				return token, nil
+			}
+			err = externalErr
+		}
+		if !cfg.DisableAPIKeyAuth && !cfg.ForceLoginTeamConfigured && cfg.PreferredAuthMethod != "oidc" {
+			if key, keyErr := auth.ResolveAPIKey(path); keyErr == nil && key != rejectedToken {
+				return key, nil
+			}
+		}
+		return "", err
 	}
 }
 
