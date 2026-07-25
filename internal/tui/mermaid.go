@@ -79,6 +79,11 @@ type mermaidQuadrantPoint struct {
 	y     float64
 }
 
+type mermaidRadarCurve struct {
+	name   string
+	values []float64
+}
+
 var mermaidOperators = []string{
 	"||--o{", "||--|{", "}o--o{", "}o..o{", "}o--||", "}|..|{",
 	"<|--", "<-->", "--|>", "-.->", "-->>", "->>", "--x", "--o", "-x", "==>", "-->", "<--",
@@ -105,6 +110,9 @@ func renderMermaid(source string, width int, theme themePalette) ([]string, bool
 	}
 	if firstToken == "quadrantChart" {
 		return renderMermaidQuadrant(source, width, theme)
+	}
+	if firstToken == "radar-beta" {
+		return renderMermaidRadar(source, width, theme)
 	}
 	statements, complete := mermaidStatements(source)
 	if !complete || len(statements) < 1 {
@@ -154,6 +162,74 @@ func renderMermaid(source string, width int, theme themePalette) ([]string, bool
 		for _, line := range mermaidBox(node.label, min(max(width, 4), maxMermaidLabelWidth+4)) {
 			lines = append(lines, theme.code+line+ansiReset)
 		}
+	}
+	return lines, true
+}
+
+func renderMermaidRadar(source string, width int, theme themePalette) ([]string, bool) {
+	axes := []string(nil)
+	curves := make([]mermaidRadarCurve, 0)
+	foundHeader := false
+	statements := 0
+	for _, raw := range strings.Split(source, "\n") {
+		statement := strings.TrimSpace(raw)
+		if statement == "" || strings.HasPrefix(statement, "%%") {
+			continue
+		}
+		statements++
+		if statements > maxMermaidStatements {
+			return nil, false
+		}
+		if !foundHeader {
+			if strings.Fields(statement)[0] != "radar-beta" {
+				return nil, false
+			}
+			foundHeader = true
+			continue
+		}
+		if value, ok := strings.CutPrefix(statement, "axis "); ok {
+			axes = axes[:0]
+			for _, axis := range strings.Split(value, ",") {
+				if axis = strings.TrimSpace(axis); axis != "" {
+					axes = append(axes, axis)
+				}
+			}
+			continue
+		}
+		if value, ok := strings.CutPrefix(statement, "curve "); ok {
+			name, rawValues, valid := strings.Cut(strings.TrimSpace(value), "{")
+			if !valid || !strings.HasSuffix(rawValues, "}") {
+				return nil, false
+			}
+			values := make([]float64, 0)
+			for _, rawValue := range strings.Split(strings.TrimSpace(strings.TrimSuffix(rawValues, "}")), ",") {
+				rawValue = strings.TrimSpace(rawValue)
+				if rawValue == "" {
+					continue
+				}
+				parsed, err := strconv.ParseFloat(rawValue, 64)
+				if err != nil {
+					return nil, false
+				}
+				values = append(values, parsed)
+			}
+			curves = append(curves, mermaidRadarCurve{name: strings.TrimSpace(name), values: values})
+		}
+	}
+	if len(axes) == 0 {
+		return nil, false
+	}
+	lines := []string{ansiDim + mermaidFit("◇ mermaid radar", width) + ansiReset}
+	lines = append(lines, theme.heading+mermaidFit("axes: "+strings.Join(axes, " · "), width)+ansiReset)
+	for _, curve := range curves {
+		if len(curve.values) != len(axes) {
+			continue
+		}
+		parts := make([]string, len(axes))
+		for index, axis := range axes {
+			parts[index] = axis + "=" + strconv.FormatFloat(curve.values[index], 'g', -1, 64)
+		}
+		lines = append(lines, theme.code+mermaidFit(curve.name+": "+strings.Join(parts, " · "), width)+ansiReset)
 	}
 	return lines, true
 }

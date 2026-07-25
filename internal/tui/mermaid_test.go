@@ -180,6 +180,88 @@ func TestRenderMermaidQuadrant(t *testing.T) {
 	}
 }
 
+func TestRenderMermaidRadar(t *testing.T) {
+	source := "radar-beta\naxis Speed, Quality, Cost\ncurve Current {8, 6.5, 4}\ncurve Target {9, 9, 7}"
+	lines, ok := renderMermaid(source, 52, paletteFor("groknight"))
+	if !ok {
+		t.Fatal("supported Mermaid radar was rejected")
+	}
+	rendered := stripUIANSI(strings.Join(lines, "\n"))
+	for _, expected := range []string{
+		"◇ mermaid radar", "axes: Speed · Quality · Cost",
+		"Current: Speed=8 · Quality=6.5 · Cost=4",
+		"Target: Speed=9 · Quality=9 · Cost=7",
+	} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("rendered radar missing %q:\n%s", expected, rendered)
+		}
+	}
+	for _, line := range lines {
+		if displayWidth(stripUIANSI(line)) > 52 {
+			t.Fatalf("radar line exceeds width: %q", stripUIANSI(line))
+		}
+	}
+}
+
+func TestRenderMermaidRadarMatchesReferenceParsing(t *testing.T) {
+	source := "%% comment\nradar-beta extra\naxis Old\naxis A, , B\nunknown ignored\ncurve Empty {}\ncurve  {NaN, -2}\ncurve Short {1}\ncurve Long {1, 2, 3}"
+	lines, ok := renderMermaid(source, 44, paletteFor("groknight"))
+	if !ok {
+		t.Fatal("reference-compatible Mermaid radar was rejected")
+	}
+	rendered := stripUIANSI(strings.Join(lines, "\n"))
+	for _, expected := range []string{
+		"axes: A · B", ": A=NaN · B=-2",
+	} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("radar parsing differs from reference, missing %q:\n%s", expected, rendered)
+		}
+	}
+	for _, unexpected := range []string{"Old", "Empty", "Short", "Long", "unknown"} {
+		if strings.Contains(rendered, unexpected) {
+			t.Fatalf("radar rendered ignored or mismatched curve %q:\n%s", unexpected, rendered)
+		}
+	}
+}
+
+func TestRenderMermaidRadarAcceptsAxesWithoutDrawableCurves(t *testing.T) {
+	lines, ok := renderMermaid("radar-beta\naxis A, B\ncurve OnlyOne {1}", 28, paletteFor("groknight"))
+	if !ok {
+		t.Fatal("radar with axes and no drawable curve was rejected")
+	}
+	rendered := stripUIANSI(strings.Join(lines, "\n"))
+	if !strings.Contains(rendered, "axes: A · B") || strings.Contains(rendered, "OnlyOne") {
+		t.Fatalf("radar mismatched-curve behavior differs from reference:\n%s", rendered)
+	}
+}
+
+func TestRenderMermaidRadarRejectsReferenceParseErrors(t *testing.T) {
+	for _, source := range []string{
+		"radar-beta",
+		"radar-beta\naxis , ,",
+		"radar-beta\naxis A\ncurve Bad 1, 2}",
+		"radar-beta\naxis A\ncurve Bad {1, 2",
+		"radar-beta\naxis A\ncurve Bad {nope}",
+	} {
+		if _, ok := renderMermaid(source, 40, paletteFor("groknight")); ok {
+			t.Fatalf("invalid radar was accepted: %q", source)
+		}
+	}
+}
+
+func TestRenderMarkdownRendersClosedMermaidRadar(t *testing.T) {
+	source := "Before\n```mermaid\nradar-beta\naxis A, B\ncurve Score {1, 2}\n```\nAfter"
+	rendered := stripUIANSI(strings.Join(renderMarkdown(source, 36), "\n"))
+	for _, expected := range []string{"Before", "◇ mermaid radar", "axes: A · B", "Score: A=1 · B=2", "After"} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("rendered Mermaid radar missing %q:\n%s", expected, rendered)
+		}
+	}
+	if strings.Contains(rendered, "curve Score") {
+		t.Fatalf("closed Mermaid radar source was not replaced:\n%s", rendered)
+	}
+}
+
 func TestRenderMermaidQuadrantMatchesReferenceParsing(t *testing.T) {
 	source := "%% comment\nquadrantChart extra\ntitle First\ntitle Final\nx-axis left --> right --> extra\nquadrant-1 Old\nquadrant-1 New\nquadrant-5 Hidden\n\"Double quoted\": [-2, 3]\n'Single quoted': [0.5, 0.5]\n: [NaN, 0.2]"
 	lines, ok := renderMermaid(source, 56, paletteFor("groknight"))
