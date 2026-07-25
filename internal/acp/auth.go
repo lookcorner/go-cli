@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/auth"
 )
@@ -85,6 +86,20 @@ func (s *Server) SetAuthState(methodID, token string) {
 	s.Auth.MethodID = methodID
 	s.Auth.Token = token
 	s.authMu.Unlock()
+}
+
+func (s *Server) SetSessionAuthentication(authentication agent.Authentication) {
+	s.mu.Lock()
+	sessions := make([]*session, 0, len(s.sessions))
+	for _, current := range s.sessions {
+		sessions = append(sessions, current)
+	}
+	s.mu.Unlock()
+	for _, current := range sessions {
+		current.mu.Lock()
+		current.runner.Authentication = authentication
+		current.mu.Unlock()
+	}
 }
 
 func isSessionAuthMethod(methodID string) bool {

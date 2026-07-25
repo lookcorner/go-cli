@@ -858,7 +858,7 @@ func TestSessionStatusSlashCommandsUseLiveStateWithoutModelTurn(t *testing.T) {
 	}
 	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
 	defer registry.Close()
-	runner := &agent.Runner{SessionID: "status-session", Workspace: "/work", ModelID: "grok-build", Model: "grok-build", ContextWindow: 1000, Tools: registry}
+	runner := &agent.Runner{SessionID: "status-session", Workspace: "/work", ModelID: "grok-build", Model: "grok-build", ContextWindow: 1000, Tools: registry, Authentication: agent.Authentication{Method: "api_key", APIKeyEnvironment: true}}
 	current := &session{
 		id: "status-session", cwd: "/work", title: "Session title", runner: runner,
 		promptIndex: 2, activePrompt: -1, inputTokens: 250,
@@ -892,7 +892,7 @@ func TestSessionStatusSlashCommandsUseLiveStateWithoutModelTurn(t *testing.T) {
 				responded = true
 			}
 		}
-		for _, want := range []string{"**Title:** Session title", "**Session ID:** status-session", "**Working directory:** /work", "**Model:** grok-build", "**Turn:** 2", "**Context:** 250 / 1000 tokens (25%)"} {
+		for _, want := range []string{"**Title:** Session title", "**Auth method: API key (XAI_API_KEY)**", "Manage account and credits: console.x.ai", "Run `gork login` to use your SuperGrok subscription instead.", "**Session ID:** status-session", "**Working directory:** /work", "**Model:** grok-build", "**Turn:** 2", "**Context:** 250 / 1000 tokens (25%)"} {
 			if !strings.Contains(text, want) {
 				t.Fatalf("prompt=%q missing %q in messages=%#v", prompt, want, messages)
 			}

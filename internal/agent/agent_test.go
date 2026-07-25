@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -438,6 +439,25 @@ func TestRunnerRenameSessionUsesActiveLogger(t *testing.T) {
 	}
 	if err := runner.RenameSession(" "); err == nil {
 		t.Fatal("blank title was accepted")
+	}
+}
+
+func TestAuthenticationDetails(t *testing.T) {
+	tests := []struct {
+		auth Authentication
+		want []string
+	}{
+		{auth: Authentication{Method: "oauth"}, want: []string{"Auth method: OAuth", "Manage account and credits: https://grok.com/?_s=billing"}},
+		{auth: Authentication{Method: "api_key"}, want: []string{"Auth method: API key", "Manage account and credits: console.x.ai", "Run `gork login` to use your SuperGrok subscription instead."}},
+		{auth: Authentication{Method: "api_key", APIKeyEnvironment: true}, want: []string{"Auth method: API key (XAI_API_KEY)", "Manage account and credits: console.x.ai", "Run `gork login` to use your SuperGrok subscription instead."}},
+	}
+	for _, test := range tests {
+		if got := test.auth.Details(); !reflect.DeepEqual(got, test.want) {
+			t.Fatalf("auth=%#v got=%#v want=%#v", test.auth, got, test.want)
+		}
+	}
+	if details := (Authentication{}).Details(); details != nil {
+		t.Fatalf("unknown auth details=%#v", details)
 	}
 }
 

@@ -1084,7 +1084,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			return nil
 		},
 		ListTasks: registry.BackgroundTasks, KillTask: registry.KillBackgroundTask,
-		SessionID: logger.ID(), SessionPath: logger.Path(), Workspace: ws.Root(),
+		SessionID: logger.ID(), SessionPath: logger.Path(), Authentication: sessionAuthentication(cfg.APIKey, authPath, auth.DefaultConfig().Scope()), Workspace: ws.Root(),
 		ModelID: acpSessionModelID(cfg, ""), Model: cfg.Model, ModelOptions: acpModelOptions(cfg), ReasoningEffort: cfg.ReasoningEffort,
 		Instructions: cfg.SystemPrompt, MaxSteps: cfg.MaxSteps,
 		PermissionClassifier: permissionClassifier,
@@ -1666,6 +1666,20 @@ func newAuthTokenProvider(cfg config.Config, path string, authConfig auth.Config
 		}
 		return "", err
 	}
+}
+
+func sessionAuthentication(token, path, scope string) agent.Authentication {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return agent.Authentication{}
+	}
+	if path != "" {
+		if credential, err := auth.Load(path, scope); err == nil && credential.Key == token && credential.AuthMode != "api_key" {
+			return agent.Authentication{Method: "oauth"}
+		}
+	}
+	environment := strings.TrimSpace(os.Getenv("XAI_API_KEY"))
+	return agent.Authentication{Method: "api_key", APIKeyEnvironment: environment != "" && environment == token}
 }
 
 func runMemory(args []string, cwd string, stdin io.Reader, stdout, stderr io.Writer) error {
@@ -3293,6 +3307,8 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			setSessionKey("")
 			authRuntime.Set("")
 		}
+		current := runtimeConfigSnapshot()
+		server.SetSessionAuthentication(sessionAuthentication(resolveACPAPIKey(current, authPath), authPath, authConfig.Scope()))
 		return server.ReloadModels()
 	}}
 	server.Bundle = acp.BundleConfig{
@@ -3320,6 +3336,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 	loginCoordinator.setState = func(methodID, token string) {
 		authRuntime.Set(methodID)
 		server.SetAuthState(methodID, token)
+		server.SetSessionAuthentication(sessionAuthentication(token, authPath, authConfig.Scope()))
 		go refreshBundle(ctx)
 	}
 	loginCoordinator.refreshModels = func(token string) {
@@ -3928,7 +3945,8 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 				return nil
 			},
 			ModelID: modelID, Model: sessionCfg.Model, ModelOptions: acpModelOptions(modelCatalog), ReasoningEffort: reasoningEffort,
-			Instructions: instructions, MaxSteps: cfg.MaxSteps,
+			Authentication: sessionAuthentication(sessionCfg.APIKey, authPath, authConfig.Scope()),
+			Instructions:   instructions, MaxSteps: cfg.MaxSteps,
 			PermissionClassifier: permissionClassifier,
 			TextOutput:           textOutput, StatusOutput: statusOutput,
 			ContextWindow: sessionCfg.ContextWindow, CompactThresholdPercent: sessionCfg.AutoCompactThresholdPercent,
@@ -4845,7 +4863,11 @@ func interactiveLoop(
 				if model == "" {
 					model = runner.Model
 				}
-				fmt.Fprintf(stderr, "[gork] session: %s\n[gork] workspace: %s\n[gork] model: %s\n[gork] turn: %d\n", valueOrUnknown(runner.SessionID), valueOrUnknown(runner.Workspace), valueOrUnknown(model), runner.SessionTurnCount())
+				fmt.Fprintf(stderr, "[gork] session: %s\n", valueOrUnknown(runner.SessionID))
+				for _, detail := range runner.Authentication.Details() {
+					fmt.Fprintln(stderr, "[gork] "+detail)
+				}
+				fmt.Fprintf(stderr, "[gork] workspace: %s\n[gork] model: %s\n[gork] turn: %d\n", valueOrUnknown(runner.Workspace), valueOrUnknown(model), runner.SessionTurnCount())
 				if contextWindow > 0 {
 					fmt.Fprintf(stderr, "[gork] context: %d / %d tokens (%d%%)\n", inputTokens, contextWindow, inputTokens*100/contextWindow)
 				}

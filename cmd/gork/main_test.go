@@ -181,7 +181,7 @@ func TestInteractiveSessionInfoAliasesAndContext(t *testing.T) {
 	streamer := &interactiveStatusStreamer{}
 	runner := &agent.Runner{
 		Client: streamer, Tools: registry, Logger: logger, SessionID: logger.ID(), SessionPath: logger.Path(),
-		Workspace: root, ModelID: "grok-build", Model: "model-id", ContextWindow: 1000, MaxSteps: 1,
+		Authentication: agent.Authentication{Method: "oauth"}, Workspace: root, ModelID: "grok-build", Model: "model-id", ContextWindow: 1000, MaxSteps: 1,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -191,7 +191,7 @@ func TestInteractiveSessionInfoAliasesAndContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	output := stderr.String()
-	if streamer.calls != 1 || strings.Count(output, "[gork] session: interactive-status") != 2 || !strings.Contains(output, "[gork] workspace: "+root) || !strings.Contains(output, "[gork] model: grok-build") || !strings.Contains(output, "[gork] turn: 0") || !strings.Contains(output, "[gork] turn: 1") || strings.Count(output, "[gork] context: 0 / 1000 tokens (0%)") != 1 || strings.Count(output, "[gork] context: 250 / 1000 tokens (25%)") != 1 || !strings.Contains(output, "0 / 1000 tokens (0%)") || !strings.Contains(output, "250 / 1000 tokens (25%)") || strings.Count(output, "Tool definitions:") != 2 || strings.Count(output, "# Context usage") != 2 {
+	if streamer.calls != 1 || strings.Count(output, "[gork] session: interactive-status") != 2 || strings.Count(output, "[gork] Auth method: OAuth") != 2 || strings.Count(output, "[gork] Manage account and credits: https://grok.com/?_s=billing") != 2 || !strings.Contains(output, "[gork] workspace: "+root) || !strings.Contains(output, "[gork] model: grok-build") || !strings.Contains(output, "[gork] turn: 0") || !strings.Contains(output, "[gork] turn: 1") || strings.Count(output, "[gork] context: 0 / 1000 tokens (0%)") != 1 || strings.Count(output, "[gork] context: 250 / 1000 tokens (25%)") != 1 || !strings.Contains(output, "0 / 1000 tokens (0%)") || !strings.Contains(output, "250 / 1000 tokens (25%)") || strings.Count(output, "Tool definitions:") != 2 || strings.Count(output, "# Context usage") != 2 {
 		t.Fatalf("calls=%d output=%q", streamer.calls, output)
 	}
 }
@@ -3048,6 +3048,24 @@ func TestAuthTokenProviderPrefersSessionOverStaticAPIKey(t *testing.T) {
 	provider := newAuthTokenProvider(config.Config{APIKey: "environment-key", HTTPTimeout: time.Second}, path, authConfig, io.Discard)
 	if key, err := provider(context.Background(), ""); err != nil || key != "session-token" {
 		t.Fatalf("key=%q err=%v", key, err)
+	}
+}
+
+func TestSessionAuthenticationUsesResolvedCredential(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "auth.json")
+	scope := auth.DefaultConfig().Scope()
+	if err := auth.Save(path, scope, auth.Credential{Key: "oauth-token", AuthMode: "oidc"}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XAI_API_KEY", "environment-key")
+	if got := sessionAuthentication("oauth-token", path, scope); got != (agent.Authentication{Method: "oauth"}) {
+		t.Fatalf("oauth=%#v", got)
+	}
+	if got := sessionAuthentication("environment-key", path, scope); got != (agent.Authentication{Method: "api_key", APIKeyEnvironment: true}) {
+		t.Fatalf("environment=%#v", got)
+	}
+	if got := sessionAuthentication("configured-key", path, scope); got != (agent.Authentication{Method: "api_key"}) {
+		t.Fatalf("configured=%#v", got)
 	}
 }
 

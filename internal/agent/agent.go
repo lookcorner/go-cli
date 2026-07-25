@@ -145,6 +145,7 @@ type Runner struct {
 	Logger                  EventLogger
 	SessionID               string
 	SessionPath             string
+	Authentication          Authentication
 	Workspace               string
 	PromptWorkspace         string
 	ModelID                 string
@@ -227,6 +228,26 @@ type Runner struct {
 	interjectionMu     sync.Mutex
 	interjections      []Interjection
 	turnMu             sync.Mutex
+}
+
+type Authentication struct {
+	Method            string
+	APIKeyEnvironment bool
+}
+
+func (a Authentication) Details() []string {
+	switch a.Method {
+	case "oauth":
+		return []string{"Auth method: OAuth", "Manage account and credits: https://grok.com/?_s=billing"}
+	case "api_key":
+		method := "Auth method: API key"
+		if a.APIKeyEnvironment {
+			method += " (XAI_API_KEY)"
+		}
+		return []string{method, "Manage account and credits: console.x.ai", "Run `gork login` to use your SuperGrok subscription instead."}
+	default:
+		return nil
+	}
 }
 
 func (r *Runner) SessionTurnCount() int {

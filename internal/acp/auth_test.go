@@ -93,6 +93,17 @@ func TestBearerTokenHonorsActiveAPIKeyMethod(t *testing.T) {
 	}
 }
 
+func TestSetSessionAuthenticationUpdatesLiveSessions(t *testing.T) {
+	first := &session{runner: &agent.Runner{}}
+	second := &session{runner: &agent.Runner{}}
+	server := &Server{sessions: map[string]*session{"first": first, "second": second}}
+	authentication := agent.Authentication{Method: "api_key", APIKeyEnvironment: true}
+	server.SetSessionAuthentication(authentication)
+	if first.runner.Authentication != authentication || second.runner.Authentication != authentication {
+		t.Fatalf("first=%#v second=%#v", first.runner.Authentication, second.runner.Authentication)
+	}
+}
+
 func TestCheckSubscriptionReturnsApplicationAuthMeta(t *testing.T) {
 	var output bytes.Buffer
 	called := 0

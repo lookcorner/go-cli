@@ -2925,7 +2925,7 @@ func TestInstantInfoCommandsDoNotRunModelTurn(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.prompt, func(t *testing.T) {
 			m := &model{
-				ctx: context.Background(), runner: &agent.Runner{SessionID: "session-1"},
+				ctx: context.Background(), runner: &agent.Runner{SessionID: "session-1", Authentication: agent.Authentication{Method: "oauth"}},
 				workspace: "/workspace", modelName: "test-model", inputTokens: 250, contextWindow: 1000,
 			}
 			m.setInput(test.prompt)
@@ -2933,6 +2933,9 @@ func TestInstantInfoCommandsDoNotRunModelTurn(t *testing.T) {
 			m = updated.(*model)
 			if command != nil || m.running || m.status != test.status || !strings.Contains(m.transcript.String(), test.want) {
 				t.Fatalf("command=%v running=%v status=%q transcript=%q", command != nil, m.running, m.status, m.transcript.String())
+			}
+			if strings.HasPrefix(test.prompt, "/session-info") && !strings.Contains(m.transcript.String(), "Auth method: OAuth") {
+				t.Fatalf("session info missing auth: %q", m.transcript.String())
 			}
 		})
 	}

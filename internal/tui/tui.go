@@ -3298,6 +3298,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			text := fmt.Sprintf("# Session info\n\n- Session: `%s`\n- Workspace: `%s`\n- Model: `%s`\n- Turn: %d", m.runner.SessionID, m.workspace, m.modelName, m.runner.SessionTurnCount())
+			if details := m.runner.Authentication.Details(); len(details) > 0 {
+				text = fmt.Sprintf("# Session info\n\n- Session: `%s`\n- %s\n- Workspace: `%s`\n- Model: `%s`\n- Turn: %d", m.runner.SessionID, strings.Join(details, "\n- "), m.workspace, m.modelName, m.runner.SessionTurnCount())
+			}
 			if m.contextWindow > 0 {
 				text += fmt.Sprintf("\n- Context: %d / %d tokens (%d%%)", m.inputTokens, m.contextWindow, m.inputTokens*100/m.contextWindow)
 			}

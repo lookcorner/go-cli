@@ -411,6 +411,9 @@ func (s *Server) handleSessionStatusPrompt(incoming message, current *session, l
 
 	if command == "session-info" {
 		text := fmt.Sprintf("**Session ID:** %s\n\n**Working directory:** %s\n\n**Model:** %s\n\n**Turn:** %d\n\n**Context:** %d / %d tokens (%d%%)", id, cwd, model, turns, used, total, contextUsagePercent(used, total))
+		if details := current.runner.Authentication.Details(); len(details) > 0 {
+			text = "**" + details[0] + "**\n\n" + strings.Join(details[1:], "\n\n") + "\n\n" + text
+		}
 		if title != "" {
 			text = "**Title:** " + title + "\n\n" + text
 		}
