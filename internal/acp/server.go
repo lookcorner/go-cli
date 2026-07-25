@@ -582,18 +582,7 @@ func (s *Server) handleSessionAdmin(incoming message) {
 			s.respondError(incoming.ID, -32602, "sessionId is required")
 			return
 		}
-		s.mu.Lock()
-		current := s.sessions[req.SessionID]
-		delete(s.sessions, req.SessionID)
-		s.mu.Unlock()
-		if current != nil {
-			current.mu.Lock()
-			if current.cancel != nil {
-				current.cancel()
-			}
-			current.mu.Unlock()
-			current.close()
-		}
+		s.closeSession(req.SessionID)
 		if err := sessionlog.Delete(s.SessionDir, req.SessionID); err != nil {
 			s.respondError(incoming.ID, -32000, err.Error())
 			return

@@ -48,6 +48,8 @@ New sessions expose their working directory and Git-root state; loaded sessions
 echo client-owned `x.ai/persist` metadata and their session ID.
 Loaded ACP sessions also report `gitDivergence` when their recorded Git HEAD
 differs from the workspace's current HEAD.
+ACP session deletion uses the same cancellation-and-drain shutdown path as
+session close before removing persisted history.
 ACP `_meta.x.ai/display_cwd` metadata is persisted across restore and used for
 active or dormant session roster display. Live and replayed ACP updates rewrite
 plain and URL-encoded worktree paths for the client while the real cwd remains

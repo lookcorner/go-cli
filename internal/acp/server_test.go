@@ -2604,6 +2604,74 @@ func TestCloseSessionWaitsForCancelledRun(t *testing.T) {
 	server.wg.Wait()
 }
 
+func TestSessionDeleteUsesFullSessionShutdown(t *testing.T) {
+	dir, root := t.TempDir(), t.TempDir()
+	logger, err := sessionlog.NewLoggerWithID(dir, "delete-active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append("session_metadata", map[string]any{"cwd": root}); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	streamer := &blockingStreamer{started: make(chan struct{})}
+	closed := make(chan struct{})
+	current := &session{
+		id: "delete-active", cwd: root, activePrompt: -1,
+		runner: &agent.Runner{Client: streamer, Tools: registry, Model: "test"},
+		close: func() {
+			_ = logger.Close()
+			close(closed)
+		},
+	}
+	var output bytes.Buffer
+	server := &Server{SessionDir: dir, output: &output, sessions: map[string]*session{current.id: current}}
+	server.pathRewriters.Store(current.id, newPathRewriter(root, "/project"))
+	params, _ := json.Marshal(map[string]any{"sessionId": current.id, "prompt": []any{map[string]any{"type": "text", "text": "wait"}}})
+	server.handlePrompt(context.Background(), message{ID: json.RawMessage("1"), Method: "session/prompt", Params: params})
+	select {
+	case <-streamer.started:
+	case <-time.After(time.Second):
+		t.Fatal("prompt did not start")
+	}
+	server.handleSessionAdmin(message{ID: json.RawMessage("2"), Method: "x.ai/session/delete", Params: json.RawMessage(`{"sessionId":"delete-active"}`)})
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("delete returned before session resources closed")
+	}
+	server.wg.Wait()
+	if server.lookupSession(current.id) != nil {
+		t.Fatal("deleted session remained resident")
+	}
+	if _, ok := server.pathRewriters.Load(current.id); ok {
+		t.Fatal("deleted session path rewriter remained")
+	}
+	if _, err := os.Stat(logger.Path()); !os.IsNotExist(err) {
+		t.Fatalf("deleted session log remained: %v", err)
+	}
+	messages := decodeACPOutput(t, output.Bytes())
+	removed, success := false, false
+	for _, item := range messages {
+		if item["method"] == "x.ai/sessions/changed" {
+			params := item["params"].(map[string]any)
+			ids := params["removed"].([]any)
+			removed = len(ids) == 1 && ids[0] == current.id
+		}
+		if item["id"] == float64(2) {
+			success = item["result"].(map[string]any)["success"] == true
+		}
+	}
+	if !removed || !success {
+		t.Fatalf("delete messages=%#v", messages)
+	}
+}
+
 func (f *blockingStreamer) StreamResponse(ctx context.Context, _ api.ResponseRequest, _ func(string)) (api.StreamResult, error) {
 	close(f.started)
 	<-ctx.Done()
