@@ -81,8 +81,11 @@ func (m *model) handleJumpKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.scroll, m.scrollTail, m.scrollAnchor = state.restore, state.restoreTail, cloneInt(state.restoreAnchor)
 		m.status = "ready"
 	case key.Code == tea.KeyEnter:
-		m.jump = nil
-		m.status = "ready"
+		entry := state.entries[state.selected]
+		if !m.enterInlineEdit(entry.message) {
+			m.jump = nil
+			m.status = "ready"
+		}
 	case key.Code == tea.KeyUp || key.Text == "k":
 		state.selected = max(state.selected-1, 0)
 		m.syncJumpPreview()

@@ -35,7 +35,10 @@ type rememberTUIStreamer struct{}
 
 type recapTUIStreamer struct{ request api.ResponseRequest }
 type promptSuggestionTUIStreamer struct{ request api.ResponseRequest }
-type modelTUIStreamer struct{ history []session.Message }
+type modelTUIStreamer struct {
+	history []session.Message
+	request api.ResponseRequest
+}
 type imagineTUIStreamer struct{ request api.ResponseRequest }
 type imagineTUITool struct{ name string }
 
@@ -52,7 +55,8 @@ func (s *imagineTUIStreamer) StreamResponse(_ context.Context, request api.Respo
 	return api.StreamResult{ResponseID: "imagine-response", Text: "created"}, nil
 }
 
-func (s *modelTUIStreamer) StreamResponse(context.Context, api.ResponseRequest, func(string)) (api.StreamResult, error) {
+func (s *modelTUIStreamer) StreamResponse(_ context.Context, request api.ResponseRequest, _ func(string)) (api.StreamResult, error) {
+	s.request = request
 	return api.StreamResult{ResponseID: "new-response", Text: "done"}, nil
 }
 

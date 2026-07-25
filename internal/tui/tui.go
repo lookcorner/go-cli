@@ -107,11 +107,13 @@ const (
 
 type selectionPoint struct{ line, column int }
 type mouseSelectionEvent struct {
-	phase     mouseSelectionPhase
-	point     selectionPoint
-	lines     []string
-	at        time.Time
-	assistant bool
+	phase             mouseSelectionPhase
+	point             selectionPoint
+	lines             []string
+	at                time.Time
+	assistant         bool
+	transcript        bool
+	transcriptMessage int
 }
 type selectionClearEvent struct{ nonce uint64 }
 type contextualUndoClearEvent struct{ nonce uint64 }
@@ -732,6 +734,7 @@ type model struct {
 	historySearch       *historySearchState
 	scrollSearch        *scrollSearchState
 	selection           *textSelection
+	inlineEdit          *inlineEditState
 	selectionNonce      uint64
 	selectionMode       textSelectionMode
 	persistSelection    func(string) error
@@ -939,6 +942,15 @@ type selectionClickState struct {
 	line  int
 	count uint8
 	at    time.Time
+}
+
+type inlineEditState struct {
+	target      int
+	original    string
+	draft       []rune
+	draftCursor int
+	draftImages []api.ContentPart
+	submitting  bool
 }
 
 type textSelectionMode uint8
@@ -1472,6 +1484,10 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case mouseSelectionEvent:
 		switch msg.phase {
 		case selectionStart:
+			if m.inlineEdit != nil {
+				m.exitInlineEdit()
+				return m, nil
+			}
 			m.scrollFocused = true
 			if msg.point.line < 0 || msg.point.line >= len(msg.lines) {
 				m.selection = nil
@@ -1494,6 +1510,9 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			count := m.countTextClick(clickedAt, msg.point)
 			m.selectionClick = selectionClickState{line: msg.point.line, count: count, at: clickedAt}
+			if count == 2 && msg.transcript && m.enterInlineEdit(msg.transcriptMessage) {
+				return m, nil
+			}
 			if m.selectionMode.selectsWord() {
 				line := m.selection.lines[msg.point.line]
 				from, to := 0, 0
@@ -1777,6 +1796,11 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.activeTask = ""
 		if m.rewind != nil && m.rewind.phase == rewindCancelling {
+			if m.inlineEdit != nil && m.inlineEdit.submitting {
+				m.rewind.phase = rewindExecuting
+				m.status = "rewinding edited prompt"
+				return m, runRewind(m.runner, m.rewind.target, m.rewind.mode, m.promptSerial)
+			}
 			return m, m.loadRewindPoints()
 		}
 		if m.pendingRecap != "" {
@@ -1825,6 +1849,12 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if msg.err != nil {
+			if m.inlineEdit != nil && m.inlineEdit.submitting {
+				m.inlineEdit.submitting = false
+				m.rewind = nil
+				m.status = "edit rewind failed: " + msg.err.Error()
+				return m, nil
+			}
 			m.rewind.phase, m.rewind.err = rewindError, msg.err.Error()
 			return m, nil
 		}
@@ -1836,12 +1866,17 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.replaceTranscript(session.FormatTranscript(msg.result.Messages), msg.result.Messages)
 			}
-			m.setInput(msg.result.PromptText)
+			if m.inlineEdit == nil || !m.inlineEdit.submitting {
+				m.setInput(msg.result.PromptText)
+			}
 			m.history = loadPromptHistory(m.runner, m.workspace)
 			m.historyActive, m.historyIndex = false, -1
 		}
 		m.rewind = nil
 		m.scroll = 0
+		if m.inlineEdit != nil && m.inlineEdit.submitting {
+			return m, m.startInlineResubmit()
+		}
 		m.status = fmt.Sprintf("rewound %s to turn %d", strings.ReplaceAll(string(mode), "_", " "), msg.result.Target+1)
 	case shellDoneEvent:
 		m.running = false
@@ -2330,6 +2365,19 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.foreignResumeReady {
 		m.foreignResume, m.foreignResumeReady = nil, false
+	}
+	if m.inlineEdit != nil && m.rewind == nil {
+		if key.Code == tea.KeyEsc {
+			m.exitInlineEdit()
+			return m, nil
+		}
+		if key.Code == tea.KeyEnter {
+			if key.Mod&(tea.ModShift|tea.ModAlt) != 0 {
+				m.insertInput("\n")
+				return m, nil
+			}
+			return m, m.submitInlineEdit()
+		}
 	}
 	if stroke == "ctrl+y" && m.wordSelectHintCanAccept() {
 		previous := m.selectionMode
@@ -3730,6 +3778,105 @@ func (m *model) openRewind(cancelTurn bool) tea.Cmd {
 	return runRewindPoints(m.runner, m.promptSerial)
 }
 
+func (m *model) enterInlineEdit(messageIndex int) bool {
+	if m.inlineEdit != nil || m.runner == nil || messageIndex < 0 || messageIndex >= len(m.transcriptMessages) {
+		return false
+	}
+	message := m.transcriptMessages[messageIndex]
+	if message.role != "user" {
+		return false
+	}
+	text := m.transcript.String()
+	end := len(text)
+	if messageIndex+1 < len(m.transcriptMessages) {
+		end = m.transcriptMessages[messageIndex+1].start
+	}
+	if message.offset < 0 || end < message.offset || end > len(text) {
+		return false
+	}
+	target := 0
+	for index := 0; index < messageIndex; index++ {
+		if m.transcriptMessages[index].role == "user" {
+			target++
+		}
+	}
+	original := strings.TrimSpace(text[message.offset:end])
+	if original == "" {
+		return false
+	}
+	m.inlineEdit = &inlineEditState{
+		target: target, original: original, draft: append([]rune(nil), m.input...), draftCursor: m.cursor,
+		draftImages: append([]api.ContentPart(nil), m.promptImages...),
+	}
+	m.setInput(original)
+	m.selection = nil
+	m.selectionClick = selectionClickState{}
+	m.jump = nil
+	m.scrollFocused = false
+	m.status = "editing previous prompt"
+	return true
+}
+
+func (m *model) exitInlineEdit() {
+	if m.inlineEdit == nil {
+		return
+	}
+	edit := m.inlineEdit
+	m.inlineEdit = nil
+	m.input = append([]rune(nil), edit.draft...)
+	m.cursor = min(max(edit.draftCursor, 0), len(m.input))
+	m.promptImages = append([]api.ContentPart(nil), edit.draftImages...)
+	m.status = "ready"
+}
+
+func (m *model) submitInlineEdit() tea.Cmd {
+	edit := m.inlineEdit
+	if edit == nil || edit.submitting {
+		return nil
+	}
+	text := strings.TrimSpace(string(m.input))
+	if text == "" || text == strings.TrimSpace(edit.original) {
+		m.exitInlineEdit()
+		return nil
+	}
+	if m.runner == nil {
+		m.status = "edit rewind unavailable"
+		return nil
+	}
+	edit.submitting = true
+	m.promptSerial++
+	m.clearPromptSuggestion()
+	m.rewind = &rewindState{target: edit.target, mode: agent.RewindConversationOnly}
+	if m.running {
+		m.rewind.phase = rewindCancelOffer
+		m.status = "cancel the current turn to edit this prompt?"
+		return nil
+	}
+	m.rewind.phase = rewindExecuting
+	m.status = "rewinding edited prompt"
+	return runRewind(m.runner, edit.target, agent.RewindConversationOnly, m.promptSerial)
+}
+
+func (m *model) startInlineResubmit() tea.Cmd {
+	edit := m.inlineEdit
+	if edit == nil {
+		return nil
+	}
+	prompt := strings.TrimSpace(string(m.input))
+	m.inlineEdit = nil
+	m.input = append([]rune(nil), edit.draft...)
+	m.cursor = min(max(edit.draftCursor, 0), len(m.input))
+	m.promptImages = append([]api.ContentPart(nil), edit.draftImages...)
+	m.rememberPrompt(prompt)
+	m.running = true
+	turnCtx, cancel := context.WithCancel(m.ctx)
+	turnCtx, requestRewind := agent.WithCancelRewind(turnCtx)
+	m.turnCancel = cancel
+	m.stashInFlightPrompt(prompt, nil, requestRewind)
+	m.beginTurn(prompt)
+	return runTurn(turnCtx, m.runner, prompt, m.previousID, m.activeTurnSerial)
+}
+
 func (m *model) loadRewindPoints() tea.Cmd {
 	if m.rewind == nil {
 		m.rewind = &rewindState{}
@@ -3744,6 +3891,11 @@ func (m *model) handleRewindKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	state := m.rewind
 	dismiss := func() (tea.Model, tea.Cmd) {
 		m.rewind = nil
+		if m.inlineEdit != nil {
+			m.inlineEdit.submitting = false
+			m.status = "editing previous prompt"
+			return m, nil
+		}
 		if m.running {
 			m.status = "thinking"
 		} else {
@@ -3788,6 +3940,11 @@ func (m *model) handleRewindKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.turnCancel != nil {
 			m.turnCancel()
 			return m, nil
+		}
+		if m.inlineEdit != nil && m.inlineEdit.submitting {
+			state.phase = rewindExecuting
+			m.status = "rewinding edited prompt"
+			return m, runRewind(m.runner, state.target, state.mode, m.promptSerial)
 		}
 		return m, m.loadRewindPoints()
 	case rewindPicker:
@@ -4763,6 +4920,8 @@ func (m *model) handlePaste(value string) (tea.Model, tea.Cmd) {
 
 func (m *model) acceptsPaste() bool {
 	switch {
+	case m.inlineEdit != nil:
+		return true
 	case m.planReview != nil:
 		return m.planReview.editing
 	case m.question != nil:
@@ -5827,8 +5986,9 @@ func (m *model) View() tea.View {
 				adjusted.Y -= bannerHeight
 				point := selectionPointForMouse(adjusted, plainVisible)
 				event := mouseSelectionEvent{
-					phase: selectionStart, point: point, lines: plainVisible, at: time.Now(),
-					assistant: showingTranscript && m.transcriptRoleAtVisibleLine(point.line, transcriptLineCount) == "assistant",
+					phase: selectionStart, point: point, lines: plainVisible, at: time.Now(), transcript: showingTranscript,
+					assistant:         showingTranscript && m.transcriptRoleAtVisibleLine(point.line, transcriptLineCount) == "assistant",
+					transcriptMessage: m.transcriptMessageAtVisibleLine(point.line, transcriptLineCount),
 				}
 				return func() tea.Msg { return event }
 			}
@@ -6326,16 +6486,24 @@ func selectionPointForMouse(mouse tea.Mouse, lines []string) selectionPoint {
 }
 
 func (m *model) transcriptRoleAtVisibleLine(line, total int) string {
+	index := m.transcriptMessageAtVisibleLine(line, total)
+	if index < 0 {
+		return ""
+	}
+	return m.transcriptMessages[index].role
+}
+
+func (m *model) transcriptMessageAtVisibleLine(line, total int) int {
 	fullLine := max(total+m.scrollTail-m.contentHeight()-m.scroll, 0) + line
-	role := ""
-	for index, message := range m.transcriptMessages {
+	selected := -1
+	for index := range m.transcriptMessages {
 		start := m.jumpLine(index)
 		if fullLine < start {
 			break
 		}
-		role = message.role
+		selected = index
 	}
-	return role
+	return selected
 }
 
 func (m *model) countTextClick(at time.Time, point selectionPoint) uint8 {
