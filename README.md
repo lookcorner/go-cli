@@ -994,7 +994,7 @@ editor/IDE integrations:
 as `--acp`. It accepts model, reasoning, permission, workspace, session,
 folder-trust, memory, and capability flags before `stdio`. Shared leader use is
 disabled by default. Set `[cli] use_leader = true` in `config.toml` or pass
-`--leader` to connect to an existing Unix leader and start one when needed;
+`--leader` to connect to an existing leader and start one when needed;
 `--no-leader` always forces the local ACP runtime. `agent serve`
 exposes the same persistent runtime at `ws://127.0.0.1:2419/ws` by default.
 Authenticate with `Authorization: Bearer TOKEN` or the `server-key=TOKEN`
@@ -1003,11 +1003,12 @@ neither is set, the command prints a generated 12-character token. Use
 `--bind ADDRESS` to change the listener. Text and UTF-8 binary JSON frames are
 accepted, and running sessions survive client reconnects. `agent leader` runs
 the shared ACP application behind the reference
-length-prefixed local IPC protocol on Unix. It owns `$GROK_HOME/leader.lock`
-and `leader.sock`, isolates client request IDs and session routes, reports
+length-prefixed local IPC protocol on Unix and Windows. It owns
+`$GROK_HOME/leader.lock` and `leader.sock` (a named-pipe marker on Windows),
+isolates client request IDs and session routes, reports
 startup readiness, and exits after the last client disconnects unless
-`--no-exit-on-disconnect` is set. Remote `agent headless` relay mode and
-Windows named-pipe leader IPC remain unavailable.
+`--no-exit-on-disconnect` is set. Remote `agent headless` relay mode remains
+unavailable.
 
 Inspect reference-compatible shared leader candidates without starting the
 normal agent runtime:

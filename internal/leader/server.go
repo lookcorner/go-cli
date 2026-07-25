@@ -569,3 +569,14 @@ func (s *Server) paths() (socketPath, lockPath string) {
 	}
 	return socketPath, strings.TrimSuffix(socketPath, filepath.Ext(socketPath)) + ".lock"
 }
+
+func removeLeaderPath(path string) error {
+	if path == "" {
+		return nil
+	}
+	err := os.Remove(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
+}

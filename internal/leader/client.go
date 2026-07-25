@@ -89,6 +89,24 @@ func contextDeadline(ctx context.Context, maximum time.Duration) time.Time {
 	return deadline
 }
 
+func waitForLeader(ctx context.Context, socketPath string, registration Registration) (*Client, error) {
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		attempt, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
+		client, err := Connect(attempt, socketPath, registration)
+		cancel()
+		if err == nil {
+			return client, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
 func (c *Client) Serve(ctx context.Context, input io.Reader, output io.Writer) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()

@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	charm.land/bubbletea/v2 v2.0.6
+	github.com/Microsoft/go-winio v0.6.2
 	github.com/UserExistsError/conpty v0.1.4
 	github.com/bmatcuk/doublestar v1.3.4
 	github.com/charmbracelet/x/ansi v0.11.7

@@ -156,21 +156,23 @@ The reference `gork agent stdio` command routes its supported model, reasoning,
 permission, workspace, session, trust, memory, and capability flags through the
 same complete ACP stdio runtime as `--acp`. `gork agent serve` exposes that
 persistent runtime over an authenticated WebSocket and preserves active
-sessions across reconnects. On Unix, `gork agent leader` exposes the same ACP
-application through the reference framed local IPC protocol with lock/socket
-lifecycle, readiness signaling, client request-ID isolation, session ownership,
-disconnect cleanup, and optional persistent operation. Remote headless relay
+sessions across reconnects. On Unix and Windows, `gork agent leader` exposes
+the same ACP application through the reference framed local IPC protocol with
+lock/socket lifecycle, readiness signaling, client request-ID isolation,
+session ownership, disconnect cleanup, and optional persistent operation;
+Windows uses a deterministic named pipe derived from the socket marker path
+with a share-mode file lock in place of `flock`. Remote headless relay
 mode remains unavailable and fails explicitly rather than being misparsed as a
-prompt. Unix stdio followers adopt an existing leader or coordinate a single
-background leader spawn when `--leader` or `[cli] use_leader = true` is set;
+prompt. Unix and Windows stdio followers adopt an existing leader or
+coordinate a single background leader spawn when `--leader` or
+`[cli] use_leader = true` is set;
 `--no-leader` has highest precedence and keeps the direct ACP runtime.
 The top-level `gork leader list/info/kill` commands discover reference lock/socket
-candidates, verify live Unix sockets with the reference length-prefixed
-registration/control protocol, classify stale/unreachable/unsupported entries,
+candidates, verify live Unix sockets or Windows named pipes with the reference
+length-prefixed registration/control protocol, classify stale/unreachable/unsupported entries,
 select the production or explicit-PID leader, emit reference-shaped JSON, and
 terminate only identity-verified gork processes while cleaning stale candidate
-files. Remote relay forwarding, workspace exposure, and Windows named-pipe IPC
-remain.
+files. Remote relay forwarding and workspace exposure remain.
 
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |

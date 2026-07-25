@@ -1,21 +1,19 @@
-//go:build unix
+//go:build windows
 
 package leader
 
 import (
 	"context"
-	"errors"
 	"io"
-	"net"
 	"os"
 	"path/filepath"
 	"time"
 
-	"golang.org/x/sys/unix"
+	"github.com/Microsoft/go-winio"
 )
 
 func dial(ctx context.Context, socketPath string) (io.ReadWriteCloser, error) {
-	return (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
+	return winio.DialPipeContext(ctx, pipeName(socketPath))
 }
 
 func connectOrSpawn(ctx context.Context, socketPath string, registration Registration, spawn SpawnFunc) (*Client, error) {
@@ -25,28 +23,24 @@ func connectOrSpawn(ctx context.Context, socketPath string, registration Registr
 	if err := os.MkdirAll(filepath.Dir(socketPath), 0o700); err != nil {
 		return nil, err
 	}
-	lock, err := os.OpenFile(socketPath+".spawn", os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return nil, err
-	}
-	defer lock.Close()
-
 	for {
-		if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB); err == nil {
+		lock, err := openLeaderLock(socketPath + ".spawn")
+		if err == nil {
 			client, connectErr := Connect(ctx, socketPath, registration)
 			if connectErr == nil {
-				_ = unix.Flock(int(lock.Fd()), unix.LOCK_UN)
+				_ = lock.Close()
 				return client, nil
 			}
 			_ = os.Remove(socketPath)
 			if err := spawn(); err != nil {
-				_ = unix.Flock(int(lock.Fd()), unix.LOCK_UN)
+				_ = lock.Close()
 				return nil, err
 			}
 			client, err = waitForLeader(ctx, socketPath, registration)
-			_ = unix.Flock(int(lock.Fd()), unix.LOCK_UN)
+			_ = lock.Close()
 			return client, err
-		} else if !errors.Is(err, unix.EWOULDBLOCK) {
+		}
+		if !isLockHeld(err) {
 			return nil, err
 		}
 		attempt, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
