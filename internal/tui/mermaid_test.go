@@ -133,6 +133,73 @@ func TestRenderMermaidGitGraph(t *testing.T) {
 	}
 }
 
+func TestRenderMermaidSankey(t *testing.T) {
+	source := "sankey-beta\nA,B,10\nB,C,5\nB,D,5"
+	lines, ok := renderMermaid(source, 28, paletteFor("groknight"))
+	if !ok {
+		t.Fatal("supported Mermaid sankey was rejected")
+	}
+	rendered := stripUIANSI(strings.Join(lines, "\n"))
+	for _, expected := range []string{
+		"◇ mermaid sankey", "nodes: A · B · C · D",
+		"A ─10▶ B", "B ─5▶ C", "B ─5▶ D",
+	} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("rendered sankey missing %q:\n%s", expected, rendered)
+		}
+	}
+	for _, line := range lines {
+		if displayWidth(stripUIANSI(line)) > 28 {
+			t.Fatalf("sankey line exceeds width: %q", stripUIANSI(line))
+		}
+	}
+}
+
+func TestRenderMermaidSankeyMatchesReferenceParsing(t *testing.T) {
+	source := "%% comment\nsankey-beta extra\n,B,-1\nB,A,1e3\nA,B,2.5"
+	lines, ok := renderMermaid(source, 40, paletteFor("groknight"))
+	if !ok {
+		t.Fatal("reference-compatible Mermaid sankey was rejected")
+	}
+	rendered := stripUIANSI(strings.Join(lines, "\n"))
+	for _, expected := range []string{
+		"nodes:  · B · A", " ─-1▶ B", "B ─1000▶ A", "A ─2.5▶ B",
+	} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("sankey parsing differs from reference, missing %q:\n%s", expected, rendered)
+		}
+	}
+	if strings.Count(rendered, " · A") != 1 {
+		t.Fatalf("sankey node first-seen order was not deduplicated:\n%s", rendered)
+	}
+}
+
+func TestRenderMermaidSankeyRejectsReferenceParseErrors(t *testing.T) {
+	for _, source := range []string{
+		"sankey-beta",
+		"sankey-beta\nA,B",
+		"sankey-beta\nA,B,1,extra",
+		"sankey-beta\nA,B,nope",
+	} {
+		if _, ok := renderMermaid(source, 40, paletteFor("groknight")); ok {
+			t.Fatalf("invalid sankey was accepted: %q", source)
+		}
+	}
+}
+
+func TestRenderMarkdownRendersClosedMermaidSankey(t *testing.T) {
+	source := "Before\n```mermaid\nsankey-beta\nSource,Target,3\n```\nAfter"
+	rendered := stripUIANSI(strings.Join(renderMarkdown(source, 36), "\n"))
+	for _, expected := range []string{"Before", "◇ mermaid sankey", "nodes: Source · Target", "Source ─3▶ Target", "After"} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("rendered Mermaid sankey missing %q:\n%s", expected, rendered)
+		}
+	}
+	if strings.Contains(rendered, "Source,Target,3") {
+		t.Fatalf("closed Mermaid sankey source was not replaced:\n%s", rendered)
+	}
+}
+
 func TestRenderMermaidGitGraphMatchesReferenceBranchState(t *testing.T) {
 	source := "gitGraph\ncommit\nbranch topic\ncommit\ncheckout missing\ncommit\nbranch topic\ncheckout main\nmerge unknown"
 	lines, ok := renderMermaid(source, 48, paletteFor("groknight"))

@@ -67,6 +67,12 @@ type mermaidGitCommit struct {
 	merge   bool
 }
 
+type mermaidSankeyLink struct {
+	source string
+	target string
+	value  float64
+}
+
 var mermaidOperators = []string{
 	"||--o{", "||--|{", "}o--o{", "}o..o{", "}o--||", "}|..|{",
 	"<|--", "<-->", "--|>", "-.->", "-->>", "->>", "--x", "--o", "-x", "==>", "-->", "<--",
@@ -87,6 +93,9 @@ func renderMermaid(source string, width int, theme themePalette) ([]string, bool
 	}
 	if firstToken == "gitGraph" {
 		return renderMermaidGitGraph(source, width, theme)
+	}
+	if firstToken == "sankey-beta" {
+		return renderMermaidSankey(source, width, theme)
 	}
 	statements, complete := mermaidStatements(source)
 	if !complete || len(statements) < 1 {
@@ -136,6 +145,58 @@ func renderMermaid(source string, width int, theme themePalette) ([]string, bool
 		for _, line := range mermaidBox(node.label, min(max(width, 4), maxMermaidLabelWidth+4)) {
 			lines = append(lines, theme.code+line+ansiReset)
 		}
+	}
+	return lines, true
+}
+
+func renderMermaidSankey(source string, width int, theme themePalette) ([]string, bool) {
+	links := make([]mermaidSankeyLink, 0)
+	nodes := make([]string, 0)
+	seen := make(map[string]bool)
+	foundHeader := false
+	statements := 0
+	for _, raw := range strings.Split(source, "\n") {
+		statement := strings.TrimSpace(raw)
+		if statement == "" || strings.HasPrefix(statement, "%%") {
+			continue
+		}
+		statements++
+		if statements > maxMermaidStatements {
+			return nil, false
+		}
+		if !foundHeader {
+			if strings.Fields(statement)[0] != "sankey-beta" {
+				return nil, false
+			}
+			foundHeader = true
+			continue
+		}
+		parts := strings.Split(statement, ",")
+		if len(parts) != 3 {
+			return nil, false
+		}
+		sourceNode := strings.TrimSpace(parts[0])
+		targetNode := strings.TrimSpace(parts[1])
+		value, err := strconv.ParseFloat(strings.TrimSpace(parts[2]), 64)
+		if err != nil {
+			return nil, false
+		}
+		for _, node := range []string{sourceNode, targetNode} {
+			if !seen[node] {
+				seen[node] = true
+				nodes = append(nodes, node)
+			}
+		}
+		links = append(links, mermaidSankeyLink{source: sourceNode, target: targetNode, value: value})
+	}
+	if len(links) == 0 {
+		return nil, false
+	}
+	lines := []string{ansiDim + mermaidFit("◇ mermaid sankey", width) + ansiReset}
+	lines = append(lines, theme.heading+mermaidFit("nodes: "+strings.Join(nodes, " · "), width)+ansiReset)
+	for _, link := range links {
+		value := strconv.FormatFloat(link.value, 'g', -1, 64)
+		lines = append(lines, theme.code+mermaidFit(link.source+" ─"+value+"▶ "+link.target, width)+ansiReset)
 	}
 	return lines, true
 }
