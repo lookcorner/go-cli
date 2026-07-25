@@ -47,6 +47,7 @@ func TestCompletionCandidatesFollowCommandTree(t *testing.T) {
 		{[]string{"mcp", "add", "--t"}, []string{"--transport"}},
 		{[]string{"mcp", "add", "--"}, []string{"--args", "--command", "--type", "--url"}},
 		{[]string{"plugin", "marketplace", ""}, []string{"add", "list", "remove", "update"}},
+		{[]string{"plugin", "marketplace", "add", "--"}, []string{"--force"}},
 		{[]string{"sessions", "search", "query", "--l"}, []string{"--limit"}},
 		{[]string{"worktree", "db", ""}, []string{"path", "rebuild", "stats"}},
 		{[]string{"worktree", "p"}, []string{"prune"}},

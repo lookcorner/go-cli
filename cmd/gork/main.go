@@ -2361,14 +2361,25 @@ func runMarketplace(args []string, stdout, stderr io.Writer) error {
 		}
 		return nil
 	case "add", "remove":
-		if len(args) != 2 {
-			return fmt.Errorf("usage: gork plugin marketplace %s <git-url-or-local-path>", args[0])
+		force, source, invalid := false, "", false
+		for _, arg := range args[1:] {
+			switch {
+			case arg == "--force" && args[0] == "add":
+				force = true
+			case source == "" && !strings.HasPrefix(arg, "-"):
+				source = arg
+			default:
+				invalid = true
+			}
+		}
+		if source == "" || invalid {
+			return fmt.Errorf("usage: gork plugin marketplace %s %s<git-url-or-local-path>", args[0], map[bool]string{true: "[--force] ", false: ""}[args[0] == "add"])
 		}
 		actionType := "add_source"
 		if args[0] == "remove" {
 			actionType = "remove_source"
 		}
-		outcome, err := marketplace.Execute("", cwd, marketplace.Action{Type: actionType, SourceURLOrPath: args[1]})
+		outcome, err := marketplace.Execute("", cwd, marketplace.Action{Type: actionType, SourceURLOrPath: source, Force: force})
 		return printMarketplaceOutcome(stdout, outcome, err)
 	case "update":
 		if len(args) > 2 {

@@ -3204,6 +3204,28 @@ func TestPluginMarketplaceCLI(t *testing.T) {
 	}
 }
 
+func TestPluginMarketplaceAddForce(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	t.Setenv("HOME", t.TempDir())
+	var stdout bytes.Buffer
+	remote := "ssh://git@vpn.invalid/private/catalog.git"
+	if err := runPlugin([]string{"marketplace", "add", "--force", remote}, &stdout, io.Discard); err != nil || !strings.Contains(stdout.String(), "source added") {
+		t.Fatalf("stdout=%q err=%v", stdout.String(), err)
+	}
+	sources, err := marketplace.Sources("", t.TempDir())
+	if err != nil || len(sources) != 1 || sources[0].Git != remote {
+		t.Fatalf("sources=%#v err=%v", sources, err)
+	}
+	if err := runPlugin([]string{"marketplace", "remove", "--force", remote}, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "usage") {
+		t.Fatalf("remove accepted --force: %v", err)
+	}
+	second := "ssh://git@vpn.invalid/private/second.git"
+	if err := runPlugin([]string{"marketplace", "add", second, "--force"}, io.Discard, io.Discard); err != nil {
+		t.Fatalf("trailing --force: %v", err)
+	}
+}
+
 func TestPluginMarketplaceCLIAutoRegistersOfficialSource(t *testing.T) {
 	t.Setenv("GROK_HOME", filepath.Join(t.TempDir(), ".grok"))
 	t.Setenv("HOME", t.TempDir())

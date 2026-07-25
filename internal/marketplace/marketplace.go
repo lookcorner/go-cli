@@ -1,6 +1,7 @@
 package marketplace
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -64,6 +65,7 @@ type Action struct {
 	Type               string
 	SourceURLOrPath    string
 	PluginRelativePath string
+	Force              bool
 }
 
 type Outcome struct {
@@ -636,6 +638,11 @@ func addSource(configPath, cwd string, sources []Source, action Action) Outcome 
 			return Outcome{Status: "validation_error", Message: "Marketplace source already configured: " + action.SourceURLOrPath}
 		}
 	}
+	if git != "" && !action.Force {
+		if err := probeGitRemote(git); err != nil {
+			return Outcome{Status: "validation_error", Message: fmt.Sprintf("%v. Not adding %q: it does not look like a reachable git repository. Re-run with --force to add it anyway.", err, action.SourceURLOrPath)}
+		}
+	}
 	value := path
 	if git != "" {
 		value = git
@@ -660,6 +667,35 @@ func addSource(configPath, cwd string, sources []Source, action Action) Outcome 
 		return Outcome{Status: "internal_error", Message: err.Error()}
 	}
 	return Outcome{Status: "success", Message: "Marketplace source added."}
+}
+
+func probeGitRemote(remote string) error {
+	remote = strings.TrimSpace(remote)
+	if remote == "" {
+		return errors.New("empty git URL")
+	}
+	if strings.ContainsRune(remote, '\x00') {
+		return errors.New("git URL contains NUL")
+	}
+	if strings.HasPrefix(remote, "-") {
+		return errors.New("git URL may not begin with '-'")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, "git", "ls-remote", "--", remote, "HEAD")
+	command.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	output, err := command.CombinedOutput()
+	if ctx.Err() != nil {
+		return errors.New("git ls-remote timed out after 15s")
+	}
+	if err != nil {
+		detail := strings.TrimSpace(string(output))
+		if detail == "" {
+			detail = err.Error()
+		}
+		return fmt.Errorf("git ls-remote failed: %s", detail)
+	}
+	return nil
 }
 
 func removeSource(configPath, cwd string, action Action) Outcome {

@@ -422,12 +422,54 @@ func TestAddAndRemoveMarketplaceSource(t *testing.T) {
 	if missing, err := Execute(configPath, cwd, Action{Type: "remove_source", SourceURLOrPath: "./catalog"}); err != nil || missing.Status != "not_found" {
 		t.Fatalf("missing source=%#v err=%v", missing, err)
 	}
-	if added, err := Execute(configPath, cwd, Action{Type: "add_source", SourceURLOrPath: "owner/catalog"}); err != nil || added.Status != "success" {
+	if added, err := Execute(configPath, cwd, Action{Type: "add_source", SourceURLOrPath: "owner/catalog", Force: true}); err != nil || added.Status != "success" {
 		t.Fatalf("github shorthand=%#v err=%v", added, err)
 	}
 	sources, _ = Sources(configPath, cwd)
 	if len(sources) != 1 || sources[0].Git != "https://github.com/owner/catalog.git" {
 		t.Fatalf("normalized source=%#v", sources)
+	}
+}
+
+func TestAddGitMarketplaceSourceProbesRemoteUnlessForced(t *testing.T) {
+	grokHome := filepath.Join(t.TempDir(), ".grok")
+	t.Setenv("GROK_HOME", grokHome)
+	t.Setenv("HOME", filepath.Dir(grokHome))
+	configPath, cwd := filepath.Join(grokHome, "config.toml"), t.TempDir()
+	remote := filepath.Join(t.TempDir(), "catalog.git")
+	runGit(t, filepath.Dir(remote), "init", "--bare", remote)
+	remoteURL := "file://" + remote
+	outcome, err := Execute(configPath, cwd, Action{Type: "add_source", SourceURLOrPath: remoteURL})
+	if err != nil || outcome.Status != "success" {
+		t.Fatalf("reachable source=%#v err=%v", outcome, err)
+	}
+
+	nonRepo := "file://" + t.TempDir()
+	outcome, err = Execute(configPath, cwd, Action{Type: "add_source", SourceURLOrPath: nonRepo})
+	if err != nil || outcome.Status != "validation_error" || !strings.Contains(outcome.Message, "git ls-remote failed") || !strings.Contains(outcome.Message, "--force") {
+		t.Fatalf("non-repository source=%#v err=%v", outcome, err)
+	}
+	sources, loadErr := Sources(configPath, cwd)
+	if loadErr != nil || len(sources) != 1 {
+		t.Fatalf("failed source was persisted: sources=%#v err=%v", sources, loadErr)
+	}
+
+	forced := "ssh://git@vpn.invalid/private/catalog.git"
+	outcome, err = Execute(configPath, cwd, Action{Type: "add_source", SourceURLOrPath: forced, Force: true})
+	if err != nil || outcome.Status != "success" {
+		t.Fatalf("forced source=%#v err=%v", outcome, err)
+	}
+	sources, _ = Sources(configPath, cwd)
+	if len(sources) != 2 || sources[1].Git != forced {
+		t.Fatalf("forced source not persisted: %#v", sources)
+	}
+}
+
+func TestProbeGitRemoteRejectsUnsafeOperandsBeforeGit(t *testing.T) {
+	for _, remote := range []string{"", "  ", "--upload-pack=cmd", "bad\x00value"} {
+		if err := probeGitRemote(remote); err == nil {
+			t.Fatalf("remote %q unexpectedly passed", remote)
+		}
 	}
 }
 

@@ -69,7 +69,7 @@ var completionRoot = completionSpec{
 			"rm": {flags: words("--confirm --keep-data")}, "tag": {flags: words("--dry-run --force --push -f")}, "update": {},
 			"uninstall": {flags: words("--confirm --keep-data")}, "validate": {},
 			"marketplace": {children: map[string]completionSpec{
-				"add": {}, "list": {flags: []string{"--json"}}, "remove": {}, "update": {},
+				"add": {flags: []string{"--force"}}, "list": {flags: []string{"--json"}}, "remove": {}, "update": {},
 			}},
 		}},
 		"sessions": {children: map[string]completionSpec{
