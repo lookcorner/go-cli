@@ -6,7 +6,8 @@ This file tracks behavioral compatibility against
 Status values: **done**, **partial**, **planned**.
 
 Trusted workspace roots load `.envrc` through `direnv export json` when
-available and otherwise through a Bash subshell with common direnv helpers.
+available and otherwise through a Bash subshell with common direnv helpers;
+both are Unix-only paths, so Windows workspaces silently skip `.envrc`.
 The default-on `[session].load_envrc` gate, fail-open execution, current-root
 scope, folder-trust enforcement, and explicit environment precedence match the
 reference behavior.

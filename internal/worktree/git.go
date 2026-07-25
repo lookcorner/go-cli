@@ -148,6 +148,11 @@ func HeadInfo(ctx context.Context, cwd string) (GitHead, error) {
 	if err != nil {
 		return GitHead{}, err
 	}
+	// Compare canonical paths: git prints forward-slash separators on
+	// Windows while mainRepositoryRoot resolves symlinks.
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
 	mainRoot, err := mainRepositoryRoot(ctx, root)
 	if err != nil {
 		return GitHead{}, err
@@ -296,6 +301,11 @@ func Status(ctx context.Context, root string, includeUntracked, includeStats, ig
 	resolved, err := GitRoot(ctx, root)
 	if err != nil {
 		return GitStatus{}, err
+	}
+	// Compare canonical paths: git prints forward-slash separators on
+	// Windows while mainRepositoryRoot resolves symlinks.
+	if canonical, err := filepath.EvalSymlinks(resolved); err == nil {
+		resolved = canonical
 	}
 	commit, err := CurrentCommit(ctx, resolved)
 	if err != nil {

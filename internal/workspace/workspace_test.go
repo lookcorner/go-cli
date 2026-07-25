@@ -102,7 +102,7 @@ func TestWorkspaceExtraRootIsIsolatedAndConfined(t *testing.T) {
 		t.Fatal("unrelated absolute path escaped confinement")
 	}
 	if err := os.Symlink(outside, filepath.Join(extra, "escape")); err != nil {
-		t.Fatal(err)
+		t.Skipf("symlinks unavailable: %v", err)
 	}
 	if _, err := view.Resolve(filepath.Join(extra, "escape")); err == nil {
 		t.Fatal("extra-root symlink escaped confinement")

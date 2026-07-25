@@ -310,10 +310,7 @@ func TestCommitReturnsHashAndSignoff(t *testing.T) {
 func TestReadFilesAndStageContent(t *testing.T) {
 	ctx := context.Background()
 	root := newRepo(t)
-	if err := os.Chmod(filepath.Join(root, "tracked.txt"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	runGit(t, root, "add", "tracked.txt")
+	runGit(t, root, "update-index", "--chmod=+x", "tracked.txt")
 	runGit(t, root, "commit", "-qm", "make executable")
 	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("working\n"), 0o755); err != nil {
 		t.Fatal(err)

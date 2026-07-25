@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -78,8 +79,12 @@ func TestCopyEntryPreservesModeAndCreatesIndependentFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o755 {
-		t.Fatalf("copied mode = %o, want 755", info.Mode().Perm())
+	want := os.FileMode(0o755)
+	if runtime.GOOS == "windows" {
+		want = 0o666
+	}
+	if info.Mode().Perm() != want {
+		t.Fatalf("copied mode = %o, want %o", info.Mode().Perm(), want)
 	}
 	if err := os.WriteFile(dest, []byte("changed\n"), 0o755); err != nil {
 		t.Fatal(err)
@@ -359,8 +364,12 @@ func TestCopyIgnoredUsesGitignoreAndSkipPatterns(t *testing.T) {
 	if err != nil || string(data) != "keep\n" {
 		t.Fatalf("copied ignored file=%q err=%v", data, err)
 	}
-	if info, err := os.Stat(filepath.Join(dest, "empty-cache")); err != nil || !info.IsDir() || info.Mode().Perm() != 0o750 {
-		t.Fatalf("ignored empty directory missing or wrong mode: %#v err=%v", info, err)
+	info, err := os.Stat(filepath.Join(dest, "empty-cache"))
+	if err != nil || !info.IsDir() {
+		t.Fatalf("ignored empty directory missing: %#v err=%v", info, err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o750 {
+		t.Fatalf("ignored empty directory mode = %o, want 750", info.Mode().Perm())
 	}
 	for _, name := range []string{"build/nested/skip.txt", "root.log", "info-only.txt"} {
 		if _, err := os.Stat(filepath.Join(dest, filepath.FromSlash(name))); !os.IsNotExist(err) {

@@ -3,6 +3,7 @@ package workspace
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -28,7 +29,11 @@ func TestApplyTextEditsUsesUTF16AndPreservesMode(t *testing.T) {
 	if err != nil || statErr != nil {
 		t.Fatalf("readErr=%v statErr=%v", err, statErr)
 	}
-	if string(data) != content || info.Mode().Perm() != 0o640 {
+	wantMode := os.FileMode(0o640)
+	if runtime.GOOS == "windows" {
+		wantMode = 0o666
+	}
+	if string(data) != content || info.Mode().Perm() != wantMode {
 		t.Fatalf("stored=%q mode=%v", data, info.Mode().Perm())
 	}
 }

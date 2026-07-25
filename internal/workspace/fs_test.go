@@ -130,7 +130,11 @@ func TestFSWriteAndDelete(t *testing.T) {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(existing)
-	if err != nil || info.Mode().Perm() != 0o600 {
+	wantMode := os.FileMode(0o600)
+	if runtime.GOOS == "windows" {
+		wantMode = 0o666
+	}
+	if err != nil || info.Mode().Perm() != wantMode {
 		t.Fatalf("mode=%v err=%v", info.Mode().Perm(), err)
 	}
 	if err := ws.Write("new/deep/file.txt", "created", true); err != nil {

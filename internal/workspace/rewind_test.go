@@ -3,6 +3,7 @@ package workspace
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -21,7 +22,11 @@ func TestRewindStorePersistsPreviewsAndRestoresFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(storePath)
-	if err != nil || info.Mode().Perm() != 0o600 {
+	wantMode := os.FileMode(0o600)
+	if runtime.GOOS == "windows" {
+		wantMode = 0o666
+	}
+	if err != nil || info.Mode().Perm() != wantMode {
 		t.Fatalf("rewind store permissions: info=%v err=%v", info, err)
 	}
 	if err := store.CaptureBefore(0, "existing.txt"); err != nil {
@@ -255,7 +260,12 @@ func TestRewindStoreCapturesShellWorkspaceChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	counts, err := store.Counts()
-	if err != nil || counts[0] != 4 {
+	want := 4
+	if runtime.GOOS == "windows" {
+		// File mode changes are not observable on Windows.
+		want = 3
+	}
+	if err != nil || counts[0] != want {
 		t.Fatalf("unexpected shell checkpoint count: %#v err=%v", counts, err)
 	}
 	if _, _, err := store.Restore(0); err != nil {
@@ -269,9 +279,11 @@ func TestRewindStoreCapturesShellWorkspaceChanges(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "created.txt")); !os.IsNotExist(err) {
 		t.Fatalf("shell-created file remained: %v", err)
 	}
-	mode, err := os.Stat(filepath.Join(root, "mode.txt"))
-	if err != nil || mode.Mode().Perm() != 0o600 {
-		t.Fatalf("shell mode change was not restored: mode=%v err=%v", mode, err)
+	if runtime.GOOS != "windows" {
+		mode, err := os.Stat(filepath.Join(root, "mode.txt"))
+		if err != nil || mode.Mode().Perm() != 0o600 {
+			t.Fatalf("shell mode change was not restored: mode=%v err=%v", mode, err)
+		}
 	}
 	internal, _ := os.ReadFile(filepath.Join(root, ".git", "internal"))
 	if string(internal) != "changed" {

@@ -3,6 +3,7 @@ package workspace
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -32,6 +33,9 @@ func TestLoadEnvrcRequiresTrustAndCurrentRoot(t *testing.T) {
 }
 
 func TestLoadEnvrcViaBash(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("envrc execution requires a Unix bash environment")
+	}
 	root := filepath.Join(t.TempDir(), "workspace with spaces")
 	if err := os.Mkdir(root, 0o700); err != nil {
 		t.Fatal(err)
