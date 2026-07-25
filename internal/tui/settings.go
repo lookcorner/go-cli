@@ -14,7 +14,7 @@ type settingsState struct {
 	err      string
 }
 
-const settingsCount = 8
+const settingsCount = 9
 
 func (m *model) openSettings() {
 	m.settings = &settingsState{}
@@ -90,9 +90,18 @@ func (m *model) applySetting(selected int) {
 			state.err = persistSetting(m.persistGroupTools(m.groupToolVerbs), func() { m.groupToolVerbs = previous })
 		}
 		if state.err == "" && !m.minimal {
-			m.refreshToolDisplay()
+			m.refreshToolDisplay(m.collapsedEditBlocks, previous)
 		}
 	case 6:
+		previous := m.collapsedEditBlocks
+		m.collapsedEditBlocks = !previous
+		if m.persistEditBlocks != nil {
+			state.err = persistSetting(m.persistEditBlocks(m.collapsedEditBlocks), func() { m.collapsedEditBlocks = previous })
+		}
+		if state.err == "" && !m.minimal {
+			m.refreshToolDisplay(previous, m.groupToolVerbs)
+		}
+	case 7:
 		previous := m.mermaidMode
 		switch m.mermaidMode {
 		case "auto":
@@ -105,7 +114,7 @@ func (m *model) applySetting(selected int) {
 		if m.persistMermaid != nil {
 			state.err = persistSetting(m.persistMermaid(m.mermaidMode), func() { m.mermaidMode = previous })
 		}
-	case 7:
+	case 8:
 		previousName, previousTheme := m.themeName, m.theme
 		m.themeName = nextTheme(m.themeName)
 		m.theme = paletteForAuto(m.themeName, m.autoDarkTheme, m.autoLightTheme)
@@ -153,6 +162,7 @@ func (m *model) settingsContent() string {
 		settingLine("Vim navigation", m.vimMode),
 		settingLine("Minimal by default", m.defaultMinimal),
 		settingLine("Group tool verbs", m.groupToolVerbs),
+		settingLine("Collapsed edit blocks", m.collapsedEditBlocks),
 		fmt.Sprintf("Mermaid rendering: %s", mermaidMode),
 		fmt.Sprintf("Theme: %s", m.themeName),
 	}
@@ -163,12 +173,12 @@ func (m *model) settingsContent() string {
 	return content
 }
 
-func (m *model) refreshToolDisplay() {
+func (m *model) refreshToolDisplay(previousCollapsedEditBlocks, previousGroupToolVerbs bool) {
 	if m.runner == nil || strings.TrimSpace(m.runner.SessionPath) == "" {
 		return
 	}
 	previous, _, _, err := sessionDisplayTranscript(
-		m.runner.SessionPath, m.workspace, m.collapsedEditBlocks, !m.groupToolVerbs,
+		m.runner.SessionPath, m.workspace, previousCollapsedEditBlocks, previousGroupToolVerbs,
 	)
 	if err != nil || strings.TrimSpace(m.transcript.String()) != strings.TrimSpace(previous) {
 		return

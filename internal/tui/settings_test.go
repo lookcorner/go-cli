@@ -3,6 +3,7 @@ package tui
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -58,6 +59,10 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 			booleans = append(booleans, "group")
 			return nil
 		},
+		persistEditBlocks: func(value bool) error {
+			booleans = append(booleans, "edits")
+			return nil
+		},
 		persistScreenMode: func(value string) error {
 			screenModes = append(screenModes, value)
 			return nil
@@ -73,8 +78,8 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 			t.Fatalf("index=%d command=%v err=%q status=%q", index, command != nil, m.settings.err, m.status)
 		}
 	}
-	if !m.showTimestamps || !m.showTimeline || !m.compactMode || !m.vimMode || !m.defaultMinimal || !m.groupToolVerbs ||
-		strings.Join(booleans, ",") != "timestamps,timeline,compact,vim,group" || strings.Join(screenModes, ",") != "minimal" {
+	if !m.showTimestamps || !m.showTimeline || !m.compactMode || !m.vimMode || !m.defaultMinimal || !m.groupToolVerbs || !m.collapsedEditBlocks ||
+		strings.Join(booleans, ",") != "timestamps,timeline,compact,vim,group,edits" || strings.Join(screenModes, ",") != "minimal" {
 		t.Fatalf("timestamps=%v timeline=%v compact=%v vim=%v persisted=%v", m.showTimestamps, m.showTimeline, m.compactMode, m.vimMode, booleans)
 	}
 	if m.themeName != "grokday" || m.theme.name != "grokday" || strings.Join(themes, ",") != "grokday" {
@@ -107,7 +112,7 @@ func TestSettingsPanelRollsBackFailedPersistence(t *testing.T) {
 		t.Fatalf("command=%v minimal=%v err=%q", command != nil, m.defaultMinimal, m.settings.err)
 	}
 
-	m.settings.selected = 6
+	m.settings.selected = 7
 	m.mermaidMode = "auto"
 	m.persistMermaid = func(string) error { return errors.New("read only") }
 	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
@@ -116,7 +121,7 @@ func TestSettingsPanelRollsBackFailedPersistence(t *testing.T) {
 		t.Fatalf("command=%v Mermaid=%q err=%q", command != nil, m.mermaidMode, m.settings.err)
 	}
 
-	m.settings.selected = 7
+	m.settings.selected = 8
 	m.persistTheme = func(string) error { return errors.New("read only") }
 	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)
@@ -131,6 +136,14 @@ func TestSettingsPanelRollsBackFailedPersistence(t *testing.T) {
 	m = updated.(*model)
 	if command != nil || !m.groupToolVerbs || m.settings.err != "read only" {
 		t.Fatalf("command=%v grouped=%v err=%q", command != nil, m.groupToolVerbs, m.settings.err)
+	}
+
+	m.settings.selected = 6
+	m.persistEditBlocks = func(bool) error { return errors.New("read only") }
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.collapsedEditBlocks || m.settings.err != "read only" {
+		t.Fatalf("command=%v collapsed=%v err=%q", command != nil, m.collapsedEditBlocks, m.settings.err)
 	}
 }
 
@@ -213,5 +226,75 @@ func TestSettingsGroupToolVerbsPreservesLocalTranscriptContent(t *testing.T) {
 	m = updated.(*model)
 	if m.groupToolVerbs || m.transcript.String() != "local help output" {
 		t.Fatalf("grouped=%v transcript=%q", m.groupToolVerbs, m.transcript.String())
+	}
+}
+
+func TestSettingsCollapsedEditBlocksRefoldsTranscriptImmediately(t *testing.T) {
+	logger, err := session.NewLoggerWithID(t.TempDir(), "settings-edits")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.AppendPrompt("edit", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append("model_response", map[string]any{
+		"response_id": "response-1", "tool_call_count": 2,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for index, change := range []struct{ old, new string }{
+		{"old", "new\nline"},
+		{"next\nline", "next"},
+	} {
+		id := fmt.Sprintf("edit-%d", index)
+		if err := logger.Append("tool_call", map[string]any{
+			"call_id": id, "name": "edit_file",
+			"arguments": json.RawMessage(fmt.Sprintf(
+				`{"path":"main.go","old_text":%q,"new_text":%q}`, change.old, change.new,
+			)),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := logger.Append("tool_result", map[string]any{
+			"call_id": id, "name": "edit_file", "output": "edited main.go (1 replacement(s))",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := logger.Append("model_response", map[string]any{
+		"response_id": "response-2", "text": "done", "tool_call_count": 0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	path := logger.Path()
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	expanded, messages, expands, err := sessionDisplayTranscript(path, "", false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	persisted := false
+	m := &model{
+		width: 80, height: 20, runner: &agent.Runner{SessionPath: path},
+		groupToolVerbs: true, settings: &settingsState{selected: 6},
+		persistEditBlocks: func(value bool) error { persisted = value; return nil },
+	}
+	m.replaceDisplayTranscript(expanded, messages, expands)
+	if strings.Count(m.transcript.String(), "#### Tool: `edit_file`") != 2 {
+		t.Fatalf("initial transcript=%q", m.transcript.String())
+	}
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || !m.collapsedEditBlocks || !persisted ||
+		!strings.Contains(m.transcript.String(), "Edit `main.go` +3/-3") ||
+		strings.Contains(m.transcript.String(), "#### Tool: `edit_file`") {
+		t.Fatalf("command=%v collapsed=%v persisted=%v transcript=%q", command != nil, m.collapsedEditBlocks, persisted, m.transcript.String())
+	}
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.collapsedEditBlocks || persisted ||
+		strings.Count(m.transcript.String(), "#### Tool: `edit_file`") != 2 {
+		t.Fatalf("command=%v collapsed=%v persisted=%v transcript=%q", command != nil, m.collapsedEditBlocks, persisted, m.transcript.String())
 	}
 }
