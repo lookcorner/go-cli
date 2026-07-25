@@ -80,6 +80,7 @@ type RemoteHints struct {
 	PlanMode    *bool `json:"plan_mode"`
 	SendNow     *bool `json:"send_now"`
 	SmallScreen *bool `json:"small_screen"`
+	WordSelect  *bool `json:"word_select"`
 }
 
 type RemoteAnnouncement = announcement.Announcement
@@ -206,6 +207,9 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 	}
 	if !c.uiContextualSmallConfigured {
 		c.UI.ContextualHints.SmallScreen = remote.ContextualHints == nil || remote.ContextualHints.SmallScreen == nil || *remote.ContextualHints.SmallScreen
+	}
+	if !c.uiContextualWordConfigured {
+		c.UI.ContextualHints.WordSelect = remote.ContextualHints == nil || remote.ContextualHints.WordSelect == nil || *remote.ContextualHints.WordSelect
 	}
 	applyContextualHintsEnvironment(c)
 	if remote.OfficialMarketplaceAutoRegister != nil {

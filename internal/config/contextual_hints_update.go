@@ -16,6 +16,10 @@ func UpdateContextualSmallScreenHint(path string, enabled bool) error {
 	return updateContextualHint(path, "small_screen", enabled)
 }
 
+func UpdateContextualWordSelectHint(path string, enabled bool) error {
+	return updateContextualHint(path, "word_select", enabled)
+}
+
 func updateContextualHint(path, name string, enabled bool) error {
 	return updateUserConfig(path, func(root map[string]any) error {
 		ui, _ := root["ui"].(map[string]any)

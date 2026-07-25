@@ -100,16 +100,18 @@ const (
 
 type selectionPoint struct{ line, column int }
 type mouseSelectionEvent struct {
-	phase mouseSelectionPhase
-	point selectionPoint
-	lines []string
-	at    time.Time
+	phase     mouseSelectionPhase
+	point     selectionPoint
+	lines     []string
+	at        time.Time
+	assistant bool
 }
 type selectionClearEvent struct{ nonce uint64 }
 type contextualUndoClearEvent struct{ nonce uint64 }
 type planNudgeClearEvent struct{ nonce uint64 }
 type sendNowClearEvent struct{ nonce uint64 }
 type smallScreenHintTickEvent struct{ nonce uint64 }
+type wordSelectHintTickEvent struct{ nonce uint64 }
 
 type contextualHintState struct {
 	enabled bool
@@ -125,6 +127,16 @@ type smallScreenHintState struct {
 	active    bool
 	remaining time.Duration
 	nonce     uint64
+	persist   func(bool) error
+}
+
+type wordSelectHintState struct {
+	enabled   bool
+	active    bool
+	shown     int
+	remaining time.Duration
+	nonce     uint64
+	input     string
 	persist   func(bool) error
 }
 
@@ -685,6 +697,7 @@ type model struct {
 	planModeHint        contextualHintState
 	sendNowHint         contextualHintState
 	smallScreenHint     smallScreenHintState
+	wordSelectHint      wordSelectHintState
 	multiline           bool
 	history             []string
 	historyIndex        int
@@ -932,6 +945,8 @@ type UIOptions struct {
 	SetContextualSendNow func(bool) error
 	ContextualSmall      bool
 	SetContextualSmall   func(bool) error
+	ContextualWord       bool
+	SetContextualWord    func(bool) error
 	DefaultPermission    string
 	SetDefaultPermission func(string) error
 	CancelSubs           string
@@ -1124,6 +1139,10 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		smallScreenHint: smallScreenHintState{
 			enabled: options.ContextualSmall,
 			persist: options.SetContextualSmall,
+		},
+		wordSelectHint: wordSelectHintState{
+			enabled: options.ContextualWord,
+			persist: options.SetContextualWord,
 		},
 		defaultPermission:    options.DefaultPermission,
 		persistPermission:    options.SetDefaultPermission,
@@ -1369,13 +1388,13 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 					m.selection.table, m.selection.fromCell, m.selection.toCell = geometry, cell, cell
 				}
 			}
+			clickedAt := msg.at
+			if clickedAt.IsZero() {
+				clickedAt = time.Now()
+			}
+			count := m.countTextClick(clickedAt, msg.point)
+			m.selectionClick = selectionClickState{line: msg.point.line, count: count, at: clickedAt}
 			if m.selectionMode.selectsWord() {
-				clickedAt := msg.at
-				if clickedAt.IsZero() {
-					clickedAt = time.Now()
-				}
-				count := m.countTextClick(clickedAt, msg.point)
-				m.selectionClick = selectionClickState{line: msg.point.line, count: count, at: clickedAt}
 				line := m.selection.lines[msg.point.line]
 				from, to := 0, 0
 				switch count {
@@ -1403,6 +1422,10 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 					m.selection.anchor.column, m.selection.head.column = from, to-1
 					m.selection.moved, m.selection.semantic = true, true
 					return m, m.copyTextSelection()
+				}
+			} else if count == 2 && msg.assistant {
+				if command := m.showWordSelectHint(); command != nil {
+					return m, command
 				}
 			}
 		case selectionMove:
@@ -1470,6 +1493,22 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, m.smallScreenHintTick()
+	case wordSelectHintTickEvent:
+		if !m.wordSelectHint.active || m.wordSelectHint.nonce != msg.nonce {
+			return m, nil
+		}
+		if m.wordSelectHint.input != string(m.input) {
+			m.wordSelectHint.active = false
+			return m, nil
+		}
+		if m.wordSelectHintCanRender() {
+			m.wordSelectHint.remaining -= 100 * time.Millisecond
+			if m.wordSelectHint.remaining <= 0 {
+				m.wordSelectHint.active = false
+				return m, nil
+			}
+		}
+		return m, m.wordSelectHintTick()
 	case mouseClickEvent:
 		switch msg.action {
 		case "approval_option":
@@ -2136,6 +2175,20 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	stroke := msg.Keystroke()
 	if m.gboom != nil {
 		return m.handleGboomKey(msg)
+	}
+	if stroke == "ctrl+y" && m.wordSelectHintCanAccept() {
+		previous := m.selectionMode
+		m.selectionMode = selectionWord
+		m.wordSelectHint.active = false
+		if m.persistSelection != nil {
+			if err := m.persistSelection(m.selectionMode.canonical()); err != nil {
+				m.selectionMode = previous
+				m.status = "setting update failed"
+				return m, nil
+			}
+		}
+		m.status = "Text selection: word select"
+		return m, nil
 	}
 	if key.Code == tea.KeyEsc && m.selection != nil && m.scrollSearch == nil {
 		m.selection = nil
@@ -4538,6 +4591,9 @@ func (m *model) editInput(message tea.KeyPressMsg) tea.Cmd {
 		m.insertInput(key.Text)
 		edited = true
 	}
+	if edited {
+		m.wordSelectHint.active = false
+	}
 	if edited && m.inputClear.observeUserEdit(before, len(m.input)) && m.undoHint.enabled && m.undoHint.shown < 3 {
 		m.undoHint.shown++
 		m.undoHint.nonce++
@@ -4584,6 +4640,35 @@ func (m *model) maybeStartSmallScreenHint() tea.Cmd {
 	m.smallScreenHint.remaining = 3 * time.Second
 	m.smallScreenHint.nonce++
 	return m.smallScreenHintTick()
+}
+
+func (m *model) showWordSelectHint() tea.Cmd {
+	if !m.wordSelectHint.enabled || m.wordSelectHint.shown >= 3 || m.selectionMode.selectsWord() ||
+		!m.wordSelectHintCanRender() {
+		return nil
+	}
+	m.wordSelectHint.active = true
+	m.wordSelectHint.shown++
+	m.wordSelectHint.remaining = 20 * time.Second
+	m.wordSelectHint.input = string(m.input)
+	m.wordSelectHint.nonce++
+	return m.wordSelectHintTick()
+}
+
+func (m *model) wordSelectHintTick() tea.Cmd {
+	nonce := m.wordSelectHint.nonce
+	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
+		return wordSelectHintTickEvent{nonce: nonce}
+	})
+}
+
+func (m *model) wordSelectHintCanAccept() bool {
+	return m.wordSelectHint.active && m.wordSelectHintCanRender() &&
+		m.wordSelectHint.input == string(m.input)
+}
+
+func (m *model) wordSelectHintCanRender() bool {
+	return m.smallScreenHintCanRender()
 }
 
 func smallScreenBandContains(rows int) bool {
@@ -5255,7 +5340,9 @@ func (m *model) View() tea.View {
 		footer = strings.Join(parts, "\n") + "\n" + ansiDim + truncate(hint, width) + ansiReset
 	}
 	statusText := m.status
-	if m.smallScreenHint.active && m.smallScreenHintCanRender() {
+	if m.wordSelectHint.active && m.wordSelectHintCanRender() {
+		statusText = "Want double-click to select? /settings → Text selection · Ctrl+Y: enable now"
+	} else if m.smallScreenHint.active && m.smallScreenHintCanRender() {
 		statusText = "Tight on space? Try /compact-mode"
 	}
 	status := ansiDim + truncate(statusText, width) + ansiReset
@@ -5324,7 +5411,11 @@ func (m *model) View() tea.View {
 			if mouse.Y >= bannerHeight+1 && mouse.Y <= bodyEnd {
 				adjusted := mouse
 				adjusted.Y -= bannerHeight
-				event := mouseSelectionEvent{phase: selectionStart, point: selectionPointForMouse(adjusted, plainVisible), lines: plainVisible, at: time.Now()}
+				point := selectionPointForMouse(adjusted, plainVisible)
+				event := mouseSelectionEvent{
+					phase: selectionStart, point: point, lines: plainVisible, at: time.Now(),
+					assistant: showingTranscript && m.transcriptRoleAtVisibleLine(point.line, transcriptLineCount) == "assistant",
+				}
 				return func() tea.Msg { return event }
 			}
 			if mouse.Y < bodyEnd+3 {
@@ -5791,6 +5882,19 @@ func selectionPointForMouse(mouse tea.Mouse, lines []string) selectionPoint {
 	line := min(max(mouse.Y-1, 0), len(lines)-1)
 	column := min(max(mouse.X, 0), max(displayWidth(lines[line])-1, 0))
 	return selectionPoint{line: line, column: column}
+}
+
+func (m *model) transcriptRoleAtVisibleLine(line, total int) string {
+	fullLine := max(total+m.scrollTail-m.contentHeight()-m.scroll, 0) + line
+	role := ""
+	for index, message := range m.transcriptMessages {
+		start := m.jumpLine(index)
+		if fullLine < start {
+			break
+		}
+		role = message.role
+	}
+	return role
 }
 
 func (m *model) countTextClick(at time.Time, point selectionPoint) uint8 {

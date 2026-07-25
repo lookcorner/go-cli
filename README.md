@@ -805,6 +805,12 @@ Dragging across visible transcript text copies the selection through OSC 52.
 copies a URL or tmux-style character class on double-click and the rendered line
 on triple-click. Table drags copy one cell or a rectangular TSV range; triple-clicking
 a cell copies that cell, while triple-clicking a table border copies the whole table.
+When `flash` or `hold` is active, a second click on assistant text shows
+`Want double-click to select? /settings → Text selection · Ctrl+Y: enable now`
+for up to 20 visible seconds, at most three times per session. The timer pauses
+while another view covers the status row, prompt edits retire the hint, and
+`Ctrl+Y` switches and persists `word_select` only while the unchanged hint is
+visible. Set `word_select = false` under `[ui.contextual_hints]` to hide it.
 Legacy boolean `keep_text_selection`, `selection_highlight_duration_ms = 0`, and
 `double_click_action = "word_select"` settings are migrated with modern values taking precedence.
 `[ui] word_separators` overrides the default separator set,
