@@ -1,7 +1,10 @@
 package tui
 
 import (
+	"fmt"
+	"math"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -26,6 +29,11 @@ type mermaidRelation struct {
 	note  string
 }
 
+type mermaidPieSlice struct {
+	label string
+	value float64
+}
+
 var mermaidOperators = []string{
 	"||--o{", "||--|{", "}o--o{", "}o..o{", "}o--||", "}|..|{",
 	"<|--", "<-->", "--|>", "-.->", "-->>", "->>", "--x", "--o", "-x", "==>", "-->", "<--",
@@ -47,6 +55,9 @@ func renderMermaid(source string, width int, theme themePalette) ([]string, bool
 	header := strings.Fields(strings.ToLower(statements[0]))
 	if len(header) == 0 {
 		return nil, false
+	}
+	if header[0] == "pie" {
+		return renderMermaidPie(statements, width, theme)
 	}
 	var relations []mermaidRelation
 	var nodes []mermaidNode
@@ -76,6 +87,57 @@ func renderMermaid(source string, width int, theme themePalette) ([]string, bool
 		for _, line := range mermaidBox(node.label, min(max(width, 4), maxMermaidLabelWidth+4)) {
 			lines = append(lines, theme.code+line+ansiReset)
 		}
+	}
+	return lines, true
+}
+
+func renderMermaidPie(statements []string, width int, theme themePalette) ([]string, bool) {
+	showData := false
+	for _, field := range strings.Fields(statements[0])[1:] {
+		if strings.EqualFold(field, "showData") {
+			showData = true
+		}
+	}
+	title := ""
+	slices := make([]mermaidPieSlice, 0, len(statements)-1)
+	total := 0.0
+	for _, statement := range statements[1:] {
+		if strings.HasPrefix(strings.ToLower(statement), "title ") {
+			title = mermaidCleanLabel(statement[len("title "):])
+			continue
+		}
+		label, rawValue, ok := strings.Cut(statement, ":")
+		label = mermaidCleanLabel(label)
+		value, err := strconv.ParseFloat(strings.TrimSpace(rawValue), 64)
+		if !ok || label == "" || err != nil || math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+			return nil, false
+		}
+		slices = append(slices, mermaidPieSlice{label: label, value: value})
+		total += value
+	}
+	if len(slices) == 0 || total <= 0 || math.IsInf(total, 0) {
+		return nil, false
+	}
+	sort.SliceStable(slices, func(i, j int) bool { return slices[i].value > slices[j].value })
+	lines := []string{ansiDim + mermaidFit("◇ mermaid pie", width) + ansiReset}
+	if title != "" {
+		lines = append(lines, theme.heading+mermaidFit(title, width)+ansiReset)
+	}
+	for _, slice := range slices {
+		percent := slice.value / total * 100
+		label := slice.label
+		if showData {
+			label += " [" + strconv.FormatFloat(slice.value, 'f', -1, 64) + "]"
+		}
+		percentText := fmt.Sprintf("%d%%", int(math.Round(percent)))
+		lines = append(lines, theme.code+mermaidFit(label, width)+ansiReset)
+		available := max(width-displayWidth(percentText)-1, 0)
+		barWidth := min(available, max(0, int(math.Round(percent/100*float64(available)))))
+		metric := padDisplayRight(strings.Repeat("█", barWidth), available)
+		if available > 0 {
+			metric += " "
+		}
+		lines = append(lines, theme.code+mermaidFit(metric+percentText, width)+ansiReset)
 	}
 	return lines, true
 }

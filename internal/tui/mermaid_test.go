@@ -70,10 +70,73 @@ func TestRenderMermaidSupportsReferenceDiagramKinds(t *testing.T) {
 	}
 }
 
+func TestRenderMermaidPie(t *testing.T) {
+	lines, ok := renderMermaid("pie showData\ntitle Work mix\n\"Build\" : 3\nTest : 1", 24, paletteFor("groknight"))
+	if !ok {
+		t.Fatal("supported Mermaid pie was rejected")
+	}
+	rendered := stripUIANSI(strings.Join(lines, "\n"))
+	for _, expected := range []string{"◇ mermaid pie", "Work mix", "Build [3]", "75%", "Test [1]", "25%", "█"} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("rendered pie missing %q:\n%s", expected, rendered)
+		}
+	}
+	if strings.Index(rendered, "Build") > strings.Index(rendered, "Test") {
+		t.Fatalf("pie slices were not sorted by value:\n%s", rendered)
+	}
+	for _, line := range lines {
+		if displayWidth(stripUIANSI(line)) > 24 {
+			t.Fatalf("pie line exceeds width: %q", stripUIANSI(line))
+		}
+	}
+}
+
+func TestRenderMarkdownRendersClosedMermaidPie(t *testing.T) {
+	source := "Before\n```mermaid\npie\nA : 2\nB : 1\n```\nAfter"
+	rendered := stripUIANSI(strings.Join(renderMarkdown(source, 32), "\n"))
+	for _, expected := range []string{"Before", "◇ mermaid pie", "A", "67%", "B", "33%", "After"} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("rendered Mermaid pie missing %q:\n%s", expected, rendered)
+		}
+	}
+	if strings.Contains(rendered, "A : 2") || strings.Contains(rendered, "B : 1") {
+		t.Fatalf("closed Mermaid pie source was not replaced:\n%s", rendered)
+	}
+}
+
+func TestRenderMermaidPieFitsNarrowWidthsAndZeroSlices(t *testing.T) {
+	lines, ok := renderMermaid("pie\nLong label : 1\nZero : 0", 5, paletteFor("groknight"))
+	if !ok {
+		t.Fatal("valid narrow Mermaid pie was rejected")
+	}
+	rendered := stripUIANSI(strings.Join(lines, "\n"))
+	if !strings.Contains(rendered, "100%") || !strings.Contains(rendered, "0%") {
+		t.Fatalf("narrow pie lost percentages:\n%s", rendered)
+	}
+	for _, line := range lines {
+		if displayWidth(stripUIANSI(line)) > 5 {
+			t.Fatalf("narrow pie line exceeds width: %q", stripUIANSI(line))
+		}
+	}
+}
+
+func TestRenderMermaidPieRejectsInvalidCharts(t *testing.T) {
+	for _, source := range []string{
+		"pie",
+		"pie\nA : 0",
+		"pie\nA : -1\nB : 2",
+		"pie\nA : nope",
+	} {
+		if _, ok := renderMermaid(source, 40, paletteFor("groknight")); ok {
+			t.Fatalf("invalid pie was accepted: %q", source)
+		}
+	}
+}
+
 func TestRenderMarkdownKeepsIncompleteAndUnsupportedMermaidSource(t *testing.T) {
 	for _, source := range []string{
 		"```mermaid\nflowchart TD\nA --> B",
-		"```mermaid\npie\n  \"A\" : 1\n```",
+		"```mermaid\npie\n  \"A\" : nope\n```",
 	} {
 		rendered := stripUIANSI(strings.Join(renderMarkdown(source, 80), "\n"))
 		if strings.Contains(rendered, "◇ mermaid") || !strings.Contains(rendered, "mermaid") || !strings.Contains(rendered, "A") {
