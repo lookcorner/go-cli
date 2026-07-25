@@ -314,6 +314,7 @@ func PathForID(dir, id string) (string, error) {
 
 type Info struct {
 	SessionID       string    `json:"sessionId"`
+	Source          string    `json:"source,omitempty"`
 	CWD             string    `json:"cwd"`
 	DisplayCWD      string    `json:"displayCwd,omitempty"`
 	HeadCommit      string    `json:"headCommit,omitempty"`

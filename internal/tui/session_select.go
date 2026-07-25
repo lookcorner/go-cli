@@ -62,6 +62,20 @@ func (m *model) openSessionSelect() tea.Cmd {
 	m.status = "loading sessions"
 	return func() tea.Msg {
 		items, err := session.List(dir, "")
+		if err == nil {
+			for _, item := range session.ForeignSummaries(m.workspace, m.foreignSessions) {
+				items = append(items, session.Info{SessionID: item.ID, Source: item.Source, CWD: item.CWD, HeadBranch: item.Branch, Title: item.Title, CreatedAt: item.UpdatedAt, UpdatedAt: item.UpdatedAt})
+			}
+			slices.SortFunc(items, func(left, right session.Info) int {
+				if result := right.UpdatedAt.Compare(left.UpdatedAt); result != 0 {
+					return result
+				}
+				if result := strings.Compare(left.Source, right.Source); result != 0 {
+					return result
+				}
+				return strings.Compare(left.SessionID, right.SessionID)
+			})
+		}
 		return sessionSelectLoadedEvent{dir: dir, sessions: items, err: err}
 	}
 }
@@ -125,6 +139,10 @@ func (m *model) handleSessionSelectKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd)
 	}
 	if state.err == "" && (stroke == "ctrl+d" || !state.searchInput && strings.EqualFold(key.Text, "d")) && len(state.sessions) > 0 {
 		selected := state.sessions[state.selected]
+		if selected.Source != "" {
+			m.status = "can't delete an external session"
+			return m, nil
+		}
 		if selected.SessionID == m.runner.SessionID {
 			m.status = "can't delete the active session"
 			return m, nil
@@ -202,6 +220,13 @@ func (m *model) handleSessionSelectKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd)
 		return m, nil
 	}
 	selected := state.sessions[state.selected]
+	if selected.Source != "" {
+		m.sessionSelect = nil
+		m.newSession = true
+		m.newSessionPrompt = "/resume-" + selected.Source + " " + selected.SessionID
+		m.status = "resuming " + selected.Source + " session"
+		return m, tea.Quit
+	}
 	if selected.SessionID == m.runner.SessionID {
 		m.sessionSelect = nil
 		m.status = "session already active"
@@ -220,16 +245,24 @@ func (m *model) handleSessionSelectKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd)
 func (s *sessionSelectState) resetSelection(current string) {
 	s.selected = 0
 	for index, item := range s.sessions {
-		if item.SessionID != current {
+		if item.Source != "" || item.SessionID != current {
 			s.selected = index
 			return
 		}
 	}
 }
 
-func runSessionSearch(dir, query string, seq uint64) tea.Cmd {
+func runSessionSearch(dir, query string, seq uint64, all []session.Info) tea.Cmd {
 	return func() tea.Msg {
 		result, err := session.Search(dir, session.SearchRequest{Query: query, Limit: 100})
+		if err == nil {
+			needle := strings.ToLower(query)
+			for _, item := range all {
+				if item.Source != "" && strings.Contains(strings.ToLower(item.Title+"\n"+item.SessionID+"\n"+item.CWD), needle) {
+					result.Results = append(result.Results, session.SearchHit{SessionID: item.Source + ":" + item.SessionID, CWD: item.CWD, Summary: item.Title, UpdatedAt: item.UpdatedAt.Format(time.RFC3339)})
+				}
+			}
+		}
 		return sessionSelectSearchEvent{seq: seq, result: result, err: err}
 	}
 }
@@ -245,7 +278,7 @@ func (m *model) startSessionSelectSearch(event sessionSelectSearchRequestEvent) 
 	if state == nil || event.seq != state.seq {
 		return nil
 	}
-	return runSessionSearch(state.dir, event.query, event.seq)
+	return runSessionSearch(state.dir, event.query, event.seq, state.all)
 }
 
 func (m *model) finishSessionSelectSearch(event sessionSelectSearchEvent) {
@@ -262,7 +295,11 @@ func (m *model) finishSessionSelectSearch(event sessionSelectSearchEvent) {
 	}
 	byID := make(map[string]session.Info, len(state.all))
 	for _, item := range state.all {
-		byID[item.SessionID] = item
+		key := item.SessionID
+		if item.Source != "" {
+			key = item.Source + ":" + item.SessionID
+		}
+		byID[key] = item
 	}
 	state.sessions = make([]session.Info, 0, len(event.result.Results))
 	for _, hit := range event.result.Results {
@@ -340,8 +377,10 @@ func (m *model) sessionSelectContent() string {
 			title = "Untitled session"
 		}
 		suffix := ""
-		if item.SessionID == m.runner.SessionID {
+		if item.Source == "" && item.SessionID == m.runner.SessionID {
 			suffix = " (current)"
+		} else if item.Source != "" {
+			suffix = " [" + item.Source + "]"
 		}
 		updated := item.UpdatedAt.Local().Format("2006-01-02 15:04")
 		lines = append(lines, fmt.Sprintf("%s%s · %s · %s · %s", title, suffix, item.SessionID, item.CWD, updated))

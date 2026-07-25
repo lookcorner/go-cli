@@ -1100,6 +1100,16 @@ func (c *Catalog) Names() []string {
 	return c.namesLocked()
 }
 
+func (c *Catalog) Has(name string) bool {
+	if c == nil {
+		return false
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	skill, ok := c.resolveSkillLocked(name)
+	return ok && !c.disabled[skill.Name] && !c.disabled[qualifiedSkillName(skill)]
+}
+
 func (c *Catalog) namesLocked() []string {
 	names := make([]string, 0, len(c.byName))
 	for name := range c.byName {

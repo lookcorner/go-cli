@@ -70,11 +70,14 @@ type RemoteSettings struct {
 	CursorAgents                     *bool                `json:"cursor_agents_enabled"`
 	CursorMCPs                       *bool                `json:"cursor_mcps_enabled"`
 	CursorHooks                      *bool                `json:"cursor_hooks_enabled"`
+	CursorSessions                   *bool                `json:"cursor_sessions_enabled"`
 	ClaudeSkills                     *bool                `json:"claude_skills_enabled"`
 	ClaudeRules                      *bool                `json:"claude_rules_enabled"`
 	ClaudeAgents                     *bool                `json:"claude_agents_enabled"`
 	ClaudeMCPs                       *bool                `json:"claude_mcps_enabled"`
 	ClaudeHooks                      *bool                `json:"claude_hooks_enabled"`
+	ClaudeSessions                   *bool                `json:"claude_sessions_enabled"`
+	CodexSessions                    *bool                `json:"codex_sessions_enabled"`
 }
 
 type RemoteHints struct {
@@ -347,8 +350,9 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 		c.WebFetch.AllowedDomains = append([]string(nil), remote.WebFetchAllowedDomains...)
 		c.WebFetch.DomainsConfigured = true
 	}
-	applyRemoteVendor(&c.Compat.Cursor, c.compatConfigured.Cursor, "CURSOR", remote.CursorSkills, remote.CursorRules, remote.CursorAgents, remote.CursorMCPs, remote.CursorHooks)
-	applyRemoteVendor(&c.Compat.Claude, c.compatConfigured.Claude, "CLAUDE", remote.ClaudeSkills, remote.ClaudeRules, remote.ClaudeAgents, remote.ClaudeMCPs, remote.ClaudeHooks)
+	applyRemoteVendor(&c.Compat.Cursor, c.compatConfigured.Cursor, "CURSOR", remote.CursorSkills, remote.CursorRules, remote.CursorAgents, remote.CursorMCPs, remote.CursorHooks, remote.CursorSessions)
+	applyRemoteVendor(&c.Compat.Claude, c.compatConfigured.Claude, "CLAUDE", remote.ClaudeSkills, remote.ClaudeRules, remote.ClaudeAgents, remote.ClaudeMCPs, remote.ClaudeHooks, remote.ClaudeSessions)
+	applyRemoteVendor(&c.Compat.Codex, c.compatConfigured.Codex, "CODEX", nil, nil, nil, nil, nil, remote.CodexSessions)
 }
 
 type goalRoleModels []GoalRoleModel
@@ -368,9 +372,9 @@ func (m *goalRoleModels) UnmarshalJSON(data []byte) error {
 }
 
 func applyRemoteVendor(target *compat.Vendor, configured compat.Vendor, vendor string, values ...*bool) {
-	fields := []*bool{&target.Skills, &target.Rules, &target.Agents, &target.Mcps, &target.Hooks}
-	configuredFields := []bool{configured.Skills, configured.Rules, configured.Agents, configured.Mcps, configured.Hooks}
-	names := []string{"SKILLS", "RULES", "AGENTS", "MCPS", "HOOKS"}
+	fields := []*bool{&target.Skills, &target.Rules, &target.Agents, &target.Mcps, &target.Hooks, &target.Sessions}
+	configuredFields := []bool{configured.Skills, configured.Rules, configured.Agents, configured.Mcps, configured.Hooks, configured.Sessions}
+	names := []string{"SKILLS", "RULES", "AGENTS", "MCPS", "HOOKS", "SESSIONS"}
 	for index, value := range values {
 		if value != nil && !configuredFields[index] {
 			if _, set := envBool("GROK_" + vendor + "_" + names[index] + "_ENABLED"); !set {

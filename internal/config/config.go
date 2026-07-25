@@ -723,16 +723,18 @@ type filePruningConfig struct {
 }
 
 type fileVendorCompat struct {
-	Skills *bool `json:"skills,omitempty" toml:"skills"`
-	Rules  *bool `json:"rules,omitempty" toml:"rules"`
-	Agents *bool `json:"agents,omitempty" toml:"agents"`
-	Mcps   *bool `json:"mcps,omitempty" toml:"mcps"`
-	Hooks  *bool `json:"hooks,omitempty" toml:"hooks"`
+	Skills   *bool `json:"skills,omitempty" toml:"skills"`
+	Rules    *bool `json:"rules,omitempty" toml:"rules"`
+	Agents   *bool `json:"agents,omitempty" toml:"agents"`
+	Mcps     *bool `json:"mcps,omitempty" toml:"mcps"`
+	Hooks    *bool `json:"hooks,omitempty" toml:"hooks"`
+	Sessions *bool `json:"sessions,omitempty" toml:"sessions"`
 }
 
 type fileCompatConfig struct {
 	Cursor fileVendorCompat `json:"cursor,omitempty" toml:"cursor"`
 	Claude fileVendorCompat `json:"claude,omitempty" toml:"claude"`
+	Codex  fileVendorCompat `json:"codex,omitempty" toml:"codex"`
 }
 
 func Load(path string) (Config, error) {
@@ -1555,11 +1557,13 @@ func normalizeReasoningEffort(value string) string {
 func applyCompatConfig(target *compat.Config, source fileCompatConfig) {
 	applyVendorCompat(&target.Cursor, source.Cursor)
 	applyVendorCompat(&target.Claude, source.Claude)
+	applyVendorCompat(&target.Codex, source.Codex)
 }
 
 func markCompatConfig(target *compat.Config, source fileCompatConfig) {
 	markVendorCompat(&target.Cursor, source.Cursor)
 	markVendorCompat(&target.Claude, source.Claude)
+	markVendorCompat(&target.Codex, source.Codex)
 }
 
 func markVendorCompat(target *compat.Vendor, source fileVendorCompat) {
@@ -1568,6 +1572,7 @@ func markVendorCompat(target *compat.Vendor, source fileVendorCompat) {
 	target.Agents = target.Agents || source.Agents != nil
 	target.Mcps = target.Mcps || source.Mcps != nil
 	target.Hooks = target.Hooks || source.Hooks != nil
+	target.Sessions = target.Sessions || source.Sessions != nil
 }
 
 func applyVendorCompat(target *compat.Vendor, source fileVendorCompat) {
@@ -1585,6 +1590,9 @@ func applyVendorCompat(target *compat.Vendor, source fileVendorCompat) {
 	}
 	if source.Hooks != nil {
 		target.Hooks = *source.Hooks
+	}
+	if source.Sessions != nil {
+		target.Sessions = *source.Sessions
 	}
 }
 
@@ -1988,6 +1996,7 @@ func applyEnv(cfg *Config) {
 	}
 	applyCompatEnv(&cfg.Compat.Cursor, "CURSOR")
 	applyCompatEnv(&cfg.Compat.Claude, "CLAUDE")
+	applyCompatEnv(&cfg.Compat.Codex, "CODEX")
 	if value, ok := envBool("GROK_FOLDER_TRUST"); ok {
 		cfg.FolderTrustEnabled = value
 	}
@@ -2453,11 +2462,12 @@ func (c Config) WebSearchEndpoint() (WebSearchConfig, bool) {
 
 func applyCompatEnv(target *compat.Vendor, vendor string) {
 	for surface, field := range map[string]*bool{
-		"SKILLS": &target.Skills,
-		"RULES":  &target.Rules,
-		"AGENTS": &target.Agents,
-		"MCPS":   &target.Mcps,
-		"HOOKS":  &target.Hooks,
+		"SKILLS":   &target.Skills,
+		"RULES":    &target.Rules,
+		"AGENTS":   &target.Agents,
+		"MCPS":     &target.Mcps,
+		"HOOKS":    &target.Hooks,
+		"SESSIONS": &target.Sessions,
 	} {
 		if value, ok := envBool("GROK_" + vendor + "_" + surface + "_ENABLED"); ok {
 			*field = value

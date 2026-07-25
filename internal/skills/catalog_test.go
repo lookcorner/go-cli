@@ -31,6 +31,14 @@ func TestCatalogScanAndTool(t *testing.T) {
 	if names := catalog.Names(); len(names) != 1 || names[0] != "code-review" {
 		t.Fatalf("unexpected names: %#v", names)
 	}
+	if !catalog.Has("CODE-REVIEW") || catalog.Has("missing") || (*Catalog)(nil).Has("code-review") {
+		t.Fatal("skill availability lookup did not match the catalog")
+	}
+	catalog.disabled = map[string]bool{"code-review": true}
+	if catalog.Has("code-review") {
+		t.Fatal("disabled skill was reported available")
+	}
+	catalog.disabled = nil
 	if !strings.Contains(catalog.Summary(), "Review a code change") {
 		t.Fatalf("unexpected summary: %s", catalog.Summary())
 	}

@@ -703,6 +703,7 @@ type model struct {
 	runner              *agent.Runner
 	bridge              *Bridge
 	workspace           string
+	foreignSessions     session.ForeignSources
 	modelName           string
 	defaultModelID      string
 	previousID          string
@@ -1011,6 +1012,7 @@ type UIOptions struct {
 	SetForkModel         func(string) error
 	DashboardPinned      []string
 	OpenDashboard        bool
+	Foreign              session.ForeignSources
 	DashboardDisabled    bool
 	SetDashboardPinned   func([]string) error
 	DashboardReorder     []string
@@ -1146,7 +1148,8 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 	defer func() { runner.ToolObserver = previousToolObserver }()
 	m := &model{
 		ctx: ctx, runner: runner, bridge: bridge, workspace: workspace,
-		modelName: modelName, defaultModelID: options.DefaultModelID, previousID: previousID, width: 80, height: 24,
+		foreignSessions: options.Foreign,
+		modelName:       modelName, defaultModelID: options.DefaultModelID, previousID: previousID, width: 80, height: 24,
 		minimal:       options.Minimal,
 		contextWindow: runner.ContextWindow,
 		status:        "ready", initial: strings.TrimSpace(initialPrompt), historyIndex: -1,

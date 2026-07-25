@@ -281,9 +281,9 @@ func TestApplyRemoteSettingsUsesLocalAndEnvironmentPrecedence(t *testing.T) {
 	cfg.ApplyRemoteSettings(&RemoteSettings{
 		OfficialMarketplaceAutoRegister: boolPointer(true), WebFetchEnabled: boolPointer(true), AutoWakeEnabled: boolPointer(true),
 		WebFetchProxy: stringPointer("https://remote.example"), WebFetchAllowedDomains: []string{"docs.example"},
-		CursorSkills: boolPointer(false), ClaudeHooks: boolPointer(false),
+		CursorSkills: boolPointer(false), ClaudeHooks: boolPointer(false), CursorSessions: boolPointer(false), ClaudeSessions: boolPointer(false), CodexSessions: boolPointer(false),
 	})
-	if cfg.OfficialMarketplaceAutoRegister || cfg.WebFetch.Enabled || cfg.AutoWakeEnabled || cfg.WebFetch.ProxyEndpoint != "https://local.example" || !cfg.Compat.Cursor.Skills || cfg.Compat.Claude.Hooks || !cfg.WebFetch.DomainsConfigured || len(cfg.WebFetch.AllowedDomains) != 1 {
+	if cfg.OfficialMarketplaceAutoRegister || cfg.WebFetch.Enabled || cfg.AutoWakeEnabled || cfg.WebFetch.ProxyEndpoint != "https://local.example" || !cfg.Compat.Cursor.Skills || cfg.Compat.Cursor.Sessions || cfg.Compat.Claude.Hooks || cfg.Compat.Claude.Sessions || cfg.Compat.Codex.Sessions || !cfg.WebFetch.DomainsConfigured || len(cfg.WebFetch.AllowedDomains) != 1 {
 		t.Fatalf("config=%#v", cfg)
 	}
 }

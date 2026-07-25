@@ -2295,6 +2295,43 @@ func TestResumeCommandSelectsPreviousSessionWithoutModelTurn(t *testing.T) {
 	}
 }
 
+func TestResumePickerStartsForeignSessionThroughResumeSkill(t *testing.T) {
+	m := &model{
+		runner: &agent.Runner{SessionID: "current"}, status: "select a session",
+		sessionSelect: &sessionSelectState{sessions: []session.Info{{SessionID: "11111111-1111-4111-8111-111111111111", Source: "claude", CWD: "/work", Title: "Foreign"}}, searchInput: true},
+	}
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command == nil || !m.newSession || m.newSessionPrompt != "/resume-claude 11111111-1111-4111-8111-111111111111" || m.sessionSelect != nil {
+		t.Fatalf("command=%v new=%v prompt=%q picker=%#v", command != nil, m.newSession, m.newSessionPrompt, m.sessionSelect)
+	}
+}
+
+func TestResumePickerTreatsMatchingForeignIDAsExternal(t *testing.T) {
+	m := &model{runner: &agent.Runner{SessionID: "same"}, sessionSelect: &sessionSelectState{sessions: []session.Info{{SessionID: "same", Source: "codex"}}}}
+	m.sessionSelect.resetSelection("same")
+	if m.sessionSelect.selected != 0 || strings.Contains(m.sessionSelectContent(), "(current)") {
+		t.Fatalf("picker=%#v content=%q", m.sessionSelect, m.sessionSelectContent())
+	}
+}
+
+func TestResumePickerSearchesAndProtectsForeignSessions(t *testing.T) {
+	foreign := session.Info{SessionID: "22222222-2222-4222-8222-222222222222", Source: "codex", CWD: "/work", Title: "Deep foreign needle", UpdatedAt: time.Now()}
+	m := &model{
+		runner:        &agent.Runner{SessionID: "current"},
+		sessionSelect: &sessionSelectState{dir: t.TempDir(), all: []session.Info{foreign}, sessions: []session.Info{foreign}, searchInput: true},
+	}
+	m.finishSessionSelectSearch(sessionSelectSearchEvent{seq: 0, result: session.SearchResult{Results: []session.SearchHit{{SessionID: "codex:" + foreign.SessionID}}}})
+	if len(m.sessionSelect.sessions) != 1 || m.sessionSelect.sessions[0].Source != "codex" {
+		t.Fatalf("search=%#v", m.sessionSelect.sessions)
+	}
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: 'd', Mod: tea.ModCtrl}))
+	m = updated.(*model)
+	if command != nil || m.sessionSelect.pendingDelete != "" || m.status != "can't delete an external session" {
+		t.Fatalf("command=%v picker=%#v status=%q", command != nil, m.sessionSelect, m.status)
+	}
+}
+
 func TestResumePickerDoesNotReopenCurrentSession(t *testing.T) {
 	m := &model{
 		runner: &agent.Runner{SessionID: "current"}, status: "select a session",

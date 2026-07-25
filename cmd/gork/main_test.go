@@ -289,6 +289,15 @@ func TestRestartTUITranslatesResumeRequest(t *testing.T) {
 	}
 }
 
+func TestRestartTUITranslatesForeignResumeIntoFreshPrompt(t *testing.T) {
+	err := restartTUI(&tui.NewSessionError{Prompt: "/resume-codex 22222222-2222-4222-8222-222222222222"}, []string{"--tui", "old prompt"}, []string{"old prompt"})
+	var restart *sessionRestartRequest
+	want := []string{"--tui", "--", "/resume-codex 22222222-2222-4222-8222-222222222222"}
+	if !errors.As(err, &restart) || !reflect.DeepEqual(restart.args, want) {
+		t.Fatalf("err=%v restart=%#v", err, restart)
+	}
+}
+
 func TestRestartTUITranslatesScreenModeRequest(t *testing.T) {
 	tests := []struct {
 		minimal bool
