@@ -119,7 +119,7 @@ func TestParseRunOptionsSupportsSessionStartupAliases(t *testing.T) {
 
 func TestResolveSessionStartup(t *testing.T) {
 	dir, firstRoot, secondRoot := t.TempDir(), t.TempDir(), t.TempDir()
-	writeSession := func(id, cwd string) {
+	writeSession := func(id, cwd string, title ...string) {
 		logger, err := session.NewLoggerWithID(dir, id)
 		if err != nil {
 			t.Fatal(err)
@@ -127,11 +127,17 @@ func TestResolveSessionStartup(t *testing.T) {
 		if err := logger.Append("session_metadata", map[string]any{"cwd": cwd, "modelId": "test"}); err != nil {
 			t.Fatal(err)
 		}
+		if len(title) > 0 {
+			if err := logger.Append("session_title", map[string]any{"title": title[0]}); err != nil {
+				t.Fatal(err)
+			}
+		}
 		if err := logger.Close(); err != nil {
 			t.Fatal(err)
 		}
 	}
 	writeSession("first", firstRoot)
+	writeSession("titled", firstRoot, "Fix Login Bug")
 	time.Sleep(time.Millisecond)
 	writeSession("second", firstRoot)
 	writeSession("other", secondRoot)
@@ -144,6 +150,21 @@ func TestResolveSessionStartup(t *testing.T) {
 	startup, err = resolveSessionStartup(options{sessionDir: dir, resume: "first", resumeSet: true}, firstRoot)
 	if err != nil || filepath.Base(startup.resumePath) != "first.jsonl" {
 		t.Fatalf("ID startup=%#v err=%v", startup, err)
+	}
+	startup, err = resolveSessionStartup(options{sessionDir: dir, resume: " fix login bug ", resumeSet: true}, firstRoot)
+	if err != nil || filepath.Base(startup.resumePath) != "titled.jsonl" {
+		t.Fatalf("title startup=%#v err=%v", startup, err)
+	}
+	writeSession("Fix-Login-Bug", firstRoot)
+	startup, err = resolveSessionStartup(options{sessionDir: dir, resume: "Fix-Login-Bug", resumeSet: true}, firstRoot)
+	if err != nil || filepath.Base(startup.resumePath) != "Fix-Login-Bug.jsonl" {
+		t.Fatalf("ID precedence startup=%#v err=%v", startup, err)
+	}
+	uuidTitle := "12345678-1234-1234-1234-123456789abc"
+	writeSession("uuid-title", firstRoot, uuidTitle)
+	startup, err = resolveSessionStartup(options{sessionDir: dir, resume: uuidTitle, resumeSet: true}, firstRoot)
+	if err != nil || filepath.Base(startup.resumePath) != uuidTitle+".jsonl" {
+		t.Fatalf("UUID precedence startup=%#v err=%v", startup, err)
 	}
 	id := "018f47a2-4df1-7d5b-8c2a-1f7d9e6b3a40"
 	startup, err = resolveSessionStartup(options{

@@ -430,8 +430,8 @@ func TestRunnerRenameSessionUsesActiveLogger(t *testing.T) {
 		t.Fatal(err)
 	}
 	info, err := session.InfoByID(filepath.Dir(logger.Path()), logger.ID())
-	if err != nil || info.Title != "Release work" {
-		t.Fatalf("title=%q err=%v", info.Title, err)
+	if err != nil || info.Title != "Release work" || !info.TitleIsManual {
+		t.Fatalf("info=%#v err=%v", info, err)
 	}
 	if err := (&Runner{}).RenameSession("title"); err == nil {
 		t.Fatal("rename without an active session was accepted")

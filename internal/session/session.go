@@ -323,6 +323,7 @@ type Info struct {
 	ReasoningEffort string    `json:"reasoningEffort,omitempty"`
 	SandboxProfile  string    `json:"sandboxProfile,omitempty"`
 	Title           string    `json:"title,omitempty"`
+	TitleIsManual   bool      `json:"titleIsManual,omitempty"`
 	CreatedAt       time.Time `json:"createdAt"`
 	UpdatedAt       time.Time `json:"updatedAt"`
 }
@@ -441,10 +442,12 @@ func readInfo(path, id string) (Info, error) {
 			}
 		case "session_title":
 			var data struct {
-				Title string `json:"title"`
+				Title  string `json:"title"`
+				Manual bool   `json:"manual"`
 			}
 			if json.Unmarshal(event.Data, &data) == nil && strings.TrimSpace(data.Title) != "" {
 				info.Title = strings.TrimSpace(data.Title)
+				info.TitleIsManual = data.Manual
 			}
 		}
 	}
@@ -452,6 +455,41 @@ func readInfo(path, id string) (Info, error) {
 		info.CreatedAt = stat.ModTime().UTC()
 	}
 	return info, scanner.Err()
+}
+
+func ResolveTitle(dir, cwd, title string) (string, error) {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return "", os.ErrNotExist
+	}
+	items, err := List(dir, cwd)
+	if err != nil {
+		return "", err
+	}
+	var matches, manual []Info
+	key := strings.ToLower(title)
+	for _, item := range items {
+		if strings.ToLower(strings.TrimSpace(item.Title)) == key {
+			matches = append(matches, item)
+			if item.TitleIsManual {
+				manual = append(manual, item)
+			}
+		}
+	}
+	if len(matches) == 1 {
+		return matches[0].SessionID, nil
+	}
+	if len(manual) == 1 {
+		return manual[0].SessionID, nil
+	}
+	if len(matches) == 0 {
+		return "", os.ErrNotExist
+	}
+	var listing strings.Builder
+	for _, item := range matches {
+		fmt.Fprintf(&listing, "\n  %s  %q", item.SessionID, item.Title)
+	}
+	return "", fmt.Errorf("multiple sessions match title %q:%s\nresume by session ID instead", title, listing.String())
 }
 
 func titleFromText(text string) string {

@@ -412,6 +412,101 @@ func TestNamedSessionMetadataAndList(t *testing.T) {
 	}
 }
 
+func TestResolveTitleUsesExactCaseInsensitiveMatch(t *testing.T) {
+	dir, cwd := t.TempDir(), t.TempDir()
+	write := func(id, prompt, title string) {
+		logger, err := NewLoggerWithID(dir, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := logger.Append("session_metadata", map[string]any{"cwd": cwd}); err != nil {
+			t.Fatal(err)
+		}
+		if err := logger.AppendPrompt(prompt, nil); err != nil {
+			t.Fatal(err)
+		}
+		if title != "" {
+			if err := logger.Append("session_title", map[string]any{"title": title, "manual": true}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := logger.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("one", "Fix login bug", "")
+	write("two", "Other", "Release Plan")
+	if id, err := ResolveTitle(dir, cwd, "  release plan "); err != nil || id != "two" {
+		t.Fatalf("id=%q err=%v", id, err)
+	}
+	if _, err := ResolveTitle(dir, cwd, "release"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("partial title matched: %v", err)
+	}
+	write("accented", "Other", "Café Löschen")
+	if id, err := ResolveTitle(dir, cwd, "CAFÉ LÖSCHEN"); err != nil || id != "accented" {
+		t.Fatalf("accented id=%q err=%v", id, err)
+	}
+	write("sharp", "Other", "straße")
+	if _, err := ResolveTitle(dir, cwd, "STRASSE"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("one-to-many case fold matched: %v", err)
+	}
+}
+
+func TestResolveTitlePrefersSoleManualMatchAndRejectsAmbiguity(t *testing.T) {
+	dir, cwd := t.TempDir(), t.TempDir()
+	write := func(id string, manual bool) {
+		logger, err := NewLoggerWithID(dir, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := logger.Append("session_metadata", map[string]any{"cwd": cwd}); err != nil {
+			t.Fatal(err)
+		}
+		if err := logger.AppendPrompt("Duplicate", nil); err != nil {
+			t.Fatal(err)
+		}
+		if manual {
+			if err := logger.Append("session_title", map[string]any{"title": "Duplicate", "manual": true}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := logger.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("auto", false)
+	write("manual", true)
+	if id, err := ResolveTitle(dir, cwd, "duplicate"); err != nil || id != "manual" {
+		t.Fatalf("id=%q err=%v", id, err)
+	}
+	write("manual-two", true)
+	if _, err := ResolveTitle(dir, cwd, "duplicate"); err == nil || !strings.Contains(err.Error(), "manual-two") || !strings.Contains(err.Error(), "resume by session ID") {
+		t.Fatalf("ambiguous title error=%v", err)
+	}
+}
+
+func TestResolveTitleRejectsDuplicateAutomaticTitles(t *testing.T) {
+	dir, cwd := t.TempDir(), t.TempDir()
+	for _, id := range []string{"auto-one", "auto-two"} {
+		logger, err := NewLoggerWithID(dir, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := logger.Append("session_metadata", map[string]any{"cwd": cwd}); err != nil {
+			t.Fatal(err)
+		}
+		if err := logger.AppendPrompt("Duplicate", nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := logger.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := ResolveTitle(dir, cwd, "duplicate"); err == nil || !strings.Contains(err.Error(), "auto-one") || !strings.Contains(err.Error(), "auto-two") {
+		t.Fatalf("ambiguous automatic title error=%v", err)
+	}
+}
+
 func TestListUsesLatestSessionModel(t *testing.T) {
 	dir := t.TempDir()
 	logger, err := NewLoggerWithID(dir, "model-session")

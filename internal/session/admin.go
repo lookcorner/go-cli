@@ -145,7 +145,7 @@ func Rename(dir, id, title string) error {
 	if err != nil {
 		return err
 	}
-	return appendAdminEvent(path, Event{Time: time.Now().UTC(), Kind: "session_title", Data: map[string]any{"title": title}})
+	return appendAdminEvent(path, Event{Time: time.Now().UTC(), Kind: "session_title", Data: map[string]any{"title": title, "manual": true}})
 }
 
 func Delete(dir, id string) error {

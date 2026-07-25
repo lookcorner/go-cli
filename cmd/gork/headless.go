@@ -88,11 +88,24 @@ func resolveSessionStartup(opts options, workspaceRoot string) (sessionStartup, 
 	case filepath.IsAbs(resume) || strings.ContainsRune(resume, filepath.Separator) || filepath.Ext(resume) == ".jsonl":
 		startup.resumePath = resume
 	default:
-		path, err := session.PathForID(opts.sessionDir, resume)
+		path, pathErr := session.PathForID(opts.sessionDir, resume)
+		if pathErr == nil {
+			if _, statErr := os.Stat(path); statErr == nil || !errors.Is(statErr, os.ErrNotExist) || sessionUUIDPattern.MatchString(resume) {
+				startup.resumePath = path
+				break
+			}
+		}
+		id, err := session.ResolveTitle(opts.sessionDir, workspaceRoot, resume)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return sessionStartup{}, fmt.Errorf("no session id or title matched %q for this workspace", cleanCLIText(resume))
+			}
+			return sessionStartup{}, err
+		}
+		startup.resumePath, err = session.PathForID(opts.sessionDir, id)
 		if err != nil {
 			return sessionStartup{}, err
 		}
-		startup.resumePath = path
 	}
 	if startup.fork {
 		if startup.newID == "" {

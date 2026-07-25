@@ -328,7 +328,7 @@ func (r *Runner) RenameSession(title string) error {
 	if title == "" {
 		return errors.New("usage: /rename <new title>")
 	}
-	return r.Logger.Append("session_title", map[string]any{"title": title})
+	return r.Logger.Append("session_title", map[string]any{"title": title, "manual": true})
 }
 
 func (r *Runner) ExportSession(filename, cwd string) (string, string, error) {

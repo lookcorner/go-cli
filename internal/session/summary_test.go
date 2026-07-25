@@ -14,7 +14,7 @@ func TestSummariesFoldSessionEvents(t *testing.T) {
 	_ = logger.Append("user_prompt", map[string]any{"text": "Initial title"})
 	_ = logger.Append("model_response", map[string]any{"text": "answer", "response_id": "r1", "tool_call_count": 0})
 	_ = logger.Append("session_forked", map[string]any{"parent_session_id": "parent-session"})
-	_ = logger.Append("session_title", map[string]any{"title": "Manual title"})
+	_ = logger.Append("session_title", map[string]any{"title": "Manual title", "manual": true})
 	_ = logger.Close()
 
 	summaries, err := Summaries(dir, cwd, 0)

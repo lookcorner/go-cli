@@ -101,11 +101,12 @@ func summaryFromInfo(dir string, info Info) (Summary, error) {
 			}
 		case "session_title":
 			var data struct {
-				Title string `json:"title"`
+				Title  string `json:"title"`
+				Manual bool   `json:"manual"`
 			}
 			if json.Unmarshal(event.Data, &data) == nil && data.Title != "" {
 				result.GeneratedTitle = &data.Title
-				result.TitleIsManual = true
+				result.TitleIsManual = data.Manual
 			}
 		}
 	}

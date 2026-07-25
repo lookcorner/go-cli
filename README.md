@@ -218,8 +218,8 @@ export GORK_MODEL="a-responses-compatible-model"
 For the default xAI endpoint, `gork login` performs an OIDC browser login with
 PKCE and a loopback callback. Use `--device-auth` for the OAuth device flow.
 Both store scoped credentials in `~/.grok/auth.json` (or `$GROK_HOME/auth.json`).
-Gork Go loads that token when no API-key environment variable is set and
-refreshes it within five minutes of expiration. Issuer, client ID, scopes and
+Gork Go prefers a valid or refreshed OAuth session by default, then falls back
+to an environment, config, or stored API key when policy allows it. Issuer, client ID, scopes and
 audience honor `GROK_OAUTH2_*` / `GROK_OIDC_*` environment overrides. Login
 opens the verification URL with the platform browser; use `--no-browser` in SSH
 or headless environments and paste the callback URL when prompted. Refresh and
@@ -1584,17 +1584,22 @@ Each run is recorded as a mode-0600 JSONL event log under the user cache
 directory. `--session-dir` selects another location.
 
 Resume the current workspace's most recent completed turn, or a specific
-session by ID or path, with:
+session by ID, title, or path, with:
 
 ```sh
 ./gork --interactive --continue --workspace .
 ./gork --resume SESSION_ID "continue the implementation"
+./gork --resume "Fix Login Bug" "continue the implementation"
 ./gork --load /path/to/session.jsonl "continue the implementation"
 ```
 
 Bare `--resume` and `-c`/`--continue` select the most recently updated session
 whose recorded workspace matches `--workspace`. `--resume latest` retains the
-global latest-log behavior. `--session-id UUID` selects the ID for a new
+global latest-log behavior. A non-UUID value first resolves as an existing ID,
+then matches a title in the current workspace after trimming whitespace and
+ignoring case. A sole manually renamed match wins over duplicate automatic
+titles; otherwise duplicate titles fail and list their session IDs. UUID-shaped
+values always use the ID path. `--session-id UUID` selects the ID for a new
 session; combine it with `--fork-session` and a resume option to create an
 append-only child while leaving the parent unchanged. When omitted for a fork,
 the child UUID is generated automatically.
