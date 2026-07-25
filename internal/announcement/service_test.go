@@ -2,8 +2,8 @@ package announcement
 
 import (
 	"os"
-	"runtime"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
