@@ -133,6 +133,9 @@ func sttURL(config Config) (string, error) {
 	if base == "" {
 		base = "https://api.x.ai/v1"
 	}
+	if !strings.Contains(base, "://") {
+		base = "https://" + base
+	}
 	parsed, err := url.Parse(base)
 	if err != nil {
 		return "", fmt.Errorf("parse voice base URL: %w", err)

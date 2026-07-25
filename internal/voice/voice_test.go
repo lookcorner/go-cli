@@ -13,26 +13,30 @@ import (
 )
 
 func TestSTTURL(t *testing.T) {
-	target, err := sttURL(Config{
-		BaseURL: "https://proxy.example/xai/v1/", Language: "ja", SampleRate: 16_000, EndpointingMS: 500,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	parsed, err := url.Parse(target)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if parsed.Scheme != "wss" || parsed.Host != "proxy.example" || parsed.Path != "/xai/v1/stt" {
-		t.Fatalf("unexpected STT URL: %s", target)
-	}
-	query := parsed.Query()
-	for key, want := range map[string]string{
-		"sample_rate": "16000", "encoding": "pcm", "interim_results": "true", "language": "ja", "endpointing": "500",
-	} {
-		if got := query.Get(key); got != want {
-			t.Fatalf("%s = %q, want %q", key, got, want)
-		}
+	for _, base := range []string{"https://proxy.example/xai/v1/", "proxy.example/xai/v1/"} {
+		t.Run(base, func(t *testing.T) {
+			target, err := sttURL(Config{
+				BaseURL: base, Language: "ja", SampleRate: 16_000, EndpointingMS: 500,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			parsed, err := url.Parse(target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if parsed.Scheme != "wss" || parsed.Host != "proxy.example" || parsed.Path != "/xai/v1/stt" {
+				t.Fatalf("unexpected STT URL: %s", target)
+			}
+			query := parsed.Query()
+			for key, want := range map[string]string{
+				"sample_rate": "16000", "encoding": "pcm", "interim_results": "true", "language": "ja", "endpointing": "500",
+			} {
+				if got := query.Get(key); got != want {
+					t.Fatalf("%s = %q, want %q", key, got, want)
+				}
+			}
+		})
 	}
 }
 

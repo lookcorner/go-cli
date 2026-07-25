@@ -113,6 +113,8 @@ display-only session events, and render in distinct TUI Thinking blocks.
 `[ui].show_thinking_blocks` defaults on and the live `/settings` toggle rebuilds
 completed scrollback so hidden thoughts disappear and can be restored without
 entering model history or Markdown exports.
+Voice STT accepts TLS, WSS, or scheme-less API bases, inherits the active model
+endpoint, and de-duplicates existing `/v1` path prefixes.
 
 REPL, TUI, and ACP sessions support shared `/usage` and `/cost` billing metrics
 plus management links as local commands that never invoke model inference. ACP
