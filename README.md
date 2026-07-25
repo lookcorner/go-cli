@@ -634,6 +634,9 @@ persists `[models].default` and switches the active session; selecting
 `(no override)` removes the persisted default without changing the active
 session. Failed persistence or model resolution leaves the previous default in
 place.
+The fork-secondary-model row uses the same catalog but does not switch the
+current session. It persists `[ui].fork_secondary_model` and applies to the
+next `/fork`; `(no override)` makes forks inherit the active model.
 Plan mode changes immediately through the same registry path as Shift-Tab and
 does not write a user preference.
 Automatic dark/light mapping changes apply immediately only while `theme=auto`

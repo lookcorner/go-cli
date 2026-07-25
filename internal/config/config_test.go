@@ -461,6 +461,17 @@ func TestDefaultSelectedPermissionConfigAndEnvironmentPrecedence(t *testing.T) {
 	}
 }
 
+func TestForkSecondaryModelLoadsAndTrims(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[ui]\nfork_secondary_model = \" secondary \"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil || cfg.UI.ForkSecondaryModel != "secondary" {
+		t.Fatalf("config=%#v err=%v", cfg.UI, err)
+	}
+}
+
 func TestCursorBlinkPreservesTriStateAcrossConfigFormats(t *testing.T) {
 	for _, test := range []struct {
 		name, filename, content string

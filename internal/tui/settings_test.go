@@ -141,7 +141,7 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 			return nil
 		},
 	}
-	for index := 0; index < settingsCount-1; index++ {
+	for index := 0; index < settingsCount-2; index++ {
 		m.settings.selected = index
 		updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 		m = updated.(*model)
@@ -715,6 +715,71 @@ func TestSettingsDefaultModelSwitchFailureRestoresPreviousDefault(t *testing.T) 
 		m.runner.ModelID != "plain" || strings.Join(persisted, ",") != "reasoning,plain" ||
 		!strings.Contains(m.modelSelect.err, "model unavailable") {
 		t.Fatalf("picker=%#v default=%q model=%q persisted=%v", m.modelSelect, m.defaultModelID, m.runner.ModelID, persisted)
+	}
+}
+
+func TestSettingsForkSecondaryModelReusesCatalogWithoutSwitching(t *testing.T) {
+	m, _ := modelTUIFixture(t)
+	m.forkSecondaryModel = "plain"
+	var persisted []string
+	m.persistForkModel = func(id string) error {
+		persisted = append(persisted, id)
+		return nil
+	}
+	settings := &settingsState{selected: 23}
+	m.settings = settings
+
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.settings != nil || m.modelSelect == nil || m.modelSelect.setting != "fork" ||
+		len(m.modelSelect.models) != 3 || m.modelSelect.selected != 1 ||
+		!strings.Contains(stripUIANSI(m.View().Content), "Fork secondary model") {
+		t.Fatalf("command=%v settings=%#v picker=%#v view=%q", command != nil, m.settings, m.modelSelect, stripUIANSI(m.View().Content))
+	}
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	m = updated.(*model)
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if m.modelSelect != nil || m.settings != settings || m.forkSecondaryModel != "reasoning" ||
+		m.runner.ModelID != "plain" || strings.Join(persisted, ",") != "reasoning" ||
+		!strings.Contains(m.settingsContent(), "Fork secondary model: Reasoning X") {
+		t.Fatalf("settings=%#v picker=%#v fork=%q model=%q persisted=%v content=%q", m.settings, m.modelSelect, m.forkSecondaryModel, m.runner.ModelID, persisted, m.settingsContent())
+	}
+}
+
+func TestSettingsForkSecondaryModelClearsAndRollsBack(t *testing.T) {
+	m, _ := modelTUIFixture(t)
+	m.forkSecondaryModel = "plain"
+	var persisted []string
+	m.persistForkModel = func(id string) error {
+		persisted = append(persisted, id)
+		return nil
+	}
+	settings := &settingsState{selected: 23}
+	m.settings = settings
+
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
+	m = updated.(*model)
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if m.settings != settings || m.modelSelect != nil || m.forkSecondaryModel != "" ||
+		len(persisted) != 1 || persisted[0] != "" || m.status != "fork secondary model override cleared" {
+		t.Fatalf("settings=%#v picker=%#v fork=%q persisted=%q status=%q", m.settings, m.modelSelect, m.forkSecondaryModel, persisted, m.status)
+	}
+
+	m.forkSecondaryModel = "plain"
+	m.persistForkModel = func(string) error { return errors.New("read only") }
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	m = updated.(*model)
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if m.modelSelect == nil || m.modelSelect.phase != modelSelectError || m.forkSecondaryModel != "plain" ||
+		!strings.Contains(m.modelSelect.err, "persist fork secondary model") {
+		t.Fatalf("picker=%#v fork=%q", m.modelSelect, m.forkSecondaryModel)
 	}
 }
 

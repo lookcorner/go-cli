@@ -226,6 +226,7 @@ type UIConfig struct {
 	ScrollLines               *uint8  `json:"scroll_lines,omitempty"`
 	InvertScroll              bool    `json:"invert_scroll,omitempty"`
 	DefaultSelectedPermission string  `json:"default_selected_permission"`
+	ForkSecondaryModel        string  `json:"fork_secondary_model,omitempty"`
 	RememberToolApprovals     bool    `json:"remember_tool_approvals,omitempty"`
 	CollapsedEditBlocks       bool    `json:"collapsed_edit_blocks,omitempty"`
 	GroupToolVerbs            bool    `json:"group_tool_verbs"`
@@ -494,6 +495,7 @@ type fileUIConfig struct {
 	ScrollLines                  *uint8  `json:"scroll_lines,omitempty" toml:"scroll_lines"`
 	InvertScroll                 *bool   `json:"invert_scroll,omitempty" toml:"invert_scroll"`
 	DefaultSelectedPermission    *string `json:"default_selected_permission,omitempty" toml:"default_selected_permission"`
+	ForkSecondaryModel           *string `json:"fork_secondary_model,omitempty" toml:"fork_secondary_model"`
 	RememberToolApprovals        *bool   `json:"remember_tool_approvals,omitempty" toml:"remember_tool_approvals"`
 	CollapsedEditBlocks          *bool   `json:"collapsed_edit_blocks,omitempty" toml:"collapsed_edit_blocks"`
 	GroupToolVerbs               *bool   `json:"group_tool_verbs,omitempty" toml:"group_tool_verbs"`
@@ -1016,6 +1018,9 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.UI.DefaultSelectedPermission != nil {
 		cfg.UI.DefaultSelectedPermission = normalizeDefaultSelectedPermission(*disk.UI.DefaultSelectedPermission)
+	}
+	if disk.UI.ForkSecondaryModel != nil {
+		cfg.UI.ForkSecondaryModel = strings.TrimSpace(*disk.UI.ForkSecondaryModel)
 	}
 	if disk.UI.RememberToolApprovals != nil {
 		cfg.UI.RememberToolApprovals = *disk.UI.RememberToolApprovals

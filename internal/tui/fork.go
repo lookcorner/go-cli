@@ -76,9 +76,9 @@ type forkDoneEvent struct {
 	err       error
 }
 
-func runFork(ctx context.Context, fork func(context.Context, bool) (ForkResult, error), worktree bool, directive string) tea.Cmd {
+func runFork(ctx context.Context, fork func(context.Context, bool, string) (ForkResult, error), worktree bool, modelID, directive string) tea.Cmd {
 	return func() tea.Msg {
-		result, err := fork(ctx, worktree)
+		result, err := fork(ctx, worktree, modelID)
 		return forkDoneEvent{result: result, directive: directive, err: err}
 	}
 }
@@ -94,7 +94,11 @@ func (m *model) startFork(worktree bool, directive string) tea.Cmd {
 	turnCtx, cancel := context.WithCancel(m.ctx)
 	m.turnCancel = cancel
 	m.status = "creating fork"
-	return runFork(turnCtx, m.forkSession, worktree, directive)
+	modelID := m.forkSecondaryModel
+	if modelID == "" && m.runner != nil {
+		modelID = m.runner.ModelID
+	}
+	return runFork(turnCtx, m.forkSession, worktree, modelID, directive)
 }
 
 func (m *model) handleForkChoiceKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {

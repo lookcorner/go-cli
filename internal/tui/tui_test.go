@@ -1947,10 +1947,12 @@ func TestParseForkArgs(t *testing.T) {
 
 func TestForkCommandCompletesWithoutModelTurn(t *testing.T) {
 	called := 0
+	var modelID string
 	m := &model{
-		ctx: context.Background(), runner: &agent.Runner{}, status: "ready", forkInGit: true,
-		forkSession: func(_ context.Context, isolated bool) (ForkResult, error) {
+		ctx: context.Background(), runner: &agent.Runner{ModelID: "active"}, status: "ready", forkInGit: true,
+		forkSession: func(_ context.Context, isolated bool, model string) (ForkResult, error) {
 			called++
+			modelID = model
 			if isolated {
 				t.Fatal("no-worktree command requested a worktree")
 			}
@@ -1965,8 +1967,8 @@ func TestForkCommandCompletesWithoutModelTurn(t *testing.T) {
 	}
 	updated, quit := m.Update(command())
 	m = updated.(*model)
-	if quit == nil || called != 1 || m.running || m.forkResult == nil {
-		t.Fatalf("quit=%v called=%d running=%v result=%#v", quit != nil, called, m.running, m.forkResult)
+	if quit == nil || called != 1 || modelID != "active" || m.running || m.forkResult == nil {
+		t.Fatalf("quit=%v called=%d model=%q running=%v result=%#v", quit != nil, called, modelID, m.running, m.forkResult)
 	}
 	if m.forkResult.Path != "/sessions/child.jsonl" || m.forkResult.Workspace != "/workspace" || m.forkResult.Directive != "continue here" {
 		t.Fatalf("fork result=%#v", m.forkResult)
@@ -1975,7 +1977,7 @@ func TestForkCommandCompletesWithoutModelTurn(t *testing.T) {
 
 func TestForkCommandAsksInGitAndFallsBackOutsideGit(t *testing.T) {
 	var isolated []bool
-	fork := func(_ context.Context, worktree bool) (ForkResult, error) {
+	fork := func(_ context.Context, worktree bool, _ string) (ForkResult, error) {
 		isolated = append(isolated, worktree)
 		return ForkResult{Path: "/sessions/child.jsonl", Workspace: "/workspace"}, nil
 	}
@@ -2015,7 +2017,7 @@ func TestForkCommandAsksInGitAndFallsBackOutsideGit(t *testing.T) {
 func TestForkFailureKeepsCurrentSession(t *testing.T) {
 	m := &model{
 		ctx: context.Background(), runner: &agent.Runner{}, status: "ready",
-		forkSession: func(context.Context, bool) (ForkResult, error) { return ForkResult{}, errors.New("disk full") },
+		forkSession: func(context.Context, bool, string) (ForkResult, error) { return ForkResult{}, errors.New("disk full") },
 	}
 	m.setInput("/fork --no-worktree")
 	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
@@ -2029,7 +2031,7 @@ func TestForkFailureKeepsCurrentSession(t *testing.T) {
 
 func TestForkRejectsRunningRequests(t *testing.T) {
 	called := 0
-	fork := func(context.Context, bool) (ForkResult, error) {
+	fork := func(context.Context, bool, string) (ForkResult, error) {
 		called++
 		return ForkResult{}, nil
 	}
@@ -2055,6 +2057,26 @@ func TestForkRejectsRunningRequests(t *testing.T) {
 	}
 	if called != 0 {
 		t.Fatalf("fork calls=%d", called)
+	}
+}
+
+func TestForkUsesConfiguredSecondaryModel(t *testing.T) {
+	var modelID string
+	m := &model{
+		ctx: context.Background(), runner: &agent.Runner{ModelID: "active"}, status: "ready",
+		forkSecondaryModel: "secondary",
+		forkSession: func(_ context.Context, _ bool, model string) (ForkResult, error) {
+			modelID = model
+			return ForkResult{}, nil
+		},
+	}
+	command := m.startFork(false, "")
+	if command == nil {
+		t.Fatal("fork did not start")
+	}
+	command()
+	if modelID != "secondary" {
+		t.Fatalf("fork model=%q", modelID)
 	}
 }
 

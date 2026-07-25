@@ -744,8 +744,10 @@ type model struct {
 	resumeSession       *ResumeSessionError
 	screenMode          *ScreenModeError
 	forkResult          *ForkSessionError
-	forkSession         func(context.Context, bool) (ForkResult, error)
+	forkSession         func(context.Context, bool, string) (ForkResult, error)
 	forkInGit           bool
+	forkSecondaryModel  string
+	persistForkModel    func(string) error
 
 	promptSuggestion    string
 	suggestionsEnabled  bool
@@ -905,8 +907,10 @@ type UIOptions struct {
 	SetRenderMermaid     func(string) error
 	HunkTrackerMode      string
 	SetHunkTrackerMode   func(string) error
-	ForkSession          func(context.Context, bool) (ForkResult, error)
+	ForkSession          func(context.Context, bool, string) (ForkResult, error)
 	ForkInGit            bool
+	ForkModel            string
+	SetForkModel         func(string) error
 	DashboardPinned      []string
 	OpenDashboard        bool
 	DashboardDisabled    bool
@@ -1020,6 +1024,7 @@ type modelSelectState struct {
 	model      agent.ModelOption
 	effortOnly bool
 	settings   *settingsState
+	setting    string
 	err        string
 }
 
@@ -1079,6 +1084,8 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		persistHunkTracker:   options.SetHunkTrackerMode,
 		forkSession:          options.ForkSession,
 		forkInGit:            options.ForkInGit,
+		forkSecondaryModel:   options.ForkModel,
+		persistForkModel:     options.SetForkModel,
 		startupDashboard:     options.OpenDashboard,
 		dashboardDisabled:    options.DashboardDisabled,
 		dashboardPins:        make(map[string]bool, len(options.DashboardPinned)),
@@ -3077,7 +3084,7 @@ func (m *model) openModelSelect(effortOnly bool) {
 	}
 }
 
-func (m *model) openModelSelectFromSettings() {
+func (m *model) openModelSelectFromSettings(setting string) {
 	settings := m.settings
 	m.settings = nil
 	m.openModelSelect(false)
@@ -3086,15 +3093,20 @@ func (m *model) openModelSelectFromSettings() {
 		return
 	}
 	m.modelSelect.settings = settings
+	m.modelSelect.setting = setting
 	m.modelSelect.models = append([]agent.ModelOption{{Name: "(no override)"}}, m.modelSelect.models...)
 	m.modelSelect.selected = 0
+	selectedID := m.defaultModelID
+	if setting == "fork" {
+		selectedID = m.forkSecondaryModel
+	}
 	for index, option := range m.modelSelect.models {
-		if option.ID == m.defaultModelID {
+		if option.ID == selectedID {
 			m.modelSelect.selected = index
 			break
 		}
 	}
-	m.status = "select default model"
+	m.status = "select " + setting + " model"
 }
 
 func (m *model) handleModelSelectKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -3149,7 +3161,11 @@ func (m *model) handleModelSelectKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if state.phase == modelSelectModel {
 		state.model = state.models[state.selected]
 		if state.settings != nil {
-			m.applyDefaultModel(state.model.ID)
+			if state.setting == "fork" {
+				m.applyForkSecondaryModel(state.model.ID)
+			} else {
+				m.applyDefaultModel(state.model.ID)
+			}
 			return m, nil
 		}
 		if state.model.SupportsReasoningEffort {
@@ -3169,6 +3185,27 @@ func (m *model) handleModelSelectKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	effort := state.efforts[state.selected]
 	m.applyModel(state.model.ID, effort.ID)
 	return m, nil
+}
+
+func (m *model) applyForkSecondaryModel(id string) {
+	if m.persistForkModel == nil {
+		m.modelSelect.phase, m.modelSelect.err = modelSelectError, "fork model persistence is unavailable"
+		m.status = "model selection failed: " + m.modelSelect.err
+		return
+	}
+	if err := m.persistForkModel(id); err != nil {
+		m.modelSelect.phase, m.modelSelect.err = modelSelectError, "persist fork secondary model: "+err.Error()
+		m.status = "model selection failed: " + m.modelSelect.err
+		return
+	}
+	m.forkSecondaryModel = id
+	m.settings = m.modelSelect.settings
+	m.modelSelect = nil
+	if id == "" {
+		m.status = "fork secondary model override cleared"
+	} else {
+		m.status = "fork secondary model updated"
+	}
 }
 
 func (m *model) applyDefaultModel(id string) {
@@ -5201,6 +5238,9 @@ func (m *model) modelSelectContent() string {
 	title := "# Select model"
 	if state.settings != nil {
 		title = "# Default model"
+		if state.setting == "fork" {
+			title = "# Fork secondary model"
+		}
 	}
 	return title + "\n\n" + selectedWindow(lines, state.selected, max(m.contentHeight()-4, 1))
 }
@@ -5213,6 +5253,9 @@ func (m *model) modelSelectHint() string {
 		return "Up/Down select · Enter switch · Esc models"
 	}
 	if m.modelSelect != nil && m.modelSelect.settings != nil {
+		if m.modelSelect.setting == "fork" {
+			return "Up/Down select · Enter set fork model · Esc settings"
+		}
 		return "Up/Down select · Enter set default · Esc settings"
 	}
 	return "Up/Down select · Enter switch · Esc cancel"

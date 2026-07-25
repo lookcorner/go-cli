@@ -1174,6 +1174,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			RememberApprovals:   cfg.UI.RememberToolApprovals,
 			DefaultPermission:   cfg.UI.DefaultSelectedPermission,
 			DefaultModelID:      cfg.DefaultModelID,
+			ForkModel:           cfg.UI.ForkSecondaryModel,
 			QuestionTimeout:     cfg.AskUserQuestion.TimeoutEnabled,
 			CursorBlink:         cfg.UI.CursorBlink,
 			CompactMode:         cfg.UI.CompactMode,
@@ -1214,6 +1215,9 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 				tuiBridge.SetDefaultSelectedPermission(value)
 				return nil
 			},
+			SetForkModel: func(id string) error {
+				return config.UpdateForkSecondaryModel(opts.configPath, id)
+			},
 			SetQuestionTimeout: func(enabled bool) error {
 				return config.UpdateQuestionTimeout(opts.configPath, enabled)
 			},
@@ -1239,8 +1243,8 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			},
 			SetTheme:  func(value string) error { return config.UpdateTheme(opts.configPath, value) },
 			ForkInGit: forkGitErr == nil,
-			ForkSession: func(forkCtx context.Context, isolated bool) (tui.ForkResult, error) {
-				return forkCurrentSession(forkCtx, worktreeManager, filepath.Dir(logger.Path()), logger.ID(), ws.Root(), runner.ModelID, isolated)
+			ForkSession: func(forkCtx context.Context, isolated bool, modelID string) (tui.ForkResult, error) {
+				return forkCurrentSession(forkCtx, worktreeManager, filepath.Dir(logger.Path()), logger.ID(), ws.Root(), modelID, isolated)
 			},
 		})
 		return restartTUI(err, args, flags.Args())

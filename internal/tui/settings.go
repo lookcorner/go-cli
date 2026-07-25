@@ -24,7 +24,7 @@ type settingsNumber struct {
 	large int
 }
 
-const settingsCount = 23
+const settingsCount = 24
 
 func (m *model) openSettings() {
 	m.settings = &settingsState{}
@@ -252,7 +252,10 @@ func (m *model) applySetting(selected int) {
 			state.err = persistSetting(m.persistPermission(m.defaultPermission), func() { m.defaultPermission = previous })
 		}
 	case 22:
-		m.openModelSelectFromSettings()
+		m.openModelSelectFromSettings("default")
+		return
+	case 23:
+		m.openModelSelectFromSettings("fork")
 		return
 	}
 	if state.err != "" {
@@ -418,6 +421,7 @@ func (m *model) settingsContent() string {
 		fmt.Sprintf("Theme: %s", m.themeName),
 		fmt.Sprintf("Default selected permission: %s", m.defaultPermission),
 		fmt.Sprintf("Default model: %s", m.settingsModelName()),
+		fmt.Sprintf("Fork secondary model: %s", m.modelOptionName(m.forkSecondaryModel)),
 	}
 	if m.planModeAvailable() {
 		lines = append(lines, settingLine("Plan mode", m.planMode))
@@ -433,12 +437,16 @@ func (m *model) settingsContent() string {
 }
 
 func (m *model) settingsModelName() string {
-	if m.defaultModelID == "" {
+	return m.modelOptionName(m.defaultModelID)
+}
+
+func (m *model) modelOptionName(id string) string {
+	if id == "" {
 		return "(no override)"
 	}
 	if m.runner != nil {
 		for _, option := range m.runner.ModelOptions {
-			if option.ID != m.defaultModelID {
+			if option.ID != id {
 				continue
 			}
 			if name := strings.TrimSpace(option.Name); name != "" {
@@ -450,7 +458,7 @@ func (m *model) settingsModelName() string {
 			return option.ID
 		}
 	}
-	return m.defaultModelID
+	return id
 }
 
 func (m *model) settingsCount() int {
