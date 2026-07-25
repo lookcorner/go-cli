@@ -783,6 +783,19 @@ func TestExitSlashCommandsQuitWithoutModelTurn(t *testing.T) {
 	}
 }
 
+func TestExitInfoKeepsActiveScreenMode(t *testing.T) {
+	runner := &agent.Runner{SessionID: "sess-abc"}
+	for _, minimal := range []bool{false, true} {
+		info := exitInfo(&model{minimal: minimal}, runner)
+		if info == nil || info.SessionID != "sess-abc" || info.Minimal != minimal {
+			t.Fatalf("minimal=%v info=%#v", minimal, info)
+		}
+	}
+	if info := exitInfo(&model{minimal: true}, &agent.Runner{}); info != nil {
+		t.Fatalf("empty session returned exit info: %#v", info)
+	}
+}
+
 func TestPlanModeFooterFitsNarrowViewport(t *testing.T) {
 	m := &model{
 		planMode: true, width: 20, height: 10, status: "review implementation plan",

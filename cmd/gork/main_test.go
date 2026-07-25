@@ -325,6 +325,28 @@ func TestRestartTUITranslatesScreenModeRequest(t *testing.T) {
 	}
 }
 
+func TestWriteExitResumeHint(t *testing.T) {
+	tests := []struct {
+		name      string
+		sessionID string
+		minimal   bool
+		want      string
+	}{
+		{name: "fullscreen", sessionID: "sess-abc", want: "\nResume this session with:\n  gork --resume sess-abc\n"},
+		{name: "minimal", sessionID: "sess-abc", minimal: true, want: "\nResume this session with:\n  gork --minimal --resume sess-abc\n"},
+		{name: "missing session", minimal: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			writeExitResumeHint(&output, test.sessionID, test.minimal)
+			if got := output.String(); got != test.want {
+				t.Fatalf("got=%q want=%q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestScreenModeFlagsAreMutuallyExclusive(t *testing.T) {
 	err := runOnce([]string{"--minimal", "--fullscreen"}, strings.NewReader(""), io.Discard, io.Discard)
 	if err == nil || err.Error() != "--minimal and --fullscreen are mutually exclusive" {

@@ -561,6 +561,8 @@ default is fullscreen; `[ui].screen_mode` accepts `fullscreen` or `minimal`.
 Within a session, `/minimal` reopens the same session in minimal mode and
 `/fullscreen` (or `/full`) switches back without changing its conversation.
 `--fullscreen` explicitly overrides a configured minimal default.
+On exit, the TUI prints a pasteable resume command after restoring the terminal;
+minimal sessions keep `--minimal` in that command.
 
 The TUI streams model output as it arrives, renders headings, emphasis, links,
 lists, quotes, pipe tables, and inline or fenced code, strips untrusted terminal

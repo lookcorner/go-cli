@@ -1158,7 +1158,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		if voice.Supported() {
 			voiceClient = voice.New(voice.Config{BaseURL: cfg.BaseURL, Language: cfg.UI.VoiceSTTLanguage}, cfg.APIKey, voice.TokenProvider(tokenProvider))
 		}
-		err := tui.Run(ctx, runner, tuiBridge, prompt, opts.previousID, resumedTranscript, ws.Root(), cfg.Model, tui.UIOptions{
+		exit, err := tui.Run(ctx, runner, tuiBridge, prompt, opts.previousID, resumedTranscript, ws.Root(), cfg.Model, tui.UIOptions{
 			Minimal: minimal, RendererFPS: tui.RendererFPS(cfg.UI.DisplayRefresh), ScreenMode: cfg.UI.ScreenMode,
 			SetScreenMode: func(mode string) error { return config.UpdateScreenMode(opts.configPath, mode) },
 			SetSelectionMode: func(mode string) error {
@@ -1291,7 +1291,13 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 				return forkCurrentSession(forkCtx, worktreeManager, filepath.Dir(logger.Path()), logger.ID(), ws.Root(), modelID, isolated)
 			},
 		})
-		return restartTUI(err, args, flags.Args())
+		if err != nil {
+			return restartTUI(err, args, flags.Args())
+		}
+		if exit != nil {
+			writeExitResumeHint(stderr, exit.SessionID, exit.Minimal)
+		}
+		return nil
 	}
 	fmt.Fprintf(stderr, "[gork] workspace: %s\n[gork] session: %s\n", ws.Root(), displayPath(logger.Path()))
 	if opts.interactive {
@@ -1604,6 +1610,17 @@ func restartScreenModeArgs(args, positional []string, resumePath, workspace stri
 		return append(result, "--minimal")
 	}
 	return append(result, "--fullscreen")
+}
+
+func writeExitResumeHint(writer io.Writer, sessionID string, minimal bool) {
+	if writer == nil || strings.TrimSpace(sessionID) == "" {
+		return
+	}
+	command := "gork --resume " + sessionID
+	if minimal {
+		command = "gork --minimal --resume " + sessionID
+	}
+	_, _ = fmt.Fprintf(writer, "\nResume this session with:\n  %s\n", command)
 }
 
 func newAuthTokenProvider(cfg config.Config, path string, authConfig auth.Config, stderr io.Writer) api.TokenProvider {

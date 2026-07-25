@@ -90,6 +90,11 @@ func (e *ScreenModeError) Error() string {
 	return "switch to fullscreen mode"
 }
 
+type ExitInfo struct {
+	SessionID string
+	Minimal   bool
+}
+
 type textEvent struct{ text string }
 type thoughtEvent struct{ text string }
 type clipboardEvent struct {
@@ -1161,7 +1166,7 @@ type questionState struct {
 	partial     map[string]string
 }
 
-func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPrompt, previousID, initialTranscript, workspace, modelName string, options UIOptions) error {
+func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPrompt, previousID, initialTranscript, workspace, modelName string, options UIOptions) (*ExitInfo, error) {
 	defer bridge.Close()
 	runner.TextOutput = bridge.TextWriter()
 	runner.ThoughtOutput = bridge.ThoughtWriter()
@@ -1304,27 +1309,37 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 	final, err := program.Run()
 	m.stopVoice()
 	if errors.Is(err, tea.ErrInterrupted) || errors.Is(err, context.Canceled) {
-		return nil
+		return nil, nil
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if current, ok := final.(*model); ok && current.newSession {
 		if current.newSessionPrompt != "" {
-			return &NewSessionError{Prompt: current.newSessionPrompt}
+			return nil, &NewSessionError{Prompt: current.newSessionPrompt}
 		}
-		return ErrNewSession
+		return nil, ErrNewSession
 	}
 	if current, ok := final.(*model); ok && current.resumeSession != nil {
-		return current.resumeSession
+		return nil, current.resumeSession
 	}
 	if current, ok := final.(*model); ok && current.screenMode != nil {
-		return current.screenMode
+		return nil, current.screenMode
 	}
 	if current, ok := final.(*model); ok && current.forkResult != nil {
-		return current.forkResult
+		return nil, current.forkResult
 	}
-	return nil
+	if current, ok := final.(*model); ok {
+		return exitInfo(current, runner), nil
+	}
+	return nil, nil
+}
+
+func exitInfo(current *model, runner *agent.Runner) *ExitInfo {
+	if current == nil || runner == nil || strings.TrimSpace(runner.SessionID) == "" {
+		return nil
+	}
+	return &ExitInfo{SessionID: runner.SessionID, Minimal: current.minimal}
 }
 
 func (m *model) Init() tea.Cmd {
