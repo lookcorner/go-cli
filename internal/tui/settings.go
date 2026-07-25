@@ -24,7 +24,7 @@ type settingsNumber struct {
 	large int
 }
 
-const settingsCount = 30
+const settingsCount = 31
 
 func (m *model) openSettings() {
 	m.settings = &settingsState{}
@@ -306,6 +306,15 @@ func (m *model) applySetting(selected int) {
 		if state.err == "" && !m.wordSelectHint.enabled {
 			m.wordSelectHint.active = false
 		}
+	case 30:
+		previous := m.showThinking
+		m.showThinking = !previous
+		if m.persistThinking != nil {
+			state.err = persistSetting(m.persistThinking(m.showThinking), func() { m.showThinking = previous })
+		}
+		if state.err == "" && !m.minimal {
+			m.refreshToolDisplay(m.collapsedEditBlocks, m.groupToolVerbs, previous)
+		}
 	}
 	if state.err != "" {
 		m.status = "setting update failed"
@@ -497,6 +506,7 @@ func (m *model) settingsContent() string {
 		settingLine("Send-now hint", m.sendNowHint.enabled),
 		settingLine("Small-screen hint", m.smallScreenHint.enabled),
 		settingLine("Word-select hint", m.wordSelectHint.enabled),
+		settingLine("Show thinking blocks", m.showThinking),
 	}
 	if m.planModeAvailable() {
 		lines = append(lines, settingLine("Plan mode", m.planMode))
@@ -597,18 +607,22 @@ func scrollModeName(mode string) string {
 	return "auto"
 }
 
-func (m *model) refreshToolDisplay(previousCollapsedEditBlocks, previousGroupToolVerbs bool) {
+func (m *model) refreshToolDisplay(previousCollapsedEditBlocks, previousGroupToolVerbs bool, previousThinking ...bool) {
 	if m.runner == nil || strings.TrimSpace(m.runner.SessionPath) == "" {
 		return
 	}
+	beforeThinking := m.showThinking
+	if len(previousThinking) > 0 {
+		beforeThinking = previousThinking[0]
+	}
 	previous, _, _, _, err := sessionDisplayTranscript(
-		m.runner.SessionPath, m.workspace, previousCollapsedEditBlocks, previousGroupToolVerbs,
+		m.runner.SessionPath, m.workspace, previousCollapsedEditBlocks, previousGroupToolVerbs, beforeThinking,
 	)
 	if err != nil || strings.TrimSpace(m.transcript.String()) != strings.TrimSpace(previous) {
 		return
 	}
 	text, messages, expands, folds, err := sessionDisplayTranscript(
-		m.runner.SessionPath, m.workspace, m.collapsedEditBlocks, m.groupToolVerbs,
+		m.runner.SessionPath, m.workspace, m.collapsedEditBlocks, m.groupToolVerbs, m.showThinking,
 	)
 	if err == nil {
 		m.replaceDisplayTranscript(text, messages, expands, folds)

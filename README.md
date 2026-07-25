@@ -614,12 +614,17 @@ automatically without changing the saved user preference.
 Message timestamps are enabled by default. `/timestamps` hides or restores them
 immediately, atomically saves `[ui].show_timestamps`, and rolls back the display
 state if the configuration write fails.
+Streamed model reasoning summaries are shown by default in distinct Thinking
+blocks. The `/settings` "Show thinking blocks" row hides or restores both live
+and completed blocks immediately, atomically saves `[ui].show_thinking_blocks`,
+and rolls back if the configuration write fails. Thinking blocks stay out of
+model history and Markdown exports.
 `/timeline` toggles and persists `[ui].show_timeline`. On terminals at least 60
 columns wide, conversations with two or more turns reserve a two-column rail:
 the highlighted tick follows the turn at the viewport top, chevrons step between
 turns, clicking a tick top-aligns it, and hovering shows the prompt preview.
 `/settings` (aliases `/config`, `/preferences`, and `/prefs`) opens a keyboard
-settings panel for timestamps, the timeline, compact mode, Vim navigation,
+settings panel for timestamps, the timeline, thinking blocks, compact mode, Vim navigation,
 default screen mode, grouped tool verbs, collapsed edit blocks, prompt
 suggestions, remembered tool approvals, ask-question timeouts, session multiline
 input, inverted scrolling, scroll speed, scroll-input classification, scroll

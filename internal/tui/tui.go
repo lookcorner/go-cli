@@ -89,6 +89,7 @@ func (e *ScreenModeError) Error() string {
 }
 
 type textEvent struct{ text string }
+type thoughtEvent struct{ text string }
 type statusEvent struct{ text string }
 type mouseSelectionPhase uint8
 
@@ -391,8 +392,9 @@ func (b *Bridge) send(message tea.Msg) {
 	}
 }
 
-func (b *Bridge) TextWriter() io.Writer   { return bridgeWriter{bridge: b, status: false} }
-func (b *Bridge) StatusWriter() io.Writer { return bridgeWriter{bridge: b, status: true} }
+func (b *Bridge) TextWriter() io.Writer    { return bridgeWriter{bridge: b} }
+func (b *Bridge) ThoughtWriter() io.Writer { return bridgeWriter{bridge: b, thought: true} }
+func (b *Bridge) StatusWriter() io.Writer  { return bridgeWriter{bridge: b, status: true} }
 
 func (b *Bridge) Approve(ctx context.Context, action, detail string) error {
 	mode := b.PermissionMode()
@@ -660,8 +662,9 @@ func selectedApprovalOption(options []approvalOption, target approvalChoice) int
 }
 
 type bridgeWriter struct {
-	bridge *Bridge
-	status bool
+	bridge  *Bridge
+	status  bool
+	thought bool
 }
 
 func (w bridgeWriter) Write(data []byte) (int, error) {
@@ -669,6 +672,8 @@ func (w bridgeWriter) Write(data []byte) (int, error) {
 	var event tea.Msg = textEvent{text: text}
 	if w.status {
 		event = statusEvent{text: text}
+	} else if w.thought {
+		event = thoughtEvent{text: text}
 	}
 	select {
 	case w.bridge.events <- event:
@@ -720,6 +725,10 @@ type model struct {
 	persistTimestamps   func(bool) error
 	showTimeline        bool
 	persistTimeline     func(bool) error
+	showThinking        bool
+	persistThinking     func(bool) error
+	thoughtOpen         bool
+	thoughtLineStart    bool
 	persistGroupTools   func(bool) error
 	persistEditBlocks   func(bool) error
 	persistSuggestions  func(bool) error
@@ -925,6 +934,8 @@ type UIOptions struct {
 	SetShowTimestamps    func(bool) error
 	ShowTimeline         bool
 	SetShowTimeline      func(bool) error
+	ShowThinkingBlocks   bool
+	SetShowThinking      func(bool) error
 	ScrollSpeed          uint8
 	SetScrollSpeed       func(uint8) error
 	ScrollMode           string
@@ -1103,6 +1114,7 @@ type questionState struct {
 func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPrompt, previousID, initialTranscript, workspace, modelName string, options UIOptions) error {
 	defer bridge.Close()
 	runner.TextOutput = bridge.TextWriter()
+	runner.ThoughtOutput = bridge.ThoughtWriter()
 	runner.StatusOutput = bridge.StatusWriter()
 	previousToolObserver := runner.ToolObserver
 	runner.ToolObserver = bridge
@@ -1119,6 +1131,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		defaultMinimal: options.ScreenMode == "minimal", persistScreenMode: options.SetScreenMode,
 		showTimestamps: options.ShowTimestamps, persistTimestamps: options.SetShowTimestamps,
 		showTimeline: options.ShowTimeline, persistTimeline: options.SetShowTimeline,
+		showThinking: options.ShowThinkingBlocks, persistThinking: options.SetShowThinking,
 		scrollLines: mouseWheelScrollLines, scrollSpeed: options.ScrollSpeed, persistScrollSpeed: options.SetScrollSpeed,
 		scrollInput: scrollInput{mode: options.ScrollMode}, persistScrollMode: options.SetScrollMode, persistScrollLines: options.SetScrollLines,
 		invertScroll: options.InvertScroll, persistInvertScroll: options.SetInvertScroll,
@@ -1217,7 +1230,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 	m.replaceTranscript(initialTranscript, nil)
 	if runner != nil && strings.TrimSpace(runner.SessionPath) != "" {
 		if messages, err := session.Transcript(runner.SessionPath); err == nil && strings.TrimSpace(session.FormatTranscript(messages)) == strings.TrimSpace(initialTranscript) {
-			if text, displayMessages, expands, folds, displayErr := sessionDisplayTranscript(runner.SessionPath, m.workspace, m.collapsedEditBlocks, m.groupToolVerbs); displayErr == nil {
+			if text, displayMessages, expands, folds, displayErr := sessionDisplayTranscript(runner.SessionPath, m.workspace, m.collapsedEditBlocks, m.groupToolVerbs, m.showThinking); displayErr == nil {
 				m.replaceDisplayTranscript(text, displayMessages, expands, folds)
 			} else {
 				m.replaceTranscript(initialTranscript, messages)
@@ -1331,6 +1344,7 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case textEvent:
 		m.finishToolVerbGroup()
 		m.finishCollapsedEditGroup()
+		m.finishThought()
 		m.selection = nil
 		m.selectionClick = selectionClickState{}
 		before := 0
@@ -1343,6 +1357,22 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.scroll += max(after-before, 0)
 		}
 		m.refreshScrollSearch()
+		return m, waitForBridge(m.bridge)
+	case thoughtEvent:
+		m.finishToolVerbGroup()
+		m.finishCollapsedEditGroup()
+		if m.showThinking {
+			before := 0
+			if m.scroll > 0 {
+				before = len(renderMarkdownTheme(m.transcriptText(), m.transcriptRenderWidth(), false, m.colors()))
+			}
+			m.appendThought(msg.text)
+			if m.scroll > 0 {
+				after := len(renderMarkdownTheme(m.transcriptText(), m.transcriptRenderWidth(), false, m.colors()))
+				m.scroll += max(after-before, 0)
+			}
+			m.refreshScrollSearch()
+		}
 		return m, waitForBridge(m.bridge)
 	case mouseScrollEvent:
 		if msg.scale {
@@ -1579,6 +1609,7 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = "review implementation plan"
 		return m, waitForBridge(m.bridge)
 	case toolStartedEvent:
+		m.finishThought()
 		m.status = "tool running: " + msg.call.Name
 		return m, waitForBridge(m.bridge)
 	case toolFinishedEvent:
@@ -1647,6 +1678,7 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case turnDoneEvent:
 		m.finishToolVerbGroup()
 		m.finishCollapsedEditGroup()
+		m.finishThought()
 		m.running = false
 		m.turnCancel = nil
 		m.cancelTurn = nil
@@ -1722,7 +1754,7 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		mode := msg.result.Mode
 		if mode == agent.RewindAll || mode == agent.RewindConversationOnly {
 			m.previousID = msg.result.PreviousResponseID
-			if text, messages, expands, folds, err := sessionDisplayTranscript(m.runner.SessionPath, m.workspace, m.collapsedEditBlocks, m.groupToolVerbs); err == nil {
+			if text, messages, expands, folds, err := sessionDisplayTranscript(m.runner.SessionPath, m.workspace, m.collapsedEditBlocks, m.groupToolVerbs, m.showThinking); err == nil {
 				m.replaceDisplayTranscript(text, messages, expands, folds)
 			} else {
 				m.replaceTranscript(session.FormatTranscript(msg.result.Messages), msg.result.Messages)
@@ -2921,7 +2953,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.status = "no active session to view"
 				return m, nil
 			}
-			content, _, _, _, err := sessionDisplayTranscript(m.runner.SessionPath, m.workspace, m.collapsedEditBlocks, m.groupToolVerbs)
+			content, _, _, _, err := sessionDisplayTranscript(m.runner.SessionPath, m.workspace, m.collapsedEditBlocks, m.groupToolVerbs, m.showThinking)
 			if err != nil {
 				m.status = "transcript failed: " + err.Error()
 				return m, nil
@@ -3138,6 +3170,7 @@ func (m *model) setPlanMode(active bool) error {
 func (m *model) appendSystem(text string) {
 	m.finishToolVerbGroup()
 	m.finishCollapsedEditGroup()
+	m.finishThought()
 	m.appendToolDisplay(text)
 }
 
@@ -4946,6 +4979,7 @@ func (m *model) inlineProtocol() imageProtocol {
 func (m *model) beginTurn(prompt string) {
 	m.finishToolVerbGroup()
 	m.finishCollapsedEditGroup()
+	m.finishThought()
 	if m.minimal && m.transcript.Len() > m.minimalCommitted {
 		m.minimalFlushTo = m.transcript.Len()
 	}
@@ -4964,6 +4998,39 @@ func (m *model) beginTurn(prompt string) {
 	m.transcript.WriteString("\n")
 	m.status = "thinking"
 	m.scroll = 0
+}
+
+func (m *model) appendThought(text string) {
+	if text == "" {
+		return
+	}
+	if !m.thoughtOpen {
+		m.transcript.WriteString("> Thinking\n>\n")
+		m.thoughtOpen = true
+		m.thoughtLineStart = true
+	}
+	for _, char := range text {
+		if m.thoughtLineStart {
+			m.transcript.WriteString("> ")
+			m.thoughtLineStart = false
+		}
+		m.transcript.WriteRune(char)
+		if char == '\n' {
+			m.thoughtLineStart = true
+		}
+	}
+}
+
+func (m *model) finishThought() {
+	if m.thoughtOpen {
+		if m.thoughtLineStart {
+			m.transcript.WriteByte('\n')
+		} else {
+			m.transcript.WriteString("\n\n")
+		}
+		m.thoughtOpen = false
+		m.thoughtLineStart = false
+	}
 }
 
 func waitForBridge(bridge *Bridge) tea.Cmd {

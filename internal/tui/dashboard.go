@@ -1151,7 +1151,7 @@ func (m *model) peekDashboardRow(row dashboardRow) (tea.Model, tea.Cmd) {
 		state.busy = true
 		state.err = ""
 		return m, func() tea.Msg {
-			transcript, _, _, _, err := sessionDisplayTranscript(path, row.cwd, m.collapsedEditBlocks, m.groupToolVerbs)
+			transcript, _, _, _, err := sessionDisplayTranscript(path, row.cwd, m.collapsedEditBlocks, m.groupToolVerbs, m.showThinking)
 			if err != nil {
 				messages, fallbackErr := session.TranscriptOrEmpty(path)
 				if fallbackErr != nil {

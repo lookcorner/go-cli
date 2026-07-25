@@ -834,6 +834,16 @@ func DisplayTimeline(path string) ([]DisplayEntry, error) {
 			if data.Text != "" {
 				result = append(result, DisplayEntry{Time: event.Time, Kind: "assistant", Text: data.Text})
 			}
+		case "model_thought":
+			var data struct {
+				Text string `json:"text"`
+			}
+			if err := json.Unmarshal(event.Data, &data); err != nil {
+				return nil, fmt.Errorf("parse display thought on session line %d: %w", line, err)
+			}
+			if data.Text != "" {
+				result = append(result, DisplayEntry{Time: event.Time, Kind: "thought", Text: data.Text})
+			}
 		case "tool_call":
 			var data struct {
 				CallID    string          `json:"call_id"`

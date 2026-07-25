@@ -52,6 +52,32 @@ func TestParseSSETextAndToolCall(t *testing.T) {
 	}
 }
 
+func TestParseSSEReturnsReasoningSummaryEvents(t *testing.T) {
+	stream := strings.Join([]string{
+		sseLine(t, map[string]any{"type": "response.reasoning_summary_text.delta", "delta": "check "}),
+		sseLine(t, map[string]any{"type": "response.reasoning_summary_text.delta", "delta": "inputs"}),
+		sseLine(t, map[string]any{"type": "response.output_text.delta", "delta": "done"}),
+	}, "\n")
+	var events []StreamEvent
+	result, err := parseSSEEvents(strings.NewReader(stream), func(event StreamEvent) { events = append(events, event) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Thought != "check inputs" || result.Text != "done" || len(events) != 3 ||
+		events[0] != (StreamEvent{Kind: StreamThought, Text: "check "}) ||
+		events[2] != (StreamEvent{Kind: StreamText, Text: "done"}) {
+		t.Fatalf("result=%#v events=%#v", result, events)
+	}
+}
+
+func TestParseJSONReturnsReasoningSummary(t *testing.T) {
+	body := `{"id":"resp_1","output":[{"type":"reasoning","summary":[{"type":"summary_text","text":"checked"}]},{"type":"message","content":[{"type":"output_text","text":"done"}]}]}`
+	result, err := parseJSONEvents(strings.NewReader(body), nil)
+	if err != nil || result.Thought != "checked" || result.Text != "done" {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+}
+
 func TestParseJSONUsageDetails(t *testing.T) {
 	result, err := parseJSON(strings.NewReader(`{"id":"resp_1","output":[],"usage":{"input_tokens":20,"output_tokens":4,"total_tokens":24,"input_tokens_details":{"cached_tokens":12},"output_tokens_details":{"reasoning_tokens":3}}}`), nil)
 	if err != nil {

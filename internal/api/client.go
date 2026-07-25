@@ -30,6 +30,10 @@ func NewClient(baseURL, apiKey string, httpClient *http.Client) *Client {
 }
 
 func (c *Client) StreamResponse(ctx context.Context, request ResponseRequest, onText func(string)) (StreamResult, error) {
+	return c.StreamResponseEvents(ctx, request, textEvents(onText))
+}
+
+func (c *Client) StreamResponseEvents(ctx context.Context, request ResponseRequest, onEvent func(StreamEvent)) (StreamResult, error) {
 	body, err := json.Marshal(request)
 	if err != nil {
 		return StreamResult{}, fmt.Errorf("encode response request: %w", err)
@@ -56,9 +60,9 @@ func (c *Client) StreamResponse(ctx context.Context, request ResponseRequest, on
 
 	contentType := resp.Header.Get("Content-Type")
 	if strings.Contains(contentType, "text/event-stream") {
-		return parseSSE(resp.Body, onText)
+		return parseSSEEvents(resp.Body, onEvent)
 	}
-	return parseJSON(resp.Body, onText)
+	return parseJSONEvents(resp.Body, onEvent)
 }
 
 type wireEvent struct {
@@ -90,6 +94,10 @@ type wireResponse struct {
 }
 
 func parseSSE(reader io.Reader, onText func(string)) (StreamResult, error) {
+	return parseSSEEvents(reader, textEvents(onText))
+}
+
+func parseSSEEvents(reader io.Reader, onEvent func(StreamEvent)) (StreamResult, error) {
 	scanner := bufio.NewScanner(reader)
 	buffer := make([]byte, 64<<10)
 	scanner.Buffer(buffer, 8<<20)
@@ -118,9 +126,11 @@ func parseSSE(reader io.Reader, onText func(string)) (StreamResult, error) {
 		}
 		if event.Type == "response.output_text.delta" && event.Delta != "" {
 			result.Text += event.Delta
-			if onText != nil {
-				onText(event.Delta)
-			}
+			emitStreamEvent(onEvent, StreamText, event.Delta)
+		}
+		if event.Type == "response.reasoning_summary_text.delta" && event.Delta != "" {
+			result.Thought += event.Delta
+			emitStreamEvent(onEvent, StreamThought, event.Delta)
 		}
 		if len(event.Item) > 0 && event.Type == "response.output_item.done" {
 			appendToolCall(event.Item, &result, seenCalls)
@@ -144,6 +154,10 @@ func parseSSE(reader io.Reader, onText func(string)) (StreamResult, error) {
 }
 
 func parseJSON(reader io.Reader, onText func(string)) (StreamResult, error) {
+	return parseJSONEvents(reader, textEvents(onText))
+}
+
+func parseJSONEvents(reader io.Reader, onEvent func(StreamEvent)) (StreamResult, error) {
 	var response wireResponse
 	if err := json.NewDecoder(reader).Decode(&response); err != nil {
 		return StreamResult{}, fmt.Errorf("decode response: %w", err)
@@ -153,6 +167,10 @@ func parseJSON(reader io.Reader, onText func(string)) (StreamResult, error) {
 	for _, raw := range response.Output {
 		var item struct {
 			Type    string `json:"type"`
+			Summary []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"summary"`
 			Content []struct {
 				Type string `json:"type"`
 				Text string `json:"text"`
@@ -162,15 +180,38 @@ func parseJSON(reader io.Reader, onText func(string)) (StreamResult, error) {
 			for _, content := range item.Content {
 				if content.Type == "output_text" {
 					result.Text += content.Text
-					if onText != nil {
-						onText(content.Text)
-					}
+					emitStreamEvent(onEvent, StreamText, content.Text)
+				}
+			}
+		}
+		if item.Type == "reasoning" {
+			for _, summary := range item.Summary {
+				if summary.Type == "summary_text" {
+					result.Thought += summary.Text
+					emitStreamEvent(onEvent, StreamThought, summary.Text)
 				}
 			}
 		}
 		appendToolCall(raw, &result, seenCalls)
 	}
 	return result, nil
+}
+
+func textEvents(onText func(string)) func(StreamEvent) {
+	if onText == nil {
+		return nil
+	}
+	return func(event StreamEvent) {
+		if event.Kind == StreamText {
+			onText(event.Text)
+		}
+	}
+}
+
+func emitStreamEvent(onEvent func(StreamEvent), kind, text string) {
+	if onEvent != nil && text != "" {
+		onEvent(StreamEvent{Kind: kind, Text: text})
+	}
 }
 
 func responseUsage(response wireResponse) Usage {

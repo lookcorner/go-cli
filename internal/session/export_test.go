@@ -14,6 +14,7 @@ func TestExportMarkdownIncludesConversationAndCompactToolSummaries(t *testing.T)
 	editArguments, _ := json.Marshal(map[string]any{"file_path": "main.go"})
 	content := "" +
 		`{"kind":"user_prompt","data":{"text":"run tests"}}` + "\n" +
+		`{"kind":"model_thought","data":{"text":"do not export"}}` + "\n" +
 		`{"kind":"model_response","data":{"response_id":"r1","text":"Starting.","tool_call_count":1}}` + "\n" +
 		`{"kind":"tool_call","data":{"call_id":"call-1","name":"shell","arguments":` + string(arguments) + `}}` + "\n" +
 		`{"kind":"tool_result","data":{"call_id":"call-1","name":"shell","output":"ok"}}` + "\n" +
@@ -38,7 +39,7 @@ func TestExportMarkdownIncludesConversationAndCompactToolSummaries(t *testing.T)
 			t.Fatalf("export missing %q:\n%s", expected, exported)
 		}
 	}
-	if strings.Contains(exported, `"call_id"`) || strings.Contains(exported, "output") {
+	if strings.Contains(exported, `"call_id"`) || strings.Contains(exported, "output") || strings.Contains(exported, "do not export") {
 		t.Fatalf("export leaked tool protocol details:\n%s", exported)
 	}
 }

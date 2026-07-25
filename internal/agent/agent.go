@@ -161,6 +161,7 @@ type Runner struct {
 	Instructions            string
 	MaxSteps                int
 	TextOutput              io.Writer
+	ThoughtOutput           io.Writer
 	StatusOutput            io.Writer
 	ToolObserver            ToolObserver
 	HookPolicy              HookPolicy
@@ -730,11 +731,28 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 			request.Reasoning = &api.ReasoningConfig{Effort: r.ReasoningEffort}
 		}
 		r.log("model_request", map[string]any{"step": step, "previous_response_id": previousResponseID})
-		streamed, err := r.Client.StreamResponse(ctx, request, func(delta string) {
-			if r.TextOutput != nil {
-				_, _ = io.WriteString(r.TextOutput, delta)
-			}
-		})
+		var streamed api.StreamResult
+		var err error
+		if client, ok := r.Client.(api.EventStreamer); ok {
+			streamed, err = client.StreamResponseEvents(ctx, request, func(event api.StreamEvent) {
+				switch event.Kind {
+				case api.StreamText:
+					if r.TextOutput != nil {
+						_, _ = io.WriteString(r.TextOutput, event.Text)
+					}
+				case api.StreamThought:
+					if r.ThoughtOutput != nil {
+						_, _ = io.WriteString(r.ThoughtOutput, event.Text)
+					}
+				}
+			})
+		} else {
+			streamed, err = r.Client.StreamResponse(ctx, request, func(delta string) {
+				if r.TextOutput != nil {
+					_, _ = io.WriteString(r.TextOutput, delta)
+				}
+			})
+		}
 		if err != nil {
 			if len(inFlightInterjections) > 0 {
 				r.prependInterjections(inFlightInterjections)
@@ -746,6 +764,9 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 		}
 		if prefixAdded {
 			r.promptWorkspaceSent = true
+		}
+		if streamed.Thought != "" {
+			r.log("model_thought", map[string]any{"step": step, "text": streamed.Thought})
 		}
 		r.modelHistory = nil
 		inFlightInterjections = nil

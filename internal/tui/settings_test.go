@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -529,7 +531,7 @@ func TestSettingsGroupToolVerbsRefoldsTranscriptImmediately(t *testing.T) {
 	if err := logger.Close(); err != nil {
 		t.Fatal(err)
 	}
-	grouped, messages, expands, folds, err := sessionDisplayTranscript(path, "", false, true)
+	grouped, messages, expands, folds, err := sessionDisplayTranscript(path, "", false, true, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -576,6 +578,50 @@ func TestSettingsGroupToolVerbsPreservesLocalTranscriptContent(t *testing.T) {
 	}
 }
 
+func TestSettingsThinkingToggleRebuildsExistingTranscript(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "thinking.jsonl")
+	content := "" +
+		`{"kind":"user_prompt","data":{"text":"question"}}` + "\n" +
+		`{"kind":"model_thought","data":{"text":"sentinel thought"}}` + "\n" +
+		`{"kind":"model_response","data":{"response_id":"r1","text":"answer","tool_call_count":0}}` + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	shown, messages, expands, folds, err := sessionDisplayTranscript(path, "", false, false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	persisted := true
+	m := &model{
+		width: 80, height: 20, runner: &agent.Runner{SessionPath: path},
+		showThinking: true, settings: &settingsState{selected: 30},
+		persistThinking: func(value bool) error { persisted = value; return nil },
+	}
+	m.replaceDisplayTranscript(shown, messages, expands, folds)
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.showThinking || persisted || strings.Contains(m.transcript.String(), "sentinel thought") {
+		t.Fatalf("hidden state: command=%v show=%v persisted=%v transcript=%q", command != nil, m.showThinking, persisted, m.transcript.String())
+	}
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || !m.showThinking || !persisted || !strings.Contains(m.transcript.String(), "sentinel thought") {
+		t.Fatalf("restored state: command=%v show=%v persisted=%v transcript=%q", command != nil, m.showThinking, persisted, m.transcript.String())
+	}
+}
+
+func TestSettingsThinkingToggleRollsBackPersistenceFailure(t *testing.T) {
+	m := &model{
+		showThinking: true, settings: &settingsState{selected: 30},
+		persistThinking: func(bool) error { return errors.New("write failed") },
+	}
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if !m.showThinking || m.settings.err != "write failed" || m.status != "setting update failed" {
+		t.Fatalf("show=%v err=%q status=%q", m.showThinking, m.settings.err, m.status)
+	}
+}
+
 func TestSettingsCollapsedEditBlocksRefoldsTranscriptImmediately(t *testing.T) {
 	logger, err := session.NewLoggerWithID(t.TempDir(), "settings-edits")
 	if err != nil {
@@ -617,7 +663,7 @@ func TestSettingsCollapsedEditBlocksRefoldsTranscriptImmediately(t *testing.T) {
 	if err := logger.Close(); err != nil {
 		t.Fatal(err)
 	}
-	expanded, messages, expands, folds, err := sessionDisplayTranscript(path, "", false, true)
+	expanded, messages, expands, folds, err := sessionDisplayTranscript(path, "", false, true, true)
 	if err != nil {
 		t.Fatal(err)
 	}

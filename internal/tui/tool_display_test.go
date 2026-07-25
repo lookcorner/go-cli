@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -493,7 +494,7 @@ func TestSessionDisplayTranscriptRestoresToolsInOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	text, messages, expands, folds, err := sessionDisplayTranscript(path, "", false, false)
+	text, messages, expands, folds, err := sessionDisplayTranscript(path, "", false, false, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -548,12 +549,31 @@ func TestSessionDisplayTranscriptRestoresCollapsedEdit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	text, _, expands, _, err := sessionDisplayTranscript(path, "", true, false)
+	text, _, expands, _, err := sessionDisplayTranscript(path, "", true, false, true)
 	if err != nil || !strings.Contains(text, "Edit `main.go` +2/-1") || strings.Contains(text, "Arguments") {
 		t.Fatalf("text=%q err=%v", text, err)
 	}
 	if len(expands) != 1 || !strings.Contains(expands[0], `"old_text": "old"`) {
 		t.Fatalf("expansions=%#v", expands)
+	}
+}
+
+func TestSessionDisplayTranscriptCanHideAndRestoreThoughts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "thought.jsonl")
+	content := "" +
+		`{"kind":"user_prompt","data":{"text":"question"}}` + "\n" +
+		`{"kind":"model_thought","data":{"text":"inspect\ninputs"}}` + "\n" +
+		`{"kind":"model_response","data":{"response_id":"r1","text":"answer","tool_call_count":0}}` + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	shown, _, _, _, err := sessionDisplayTranscript(path, "", false, false, true)
+	if err != nil || !strings.Contains(shown, "> Thinking\n>\n> inspect\n> inputs") || !strings.Contains(shown, "answer") {
+		t.Fatalf("shown=%q err=%v", shown, err)
+	}
+	hidden, _, _, _, err := sessionDisplayTranscript(path, "", false, false, false)
+	if err != nil || strings.Contains(hidden, "Thinking") || strings.Contains(hidden, "inspect") || !strings.Contains(hidden, "answer") {
+		t.Fatalf("hidden=%q err=%v", hidden, err)
 	}
 }
 
@@ -590,7 +610,7 @@ func TestSessionDisplayTranscriptCoalescesAdjacentSameFileEdits(t *testing.T) {
 	if err := logger.Close(); err != nil {
 		t.Fatal(err)
 	}
-	text, _, expands, _, err := sessionDisplayTranscript(path, workspace, true, false)
+	text, _, expands, _, err := sessionDisplayTranscript(path, workspace, true, false, true)
 	if err != nil || strings.Count(text, "Edit `main.go`") != 1 || !strings.Contains(text, "Edit `main.go` +2/-2") {
 		t.Fatalf("text=%q err=%v", text, err)
 	}
@@ -640,7 +660,7 @@ func TestSessionDisplayTranscriptGroupsConsecutiveToolVerbs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	text, _, expands, _, err := sessionDisplayTranscript(path, "", true, true)
+	text, _, expands, _, err := sessionDisplayTranscript(path, "", true, true, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -653,7 +673,7 @@ func TestSessionDisplayTranscriptGroupsConsecutiveToolVerbs(t *testing.T) {
 		t.Fatalf("expansions=%#v", expands)
 	}
 
-	ungrouped, _, _, _, err := sessionDisplayTranscript(path, "", true, false)
+	ungrouped, _, _, _, err := sessionDisplayTranscript(path, "", true, false, true)
 	if err != nil || strings.Contains(ungrouped, first) || !strings.Contains(ungrouped, "#### Tool failed: `grep`") {
 		t.Fatalf("ungrouped transcript=%q err=%v", ungrouped, err)
 	}
@@ -683,7 +703,7 @@ func TestSessionDisplayTranscriptKeepsSyntheticAssistantBoundary(t *testing.T) {
 	if err := logger.Close(); err != nil {
 		t.Fatal(err)
 	}
-	text, messages, _, _, err := sessionDisplayTranscript(path, "", false, false)
+	text, messages, _, _, err := sessionDisplayTranscript(path, "", false, false, true)
 	if err != nil || strings.Count(text, "Gork\n") != 2 || strings.Contains(text, "internal") || len(messages) != 3 {
 		t.Fatalf("text=%q messages=%#v err=%v", text, messages, err)
 	}

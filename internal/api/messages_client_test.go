@@ -46,6 +46,29 @@ func TestParseMessagesSSE(t *testing.T) {
 	}
 }
 
+func TestParseMessagesThinkingBlocks(t *testing.T) {
+	events := []any{
+		map[string]any{"type": "content_block_start", "index": 0, "content_block": map[string]any{"type": "thinking", "thinking": "check "}},
+		map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]any{"type": "thinking_delta", "thinking": "inputs"}},
+		map[string]any{"type": "content_block_delta", "index": 1, "delta": map[string]any{"type": "text_delta", "text": "done"}},
+	}
+	var stream strings.Builder
+	for _, event := range events {
+		stream.WriteString(sseLine(t, event))
+		stream.WriteByte('\n')
+	}
+	var streamed []StreamEvent
+	result, err := parseMessagesSSEEvents(strings.NewReader(stream.String()), func(event StreamEvent) { streamed = append(streamed, event) })
+	if err != nil || result.Thought != "check inputs" || result.Text != "done" || len(streamed) != 3 {
+		t.Fatalf("result=%#v events=%#v err=%v", result, streamed, err)
+	}
+
+	result, err = parseMessagesJSONEvents(strings.NewReader(`{"id":"msg_1","content":[{"type":"thinking","thinking":"checked"},{"type":"text","text":"done"}]}`), nil)
+	if err != nil || result.Thought != "checked" || result.Text != "done" {
+		t.Fatalf("JSON result=%#v err=%v", result, err)
+	}
+}
+
 func TestParseMessagesJSONUsageDetails(t *testing.T) {
 	result, err := parseMessagesJSON(strings.NewReader(`{"id":"msg_1","content":[],"usage":{"input_tokens":20,"output_tokens":4,"cache_read_input_tokens":12}}`), nil)
 	if err != nil {

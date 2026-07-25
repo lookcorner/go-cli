@@ -59,6 +59,24 @@ func TestParseChatSSEIncrementalToolCall(t *testing.T) {
 	}
 }
 
+func TestParseChatReasoningContent(t *testing.T) {
+	stream := sseLine(t, map[string]any{
+		"id": "chat_1", "choices": []any{map[string]any{"delta": map[string]any{
+			"reasoning_content": "considering", "content": "done",
+		}}},
+	})
+	var events []StreamEvent
+	result, err := parseChatSSEEvents(strings.NewReader(stream), func(event StreamEvent) { events = append(events, event) })
+	if err != nil || result.Thought != "considering" || result.Text != "done" || len(events) != 2 {
+		t.Fatalf("result=%#v events=%#v err=%v", result, events, err)
+	}
+
+	result, err = parseChatJSONEvents(strings.NewReader(`{"id":"chat_2","choices":[{"message":{"role":"assistant","reasoning_content":"checked","content":"answer"}}]}`), nil)
+	if err != nil || result.Thought != "checked" || result.Text != "answer" {
+		t.Fatalf("JSON result=%#v err=%v", result, err)
+	}
+}
+
 func TestParseChatJSONUsageDetails(t *testing.T) {
 	result, err := parseChatJSON(strings.NewReader(`{"id":"chat_1","choices":[],"usage":{"prompt_tokens":20,"completion_tokens":4,"total_tokens":24,"prompt_tokens_details":{"cached_tokens":12},"completion_tokens_details":{"reasoning_tokens":3}}}`), nil)
 	if err != nil {

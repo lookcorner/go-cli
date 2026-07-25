@@ -9,6 +9,20 @@ type Streamer interface {
 	StreamResponse(context.Context, ResponseRequest, func(string)) (StreamResult, error)
 }
 
+type EventStreamer interface {
+	StreamResponseEvents(context.Context, ResponseRequest, func(StreamEvent)) (StreamResult, error)
+}
+
+type StreamEvent struct {
+	Kind string
+	Text string
+}
+
+const (
+	StreamText    = "text"
+	StreamThought = "thought"
+)
+
 type CompactionCloner interface {
 	CloneForCompaction(includeHistory bool) Streamer
 }
@@ -79,6 +93,7 @@ type ToolCall struct {
 type StreamResult struct {
 	ResponseID string
 	Text       string
+	Thought    string
 	ToolCalls  []ToolCall
 	Usage      Usage
 }

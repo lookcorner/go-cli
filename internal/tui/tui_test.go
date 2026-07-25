@@ -4508,6 +4508,42 @@ func TestStreamingTextPreservesScrolledViewport(t *testing.T) {
 	}
 }
 
+func TestStreamingThoughtUsesSeparateBlock(t *testing.T) {
+	bridge := NewBridge(context.Background(), tools.PermissionAuto)
+	defer bridge.Close()
+	m := &model{bridge: bridge, width: 80, height: 16, showThinking: true}
+	m.transcript.WriteString("Gork\n")
+	updated, _ := m.Update(thoughtEvent{text: "check\ninputs"})
+	m = updated.(*model)
+	updated, _ = m.Update(textEvent{text: "answer"})
+	m = updated.(*model)
+	if got := m.transcript.String(); !strings.Contains(got, "> Thinking\n>\n> check\n> inputs\n\nanswer") {
+		t.Fatalf("transcript=%q", got)
+	}
+
+	hidden := &model{bridge: bridge, showThinking: false}
+	updated, _ = hidden.Update(thoughtEvent{text: "secret"})
+	if strings.Contains(updated.(*model).transcript.String(), "secret") {
+		t.Fatal("hidden thought was rendered")
+	}
+
+	trailing := &model{bridge: bridge, showThinking: true}
+	updated, _ = trailing.Update(thoughtEvent{text: "line\n"})
+	trailing = updated.(*model)
+	updated, _ = trailing.Update(toolStartedEvent{call: api.ToolCall{Name: "shell"}})
+	trailing = updated.(*model)
+	if got := trailing.transcript.String(); strings.Contains(got, "\n> \n") || !strings.HasSuffix(got, "\n\n") {
+		t.Fatalf("trailing newline block=%q", got)
+	}
+
+	scrolled := &model{bridge: bridge, width: 80, height: 16, showThinking: true, scroll: 2}
+	scrolled.transcript.WriteString("one\ntwo\nthree")
+	updated, _ = scrolled.Update(thoughtEvent{text: "reasoning"})
+	if updated.(*model).scroll <= 2 {
+		t.Fatalf("streaming thought scroll=%d", updated.(*model).scroll)
+	}
+}
+
 func TestSliceFromBottom(t *testing.T) {
 	lines := []string{"1", "2", "3", "4", "5"}
 	if got := strings.Join(sliceFromBottom(lines, 2, 0), ","); got != "4,5" {

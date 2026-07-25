@@ -227,6 +227,7 @@ type UIConfig struct {
 	CompactMode               bool    `json:"compact_mode,omitempty"`
 	ShowTimestamps            bool    `json:"show_timestamps"`
 	ShowTimeline              bool    `json:"show_timeline,omitempty"`
+	ShowThinkingBlocks        bool    `json:"show_thinking_blocks"`
 	ScrollSpeed               uint8   `json:"scroll_speed,omitempty"`
 	ScrollMode                string  `json:"scroll_mode"`
 	ScrollLines               *uint8  `json:"scroll_lines,omitempty"`
@@ -507,6 +508,7 @@ type fileUIConfig struct {
 	CompactMode                  *bool   `json:"compact_mode,omitempty" toml:"compact_mode"`
 	ShowTimestamps               *bool   `json:"show_timestamps,omitempty" toml:"show_timestamps"`
 	ShowTimeline                 *bool   `json:"show_timeline,omitempty" toml:"show_timeline"`
+	ShowThinkingBlocks           *bool   `json:"show_thinking_blocks,omitempty" toml:"show_thinking_blocks"`
 	ScrollSpeed                  *uint8  `json:"scroll_speed,omitempty" toml:"scroll_speed"`
 	ScrollMode                   *string `json:"scroll_mode,omitempty" toml:"scroll_mode"`
 	ScrollLines                  *uint8  `json:"scroll_lines,omitempty" toml:"scroll_lines"`
@@ -747,7 +749,7 @@ func Load(path string) (Config, error) {
 		AskUserQuestion:             AskUserQuestionConfig{TimeoutEnabled: true, TimeoutSeconds: 30 * 60},
 		Toolset:                     ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}},
 		Goal:                        GoalConfig{VerifierCount: 3, ClassifierMaxRuns: 10, ReverifyAfter: 8},
-		UI:                          UIConfig{Theme: "groknight", AutoDarkTheme: "groknight", AutoLightTheme: "grokday", HunkTrackerMode: "agent_only", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, ScrollSpeed: 50, ScrollMode: "auto", DefaultSelectedPermission: "always_allow_all_sessions", GroupToolVerbs: true, PromptSuggestions: true, ContextualHints: Hints{Undo: true, PlanMode: true, SendNow: true, SmallScreen: true, WordSelect: true}, VoiceCaptureMode: "hold", VoiceSTTLanguage: "en", PermissionMode: "ask"},
+		UI:                          UIConfig{Theme: "groknight", AutoDarkTheme: "groknight", AutoLightTheme: "grokday", HunkTrackerMode: "agent_only", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, ShowThinkingBlocks: true, ScrollSpeed: 50, ScrollMode: "auto", DefaultSelectedPermission: "always_allow_all_sessions", GroupToolVerbs: true, PromptSuggestions: true, ContextualHints: Hints{Undo: true, PlanMode: true, SendNow: true, SmallScreen: true, WordSelect: true}, VoiceCaptureMode: "hold", VoiceSTTLanguage: "en", PermissionMode: "ask"},
 		Dashboard:                   DashboardConfig{Enabled: true, Grouping: "state"},
 		Sandbox:                     SandboxConfig{Profile: "off"},
 		Pruning:                     PruningConfig{Enabled: true, KeepLastNTurns: 3, SoftTrimThreshold: 4000, SoftTrimHead: 1500, SoftTrimTail: 1500, HardClearAgeTurns: 10},
@@ -1033,6 +1035,9 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.UI.ShowTimeline != nil {
 		cfg.UI.ShowTimeline = *disk.UI.ShowTimeline
+	}
+	if disk.UI.ShowThinkingBlocks != nil {
+		cfg.UI.ShowThinkingBlocks = *disk.UI.ShowThinkingBlocks
 	}
 	if disk.UI.ScrollSpeed != nil {
 		cfg.UI.ScrollSpeed = normalizedScrollSpeed(*disk.UI.ScrollSpeed)

@@ -27,6 +27,20 @@ type fakeStreamer struct {
 	results  []api.StreamResult
 }
 
+type eventStreamer struct {
+	result api.StreamResult
+}
+
+func (s eventStreamer) StreamResponse(context.Context, api.ResponseRequest, func(string)) (api.StreamResult, error) {
+	return s.result, nil
+}
+
+func (s eventStreamer) StreamResponseEvents(_ context.Context, _ api.ResponseRequest, onEvent func(api.StreamEvent)) (api.StreamResult, error) {
+	onEvent(api.StreamEvent{Kind: api.StreamThought, Text: s.result.Thought})
+	onEvent(api.StreamEvent{Kind: api.StreamText, Text: s.result.Text})
+	return s.result, nil
+}
+
 type modelSwitchStreamer struct {
 	requests []api.ResponseRequest
 	results  []api.StreamResult
@@ -735,6 +749,44 @@ func TestRunnerApplyModelSeedsStatelessHistoryUntilSuccess(t *testing.T) {
 	}
 	if len(streamer.requests[2].Input) != 1 {
 		t.Fatalf("history seed was not cleared: %#v", streamer.requests[2].Input)
+	}
+}
+
+func TestRunnerStreamsAndPersistsThoughtSeparately(t *testing.T) {
+	logger, err := session.NewLoggerWithID(t.TempDir(), "thought")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logger.Close()
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionDeny})
+	defer registry.Close()
+	var text, thought bytes.Buffer
+	runner := Runner{
+		Client:        eventStreamer{result: api.StreamResult{ResponseID: "r1", Text: "answer", Thought: "reasoning"}},
+		Tools:         registry,
+		Model:         "test-model",
+		MaxSteps:      1,
+		TextOutput:    &text,
+		ThoughtOutput: &thought,
+		Logger:        logger,
+	}
+	result, err := runner.RunTurn(context.Background(), "question", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Text != "answer" || text.String() != "answer" || thought.String() != "reasoning" {
+		t.Fatalf("result=%#v text=%q thought=%q", result, text.String(), thought.String())
+	}
+	data, err := os.ReadFile(logger.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(data), `"kind":"model_thought"`) != 1 || !strings.Contains(string(data), `"text":"reasoning"`) {
+		t.Fatalf("thought event missing:\n%s", data)
 	}
 }
 

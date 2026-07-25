@@ -101,6 +101,12 @@ The TUI also implements the reference hidden `/debug [scroll|fps|log]`
 diagnostics: live scroll and FPS overlays, the `/scroll-debug` alias, bare
 toggle-state reporting, environment startup switches, and an event-exact JSONL
 recorder for the Go TUI's discrete keyboard and wheel scroll transitions.
+Responses reasoning summaries, Chat Completions `reasoning_content`, and
+Anthropic thinking blocks stream through a separate agent output, persist as
+display-only session events, and render in distinct TUI Thinking blocks.
+`[ui].show_thinking_blocks` defaults on and the live `/settings` toggle rebuilds
+completed scrollback so hidden thoughts disappear and can be restored without
+entering model history or Markdown exports.
 
 REPL, TUI, and ACP sessions support shared `/usage` and `/cost` billing metrics
 plus management links as local commands that never invoke model inference. ACP

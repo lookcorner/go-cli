@@ -86,6 +86,7 @@ func (b *Bridge) ToolFinished(call api.ToolCall, result tools.ExecutionResult, e
 }
 
 func (m *model) finishTool(event toolFinishedEvent) {
+	m.finishThought()
 	if m.minimal && len(event.result.Images) > 0 && m.inlineProtocol() != imageProtocolNone {
 		m.pendingImages = append(m.pendingImages, event.result.Images...)
 		if len(m.pendingImages) > 32 {
@@ -384,7 +385,7 @@ func renderStoredToolBlock(tool session.DisplayTool, compact bool) (string, bool
 	return fmt.Sprintf("#### %s: `%s`\n\n%s", title, tool.Name, strings.Join(sections, "\n\n")), folded
 }
 
-func sessionDisplayTranscript(path, workspace string, collapsedEditBlocks, groupToolVerbs bool) (string, []transcriptMessage, []string, []toolFold, error) {
+func sessionDisplayTranscript(path, workspace string, collapsedEditBlocks, groupToolVerbs, showThinking bool) (string, []transcriptMessage, []string, []toolFold, error) {
 	entries, err := session.DisplayTimeline(path)
 	if err != nil {
 		return "", nil, nil, nil, err
@@ -478,6 +479,23 @@ func sessionDisplayTranscript(path, workspace string, collapsedEditBlocks, group
 			text.WriteString(displayPromptBody(entry))
 			assistantOpen = false
 			lastKind = "user"
+		case "thought":
+			if !showThinking {
+				continue
+			}
+			flushVerbGroup()
+			flushEditGroup()
+			if !assistantOpen {
+				separate()
+				label("Gork", "assistant", entry)
+				assistantOpen = true
+			}
+			if lastKind != "" {
+				text.WriteString("\n\n")
+			}
+			text.WriteString("> Thinking\n>\n> ")
+			text.WriteString(strings.ReplaceAll(entry.Text, "\n", "\n> "))
+			lastKind = "thought"
 		case "assistant", "tool":
 			if !assistantOpen {
 				separate()
@@ -488,7 +506,7 @@ func sessionDisplayTranscript(path, workspace string, collapsedEditBlocks, group
 			if entry.Kind == "assistant" {
 				flushVerbGroup()
 				flushEditGroup()
-				if lastKind == "tool" {
+				if lastKind == "tool" || lastKind == "thought" {
 					text.WriteString("\n\n")
 				}
 				text.WriteString(entry.Text)

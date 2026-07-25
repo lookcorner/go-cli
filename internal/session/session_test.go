@@ -190,6 +190,25 @@ func TestDisplayTimelineRestoresCompletedToolEvents(t *testing.T) {
 	}
 }
 
+func TestThoughtIsDisplayOnly(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	content := "" +
+		`{"kind":"user_prompt","data":{"text":"question"}}` + "\n" +
+		`{"kind":"model_thought","data":{"text":"private reasoning"}}` + "\n" +
+		`{"kind":"model_response","data":{"response_id":"r1","text":"answer","tool_call_count":0}}` + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := DisplayTimeline(path)
+	if err != nil || len(entries) != 3 || entries[1].Kind != "thought" || entries[1].Text != "private reasoning" {
+		t.Fatalf("entries=%#v err=%v", entries, err)
+	}
+	messages, err := Transcript(path)
+	if err != nil || len(messages) != 2 || strings.Contains(FormatTranscript(messages), "private reasoning") {
+		t.Fatalf("messages=%#v err=%v", messages, err)
+	}
+}
+
 func TestDisplayTimelineSkipsOrphanToolResult(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "session.jsonl")
 	content := "" +

@@ -129,6 +129,10 @@ func sessionMessageContent(message session.Message) []ContentPart {
 func (c *ChatClient) SetPruning(config PruningConfig) { c.pruning = config }
 
 func (c *ChatClient) StreamResponse(ctx context.Context, request ResponseRequest, onText func(string)) (StreamResult, error) {
+	return c.StreamResponseEvents(ctx, request, textEvents(onText))
+}
+
+func (c *ChatClient) StreamResponseEvents(ctx context.Context, request ResponseRequest, onEvent func(StreamEvent)) (StreamResult, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -210,9 +214,9 @@ func (c *ChatClient) StreamResponse(ctx context.Context, request ResponseRequest
 	}
 	var result StreamResult
 	if strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
-		result, err = parseChatSSE(resp.Body, onText)
+		result, err = parseChatSSEEvents(resp.Body, onEvent)
 	} else {
-		result, err = parseChatJSON(resp.Body, onText)
+		result, err = parseChatJSONEvents(resp.Body, onEvent)
 	}
 	if err != nil {
 		return StreamResult{}, err
@@ -283,8 +287,9 @@ type chatChunk struct {
 	} `json:"usage,omitempty"`
 	Choices []struct {
 		Delta struct {
-			Content   string `json:"content"`
-			ToolCalls []struct {
+			Content          string `json:"content"`
+			ReasoningContent string `json:"reasoning_content"`
+			ToolCalls        []struct {
 				Index    int    `json:"index"`
 				ID       string `json:"id"`
 				Function struct {
@@ -303,6 +308,10 @@ type chatCallBuilder struct {
 }
 
 func parseChatSSE(reader io.Reader, onText func(string)) (StreamResult, error) {
+	return parseChatSSEEvents(reader, textEvents(onText))
+}
+
+func parseChatSSEEvents(reader io.Reader, onEvent func(StreamEvent)) (StreamResult, error) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 64<<10), 8<<20)
 	result := StreamResult{}
@@ -329,9 +338,11 @@ func parseChatSSE(reader io.Reader, onText func(string)) (StreamResult, error) {
 		for _, choice := range chunk.Choices {
 			if choice.Delta.Content != "" {
 				result.Text += choice.Delta.Content
-				if onText != nil {
-					onText(choice.Delta.Content)
-				}
+				emitStreamEvent(onEvent, StreamText, choice.Delta.Content)
+			}
+			if choice.Delta.ReasoningContent != "" {
+				result.Thought += choice.Delta.ReasoningContent
+				emitStreamEvent(onEvent, StreamThought, choice.Delta.ReasoningContent)
 			}
 			for _, call := range choice.Delta.ToolCalls {
 				builder := builders[call.Index]
@@ -371,6 +382,10 @@ func parseChatSSE(reader io.Reader, onText func(string)) (StreamResult, error) {
 }
 
 func parseChatJSON(reader io.Reader, onText func(string)) (StreamResult, error) {
+	return parseChatJSONEvents(reader, textEvents(onText))
+}
+
+func parseChatJSONEvents(reader io.Reader, onEvent func(StreamEvent)) (StreamResult, error) {
 	var response struct {
 		ID    string `json:"id"`
 		Usage struct {
@@ -385,7 +400,10 @@ func parseChatJSON(reader io.Reader, onText func(string)) (StreamResult, error) 
 			} `json:"completion_tokens_details"`
 		} `json:"usage"`
 		Choices []struct {
-			Message chatMessage `json:"message"`
+			Message struct {
+				chatMessage
+				ReasoningContent string `json:"reasoning_content"`
+			} `json:"message"`
 		} `json:"choices"`
 	}
 	if err := json.NewDecoder(reader).Decode(&response); err != nil {
@@ -398,9 +416,9 @@ func parseChatJSON(reader io.Reader, onText func(string)) (StreamResult, error) 
 	for _, choice := range response.Choices {
 		content, _ := choice.Message.Content.(string)
 		result.Text += content
-		if onText != nil && content != "" {
-			onText(content)
-		}
+		emitStreamEvent(onEvent, StreamText, content)
+		result.Thought += choice.Message.ReasoningContent
+		emitStreamEvent(onEvent, StreamThought, choice.Message.ReasoningContent)
 		for _, call := range choice.Message.ToolCalls {
 			arguments := call.Function.Arguments
 			if arguments == "" {

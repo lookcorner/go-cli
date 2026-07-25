@@ -38,6 +38,7 @@ type messagesMessage struct {
 type messagesBlock struct {
 	Type      string          `json:"type"`
 	Text      string          `json:"text,omitempty"`
+	Thinking  string          `json:"thinking,omitempty"`
 	ID        string          `json:"id,omitempty"`
 	Name      string          `json:"name,omitempty"`
 	Input     json.RawMessage `json:"input,omitempty"`
@@ -135,6 +136,10 @@ func (c *MessagesClient) RewindHistory(messages []session.Message) {
 func (c *MessagesClient) SetPruning(config PruningConfig) { c.pruning = config }
 
 func (c *MessagesClient) StreamResponse(ctx context.Context, request ResponseRequest, onText func(string)) (StreamResult, error) {
+	return c.StreamResponseEvents(ctx, request, textEvents(onText))
+}
+
+func (c *MessagesClient) StreamResponseEvents(ctx context.Context, request ResponseRequest, onEvent func(StreamEvent)) (StreamResult, error) {
 	if request.Reasoning != nil {
 		return StreamResult{}, errors.New("messages backend does not support reasoning effort overrides")
 	}
@@ -216,9 +221,9 @@ func (c *MessagesClient) StreamResponse(ctx context.Context, request ResponseReq
 	}
 	var result StreamResult
 	if strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
-		result, err = parseMessagesSSE(resp.Body, onText)
+		result, err = parseMessagesSSEEvents(resp.Body, onEvent)
 	} else {
-		result, err = parseMessagesJSON(resp.Body, onText)
+		result, err = parseMessagesJSONEvents(resp.Body, onEvent)
 	}
 	if err != nil {
 		return StreamResult{}, err
@@ -310,16 +315,18 @@ type messagesEvent struct {
 		} `json:"usage"`
 	} `json:"message,omitempty"`
 	ContentBlock struct {
-		Type  string          `json:"type"`
-		ID    string          `json:"id,omitempty"`
-		Name  string          `json:"name,omitempty"`
-		Input json.RawMessage `json:"input,omitempty"`
-		Text  string          `json:"text,omitempty"`
+		Type     string          `json:"type"`
+		ID       string          `json:"id,omitempty"`
+		Name     string          `json:"name,omitempty"`
+		Input    json.RawMessage `json:"input,omitempty"`
+		Text     string          `json:"text,omitempty"`
+		Thinking string          `json:"thinking,omitempty"`
 	} `json:"content_block,omitempty"`
 	Delta struct {
 		Type        string `json:"type"`
 		Text        string `json:"text,omitempty"`
 		PartialJSON string `json:"partial_json,omitempty"`
+		Thinking    string `json:"thinking,omitempty"`
 	} `json:"delta,omitempty"`
 	Usage struct {
 		InputTokens      int `json:"input_tokens"`
@@ -336,6 +343,10 @@ type messagesCallBuilder struct {
 }
 
 func parseMessagesSSE(reader io.Reader, onText func(string)) (StreamResult, error) {
+	return parseMessagesSSEEvents(reader, textEvents(onText))
+}
+
+func parseMessagesSSEEvents(reader io.Reader, onEvent func(StreamEvent)) (StreamResult, error) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 64<<10), 8<<20)
 	result := StreamResult{}
@@ -379,9 +390,11 @@ func parseMessagesSSE(reader io.Reader, onText func(string)) (StreamResult, erro
 		case "content_block_start":
 			if event.ContentBlock.Type == "text" && event.ContentBlock.Text != "" {
 				result.Text += event.ContentBlock.Text
-				if onText != nil {
-					onText(event.ContentBlock.Text)
-				}
+				emitStreamEvent(onEvent, StreamText, event.ContentBlock.Text)
+			}
+			if event.ContentBlock.Type == "thinking" && event.ContentBlock.Thinking != "" {
+				result.Thought += event.ContentBlock.Thinking
+				emitStreamEvent(onEvent, StreamThought, event.ContentBlock.Thinking)
 			}
 			if event.ContentBlock.Type == "tool_use" {
 				builder := &messagesCallBuilder{id: event.ContentBlock.ID, name: event.ContentBlock.Name}
@@ -393,9 +406,11 @@ func parseMessagesSSE(reader io.Reader, onText func(string)) (StreamResult, erro
 		case "content_block_delta":
 			if event.Delta.Type == "text_delta" && event.Delta.Text != "" {
 				result.Text += event.Delta.Text
-				if onText != nil {
-					onText(event.Delta.Text)
-				}
+				emitStreamEvent(onEvent, StreamText, event.Delta.Text)
+			}
+			if event.Delta.Type == "thinking_delta" && event.Delta.Thinking != "" {
+				result.Thought += event.Delta.Thinking
+				emitStreamEvent(onEvent, StreamThought, event.Delta.Thinking)
 			}
 			if event.Delta.Type == "input_json_delta" {
 				builder := builders[event.Index]
@@ -428,6 +443,10 @@ func parseMessagesSSE(reader io.Reader, onText func(string)) (StreamResult, erro
 }
 
 func parseMessagesJSON(reader io.Reader, onText func(string)) (StreamResult, error) {
+	return parseMessagesJSONEvents(reader, textEvents(onText))
+}
+
+func parseMessagesJSONEvents(reader io.Reader, onEvent func(StreamEvent)) (StreamResult, error) {
 	var response struct {
 		ID      string          `json:"id"`
 		Content []messagesBlock `json:"content"`
@@ -448,9 +467,10 @@ func parseMessagesJSON(reader io.Reader, onText func(string)) (StreamResult, err
 		switch block.Type {
 		case "text":
 			result.Text += block.Text
-			if onText != nil {
-				onText(block.Text)
-			}
+			emitStreamEvent(onEvent, StreamText, block.Text)
+		case "thinking":
+			result.Thought += block.Thinking
+			emitStreamEvent(onEvent, StreamThought, block.Thinking)
 		case "tool_use":
 			arguments := block.Input
 			if len(arguments) == 0 {
