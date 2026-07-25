@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"runtime"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -138,9 +139,13 @@ func TestResolveRefreshesAndPersistsCredential(t *testing.T) {
 	if err != nil || !strings.Contains(string(data), `"custom": "preserved"`) {
 		t.Fatalf("unknown auth fields were lost: %s err=%v", data, err)
 	}
+	wantMode := os.FileMode(0o600)
+	if runtime.GOOS == "windows" {
+		wantMode = 0o666
+	}
 	if info, err := os.Stat(path); err != nil {
 		t.Fatal(err)
-	} else if info.Mode().Perm() != 0o600 {
+	} else if info.Mode().Perm() != wantMode {
 		t.Fatalf("auth permissions=%v", info.Mode().Perm())
 	}
 }

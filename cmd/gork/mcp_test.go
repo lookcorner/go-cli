@@ -79,6 +79,7 @@ func TestMCPCLIAddsRemoteServerAndValidatesArguments(t *testing.T) {
 func TestMCPCLIDoctorJSONAndFailureExit(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("GROK_HOME", filepath.Join(home, ".grok"))
 	userPath := filepath.Join(t.TempDir(), "config.toml")
 	if err := config.UpsertMCPServer(userPath, "good", config.MCPServerConfig{Command: "good"}); err != nil {

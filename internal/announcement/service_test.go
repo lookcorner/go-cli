@@ -2,6 +2,7 @@ package announcement
 
 import (
 	"os"
+	"runtime"
 	"path/filepath"
 	"testing"
 	"time"
@@ -37,7 +38,11 @@ func TestServiceSelectsCriticalThenPersistsHiddenState(t *testing.T) {
 	if current, _ := reloaded.Current(); value(current.ID) != "critical" {
 		t.Fatalf("shown current=%#v", current)
 	}
-	if info, err := os.Stat(filepath.Join(home, "announcements.json")); err != nil || info.Mode().Perm() != 0o600 {
+	wantMode := os.FileMode(0o600)
+	if runtime.GOOS == "windows" {
+		wantMode = 0o666
+	}
+	if info, err := os.Stat(filepath.Join(home, "announcements.json")); err != nil || info.Mode().Perm() != wantMode {
 		t.Fatalf("state file=%#v err=%v", info, err)
 	}
 }
