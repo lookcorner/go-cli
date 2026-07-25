@@ -2725,6 +2725,28 @@ func TestBrowserCommandUsesPlatformLaunchersWithoutShell(t *testing.T) {
 	}
 }
 
+func TestBrowserOpenLikelyAvailableFromEnvironment(t *testing.T) {
+	env := func(values map[string]string) func(string) string {
+		return func(name string) string { return values[name] }
+	}
+	for _, goos := range []string{"darwin", "windows"} {
+		if !browserOpenLikelyAvailable(goos, env(nil)) {
+			t.Fatalf("%s should try the native browser opener", goos)
+		}
+	}
+	if browserOpenLikelyAvailable("linux", env(nil)) {
+		t.Fatal("headless Linux should use the visible URL fallback")
+	}
+	for name, value := range map[string]string{"DISPLAY": ":0", "WAYLAND_DISPLAY": "wayland-0", "BROWSER": "firefox"} {
+		if !browserOpenLikelyAvailable("linux", env(map[string]string{name: value})) {
+			t.Fatalf("Linux browser unavailable with %s=%q", name, value)
+		}
+	}
+	if browserOpenLikelyAvailable("freebsd", env(map[string]string{"DISPLAY": " ", "BROWSER": ""})) {
+		t.Fatal("blank display variables should not claim browser availability")
+	}
+}
+
 func TestRunLoginDeviceFlow(t *testing.T) {
 	requireLoopback(t)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

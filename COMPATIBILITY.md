@@ -192,6 +192,8 @@ The dashboard new-agent composer has its own session-local multiline mode via
 semantics independent from the active session prompt.
 The dashboard shortcut panel uses `j` and `k` for scrolling only when Vim mode
 is enabled; arrow, page, and home/end navigation remain available in both modes.
+Linux and BSD browser launches fail fast without a display server or explicit
+`BROWSER`, allowing TUI, ACP, and terminal commands to show the full URL instead.
 Plain TUI exits print a pasteable session resume command after terminal restore,
 including `--minimal` when the active session used native scrollback mode.
 Ctrl-V reads native clipboard text or validated PNG data, with Alt-V as a
