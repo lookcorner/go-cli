@@ -761,22 +761,24 @@ type model struct {
 	extensions    *extensionsState
 	agentConfig   *agentConfigState
 
-	minimal            bool
-	minimalCommitted   int
-	minimalFlushTo     int
-	minimalInitial     string
-	minimalReset       bool
-	gboom              *gboomState
-	gboomEpoch         uint64
-	voiceClient        voiceStarter
-	voiceSession       voice.Session
-	voiceCancel        context.CancelFunc
-	voiceStarting      bool
-	voiceInterim       string
-	voiceSendOnStop    bool
-	toolExpand         []string
-	toolVerbGroup      *toolVerbGroup
-	collapsedEditGroup *collapsedEditGroup
+	minimal              bool
+	minimalCommitted     int
+	minimalFlushTo       int
+	minimalInitial       string
+	minimalReset         bool
+	gboom                *gboomState
+	gboomEpoch           uint64
+	voiceClient          voiceStarter
+	voiceLanguage        string
+	persistVoiceLanguage func(string) error
+	voiceSession         voice.Session
+	voiceCancel          context.CancelFunc
+	voiceStarting        bool
+	voiceInterim         string
+	voiceSendOnStop      bool
+	toolExpand           []string
+	toolVerbGroup        *toolVerbGroup
+	collapsedEditGroup   *collapsedEditGroup
 
 	dashboard         *dashboardState
 	startupDashboard  bool
@@ -902,6 +904,8 @@ type UIOptions struct {
 	DashboardGrouping    string
 	SetDashboardGrouping func(string) error
 	Voice                *voice.Client
+	VoiceLanguage        string
+	SetVoiceLanguage     func(string) error
 }
 
 type transcriptMessage struct {
@@ -1036,40 +1040,42 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		scrollLines: mouseWheelScrollLines, scrollSpeed: options.ScrollSpeed, persistScrollSpeed: options.SetScrollSpeed,
 		scrollInput: scrollInput{mode: options.ScrollMode}, persistScrollMode: options.SetScrollMode, persistScrollLines: options.SetScrollLines,
 		invertScroll: options.InvertScroll, persistInvertScroll: options.SetInvertScroll,
-		collapsedEditBlocks: options.CollapsedEditBlocks,
-		persistEditBlocks:   options.SetCollapsedEdits,
-		groupToolVerbs:      options.GroupToolVerbs,
-		persistGroupTools:   options.SetGroupToolVerbs,
-		suggestionsEnabled:  options.PromptSuggestions,
-		persistSuggestions:  options.SetPromptSuggestions,
-		rememberApprovals:   options.RememberApprovals,
-		persistRemember:     options.SetRememberApprovals,
-		questionTimeout:     options.QuestionTimeout,
-		persistQuestionTime: options.SetQuestionTimeout,
-		hyperlinks:          detectTerminalHyperlinks(),
-		themeName:           options.Theme,
-		autoDarkTheme:       options.AutoDarkTheme,
-		autoLightTheme:      options.AutoLightTheme,
-		theme:               paletteForAuto(options.Theme, options.AutoDarkTheme, options.AutoLightTheme),
-		persistTheme:        options.SetTheme,
-		persistAutoDark:     options.SetAutoDarkTheme,
-		persistAutoLight:    options.SetAutoLightTheme,
-		mermaidMode:         options.RenderMermaid,
-		persistMermaid:      options.SetRenderMermaid,
-		hunkTrackerMode:     options.HunkTrackerMode,
-		persistHunkTracker:  options.SetHunkTrackerMode,
-		forkSession:         options.ForkSession,
-		forkInGit:           options.ForkInGit,
-		startupDashboard:    options.OpenDashboard,
-		dashboardDisabled:   options.DashboardDisabled,
-		dashboardPins:       make(map[string]bool, len(options.DashboardPinned)),
-		persistPins:         options.SetDashboardPinned,
-		dashboardOrder:      append([]string(nil), options.DashboardReorder...),
-		persistOrder:        options.SetDashboardReorder,
-		dashboardGrouping:   dashboardGrouping(options.DashboardGrouping),
-		persistGrouping:     options.SetDashboardGrouping,
-		voiceClient:         options.Voice,
-		debug:               newDebugState(),
+		collapsedEditBlocks:  options.CollapsedEditBlocks,
+		persistEditBlocks:    options.SetCollapsedEdits,
+		groupToolVerbs:       options.GroupToolVerbs,
+		persistGroupTools:    options.SetGroupToolVerbs,
+		suggestionsEnabled:   options.PromptSuggestions,
+		persistSuggestions:   options.SetPromptSuggestions,
+		rememberApprovals:    options.RememberApprovals,
+		persistRemember:      options.SetRememberApprovals,
+		questionTimeout:      options.QuestionTimeout,
+		persistQuestionTime:  options.SetQuestionTimeout,
+		hyperlinks:           detectTerminalHyperlinks(),
+		themeName:            options.Theme,
+		autoDarkTheme:        options.AutoDarkTheme,
+		autoLightTheme:       options.AutoLightTheme,
+		theme:                paletteForAuto(options.Theme, options.AutoDarkTheme, options.AutoLightTheme),
+		persistTheme:         options.SetTheme,
+		persistAutoDark:      options.SetAutoDarkTheme,
+		persistAutoLight:     options.SetAutoLightTheme,
+		mermaidMode:          options.RenderMermaid,
+		persistMermaid:       options.SetRenderMermaid,
+		hunkTrackerMode:      options.HunkTrackerMode,
+		persistHunkTracker:   options.SetHunkTrackerMode,
+		forkSession:          options.ForkSession,
+		forkInGit:            options.ForkInGit,
+		startupDashboard:     options.OpenDashboard,
+		dashboardDisabled:    options.DashboardDisabled,
+		dashboardPins:        make(map[string]bool, len(options.DashboardPinned)),
+		persistPins:          options.SetDashboardPinned,
+		dashboardOrder:       append([]string(nil), options.DashboardReorder...),
+		persistOrder:         options.SetDashboardReorder,
+		dashboardGrouping:    dashboardGrouping(options.DashboardGrouping),
+		persistGrouping:      options.SetDashboardGrouping,
+		voiceClient:          options.Voice,
+		voiceLanguage:        options.VoiceLanguage,
+		persistVoiceLanguage: options.SetVoiceLanguage,
+		debug:                newDebugState(),
 	}
 	if m.mermaidMode == "" {
 		m.mermaidMode = "auto"

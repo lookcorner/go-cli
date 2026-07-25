@@ -588,6 +588,10 @@ streaming STT endpoint. Native macOS and Windows builds capture the default
 microphone directly; Linux uses the first available `pw-record`, `parec`, or
 `arecord` executable. CGO-disabled non-Linux builds hide the command instead of
 advertising unavailable microphone support.
+On supported platforms, `/settings` persists `[ui].voice_stt_language`.
+It cycles English, System (`auto`), and the 24 remaining official Grok STT
+languages; changes apply to the next recording. System resolves `LC_ALL`,
+`LC_MESSAGES`, then `LANG` on each connection and falls back to English.
 When `[auto_mode]` is enabled, `/auto` toggles classifier-based approval and
 switches cleanly from always-approve; the command is unavailable when policy
 or configuration disables auto mode. Successful mode changes are atomically
@@ -611,8 +615,8 @@ default screen mode, grouped tool verbs, collapsed edit blocks, prompt
 suggestions, remembered tool approvals, ask-question timeouts, session multiline
 input, inverted scrolling, scroll speed, scroll-input classification, scroll
 lines, text-selection behavior, Mermaid rendering, restart-scoped hunk tracking,
-automatic dark/light theme mappings, and the terminal theme. Enter or Space
-changes the selected value.
+automatic dark/light theme mappings, the terminal theme, and voice language
+when voice capture is available. Enter or Space changes the selected value.
 Scroll speed and line count open a bounded arrow-key stepper and commit with
 Enter; persisted settings use atomic configuration writers with rollback on
 write failure. Changing

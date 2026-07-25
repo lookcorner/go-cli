@@ -43,6 +43,7 @@ type Session interface {
 }
 
 type Client struct {
+	mu       sync.RWMutex
 	config   Config
 	token    string
 	provider TokenProvider
@@ -57,9 +58,7 @@ func New(config Config, token string, provider TokenProvider) *Client {
 	if config.EndpointingMS <= 0 {
 		config.EndpointingMS = 400
 	}
-	if strings.TrimSpace(config.Language) == "" {
-		config.Language = "en"
-	}
+	config.Language = CanonicalLanguage(config.Language)
 	return &Client{
 		config: config, token: strings.TrimSpace(token), provider: provider,
 		recorder: platformRecorder{}, dial: func(ctx context.Context, config *websocket.Config) (*websocket.Conn, error) {
@@ -69,6 +68,9 @@ func New(config Config, token string, provider TokenProvider) *Client {
 }
 
 func (c *Client) Start(ctx context.Context) (Session, error) {
+	c.mu.RLock()
+	config := c.config
+	c.mu.RUnlock()
 	token := c.token
 	if c.provider != nil {
 		var err error
@@ -80,7 +82,7 @@ func (c *Client) Start(ctx context.Context) (Session, error) {
 	if strings.TrimSpace(token) == "" {
 		return nil, errors.New("voice requires login or an API key")
 	}
-	target, err := sttURL(c.config)
+	target, err := sttURL(config)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +110,7 @@ func (c *Client) Start(ctx context.Context) (Session, error) {
 		conn: conn, events: make(chan Event, 32), audio: make(chan []byte, 64),
 		stop: make(chan struct{}), cancel: sessionCancel,
 	}
-	capture, err := c.recorder.Start(sessionCtx, c.config.SampleRate, s.audio)
+	capture, err := c.recorder.Start(sessionCtx, config.SampleRate, s.audio)
 	if err != nil {
 		sessionCancel()
 		conn.Close()
@@ -118,6 +120,12 @@ func (c *Client) Start(ctx context.Context) (Session, error) {
 	go s.write()
 	go s.read(sessionCtx)
 	return s, nil
+}
+
+func (c *Client) SetLanguage(language string) {
+	c.mu.Lock()
+	c.config.Language = CanonicalLanguage(language)
+	c.mu.Unlock()
 }
 
 func sttURL(config Config) (string, error) {
@@ -147,7 +155,7 @@ func sttURL(config Config) (string, error) {
 	query.Set("sample_rate", fmt.Sprint(config.SampleRate))
 	query.Set("encoding", "pcm")
 	query.Set("interim_results", "true")
-	query.Set("language", config.Language)
+	query.Set("language", LanguageForAPI(config.Language))
 	query.Set("endpointing", fmt.Sprint(config.EndpointingMS))
 	parsed.RawQuery = query.Encode()
 	return parsed.String(), nil

@@ -1151,7 +1151,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		minimal := opts.minimal || !opts.fullscreen && cfg.UI.ScreenMode == "minimal"
 		var voiceClient *voice.Client
 		if voice.Supported() {
-			voiceClient = voice.New(voice.Config{BaseURL: cfg.BaseURL}, cfg.APIKey, voice.TokenProvider(tokenProvider))
+			voiceClient = voice.New(voice.Config{BaseURL: cfg.BaseURL, Language: cfg.UI.VoiceSTTLanguage}, cfg.APIKey, voice.TokenProvider(tokenProvider))
 		}
 		err := tui.Run(ctx, runner, tuiBridge, prompt, opts.previousID, resumedTranscript, ws.Root(), cfg.Model, tui.UIOptions{
 			Minimal: minimal, ScreenMode: cfg.UI.ScreenMode,
@@ -1217,7 +1217,17 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			SetDashboardGrouping: func(grouping string) error {
 				return config.UpdateDashboardGrouping(opts.configPath, grouping)
 			},
-			Voice:     voiceClient,
+			Voice:         voiceClient,
+			VoiceLanguage: cfg.UI.VoiceSTTLanguage,
+			SetVoiceLanguage: func(language string) error {
+				if err := config.UpdateVoiceSTTLanguage(opts.configPath, language); err != nil {
+					return err
+				}
+				if voiceClient != nil {
+					voiceClient.SetLanguage(language)
+				}
+				return nil
+			},
 			SetTheme:  func(value string) error { return config.UpdateTheme(opts.configPath, value) },
 			ForkInGit: forkGitErr == nil,
 			ForkSession: func(forkCtx context.Context, isolated bool) (tui.ForkResult, error) {

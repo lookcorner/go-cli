@@ -849,3 +849,34 @@ func TestSettingsHunkTrackerUsesDefaultAndCycles(t *testing.T) {
 		t.Fatalf("hunk tracker=%q persisted=%v", m.hunkTrackerMode, persisted)
 	}
 }
+
+func TestSettingsVoiceLanguageIsCapabilityGatedAndRollsBack(t *testing.T) {
+	withoutVoice := &model{width: 60, height: 16, settings: &settingsState{}}
+	if withoutVoice.settingsCount() != settingsCount || strings.Contains(withoutVoice.settingsContent(), "Voice language:") {
+		t.Fatalf("voice setting shown without capability: count=%d content=%q", withoutVoice.settingsCount(), withoutVoice.settingsContent())
+	}
+
+	var persisted []string
+	withVoice := &model{
+		width: 60, height: 16,
+		voiceClient:          fakeVoiceStarter{},
+		voiceLanguage:        "en",
+		settings:             &settingsState{selected: settingsCount},
+		persistVoiceLanguage: func(value string) error { persisted = append(persisted, value); return nil },
+	}
+	if withVoice.settingsCount() != settingsCount+1 || !strings.Contains(withVoice.settingsContent(), "Voice language: en") {
+		t.Fatalf("voice setting missing: count=%d content=%q", withVoice.settingsCount(), withVoice.settingsContent())
+	}
+	updated, command := withVoice.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	withVoice = updated.(*model)
+	if command != nil || withVoice.voiceLanguage != "auto" || strings.Join(persisted, ",") != "auto" || withVoice.status != "settings updated" {
+		t.Fatalf("voice language=%q persisted=%v status=%q command=%v", withVoice.voiceLanguage, persisted, withVoice.status, command != nil)
+	}
+
+	withVoice.persistVoiceLanguage = func(string) error { return errors.New("read only") }
+	updated, command = withVoice.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	withVoice = updated.(*model)
+	if command != nil || withVoice.voiceLanguage != "auto" || withVoice.settings.err != "read only" || withVoice.status != "setting update failed" {
+		t.Fatalf("rollback language=%q err=%q status=%q command=%v", withVoice.voiceLanguage, withVoice.settings.err, withVoice.status, command != nil)
+	}
+}

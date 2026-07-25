@@ -2,6 +2,7 @@ package voice
 
 import (
 	"context"
+	"errors"
 	"net/http/httptest"
 	"net/url"
 	"strings"
@@ -13,7 +14,7 @@ import (
 
 func TestSTTURL(t *testing.T) {
 	target, err := sttURL(Config{
-		BaseURL: "https://proxy.example/xai/v1/", Language: "zh", SampleRate: 16_000, EndpointingMS: 500,
+		BaseURL: "https://proxy.example/xai/v1/", Language: "ja", SampleRate: 16_000, EndpointingMS: 500,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -27,7 +28,7 @@ func TestSTTURL(t *testing.T) {
 	}
 	query := parsed.Query()
 	for key, want := range map[string]string{
-		"sample_rate": "16000", "encoding": "pcm", "interim_results": "true", "language": "zh", "endpointing": "500",
+		"sample_rate": "16000", "encoding": "pcm", "interim_results": "true", "language": "ja", "endpointing": "500",
 	} {
 		if got := query.Get(key); got != want {
 			t.Fatalf("%s = %q, want %q", key, got, want)
@@ -120,5 +121,50 @@ func TestNewAppliesVoiceDefaults(t *testing.T) {
 	client := New(Config{}, "", nil)
 	if client.config.SampleRate != 16_000 || client.config.EndpointingMS != 400 || client.config.Language != "en" {
 		t.Fatalf("unexpected defaults: %#v", client.config)
+	}
+}
+
+func TestVoiceLanguageCanonicalizationAndLocaleResolution(t *testing.T) {
+	for _, test := range []struct {
+		value string
+		want  string
+	}{
+		{value: "", want: "en"},
+		{value: "ES", want: "es"},
+		{value: "pt_BR.UTF-8", want: "pt"},
+		{value: "tl-PH", want: "fil"},
+		{value: "zh-CN", want: "en"},
+		{value: "auto", want: "auto"},
+	} {
+		if got := CanonicalLanguage(test.value); got != test.want {
+			t.Errorf("CanonicalLanguage(%q)=%q want %q", test.value, got, test.want)
+		}
+	}
+
+	t.Setenv("LC_ALL", "")
+	t.Setenv("LC_MESSAGES", "tl_PH.UTF-8")
+	t.Setenv("LANG", "es_ES.UTF-8")
+	if got := LanguageForAPI("auto"); got != "fil" {
+		t.Fatalf("auto language=%q", got)
+	}
+	t.Setenv("LC_ALL", "C")
+	if got := LanguageForAPI("auto"); got != "en" {
+		t.Fatalf("C locale language=%q", got)
+	}
+}
+
+func TestClientLanguageUpdateAppliesToNextConnection(t *testing.T) {
+	client := New(Config{Language: "en"}, "token", nil)
+	client.SetLanguage("ES")
+	var got string
+	client.dial = func(_ context.Context, config *websocket.Config) (*websocket.Conn, error) {
+		got = config.Location.Query().Get("language")
+		return nil, errors.New("stop after inspecting handshake")
+	}
+	if _, err := client.Start(context.Background()); err == nil {
+		t.Fatal("voice start unexpectedly succeeded")
+	}
+	if got != "es" {
+		t.Fatalf("language=%q", got)
 	}
 }

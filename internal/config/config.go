@@ -18,6 +18,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/memory"
 	"github.com/lookcorner/go-cli/internal/theme"
 	"github.com/lookcorner/go-cli/internal/version"
+	"github.com/lookcorner/go-cli/internal/voice"
 	"github.com/pelletier/go-toml/v2"
 	"golang.org/x/mod/semver"
 )
@@ -230,6 +231,7 @@ type UIConfig struct {
 	GroupToolVerbs            bool    `json:"group_tool_verbs"`
 	PromptSuggestions         bool    `json:"prompt_suggestions"`
 	CursorBlink               *bool   `json:"cursor_blink,omitempty"`
+	VoiceSTTLanguage          string  `json:"voice_stt_language"`
 	PermissionMode            string  `json:"permission_mode"`
 }
 
@@ -497,6 +499,7 @@ type fileUIConfig struct {
 	GroupToolVerbs               *bool   `json:"group_tool_verbs,omitempty" toml:"group_tool_verbs"`
 	PromptSuggestions            *bool   `json:"prompt_suggestions,omitempty" toml:"prompt_suggestions"`
 	CursorBlink                  *bool   `json:"cursor_blink,omitempty" toml:"cursor_blink"`
+	VoiceSTTLanguage             *string `json:"voice_stt_language,omitempty" toml:"voice_stt_language"`
 	PermissionMode               *string `json:"permission_mode,omitempty" toml:"permission_mode"`
 	SelectionHighlightDurationMS *uint64 `json:"selection_highlight_duration_ms,omitempty" toml:"selection_highlight_duration_ms"`
 	DoubleClickAction            *string `json:"double_click_action,omitempty" toml:"double_click_action"`
@@ -713,7 +716,7 @@ func Load(path string) (Config, error) {
 		AskUserQuestion:             AskUserQuestionConfig{TimeoutEnabled: true, TimeoutSeconds: 30 * 60},
 		Toolset:                     ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}},
 		Goal:                        GoalConfig{VerifierCount: 3, ClassifierMaxRuns: 10, ReverifyAfter: 8},
-		UI:                          UIConfig{Theme: "groknight", AutoDarkTheme: "groknight", AutoLightTheme: "grokday", HunkTrackerMode: "agent_only", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, ScrollSpeed: 50, ScrollMode: "auto", DefaultSelectedPermission: "always_allow_all_sessions", GroupToolVerbs: true, PromptSuggestions: true, PermissionMode: "ask"},
+		UI:                          UIConfig{Theme: "groknight", AutoDarkTheme: "groknight", AutoLightTheme: "grokday", HunkTrackerMode: "agent_only", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, ScrollSpeed: 50, ScrollMode: "auto", DefaultSelectedPermission: "always_allow_all_sessions", GroupToolVerbs: true, PromptSuggestions: true, VoiceSTTLanguage: "en", PermissionMode: "ask"},
 		Dashboard:                   DashboardConfig{Enabled: true, Grouping: "state"},
 		Sandbox:                     SandboxConfig{Profile: "off"},
 		Pruning:                     PruningConfig{Enabled: true, KeepLastNTurns: 3, SoftTrimThreshold: 4000, SoftTrimHead: 1500, SoftTrimTail: 1500, HardClearAgeTurns: 10},
@@ -1032,6 +1035,9 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	if disk.UI.CursorBlink != nil {
 		value := *disk.UI.CursorBlink
 		cfg.UI.CursorBlink = &value
+	}
+	if disk.UI.VoiceSTTLanguage != nil {
+		cfg.UI.VoiceSTTLanguage = voice.CanonicalLanguage(*disk.UI.VoiceSTTLanguage)
 	}
 	if disk.UI.PermissionMode != nil {
 		mode, err := normalizePermissionMode(*disk.UI.PermissionMode)
@@ -2490,6 +2496,9 @@ func (c Config) Validate() error {
 	}
 	if c.UI.HunkTrackerMode != "" && c.UI.HunkTrackerMode != "agent_only" && c.UI.HunkTrackerMode != "all_dirty" && c.UI.HunkTrackerMode != "off" {
 		return errors.New("ui hunk_tracker_mode must be agent_only, all_dirty, or off")
+	}
+	if c.UI.VoiceSTTLanguage != "" && voice.CanonicalLanguage(c.UI.VoiceSTTLanguage) != c.UI.VoiceSTTLanguage {
+		return errors.New("ui voice_stt_language must be a supported language code or auto")
 	}
 	if c.UI.ScrollMode != "" && c.UI.ScrollMode != "auto" && c.UI.ScrollMode != "wheel" && c.UI.ScrollMode != "trackpad" {
 		return errors.New("ui scroll_mode must be auto, wheel, or trackpad")

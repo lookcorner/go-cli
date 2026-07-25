@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	uitheme "github.com/lookcorner/go-cli/internal/theme"
+	"github.com/lookcorner/go-cli/internal/voice"
 )
 
 type settingsState struct {
@@ -46,7 +47,7 @@ func (m *model) handleSettingsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if key.Code == tea.KeyDown || key.Text == "j" {
-		m.settings.selected = min(settingsCount-1, m.settings.selected+1)
+		m.settings.selected = min(m.settingsCount()-1, m.settings.selected+1)
 		return m, nil
 	}
 	if key.Code != tea.KeyEnter && key.Code != tea.KeySpace && key.Text != " " {
@@ -226,6 +227,12 @@ func (m *model) applySetting(selected int) {
 		if m.persistTheme != nil {
 			state.err = persistSetting(m.persistTheme(m.themeName), func() { m.themeName, m.theme = previousName, previousTheme })
 		}
+	case 21:
+		previous := m.voiceLanguage
+		m.voiceLanguage = nextVoiceLanguage(previous)
+		if m.persistVoiceLanguage != nil {
+			state.err = persistSetting(m.persistVoiceLanguage(m.voiceLanguage), func() { m.voiceLanguage = previous })
+		}
 	}
 	if state.err != "" {
 		m.status = "setting update failed"
@@ -324,6 +331,16 @@ func currentHunkTrackerMode(current string) string {
 	}
 }
 
+func nextVoiceLanguage(current string) string {
+	current = voice.CanonicalLanguage(current)
+	for index, language := range voice.Languages {
+		if language == current {
+			return voice.Languages[(index+1)%len(voice.Languages)]
+		}
+	}
+	return voice.Languages[0]
+}
+
 func nextScrollMode(current string) string {
 	switch current {
 	case "auto":
@@ -366,11 +383,21 @@ func (m *model) settingsContent() string {
 		fmt.Sprintf("Auto light theme: %s", concreteAutomaticTheme(m.autoLightTheme, "grokday")),
 		fmt.Sprintf("Theme: %s", m.themeName),
 	}
+	if m.voiceClient != nil {
+		lines = append(lines, fmt.Sprintf("Voice language: %s", voice.CanonicalLanguage(m.voiceLanguage)))
+	}
 	content := "# Settings\n\n" + selectedWindow(lines, m.settings.selected, max(m.contentHeight()-3, 1))
 	if m.settings.err != "" {
 		content += "\n\n**Error:** " + strings.ReplaceAll(sanitizeTerminalText(m.settings.err), "\n", " ")
 	}
 	return content
+}
+
+func (m *model) settingsCount() int {
+	if m.voiceClient != nil {
+		return settingsCount + 1
+	}
+	return settingsCount
 }
 
 func (m *model) effectiveScrollSpeed() int {
