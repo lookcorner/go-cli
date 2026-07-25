@@ -375,3 +375,54 @@ func TestOpenWorkspaceDetectsTemporaryAndPersistentPaths(t *testing.T) {
 		t.Fatalf("flat store=%#v err=%v", flat, err)
 	}
 }
+
+func TestEditLinesReplacesDeletesAndValidates(t *testing.T) {
+	root, workspace := t.TempDir(), t.TempDir()
+	store, err := Open(root, workspace, "session-one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	global := filepath.Join(store.root, "MEMORY.md")
+	if err := os.WriteFile(global, []byte("one\ntwo\nthree\nfour\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := store.EditLines(global, 1, intPtr(2), "2nd\n2.5")
+	if err != nil || !changed {
+		t.Fatalf("replace changed=%v err=%v", changed, err)
+	}
+	if data, _ := os.ReadFile(global); string(data) != "one\n2nd\n2.5\nfour\n" {
+		t.Fatalf("replace content=%q", data)
+	}
+	if changed, err := store.EditLines(global, 1, intPtr(2), "2nd\n2.5"); err != nil || changed {
+		t.Fatalf("no-op changed=%v err=%v", changed, err)
+	}
+	if changed, err := store.EditLines(global, 0, intPtr(2), ""); err != nil || !changed {
+		t.Fatalf("delete changed=%v err=%v", changed, err)
+	}
+	if data, _ := os.ReadFile(global); string(data) != "2.5\nfour\n" {
+		t.Fatalf("delete content=%q", data)
+	}
+	if changed, err := store.EditLines(global, 1, nil, "tail\n"); err != nil || !changed {
+		t.Fatalf("eof changed=%v err=%v", changed, err)
+	}
+	if data, _ := os.ReadFile(global); string(data) != "2.5\ntail\n" {
+		t.Fatalf("eof content=%q", data)
+	}
+	if changed, err := store.EditLines(global, 2, intPtr(0), "appended"); err != nil || !changed {
+		t.Fatalf("append changed=%v err=%v", changed, err)
+	}
+	if data, _ := os.ReadFile(global); string(data) != "2.5\ntail\nappended\n" {
+		t.Fatalf("append content=%q", data)
+	}
+	if _, err := store.EditLines(global, 99, nil, "x"); err == nil {
+		t.Fatal("out-of-range edit accepted")
+	}
+	if _, err := store.EditLines(global, -1, nil, "x"); err == nil {
+		t.Fatal("negative edit accepted")
+	}
+	if _, err := store.EditLines(filepath.Join(t.TempDir(), "outside.md"), 0, nil, "x"); err == nil {
+		t.Fatal("outside path accepted")
+	}
+}
+
+func intPtr(value int) *int { return &value }

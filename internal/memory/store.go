@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -357,6 +358,82 @@ func (s *Store) Write(trigger, content string) (string, bool, error) {
 	}
 	remove = false
 	return path, true, nil
+}
+
+// EditLines atomically replaces the 0-based line range [from, from+count) of
+// an allowed memory file with replacement; an empty replacement deletes the
+// range (a nil count replaces to the end of file). It reports whether the
+// file changed; replacing with identical content is a no-op.
+func (s *Store) EditLines(path string, from int, count *int, replacement string) (bool, error) {
+	if from < 0 || count != nil && *count < 0 {
+		return false, errors.New("memory line range must not be negative")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	allowed, err := s.allowedPath(path)
+	if err != nil {
+		return false, err
+	}
+	data, err := readMemoryFile(allowed)
+	if err != nil {
+		return false, err
+	}
+	lines := memoryLines(string(data))
+	if from > len(lines) {
+		return false, fmt.Errorf("memory line %d is past end of file (%d lines)", from, len(lines))
+	}
+	end := len(lines)
+	if count != nil && from+*count < end {
+		end = from + *count
+	}
+	var added []string
+	if replacement = strings.TrimSuffix(replacement, "\n"); replacement != "" {
+		added = strings.Split(replacement, "\n")
+	}
+	merged := make([]string, 0, len(lines)-(end-from)+len(added))
+	merged = append(merged, lines[:from]...)
+	merged = append(merged, added...)
+	merged = append(merged, lines[end:]...)
+	if slices.Equal(merged, lines) {
+		return false, nil
+	}
+	content := strings.Join(merged, "\n")
+	if len(merged) > 0 {
+		content += "\n"
+	}
+	if len(content) > maxMemoryFileBytes {
+		return false, fmt.Errorf("memory file would exceed %d bytes", maxMemoryFileBytes)
+	}
+	return true, replaceMemoryFile(allowed, content)
+}
+
+func replaceMemoryFile(path, content string) error {
+	tempPath := filepath.Join(filepath.Dir(path), ".tmp-"+filepath.Base(path))
+	file, err := os.OpenFile(tempPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	remove := true
+	defer func() {
+		_ = file.Close()
+		if remove {
+			_ = os.Remove(tempPath)
+		}
+	}()
+	if _, err := file.WriteString(content); err != nil {
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tempPath, path); err != nil {
+		return err
+	}
+	remove = false
+	return nil
 }
 
 func (s *Store) List() ([]FileInfo, error) {

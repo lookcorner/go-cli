@@ -24,9 +24,13 @@ func SetMemoryTools(registry *Registry, store *memory.Store, cfg memory.Config, 
 		if store == nil {
 			return fmt.Errorf("memory store is required")
 		}
-		replacements = []Tool{&memorySearchTool{store: store, index: cfg.Index, search: cfg.Search}, &memoryGetTool{store: store}}
+		replacements = []Tool{
+			&memorySearchTool{store: store, index: cfg.Index, search: cfg.Search},
+			&memoryGetTool{store: store},
+			&memoryEditTool{store: store, approver: registry.approver},
+		}
 	}
-	_, err := registry.Replace([]string{"memory_search", "memory_get"}, replacements)
+	_, err := registry.Replace([]string{"memory_search", "memory_get", "memory_edit"}, replacements)
 	return err
 }
 
@@ -161,4 +165,53 @@ func (t *memoryGetTool) Execute(_ context.Context, raw json.RawMessage) (string,
 		formatted[index] = fmt.Sprintf("%d→%s", from+index+1, line)
 	}
 	return fmt.Sprintf("**File:** %s\n**Lines:** %d (from: %s, limit: %s)\n\n%s", args.Path, lineCount, fromLabel, linesLabel, strings.Join(formatted, "\n")), nil
+}
+
+type memoryEditTool struct {
+	store    *memory.Store
+	approver Approver
+}
+
+func (t *memoryEditTool) Definition() api.ToolDefinition {
+	return api.ToolDefinition{
+		Type: "function", Name: "memory_edit",
+		Description: "Replace or delete a 0-based line range in a global, workspace, or current-workspace session memory file. Use memory_get for exact line numbers. An empty new_text forgets the range. Requires write approval.",
+		Parameters: objectSchema(map[string]any{
+			"path":     map[string]any{"type": "string", "description": "Absolute memory file path returned by memory_search or memory_get."},
+			"from":     map[string]any{"type": "integer", "minimum": 0, "description": "0-based start line (default: beginning of file)."},
+			"lines":    map[string]any{"type": "integer", "minimum": 0, "description": "Number of lines to replace (default: to end of file)."},
+			"new_text": map[string]any{"type": "string", "description": "Replacement text; empty deletes the range."},
+		}, "path", "new_text"),
+	}
+}
+
+func (t *memoryEditTool) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
+	var args struct {
+		Path    string `json:"path"`
+		From    *int   `json:"from"`
+		Lines   *int   `json:"lines"`
+		NewText string `json:"new_text"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return "", fmt.Errorf("decode memory_edit arguments: %w", err)
+	}
+	from := 0
+	if args.From != nil {
+		from = *args.From
+	}
+	if err := t.approver.Approve(ctx, "memory_edit", args.Path); err != nil {
+		return "", err
+	}
+	changed, err := t.store.EditLines(args.Path, from, args.Lines, args.NewText)
+	if err != nil {
+		return "", err
+	}
+	if !changed {
+		return fmt.Sprintf("No changes: %s already matches the requested content.", args.Path), nil
+	}
+	removed := "to end of file"
+	if args.Lines != nil {
+		removed = fmt.Sprint(*args.Lines)
+	}
+	return fmt.Sprintf("Edited %s (replaced %s line(s) from line %d).", args.Path, removed, from), nil
 }

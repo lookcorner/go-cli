@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -363,7 +364,11 @@ func TestWebFetchDownloadsSessionMedia(t *testing.T) {
 		if readErr != nil || statErr != nil {
 			t.Fatalf("readErr=%v statErr=%v", readErr, statErr)
 		}
-		if !bytes.Equal(stored, test.data) || info.Mode().Perm() != 0o600 {
+		wantMode := os.FileMode(0o600)
+		if runtime.GOOS == "windows" {
+			wantMode = 0o666
+		}
+		if !bytes.Equal(stored, test.data) || info.Mode().Perm() != wantMode {
 			t.Fatalf("stored media mismatch for %s, mode=%v", test.relative, info.Mode().Perm())
 		}
 	}

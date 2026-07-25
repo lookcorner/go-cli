@@ -436,7 +436,10 @@ notes as evergreen. `[memory.search.source_weights]` adjusts source priority;
 optional `[memory.search.mmr]` promotes diverse results over near-duplicates.
 Search output labels stale session results with their age. `memory_get` uses
 0-based ranges, distinguishes omitted `from`/`lines` as `start`/`all`, and
-preserves trailing blank-line numbering on full-file reads.
+preserves trailing blank-line numbering on full-file reads. `memory_edit`
+replaces or deletes a 0-based line range with write approval, reusing the same
+path allowlist and atomic persistence; an empty `new_text` forgets the range,
+and identical content is a no-op.
 It is a deterministic text-only backend; semantic/vector retrieval remains
 pending. Session startup also removes, in the background, empty orphan memory
 workspaces older than `[memory.gc].max_age_days` (30 by default); temporary

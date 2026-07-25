@@ -27,7 +27,7 @@ func TestMemoryToolsRegisterOnlyWhenEnabledAndFormatResults(t *testing.T) {
 	if err := RegisterMemoryTools(registry, store, cfg); err != nil {
 		t.Fatal(err)
 	}
-	if registry.HasTool("memory_search") || registry.HasTool("memory_get") {
+	if registry.HasTool("memory_search") || registry.HasTool("memory_get") || registry.HasTool("memory_edit") {
 		t.Fatal("disabled memory tools were registered")
 	}
 	cfg.Enabled = true
@@ -76,13 +76,13 @@ func TestMemoryToolsToggleAtomicallyAndParseCommands(t *testing.T) {
 	if err := SetMemoryTools(registry, store, cfg, true); err != nil {
 		t.Fatal(err)
 	}
-	if !registry.HasTool("memory_search") || !registry.HasTool("memory_get") {
+	if !registry.HasTool("memory_search") || !registry.HasTool("memory_get") || !registry.HasTool("memory_edit") {
 		t.Fatal("memory tools missing after enable")
 	}
 	if err := SetMemoryTools(registry, nil, cfg, false); err != nil {
 		t.Fatal(err)
 	}
-	if registry.HasTool("memory_search") || registry.HasTool("memory_get") {
+	if registry.HasTool("memory_search") || registry.HasTool("memory_get") || registry.HasTool("memory_edit") {
 		t.Fatal("memory tools survived disable")
 	}
 	for input, want := range map[string]string{"/memory": "browse", "/mem status": "browse", "/memory ON": "enable", "/mem disable": "disable"} {
@@ -113,3 +113,52 @@ func storeRootFromList(t *testing.T, store *memory.Store) string {
 }
 
 func quoted(value string) string { data, _ := json.Marshal(value); return string(data) }
+
+func TestMemoryEditToolRequiresApprovalAndEdits(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := memory.Open(t.TempDir(), ws.Root(), "edit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	global := filepath.Join(storeRootFromList(t, store), "MEMORY.md")
+	if err := os.WriteFile(global, []byte("one\ntwo\nthree\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := memory.DefaultConfig()
+	cfg.Enabled = true
+
+	denied := NewRegistry(ws, PromptApprover{Mode: PermissionDeny})
+	defer denied.Close()
+	if err := SetMemoryTools(denied, store, cfg, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := denied.Execute(context.Background(), "memory_edit", json.RawMessage(`{"path":`+quoted(global)+`,"from":1,"lines":1,"new_text":"2nd"}`)); !IsPermissionDenied(err) {
+		t.Fatalf("denied err=%v", err)
+	}
+
+	registry := NewRegistry(ws, PromptApprover{Mode: PermissionAlwaysApprove})
+	defer registry.Close()
+	if err := SetMemoryTools(registry, store, cfg, true); err != nil {
+		t.Fatal(err)
+	}
+	out, err := registry.Execute(context.Background(), "memory_edit", json.RawMessage(`{"path":`+quoted(global)+`,"from":1,"lines":1,"new_text":"2nd"}`))
+	if err != nil || !strings.Contains(out, "replaced 1 line(s) from line 1") {
+		t.Fatalf("edit=%q err=%v", out, err)
+	}
+	if data, _ := os.ReadFile(global); string(data) != "one\n2nd\nthree\n" {
+		t.Fatalf("content=%q", data)
+	}
+	out, err = registry.Execute(context.Background(), "memory_edit", json.RawMessage(`{"path":`+quoted(global)+`,"from":1,"lines":1,"new_text":""}`))
+	if err != nil || !strings.Contains(out, "Edited") {
+		t.Fatalf("forget=%q err=%v", out, err)
+	}
+	if data, _ := os.ReadFile(global); string(data) != "one\nthree\n" {
+		t.Fatalf("forget content=%q", data)
+	}
+	if out, err := registry.Execute(context.Background(), "memory_edit", json.RawMessage(`{"path":`+quoted(global)+`,"new_text":"one\nthree"}`)); err != nil || !strings.HasPrefix(out, "No changes") {
+		t.Fatalf("no-op=%q err=%v", out, err)
+	}
+}
