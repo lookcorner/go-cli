@@ -39,8 +39,13 @@ var completionRoot = completionSpec{
 			flags: []string{"--json"},
 			children: map[string]completionSpec{
 				"fix": {
-					flags:    []string{"--yes"},
-					children: leaves("ssh-wrap", "terminal.ssh-wrap"),
+					flags: []string{"--yes"},
+					children: leaves(
+						"ssh-wrap", "terminal.ssh-wrap",
+						"tmux-clipboard", "terminal.tmux-clipboard",
+						"dcs-passthrough", "terminal.dcs-passthrough",
+						"tmux-extended-keys", "terminal.tmux-extended-keys",
+					),
 				},
 			},
 		},

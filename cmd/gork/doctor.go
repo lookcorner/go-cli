@@ -18,7 +18,7 @@ func runDoctor(args []string, stdout, stderr io.Writer) error {
 	flags.SetOutput(stderr)
 	flags.Usage = func() {
 		fmt.Fprintln(stderr, "Usage: gork doctor [--json]")
-		fmt.Fprintln(stderr, "       gork doctor fix [ssh-wrap] [--yes]")
+		fmt.Fprintln(stderr, "       gork doctor fix [ssh-wrap|tmux-clipboard|dcs-passthrough|tmux-extended-keys] [--yes]")
 		flags.PrintDefaults()
 	}
 	asJSON := flags.Bool("json", false, "emit machine-readable JSON")
@@ -45,7 +45,7 @@ func runDoctor(args []string, stdout, stderr io.Writer) error {
 func runDoctorFix(args []string, stdout, stderr io.Writer) error {
 	yes, rest, err := parseDoctorFixArgs(args)
 	if errors.Is(err, flag.ErrHelp) {
-		fmt.Fprintln(stderr, "Usage: gork doctor fix [ssh-wrap] [--yes]")
+		fmt.Fprintln(stderr, "Usage: gork doctor fix [ssh-wrap|tmux-clipboard|dcs-passthrough|tmux-extended-keys] [--yes]")
 		return nil
 	} else if err != nil {
 		return err
@@ -59,16 +59,13 @@ func runDoctorFix(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	if len(rest) != 1 {
-		return errors.New("usage: gork doctor fix [ssh-wrap] [--yes]")
+		return errors.New("usage: gork doctor fix [ssh-wrap|tmux-clipboard|dcs-passthrough|tmux-extended-keys] [--yes]")
 	}
 	id, err := terminaldiag.ResolveFixID(rest[0])
 	if err != nil {
 		return err
 	}
-	if id != terminaldiag.SSHWrapID {
-		return fmt.Errorf("unsupported fix %q", id)
-	}
-	plan, err := terminaldiag.PlanSSHWrap(env)
+	plan, err := terminaldiag.PlanFix(env, id)
 	if err != nil {
 		return err
 	}
@@ -78,7 +75,7 @@ func runDoctorFix(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintln(stdout, "Re-run with --yes to apply.")
 		return nil
 	}
-	outcome, err := terminaldiag.ApplySSHWrap(plan)
+	outcome, err := terminaldiag.ApplyFix(plan)
 	if err != nil {
 		return err
 	}

@@ -8,13 +8,18 @@ import (
 )
 
 func TestResolveFixID(t *testing.T) {
-	for _, value := range []string{"ssh-wrap", "terminal.ssh-wrap"} {
+	cases := map[string]string{
+		"ssh-wrap": "terminal.ssh-wrap", "terminal.ssh-wrap": SSHWrapID,
+		"tmux-clipboard": TmuxClipboardID, "terminal.tmux-clipboard": TmuxClipboardID,
+		"dcs-passthrough": DCSPassthroughID, "tmux-extended-keys": TmuxExtendedKeysID,
+	}
+	for value, want := range cases {
 		id, err := ResolveFixID(value)
-		if err != nil || id != SSHWrapID {
-			t.Fatalf("value=%q id=%q err=%v", value, id, err)
+		if err != nil || id != want {
+			t.Fatalf("value=%q id=%q err=%v want=%q", value, id, err, want)
 		}
 	}
-	if _, err := ResolveFixID("tmux-clipboard"); err == nil {
+	if _, err := ResolveFixID("not-a-fix"); err == nil {
 		t.Fatal("unknown id accepted")
 	}
 }
@@ -67,13 +72,17 @@ func TestPlanSSHWrapRejectsConflictsAndRemote(t *testing.T) {
 }
 
 func TestListAutomaticFixesAvailability(t *testing.T) {
-	local := ListAutomaticFixes(FixEnv{Home: "/tmp/home", Shell: "/bin/bash", GOOS: "linux"})
-	if len(local) != 1 || local[0].Availability != "here" {
+	local := ListAutomaticFixes(FixEnv{Home: "/tmp/home", Shell: "/bin/bash", GOOS: "linux", Tmux: true})
+	if len(local) != 4 || local[0].Availability != "here" || local[1].Availability != "here" {
 		t.Fatalf("local=%#v", local)
 	}
 	remote := ListAutomaticFixes(FixEnv{Home: "/tmp/home", Shell: "/bin/bash", GOOS: "linux", SSH: true})
 	if remote[0].Availability != "run_locally" {
 		t.Fatalf("remote=%#v", remote)
+	}
+	outside := ListAutomaticFixes(FixEnv{Home: "/tmp/home", Shell: "/bin/bash", GOOS: "linux", Tmux: false})
+	if outside[1].Availability != "unsupported" {
+		t.Fatalf("outside tmux=%#v", outside)
 	}
 }
 
@@ -86,5 +95,92 @@ func TestDetectPOSIXSSHCustomization(t *testing.T) {
 	}
 	if detectPOSIXSSHCustomization("alias ssh_wrap='ssh'\n") != "" {
 		t.Fatal("unrelated alias treated as conflict")
+	}
+}
+
+func TestPlanAndApplyTmuxClipboard(t *testing.T) {
+	home := t.TempDir()
+	env := FixEnv{Home: home, Tmux: true}
+	plan, err := PlanTmuxOption(env, TmuxClipboardID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Path != filepath.Join(home, ".tmux.conf") || plan.Alias != "set -g set-clipboard on" {
+		t.Fatalf("plan=%#v", plan)
+	}
+	outcome, err := ApplyTmuxOption(plan)
+	if err != nil || outcome.Status != FixApplied {
+		t.Fatalf("outcome=%#v err=%v", outcome, err)
+	}
+	data, err := os.ReadFile(plan.Path)
+	if err != nil || !strings.Contains(string(data), "set -g set-clipboard on") {
+		t.Fatalf("tmux.conf=%q err=%v", data, err)
+	}
+	outcome, err = ApplyTmuxOption(plan)
+	if err != nil || outcome.Status != FixAlreadyConfigured {
+		t.Fatalf("second=%#v err=%v", outcome, err)
+	}
+}
+
+func TestPlanTmuxPreservesSiblingManagedItems(t *testing.T) {
+	home := t.TempDir()
+	env := FixEnv{Home: home, Tmux: true}
+	first, err := PlanTmuxOption(env, TmuxClipboardID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ApplyTmuxOption(first); err != nil {
+		t.Fatal(err)
+	}
+	second, err := PlanTmuxOption(env, DCSPassthroughID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ApplyTmuxOption(second); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".tmux.conf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, want := range []string{"terminal.tmux-clipboard", "set -g set-clipboard on", "terminal.dcs-passthrough", "set -wg allow-passthrough on"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in %s", want, text)
+		}
+	}
+}
+
+func TestPlanTmuxRejectsConflictAndOutsideSession(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".tmux.conf")
+	if err := os.WriteFile(path, []byte("set -g set-clipboard off\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PlanTmuxOption(FixEnv{Home: home, Tmux: true}, TmuxClipboardID); err == nil || !strings.Contains(err.Error(), "existing") {
+		t.Fatalf("conflict err=%v", err)
+	}
+	if _, err := PlanTmuxOption(FixEnv{Home: home, Tmux: false}, TmuxClipboardID); err == nil || !strings.Contains(err.Error(), "tmux session") {
+		t.Fatalf("outside err=%v", err)
+	}
+}
+
+func TestPlanTmuxHealthyDirectAssignmentSkipsWrite(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".tmux.conf")
+	if err := os.WriteFile(path, []byte("set -g extended-keys on\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := PlanTmuxOption(FixEnv{Home: home, Tmux: true}, TmuxExtendedKeysID)
+	if err != nil || !plan.SkipWrite {
+		t.Fatalf("plan=%#v err=%v", plan, err)
+	}
+	outcome, err := ApplyTmuxOption(plan)
+	if err != nil || outcome.Status != FixAlreadyConfigured {
+		t.Fatalf("outcome=%#v err=%v", outcome, err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || strings.Contains(string(data), "gork doctor") {
+		t.Fatalf("unexpected write: %q err=%v", data, err)
 	}
 }

@@ -42,7 +42,7 @@ func TestCompletionCandidatesFollowCommandTree(t *testing.T) {
 		{[]string{"plugin", "tag", "--"}, []string{"--dry-run", "--force", "--push"}},
 		{[]string{"plugin", "tag", "-f"}, []string{"-f"}},
 		{[]string{"doctor", ""}, []string{"fix", "--json"}},
-		{[]string{"doctor", "fix", ""}, []string{"ssh-wrap", "terminal.ssh-wrap", "--yes"}},
+		{[]string{"doctor", "fix", ""}, []string{"ssh-wrap", "tmux-clipboard", "dcs-passthrough", "tmux-extended-keys", "--yes"}},
 		{[]string{"mcp", ""}, []string{"add", "doctor", "list", "remove"}},
 		{[]string{"mcp", "add", "--t"}, []string{"--transport"}},
 		{[]string{"mcp", "add", "--"}, []string{"--args", "--command", "--type", "--url"}},

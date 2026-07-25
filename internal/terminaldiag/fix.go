@@ -79,13 +79,22 @@ const (
 	FixAlreadyConfigured FixStatus = "already_configured"
 )
 
+type FixKind string
+
+const (
+	FixKindSSH  FixKind = "ssh"
+	FixKindTmux FixKind = "tmux"
+)
+
 type FixEnv struct {
-	Home         string
-	Shell        string
-	GOOS         string
-	SSH          bool
-	VSCodeRemote bool
-	Getenv       func(string) string
+	Home           string
+	Shell          string
+	GOOS           string
+	SSH            bool
+	VSCodeRemote   bool
+	Tmux           bool
+	ByobuConfigDir string
+	Getenv         func(string) string
 }
 
 func DefaultFixEnv() FixEnv {
@@ -95,9 +104,11 @@ func DefaultFixEnv() FixEnv {
 	}
 	return FixEnv{
 		Home: home, Shell: os.Getenv("SHELL"), GOOS: runtime.GOOS,
-		SSH:          os.Getenv("SSH_CONNECTION") != "" || os.Getenv("SSH_TTY") != "",
-		VSCodeRemote: os.Getenv("VSCODE_INJECTION") != "" || strings.Contains(os.Getenv("TERM_PROGRAM"), "vscode"),
-		Getenv:       os.Getenv,
+		SSH:            os.Getenv("SSH_CONNECTION") != "" || os.Getenv("SSH_TTY") != "",
+		VSCodeRemote:   os.Getenv("VSCODE_INJECTION") != "" || strings.Contains(os.Getenv("TERM_PROGRAM"), "vscode"),
+		Tmux:           os.Getenv("TMUX") != "",
+		ByobuConfigDir: strings.TrimSpace(os.Getenv("BYOBU_CONFIG_DIR")),
+		Getenv:         os.Getenv,
 	}
 }
 
@@ -107,8 +118,21 @@ func ResolveFixID(value string) (string, error) {
 		return "", errors.New("fix id is required")
 	case SSHWrapHandle, SSHWrapID:
 		return SSHWrapID, nil
+	case TmuxClipboardHandle, TmuxClipboardID:
+		return TmuxClipboardID, nil
+	case DCSPassthroughHandle, DCSPassthroughID:
+		return DCSPassthroughID, nil
+	case TmuxExtendedKeysHandle, TmuxExtendedKeysID:
+		return TmuxExtendedKeysID, nil
 	default:
 		return "", fmt.Errorf("`%s` is not an available Doctor fix. Run `gork doctor fix` to list available fixes", value)
+	}
+}
+
+func AllFixHandles() []string {
+	return []string{
+		SSHWrapHandle, TmuxClipboardHandle, DCSPassthroughHandle, TmuxExtendedKeysHandle,
+		SSHWrapID, TmuxClipboardID, DCSPassthroughID, TmuxExtendedKeysID,
 	}
 }
 
@@ -120,6 +144,14 @@ type FixListing struct {
 }
 
 func ListAutomaticFixes(env FixEnv) []FixListing {
+	listings := []FixListing{sshWrapListing(env)}
+	for _, spec := range tmuxOptionSpecs {
+		listings = append(listings, tmuxListing(env, spec))
+	}
+	return listings
+}
+
+func sshWrapListing(env FixEnv) FixListing {
 	listing := FixListing{ID: SSHWrapID, Handle: SSHWrapHandle, Availability: "here"}
 	switch {
 	case env.GOOS == "windows":
@@ -140,7 +172,7 @@ func ListAutomaticFixes(env FixEnv) []FixListing {
 			listing.Detail = "supports Bash, zsh, and fish"
 		}
 	}
-	return []FixListing{listing}
+	return listing
 }
 
 func FormatFixListing(listings []FixListing) string {
@@ -163,12 +195,14 @@ func FormatFixListing(listings []FixListing) string {
 }
 
 type FixPlan struct {
-	ID      string
-	Handle  string
-	Path    string
-	Shell   ShellKind
-	Alias   string
-	Caveats []string
+	ID        string
+	Handle    string
+	Path      string
+	Shell     ShellKind
+	Alias     string
+	Kind      FixKind
+	Caveats   []string
+	SkipWrite bool
 }
 
 type FixOutcome struct {
@@ -176,6 +210,28 @@ type FixOutcome struct {
 	Status FixStatus
 	Path   string
 	Shell  ShellKind
+	Kind   FixKind
+	Line   string
+}
+
+func PlanFix(env FixEnv, id string) (FixPlan, error) {
+	switch id {
+	case SSHWrapID:
+		return PlanSSHWrap(env)
+	case TmuxClipboardID, DCSPassthroughID, TmuxExtendedKeysID:
+		return PlanTmuxOption(env, id)
+	default:
+		return FixPlan{}, fmt.Errorf("unsupported fix %q", id)
+	}
+}
+
+func ApplyFix(plan FixPlan) (FixOutcome, error) {
+	switch plan.Kind {
+	case FixKindTmux:
+		return ApplyTmuxOption(plan)
+	default:
+		return ApplySSHWrap(plan)
+	}
 }
 
 func PlanSSHWrap(env FixEnv) (FixPlan, error) {
@@ -204,7 +260,7 @@ func PlanSSHWrap(env FixEnv) (FixPlan, error) {
 		return FixPlan{}, fmt.Errorf("found an existing SSH alias or function in %s and did not change it: %s", path, detail)
 	}
 	return FixPlan{
-		ID: SSHWrapID, Handle: SSHWrapHandle, Path: path, Shell: shell, Alias: shell.Alias(),
+		ID: SSHWrapID, Handle: SSHWrapHandle, Path: path, Shell: shell, Alias: shell.Alias(), Kind: FixKindSSH,
 		Caveats: []string{
 			"The alias loads only in new interactive shells.",
 			"Use `command ssh ...` to bypass the alias.",
@@ -232,12 +288,15 @@ func ApplySSHWrap(plan FixPlan) (FixOutcome, error) {
 	if written {
 		status = FixApplied
 	}
-	return FixOutcome{ID: plan.ID, Status: status, Path: plan.Path, Shell: plan.Shell}, nil
+	return FixOutcome{ID: plan.ID, Status: status, Path: plan.Path, Shell: plan.Shell, Kind: FixKindSSH}, nil
 }
 
 func FormatFixPreview(plan FixPlan) string {
 	var out strings.Builder
 	fmt.Fprintf(&out, "Fix %s\n  file   %s\n  change %s\n", plan.Handle, plan.Path, plan.Alias)
+	if plan.SkipWrite {
+		out.WriteString("\nAlready present as a direct assignment; no file write needed.\n")
+	}
 	if len(plan.Caveats) > 0 {
 		out.WriteString("\nNotes:\n")
 		for _, caveat := range plan.Caveats {
@@ -248,11 +307,21 @@ func FormatFixPreview(plan FixPlan) string {
 }
 
 func FormatFixSuccess(outcome FixOutcome) string {
-	switch outcome.Status {
-	case FixApplied:
-		return fmt.Sprintf("Set up SSH wrapping in %s.\nOpen a new shell or run `gork doctor` again to confirm.", outcome.Path)
+	switch outcome.Kind {
+	case FixKindTmux:
+		switch outcome.Status {
+		case FixApplied:
+			return fmt.Sprintf("Added `%s` to %s.\nReload tmux with `tmux source-file %s`, or detach and reattach.", outcome.Line, outcome.Path, outcome.Path)
+		default:
+			return fmt.Sprintf("`%s` is already configured in %s.", outcome.Line, outcome.Path)
+		}
 	default:
-		return fmt.Sprintf("SSH wrapping was already configured in %s.", outcome.Path)
+		switch outcome.Status {
+		case FixApplied:
+			return fmt.Sprintf("Set up SSH wrapping in %s.\nOpen a new shell or run `gork doctor` again to confirm.", outcome.Path)
+		default:
+			return fmt.Sprintf("SSH wrapping was already configured in %s.", outcome.Path)
+		}
 	}
 }
 

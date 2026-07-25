@@ -7,10 +7,12 @@ import (
 	"strings"
 )
 
-const (
-	managedNamespace = "gork doctor"
-	sshWrapItemID    = "terminal.ssh-wrap"
-)
+const managedNamespace = "gork doctor"
+
+type managedItem struct {
+	ID   string
+	Body string
+}
 
 func managedOuterOpen() string  { return "# >>> " + managedNamespace + " >>>" }
 func managedOuterClose() string { return "# <<< " + managedNamespace + " <<<" }
@@ -21,14 +23,13 @@ func managedItemClose(id string) string {
 	return "# <<< " + id + " <<<"
 }
 
-func managedBlock(id, body string) string {
-	return strings.Join([]string{
-		managedOuterOpen(),
-		managedItemOpen(id),
-		body,
-		managedItemClose(id),
-		managedOuterClose(),
-	}, "\n")
+func managedBlock(items []managedItem) string {
+	parts := []string{managedOuterOpen()}
+	for _, item := range items {
+		parts = append(parts, managedItemOpen(item.ID), item.Body, managedItemClose(item.ID))
+	}
+	parts = append(parts, managedOuterClose())
+	return strings.Join(parts, "\n")
 }
 
 func upsertManagedItem(path, id, body string) (written bool, err error) {
@@ -36,16 +37,34 @@ func upsertManagedItem(path, id, body string) (written bool, err error) {
 	if err != nil {
 		return false, err
 	}
-	unmanaged, existing, exact := splitManaged(original, id)
-	if exact && existing == body {
+	unmanaged, items := splitManagedAll(original)
+	updatedItems := make([]managedItem, 0, len(items)+1)
+	found := false
+	unchanged := false
+	for _, item := range items {
+		if item.ID != id {
+			updatedItems = append(updatedItems, item)
+			continue
+		}
+		found = true
+		if item.Body == body {
+			unchanged = true
+			updatedItems = append(updatedItems, item)
+			continue
+		}
+		updatedItems = append(updatedItems, managedItem{ID: id, Body: body})
+	}
+	if !found {
+		updatedItems = append(updatedItems, managedItem{ID: id, Body: body})
+	}
+	if found && unchanged {
 		return false, nil
 	}
-	block := managedBlock(id, body)
 	updated := strings.TrimRight(unmanaged, "\n")
 	if updated != "" {
 		updated += "\n"
 	}
-	updated += block + "\n"
+	updated += managedBlock(updatedItems) + "\n"
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return false, err
 	}
@@ -60,8 +79,13 @@ func managedItemExact(path, id, body string) bool {
 	if err != nil {
 		return false
 	}
-	_, existing, exact := splitManaged(data, id)
-	return exact && existing == body
+	_, items := splitManagedAll(data)
+	for _, item := range items {
+		if item.ID == id {
+			return item.Body == body
+		}
+	}
+	return false
 }
 
 func unmanagedText(path string) (string, error) {
@@ -69,20 +93,20 @@ func unmanagedText(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	unmanaged, _, _ := splitManaged(data, sshWrapItemID)
+	unmanaged, _ := splitManagedAll(data)
 	return unmanaged, nil
 }
 
-func splitManaged(text, id string) (unmanaged, body string, exact bool) {
+func splitManagedAll(text string) (unmanaged string, items []managedItem) {
 	open := managedOuterOpen()
 	closeMarker := managedOuterClose()
 	start := strings.Index(text, open)
 	if start < 0 {
-		return text, "", false
+		return text, nil
 	}
 	end := strings.Index(text[start:], closeMarker)
 	if end < 0 {
-		return text, "", false
+		return text, nil
 	}
 	end = start + end + len(closeMarker)
 	for end < len(text) && (text[end] == '\n' || text[end] == '\r') {
@@ -90,16 +114,39 @@ func splitManaged(text, id string) (unmanaged, body string, exact bool) {
 	}
 	block := text[start:end]
 	unmanaged = text[:start] + text[end:]
-	itemOpen := managedItemOpen(id)
-	itemClose := managedItemClose(id)
-	itemStart := strings.Index(block, itemOpen)
-	itemEnd := strings.Index(block, itemClose)
-	if itemStart < 0 || itemEnd < 0 || itemEnd < itemStart {
-		return unmanaged, "", false
+	rest := block
+	for {
+		itemStart := strings.Index(rest, "# >>> terminal.")
+		if itemStart < 0 {
+			break
+		}
+		lineEnd := strings.IndexByte(rest[itemStart:], '\n')
+		if lineEnd < 0 {
+			break
+		}
+		openLine := strings.TrimSpace(rest[itemStart : itemStart+lineEnd])
+		id, ok := strings.CutPrefix(openLine, "# >>> ")
+		if !ok {
+			rest = rest[itemStart+lineEnd+1:]
+			continue
+		}
+		id, ok = strings.CutSuffix(id, " >>>")
+		if !ok || !strings.HasPrefix(id, "terminal.") {
+			rest = rest[itemStart+lineEnd+1:]
+			continue
+		}
+		closeLine := managedItemClose(id)
+		bodyStart := itemStart + lineEnd + 1
+		itemEnd := strings.Index(rest[bodyStart:], closeLine)
+		if itemEnd < 0 {
+			break
+		}
+		itemEnd = bodyStart + itemEnd
+		body := strings.Trim(rest[bodyStart:itemEnd], "\r\n")
+		items = append(items, managedItem{ID: id, Body: body})
+		rest = rest[itemEnd+len(closeLine):]
 	}
-	bodyStart := itemStart + len(itemOpen)
-	raw := strings.Trim(block[bodyStart:itemEnd], "\r\n")
-	return unmanaged, raw, true
+	return unmanaged, items
 }
 
 func readFileOrEmpty(path string) (string, error) {

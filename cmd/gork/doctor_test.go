@@ -66,6 +66,7 @@ func TestDoctorFixListAndApplySSHWrap(t *testing.T) {
 	t.Setenv("SSH_TTY", "")
 	t.Setenv("VSCODE_INJECTION", "")
 	t.Setenv("TERM_PROGRAM", "TestTerm")
+	t.Setenv("TMUX", "")
 
 	var list, stderr bytes.Buffer
 	if err := runDoctor([]string{"fix"}, &list, &stderr); err != nil {
@@ -73,6 +74,9 @@ func TestDoctorFixListAndApplySSHWrap(t *testing.T) {
 	}
 	if !strings.Contains(list.String(), "ssh-wrap") || !strings.Contains(list.String(), "gork doctor fix ssh-wrap --yes") {
 		t.Fatalf("list=%s", list.String())
+	}
+	if !strings.Contains(list.String(), "tmux-clipboard") || !strings.Contains(list.String(), "unavailable") {
+		t.Fatalf("tmux list=%s", list.String())
 	}
 
 	var preview bytes.Buffer
@@ -115,5 +119,31 @@ func TestDoctorFixRejectsUnknownAndRemote(t *testing.T) {
 	t.Setenv("SSH_CONNECTION", "1 2 3 4")
 	if err := runDoctor([]string{"fix", "ssh-wrap", "--yes"}, &stdout, &stderr); err == nil || !strings.Contains(err.Error(), "local computer") {
 		t.Fatalf("remote err=%v", err)
+	}
+}
+
+func TestDoctorFixApplyTmuxClipboard(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("TMUX", "/tmp/tmux-1000/default,123,0")
+	t.Setenv("BYOBU_CONFIG_DIR", "")
+	var stdout, stderr bytes.Buffer
+	if err := runDoctor([]string{"fix", "tmux-clipboard", "--yes"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "set -g set-clipboard on") {
+		t.Fatalf("stdout=%s", stdout.String())
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".tmux.conf"))
+	if err != nil || !strings.Contains(string(data), "set -g set-clipboard on") {
+		t.Fatalf("tmux.conf=%q err=%v", data, err)
+	}
+	var keys bytes.Buffer
+	if err := runDoctor([]string{"fix", "terminal.tmux-extended-keys", "--yes"}, &keys, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	data, err = os.ReadFile(filepath.Join(home, ".tmux.conf"))
+	if err != nil || !strings.Contains(string(data), "extended-keys") || !strings.Contains(string(data), "set-clipboard") {
+		t.Fatalf("siblings=%q err=%v", data, err)
 	}
 }
