@@ -790,6 +790,9 @@ type model struct {
 	minimalFlushTo       int
 	minimalInitial       string
 	minimalReset         bool
+	imageProtocol        imageProtocol
+	protocolChecked      bool
+	pendingImages        []tools.ImageAttachment
 	gboom                *gboomState
 	gboomEpoch           uint64
 	voiceClient          voiceStarter
@@ -4545,7 +4548,22 @@ func (m *model) minimalPrint(text string) tea.Cmd {
 		return nil
 	}
 	lines := renderMarkdownTheme(text, m.transcriptRenderWidth(), m.hyperlinks, m.colors())
+	if protocol := m.inlineProtocol(); protocol != imageProtocolNone {
+		var consumed int
+		lines, consumed = injectInlineImages(lines, m.pendingImages, protocol, 12)
+		m.pendingImages = m.pendingImages[consumed:]
+	}
 	return tea.Println(strings.Join(lines, "\n"))
+}
+
+// inlineProtocol reports the terminal's inline-image transport, detected once
+// from the process environment.
+func (m *model) inlineProtocol() imageProtocol {
+	if !m.protocolChecked {
+		m.protocolChecked = true
+		m.imageProtocol = detectImageProtocol(os.Getenv)
+	}
+	return m.imageProtocol
 }
 
 func (m *model) beginTurn(prompt string) {

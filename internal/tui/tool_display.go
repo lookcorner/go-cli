@@ -86,6 +86,12 @@ func (b *Bridge) ToolFinished(call api.ToolCall, result tools.ExecutionResult, e
 }
 
 func (m *model) finishTool(event toolFinishedEvent) {
+	if m.minimal && len(event.result.Images) > 0 && m.inlineProtocol() != imageProtocolNone {
+		m.pendingImages = append(m.pendingImages, event.result.Images...)
+		if len(m.pendingImages) > 32 {
+			m.pendingImages = m.pendingImages[len(m.pendingImages)-32:]
+		}
+	}
 	full, _ := renderToolBlock(event.call, event.result, event.err, false)
 	if m.groupToolVerbs {
 		if kind, ok := classifyToolVerb(event.call.Name, event.call.Arguments); ok {

@@ -2,8 +2,11 @@ package tui
 
 import (
 	"encoding/base64"
+	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/lookcorner/go-cli/internal/tools"
 )
 
 // imageProtocol names a terminal inline-image transport. imageProtocolNone
@@ -38,8 +41,9 @@ func detectImageProtocol(env func(string) string) imageProtocol {
 }
 
 // kittyImageSequence emits image bytes (PNG or any terminal-decodable format)
-// through the kitty graphics protocol, chunked with continuation flags.
-func kittyImageSequence(data []byte) []byte {
+// through the kitty graphics protocol, chunked with continuation flags. The
+// image is scaled to cols by rows terminal cells when either is positive.
+func kittyImageSequence(data []byte, cols, rows int) []byte {
 	encoded := base64.StdEncoding.EncodeToString(data)
 	var out strings.Builder
 	for len(encoded) > 0 {
@@ -52,7 +56,14 @@ func kittyImageSequence(data []byte) []byte {
 		if len(encoded) > 0 {
 			more = 1
 		}
-		out.WriteString("\x1b_Ga=T,f=100,m=" + strconv.Itoa(more) + ";")
+		out.WriteString("\x1b_Ga=T,f=100,m=" + strconv.Itoa(more))
+		if cols > 0 {
+			out.WriteString(",c=" + strconv.Itoa(cols))
+		}
+		if rows > 0 {
+			out.WriteString(",r=" + strconv.Itoa(rows))
+		}
+		out.WriteString(";")
 		out.WriteString(chunk)
 		out.WriteString("\x1b\\")
 	}
@@ -74,4 +85,61 @@ func itermImageSequence(data []byte, widthCells, heightCells int) []byte {
 	out.WriteString(base64.StdEncoding.EncodeToString(data))
 	out.WriteString("\a")
 	return []byte(out.String())
+}
+
+var inlineMetadataPattern = regexp.MustCompile(`^•?\s*-?\s*image/[a-z0-9.+-]+ · \d+x\d+ · \d+ bytes`)
+
+// inlineImageCells converts pixel dimensions to terminal cells using the
+// conventional 9x18 cell approximation, bounded to maxRows.
+func inlineImageCells(widthPx, heightPx, maxRows int) (cols, rows int) {
+	cols, rows = (widthPx+8)/9, (heightPx+17)/18
+	cols, rows = max(cols, 1), max(rows, 1)
+	if maxRows > 0 {
+		rows = min(rows, maxRows)
+	}
+	return cols, rows
+}
+
+// inlineImageBlock renders one image attachment as printable lines: the
+// protocol sequence followed by blank lines that move the cursor below the
+// image. It returns nil for empty data or an unsupported protocol.
+func inlineImageBlock(protocol imageProtocol, image tools.ImageAttachment, maxRows int) []string {
+	if len(image.Data) == 0 || !strings.HasPrefix(image.MediaType, "image/") {
+		return nil
+	}
+	cols, rows := inlineImageCells(image.Width, image.Height, maxRows)
+	var sequence []byte
+	switch protocol {
+	case imageProtocolKitty:
+		sequence = kittyImageSequence(image.Data, cols, rows)
+	case imageProtocolITerm2:
+		sequence = itermImageSequence(image.Data, cols, rows)
+	default:
+		return nil
+	}
+	lines := []string{string(sequence)}
+	for index := 1; index < rows; index++ {
+		lines = append(lines, "")
+	}
+	return lines
+}
+
+// injectInlineImages expands image metadata lines with their protocol blocks
+// while attachments remain, returning the new lines and the consumed count.
+func injectInlineImages(lines []string, images []tools.ImageAttachment, protocol imageProtocol, maxRows int) ([]string, int) {
+	if protocol == imageProtocolNone || len(images) == 0 {
+		return lines, 0
+	}
+	consumed := 0
+	out := make([]string, 0, len(lines)+len(images))
+	for _, line := range lines {
+		out = append(out, line)
+		if consumed < len(images) && inlineMetadataPattern.MatchString(line) {
+			if block := inlineImageBlock(protocol, images[consumed], maxRows); block != nil {
+				out = append(out, block...)
+				consumed++
+			}
+		}
+	}
+	return out, consumed
 }
