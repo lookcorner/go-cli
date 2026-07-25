@@ -81,6 +81,24 @@ func (m *model) applySetting(selected int) {
 	state := m.settings
 	state.err = ""
 	restartRequired := false
+	if selected >= settingsCount {
+		switch {
+		case selected == settingsCount && m.planModeAvailable():
+			state.err = errorString(m.setPlanMode(!m.planMode))
+		case selected == settingsCount+m.planSettingCount() && m.voiceClient != nil:
+			previous := m.voiceLanguage
+			m.voiceLanguage = nextVoiceLanguage(previous)
+			if m.persistVoiceLanguage != nil {
+				state.err = persistSetting(m.persistVoiceLanguage(m.voiceLanguage), func() { m.voiceLanguage = previous })
+			}
+		}
+		if state.err != "" {
+			m.status = "setting update failed"
+		} else {
+			m.status = "settings updated"
+		}
+		return
+	}
 	switch selected {
 	case 0:
 		previous := m.showTimestamps
@@ -226,12 +244,6 @@ func (m *model) applySetting(selected int) {
 		m.theme = paletteForAuto(m.themeName, m.autoDarkTheme, m.autoLightTheme)
 		if m.persistTheme != nil {
 			state.err = persistSetting(m.persistTheme(m.themeName), func() { m.themeName, m.theme = previousName, previousTheme })
-		}
-	case 21:
-		previous := m.voiceLanguage
-		m.voiceLanguage = nextVoiceLanguage(previous)
-		if m.persistVoiceLanguage != nil {
-			state.err = persistSetting(m.persistVoiceLanguage(m.voiceLanguage), func() { m.voiceLanguage = previous })
 		}
 	}
 	if state.err != "" {
@@ -383,6 +395,9 @@ func (m *model) settingsContent() string {
 		fmt.Sprintf("Auto light theme: %s", concreteAutomaticTheme(m.autoLightTheme, "grokday")),
 		fmt.Sprintf("Theme: %s", m.themeName),
 	}
+	if m.planModeAvailable() {
+		lines = append(lines, settingLine("Plan mode", m.planMode))
+	}
 	if m.voiceClient != nil {
 		lines = append(lines, fmt.Sprintf("Voice language: %s", voice.CanonicalLanguage(m.voiceLanguage)))
 	}
@@ -394,10 +409,22 @@ func (m *model) settingsContent() string {
 }
 
 func (m *model) settingsCount() int {
+	count := settingsCount + m.planSettingCount()
 	if m.voiceClient != nil {
-		return settingsCount + 1
+		count++
 	}
-	return settingsCount
+	return count
+}
+
+func (m *model) planSettingCount() int {
+	if m.planModeAvailable() {
+		return 1
+	}
+	return 0
+}
+
+func (m *model) planModeAvailable() bool {
+	return m.runner != nil && m.runner.Tools != nil && m.runner.Tools.PlanModeAvailable()
 }
 
 func (m *model) effectiveScrollSpeed() int {

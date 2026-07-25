@@ -880,3 +880,71 @@ func TestSettingsVoiceLanguageIsCapabilityGatedAndRollsBack(t *testing.T) {
 		t.Fatalf("rollback language=%q err=%q status=%q command=%v", withVoice.voiceLanguage, withVoice.settings.err, withVoice.status, command != nil)
 	}
 }
+
+func TestSettingsPlanModeIsCapabilityGatedAndUsesRegistry(t *testing.T) {
+	withoutPlan := &model{width: 60, height: 16, settings: &settingsState{}}
+	if withoutPlan.settingsCount() != settingsCount || strings.Contains(withoutPlan.settingsContent(), "Plan mode:") {
+		t.Fatalf("plan setting shown without capability: count=%d content=%q", withoutPlan.settingsCount(), withoutPlan.settingsContent())
+	}
+
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	if err := registry.ConfigurePlanMode(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	withPlan := &model{
+		width: 60, height: 16,
+		runner:   &agent.Runner{Tools: registry},
+		settings: &settingsState{selected: settingsCount},
+	}
+	if withPlan.settingsCount() != settingsCount+1 || !strings.Contains(withPlan.settingsContent(), "Plan mode: off") {
+		t.Fatalf("plan setting missing: count=%d content=%q", withPlan.settingsCount(), withPlan.settingsContent())
+	}
+	updated, command := withPlan.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	withPlan = updated.(*model)
+	if command != nil || !withPlan.planMode || !registry.PlanModeActive() || withPlan.status != "settings updated" {
+		t.Fatalf("enabled plan=%v active=%v status=%q command=%v", withPlan.planMode, registry.PlanModeActive(), withPlan.status, command != nil)
+	}
+	updated, command = withPlan.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	withPlan = updated.(*model)
+	if command != nil || withPlan.planMode || registry.PlanModeActive() || withPlan.status != "settings updated" {
+		t.Fatalf("disabled plan=%v active=%v status=%q command=%v", withPlan.planMode, registry.PlanModeActive(), withPlan.status, command != nil)
+	}
+}
+
+func TestSettingsDynamicRowsKeepPlanBeforeVoice(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	if err := registry.ConfigurePlanMode(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	var persisted string
+	m := &model{
+		width: 60, height: 16,
+		runner:               &agent.Runner{Tools: registry},
+		voiceClient:          fakeVoiceStarter{},
+		voiceLanguage:        "en",
+		settings:             &settingsState{selected: settingsCount + 1},
+		persistVoiceLanguage: func(value string) error { persisted = value; return nil },
+	}
+	if m.settingsCount() != settingsCount+2 {
+		t.Fatalf("settings count=%d", m.settingsCount())
+	}
+	content := m.settingsContent()
+	if plan, voice := strings.Index(content, "Plan mode: off"), strings.Index(content, "Voice language: en"); plan < 0 || voice < plan {
+		t.Fatalf("dynamic row order=%q", content)
+	}
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if m.planMode || registry.PlanModeActive() || m.voiceLanguage != "auto" || persisted != "auto" {
+		t.Fatalf("plan=%v active=%v voice=%q persisted=%q", m.planMode, registry.PlanModeActive(), m.voiceLanguage, persisted)
+	}
+}

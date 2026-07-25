@@ -616,7 +616,8 @@ suggestions, remembered tool approvals, ask-question timeouts, session multiline
 input, inverted scrolling, scroll speed, scroll-input classification, scroll
 lines, text-selection behavior, Mermaid rendering, restart-scoped hunk tracking,
 automatic dark/light theme mappings, the terminal theme, and voice language
-when voice capture is available. Enter or Space changes the selected value.
+when voice capture is available. Sessions with Plan tools also expose the live,
+session-scoped Plan mode. Enter or Space changes the selected value.
 Scroll speed and line count open a bounded arrow-key stepper and commit with
 Enter; persisted settings use atomic configuration writers with rollback on
 write failure. Changing
@@ -626,6 +627,8 @@ clears the current ghost text, while inverted scrolling, scroll-input
 classification, and selection lifetime apply to the next interaction. Multiline
 input applies to the current session, while remembered tool approval,
 ask-question timeout, and hunk tracker changes apply to new sessions.
+Plan mode changes immediately through the same registry path as Shift-Tab and
+does not write a user preference.
 Automatic dark/light mapping changes apply immediately only while `theme=auto`
 and the matching system appearance is active.
 `/docs` (aliases `/howto` and `/guides`) opens a 24-entry in-TUI guide picker.
