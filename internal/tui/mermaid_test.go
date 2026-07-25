@@ -272,6 +272,48 @@ func TestRenderMermaidKanban(t *testing.T) {
 	}
 }
 
+func TestRenderMermaidInfo(t *testing.T) {
+	lines, ok := renderMermaid("%% comment\n\ninfo extra\nignored content", 18, paletteFor("groknight"))
+	if !ok {
+		t.Fatal("supported Mermaid info diagram was rejected")
+	}
+	rendered := stripUIANSI(strings.Join(lines, "\n"))
+	for _, expected := range []string{"◇ mermaid info", "v11.12.2"} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("rendered info diagram missing %q:\n%s", expected, rendered)
+		}
+	}
+	if strings.Contains(rendered, "ignored content") {
+		t.Fatalf("info diagram rendered ignored source content:\n%s", rendered)
+	}
+	for _, line := range lines {
+		if displayWidth(stripUIANSI(line)) > 18 {
+			t.Fatalf("info diagram line exceeds width: %q", stripUIANSI(line))
+		}
+	}
+}
+
+func TestRenderMermaidInfoRejectsOtherDeclarations(t *testing.T) {
+	for _, source := range []string{"", "%% comment", "information", "flowchart TD\nA --> B"} {
+		if _, ok := renderMermaidInfo(source, 20, paletteFor("groknight")); ok {
+			t.Fatalf("invalid info diagram was accepted: %q", source)
+		}
+	}
+}
+
+func TestRenderMarkdownRendersClosedMermaidInfo(t *testing.T) {
+	source := "Before\n```mermaid\ninfo\n```\nAfter"
+	rendered := stripUIANSI(strings.Join(renderMarkdown(source, 20), "\n"))
+	for _, expected := range []string{"Before", "◇ mermaid info", "v11.12.2", "After"} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("rendered Markdown missing %q:\n%s", expected, rendered)
+		}
+	}
+	if strings.Contains(rendered, "```mermaid") {
+		t.Fatalf("closed Mermaid info source was not replaced:\n%s", rendered)
+	}
+}
+
 func TestRenderMermaidKanbanMatchesReferenceMetadata(t *testing.T) {
 	source := "kanban extra\nBacklog\n  Scalars @{ assigned: 42, priority: true, ticket: 3.5 }\n  Empty @{ assigned: '' }\n  Complex @{ assigned: [Alice], priority: { level: High }, ticket: null }\n  Broken @{ assigned: Alice\n\u2003Unicode indent"
 	lines, ok := renderMermaid(source, 80, paletteFor("groknight"))

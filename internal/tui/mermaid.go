@@ -161,6 +161,9 @@ func renderMermaid(source string, width int, theme themePalette) ([]string, bool
 	if firstToken == "kanban" {
 		return renderMermaidKanban(source, width, theme)
 	}
+	if firstToken == "info" {
+		return renderMermaidInfo(source, width, theme)
+	}
 	statements, complete := mermaidStatements(source)
 	if !complete || len(statements) < 1 {
 		return nil, false
@@ -211,6 +214,16 @@ func renderMermaid(source string, width int, theme themePalette) ([]string, bool
 		}
 	}
 	return lines, true
+}
+
+func renderMermaidInfo(source string, width int, theme themePalette) ([]string, bool) {
+	if mermaidFirstToken(source) != "info" {
+		return nil, false
+	}
+	return []string{
+		ansiDim + mermaidFit("◇ mermaid info", width) + ansiReset,
+		theme.heading + mermaidFit("v11.12.2", width) + ansiReset,
+	}, true
 }
 
 func renderMermaidKanban(source string, width int, theme themePalette) ([]string, bool) {
