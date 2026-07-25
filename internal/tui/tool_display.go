@@ -379,7 +379,7 @@ func renderStoredToolBlock(tool session.DisplayTool, compact bool) (string, bool
 	return fmt.Sprintf("#### %s: `%s`\n\n%s", title, tool.Name, strings.Join(sections, "\n\n")), folded
 }
 
-func sessionDisplayTranscript(path, workspace string, collapsedEditBlocks, groupToolVerbs, showThinking bool) (string, []transcriptMessage, []string, []toolFold, error) {
+func sessionDisplayTranscript(path, workspace string, collapsedEditBlocks, groupToolVerbs, showThinking bool, imageHooks ...func(*session.DisplayImage, string)) (string, []transcriptMessage, []string, []toolFold, error) {
 	entries, err := session.DisplayTimeline(path)
 	if err != nil {
 		return "", nil, nil, nil, err
@@ -392,6 +392,13 @@ func sessionDisplayTranscript(path, workspace string, collapsedEditBlocks, group
 	lastKind := ""
 	var verbGroup []session.DisplayTool
 	var editGroup []collapsedEditMember
+	enrich := func(tool *session.DisplayTool) {
+		for index := range tool.Images {
+			for _, hook := range imageHooks {
+				hook(&tool.Images[index], path)
+			}
+		}
+	}
 	separate := func() {
 		if text.Len() > 0 {
 			text.WriteString("\n\n")
@@ -404,6 +411,7 @@ func sessionDisplayTranscript(path, workspace string, collapsedEditBlocks, group
 		text.WriteByte('\n')
 	}
 	writeTool := func(tool session.DisplayTool) {
+		enrich(&tool)
 		compact, folded := renderStoredToolBlock(tool, true)
 		start := text.Len()
 		text.WriteString(compact)
@@ -424,6 +432,7 @@ func sessionDisplayTranscript(path, workspace string, collapsedEditBlocks, group
 		}
 		members := make([]toolVerbMember, 0, len(verbGroup))
 		for _, tool := range verbGroup {
+			enrich(&tool)
 			full, _ := renderStoredToolBlock(tool, false)
 			kind, _ := classifyToolVerb(tool.Name, tool.Arguments)
 			members = append(members, toolVerbMember{kind: kind, failed: tool.Failed, full: full})

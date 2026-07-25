@@ -616,13 +616,13 @@ func (m *model) refreshToolDisplay(previousCollapsedEditBlocks, previousGroupToo
 		beforeThinking = previousThinking[0]
 	}
 	previous, _, _, _, err := sessionDisplayTranscript(
-		m.runner.SessionPath, m.workspace, previousCollapsedEditBlocks, previousGroupToolVerbs, beforeThinking,
+		m.runner.SessionPath, m.workspace, previousCollapsedEditBlocks, previousGroupToolVerbs, beforeThinking, m.enrichReplayImage,
 	)
 	if err != nil || strings.TrimSpace(m.transcript.String()) != strings.TrimSpace(previous) {
 		return
 	}
 	text, messages, expands, folds, err := sessionDisplayTranscript(
-		m.runner.SessionPath, m.workspace, m.collapsedEditBlocks, m.groupToolVerbs, m.showThinking,
+		m.runner.SessionPath, m.workspace, m.collapsedEditBlocks, m.groupToolVerbs, m.showThinking, m.enrichReplayImage,
 	)
 	if err == nil {
 		m.replaceDisplayTranscript(text, messages, expands, folds)

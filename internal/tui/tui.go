@@ -1242,7 +1242,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 	m.replaceTranscript(initialTranscript, nil)
 	if runner != nil && strings.TrimSpace(runner.SessionPath) != "" {
 		if messages, err := session.Transcript(runner.SessionPath); err == nil && strings.TrimSpace(session.FormatTranscript(messages)) == strings.TrimSpace(initialTranscript) {
-			if text, displayMessages, expands, folds, displayErr := sessionDisplayTranscript(runner.SessionPath, m.workspace, m.collapsedEditBlocks, m.groupToolVerbs, m.showThinking); displayErr == nil {
+			if text, displayMessages, expands, folds, displayErr := sessionDisplayTranscript(runner.SessionPath, m.workspace, m.collapsedEditBlocks, m.groupToolVerbs, m.showThinking, m.enrichReplayImage); displayErr == nil {
 				m.replaceDisplayTranscript(text, displayMessages, expands, folds)
 			} else {
 				m.replaceTranscript(initialTranscript, messages)
@@ -1315,6 +1315,7 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if hintCommand := current.maybeStartSmallScreenHint(); hintCommand != nil {
 			command = tea.Batch(command, hintCommand)
 		}
+		command = tea.Batch(command, current.flushKittyUploads())
 	}
 	if !ok || !current.minimal {
 		return updated, command
@@ -1626,7 +1627,7 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitForBridge(m.bridge)
 	case toolFinishedEvent:
 		m.finishTool(msg)
-		return m, tea.Batch(waitForBridge(m.bridge), m.flushKittyUploads())
+		return m, waitForBridge(m.bridge)
 	case cancelSubagentsDoneEvent:
 		if len(msg.errors) > 0 {
 			m.appendSystem("Could not stop subagents: " + strings.Join(msg.errors, "; "))
@@ -1766,7 +1767,7 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		mode := msg.result.Mode
 		if mode == agent.RewindAll || mode == agent.RewindConversationOnly {
 			m.previousID = msg.result.PreviousResponseID
-			if text, messages, expands, folds, err := sessionDisplayTranscript(m.runner.SessionPath, m.workspace, m.collapsedEditBlocks, m.groupToolVerbs, m.showThinking); err == nil {
+			if text, messages, expands, folds, err := sessionDisplayTranscript(m.runner.SessionPath, m.workspace, m.collapsedEditBlocks, m.groupToolVerbs, m.showThinking, m.enrichReplayImage); err == nil {
 				m.replaceDisplayTranscript(text, messages, expands, folds)
 			} else {
 				m.replaceTranscript(session.FormatTranscript(msg.result.Messages), msg.result.Messages)
@@ -3007,7 +3008,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.status = "no active session to view"
 				return m, nil
 			}
-			content, _, _, _, err := sessionDisplayTranscript(m.runner.SessionPath, m.workspace, m.collapsedEditBlocks, m.groupToolVerbs, m.showThinking)
+			content, _, _, _, err := sessionDisplayTranscript(m.runner.SessionPath, m.workspace, m.collapsedEditBlocks, m.groupToolVerbs, m.showThinking, m.enrichReplayImage)
 			if err != nil {
 				m.status = "transcript failed: " + err.Error()
 				return m, nil
@@ -5059,6 +5060,23 @@ func (m *model) flushKittyUploads() tea.Cmd {
 		}
 		return nil
 	}
+}
+
+// enrichReplayImage loads persisted asset bytes for a replayed display image
+// and queues its kitty upload so placeholders render on resume.
+func (m *model) enrichReplayImage(image *session.DisplayImage, sessionPath string) {
+	if m.inlineProtocol() != imageProtocolKitty || image.Asset == "" || len(image.Data) > 0 {
+		return
+	}
+	data, err := session.ReadAsset(sessionPath, image.Asset, image.MediaType)
+	if err != nil {
+		return
+	}
+	m.nextKittyID++
+	image.KittyID = m.nextKittyID
+	image.Data = data
+	cols, rows := inlineImageCells(image.Width, image.Height, 12)
+	m.kittyUploads = append(m.kittyUploads, kittyTransmitVirtual(image.KittyID, data, cols, rows))
 }
 
 func (m *model) beginTurn(prompt string) {

@@ -866,9 +866,15 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 			}
 			imageLog := make([]session.DisplayImage, 0, len(toolResult.Images))
 			for _, image := range toolResult.Images {
-				imageLog = append(imageLog, session.DisplayImage{
+				display := session.DisplayImage{
 					MediaType: image.MediaType, Width: image.Width, Height: image.Height, Bytes: len(image.Data),
-				})
+				}
+				if len(image.Data) > 0 && r.SessionPath != "" {
+					if uri, _, err := session.SaveImageAsset(r.SessionPath, image.Data, image.MediaType); err == nil {
+						display.Asset = uri
+					}
+				}
+				imageLog = append(imageLog, display)
 			}
 			r.log("tool_result", map[string]any{
 				"step": step, "call_id": call.CallID, "name": call.Name,

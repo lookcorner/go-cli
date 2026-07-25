@@ -60,6 +60,9 @@ type DisplayImage struct {
 	// rendering and are never persisted into session logs.
 	KittyID int    `json:"-"`
 	Data    []byte `json:"-"`
+	// Asset is the confined assets/<name> URI of persisted image bytes,
+	// recorded so replayed sessions can reload them.
+	Asset string `json:"asset,omitempty"`
 }
 
 type UserFeedback struct {
@@ -1200,10 +1203,6 @@ func (l *Logger) persistImage(rawURL string) (Content, string, error) {
 	if !ok {
 		return Content{}, "", errors.New("image must use a base64 data URL or HTTP(S) URI")
 	}
-	ext, ok := imageExtension(mediaType)
-	if !ok {
-		return Content{}, "", fmt.Errorf("unsupported image mime type %q", mediaType)
-	}
 	if base64.StdEncoding.DecodedLen(len(encoded)) > maxImageBytes {
 		return Content{}, "", errors.New("image exceeds 20 MB")
 	}
@@ -1211,23 +1210,43 @@ func (l *Logger) persistImage(rawURL string) (Content, string, error) {
 	if err != nil || !validImage(mediaType, data) {
 		return Content{}, "", errors.New("image data does not match its mime type")
 	}
-	assets := filepath.Join(filepath.Dir(l.path), "assets")
+	uri, path, err := SaveImageAsset(l.path, data, mediaType)
+	if err != nil {
+		return Content{}, "", err
+	}
+	return Content{Type: "image", URI: uri, MimeType: mediaType}, path, nil
+}
+
+// SaveImageAsset atomically stores image bytes in the session assets
+// directory and returns the confined assets/<name> URI and full path.
+func SaveImageAsset(sessionPath string, data []byte, mediaType string) (string, string, error) {
+	ext, ok := imageExtension(mediaType)
+	if !ok {
+		return "", "", fmt.Errorf("unsupported image mime type %q", mediaType)
+	}
+	if len(data) == 0 || len(data) > maxImageBytes {
+		return "", "", errors.New("image exceeds 20 MB")
+	}
+	if !validImage(mediaType, data) {
+		return "", "", errors.New("image data does not match its mime type")
+	}
+	assets := filepath.Join(filepath.Dir(sessionPath), "assets")
 	if err := os.MkdirAll(assets, 0o700); err != nil {
-		return Content{}, "", fmt.Errorf("create session assets: %w", err)
+		return "", "", fmt.Errorf("create session assets: %w", err)
 	}
 	assetsInfo, err := os.Lstat(assets)
 	if err != nil || assetsInfo.Mode()&os.ModeSymlink != 0 || !assetsInfo.IsDir() {
-		return Content{}, "", errors.New("session assets must be a non-symlink directory")
+		return "", "", errors.New("session assets must be a non-symlink directory")
 	}
 	random := make([]byte, 16)
 	if _, err := rand.Read(random); err != nil {
-		return Content{}, "", fmt.Errorf("name session image: %w", err)
+		return "", "", fmt.Errorf("name session image: %w", err)
 	}
 	name := "image-" + hex.EncodeToString(random) + "." + ext
 	path := filepath.Join(assets, name)
 	temporary, err := os.CreateTemp(assets, ".image-*")
 	if err != nil {
-		return Content{}, "", fmt.Errorf("create session image: %w", err)
+		return "", "", fmt.Errorf("create session image: %w", err)
 	}
 	tempPath := temporary.Name()
 	defer os.Remove(tempPath)
@@ -1241,9 +1260,36 @@ func (l *Logger) persistImage(rawURL string) (Content, string, error) {
 		err = os.Rename(tempPath, path)
 	}
 	if err != nil {
-		return Content{}, "", fmt.Errorf("save session image: %w", err)
+		return "", "", fmt.Errorf("save session image: %w", err)
 	}
-	return Content{Type: "image", URI: filepath.ToSlash(filepath.Join("assets", name)), MimeType: mediaType}, path, nil
+	return filepath.ToSlash(filepath.Join("assets", name)), path, nil
+}
+
+// ReadAsset loads a confined session asset, enforcing the same path, type,
+// and size rules used for prompt images.
+func ReadAsset(sessionPath, uri, mediaType string) ([]byte, error) {
+	clean := filepath.Clean(filepath.FromSlash(uri))
+	if filepath.IsAbs(clean) || clean == "." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || filepath.Dir(clean) != "assets" {
+		return nil, errors.New("invalid session image path")
+	}
+	assets := filepath.Join(filepath.Dir(sessionPath), "assets")
+	assetsInfo, err := os.Lstat(assets)
+	if err != nil || assetsInfo.Mode()&os.ModeSymlink != 0 || !assetsInfo.IsDir() {
+		return nil, errors.New("session assets must be a non-symlink directory")
+	}
+	path := filepath.Join(filepath.Dir(sessionPath), clean)
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() > maxImageBytes {
+		return nil, errors.New("session image must be a regular file no larger than 20 MB")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if _, ok := imageExtension(mediaType); !ok || !validImage(mediaType, data) {
+		return nil, errors.New("session image data does not match its mime type")
+	}
+	return data, nil
 }
 
 func loadImage(sessionPath string, content *Content) error {

@@ -3,6 +3,8 @@ package tui
 import (
 	"encoding/base64"
 	"encoding/json"
+	"image"
+	"image/color"
 	"strings"
 	"testing"
 
@@ -92,5 +94,65 @@ func TestDisplayImageNeverPersistsLiveFields(t *testing.T) {
 	var decoded session.DisplayImage
 	if err := json.Unmarshal(data, &decoded); err != nil || decoded.KittyID != 0 || decoded.Data != nil {
 		t.Fatalf("decoded=%#v err=%v", decoded, err)
+	}
+}
+
+func TestReplayEnrichmentReloadsPersistedAssets(t *testing.T) {
+	logger, err := session.NewLoggerWithID(t.TempDir(), "replay-assets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionPath := logger.Path()
+	img := image.NewRGBA(image.Rect(0, 0, 9, 18))
+	img.Set(0, 0, color.RGBA{255, 0, 0, 255})
+	data := encodeTestPNG(t, img)
+	uri, _, err := session.SaveImageAsset(sessionPath, data, "image/png")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m := &model{imageProtocol: imageProtocolKitty, protocolChecked: true}
+	display := &session.DisplayImage{MediaType: "image/png", Width: 9, Height: 18, Bytes: len(data), Asset: uri}
+	m.enrichReplayImage(display, sessionPath)
+	if display.KittyID != 1 || len(display.Data) == 0 || len(m.kittyUploads) != 1 {
+		t.Fatalf("enriched=%#v uploads=%d", display, len(m.kittyUploads))
+	}
+	if !strings.Contains(string(m.kittyUploads[0]), "i=1,U=1,c=1,r=1") {
+		t.Fatalf("upload=%q", m.kittyUploads[0])
+	}
+
+	plain := &session.DisplayImage{MediaType: "image/png", Width: 9, Height: 18, Bytes: len(data)}
+	m.enrichReplayImage(plain, sessionPath)
+	if plain.KittyID != 0 || plain.Data != nil {
+		t.Fatal("metadata-only image was enriched")
+	}
+
+	if err := logger.AppendPrompt("inspect", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append("model_response", map[string]any{"response_id": "r1", "text": "before", "tool_call_count": 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append("tool_call", map[string]any{"call_id": "c1", "name": "read_file", "arguments": json.RawMessage(`{"target_file":"a.png"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append("tool_result", map[string]any{
+		"call_id": "c1", "name": "read_file", "output": "ok", "image_count": 1,
+		"images": []session.DisplayImage{{MediaType: "image/png", Width: 9, Height: 18, Bytes: len(data), Asset: uri}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append("model_response", map[string]any{"response_id": "r2", "text": "after", "tool_call_count": 0}); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	text, _, _, _, err := sessionDisplayTranscript(sessionPath, "", false, false, true, m.enrichReplayImage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(text, "gork-image:2:1:1") || !strings.Contains(text, "\U0010EEEE") {
+		t.Fatalf("replay did not produce a kitty fence:\n%s", text)
 	}
 }
