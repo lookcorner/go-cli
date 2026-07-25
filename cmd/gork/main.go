@@ -1173,6 +1173,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			GroupToolVerbs:      cfg.UI.GroupToolVerbs,
 			RememberApprovals:   cfg.UI.RememberToolApprovals,
 			DefaultPermission:   cfg.UI.DefaultSelectedPermission,
+			DefaultModelID:      cfg.DefaultModelID,
 			QuestionTimeout:     cfg.AskUserQuestion.TimeoutEnabled,
 			CursorBlink:         cfg.UI.CursorBlink,
 			CompactMode:         cfg.UI.CompactMode,

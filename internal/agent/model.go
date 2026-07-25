@@ -79,7 +79,7 @@ func (r *Runner) SwitchModelCommand(arguments string) (ModelOption, error) {
 	if arguments == "" {
 		return ModelOption{}, errors.New("usage: /model <name> [effort]")
 	}
-	if option, ok := r.resolveModelOption(arguments, true); ok {
+	if option, ok := r.DefaultModelSelection(arguments); ok {
 		selected, err := r.SwitchModel(option.ID, "")
 		if err == nil && r.SetDefaultModel != nil {
 			err = r.SetDefaultModel(option.ID)
@@ -103,6 +103,10 @@ func (r *Runner) SwitchModelCommand(arguments string) (ModelOption, error) {
 		break
 	}
 	return ModelOption{}, fmt.Errorf("unknown or unavailable model %q", arguments)
+}
+
+func (r *Runner) DefaultModelSelection(arguments string) (ModelOption, bool) {
+	return r.resolveModelOption(strings.TrimSpace(arguments), true)
 }
 
 func (r *Runner) CurrentReasoningEfforts() []ReasoningEffortOption {

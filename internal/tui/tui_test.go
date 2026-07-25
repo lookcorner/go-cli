@@ -3694,6 +3694,9 @@ func TestTUIModelCommandsAndPickerNavigation(t *testing.T) {
 	if m.runner.ModelID != "reasoning" || m.runner.ReasoningEffort != "xhigh" {
 		t.Fatalf("direct model id=%q effort=%q status=%q", m.runner.ModelID, m.runner.ReasoningEffort, m.status)
 	}
+	if m.defaultModelID != "" {
+		t.Fatalf("effort-bearing model switch changed default=%q", m.defaultModelID)
+	}
 	m.setInput("/effort low")
 	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)
@@ -3734,6 +3737,12 @@ func TestTUIModelCommandsAndPickerNavigation(t *testing.T) {
 	m = updated.(*model)
 	if !strings.Contains(m.status, "unknown or unavailable") {
 		t.Fatalf("invalid status=%q", m.status)
+	}
+	m.setInput("/model Plain")
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if m.defaultModelID != "plain" || !strings.Contains(m.settingsModelName(), "Plain") {
+		t.Fatalf("default model=%q display=%q", m.defaultModelID, m.settingsModelName())
 	}
 	m.runner.SetDefaultModel = func(string) error { return fmt.Errorf("disk full") }
 	m.previousID = "active-response"

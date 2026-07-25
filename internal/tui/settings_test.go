@@ -141,7 +141,7 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 			return nil
 		},
 	}
-	for index := 0; index < settingsCount; index++ {
+	for index := 0; index < settingsCount-1; index++ {
 		m.settings.selected = index
 		updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 		m = updated.(*model)
@@ -604,6 +604,117 @@ func TestSettingsDefaultSelectedPermissionAppliesToNextPrompt(t *testing.T) {
 	request.reply <- approvalOnce
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSettingsDefaultModelReusesModelPicker(t *testing.T) {
+	m, _ := modelTUIFixture(t)
+	m.defaultModelID = "plain"
+	var persisted []string
+	m.runner.SetDefaultModel = func(id string) error {
+		persisted = append(persisted, id)
+		return nil
+	}
+	settings := &settingsState{selected: 22}
+	m.settings = settings
+
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.settings != nil || m.modelSelect == nil || m.modelSelect.settings != settings ||
+		len(m.modelSelect.models) != 3 || m.modelSelect.selected != 1 ||
+		!strings.Contains(stripUIANSI(m.View().Content), "Default model") {
+		t.Fatalf("command=%v settings=%#v picker=%#v view=%q", command != nil, m.settings, m.modelSelect, stripUIANSI(m.View().Content))
+	}
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	m = updated.(*model)
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if m.modelSelect != nil || m.settings != settings || m.defaultModelID != "reasoning" ||
+		m.runner.ModelID != "reasoning" || strings.Join(persisted, ",") != "reasoning" ||
+		!strings.Contains(m.settingsContent(), "Default model: Reasoning X") {
+		t.Fatalf("settings=%#v picker=%#v default=%q model=%q persisted=%v content=%q", m.settings, m.modelSelect, m.defaultModelID, m.runner.ModelID, persisted, m.settingsContent())
+	}
+}
+
+func TestSettingsDefaultModelClearAndCancelReturnToSettings(t *testing.T) {
+	m, _ := modelTUIFixture(t)
+	m.defaultModelID = "plain"
+	var persisted []string
+	m.runner.SetDefaultModel = func(id string) error {
+		persisted = append(persisted, id)
+		return nil
+	}
+	settings := &settingsState{selected: 22}
+	m.settings = settings
+
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
+	m = updated.(*model)
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if m.settings != settings || m.modelSelect != nil || m.defaultModelID != "" || m.runner.ModelID != "plain" ||
+		len(persisted) != 1 || persisted[0] != "" || m.status != "default model override cleared" {
+		t.Fatalf("settings=%#v picker=%#v default=%q model=%q persisted=%q status=%q", m.settings, m.modelSelect, m.defaultModelID, m.runner.ModelID, persisted, m.status)
+	}
+
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
+	m = updated.(*model)
+	if m.settings != settings || m.modelSelect != nil || m.status != "settings" {
+		t.Fatalf("cancel settings=%#v picker=%#v status=%q", m.settings, m.modelSelect, m.status)
+	}
+}
+
+func TestSettingsDefaultModelFailureDoesNotLeavePartialDefault(t *testing.T) {
+	m, _ := modelTUIFixture(t)
+	m.defaultModelID = "plain"
+	settings := &settingsState{selected: 22}
+	m.settings = settings
+	m.runner.SetDefaultModel = func(string) error { return errors.New("read only") }
+
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	m = updated.(*model)
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if m.modelSelect == nil || m.modelSelect.phase != modelSelectError || m.defaultModelID != "plain" || m.runner.ModelID != "plain" ||
+		!strings.Contains(m.modelSelect.err, "persist default model") {
+		t.Fatalf("picker=%#v default=%q model=%q", m.modelSelect, m.defaultModelID, m.runner.ModelID)
+	}
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
+	m = updated.(*model)
+	if m.settings != settings || m.modelSelect != nil {
+		t.Fatalf("error close settings=%#v picker=%#v", m.settings, m.modelSelect)
+	}
+}
+
+func TestSettingsDefaultModelSwitchFailureRestoresPreviousDefault(t *testing.T) {
+	m, _ := modelTUIFixture(t)
+	m.defaultModelID = "plain"
+	var persisted []string
+	m.runner.SetDefaultModel = func(id string) error {
+		persisted = append(persisted, id)
+		return nil
+	}
+	m.runner.ResolveModel = func(string) (agent.ModelRuntime, error) {
+		return agent.ModelRuntime{}, errors.New("model unavailable")
+	}
+	settings := &settingsState{selected: 22}
+	m.settings = settings
+
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	m = updated.(*model)
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if m.modelSelect == nil || m.modelSelect.phase != modelSelectError || m.defaultModelID != "plain" ||
+		m.runner.ModelID != "plain" || strings.Join(persisted, ",") != "reasoning,plain" ||
+		!strings.Contains(m.modelSelect.err, "model unavailable") {
+		t.Fatalf("picker=%#v default=%q model=%q persisted=%v", m.modelSelect, m.defaultModelID, m.runner.ModelID, persisted)
 	}
 }
 

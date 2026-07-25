@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -30,8 +31,16 @@ func TestUpdateDefaultModelPreservesConfiguration(t *testing.T) {
 	}
 }
 
-func TestUpdateDefaultModelRejectsEmptyID(t *testing.T) {
-	if err := UpdateDefaultModel(filepath.Join(t.TempDir(), "config.toml"), " "); err == nil {
-		t.Fatal("empty default model was accepted")
+func TestUpdateDefaultModelClearsOverride(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[models]\ndefault = \"old\"\nweb_search = \"search\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateDefaultModel(path, " "); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || strings.Contains(string(data), "default") || !strings.Contains(string(data), "web_search") {
+		t.Fatalf("config=%q err=%v", data, err)
 	}
 }

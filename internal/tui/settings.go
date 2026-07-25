@@ -24,7 +24,7 @@ type settingsNumber struct {
 	large int
 }
 
-const settingsCount = 22
+const settingsCount = 23
 
 func (m *model) openSettings() {
 	m.settings = &settingsState{}
@@ -251,6 +251,9 @@ func (m *model) applySetting(selected int) {
 		if m.persistPermission != nil {
 			state.err = persistSetting(m.persistPermission(m.defaultPermission), func() { m.defaultPermission = previous })
 		}
+	case 22:
+		m.openModelSelectFromSettings()
+		return
 	}
 	if state.err != "" {
 		m.status = "setting update failed"
@@ -414,6 +417,7 @@ func (m *model) settingsContent() string {
 		fmt.Sprintf("Auto light theme: %s", concreteAutomaticTheme(m.autoLightTheme, "grokday")),
 		fmt.Sprintf("Theme: %s", m.themeName),
 		fmt.Sprintf("Default selected permission: %s", m.defaultPermission),
+		fmt.Sprintf("Default model: %s", m.settingsModelName()),
 	}
 	if m.planModeAvailable() {
 		lines = append(lines, settingLine("Plan mode", m.planMode))
@@ -426,6 +430,27 @@ func (m *model) settingsContent() string {
 		content += "\n\n**Error:** " + strings.ReplaceAll(sanitizeTerminalText(m.settings.err), "\n", " ")
 	}
 	return content
+}
+
+func (m *model) settingsModelName() string {
+	if m.defaultModelID == "" {
+		return "(no override)"
+	}
+	if m.runner != nil {
+		for _, option := range m.runner.ModelOptions {
+			if option.ID != m.defaultModelID {
+				continue
+			}
+			if name := strings.TrimSpace(option.Name); name != "" {
+				return name
+			}
+			if name := strings.TrimSpace(option.Model); name != "" {
+				return name
+			}
+			return option.ID
+		}
+	}
+	return m.defaultModelID
 }
 
 func (m *model) settingsCount() int {

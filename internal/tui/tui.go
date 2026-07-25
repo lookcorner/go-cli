@@ -651,6 +651,7 @@ type model struct {
 	bridge              *Bridge
 	workspace           string
 	modelName           string
+	defaultModelID      string
 	previousID          string
 	inputTokens         int
 	contextWindow       int
@@ -890,6 +891,7 @@ type UIOptions struct {
 	SetRememberApprovals func(bool) error
 	DefaultPermission    string
 	SetDefaultPermission func(string) error
+	DefaultModelID       string
 	QuestionTimeout      bool
 	SetQuestionTimeout   func(bool) error
 	CursorBlink          *bool
@@ -1017,6 +1019,7 @@ type modelSelectState struct {
 	selected   int
 	model      agent.ModelOption
 	effortOnly bool
+	settings   *settingsState
 	err        string
 }
 
@@ -1037,7 +1040,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 	defer func() { runner.ToolObserver = previousToolObserver }()
 	m := &model{
 		ctx: ctx, runner: runner, bridge: bridge, workspace: workspace,
-		modelName: modelName, previousID: previousID, width: 80, height: 24,
+		modelName: modelName, defaultModelID: options.DefaultModelID, previousID: previousID, width: 80, height: 24,
 		minimal:       options.Minimal,
 		contextWindow: runner.ContextWindow,
 		status:        "ready", initial: strings.TrimSpace(initialPrompt), historyIndex: -1,
@@ -3074,10 +3077,36 @@ func (m *model) openModelSelect(effortOnly bool) {
 	}
 }
 
+func (m *model) openModelSelectFromSettings() {
+	settings := m.settings
+	m.settings = nil
+	m.openModelSelect(false)
+	if m.modelSelect == nil {
+		m.settings = settings
+		return
+	}
+	m.modelSelect.settings = settings
+	m.modelSelect.models = append([]agent.ModelOption{{Name: "(no override)"}}, m.modelSelect.models...)
+	m.modelSelect.selected = 0
+	for index, option := range m.modelSelect.models {
+		if option.ID == m.defaultModelID {
+			m.modelSelect.selected = index
+			break
+		}
+	}
+	m.status = "select default model"
+}
+
 func (m *model) handleModelSelectKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	state := m.modelSelect
 	key := msg.Key()
 	if key.Code == tea.KeyEsc {
+		if state.settings != nil {
+			m.modelSelect = nil
+			m.settings = state.settings
+			m.status = "settings"
+			return m, nil
+		}
 		if state.phase == modelSelectEffort && !state.effortOnly {
 			state.phase = modelSelectModel
 			state.efforts = nil
@@ -3119,6 +3148,10 @@ func (m *model) handleModelSelectKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if state.phase == modelSelectModel {
 		state.model = state.models[state.selected]
+		if state.settings != nil {
+			m.applyDefaultModel(state.model.ID)
+			return m, nil
+		}
 		if state.model.SupportsReasoningEffort {
 			state.efforts = agent.ReasoningEfforts(state.model)
 			state.phase = modelSelectEffort
@@ -3138,6 +3171,36 @@ func (m *model) handleModelSelectKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *model) applyDefaultModel(id string) {
+	if m.runner == nil || m.runner.SetDefaultModel == nil {
+		m.modelSelect.phase, m.modelSelect.err = modelSelectError, "default model persistence is unavailable"
+		m.status = "model switch failed: " + m.modelSelect.err
+		return
+	}
+	previous := m.defaultModelID
+	if err := m.runner.SetDefaultModel(id); err != nil {
+		m.modelSelect.phase, m.modelSelect.err = modelSelectError, "persist default model: "+err.Error()
+		m.status = "model switch failed: " + m.modelSelect.err
+		return
+	}
+	m.defaultModelID = id
+	if id == "" {
+		m.settings = m.modelSelect.settings
+		m.modelSelect = nil
+		m.status = "default model override cleared"
+		return
+	}
+	option, err := m.runner.SwitchModel(id, "")
+	if err != nil {
+		if rollbackErr := m.runner.SetDefaultModel(previous); rollbackErr != nil {
+			err = fmt.Errorf("%w; restore default model: %v", err, rollbackErr)
+		} else {
+			m.defaultModelID = previous
+		}
+	}
+	m.finishModelSwitch(option, err)
+}
+
 func (m *model) applyModelCommand(arguments string) {
 	if m.runner == nil {
 		m.status = "model switching unavailable"
@@ -3147,7 +3210,11 @@ func (m *model) applyModelCommand(arguments string) {
 		m.status = "wait for the background model request before switching models"
 		return
 	}
+	defaultOption, setsDefault := m.runner.DefaultModelSelection(arguments)
 	option, err := m.runner.SwitchModelCommand(arguments)
+	if err == nil && setsDefault {
+		m.defaultModelID = defaultOption.ID
+	}
 	m.finishModelSwitch(option, err)
 }
 
@@ -3172,7 +3239,12 @@ func (m *model) finishModelSwitch(option agent.ModelOption, err error) {
 		m.status = "model switch failed: " + err.Error()
 		return
 	}
+	var settings *settingsState
+	if m.modelSelect != nil {
+		settings = m.modelSelect.settings
+	}
 	m.modelSelect = nil
+	m.settings = settings
 	m.previousID = ""
 	m.inputTokens = 0
 	m.contextWindow = m.runner.ContextWindow
@@ -5126,7 +5198,11 @@ func (m *model) modelSelectContent() string {
 		}
 		lines = append(lines, line)
 	}
-	return "# Select model\n\n" + selectedWindow(lines, state.selected, max(m.contentHeight()-4, 1))
+	title := "# Select model"
+	if state.settings != nil {
+		title = "# Default model"
+	}
+	return title + "\n\n" + selectedWindow(lines, state.selected, max(m.contentHeight()-4, 1))
 }
 
 func (m *model) modelSelectHint() string {
@@ -5135,6 +5211,9 @@ func (m *model) modelSelectHint() string {
 	}
 	if m.modelSelect != nil && m.modelSelect.phase == modelSelectEffort && !m.modelSelect.effortOnly {
 		return "Up/Down select · Enter switch · Esc models"
+	}
+	if m.modelSelect != nil && m.modelSelect.settings != nil {
+		return "Up/Down select · Enter set default · Esc settings"
 	}
 	return "Up/Down select · Enter switch · Esc cancel"
 }
