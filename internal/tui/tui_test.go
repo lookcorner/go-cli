@@ -2,9 +2,11 @@ package tui
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -846,6 +848,45 @@ func TestModelInputAndView(t *testing.T) {
 	}
 }
 
+func TestImageOnlyPromptUsesMultimodalTurnAndPersists(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	streamer := &scheduledTUIStreamer{}
+	logger, err := session.NewLoggerWithID(t.TempDir(), "clipboard-image")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &agent.Runner{Client: streamer, Tools: registry, Logger: logger, Model: "test", MaxSteps: 1}
+	data := encodeTestPNG(t, image.NewRGBA(image.Rect(0, 0, 2, 2)))
+	m := &model{
+		ctx: context.Background(), runner: runner, width: 60, height: 16,
+		promptImages: []api.ContentPart{{Type: "input_image", ImageURL: "data:image/png;base64," + base64.StdEncoding.EncodeToString(data)}},
+	}
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command == nil || !m.running || len(m.promptImages) != 0 || !strings.Contains(m.transcript.String(), "[Image]") {
+		t.Fatalf("command=%v running=%v images=%d transcript=%q", command != nil, m.running, len(m.promptImages), m.transcript.String())
+	}
+	if event, ok := command().(turnDoneEvent); !ok || event.err != nil {
+		t.Fatalf("event=%#v", event)
+	}
+	parts, ok := streamer.request.Input[0].Content.([]api.ContentPart)
+	if !ok || len(parts) != 2 || parts[0].Text != "[Image]" || parts[1].Type != "input_image" {
+		t.Fatalf("request=%#v", streamer.request)
+	}
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	messages, err := session.Transcript(logger.Path())
+	if err != nil || len(messages) != 2 || len(messages[0].Content) != 2 || messages[0].Content[1].Type != "image" {
+		t.Fatalf("messages=%#v err=%v", messages, err)
+	}
+}
+
 func TestMinimalViewUsesNativeScrollback(t *testing.T) {
 	m := &model{
 		minimal: true, workspace: "/workspace", modelName: "test-model",
@@ -1002,6 +1043,63 @@ func TestBusyQueueShowsSendNowHintAndInjectsFirstPrompt(t *testing.T) {
 	pending := runner.TakeInterjections()
 	if command != nil || m.status != "sent queued prompt now" || len(m.pendingPrompts) != 1 || m.pendingPrompts[0] != "second follow-up" || len(pending) != 1 || pending[0].Text != "first follow-up" {
 		t.Fatalf("command=%v status=%q queue=%#v interjections=%#v", command != nil, m.status, m.pendingPrompts, pending)
+	}
+}
+
+func TestBusyQueuePreservesPromptImagesForSendNow(t *testing.T) {
+	runner := &agent.Runner{}
+	image := api.ContentPart{Type: "input_image", ImageURL: "data:image/png;base64,cG5n"}
+	m := &model{
+		runner: runner, running: true,
+		input: []rune("inspect"), cursor: len("inspect"), promptImages: []api.ContentPart{image},
+	}
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || len(m.pendingPrompts) != 1 || len(m.pendingPromptImages) != 1 || len(m.pendingPromptImages[0]) != 1 {
+		t.Fatalf("command=%v prompts=%#v images=%#v", command != nil, m.pendingPrompts, m.pendingPromptImages)
+	}
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	pending := runner.TakeInterjections()
+	if command != nil || len(pending) != 1 || len(pending[0].Content) != 1 || pending[0].Content[0] != image ||
+		len(m.pendingPrompts) != 0 || len(m.pendingPromptImages) != 0 {
+		t.Fatalf("command=%v pending=%#v prompts=%#v images=%#v", command != nil, pending, m.pendingPrompts, m.pendingPromptImages)
+	}
+}
+
+func TestBusyLocalCommandRejectsPromptImages(t *testing.T) {
+	image := api.ContentPart{Type: "input_image", ImageURL: "data:image/png;base64,cG5n"}
+	m := &model{
+		runner:       &agent.Runner{},
+		running:      true,
+		input:        []rune("/queue"),
+		cursor:       len("/queue"),
+		promptImages: []api.ContentPart{image},
+	}
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.status != "images can only be attached to prompts" ||
+		string(m.input) != "/queue" || len(m.promptImages) != 1 || len(m.pendingPrompts) != 0 {
+		t.Fatalf("command=%v status=%q input=%q images=%#v prompts=%#v",
+			command != nil, m.status, m.input, m.promptImages, m.pendingPrompts)
+	}
+}
+
+func TestRewindCancellationClearsQueuedPromptImages(t *testing.T) {
+	cancelled := false
+	m := &model{
+		running:             true,
+		turnCancel:          func() { cancelled = true },
+		pendingPrompts:      []string{"inspect"},
+		pendingPromptImages: [][]api.ContentPart{{{Type: "input_image", ImageURL: "data:image/png;base64,cG5n"}}},
+		rewind:              &rewindState{phase: rewindCancelOffer, selected: 0},
+	}
+	updated, command := m.handleRewindKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || !cancelled || len(m.pendingPrompts) != 0 || len(m.pendingPromptImages) != 0 ||
+		m.rewind.phase != rewindCancelling {
+		t.Fatalf("command=%v cancelled=%v prompts=%#v images=%#v rewind=%#v",
+			command != nil, cancelled, m.pendingPrompts, m.pendingPromptImages, m.rewind)
 	}
 }
 

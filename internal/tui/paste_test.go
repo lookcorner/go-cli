@@ -1,10 +1,14 @@
 package tui
 
 import (
+	"context"
+	"image"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+
+	appclipboard "github.com/lookcorner/go-cli/internal/clipboard"
 )
 
 func TestBracketedPasteInsertsAtCursorAsOneUndoStep(t *testing.T) {
@@ -82,4 +86,48 @@ func TestBracketedPasteIgnoresEmptyContent(t *testing.T) {
 	if command != nil || string(m.input) != "unchanged" || len(m.inputUndo) != 0 {
 		t.Fatalf("command=%v input=%q undo=%d", command != nil, m.input, len(m.inputUndo))
 	}
+}
+
+func TestClipboardPasteReadsTextAndImage(t *testing.T) {
+	t.Run("text", func(t *testing.T) {
+		m := &model{
+			ctx: context.Background(),
+			clipboardRead: func(context.Context) (appclipboard.Content, error) {
+				return appclipboard.Content{Text: "pasted text"}, nil
+			},
+		}
+		updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: 'v', Text: "v", Mod: tea.ModCtrl}))
+		m = updated.(*model)
+		if command == nil || m.status != "reading clipboard" {
+			t.Fatalf("command=%v status=%q", command != nil, m.status)
+		}
+		updated, _ = m.Update(command())
+		m = updated.(*model)
+		if string(m.input) != "pasted text" || len(m.promptImages) != 0 {
+			t.Fatalf("input=%q images=%d", m.input, len(m.promptImages))
+		}
+	})
+
+	t.Run("image", func(t *testing.T) {
+		data := encodeTestPNG(t, image.NewRGBA(image.Rect(0, 0, 2, 2)))
+		m := &model{
+			ctx: context.Background(),
+			clipboardRead: func(context.Context) (appclipboard.Content, error) {
+				return appclipboard.Content{MediaType: "image/png", Data: data}, nil
+			},
+		}
+		updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: 'v', Text: "v", Mod: tea.ModAlt}))
+		m = updated.(*model)
+		updated, _ = m.Update(command())
+		m = updated.(*model)
+		if len(m.promptImages) != 1 || !strings.HasPrefix(m.promptImages[0].ImageURL, "data:image/png;base64,") ||
+			m.status != "image attached · 1 total" || !strings.Contains(m.View().Content, "[Image x1]") {
+			t.Fatalf("images=%#v status=%q view=%q", m.promptImages, m.status, m.View().Content)
+		}
+		updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
+		m = updated.(*model)
+		if len(m.promptImages) != 0 || m.status != "image attachments cleared" {
+			t.Fatalf("images=%d status=%q", len(m.promptImages), m.status)
+		}
+	})
 }

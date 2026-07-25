@@ -886,6 +886,11 @@ used as the output path.
 Up/Down browse durable prompt history when the prompt is empty. `/history`
 opens fuzzy search over the same workspace-scoped history; Enter or Tab restores
 the selected prompt to the composer without submitting it.
+Ctrl-V reads native clipboard text or a PNG image; Alt-V provides the same image
+fallback on Windows. Text is inserted at the cursor, while images are attached
+to the next prompt and shown as `[Image xN]`. Image-only prompts and queued
+follow-ups retain their attachments; press Esc on an empty composer to clear
+draft images.
 `/copy [N]` copies the latest (or Nth-latest) assistant response from the session
 transcript to the terminal clipboard.
 `/help` lists local commands, `/session-info` (also `/status` or `/info`) shows

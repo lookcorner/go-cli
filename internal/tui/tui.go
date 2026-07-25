@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -26,6 +27,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/billing"
 	"github.com/lookcorner/go-cli/internal/changelog"
 	"github.com/lookcorner/go-cli/internal/claudeimport"
+	appclipboard "github.com/lookcorner/go-cli/internal/clipboard"
 	guides "github.com/lookcorner/go-cli/internal/docs"
 	"github.com/lookcorner/go-cli/internal/imagine"
 	"github.com/lookcorner/go-cli/internal/memory"
@@ -90,6 +92,10 @@ func (e *ScreenModeError) Error() string {
 
 type textEvent struct{ text string }
 type thoughtEvent struct{ text string }
+type clipboardEvent struct {
+	content appclipboard.Content
+	err     error
+}
 type statusEvent struct{ text string }
 type mouseSelectionPhase uint8
 
@@ -787,6 +793,9 @@ type model struct {
 	turnCancel          context.CancelFunc
 	initial             string
 	pendingPrompts      []string
+	pendingPromptImages [][]api.ContentPart
+	promptImages        []api.ContentPart
+	clipboardRead       func(context.Context) (appclipboard.Content, error)
 	scheduled           []tools.ScheduledTaskFired
 	activeTask          string
 	promptSerial        uint64
@@ -1141,6 +1150,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		persistGroupTools:   options.SetGroupToolVerbs,
 		suggestionsEnabled:  options.PromptSuggestions,
 		persistSuggestions:  options.SetPromptSuggestions,
+		clipboardRead:       appclipboard.Read,
 		rememberApprovals:   options.RememberApprovals,
 		persistRemember:     options.SetRememberApprovals,
 		undoHint: contextualHintState{
@@ -2170,7 +2180,28 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyReleaseMsg:
 		return m.handleVoiceRelease(msg)
 	case tea.PasteMsg:
+		if msg.Content == "" && m.clipboardRead != nil {
+			m.status = "reading clipboard"
+			return m, readClipboard(m.ctx, m.clipboardRead)
+		}
 		return m.handlePaste(msg.Content)
+	case clipboardEvent:
+		if msg.err != nil {
+			if !errors.Is(msg.err, appclipboard.ErrEmpty) {
+				m.status = "clipboard paste failed: " + msg.err.Error()
+			}
+			return m, nil
+		}
+		if len(msg.content.Data) > 0 {
+			m.promptImages = append(m.promptImages, api.ContentPart{
+				Type: "input_image",
+				ImageURL: "data:" + msg.content.MediaType + ";base64," +
+					base64.StdEncoding.EncodeToString(msg.content.Data),
+			})
+			m.status = fmt.Sprintf("image attached · %d total", len(m.promptImages))
+			return m, nil
+		}
+		return m.handlePaste(msg.content.Text)
 	case tea.KeyboardEnhancementsMsg:
 		m.voiceKeyReleases = msg.SupportsEventTypes()
 	}
@@ -2354,6 +2385,14 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.scrollFocused && m.handleScrollbackKey(msg) {
 		return m, nil
 	}
+	if stroke == "ctrl+v" || stroke == "alt+v" {
+		if m.clipboardRead == nil {
+			m.status = "clipboard paste unavailable"
+			return m, nil
+		}
+		m.status = "reading clipboard"
+		return m, readClipboard(m.ctx, m.clipboardRead)
+	}
 	switch stroke {
 	case "ctrl+c":
 		if m.running && m.turnCancel != nil {
@@ -2419,6 +2458,11 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		if key.Code == tea.KeyEsc && len(m.input) == 0 && m.promptSuggestion != "" {
 			m.suggestionDismissed = true
+			return m, nil
+		}
+		if key.Code == tea.KeyEsc && len(m.input) == 0 && len(m.promptImages) > 0 {
+			m.promptImages = nil
+			m.status = "image attachments cleared"
 			return m, nil
 		}
 		if key.Code == tea.KeyEsc && len(m.input) == 0 {
@@ -2494,7 +2538,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch key.Code {
 	case tea.KeyEnter:
 		prompt := strings.TrimSpace(string(m.input))
-		if prompt == "" {
+		if prompt == "" && len(m.promptImages) == 0 {
 			if m.feedbackInput {
 				m.feedbackInput = false
 				m.appendSystem("Please provide feedback text.")
@@ -2502,6 +2546,14 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if len(m.promptImages) > 0 && (strings.HasPrefix(prompt, "/") || strings.HasPrefix(prompt, "!")) {
+			m.status = "images can only be attached to prompts"
+			return m, nil
+		}
+		if prompt == "" {
+			prompt = "[Image]"
+		}
+		images := m.takePromptImages()
 		m.clearInput()
 		if m.feedbackInput {
 			m.feedbackInput = false
@@ -3136,6 +3188,10 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		prompt, _ = tools.ExpandLoopCommand(prompt)
 		m.rememberPrompt(prompt)
 		m.beginTurn(prompt)
+		if len(images) > 0 {
+			parts := append([]api.ContentPart{{Type: "input_text", Text: prompt}}, images...)
+			return m, runTurnContent(turnCtx, m.runner, prompt, parts, m.previousID)
+		}
 		return m, runTurn(turnCtx, m.runner, prompt, m.previousID)
 	}
 	return m, m.editInput(msg)
@@ -3186,10 +3242,11 @@ func (m *model) appendToolDisplay(text string) {
 func (m *model) handleRunningKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := msg.Key()
 	if key.Code == tea.KeyEnter {
-		if strings.TrimSpace(string(m.input)) == "" && len(m.pendingPrompts) > 0 && m.runner != nil {
+		if strings.TrimSpace(string(m.input)) == "" && len(m.promptImages) == 0 && len(m.pendingPrompts) > 0 && m.runner != nil {
 			prompt := m.pendingPrompts[0]
 			m.pendingPrompts = m.pendingPrompts[1:]
-			m.runner.QueueInterjection(prompt, nil)
+			images := m.shiftPendingPromptImages()
+			m.runner.QueueInterjection(prompt, images)
 			m.sendNowHint.nonce++
 			m.status = "sent queued prompt now"
 			return m, nil
@@ -3198,7 +3255,14 @@ func (m *model) handleRunningKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		prompt := strings.TrimSpace(string(m.input))
+		if prompt == "" && len(m.promptImages) == 0 {
+			return m, nil
+		}
 		if prompt == "" {
+			prompt = "[Image]"
+		}
+		if len(m.promptImages) > 0 && (strings.HasPrefix(prompt, "/") || strings.HasPrefix(prompt, "!")) {
+			m.status = "images can only be attached to prompts"
 			return m, nil
 		}
 		fields := strings.Fields(prompt)
@@ -3239,11 +3303,13 @@ func (m *model) handleRunningKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.status = "only prompts can be queued while a turn is running"
 			return m, nil
 		}
+		images := m.takePromptImages()
 		m.clearInput()
 		m.rememberPrompt(prompt)
 		m.promptSerial++
 		m.clearPromptSuggestion()
 		m.pendingPrompts = append(m.pendingPrompts, prompt)
+		m.pendingPromptImages = append(m.pendingPromptImages, images)
 		if !m.sendNowHint.enabled || m.sendNowHint.shown >= 3 {
 			m.status = fmt.Sprintf("queued prompt #%d", len(m.pendingPrompts))
 			return m, nil
@@ -3635,6 +3701,7 @@ func (m *model) handleRewindKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return dismiss()
 		}
 		m.pendingPrompts = nil
+		m.pendingPromptImages = nil
 		state.phase = rewindCancelling
 		m.status = "cancelling turn before rewind"
 		if m.turnCancel != nil {
@@ -5059,6 +5126,37 @@ func runTurnParts(ctx context.Context, runner *agent.Runner, display, instructio
 	}
 }
 
+func runTurnContent(ctx context.Context, runner *agent.Runner, display string, parts []api.ContentPart, previousID string) tea.Cmd {
+	return func() tea.Msg {
+		result, err := runner.RunTurnParts(ctx, display, parts, previousID)
+		return turnDoneEvent{result: result, err: err}
+	}
+}
+
+func readClipboard(ctx context.Context, read func(context.Context) (appclipboard.Content, error)) tea.Cmd {
+	return func() tea.Msg {
+		readCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		content, err := read(readCtx)
+		return clipboardEvent{content: content, err: err}
+	}
+}
+
+func (m *model) takePromptImages() []api.ContentPart {
+	images := m.promptImages
+	m.promptImages = nil
+	return images
+}
+
+func (m *model) shiftPendingPromptImages() []api.ContentPart {
+	if len(m.pendingPromptImages) == 0 {
+		return nil
+	}
+	images := m.pendingPromptImages[0]
+	m.pendingPromptImages = m.pendingPromptImages[1:]
+	return images
+}
+
 func runFeedback(runner *agent.Runner, text string) tea.Cmd {
 	return func() tea.Msg {
 		if runner == nil || runner.SubmitFeedback == nil {
@@ -5209,10 +5307,15 @@ func (m *model) startNext() tea.Cmd {
 	if len(m.pendingPrompts) > 0 {
 		prompt := m.pendingPrompts[0]
 		m.pendingPrompts = m.pendingPrompts[1:]
+		images := m.shiftPendingPromptImages()
 		m.running = true
 		turnCtx, cancel := context.WithCancel(m.ctx)
 		m.turnCancel = cancel
 		m.beginTurn(prompt)
+		if len(images) > 0 {
+			parts := append([]api.ContentPart{{Type: "input_text", Text: prompt}}, images...)
+			return runTurnContent(turnCtx, m.runner, prompt, parts, m.previousID)
+		}
 		return runTurn(turnCtx, m.runner, prompt, m.previousID)
 	}
 	if len(m.scheduled) == 0 {
@@ -5487,7 +5590,7 @@ func (m *model) View() tea.View {
 				inputLines[0] = "~ " + strings.TrimPrefix(inputLines[0], "> ")
 			}
 		}
-		hint := "Enter send · Shift/Alt-Enter newline · Ctrl-M multiline · Ctrl-Z undo"
+		hint := "Enter send · Ctrl-V paste image/text · Shift/Alt-Enter newline · Ctrl-M multiline · Ctrl-Z undo"
 		if m.multiline {
 			hint = "Shift/Alt-Enter send · Enter newline · Ctrl-M single-line · Ctrl-Z undo"
 		}
@@ -5497,6 +5600,9 @@ func (m *model) View() tea.View {
 			hint = "Recording · Esc or Ctrl-Space/F8 stop"
 		}
 		parts := m.slashMenuLines(width)
+		if len(m.promptImages) > 0 {
+			parts = append(parts, ansiDim+fmt.Sprintf("[Image x%d]", len(m.promptImages))+ansiReset)
+		}
 		if m.voiceInterim != "" {
 			parts = append(parts, ansiDim+"🎙 "+truncate(m.voiceInterim, max(width-3, 1))+ansiReset)
 		}
