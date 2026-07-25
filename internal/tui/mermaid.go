@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 const (
@@ -84,6 +86,14 @@ type mermaidRadarCurve struct {
 	values []float64
 }
 
+type mermaidXYAxis struct {
+	title      string
+	categories []string
+	min        float64
+	max        float64
+	numeric    bool
+}
+
 var mermaidOperators = []string{
 	"||--o{", "||--|{", "}o--o{", "}o..o{", "}o--||", "}|..|{",
 	"<|--", "<-->", "--|>", "-.->", "-->>", "->>", "--x", "--o", "-x", "==>", "-->", "<--",
@@ -113,6 +123,9 @@ func renderMermaid(source string, width int, theme themePalette) ([]string, bool
 	}
 	if firstToken == "radar-beta" {
 		return renderMermaidRadar(source, width, theme)
+	}
+	if firstToken == "xychart-beta" {
+		return renderMermaidXYChart(source, width, theme)
 	}
 	statements, complete := mermaidStatements(source)
 	if !complete || len(statements) < 1 {
@@ -164,6 +177,226 @@ func renderMermaid(source string, width int, theme themePalette) ([]string, bool
 		}
 	}
 	return lines, true
+}
+
+func renderMermaidXYChart(source string, width int, theme themePalette) ([]string, bool) {
+	title := ""
+	xAxis := mermaidXYAxis{numeric: true}
+	yAxis := mermaidXYAxis{numeric: true}
+	hasYRange := false
+	series := make([][]float64, 0)
+	foundHeader := false
+	statements := 0
+	for _, raw := range strings.Split(source, "\n") {
+		statement := strings.TrimSpace(raw)
+		if statement == "" || strings.HasPrefix(statement, "%%") {
+			continue
+		}
+		statements++
+		if statements > maxMermaidStatements {
+			return nil, false
+		}
+		if !foundHeader {
+			if strings.Fields(statement)[0] != "xychart-beta" {
+				return nil, false
+			}
+			foundHeader = true
+			continue
+		}
+		if value, ok := strings.CutPrefix(statement, "title "); ok {
+			title = mermaidUnquote(value)
+			continue
+		}
+		if value, ok := strings.CutPrefix(statement, "x-axis "); ok {
+			parsed, valid := mermaidXYChartXAxis(value)
+			if !valid {
+				return nil, false
+			}
+			xAxis = parsed
+			continue
+		}
+		if value, ok := strings.CutPrefix(statement, "y-axis "); ok {
+			axis, ranged, valid := mermaidXYChartRange(value)
+			if !valid {
+				return nil, false
+			}
+			yAxis.title = axis.title
+			if ranged {
+				yAxis.min, yAxis.max = axis.min, axis.max
+				hasYRange = true
+			}
+			continue
+		}
+		if value, ok := mermaidXYChartLine(statement); ok {
+			values, valid := mermaidXYChartNumbers(value)
+			if !valid {
+				return nil, false
+			}
+			series = append(series, values)
+		}
+	}
+	hasValues := false
+	for _, values := range series {
+		if len(values) > 0 {
+			hasValues = true
+			break
+		}
+	}
+	if !hasValues {
+		return nil, false
+	}
+	if !hasYRange {
+		yAxis.min, yAxis.max = mermaidXYChartAutoRange(series)
+	}
+	lines := []string{ansiDim + mermaidFit("◇ mermaid xychart", width) + ansiReset}
+	if title != "" {
+		lines = append(lines, theme.heading+mermaidFit(title, width)+ansiReset)
+	}
+	xLabel := xAxis.title
+	if xAxis.numeric {
+		xLabel = strings.TrimSpace(xLabel + " " + mermaidXYChartRangeText(xAxis.min, xAxis.max))
+	} else if len(xAxis.categories) > 0 {
+		xLabel = strings.TrimSpace(xLabel + " [" + strings.Join(xAxis.categories, " · ") + "]")
+	}
+	lines = append(lines, theme.code+mermaidFit("x: "+xLabel, width)+ansiReset)
+	yLabel := strings.TrimSpace(yAxis.title + " " + mermaidXYChartRangeText(yAxis.min, yAxis.max))
+	lines = append(lines, theme.code+mermaidFit("y: "+yLabel, width)+ansiReset)
+	for index, values := range series {
+		if len(values) == 0 {
+			continue
+		}
+		parts := make([]string, len(values))
+		for valueIndex, value := range values {
+			parts[valueIndex] = strconv.FormatFloat(value, 'g', -1, 64)
+		}
+		lines = append(lines, theme.code+mermaidFit("line "+strconv.Itoa(index+1)+": "+strings.Join(parts, " · "), width)+ansiReset)
+	}
+	return lines, true
+}
+
+func mermaidXYChartXAxis(value string) (mermaidXYAxis, bool) {
+	value = strings.TrimSpace(value)
+	if open := strings.IndexByte(value, '['); open >= 0 {
+		close := strings.LastIndexByte(value, ']')
+		if close <= open {
+			return mermaidXYAxis{}, false
+		}
+		return mermaidXYAxis{title: mermaidUnquote(value[:open]), categories: mermaidXYChartCategories(value[open+1 : close])}, true
+	}
+	if strings.Contains(value, "-->") {
+		axis, _, valid := mermaidXYChartRange(value)
+		return axis, valid
+	}
+	return mermaidXYAxis{title: mermaidUnquote(value)}, true
+}
+
+func mermaidXYChartRange(value string) (mermaidXYAxis, bool, bool) {
+	value = strings.TrimSpace(value)
+	left, right, ranged := strings.Cut(value, "-->")
+	if !ranged {
+		return mermaidXYAxis{title: mermaidUnquote(value), numeric: true}, false, true
+	}
+	maximum, err := strconv.ParseFloat(strings.TrimSpace(right), 64)
+	if err != nil {
+		return mermaidXYAxis{}, false, false
+	}
+	left = strings.TrimSpace(left)
+	split := strings.LastIndexFunc(left, unicode.IsSpace)
+	title, minimumText := "", left
+	if split >= 0 {
+		title, minimumText = strings.TrimSpace(left[:split]), strings.TrimSpace(left[split:])
+	}
+	minimum, err := strconv.ParseFloat(minimumText, 64)
+	if err != nil {
+		return mermaidXYAxis{}, false, false
+	}
+	return mermaidXYAxis{title: mermaidUnquote(title), min: minimum, max: maximum, numeric: true}, true, true
+}
+
+func mermaidXYChartLine(statement string) (string, bool) {
+	value, ok := strings.CutPrefix(statement, "line")
+	first, _ := utf8.DecodeRuneInString(value)
+	if !ok || value != "" && !unicode.IsSpace(first) && first != '[' {
+		return "", false
+	}
+	return strings.TrimSpace(value), true
+}
+
+func mermaidXYChartNumbers(value string) ([]float64, bool) {
+	start, end := strings.IndexByte(value, '['), strings.LastIndexByte(value, ']')
+	if start < 0 || end <= start {
+		return nil, false
+	}
+	values := make([]float64, 0)
+	for _, part := range strings.Split(value[start+1:end], ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		parsed, err := strconv.ParseFloat(part, 64)
+		if err != nil {
+			return nil, false
+		}
+		values = append(values, parsed)
+	}
+	return values, true
+}
+
+func mermaidXYChartCategories(value string) []string {
+	parts := make([]string, 0)
+	start := 0
+	quote := byte(0)
+	for index := 0; index < len(value); index++ {
+		switch value[index] {
+		case '\'', '"':
+			if quote == 0 {
+				quote = value[index]
+			} else if quote == value[index] {
+				quote = 0
+			}
+		case ',':
+			if quote == 0 {
+				if item := mermaidUnquote(value[start:index]); item != "" {
+					parts = append(parts, item)
+				}
+				start = index + 1
+			}
+		}
+	}
+	if item := mermaidUnquote(value[start:]); item != "" {
+		parts = append(parts, item)
+	}
+	return parts
+}
+
+func mermaidUnquote(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) >= 2 && value[0] == value[len(value)-1] && (value[0] == '\'' || value[0] == '"') {
+		return value[1 : len(value)-1]
+	}
+	return value
+}
+
+func mermaidXYChartAutoRange(series [][]float64) (float64, float64) {
+	minimum, maximum := math.Inf(1), math.Inf(-1)
+	for _, values := range series {
+		for _, value := range values {
+			if !math.IsNaN(value) {
+				minimum, maximum = math.Min(minimum, value), math.Max(maximum, value)
+			}
+		}
+	}
+	if math.IsInf(minimum, 0) || math.IsInf(maximum, 0) || math.IsNaN(minimum) || math.IsNaN(maximum) {
+		return 0, 0
+	}
+	if math.Abs(maximum-minimum) < math.Nextafter(1, 2)-1 {
+		return minimum - 1, maximum + 1
+	}
+	return minimum, maximum
+}
+
+func mermaidXYChartRangeText(minimum, maximum float64) string {
+	return strconv.FormatFloat(minimum, 'g', -1, 64) + " → " + strconv.FormatFloat(maximum, 'g', -1, 64)
 }
 
 func renderMermaidRadar(source string, width int, theme themePalette) ([]string, bool) {

@@ -203,6 +203,108 @@ func TestRenderMermaidRadar(t *testing.T) {
 	}
 }
 
+func TestRenderMermaidXYChart(t *testing.T) {
+	source := "xychart-beta\ntitle \"Weekly users\"\nx-axis \"Month\" [Jan, 'Feb, early', Mar]\ny-axis \"Users\" 0 --> 40\nline [20.3, 22.6, 24.2]\nline [3.2, 6.3, 10]"
+	lines, ok := renderMermaid(source, 52, paletteFor("groknight"))
+	if !ok {
+		t.Fatal("supported Mermaid xychart was rejected")
+	}
+	rendered := stripUIANSI(strings.Join(lines, "\n"))
+	for _, expected := range []string{
+		"◇ mermaid xychart", "Weekly users", "x: Month [Jan · Feb, early · Mar]",
+		"y: Users 0 → 40", "line 1: 20.3 · 22.6 · 24.2", "line 2: 3.2 · 6.3 · 10",
+	} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("rendered xychart missing %q:\n%s", expected, rendered)
+		}
+	}
+	for _, line := range lines {
+		if displayWidth(stripUIANSI(line)) > 52 {
+			t.Fatalf("xychart line exceeds width: %q", stripUIANSI(line))
+		}
+	}
+}
+
+func TestRenderMermaidXYChartMatchesReferenceParsing(t *testing.T) {
+	source := "%% comment\nxychart-beta extra\ntitle First\ntitle 'Final'\nx-axis Old [old]\nx-axis -2 --> 8\ny-axis 0 --> 99\ny-axis Score\nbar [9]\nlinear [8]\nline []\nline[NaN, -2, 3] trailing"
+	lines, ok := renderMermaid(source, 44, paletteFor("groknight"))
+	if !ok {
+		t.Fatal("reference-compatible Mermaid xychart was rejected")
+	}
+	rendered := stripUIANSI(strings.Join(lines, "\n"))
+	for _, expected := range []string{
+		"Final", "x: -2 → 8", "y: Score 0 → 99", "line 2: NaN · -2 · 3",
+	} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("xychart parsing differs from reference, missing %q:\n%s", expected, rendered)
+		}
+	}
+	for _, unexpected := range []string{"First", "Old", "old", "bar", "linear", "line 1:"} {
+		if strings.Contains(rendered, unexpected) {
+			t.Fatalf("xychart retained overwritten or ignored value %q:\n%s", unexpected, rendered)
+		}
+	}
+}
+
+func TestRenderMermaidXYChartAutoRanges(t *testing.T) {
+	for _, test := range []struct {
+		source string
+		want   string
+	}{
+		{source: "xychart-beta\ny-axis Score\nline [10, 20, 30]", want: "y: Score 10 → 30"},
+		{source: "xychart-beta\nline [5, 5]", want: "y: 4 → 6"},
+		{source: "xychart-beta\nline [NaN, 2]", want: "y: 1 → 3"},
+	} {
+		lines, ok := renderMermaid(test.source, 36, paletteFor("groknight"))
+		if !ok {
+			t.Fatalf("auto-ranged xychart was rejected: %q", test.source)
+		}
+		if rendered := stripUIANSI(strings.Join(lines, "\n")); !strings.Contains(rendered, test.want) {
+			t.Fatalf("auto-ranged xychart missing %q:\n%s", test.want, rendered)
+		}
+	}
+}
+
+func TestRenderMermaidXYChartRejectsReferenceParseErrors(t *testing.T) {
+	for _, source := range []string{
+		"xychart-beta",
+		"xychart-beta\nline []",
+		"xychart-beta\nx-axis [a, b\nline [1]",
+		"xychart-beta\nx-axis nope --> 10\nline [1]",
+		"xychart-beta\ny-axis 0 --> nope\nline [1]",
+		"xychart-beta\nline 1, 2]",
+		"xychart-beta\nline [1, nope]",
+	} {
+		if _, ok := renderMermaid(source, 40, paletteFor("groknight")); ok {
+			t.Fatalf("invalid xychart was accepted: %q", source)
+		}
+	}
+}
+
+func TestRenderMermaidXYChartBoundsStatements(t *testing.T) {
+	var source strings.Builder
+	source.WriteString("xychart-beta\nline [1]\n")
+	for index := 0; index < maxMermaidStatements-1; index++ {
+		source.WriteString("unknown\n")
+	}
+	if _, ok := renderMermaid(source.String(), 40, paletteFor("groknight")); ok {
+		t.Fatal("xychart exceeding the statement limit was accepted")
+	}
+}
+
+func TestRenderMarkdownRendersClosedMermaidXYChart(t *testing.T) {
+	source := "Before\n```mermaid\nxychart-beta\nx-axis [A, B]\nline [1, 2]\n```\nAfter"
+	rendered := stripUIANSI(strings.Join(renderMarkdown(source, 36), "\n"))
+	for _, expected := range []string{"Before", "◇ mermaid xychart", "x: [A · B]", "line 1: 1 · 2", "After"} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("rendered Mermaid xychart missing %q:\n%s", expected, rendered)
+		}
+	}
+	if strings.Contains(rendered, "xychart-beta") {
+		t.Fatalf("closed Mermaid xychart source was not replaced:\n%s", rendered)
+	}
+}
+
 func TestRenderMermaidRadarMatchesReferenceParsing(t *testing.T) {
 	source := "%% comment\nradar-beta extra\naxis Old\naxis A, , B\nunknown ignored\ncurve Empty {}\ncurve  {NaN, -2}\ncurve Short {1}\ncurve Long {1, 2, 3}"
 	lines, ok := renderMermaid(source, 44, paletteFor("groknight"))

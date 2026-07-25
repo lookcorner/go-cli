@@ -561,9 +561,9 @@ The TUI streams model output as it arrives, renders headings, emphasis, links,
 lists, quotes, pipe tables, and inline or fenced code, strips untrusted terminal
 control characters, and keeps a scrollable transcript. Closed Mermaid fences for
 flowcharts, graphs, state, sequence, class, entity-relationship, pie, timeline, journey,
-Gantt, packet, Git graph, Sankey, quadrant, and radar diagrams are rendered as width-bounded
+Gantt, packet, Git graph, Sankey, quadrant, radar, and XY charts are rendered as width-bounded
 Unicode relationship, percentage, chronology, task, bit-range, commit-history, flow,
-coordinate, or axis/value art.
+coordinate, axis/value, or series art.
 Unknown diagram kinds,
 unparseable input, incomplete streaming fences, and terminals narrower than five
 columns retain the selectable Mermaid source instead of dropping content.
