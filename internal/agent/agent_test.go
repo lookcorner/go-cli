@@ -253,6 +253,76 @@ func (f failingStreamer) StreamResponse(context.Context, api.ResponseRequest, fu
 	return api.StreamResult{}, f.err
 }
 
+type cancelRewindStreamer struct {
+	started chan struct{}
+	once    sync.Once
+}
+
+func (s *cancelRewindStreamer) StreamResponse(ctx context.Context, _ api.ResponseRequest, _ func(string)) (api.StreamResult, error) {
+	s.once.Do(func() { close(s.started) })
+	<-ctx.Done()
+	return api.StreamResult{}, ctx.Err()
+}
+
+func TestCancelRewindRemovesOnlyPristinePrompt(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	logger, err := session.NewLoggerWithID(t.TempDir(), "cancel-rewind")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logger.Close()
+	streamer := &cancelRewindStreamer{started: make(chan struct{})}
+	runner := &Runner{Client: streamer, Tools: registry, Logger: logger, Model: "test", MaxSteps: 1}
+	runner.rewind.enabled.Store(true)
+	runner.rewind.next.Store(4)
+	runner.promptEpoch.Store(9)
+	ctx, cancel := context.WithCancel(context.Background())
+	ctx, requestRewind := WithCancelRewind(ctx)
+	done := make(chan error, 1)
+	go func() {
+		_, runErr := runner.RunTurn(ctx, "rewind me", "")
+		done <- runErr
+	}()
+	<-streamer.started
+	if !requestRewind() {
+		t.Fatal("pristine turn was not rewindable")
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("run err=%v", err)
+	}
+	data, err := os.ReadFile(logger.Path())
+	if err != nil || strings.Contains(string(data), "rewind me") {
+		t.Fatalf("log=%q err=%v", data, err)
+	}
+	if runner.rewind.next.Load() != 4 || runner.promptEpoch.Load() != 9 {
+		t.Fatalf("rewind index=%d prompt epoch=%d", runner.rewind.next.Load(), runner.promptEpoch.Load())
+	}
+}
+
+func TestCancelRewindAndFirstActivityAreMutuallyExclusive(t *testing.T) {
+	ctx, requestRewind := WithCancelRewind(context.Background())
+	if !markCancelRewindActivity(ctx) {
+		t.Fatal("first activity was rejected")
+	}
+	if requestRewind() {
+		t.Fatal("active turn remained rewindable")
+	}
+
+	ctx, requestRewind = WithCancelRewind(context.Background())
+	if !requestRewind() {
+		t.Fatal("pristine turn was not rewindable")
+	}
+	if markCancelRewindActivity(ctx) {
+		t.Fatal("activity was accepted after rewind")
+	}
+}
+
 type interjectionFailingStreamer struct {
 	requests []api.ResponseRequest
 }

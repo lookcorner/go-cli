@@ -26,6 +26,7 @@ auto_compact_threshold_percent = 85
 
 [features]
 # two_pass_compaction = false
+# cancel_rewind = true # Ctrl+C before first activity restores the prompt
 
 [ui]
 # flash clears the highlight after copying; hold keeps it until Esc or scrolling.

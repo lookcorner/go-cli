@@ -117,6 +117,7 @@ type Server struct {
 	Initialized           func()
 	BillingMeta           func() (*bool, *string)
 	SharingEnabled        func() bool
+	CancelRewindEnabled   func() bool
 	SessionDir            string
 	FolderTrustEnabled    bool
 	RememberToolApprovals func() bool
@@ -205,6 +206,8 @@ type session struct {
 	runningPromptID     string
 	startingPromptID    string
 	cancelTrigger       string
+	requestRewind       func() bool
+	rewound             bool
 	activeWakeID        string
 	closed              bool
 	unavailableModel    string
@@ -308,6 +311,9 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.clientHunkMode = parseClientHunkTrackerMode(incoming.Params)
 			authConfig := s.authSnapshot()
 			meta := map[string]any{"availableCommands": availableCommands(nil, false)}
+			if s.CancelRewindEnabled != nil {
+				meta["cancelRewind"] = s.CancelRewindEnabled()
+			}
 			if authConfig.DefaultMethodID != "" {
 				meta["defaultAuthMethodId"] = authConfig.DefaultMethodID
 			}
@@ -2109,8 +2115,14 @@ func (s *Server) handlePromptRequest(parent context.Context, incoming message, c
 	}
 	runCtx, cancel := context.WithCancel(parent)
 	runCtx = hooks.WithPromptID(runCtx, promptID(params.Meta))
+	var requestRewind func() bool
+	if s.CancelRewindEnabled == nil || s.CancelRewindEnabled() {
+		runCtx, requestRewind = agent.WithCancelRewind(runCtx)
+	}
 	runDone := make(chan struct{})
 	current.cancel = cancel
+	current.requestRewind = requestRewind
+	current.rewound = false
 	current.running = true
 	current.runDone = runDone
 	current.runningPromptID = promptID(params.Meta)
@@ -2158,13 +2170,20 @@ func (s *Server) handlePromptRequest(parent context.Context, incoming message, c
 			current.promptIndex = len(points)
 		}
 		current.cancel = nil
+		current.requestRewind = nil
+		rewound := current.rewound
+		current.rewound = false
 		cancelTrigger := current.cancelTrigger
 		current.cancelTrigger = ""
 		current.updated = time.Now().UTC()
 		close(runDone)
 		current.mu.Unlock()
 		s.notifyRosterUpsert(current, "idle")
-		s.finishPrompt(incoming, current, newPromptLifecycle(params), stopReason, result, err, cancelTrigger)
+		if rewound && stopReason == "cancelled" {
+			s.respondRewoundPrompt(incoming, current, newPromptLifecycle(params))
+		} else {
+			s.finishPrompt(incoming, current, newPromptLifecycle(params), stopReason, result, err, cancelTrigger)
+		}
 		s.startNext(current)
 	}()
 	s.broadcastQueue(current)
@@ -3066,7 +3085,8 @@ func promptImageURL(block promptBlock) (string, error) {
 
 func (s *Server) handleCancel(raw json.RawMessage) {
 	var params struct {
-		SessionID string `json:"sessionId"`
+		SessionID string         `json:"sessionId"`
+		Meta      map[string]any `json:"_meta"`
 	}
 	if json.Unmarshal(raw, &params) != nil {
 		return
@@ -3075,6 +3095,8 @@ func (s *Server) handleCancel(raw json.RawMessage) {
 	if current == nil {
 		return
 	}
+	rewindIfPristine, _ := params.Meta["rewindIfPristine"].(bool)
+	cancelTrigger, _ := params.Meta["cancelTrigger"].(string)
 	current.mu.Lock()
 	current.wakeQueue = nil
 	current.interjectionQueue = nil
@@ -3082,8 +3104,14 @@ func (s *Server) handleCancel(raw json.RawMessage) {
 		current.runner.ClearInterjections()
 	}
 	if current.cancel != nil {
-		if current.cancelTrigger == "" {
+		if cancelTrigger != "" {
+			current.cancelTrigger = cancelTrigger
+		} else if current.cancelTrigger == "" {
 			current.cancelTrigger = "ctrl_c"
+		}
+		if rewindIfPristine && (s.CancelRewindEnabled == nil || s.CancelRewindEnabled()) &&
+			current.requestRewind != nil && current.requestRewind() {
+			current.rewound = true
 		}
 		current.cancel()
 	}

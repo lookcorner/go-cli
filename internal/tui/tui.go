@@ -175,6 +175,15 @@ type questionEvent struct {
 type turnDoneEvent struct {
 	result agent.Result
 	err    error
+	serial uint64
+}
+
+type inFlightPrompt struct {
+	text          string
+	images        []api.ContentPart
+	transcriptLen int
+	messageCount  int
+	requestRewind func() bool
 }
 type promptSuggestionEvent struct {
 	text   string
@@ -791,6 +800,10 @@ type model struct {
 	feedbackInput       bool
 	rememberNonce       uint64
 	turnCancel          context.CancelFunc
+	cancelRewindEnabled bool
+	inFlightPrompt      *inFlightPrompt
+	turnSerial          uint64
+	activeTurnSerial    uint64
 	initial             string
 	pendingPrompts      []string
 	pendingPromptImages [][]api.ContentPart
@@ -980,6 +993,7 @@ type UIOptions struct {
 	DefaultModelID       string
 	QuestionTimeout      bool
 	SetQuestionTimeout   func(bool) error
+	CancelRewindEnabled  bool
 	CursorBlink          *bool
 	Theme                string
 	AutoDarkTheme        string
@@ -1180,6 +1194,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		cancelSubagents:      options.CancelSubs,
 		persistCancelSubs:    options.SetCancelSubs,
 		questionTimeout:      options.QuestionTimeout,
+		cancelRewindEnabled:  options.CancelRewindEnabled,
 		persistQuestionTime:  options.SetQuestionTimeout,
 		hyperlinks:           detectTerminalHyperlinks(),
 		themeName:            options.Theme,
@@ -1302,10 +1317,12 @@ func (m *model) Init() tea.Cmd {
 	prompt, _ = tools.ExpandLoopCommand(prompt)
 	m.rememberPrompt(prompt)
 	turnCtx, cancel := context.WithCancel(m.ctx)
+	turnCtx, requestRewind := agent.WithCancelRewind(turnCtx)
 	m.turnCancel = cancel
 	m.running = true
+	m.stashInFlightPrompt(prompt, nil, requestRewind)
 	m.beginTurn(prompt)
-	return tea.Sequence(initial, tea.Batch(wait, runTurn(turnCtx, m.runner, prompt, m.previousID)))
+	return tea.Sequence(initial, tea.Batch(wait, runTurn(turnCtx, m.runner, prompt, m.previousID, m.activeTurnSerial)))
 }
 
 func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
@@ -1355,6 +1372,7 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.refreshScrollSearch()
 	case textEvent:
+		m.inFlightPrompt = nil
 		m.finishToolVerbGroup()
 		m.finishCollapsedEditGroup()
 		m.finishThought()
@@ -1372,6 +1390,7 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshScrollSearch()
 		return m, waitForBridge(m.bridge)
 	case thoughtEvent:
+		m.inFlightPrompt = nil
 		m.finishToolVerbGroup()
 		m.finishCollapsedEditGroup()
 		if m.showThinking {
@@ -1622,10 +1641,12 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = "review implementation plan"
 		return m, waitForBridge(m.bridge)
 	case toolStartedEvent:
+		m.inFlightPrompt = nil
 		m.finishThought()
 		m.status = "tool running: " + msg.call.Name
 		return m, waitForBridge(m.bridge)
 	case toolFinishedEvent:
+		m.inFlightPrompt = nil
 		m.finishTool(msg)
 		return m, waitForBridge(m.bridge)
 	case cancelSubagentsDoneEvent:
@@ -1689,6 +1710,11 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, waitVoice(m.voiceSession)
 	case turnDoneEvent:
+		if msg.serial != 0 && msg.serial != m.activeTurnSerial {
+			return m, nil
+		}
+		m.inFlightPrompt = nil
+		m.activeTurnSerial = 0
 		m.finishToolVerbGroup()
 		m.finishCollapsedEditGroup()
 		m.finishThought()
@@ -2622,7 +2648,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.turnCancel = cancel
 			m.rememberPrompt(command.Display)
 			m.beginTurn(command.Display)
-			return m, runTurnParts(turnCtx, m.runner, command.Display, command.Instruction, m.previousID)
+			return m, runTurnParts(turnCtx, m.runner, command.Display, command.Instruction, m.previousID, 0)
 		}
 		fields := strings.Fields(prompt)
 		sessionPath := ""
@@ -3049,7 +3075,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.turnCancel = cancel
 			m.rememberPrompt(description)
 			m.beginTurn(description)
-			return m, runTurn(turnCtx, m.runner, description, m.previousID)
+			return m, runTurn(turnCtx, m.runner, description, m.previousID, 0)
 		case "/always-approve":
 			if m.bridge == nil {
 				m.status = "always-approve unavailable"
@@ -3190,12 +3216,14 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		prompt, _ = tools.ExpandLoopCommand(prompt)
 		m.rememberPrompt(prompt)
+		turnCtx, requestRewind := agent.WithCancelRewind(turnCtx)
+		m.stashInFlightPrompt(prompt, images, requestRewind)
 		m.beginTurn(prompt)
 		if len(images) > 0 {
 			parts := append([]api.ContentPart{{Type: "input_text", Text: prompt}}, images...)
-			return m, runTurnContent(turnCtx, m.runner, prompt, parts, m.previousID)
+			return m, runTurnContent(turnCtx, m.runner, prompt, parts, m.previousID, m.activeTurnSerial)
 		}
-		return m, runTurn(turnCtx, m.runner, prompt, m.previousID)
+		return m, runTurn(turnCtx, m.runner, prompt, m.previousID, m.activeTurnSerial)
 	}
 	return m, m.editInput(msg)
 }
@@ -5103,6 +5131,19 @@ func (m *model) beginTurn(prompt string) {
 	m.scroll = 0
 }
 
+func (m *model) stashInFlightPrompt(prompt string, images []api.ContentPart, requestRewind func() bool) {
+	m.turnSerial++
+	if m.turnSerial == 0 {
+		m.turnSerial++
+	}
+	m.activeTurnSerial = m.turnSerial
+	m.inFlightPrompt = &inFlightPrompt{
+		text: prompt, images: append([]api.ContentPart(nil), images...),
+		transcriptLen: m.transcript.Len(), messageCount: len(m.transcriptMessages),
+		requestRewind: requestRewind,
+	}
+}
+
 func (m *model) appendThought(text string) {
 	if text == "" {
 		return
@@ -5147,25 +5188,25 @@ func waitForBridge(bridge *Bridge) tea.Cmd {
 	}
 }
 
-func runTurn(ctx context.Context, runner *agent.Runner, prompt, previousID string) tea.Cmd {
+func runTurn(ctx context.Context, runner *agent.Runner, prompt, previousID string, serial uint64) tea.Cmd {
 	return func() tea.Msg {
 		result, err := runner.RunTurn(ctx, prompt, previousID)
-		return turnDoneEvent{result: result, err: err}
+		return turnDoneEvent{result: result, err: err, serial: serial}
 	}
 }
 
-func runTurnParts(ctx context.Context, runner *agent.Runner, display, instruction, previousID string) tea.Cmd {
+func runTurnParts(ctx context.Context, runner *agent.Runner, display, instruction, previousID string, serial uint64) tea.Cmd {
 	return func() tea.Msg {
 		parts := []api.ContentPart{{Type: "input_text", Text: instruction}}
 		result, err := runner.RunTurnParts(ctx, display, parts, previousID)
-		return turnDoneEvent{result: result, err: err}
+		return turnDoneEvent{result: result, err: err, serial: serial}
 	}
 }
 
-func runTurnContent(ctx context.Context, runner *agent.Runner, display string, parts []api.ContentPart, previousID string) tea.Cmd {
+func runTurnContent(ctx context.Context, runner *agent.Runner, display string, parts []api.ContentPart, previousID string, serial uint64) tea.Cmd {
 	return func() tea.Msg {
 		result, err := runner.RunTurnParts(ctx, display, parts, previousID)
-		return turnDoneEvent{result: result, err: err}
+		return turnDoneEvent{result: result, err: err, serial: serial}
 	}
 }
 
@@ -5346,13 +5387,15 @@ func (m *model) startNext() tea.Cmd {
 		images := m.shiftPendingPromptImages()
 		m.running = true
 		turnCtx, cancel := context.WithCancel(m.ctx)
+		turnCtx, requestRewind := agent.WithCancelRewind(turnCtx)
 		m.turnCancel = cancel
+		m.stashInFlightPrompt(prompt, images, requestRewind)
 		m.beginTurn(prompt)
 		if len(images) > 0 {
 			parts := append([]api.ContentPart{{Type: "input_text", Text: prompt}}, images...)
-			return runTurnContent(turnCtx, m.runner, prompt, parts, m.previousID)
+			return runTurnContent(turnCtx, m.runner, prompt, parts, m.previousID, m.activeTurnSerial)
 		}
-		return runTurn(turnCtx, m.runner, prompt, m.previousID)
+		return runTurn(turnCtx, m.runner, prompt, m.previousID, m.activeTurnSerial)
 	}
 	if len(m.scheduled) == 0 {
 		return nil

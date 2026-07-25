@@ -225,6 +225,7 @@ type Runner struct {
 	btwRunning         atomic.Bool
 	interjectionMu     sync.Mutex
 	interjections      []Interjection
+	turnMu             sync.Mutex
 }
 
 func (r *Runner) SessionTurnCount() int {
@@ -594,6 +595,8 @@ func cleanRecapText(value string) string {
 }
 
 func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previousResponseID string, synthetic bool) (final Result, runErr error) {
+	r.turnMu.Lock()
+	defer r.turnMu.Unlock()
 	if r.Client == nil || r.Tools == nil {
 		return Result{}, errors.New("agent client and tools are required")
 	}
@@ -654,6 +657,20 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 	if err := r.logPrompt(prompt, content, synthetic); err != nil {
 		return Result{}, fmt.Errorf("persist user prompt: %w", err)
 	}
+	defer func() {
+		if runErr != nil && errors.Is(runErr, context.Canceled) && cancelRewindRequested(ctx) {
+			if logger, ok := r.Logger.(interface{ RewindLastPrompt() error }); ok {
+				if logger.RewindLastPrompt() == nil {
+					if r.rewind.enabled.Load() {
+						r.rewind.next.Add(-1)
+					}
+					if !synthetic {
+						r.promptEpoch.Add(^uint64(0))
+					}
+				}
+			}
+		}
+	}()
 	if r.rewind.enabled.Load() {
 		r.rewind.next.Add(1)
 	}
@@ -735,6 +752,9 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 		var err error
 		if client, ok := r.Client.(api.EventStreamer); ok {
 			streamed, err = client.StreamResponseEvents(ctx, request, func(event api.StreamEvent) {
+				if !markCancelRewindActivity(ctx) {
+					return
+				}
 				switch event.Kind {
 				case api.StreamText:
 					if r.TextOutput != nil {
@@ -748,6 +768,9 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 			})
 		} else {
 			streamed, err = r.Client.StreamResponse(ctx, request, func(delta string) {
+				if !markCancelRewindActivity(ctx) {
+					return
+				}
 				if r.TextOutput != nil {
 					_, _ = io.WriteString(r.TextOutput, delta)
 				}
@@ -762,6 +785,7 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 			r.log("model_error", map[string]any{"step": step, "error": err.Error()})
 			return final, err
 		}
+		markCancelRewindActivity(ctx)
 		if prefixAdded {
 			r.promptWorkspaceSent = true
 		}
@@ -840,6 +864,7 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 				appendCompactTrace(&compactTrace, fmt.Sprintf("Tool call %s: %s\n", call.Name, call.Arguments))
 			}
 			if r.ToolObserver != nil {
+				markCancelRewindActivity(ctx)
 				r.ToolObserver.ToolStarted(call)
 			}
 			toolCtx := tools.WithToolCall(ctx, call.CallID, call.Name)
@@ -919,6 +944,32 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 	progress.ErrorCount++
 	publish()
 	return final, fmt.Errorf("agent reached maximum of %d model steps", r.MaxSteps)
+}
+
+type cancelRewindKey struct{}
+type cancelRewindState struct {
+	state atomic.Uint32
+}
+
+func WithCancelRewind(ctx context.Context) (context.Context, func() bool) {
+	state := &cancelRewindState{}
+	return context.WithValue(ctx, cancelRewindKey{}, state), func() bool {
+		return state.state.CompareAndSwap(0, 2)
+	}
+}
+
+func cancelRewindRequested(ctx context.Context) bool {
+	state, _ := ctx.Value(cancelRewindKey{}).(*cancelRewindState)
+	return state != nil && state.state.Load() == 2
+}
+
+func markCancelRewindActivity(ctx context.Context) bool {
+	state, _ := ctx.Value(cancelRewindKey{}).(*cancelRewindState)
+	if state == nil {
+		return true
+	}
+	state.state.CompareAndSwap(0, 1)
+	return state.state.Load() != 2
 }
 
 func (r *Runner) StartHooks(ctx context.Context) {

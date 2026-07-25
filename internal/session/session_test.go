@@ -3,6 +3,7 @@ package session
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -12,6 +13,48 @@ import (
 )
 
 var testPNG = []byte{137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0, 144, 119, 83, 222, 0, 0, 0, 12, 73, 68, 65, 84, 8, 215, 99, 248, 207, 192, 0, 0, 3, 1, 1, 0, 24, 221, 141, 176, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130}
+
+func TestLoggerRewindsLastPromptAndFollowingEvents(t *testing.T) {
+	logger, err := NewLoggerWithID(t.TempDir(), "rewind")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append("session_metadata", map[string]any{"cwd": "/work"}); err != nil {
+		t.Fatal(err)
+	}
+	imageURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(testPNG)
+	if err := logger.AppendPrompt("remove me", []Content{{Type: "image", URI: imageURL}}); err != nil {
+		t.Fatal(err)
+	}
+	assets, err := os.ReadDir(filepath.Join(filepath.Dir(logger.Path()), "assets"))
+	if err != nil || len(assets) != 1 {
+		t.Fatalf("assets=%#v err=%v", assets, err)
+	}
+	assetPath := filepath.Join(filepath.Dir(logger.Path()), "assets", assets[0].Name())
+	if err := logger.Append("model_request", map[string]any{"step": 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.RewindLastPrompt(); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.AppendPrompt("keep me", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(logger.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "remove me") || strings.Contains(string(data), "model_request") ||
+		!strings.Contains(string(data), "session_metadata") || !strings.Contains(string(data), "keep me") {
+		t.Fatalf("log=%s", data)
+	}
+	if _, err := os.Stat(assetPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rewound image asset still exists: %v", err)
+	}
+}
 
 func TestResumeUsesLastCompletedResponse(t *testing.T) {
 	dir := t.TempDir()

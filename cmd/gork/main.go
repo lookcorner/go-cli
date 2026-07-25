@@ -1183,6 +1183,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			DefaultModelID:      cfg.DefaultModelID,
 			ForkModel:           cfg.UI.ForkSecondaryModel,
 			QuestionTimeout:     cfg.AskUserQuestion.TimeoutEnabled,
+			CancelRewindEnabled: cfg.CancelRewindEnabled,
 			CursorBlink:         cfg.UI.CursorBlink,
 			CompactMode:         cfg.UI.CompactMode,
 			ShowTimestamps:      cfg.UI.ShowTimestamps,
@@ -3193,6 +3194,8 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 	}
 	server = &acp.Server{SessionDir: opts.sessionDir, FolderTrustEnabled: cfg.FolderTrustEnabled, RememberToolApprovals: func() bool {
 		return runtimeConfigSnapshot().UI.RememberToolApprovals
+	}, CancelRewindEnabled: func() bool {
+		return runtimeConfigSnapshot().CancelRewindEnabled
 	}, BillingMeta: getBillingMeta, SharingEnabled: func() bool {
 		return runtimeConfigSnapshot().SharingEnabled
 	}, Auth: acp.AuthConfig{

@@ -659,6 +659,13 @@ With the default `ask` cancel-subagents policy, Ctrl-C opens a four-choice panel
 when background subagents are still running: stop or continue once, or persist
 the corresponding always policy to `[ui].cancel_subagents_on_turn_cancel`.
 Foreground subagents remain bound to the cancelled turn context.
+Before the server emits any text, thought, or tool activity, Ctrl-C instead
+restores the just-sent text and images to the composer and removes the optimistic
+user block and unfinished session-log tail, so the prompt behaves as unsent.
+The default-on remote `cancel_rewind_enabled` setting can disable this behavior.
+A queued follow-up, committed minimal-mode scrollback, or any server activity
+uses the normal cancellation path; late chunks and completion events from a
+rewound request are ignored, including when the prompt is immediately resent.
 Plan mode changes immediately through the same registry path as Shift-Tab and
 does not write a user preference.
 Automatic dark/light mapping changes apply immediately only while `theme=auto`
@@ -1499,7 +1506,9 @@ non-breaking spaces. Authenticated remote settings may enable
 `path_not_found_hints`; missing paths then include the current working directory,
 a dropped-workspace-directory correction when applicable, or up to three
 similar entries from the parent directory. The remote setting defaults off and
-updates live ACP sessions. `todo_write` maintains the ordered task list across tool calls with
+updates live ACP sessions. The same settings response carries
+`cancel_rewind_enabled`; ACP initialize metadata advertises the resolved
+default-on value as `cancelRewind`. `todo_write` maintains the ordered task list across tool calls with
 replace, merge, partial-status-update, and duplicate-ID behavior matching the
 reference runtime. `update_goal` reports progress and terminal state when
 `--goal` is active and rejects calls outside goal mode. The compatible command

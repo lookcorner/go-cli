@@ -38,7 +38,8 @@ func TestInitializeCallbackRunsOnceAfterResponse(t *testing.T) {
 	var output bytes.Buffer
 	calls := 0
 	server := &Server{
-		Initialized: func() { calls++ },
+		CancelRewindEnabled: func() bool { return true },
+		Initialized:         func() { calls++ },
 		Factory: func(context.Context, SessionConfig, tools.Approver, io.Writer, io.Writer) (*agent.Runner, func(), error) {
 			return nil, nil, nil
 		},
@@ -51,6 +52,9 @@ func TestInitializeCallbackRunsOnceAfterResponse(t *testing.T) {
 		message := decodeACP(t, decoder)
 		if int(message["id"].(float64)) != id {
 			t.Fatalf("message %d=%#v", id, message)
+		}
+		if message["result"].(map[string]any)["_meta"].(map[string]any)["cancelRewind"] != true {
+			t.Fatalf("message %d missing cancel rewind: %#v", id, message)
 		}
 	}
 	if calls != 1 {
@@ -3564,6 +3568,132 @@ func TestSessionWorktreeResumeAndRehydrate(t *testing.T) {
 	_ = clientToAgentW.Close()
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestACPPristineCancelRewindsWithoutPromptComplete(t *testing.T) {
+	root := t.TempDir()
+	sessionDir := t.TempDir()
+	streamer := &blockingStreamer{started: make(chan struct{})}
+	server := &Server{
+		SessionDir: sessionDir, CancelRewindEnabled: func() bool { return true },
+		Factory: func(_ context.Context, cfg SessionConfig, approver tools.Approver, text, status io.Writer) (*agent.Runner, func(), error) {
+			ws, err := workspace.Open(cfg.CWD)
+			if err != nil {
+				return nil, nil, err
+			}
+			registry := tools.NewRegistry(ws, approver)
+			logger, err := sessionlog.NewLoggerWithID(sessionDir, cfg.SessionID)
+			if err != nil {
+				_ = registry.Close()
+				return nil, nil, err
+			}
+			return &agent.Runner{
+				Client: streamer, Tools: registry, Logger: logger, Model: "fixture",
+				TextOutput: text, StatusOutput: status,
+			}, func() { _ = logger.Close(); _ = registry.Close() }, nil
+		},
+	}
+	inputR, inputW := io.Pipe()
+	outputR, outputW := io.Pipe()
+	done := make(chan error, 1)
+	go func() { done <- server.Serve(context.Background(), inputR, outputW) }()
+	encoder := json.NewEncoder(inputW)
+	decoder := json.NewDecoder(outputR)
+	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "session/new", "params": map[string]any{"cwd": root, "mcpServers": []any{}}})
+	created := decodeACP(t, decoder)
+	sessionID := created["result"].(map[string]any)["sessionId"].(string)
+	encodeACP(t, encoder, map[string]any{"jsonrpc": "2.0", "id": 2, "method": "session/prompt", "params": map[string]any{
+		"sessionId": sessionID, "prompt": []any{map[string]any{"type": "text", "text": "rewind me"}},
+	}})
+	titleUpdate := decodeACP(t, decoder)
+	if titleUpdate["method"] != "session/update" {
+		t.Fatalf("unexpected title update: %#v", titleUpdate)
+	}
+	queueUpdate := decodeACP(t, decoder)
+	if queueUpdate["method"] != "x.ai/queue/changed" {
+		t.Fatalf("unexpected queue update: %#v", queueUpdate)
+	}
+	select {
+	case <-streamer.started:
+	default:
+		var roster map[string]any
+		if err := decoder.Decode(&roster); err != nil {
+			t.Fatal(err)
+		}
+		if roster["method"] != "x.ai/sessions/changed" {
+			t.Fatalf("unexpected turn-start update: %#v", roster)
+		}
+	}
+	select {
+	case <-streamer.started:
+	case <-time.After(time.Second):
+		t.Fatal("prompt did not start")
+	}
+	encodeACP(t, encoder, map[string]any{
+		"jsonrpc": "2.0", "method": "session/cancel",
+		"params": map[string]any{
+			"sessionId": sessionID,
+			"_meta":     map[string]any{"rewindIfPristine": true, "cancelTrigger": "ctrl_c"},
+		},
+	})
+	var response map[string]any
+	for {
+		message := decodeACP(t, decoder)
+		if message["method"] == "x.ai/session/prompt_complete" {
+			t.Fatalf("pristine rewind published prompt_complete: %#v", message)
+		}
+		if message["method"] == "x.ai/queue/changed" || message["method"] == "x.ai/sessions/changed" {
+			continue
+		}
+		if message["id"] != nil {
+			response = message
+			break
+		}
+		t.Fatalf("unexpected post-cancel message: %#v", message)
+	}
+	if response["result"].(map[string]any)["stopReason"] != "cancelled" {
+		t.Fatalf("unexpected rewind response: %#v", response)
+	}
+	if _, ok := response["result"].(map[string]any)["_meta"].(map[string]any)["cancelTrigger"]; ok {
+		t.Fatalf("rewound response kept cancelTrigger: %#v", response)
+	}
+	path, err := sessionlog.PathForID(sessionDir, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		data, readErr := os.ReadFile(path)
+		if readErr == nil && !strings.Contains(string(data), "rewind me") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("session log still contains rewound prompt: %q err=%v", data, readErr)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	for {
+		message := decodeACP(t, decoder)
+		if message["method"] == "x.ai/queue/changed" {
+			if len(message["params"].(map[string]any)["entries"].([]any)) == 0 {
+				break
+			}
+			continue
+		}
+		if message["method"] == "x.ai/sessions/changed" {
+			continue
+		}
+		t.Fatalf("unexpected shutdown message: %#v", message)
+	}
+	_ = inputW.Close()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ACP server did not stop")
 	}
 }
 

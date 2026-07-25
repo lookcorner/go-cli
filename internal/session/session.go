@@ -1110,6 +1110,62 @@ func (l *Logger) AppendSyntheticPrompt(text string, content []Content) error {
 	return l.appendPrompt(text, content, true)
 }
 
+func (l *Logger) RewindLastPrompt() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.file == nil {
+		return nil
+	}
+	if err := l.file.Sync(); err != nil {
+		return err
+	}
+	data, err := os.ReadFile(l.path)
+	if err != nil {
+		return err
+	}
+	offset := 0
+	lastPrompt := -1
+	var assets []string
+	for offset < len(data) {
+		end := bytes.IndexByte(data[offset:], '\n')
+		if end < 0 {
+			end = len(data) - offset
+		}
+		line := bytes.TrimSpace(data[offset : offset+end])
+		var event storedEvent
+		if len(line) > 0 && json.Unmarshal(line, &event) == nil && event.Kind == "user_prompt" {
+			lastPrompt, assets = offset, nil
+			var prompt struct {
+				Content []Content `json:"content"`
+			}
+			if json.Unmarshal(event.Data, &prompt) == nil {
+				for _, part := range prompt.Content {
+					clean := filepath.Clean(filepath.FromSlash(part.URI))
+					if part.Type == "image" && !filepath.IsAbs(clean) && filepath.Dir(clean) == "assets" {
+						assets = append(assets, filepath.Join(filepath.Dir(l.path), clean))
+					}
+				}
+			}
+		}
+		offset += end + 1
+	}
+	if lastPrompt < 0 {
+		return nil
+	}
+	if err := l.file.Truncate(int64(lastPrompt)); err != nil {
+		return fmt.Errorf("rewind session prompt: %w", err)
+	}
+	if _, err := l.file.Seek(0, io.SeekEnd); err != nil {
+		return fmt.Errorf("seek rewound session: %w", err)
+	}
+	l.needsNewline = lastPrompt > 0 && data[lastPrompt-1] != '\n'
+	if err := l.file.Sync(); err != nil {
+		return err
+	}
+	removeFiles(assets)
+	return nil
+}
+
 func (l *Logger) appendPrompt(text string, content []Content, synthetic bool) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()

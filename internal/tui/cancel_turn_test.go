@@ -9,8 +9,83 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/lookcorner/go-cli/internal/agent"
+	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/tools"
 )
+
+func TestPristineTurnCancelRewindsPrompt(t *testing.T) {
+	cancelled, requested := false, false
+	m := &model{
+		ctx: context.Background(), running: true, cancelRewindEnabled: true,
+		turnCancel: func() { cancelled = true },
+		inFlightPrompt: &inFlightPrompt{
+			text: "try again", images: []api.ContentPart{{Type: "input_image", ImageURL: "data:image/png;base64,image"}},
+			requestRewind: func() bool { requested = true; return true },
+		},
+	}
+	m.beginTurn("try again")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: 'c', Mod: tea.ModCtrl}))
+	m = updated.(*model)
+	if command != nil || !cancelled || !requested || m.running ||
+		string(m.input) != "try again" || m.cursor != len(m.input) || len(m.promptImages) != 1 ||
+		m.transcript.Len() != 0 || len(m.transcriptMessages) != 0 || m.status != "ready" {
+		t.Fatalf("cancelled=%v requested=%v running=%v pending=%v input=%q images=%d transcript=%q messages=%#v status=%q",
+			cancelled, requested, m.running, false, m.input, len(m.promptImages), m.transcript.String(), m.transcriptMessages, m.status)
+	}
+	updated, command = m.Update(turnDoneEvent{err: context.Canceled, serial: 1})
+	m = updated.(*model)
+	if command != nil || string(m.input) != "try again" || m.transcript.Len() != 0 {
+		t.Fatalf("completion changed rewind: command=%v input=%q transcript=%q", command != nil, m.input, m.transcript.String())
+	}
+}
+
+func TestTurnActivityClosesCancelRewindWindow(t *testing.T) {
+	for _, event := range []tea.Msg{
+		textEvent{text: "hello"},
+		thoughtEvent{text: "thinking"},
+		toolStartedEvent{call: api.ToolCall{Name: "shell"}},
+		toolFinishedEvent{call: api.ToolCall{Name: "shell"}},
+	} {
+		m := &model{
+			ctx: context.Background(), running: true, cancelRewindEnabled: true,
+			inFlightPrompt: &inFlightPrompt{text: "request"}, turnCancel: func() {},
+		}
+		m.beginTurn("request")
+		updated, _ := m.Update(event)
+		m = updated.(*model)
+		if m.inFlightPrompt != nil {
+			t.Fatalf("%T left prompt rewindable", event)
+		}
+	}
+}
+
+func TestTurnCancelDoesNotRewindWhenDisabledOrQueued(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		enabled bool
+		queued  []string
+	}{
+		{name: "disabled"},
+		{name: "queued", enabled: true, queued: []string{"next"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cancelled := false
+			m := &model{
+				ctx: context.Background(), running: true, cancelRewindEnabled: test.enabled,
+				pendingPrompts: test.queued, inFlightPrompt: &inFlightPrompt{text: "request"},
+				turnCancel: func() { cancelled = true },
+			}
+			m.beginTurn("request")
+			updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: 'c', Mod: tea.ModCtrl}))
+			m = updated.(*model)
+			if command != nil || !cancelled || !m.running || string(m.input) != "" ||
+				!strings.Contains(m.transcript.String(), "request") || m.status != "cancelling turn" {
+				t.Fatalf("command=%v cancelled=%v running=%v pending=%v input=%q transcript=%q status=%q",
+					command != nil, cancelled, m.running, false, m.input, m.transcript.String(), m.status)
+			}
+		})
+	}
+}
 
 func TestTurnCancelAsksWhenSubagentsAreRunning(t *testing.T) {
 	cancelled := false

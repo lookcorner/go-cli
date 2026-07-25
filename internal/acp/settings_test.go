@@ -23,7 +23,7 @@ func TestNotifySettingsUpdate(t *testing.T) {
 		Tips: []string{"tip"}, Announcements: []config.RemoteAnnouncement{{ID: stringPointer("notice")}},
 		GateMessage: &value, GateURL: &value, GateLabel: &value, AllowAccess: &enabled,
 		SubscriptionTierDisplay: &value, AutoMode: &config.AutoModeConfig{Enabled: &enabled},
-		PermissionMode: &value, RememberToolApprovals: &enabled, GroupToolVerbs: &enabled, CollapsedEditBlocks: &enabled, PathNotFoundHints: &enabled,
+		PermissionMode: &value, RememberToolApprovals: &enabled, GroupToolVerbs: &enabled, CollapsedEditBlocks: &enabled, PathNotFoundHints: &enabled, CancelRewindEnabled: &enabled,
 		SubscriptionWatchIntervalSeconds: &interval,
 	}
 	var output bytes.Buffer
@@ -32,7 +32,7 @@ func TestNotifySettingsUpdate(t *testing.T) {
 	decoder := json.NewDecoder(&output)
 	notification := decodeACP(t, decoder)
 	params := notification["params"].(map[string]any)
-	if notification["method"] != "x.ai/settings/update" || params["show_resolved_model"] != true || params["sharing_enabled"] != true || params["session_picker_grouped"] != true || params["tips"].([]any)[0] != "tip" || params["announcements"].([]any)[0].(map[string]any)["id"] != "notice" || params["gate_message"] != value || params["gate_url"] != value || params["gate_label"] != value || params["allow_access"] != true || params["subscription_tier_display"] != value || params["auto_permission_mode_enabled"] != true || params["permission_mode"] != value || params["remember_tool_approvals"] != true || params["group_tool_verbs"] != true || params["collapsed_edit_blocks"] != true || params["path_not_found_hints"] != true || params["subscription_watch_interval_secs"] != float64(interval) {
+	if notification["method"] != "x.ai/settings/update" || params["show_resolved_model"] != true || params["sharing_enabled"] != true || params["session_picker_grouped"] != true || params["tips"].([]any)[0] != "tip" || params["announcements"].([]any)[0].(map[string]any)["id"] != "notice" || params["gate_message"] != value || params["gate_url"] != value || params["gate_label"] != value || params["allow_access"] != true || params["subscription_tier_display"] != value || params["auto_permission_mode_enabled"] != true || params["permission_mode"] != value || params["remember_tool_approvals"] != true || params["group_tool_verbs"] != true || params["collapsed_edit_blocks"] != true || params["path_not_found_hints"] != true || params["cancel_rewind_enabled"] != true || params["subscription_watch_interval_secs"] != float64(interval) {
 		t.Fatalf("notification=%#v", notification)
 	}
 	announcement := decodeACP(t, decoder)

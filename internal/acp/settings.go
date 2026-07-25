@@ -25,6 +25,7 @@ type settingsUpdate struct {
 	GroupToolVerbs                   *bool                       `json:"group_tool_verbs"`
 	CollapsedEditBlocks              *bool                       `json:"collapsed_edit_blocks"`
 	PathNotFoundHints                *bool                       `json:"path_not_found_hints"`
+	CancelRewindEnabled              *bool                       `json:"cancel_rewind_enabled"`
 	SubscriptionWatchIntervalSeconds *uint64                     `json:"subscription_watch_interval_secs"`
 }
 
@@ -65,6 +66,7 @@ func (s *Server) NotifySettingsUpdate(remote *config.RemoteSettings) {
 			GroupToolVerbs:                   remote.GroupToolVerbs,
 			CollapsedEditBlocks:              remote.CollapsedEditBlocks,
 			PathNotFoundHints:                remote.PathNotFoundHints,
+			CancelRewindEnabled:              remote.CancelRewindEnabled,
 			SubscriptionWatchIntervalSeconds: remote.SubscriptionWatchIntervalSeconds,
 		},
 	})

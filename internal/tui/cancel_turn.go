@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/lookcorner/go-cli/internal/agent"
+	"github.com/lookcorner/go-cli/internal/api"
 )
 
 var cancelTurnChoices = []struct {
@@ -28,6 +29,9 @@ type cancelTurnState struct {
 type cancelSubagentsDoneEvent struct{ errors []string }
 
 func (m *model) requestTurnCancel() tea.Cmd {
+	if m.rewindPristineTurn() {
+		return nil
+	}
 	running := m.runningSubagentIDs()
 	switch m.cancelSubagents {
 	case "always_stop":
@@ -42,6 +46,36 @@ func (m *model) requestTurnCancel() tea.Cmd {
 		}
 		return m.cancelTurnAndSubagents(nil)
 	}
+}
+
+func (m *model) rewindPristineTurn() bool {
+	stashed := m.inFlightPrompt
+	if !m.cancelRewindEnabled || stashed == nil || len(m.pendingPrompts) > 0 ||
+		m.minimal && m.minimalCommitted > stashed.transcriptLen {
+		return false
+	}
+	if stashed.requestRewind == nil || !stashed.requestRewind() {
+		m.inFlightPrompt = nil
+		return false
+	}
+	if m.turnCancel != nil {
+		m.turnCancel()
+	}
+	text := m.transcript.String()
+	m.transcript.Reset()
+	m.transcript.WriteString(text[:stashed.transcriptLen])
+	m.transcriptMessages = m.transcriptMessages[:stashed.messageCount]
+	m.input = []rune(stashed.text)
+	m.cursor = len(m.input)
+	m.promptImages = append([]api.ContentPart(nil), stashed.images...)
+	m.inFlightPrompt = nil
+	m.activeTurnSerial = 0
+	m.running = false
+	m.turnCancel = nil
+	m.status = "ready"
+	m.scroll = 0
+	m.refreshScrollSearch()
+	return true
 }
 
 func (m *model) runningSubagentIDs() []string {

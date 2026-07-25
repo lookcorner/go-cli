@@ -75,6 +75,26 @@ func TestApplyRemoteSettingsPathNotFoundHints(t *testing.T) {
 	}
 }
 
+func TestApplyRemoteSettingsCancelRewindDefaultsOn(t *testing.T) {
+	cfg := Config{CancelRewindEnabled: true}
+	cfg.ApplyRemoteSettings(&RemoteSettings{CancelRewindEnabled: boolPointer(false)})
+	if cfg.CancelRewindEnabled {
+		t.Fatal("remote false was ignored")
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{})
+	if !cfg.CancelRewindEnabled {
+		t.Fatal("missing remote value did not restore the default")
+	}
+
+	var remote RemoteSettings
+	if err := json.Unmarshal([]byte(`{"cancel_rewind_enabled":true}`), &remote); err != nil {
+		t.Fatal(err)
+	}
+	if remote.CancelRewindEnabled == nil || !*remote.CancelRewindEnabled {
+		t.Fatalf("remote=%#v", remote.CancelRewindEnabled)
+	}
+}
+
 func TestFetchRemoteSettingsIncludesSessionIdentity(t *testing.T) {
 	requireLoopback(t)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

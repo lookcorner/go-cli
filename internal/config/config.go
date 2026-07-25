@@ -89,6 +89,7 @@ type Config struct {
 	AutoWakeEnabled                 bool                       `json:"-"`
 	FeedbackEnabled                 bool                       `json:"-"`
 	PathNotFoundHints               bool                       `json:"-"`
+	CancelRewindEnabled             bool                       `json:"-"`
 	UseLeader                       bool                       `json:"-"`
 	ModelProfiles                   map[string]ModelProfile    `json:"-"`
 	AllowedModels                   []string                   `json:"-"`
@@ -455,6 +456,7 @@ type fileConfig struct {
 		WebFetch          *bool `json:"web_fetch,omitempty" toml:"web_fetch"`
 		AutoWake          *bool `json:"auto_wake,omitempty" toml:"auto_wake"`
 		Feedback          *bool `json:"feedback,omitempty" toml:"feedback"`
+		CancelRewind      *bool `json:"cancel_rewind,omitempty" toml:"cancel_rewind"`
 		TwoPassCompaction *bool `json:"two_pass_compaction,omitempty" toml:"two_pass_compaction"`
 	} `json:"features,omitempty" toml:"features"`
 	AuthProviderCommand string            `json:"auth_provider_command,omitempty" toml:"auth_provider_command"`
@@ -748,6 +750,7 @@ func Load(path string) (Config, error) {
 		AutoWakeEnabled:             true,
 		FeedbackEnabled:             true,
 		AskUserQuestion:             AskUserQuestionConfig{TimeoutEnabled: true, TimeoutSeconds: 30 * 60},
+		CancelRewindEnabled:         true,
 		Toolset:                     ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}},
 		Goal:                        GoalConfig{VerifierCount: 3, ClassifierMaxRuns: 10, ReverifyAfter: 8},
 		UI:                          UIConfig{Theme: "groknight", AutoDarkTheme: "groknight", AutoLightTheme: "grokday", HunkTrackerMode: "agent_only", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, ShowThinkingBlocks: true, ScrollSpeed: 50, ScrollMode: "auto", DefaultSelectedPermission: "always_allow_all_sessions", GroupToolVerbs: true, PromptSuggestions: true, ContextualHints: Hints{Undo: true, PlanMode: true, SendNow: true, SmallScreen: true, WordSelect: true}, VoiceCaptureMode: "hold", VoiceSTTLanguage: "en", PermissionMode: "ask"},
@@ -933,6 +936,9 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.Features.Feedback != nil {
 		cfg.FeedbackEnabled, cfg.feedbackConfigured = *disk.Features.Feedback, true
+	}
+	if disk.Features.CancelRewind != nil {
+		cfg.CancelRewindEnabled = *disk.Features.CancelRewind
 	}
 	if disk.Toolset.WebFetch.AllowedDomains != nil {
 		cfg.WebFetch.AllowedDomains = append([]string(nil), disk.Toolset.WebFetch.AllowedDomains...)
@@ -1993,6 +1999,9 @@ func applyEnv(cfg *Config) {
 	}
 	if value, ok := envBool("GROK_FEEDBACK_ENABLED"); ok {
 		cfg.FeedbackEnabled, cfg.feedbackConfigured, cfg.feedbackEnvConfigured = value, true, true
+	}
+	if value, ok := envBool("GROK_CANCEL_REWIND"); ok {
+		cfg.CancelRewindEnabled = value
 	}
 	if value, ok := envBool("GROK_OFFICIAL_MARKETPLACE_AUTO_REGISTER"); ok {
 		cfg.OfficialMarketplaceAutoRegister = value

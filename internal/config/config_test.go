@@ -275,6 +275,29 @@ pattern = ".env*"
 	}
 }
 
+func TestCancelRewindConfigDefaultsAndOverrides(t *testing.T) {
+	t.Setenv("GROK_CANCEL_REWIND", "")
+	cfg, err := Load(filepath.Join(t.TempDir(), "missing.toml"))
+	if err != nil || !cfg.CancelRewindEnabled {
+		t.Fatalf("default config=%#v err=%v", cfg, err)
+	}
+
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[features]\ncancel_rewind = false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(path)
+	if err != nil || cfg.CancelRewindEnabled {
+		t.Fatalf("local config=%#v err=%v", cfg, err)
+	}
+
+	t.Setenv("GROK_CANCEL_REWIND", "true")
+	cfg, err = Load(path)
+	if err != nil || !cfg.CancelRewindEnabled {
+		t.Fatalf("environment config=%#v err=%v", cfg, err)
+	}
+}
+
 func TestFeedbackConfigPrecedence(t *testing.T) {
 	t.Setenv("GROK_FEEDBACK_ENABLED", "")
 	cfg, err := Load(filepath.Join(t.TempDir(), "missing.toml"))

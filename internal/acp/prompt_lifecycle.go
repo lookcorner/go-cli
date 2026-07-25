@@ -66,6 +66,12 @@ func (s *Server) finishPrompt(incoming message, current *session, lifecycle prom
 	s.respond(incoming.ID, promptResponse(current, lifecycle, stopReason, result, cancelTrigger))
 }
 
+func (s *Server) respondRewoundPrompt(incoming message, current *session, lifecycle promptLifecycle) {
+	// Pristine cancel treats the turn as unsent: answer the prompt RPC, but do
+	// not publish prompt_complete so clients and replay skip a terminal event.
+	s.respond(incoming.ID, promptResponse(current, lifecycle, "cancelled", agent.Result{}, ""))
+}
+
 func promptResponse(current *session, lifecycle promptLifecycle, stopReason string, result agent.Result, cancelTrigger string) map[string]any {
 	meta := map[string]any{
 		"sessionId": lifecycle.sessionID, "requestId": lifecycle.promptID,

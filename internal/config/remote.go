@@ -36,6 +36,7 @@ type RemoteSettings struct {
 	OfficialMarketplaceAutoRegister  *bool                `json:"official_marketplace_auto_register"`
 	WebFetchEnabled                  *bool                `json:"web_fetch_enabled"`
 	PathNotFoundHints                *bool                `json:"path_not_found_hints"`
+	CancelRewindEnabled              *bool                `json:"cancel_rewind_enabled"`
 	AutoWakeEnabled                  *bool                `json:"auto_wake_enabled"`
 	FeedbackEnabled                  *bool                `json:"feedback_enabled"`
 	TwoPassCompactionEnabled         *bool                `json:"two_pass_compaction_enabled"`
@@ -217,6 +218,7 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 		c.OfficialMarketplaceAutoRegister = *remote.OfficialMarketplaceAutoRegister
 	}
 	c.PathNotFoundHints = remote.PathNotFoundHints != nil && *remote.PathNotFoundHints
+	c.CancelRewindEnabled = remote.CancelRewindEnabled == nil || *remote.CancelRewindEnabled
 	value := AutoModeConfig{}
 	if remote.AutoMode != nil {
 		value, _ = normalizeAutoModeConfig(*remote.AutoMode)
