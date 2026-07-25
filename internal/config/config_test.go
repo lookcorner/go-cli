@@ -2176,13 +2176,16 @@ func TestUIConfigPersistenceAndPermissionPrecedence(t *testing.T) {
 	if err := UpdateInvertScroll(path, true); err != nil {
 		t.Fatal(err)
 	}
+	if err := UpdateTextSelection(path, "hold"); err != nil {
+		t.Fatal(err)
+	}
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	remoteMode := "always-approve"
 	cfg.ApplyRemoteSettings(&RemoteSettings{PermissionMode: &remoteMode})
-	if cfg.UI.PermissionMode != "auto" || cfg.UI.VimMode || !cfg.UI.CompactMode || cfg.UI.ShowTimestamps || !cfg.UI.ShowTimeline || cfg.UI.GroupToolVerbs || !cfg.UI.CollapsedEditBlocks || cfg.UI.PromptSuggestions || !cfg.UI.RememberToolApprovals || cfg.AskUserQuestion.TimeoutEnabled || !cfg.UI.InvertScroll || cfg.DefaultModelID != "local" || cfg.Model != "local-api" {
+	if cfg.UI.PermissionMode != "auto" || cfg.UI.VimMode || !cfg.UI.CompactMode || cfg.UI.ShowTimestamps || !cfg.UI.ShowTimeline || cfg.UI.GroupToolVerbs || !cfg.UI.CollapsedEditBlocks || cfg.UI.PromptSuggestions || !cfg.UI.RememberToolApprovals || cfg.AskUserQuestion.TimeoutEnabled || !cfg.UI.InvertScroll || cfg.UI.KeepTextSelection != "hold" || cfg.DefaultModelID != "local" || cfg.Model != "local-api" {
 		t.Fatalf("config=%#v", cfg)
 	}
 	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o640 {
@@ -2219,8 +2222,11 @@ func TestUIConfigPersistenceAndPermissionPrecedence(t *testing.T) {
 	if err := UpdateInvertScroll(emptyPath, true); err != nil {
 		t.Fatal(err)
 	}
+	if err := UpdateTextSelection(emptyPath, "hold"); err != nil {
+		t.Fatal(err)
+	}
 	emptyConfig, err := Load(emptyPath)
-	if err != nil || !emptyConfig.UI.VimMode || !emptyConfig.UI.CompactMode || emptyConfig.UI.ShowTimestamps || !emptyConfig.UI.ShowTimeline || emptyConfig.UI.GroupToolVerbs || !emptyConfig.UI.CollapsedEditBlocks || emptyConfig.UI.PromptSuggestions || !emptyConfig.UI.RememberToolApprovals || emptyConfig.AskUserQuestion.TimeoutEnabled || !emptyConfig.UI.InvertScroll {
+	if err != nil || !emptyConfig.UI.VimMode || !emptyConfig.UI.CompactMode || emptyConfig.UI.ShowTimestamps || !emptyConfig.UI.ShowTimeline || emptyConfig.UI.GroupToolVerbs || !emptyConfig.UI.CollapsedEditBlocks || emptyConfig.UI.PromptSuggestions || !emptyConfig.UI.RememberToolApprovals || emptyConfig.AskUserQuestion.TimeoutEnabled || !emptyConfig.UI.InvertScroll || emptyConfig.UI.KeepTextSelection != "hold" {
 		t.Fatalf("new config=%#v err=%v", emptyConfig, err)
 	}
 
@@ -2261,9 +2267,15 @@ func TestUIConfigPersistenceAndPermissionPrecedence(t *testing.T) {
 	if err := UpdateInvertScroll(jsonPath, true); err != nil {
 		t.Fatal(err)
 	}
+	if err := UpdateTextSelection(jsonPath, "word_select"); err != nil {
+		t.Fatal(err)
+	}
 	jsonConfig, err := Load(jsonPath)
-	if err != nil || jsonConfig.UI.PermissionMode != "always-approve" || jsonConfig.UI.VimMode || jsonConfig.UI.CompactMode || jsonConfig.UI.ShowTimestamps || !jsonConfig.UI.ShowTimeline || jsonConfig.UI.GroupToolVerbs || !jsonConfig.UI.CollapsedEditBlocks || jsonConfig.UI.PromptSuggestions || !jsonConfig.UI.RememberToolApprovals || jsonConfig.AskUserQuestion.TimeoutEnabled || !jsonConfig.UI.InvertScroll {
+	if err != nil || jsonConfig.UI.PermissionMode != "always-approve" || jsonConfig.UI.VimMode || jsonConfig.UI.CompactMode || jsonConfig.UI.ShowTimestamps || !jsonConfig.UI.ShowTimeline || jsonConfig.UI.GroupToolVerbs || !jsonConfig.UI.CollapsedEditBlocks || jsonConfig.UI.PromptSuggestions || !jsonConfig.UI.RememberToolApprovals || jsonConfig.AskUserQuestion.TimeoutEnabled || !jsonConfig.UI.InvertScroll || jsonConfig.UI.KeepTextSelection != "word_select" {
 		t.Fatalf("JSON config=%#v err=%v", jsonConfig, err)
+	}
+	if err := UpdateTextSelection(jsonPath, "invalid"); err == nil {
+		t.Fatal("invalid text selection mode was accepted")
 	}
 
 	defaultPath := filepath.Join(t.TempDir(), "default.toml")

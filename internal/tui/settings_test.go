@@ -57,6 +57,7 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 	var themes []string
 	var screenModes []string
 	var mermaidModes []string
+	var selectionModes []string
 	m := &model{
 		width: 70, height: 18, themeName: "groknight", theme: paletteFor("groknight"), mermaidMode: "auto", settings: &settingsState{},
 		persistTimestamps: func(value bool) error { booleans = append(booleans, "timestamps"); return nil },
@@ -90,6 +91,10 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 			booleans = append(booleans, "invert-scroll")
 			return nil
 		},
+		persistSelection: func(value string) error {
+			selectionModes = append(selectionModes, value)
+			return nil
+		},
 		persistScreenMode: func(value string) error {
 			screenModes = append(screenModes, value)
 			return nil
@@ -119,6 +124,9 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 	if m.mermaidMode != "on" || strings.Join(mermaidModes, ",") != "on" {
 		t.Fatalf("Mermaid=%q persisted=%v", m.mermaidMode, mermaidModes)
 	}
+	if m.selectionMode != selectionHold || strings.Join(selectionModes, ",") != "hold" {
+		t.Fatalf("selection=%q persisted=%v", m.selectionMode.canonical(), selectionModes)
+	}
 }
 
 func TestSettingsPanelRollsBackFailedPersistence(t *testing.T) {
@@ -143,7 +151,7 @@ func TestSettingsPanelRollsBackFailedPersistence(t *testing.T) {
 		t.Fatalf("command=%v minimal=%v err=%q", command != nil, m.defaultMinimal, m.settings.err)
 	}
 
-	m.settings.selected = 12
+	m.settings.selected = 13
 	m.mermaidMode = "auto"
 	m.persistMermaid = func(string) error { return errors.New("read only") }
 	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
@@ -152,7 +160,7 @@ func TestSettingsPanelRollsBackFailedPersistence(t *testing.T) {
 		t.Fatalf("command=%v Mermaid=%q err=%q", command != nil, m.mermaidMode, m.settings.err)
 	}
 
-	m.settings.selected = 13
+	m.settings.selected = 14
 	m.persistTheme = func(string) error { return errors.New("read only") }
 	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)
@@ -210,6 +218,14 @@ func TestSettingsPanelRollsBackFailedPersistence(t *testing.T) {
 	m = updated.(*model)
 	if command != nil || m.invertScroll || m.settings.err != "read only" {
 		t.Fatalf("command=%v invert=%v err=%q", command != nil, m.invertScroll, m.settings.err)
+	}
+
+	m.settings.selected = 12
+	m.persistSelection = func(string) error { return errors.New("read only") }
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.selectionMode != selectionFlash || m.settings.err != "read only" {
+		t.Fatalf("command=%v selection=%q err=%q", command != nil, m.selectionMode.canonical(), m.settings.err)
 	}
 }
 
@@ -491,5 +507,31 @@ func TestSettingsInvertScrollAppliesImmediately(t *testing.T) {
 	m = updated.(*model)
 	if m.scroll != 5 {
 		t.Fatalf("inverted wheel-up scroll=%d", m.scroll)
+	}
+}
+
+func TestSettingsTextSelectionAppliesImmediately(t *testing.T) {
+	var persisted []string
+	m := &model{
+		width: 60, height: 16, selectionMode: selectionFlash,
+		settings:         &settingsState{selected: 12},
+		persistSelection: func(value string) error { persisted = append(persisted, value); return nil },
+	}
+	for _, want := range []textSelectionMode{selectionHold, selectionWord, selectionFlash} {
+		updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+		m = updated.(*model)
+		if command != nil || m.selectionMode != want {
+			t.Fatalf("command=%v selection=%q want=%q", command != nil, m.selectionMode.canonical(), want.canonical())
+		}
+	}
+	if strings.Join(persisted, ",") != "hold,word_select,flash" {
+		t.Fatalf("persisted=%v", persisted)
+	}
+	m.selectionMode = selectionHold
+	m.selection = &textSelection{nonce: 7}
+	updated, _ := m.Update(selectionClearEvent{nonce: 7})
+	m = updated.(*model)
+	if m.selection == nil {
+		t.Fatal("hold mode cleared the active selection")
 	}
 }

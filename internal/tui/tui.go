@@ -661,6 +661,7 @@ type model struct {
 	selection           *textSelection
 	selectionNonce      uint64
 	selectionMode       textSelectionMode
+	persistSelection    func(string) error
 	wordSeparators      string
 	mouseToggle         bool
 	vimMode             bool
@@ -843,6 +844,7 @@ type UIOptions struct {
 	ScreenMode           string
 	SetScreenMode        func(string) error
 	Mode                 string
+	SetSelectionMode     func(string) error
 	WordSeparators       *string
 	MouseReportingToggle bool
 	VimMode              bool
@@ -912,6 +914,21 @@ func (m textSelectionMode) holds() bool {
 
 func (m textSelectionMode) selectsWord() bool {
 	return m == selectionWord
+}
+
+func (m textSelectionMode) canonical() string {
+	switch m {
+	case selectionHold:
+		return "hold"
+	case selectionWord:
+		return "word_select"
+	default:
+		return "flash"
+	}
+}
+
+func (m textSelectionMode) next() textSelectionMode {
+	return (m + 1) % 3
 }
 
 type planReviewState struct {
@@ -996,7 +1013,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		minimal:       options.Minimal,
 		contextWindow: runner.ContextWindow,
 		status:        "ready", initial: strings.TrimSpace(initialPrompt), historyIndex: -1,
-		history: loadPromptHistory(runner, workspace), selectionMode: parseTextSelectionMode(options.Mode),
+		history: loadPromptHistory(runner, workspace), selectionMode: parseTextSelectionMode(options.Mode), persistSelection: options.SetSelectionMode,
 		wordSeparators: defaultWordSeparators, mouseToggle: options.MouseReportingToggle, vimMode: options.VimMode, persistVimMode: options.SetVimMode,
 		compactMode: options.CompactMode, persistCompactMode: options.SetCompactMode,
 		defaultMinimal: options.ScreenMode == "minimal", persistScreenMode: options.SetScreenMode,
@@ -1308,7 +1325,7 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case selectionClearEvent:
-		if m.selection != nil && m.selection.nonce == msg.nonce {
+		if !m.selectionMode.holds() && m.selection != nil && m.selection.nonce == msg.nonce {
 			m.selection = nil
 		}
 		return m, nil

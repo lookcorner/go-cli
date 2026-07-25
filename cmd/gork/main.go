@@ -1156,6 +1156,9 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		err := tui.Run(ctx, runner, tuiBridge, prompt, opts.previousID, resumedTranscript, ws.Root(), cfg.Model, tui.UIOptions{
 			Minimal: minimal, ScreenMode: cfg.UI.ScreenMode,
 			SetScreenMode: func(mode string) error { return config.UpdateScreenMode(opts.configPath, mode) },
+			SetSelectionMode: func(mode string) error {
+				return config.UpdateTextSelection(opts.configPath, mode)
+			},
 			RenderMermaid: cfg.UI.RenderMermaid,
 			SetRenderMermaid: func(mode string) error {
 				return config.UpdateRenderMermaid(opts.configPath, mode)

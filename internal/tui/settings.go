@@ -14,7 +14,7 @@ type settingsState struct {
 	err      string
 }
 
-const settingsCount = 14
+const settingsCount = 15
 
 func (m *model) openSettings() {
 	m.settings = &settingsState{}
@@ -134,6 +134,12 @@ func (m *model) applySetting(selected int) {
 			state.err = persistSetting(m.persistInvertScroll(m.invertScroll), func() { m.invertScroll = previous })
 		}
 	case 12:
+		previous := m.selectionMode
+		m.selectionMode = previous.next()
+		if m.persistSelection != nil {
+			state.err = persistSetting(m.persistSelection(m.selectionMode.canonical()), func() { m.selectionMode = previous })
+		}
+	case 13:
 		previous := m.mermaidMode
 		switch m.mermaidMode {
 		case "auto":
@@ -146,7 +152,7 @@ func (m *model) applySetting(selected int) {
 		if m.persistMermaid != nil {
 			state.err = persistSetting(m.persistMermaid(m.mermaidMode), func() { m.mermaidMode = previous })
 		}
-	case 13:
+	case 14:
 		previousName, previousTheme := m.themeName, m.theme
 		m.themeName = nextTheme(m.themeName)
 		m.theme = paletteForAuto(m.themeName, m.autoDarkTheme, m.autoLightTheme)
@@ -202,6 +208,7 @@ func (m *model) settingsContent() string {
 		settingLine("Ask-question timeout (restart)", m.questionTimeout),
 		settingLine("Multiline input", m.multiline),
 		settingLine("Invert scroll", m.invertScroll),
+		fmt.Sprintf("Text selection: %s", m.selectionMode.canonical()),
 		fmt.Sprintf("Mermaid rendering: %s", mermaidMode),
 		fmt.Sprintf("Theme: %s", m.themeName),
 	}
