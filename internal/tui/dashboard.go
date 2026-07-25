@@ -299,11 +299,15 @@ func (m *model) dashboardContent() string {
 		return ""
 	}
 	if state.shortcuts {
-		return strings.TrimSpace(`# Dashboard Shortcuts
+		navigationKeys := "Up / Down"
+		if m.vimMode {
+			navigationKeys += ", j / k"
+		}
+		return strings.TrimSpace(fmt.Sprintf(`# Dashboard Shortcuts
 
 | Key | Action |
 | --- | --- |
-| Up / Down, j / k | Select a row |
+| %s | Select a row |
 | Enter | Open details or switch session |
 | Enter in a peek | Open full-screen details |
 | PgUp / PgDown, Ctrl+K / Ctrl+J | Scroll full-screen details |
@@ -320,7 +324,7 @@ func (m *model) dashboardContent() string {
 | Y / N | Confirm or cancel deletion |
 | R | Refresh |
 | Ctrl+. or ? | Show this panel |
-| Esc or Q | Close or go back |`)
+| Esc or Q | Close or go back |`, navigationKeys))
 	}
 	if state.attached && state.peekID != "" {
 		return strings.TrimSpace("# " + state.peekTitle + "\n\n" + state.peekContent)
@@ -421,9 +425,9 @@ func (m *model) handleDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			state.shortcuts = false
 			m.scroll = 0
 			m.status = "agent dashboard"
-		case stroke == "up" || text == "k":
+		case stroke == "up" || m.vimMode && text == "k":
 			m.scroll = min(m.scroll+1, m.maxDashboardScroll())
-		case stroke == "down" || text == "j":
+		case stroke == "down" || m.vimMode && text == "j":
 			m.scroll = max(m.scroll-1, 0)
 		case stroke == "pgup" || stroke == "ctrl+k":
 			m.scroll = min(m.scroll+max(m.contentHeight()/2, 1), m.maxDashboardScroll())

@@ -49,7 +49,7 @@ func TestDashboardShortcutsPanel(t *testing.T) {
 		{Code: '.', Text: ".", Mod: tea.ModCtrl},
 	} {
 		m := &model{
-			width: 80, height: 24,
+			width: 80, height: 24, vimMode: true,
 			dashboard: &dashboardState{
 				rows: []dashboardRow{{kind: dashboardStoredSession, id: "stored", title: "Stored"}},
 			},
@@ -85,6 +85,64 @@ func TestDashboardShortcutsPanel(t *testing.T) {
 		m = updated.(*model)
 		if command != nil || m.dashboard.shortcuts || m.status != "agent dashboard" {
 			t.Fatalf("close=%#v command=%v state=%#v status=%q", open, command != nil, m.dashboard, m.status)
+		}
+	}
+}
+
+func TestDashboardShortcutNavigationFollowsVimMode(t *testing.T) {
+	for _, vimMode := range []bool{false, true} {
+		m := &model{
+			width: 80, height: 12, vimMode: vimMode, scroll: 1,
+			dashboard: &dashboardState{shortcuts: true},
+		}
+		content := m.dashboardContent()
+		if strings.Contains(content, "Up / Down, j / k") != vimMode {
+			t.Fatalf("vim=%v content=%q", vimMode, content)
+		}
+
+		updated, command := m.handleDashboardKey(tea.KeyPressMsg(tea.Key{Code: 'k', Text: "k"}))
+		m = updated.(*model)
+		wantScroll := 1
+		if vimMode {
+			wantScroll = 2
+		}
+		if command != nil || m.scroll != wantScroll {
+			t.Fatalf("vim=%v k command=%v scroll=%d want=%d", vimMode, command != nil, m.scroll, wantScroll)
+		}
+
+		m.scroll = 1
+		updated, command = m.handleDashboardKey(tea.KeyPressMsg(tea.Key{Code: 'j', Text: "j"}))
+		m = updated.(*model)
+		wantScroll = 1
+		if vimMode {
+			wantScroll = 0
+		}
+		if command != nil || m.scroll != wantScroll {
+			t.Fatalf("vim=%v j command=%v scroll=%d want=%d", vimMode, command != nil, m.scroll, wantScroll)
+		}
+
+		m.scroll = 1
+		updated, _ = m.handleDashboardKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
+		m = updated.(*model)
+		if m.scroll != 2 {
+			t.Fatalf("vim=%v up scroll=%d", vimMode, m.scroll)
+		}
+		updated, _ = m.handleDashboardKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+		m = updated.(*model)
+		if m.scroll != 1 {
+			t.Fatalf("vim=%v down scroll=%d", vimMode, m.scroll)
+		}
+
+		m.scroll = 0
+		updated, _ = m.handleDashboardKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyPgUp}))
+		m = updated.(*model)
+		if m.scroll == 0 {
+			t.Fatalf("vim=%v pgup scroll=%d", vimMode, m.scroll)
+		}
+		updated, _ = m.handleDashboardKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyPgDown}))
+		m = updated.(*model)
+		if m.scroll != 0 {
+			t.Fatalf("vim=%v pgdown scroll=%d", vimMode, m.scroll)
 		}
 	}
 }

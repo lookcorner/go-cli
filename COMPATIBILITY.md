@@ -188,6 +188,8 @@ or running turns, while an open slash menu retains first priority for paging.
 The dashboard new-agent composer has its own session-local multiline mode via
 `Ctrl+M`, `/multiline`, or `/ml`, with Enter and Shift/Alt-Enter send/newline
 semantics independent from the active session prompt.
+The dashboard shortcut panel uses `j` and `k` for scrolling only when Vim mode
+is enabled; arrow, page, and home/end navigation remain available in both modes.
 Plain TUI exits print a pasteable session resume command after terminal restore,
 including `--minimal` when the active session used native scrollback mode.
 Ctrl-V reads native clipboard text or validated PNG data, with Alt-V as a
