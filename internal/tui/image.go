@@ -114,6 +114,12 @@ func inlineImageBlock(protocol imageProtocol, image tools.ImageAttachment, maxRo
 		sequence = kittyImageSequence(image.Data, cols, rows)
 	case imageProtocolITerm2:
 		sequence = itermImageSequence(image.Data, cols, rows)
+	case imageProtocolSixel:
+		encoded, err := sixelImageSequence(image.Data)
+		if err != nil {
+			return nil
+		}
+		sequence = encoded
 	default:
 		return nil
 	}
