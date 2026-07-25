@@ -1186,6 +1186,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			SetShowTimestamps:   func(enabled bool) error { return config.UpdateShowTimestamps(opts.configPath, enabled) },
 			SetShowTimeline:     func(enabled bool) error { return config.UpdateShowTimeline(opts.configPath, enabled) },
 			SetInvertScroll:     func(enabled bool) error { return config.UpdateInvertScroll(opts.configPath, enabled) },
+			SetScrollMode:       func(mode string) error { return config.UpdateScrollMode(opts.configPath, mode) },
 			SetGroupToolVerbs:   func(enabled bool) error { return config.UpdateGroupToolVerbs(opts.configPath, enabled) },
 			SetCollapsedEdits: func(enabled bool) error {
 				return config.UpdateCollapsedEditBlocks(opts.configPath, enabled)

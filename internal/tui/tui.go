@@ -682,6 +682,7 @@ type model struct {
 	questionTimeout     bool
 	persistQuestionTime func(bool) error
 	persistInvertScroll func(bool) error
+	persistScrollMode   func(string) error
 	themeName           string
 	autoDarkTheme       string
 	autoLightTheme      string
@@ -857,6 +858,7 @@ type UIOptions struct {
 	SetShowTimeline      func(bool) error
 	ScrollSpeed          uint8
 	ScrollMode           string
+	SetScrollMode        func(string) error
 	ScrollLines          *uint8
 	InvertScroll         bool
 	SetInvertScroll      func(bool) error
@@ -1019,7 +1021,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		defaultMinimal: options.ScreenMode == "minimal", persistScreenMode: options.SetScreenMode,
 		showTimestamps: options.ShowTimestamps, persistTimestamps: options.SetShowTimestamps,
 		showTimeline: options.ShowTimeline, persistTimeline: options.SetShowTimeline,
-		scrollLines: mouseWheelScrollLines, scrollSpeed: options.ScrollSpeed, scrollInput: scrollInput{mode: options.ScrollMode},
+		scrollLines: mouseWheelScrollLines, scrollSpeed: options.ScrollSpeed, scrollInput: scrollInput{mode: options.ScrollMode}, persistScrollMode: options.SetScrollMode,
 		invertScroll: options.InvertScroll, persistInvertScroll: options.SetInvertScroll,
 		collapsedEditBlocks: options.CollapsedEditBlocks,
 		persistEditBlocks:   options.SetCollapsedEdits,

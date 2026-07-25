@@ -14,7 +14,7 @@ type settingsState struct {
 	err      string
 }
 
-const settingsCount = 15
+const settingsCount = 16
 
 func (m *model) openSettings() {
 	m.settings = &settingsState{}
@@ -134,12 +134,18 @@ func (m *model) applySetting(selected int) {
 			state.err = persistSetting(m.persistInvertScroll(m.invertScroll), func() { m.invertScroll = previous })
 		}
 	case 12:
+		previous := m.scrollInput
+		m.scrollInput = scrollInput{mode: nextScrollMode(previous.mode), serial: previous.serial + 1}
+		if m.persistScrollMode != nil {
+			state.err = persistSetting(m.persistScrollMode(m.scrollInput.mode), func() { m.scrollInput = previous })
+		}
+	case 13:
 		previous := m.selectionMode
 		m.selectionMode = previous.next()
 		if m.persistSelection != nil {
 			state.err = persistSetting(m.persistSelection(m.selectionMode.canonical()), func() { m.selectionMode = previous })
 		}
-	case 13:
+	case 14:
 		previous := m.mermaidMode
 		switch m.mermaidMode {
 		case "auto":
@@ -152,7 +158,7 @@ func (m *model) applySetting(selected int) {
 		if m.persistMermaid != nil {
 			state.err = persistSetting(m.persistMermaid(m.mermaidMode), func() { m.mermaidMode = previous })
 		}
-	case 14:
+	case 15:
 		previousName, previousTheme := m.themeName, m.theme
 		m.themeName = nextTheme(m.themeName)
 		m.theme = paletteForAuto(m.themeName, m.autoDarkTheme, m.autoLightTheme)
@@ -187,6 +193,17 @@ func nextTheme(current string) string {
 	return names[0]
 }
 
+func nextScrollMode(current string) string {
+	switch current {
+	case "auto":
+		return "wheel"
+	case "wheel":
+		return "trackpad"
+	default:
+		return "auto"
+	}
+}
+
 func (m *model) settingsContent() string {
 	if m.settings == nil {
 		return ""
@@ -208,6 +225,7 @@ func (m *model) settingsContent() string {
 		settingLine("Ask-question timeout (restart)", m.questionTimeout),
 		settingLine("Multiline input", m.multiline),
 		settingLine("Invert scroll", m.invertScroll),
+		fmt.Sprintf("Scroll input: %s", scrollModeName(m.scrollInput.mode)),
 		fmt.Sprintf("Text selection: %s", m.selectionMode.canonical()),
 		fmt.Sprintf("Mermaid rendering: %s", mermaidMode),
 		fmt.Sprintf("Theme: %s", m.themeName),
@@ -217,6 +235,13 @@ func (m *model) settingsContent() string {
 		content += "\n\n**Error:** " + strings.ReplaceAll(sanitizeTerminalText(m.settings.err), "\n", " ")
 	}
 	return content
+}
+
+func scrollModeName(mode string) string {
+	if mode == "wheel" || mode == "trackpad" {
+		return mode
+	}
+	return "auto"
 }
 
 func (m *model) refreshToolDisplay(previousCollapsedEditBlocks, previousGroupToolVerbs bool) {
