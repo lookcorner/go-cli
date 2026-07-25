@@ -2017,8 +2017,8 @@ func (s *Server) handlePromptRequest(parent context.Context, incoming message, c
 		s.markRunningPrompt(current, promptID(params.Meta))
 		return
 	}
-	if terminaldiag.IsCommand(prompt) {
-		s.handleLocalMessagePrompt(incoming, current, newPromptLifecycle(params), terminaldiag.Report())
+	if message, ok := terminaldiag.HandleCommand(prompt); ok {
+		s.handleLocalMessagePrompt(incoming, current, newPromptLifecycle(params), message)
 		s.markRunningPrompt(current, promptID(params.Meta))
 		return
 	}

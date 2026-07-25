@@ -402,6 +402,24 @@ func TestTerminalSetupSlashCommandCompletesLocally(t *testing.T) {
 			t.Fatalf("prompt=%q text=%v completed=%v requests=%d promptIndex=%d messages=%#v", prompt, textFound, completed, len(streamer.requests), current.promptIndex, messages)
 		}
 	}
+
+	output.Reset()
+	params, _ := json.Marshal(map[string]any{"sessionId": current.id, "prompt": []any{map[string]any{"type": "text", "text": "/doctor fix"}}})
+	server.handlePrompt(context.Background(), message{ID: json.RawMessage("99"), Method: "session/prompt", Params: params})
+	messages := decodeACPOutput(t, output.Bytes())
+	listFound, completed := false, false
+	for _, item := range messages {
+		result, ok := item["result"].(map[string]any)
+		completed = completed || ok && result["stopReason"] == "end_turn"
+		params, _ := item["params"].(map[string]any)
+		update, _ := params["update"].(map[string]any)
+		content, _ := update["content"].(map[string]any)
+		text, _ := content["text"].(string)
+		listFound = listFound || strings.Contains(text, "ssh-wrap")
+	}
+	if !listFound || !completed || len(streamer.requests) != 0 {
+		t.Fatalf("fix list text=%v completed=%v requests=%d messages=%#v", listFound, completed, len(streamer.requests), messages)
+	}
 }
 
 func TestUsageSlashCommandCompletesLocally(t *testing.T) {

@@ -4611,8 +4611,8 @@ func interactiveLoop(
 				prompt = ""
 				continue
 			}
-			if terminaldiag.IsCommand(prompt) {
-				fmt.Fprintln(stderr, "[gork]", terminaldiag.Report())
+			if message, ok := terminaldiag.HandleCommand(prompt); ok {
+				fmt.Fprintln(stderr, "[gork]", message)
 				prompt = ""
 				continue
 			}
@@ -4715,7 +4715,7 @@ func interactiveLoop(
 						imagineCommands += ", /imagine-video <description>"
 					}
 				}
-				fmt.Fprintln(stderr, "Commands: ! <command>"+announcementCommand+", /compact, /context, /flush, /dream, /remember [text], /memory [on|off]"+mcpCommand+", /new (/clear)"+imagineCommands+", /loop, /privacy [opt-out], /release-notes (/changelog), /session-info (/status, /info)"+shareCommand+", /doctor (/terminal-setup), /usage [show|manage] (/cost), /help, /exit. Every other line is sent as a prompt.")
+				fmt.Fprintln(stderr, "Commands: ! <command>"+announcementCommand+", /compact, /context, /flush, /dream, /remember [text], /memory [on|off]"+mcpCommand+", /new (/clear)"+imagineCommands+", /loop, /privacy [opt-out], /release-notes (/changelog), /session-info (/status, /info)"+shareCommand+", /doctor [fix [FIX]] (/terminal-setup), /usage [show|manage] (/cost), /help, /exit. Every other line is sent as a prompt.")
 				prompt = ""
 				continue
 			case "/mcps":

@@ -79,7 +79,7 @@ var slashCommandCatalog = []slashCommandItem{
 	{name: "mcps", description: "Manage MCP servers"},
 	{name: "btw", placeholder: "<question>", description: "Ask a side question"},
 	{name: "recap", description: "Summarize the current session"},
-	{name: "doctor", description: "Inspect terminal capabilities"},
+	{name: "doctor", description: "Inspect terminal setup; /doctor fix applies automatic fixes"},
 	{name: "terminal-setup", description: "Alias for /doctor"},
 	{name: "loop", placeholder: "<interval> <prompt>", description: "Schedule a recurring prompt"},
 	{name: "imagine", placeholder: "<description>", description: "Generate an image"},

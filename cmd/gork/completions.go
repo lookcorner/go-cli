@@ -49,8 +49,8 @@ var completionRoot = completionSpec{
 				},
 			},
 		},
-		"export":      {flags: []string{"--clipboard", "-c"}},
-		"inspect":     {flags: words("--config --json")},
+		"export":  {flags: []string{"--clipboard", "-c"}},
+		"inspect": {flags: words("--config --json")},
 		"leader": {children: map[string]completionSpec{
 			"info": {flags: words("--json --pid")}, "kill": {}, "list": {flags: words("--json")},
 		}},

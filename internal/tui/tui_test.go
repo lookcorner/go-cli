@@ -2838,6 +2838,16 @@ func TestTerminalSetupCommandsDoNotRunModelTurn(t *testing.T) {
 		})
 	}
 
+	t.Run("fix list", func(t *testing.T) {
+		m := &model{ctx: context.Background(), runner: &agent.Runner{}}
+		m.setInput("/doctor fix")
+		updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+		m = updated.(*model)
+		if command != nil || m.running || !strings.Contains(m.transcript.String(), "ssh-wrap") {
+			t.Fatalf("command=%v running=%v transcript=%q", command != nil, m.running, m.transcript.String())
+		}
+	})
+
 	m := &model{ctx: context.Background(), runner: &agent.Runner{}}
 	m.setInput("/help")
 	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
