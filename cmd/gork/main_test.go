@@ -400,6 +400,7 @@ func TestSinglePromptConflictsFailBeforeConfiguration(t *testing.T) {
 }
 
 func TestReferenceRunFlagsReachResponsesRequest(t *testing.T) {
+	requireLoopback(t)
 	home, root, sessionDir := t.TempDir(), t.TempDir(), t.TempDir()
 	t.Setenv("GROK_HOME", home)
 	t.Setenv("HOME", home)
@@ -448,6 +449,7 @@ func TestReferenceRunFlagsReachResponsesRequest(t *testing.T) {
 }
 
 func TestHeadlessJSONPromptAndSchemaReachResponsesRequest(t *testing.T) {
+	requireLoopback(t)
 	home, root, sessionDir := t.TempDir(), t.TempDir(), t.TempDir()
 	t.Setenv("GROK_HOME", home)
 	t.Setenv("HOME", home)
@@ -514,6 +516,7 @@ func TestHeadlessJSONPromptAndSchemaReachResponsesRequest(t *testing.T) {
 }
 
 func TestRunCapabilityFlagsRemoveOnlyRequestedTools(t *testing.T) {
+	requireLoopback(t)
 	home, root, sessionDir := t.TempDir(), t.TempDir(), t.TempDir()
 	t.Setenv("GROK_HOME", home)
 	t.Setenv("HOME", home)
@@ -575,6 +578,7 @@ func TestRunCapabilityFlagsRemoveOnlyRequestedTools(t *testing.T) {
 }
 
 func TestSessionStartupFlagsCreateResumeAndFork(t *testing.T) {
+	requireLoopback(t)
 	home, root, sessionDir := t.TempDir(), t.TempDir(), t.TempDir()
 	t.Setenv("GROK_HOME", home)
 	t.Setenv("HOME", home)
@@ -657,6 +661,7 @@ func TestSessionStartupFlagsCreateResumeAndFork(t *testing.T) {
 }
 
 func TestStartupWorktreeCreatesIsolatedSession(t *testing.T) {
+	requireLoopback(t)
 	home, root, sessionDir := t.TempDir(), newGitRepo(t), t.TempDir()
 	t.Setenv("GROK_HOME", home)
 	t.Setenv("HOME", home)
@@ -704,6 +709,7 @@ func TestStartupWorktreeCreatesIsolatedSession(t *testing.T) {
 }
 
 func TestStartupWorktreeResumeContinuesChildResponseChain(t *testing.T) {
+	requireLoopback(t)
 	home, root, sessionDir := t.TempDir(), newGitRepo(t), t.TempDir()
 	t.Setenv("GROK_HOME", home)
 	t.Setenv("HOME", home)
@@ -1743,6 +1749,7 @@ func TestAppendGoalReverifyReminder(t *testing.T) {
 }
 
 func TestSessionMCPRuntimeMergesAndRestoresConfiguration(t *testing.T) {
+	requireLoopback(t)
 	disabled := false
 	runtime := &sessionMCPRuntime{base: config.Config{MCPServers: map[string]config.MCPServerConfig{
 		"base":     {Command: "base-server"},
@@ -1998,6 +2005,7 @@ func TestModelCacheIdentityFollowsAuthenticationRoute(t *testing.T) {
 }
 
 func TestFetchACPModelCacheUsesSelectedCredentials(t *testing.T) {
+	requireLoopback(t)
 	tests := []struct {
 		name       string
 		authMethod string
@@ -2127,7 +2135,7 @@ func TestDiscoverSkillsLoadsConfiguredPlugin(t *testing.T) {
 	if names := strings.Join(catalog.Names(), "|"); names != "team-tools:deploy" {
 		t.Fatalf("plugin skill names = %q", names)
 	}
-	if workspaceCfg.MCPServers["plugin-mcp"].Command != pluginRoot+"/server" {
+	if workspaceCfg.MCPServers["plugin-mcp"].Command != filepath.Join(pluginRoot, "server") {
 		t.Fatalf("plugin MCP config = %#v", workspaceCfg.MCPServers)
 	}
 	if workspaceCfg.LSPServers["plugin-lsp"].Command != "gopls" || strings.Join(workspaceCfg.LSPServers["plugin-lsp"].Extensions, "|") != ".go" {
@@ -2639,6 +2647,7 @@ func TestBrowserCommandUsesPlatformLaunchersWithoutShell(t *testing.T) {
 }
 
 func TestRunLoginDeviceFlow(t *testing.T) {
+	requireLoopback(t)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		switch request.URL.Path {
@@ -2676,6 +2685,7 @@ func TestRunLoginDeviceFlow(t *testing.T) {
 }
 
 func TestRunSetupInstallsManagedConfiguration(t *testing.T) {
+	requireLoopback(t)
 	home := t.TempDir()
 	t.Setenv("GROK_HOME", home)
 	t.Setenv("GROK_DEPLOYMENT_KEY", "deployment-secret")
@@ -2719,6 +2729,7 @@ func TestRunSetupRequiresManagedPrincipal(t *testing.T) {
 }
 
 func TestRunSetupJSONDoesNotWritePolicy(t *testing.T) {
+	requireLoopback(t)
 	home := t.TempDir()
 	t.Setenv("GROK_HOME", home)
 	t.Setenv("GROK_DEPLOYMENT_KEY", "deployment-secret")
@@ -2755,6 +2766,7 @@ func TestRunSetupJSONDoesNotWritePolicy(t *testing.T) {
 }
 
 func TestSessionStartRepairsAndReloadsMissingManagedPolicy(t *testing.T) {
+	requireLoopback(t)
 	home := t.TempDir()
 	t.Setenv("GROK_HOME", home)
 	t.Setenv("GROK_DEPLOYMENT_KEY", "deployment-secret")

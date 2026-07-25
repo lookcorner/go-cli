@@ -244,6 +244,9 @@ func expandMCPServer(server MCPServerConfig, pluginRoot, pluginData string) MCPS
 		return expandEnv(value)
 	}
 	server.Command = expand(server.Command)
+	if server.Command != "" && strings.ContainsAny(server.Command, `/\`) {
+		server.Command = filepath.Clean(server.Command)
+	}
 	server.URL = expand(server.URL)
 	server.Args = append([]string(nil), server.Args...)
 	for index := range server.Args {
