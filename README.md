@@ -1114,8 +1114,12 @@ history. ACP initialization advertises `_meta["x.ai/mcp/sdk"]`; clients may
 also supply in-process SDK MCP servers through `_meta["x.ai/mcp/servers"]`.
 Their handshake, discovery, adapters, disabled-tool policy, and live catalog
 behavior reuse the normal MCP runtime over reverse `x.ai/mcp/sdk_call`
-requests. This transport is half-duplex: server notifications and
-server-initiated sampling, roots, and elicitation requests are not delivered.
+requests. SDK servers may push notifications and server-initiated requests
+back through `x.ai/mcp/sdk_message`: notifications such as
+`notifications/tools/list_changed` are dispatched to the normal MCP handlers,
+`sampling/createMessage` runs through the same permission-gated sampling path
+as stdio servers, and other server-initiated requests receive a protocol-level
+unsupported-method response.
 Default
 prompt approvals use ACP's bidirectional `session/request_permission`, linked
 to the actual tool call, so protocol stdin is never consumed by a CLI prompt.

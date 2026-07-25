@@ -3832,6 +3832,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			MCPServers: mcpRuntime.Configs, MCPServerCatalog: mcpRuntime.Catalog,
 			ToggleMCPServer: toggleMCPServer, ToggleMCPTool: toggleMCPTool,
 			UpsertMCPServer: upsertMCPServer, DeleteMCPServer: deleteMCPServer,
+			HandleMCPSDKMessage: mcpRuntime.HandleSDKMessage,
 			UpdateSkills:      updateSkills,
 			UpdatePlugins:     updatePlugins,
 			MarketplaceList:   func() ([]marketplace.ScanResult, error) { return marketplace.List(opts.configPath, ws.Root()) },
@@ -5146,6 +5147,8 @@ func startACPMCPServers(
 	ctx context.Context,
 	servers []mcp.ServerConfig,
 	reverse acp.MCPReverseCall,
+	cfg config.Config,
+	tokenProvider api.TokenProvider,
 	disabledTools map[string][]string,
 	registry *tools.Registry,
 	approver tools.Approver,
@@ -5156,9 +5159,10 @@ func startACPMCPServers(
 	clients := make([]*mcp.Client, 0, len(servers))
 	for _, server := range servers {
 		server := server
+		sampling := newMCPSamplingHandler(cfg, approver, tokenProvider, server.Name)
 		client, initialized, err := mcp.StartACP(ctx, server.Name, func(ctx context.Context, payload json.RawMessage) (json.RawMessage, error) {
 			return reverse(ctx, server.ServerID, payload)
-		})
+		}, sampling)
 		if err != nil {
 			for _, client := range clients {
 				_ = client.Close()
@@ -5219,6 +5223,7 @@ type sessionMCPRuntime struct {
 	clients       []*mcp.Client
 	clientConfigs []mcp.ServerConfig
 	sdkServers    []mcp.ServerConfig
+	sdkByID       map[string]*mcp.Client
 	reverse       acp.MCPReverseCall
 	effective     []mcp.ServerConfig
 	catalog       []mcp.ServerConfig
@@ -5379,7 +5384,7 @@ func (r *sessionMCPRuntime) startLocked(requested []mcp.ServerConfig, progress f
 		return nil, nil, nil, errors.New("ACP MCP reverse call is unavailable")
 	}
 	offset := len(clients)
-	acpClients, err := startACPMCPServers(r.ctx, sdk, r.reverse, cfg.DisabledMCPTools, r.registry, r.approver, r.stderr, r.toolsChanged, func(connected int) {
+	acpClients, err := startACPMCPServers(r.ctx, sdk, r.reverse, cfg, r.tokenProvider, cfg.DisabledMCPTools, r.registry, r.approver, r.stderr, r.toolsChanged, func(connected int) {
 		if progress != nil {
 			progress(total, offset+connected)
 		}
@@ -5393,7 +5398,23 @@ func (r *sessionMCPRuntime) startLocked(requested []mcp.ServerConfig, progress f
 		}
 		return nil, nil, nil, err
 	}
+	r.sdkByID = make(map[string]*mcp.Client, len(sdk))
+	for index, server := range sdk {
+		r.sdkByID[server.ServerID] = acpClients[index]
+	}
 	return append(clients, acpClients...), effective, catalog, nil
+}
+
+// HandleSDKMessage routes one message originated by an in-process SDK MCP
+// server to its MCP client, returning the response message for requests.
+func (r *sessionMCPRuntime) HandleSDKMessage(_ context.Context, serverID string, payload json.RawMessage) (json.RawMessage, error) {
+	r.mu.Lock()
+	client := r.sdkByID[serverID]
+	r.mu.Unlock()
+	if client == nil {
+		return nil, fmt.Errorf("unknown ACP MCP server %q", serverID)
+	}
+	return client.HandleReverseMessage(payload), nil
 }
 
 func (r *sessionMCPRuntime) restartLocked(requested []mcp.ServerConfig, progress func(total, connected int)) error {
@@ -5416,6 +5437,7 @@ func (r *sessionMCPRuntime) stopLocked() {
 		_ = client.Close()
 	}
 	r.clients = nil
+	r.sdkByID = nil
 	r.effective = nil
 	r.catalog = nil
 }

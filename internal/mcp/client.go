@@ -257,17 +257,17 @@ func Start(ctx context.Context, cfg ProcessConfig) (*Client, InitializeResult, e
 }
 
 // StartACP connects to an in-process SDK MCP server over the ACP reverse channel.
-func StartACP(ctx context.Context, name string, reverse ReverseCall) (*Client, InitializeResult, error) {
+func StartACP(ctx context.Context, name string, reverse ReverseCall, sampling SamplingHandler) (*Client, InitializeResult, error) {
 	if strings.TrimSpace(name) == "" || reverse == nil {
 		return nil, InitializeResult{}, errors.New("ACP MCP server name and reverse call are required")
 	}
-	client := &Client{name: name, reverse: reverse, pending: make(map[string]chan response), done: make(chan struct{})}
+	client := &Client{name: name, reverse: reverse, pending: make(map[string]chan response), done: make(chan struct{}), sampling: sampling}
 	initCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	var initialized InitializeResult
 	if err := client.call(initCtx, "initialize", map[string]any{
 		"protocolVersion": protocolVersion,
-		"capabilities":    map[string]any{},
+		"capabilities":    clientCapabilities(sampling),
 		"clientInfo": map[string]any{
 			"name": "gork-go", "title": "Gork Go", "version": "0.1.0",
 		},
@@ -340,6 +340,29 @@ func (c *Client) handleNotification(method string, params json.RawMessage) {
 			go resourceHandler(update)
 		}
 	}
+}
+
+// HandleReverseMessage processes one MCP message originated by an in-process
+// SDK server: notifications are dispatched to their handlers and return nil,
+// while server-initiated requests return the JSON-RPC response message to
+// deliver back over the reverse channel.
+func (c *Client) HandleReverseMessage(payload json.RawMessage) json.RawMessage {
+	var message rpcMessage
+	if err := json.Unmarshal(payload, &message); err != nil {
+		return nil
+	}
+	if len(message.ID) > 0 && message.Method != "" {
+		if message.Method == "sampling/createMessage" && c.sampling != nil {
+			response, _ := json.Marshal(c.samplingResponse(message))
+			return response
+		}
+		response, _ := json.Marshal(c.unsupportedResponse(message))
+		return response
+	}
+	if len(message.ID) == 0 && message.Method != "" {
+		c.handleNotification(message.Method, message.Params)
+	}
+	return nil
 }
 
 func (c *Client) ListResources(ctx context.Context) ([]ResourceInfo, error) {
@@ -601,29 +624,33 @@ func (c *Client) dispatch(message rpcMessage) {
 }
 
 func (c *Client) handleSampling(request rpcMessage) {
+	if response := c.samplingResponse(request); response != nil {
+		_ = c.sendJSON(response)
+	}
+}
+
+func (c *Client) samplingResponse(request rpcMessage) map[string]any {
 	var id any
 	if json.Unmarshal(request.ID, &id) != nil {
-		return
+		return nil
 	}
 	var params SamplingRequest
 	if err := json.Unmarshal(request.Params, &params); err != nil || params.MaxTokens < 1 || len(params.Messages) == 0 {
-		_ = c.sendJSON(map[string]any{
+		return map[string]any{
 			"jsonrpc": "2.0", "id": id,
 			"error": map[string]any{"code": -32602, "message": "invalid sampling request"},
-		})
-		return
+		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	result, err := c.sampling(ctx, params)
 	if err != nil {
-		_ = c.sendJSON(map[string]any{
+		return map[string]any{
 			"jsonrpc": "2.0", "id": id,
 			"error": map[string]any{"code": -32000, "message": err.Error()},
-		})
-		return
+		}
 	}
-	_ = c.sendJSON(map[string]any{"jsonrpc": "2.0", "id": id, "result": result})
+	return map[string]any{"jsonrpc": "2.0", "id": id, "result": result}
 }
 
 func clientCapabilities(sampling SamplingHandler) map[string]any {
@@ -635,14 +662,20 @@ func clientCapabilities(sampling SamplingHandler) map[string]any {
 }
 
 func (c *Client) respondUnsupported(request rpcMessage) {
+	if response := c.unsupportedResponse(request); response != nil {
+		_ = c.sendJSON(response)
+	}
+}
+
+func (c *Client) unsupportedResponse(request rpcMessage) map[string]any {
 	var id any
 	if err := json.Unmarshal(request.ID, &id); err != nil {
-		return
+		return nil
 	}
-	_ = c.sendJSON(map[string]any{
+	return map[string]any{
 		"jsonrpc": "2.0", "id": id,
 		"error": map[string]any{"code": -32601, "message": "client method not supported"},
-	})
+	}
 }
 
 func (c *Client) failPending(err error) {

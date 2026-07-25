@@ -3893,3 +3893,50 @@ func assertPromptComplete(t *testing.T, value map[string]any, sessionID, promptI
 		t.Fatalf("unexpected prompt completion: %#v", value)
 	}
 }
+
+func TestACPMCPSDKMessageDelivery(t *testing.T) {
+	var receivedID, receivedPayload string
+	runner := &agent.Runner{
+		HandleMCPSDKMessage: func(_ context.Context, serverID string, payload json.RawMessage) (json.RawMessage, error) {
+			receivedID, receivedPayload = serverID, string(payload)
+			return json.RawMessage(`{"jsonrpc":"2.0","id":7,"result":{"roots":[]}}`), nil
+		},
+	}
+	var output bytes.Buffer
+	server := &Server{output: &output, sessions: map[string]*session{"sdk": {id: "sdk", runner: runner}}}
+
+	server.handleMCP(context.Background(), message{Method: "x.ai/mcp/sdk_message", Params: json.RawMessage(`{"sessionId":"sdk","serverId":"srv-0","message":{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}}`)})
+	if receivedID != "srv-0" || !strings.Contains(receivedPayload, "list_changed") {
+		t.Fatalf("notification delivery: id=%q payload=%q", receivedID, receivedPayload)
+	}
+	if output.Len() != 0 {
+		t.Fatalf("notification produced a response: %s", output.String())
+	}
+
+	server.handleMCP(context.Background(), message{ID: json.RawMessage("5"), Method: "x.ai/mcp/sdk_message", Params: json.RawMessage(`{"sessionId":"sdk","serverId":"srv-0","message":{"jsonrpc":"2.0","id":7,"method":"roots/list"}}`)})
+	var response struct {
+		ID     json.RawMessage `json:"id"`
+		Result struct {
+			Result struct {
+				Message json.RawMessage `json:"message"`
+			} `json:"result"`
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if string(response.ID) != "5" || !strings.Contains(string(response.Result.Result.Message), `"roots":[]`) {
+		t.Fatalf("response=%+v", response)
+	}
+
+	output.Reset()
+	server.handleMCP(context.Background(), message{ID: json.RawMessage("6"), Method: "x.ai/mcp/sdk_message", Params: json.RawMessage(`{"sessionId":"missing","serverId":"srv-0","message":{}}`)})
+	var failure struct {
+		Error struct {
+			Code int `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(&output).Decode(&failure); err != nil || failure.Error.Code != -32602 {
+		t.Fatalf("unknown session failure=%+v err=%v", failure, err)
+	}
+}

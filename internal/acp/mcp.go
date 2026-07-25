@@ -186,6 +186,8 @@ func (s *Server) handleMCP(ctx context.Context, incoming message) {
 		ToolName        string            `json:"tool_name"`
 		ToolNameCamel   string            `json:"toolName"`
 		ServerURL       string            `json:"serverUrl"`
+		ServerID        string            `json:"serverId"`
+		Message         json.RawMessage   `json:"message"`
 		Tool            string            `json:"tool"`
 		URI             string            `json:"uri"`
 		Arguments       json.RawMessage   `json:"arguments"`
@@ -260,6 +262,10 @@ func (s *Server) handleMCP(ctx context.Context, incoming message) {
 		}, "error": nil})
 		return
 	}
+	if incoming.Method == "x.ai/mcp/sdk_message" {
+		s.handleMCPSDKMessage(ctx, incoming, req.SessionID, req.ServerID, req.Message)
+		return
+	}
 	if incoming.Method == "x.ai/mcp/list" {
 		s.handleMCPList(incoming, req.SessionID)
 		return
@@ -326,6 +332,34 @@ func (s *Server) handleMCP(ctx context.Context, incoming message) {
 		return
 	}
 	s.respondError(incoming.ID, -32000, "MCP tool not found")
+}
+
+// handleMCPSDKMessage delivers one MCP message originated by an in-process
+// SDK server to its MCP client. Notifications (no ACP id) are processed
+// silently; server-initiated requests return the JSON-RPC response message.
+func (s *Server) handleMCPSDKMessage(ctx context.Context, incoming message, sessionID, serverID string, payload json.RawMessage) {
+	current := s.lookupSession(sessionID)
+	if current == nil || current.runner == nil || current.runner.HandleMCPSDKMessage == nil {
+		if len(incoming.ID) > 0 {
+			s.respondError(incoming.ID, -32602, "session not found")
+		}
+		return
+	}
+	if serverID == "" || len(payload) == 0 {
+		if len(incoming.ID) > 0 {
+			s.respondError(incoming.ID, -32602, "serverId and message are required")
+		}
+		return
+	}
+	response, err := current.runner.HandleMCPSDKMessage(ctx, serverID, payload)
+	if len(incoming.ID) == 0 {
+		return
+	}
+	if err != nil {
+		s.respondError(incoming.ID, -32000, err.Error())
+		return
+	}
+	s.respond(incoming.ID, map[string]any{"result": map[string]any{"message": response}, "error": nil})
 }
 
 func (s *Server) handleMCPReadResource(ctx context.Context, incoming message, sessionID, server, uri string) {

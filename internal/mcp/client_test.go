@@ -138,7 +138,7 @@ func TestACPClientLifecycleAndErrors(t *testing.T) {
 		}
 		return json.Marshal(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": result})
 	}
-	client, initialized, err := StartACP(context.Background(), "sdk-tools", reverse)
+	client, initialized, err := StartACP(context.Background(), "sdk-tools", reverse, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,4 +308,50 @@ func TestMCPHelperProcess(t *testing.T) {
 		}
 	}
 	os.Exit(0)
+}
+
+func TestHandleReverseMessage(t *testing.T) {
+	notified := make(chan string, 1)
+	sampled := false
+	client := &Client{
+		reverse: func(context.Context, json.RawMessage) (json.RawMessage, error) { return nil, nil },
+		pending: make(map[string]chan response),
+		done:    make(chan struct{}),
+		sampling: func(_ context.Context, request SamplingRequest) (SamplingResult, error) {
+			sampled = true
+			return SamplingResult{Role: "assistant", Model: "fixture", Content: SamplingContent{Type: "text", Text: "sampled"}}, nil
+		},
+	}
+	client.SetNotificationHandler(func(method string) { notified <- method })
+
+	if got := client.HandleReverseMessage(json.RawMessage(`{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}`)); got != nil {
+		t.Fatalf("notification returned %s", got)
+	}
+	select {
+	case method := <-notified:
+		if method != "notifications/tools/list_changed" {
+			t.Fatalf("notification method=%q", method)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("notification was not dispatched")
+	}
+
+	response := client.HandleReverseMessage(json.RawMessage(`{"jsonrpc":"2.0","id":9,"method":"sampling/createMessage","params":{"maxTokens":64,"messages":[{"role":"user","content":{"type":"text","text":"hi"}}]}}`))
+	if !sampled {
+		t.Fatal("sampling handler was not called")
+	}
+	var reply rpcMessage
+	if err := json.Unmarshal(response, &reply); err != nil || string(reply.ID) != "9" || reply.Error != nil || !strings.Contains(string(reply.Result), "sampled") {
+		t.Fatalf("sampling response=%s err=%v", response, err)
+	}
+
+	response = client.HandleReverseMessage(json.RawMessage(`{"jsonrpc":"2.0","id":10,"method":"roots/list"}`))
+	var refused rpcMessage
+	if err := json.Unmarshal(response, &refused); err != nil || string(refused.ID) != "10" || refused.Error == nil || refused.Error.Code != -32601 {
+		t.Fatalf("unsupported response=%s err=%v", response, err)
+	}
+
+	if got := client.HandleReverseMessage(json.RawMessage(`{`)); got != nil {
+		t.Fatalf("malformed message returned %s", got)
+	}
 }
