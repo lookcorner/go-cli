@@ -106,6 +106,14 @@ type mouseSelectionEvent struct {
 	at    time.Time
 }
 type selectionClearEvent struct{ nonce uint64 }
+type contextualUndoClearEvent struct{ nonce uint64 }
+
+type undoHintState struct {
+	enabled bool
+	shown   int
+	nonce   uint64
+	persist func(bool) error
+}
 
 type approvalChoice string
 
@@ -659,6 +667,8 @@ type model struct {
 	input               []rune
 	cursor              int
 	inputUndo           []inputSnapshot
+	inputClear          inputClearDetector
+	undoHint            undoHintState
 	multiline           bool
 	history             []string
 	historyIndex        int
@@ -895,6 +905,8 @@ type UIOptions struct {
 	SetPromptSuggestions func(bool) error
 	RememberApprovals    bool
 	SetRememberApprovals func(bool) error
+	ContextualUndo       bool
+	SetContextualUndo    func(bool) error
 	DefaultPermission    string
 	SetDefaultPermission func(string) error
 	CancelSubs           string
@@ -1064,14 +1076,18 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		scrollLines: mouseWheelScrollLines, scrollSpeed: options.ScrollSpeed, persistScrollSpeed: options.SetScrollSpeed,
 		scrollInput: scrollInput{mode: options.ScrollMode}, persistScrollMode: options.SetScrollMode, persistScrollLines: options.SetScrollLines,
 		invertScroll: options.InvertScroll, persistInvertScroll: options.SetInvertScroll,
-		collapsedEditBlocks:  options.CollapsedEditBlocks,
-		persistEditBlocks:    options.SetCollapsedEdits,
-		groupToolVerbs:       options.GroupToolVerbs,
-		persistGroupTools:    options.SetGroupToolVerbs,
-		suggestionsEnabled:   options.PromptSuggestions,
-		persistSuggestions:   options.SetPromptSuggestions,
-		rememberApprovals:    options.RememberApprovals,
-		persistRemember:      options.SetRememberApprovals,
+		collapsedEditBlocks: options.CollapsedEditBlocks,
+		persistEditBlocks:   options.SetCollapsedEdits,
+		groupToolVerbs:      options.GroupToolVerbs,
+		persistGroupTools:   options.SetGroupToolVerbs,
+		suggestionsEnabled:  options.PromptSuggestions,
+		persistSuggestions:  options.SetPromptSuggestions,
+		rememberApprovals:   options.RememberApprovals,
+		persistRemember:     options.SetRememberApprovals,
+		undoHint: undoHintState{
+			enabled: options.ContextualUndo,
+			persist: options.SetContextualUndo,
+		},
 		defaultPermission:    options.DefaultPermission,
 		persistPermission:    options.SetDefaultPermission,
 		cancelSubagents:      options.CancelSubs,
@@ -1382,6 +1398,11 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case selectionClearEvent:
 		if !m.selectionMode.holds() && m.selection != nil && m.selection.nonce == msg.nonce {
 			m.selection = nil
+		}
+		return m, nil
+	case contextualUndoClearEvent:
+		if m.undoHint.nonce == msg.nonce && m.status == "Input cleared · ctrl+z to undo" {
+			m.status = "ready"
 		}
 		return m, nil
 	case mouseClickEvent:
@@ -2947,8 +2968,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.beginTurn(prompt)
 		return m, runTurn(turnCtx, m.runner, prompt, m.previousID)
 	}
-	m.editInput(msg)
-	return m, nil
+	return m, m.editInput(msg)
 }
 
 func (m *model) toggleMultiline() {
@@ -3048,8 +3068,7 @@ func (m *model) handleRunningKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.status = fmt.Sprintf("queued prompt #%d", len(m.pendingPrompts))
 		return m, nil
 	}
-	m.editInput(msg)
-	return m, nil
+	return m, m.editInput(msg)
 }
 
 func (m *model) openModelSelect(effortOnly bool) {
@@ -3746,7 +3765,7 @@ func (m *model) handleScrollbackKey(msg tea.KeyPressMsg) bool {
 		m.scrollSearch = nil
 		m.scrollFocused = false
 		if !m.running {
-			m.editInput(msg)
+			_ = m.editInput(msg)
 		}
 	}
 	return true
@@ -3980,8 +3999,9 @@ func (m *model) handleHistorySearchKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd)
 	case stroke == "pgdown" || stroke == "ctrl+d":
 		m.historySearch.selected = min(len(m.historySearch.results)-1, m.historySearch.selected+historySearchPageSize)
 	default:
-		m.editInput(msg)
+		command := m.editInput(msg)
 		m.refreshHistorySearch()
+		return m, command
 	}
 	return m, nil
 }
@@ -4135,7 +4155,7 @@ func (m *model) handlePlanReviewKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		m.finishPlanReview(tools.PlanModeDecision{Outcome: "cancelled", Feedback: feedback})
 	default:
-		m.editInput(msg)
+		return m, m.editInput(msg)
 	}
 	return m, nil
 }
@@ -4167,7 +4187,7 @@ func (m *model) handleQuestionKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyEnter:
 		m.submitQuestion()
 	default:
-		m.editInput(msg)
+		return m, m.editInput(msg)
 	}
 	return m, nil
 }
@@ -4390,12 +4410,19 @@ func (m *model) moveInputCursorLine(direction int) {
 	}
 }
 
-func (m *model) editInput(message tea.KeyPressMsg) {
+func (m *model) editInput(message tea.KeyPressMsg) tea.Cmd {
 	key, stroke := message.Key(), message.Keystroke()
 	m.cursor = min(max(m.cursor, 0), len(m.input))
+	before := len(m.input)
+	edited := false
 	switch {
 	case stroke == "ctrl+z" || stroke == "super+z":
 		m.undoInput()
+		edited = true
+		if m.status == "Input cleared · ctrl+z to undo" {
+			m.undoHint.nonce++
+			m.status = "ready"
+		}
 	case key.Code == tea.KeyLeft:
 		m.cursor = max(0, m.cursor-1)
 	case key.Code == tea.KeyRight:
@@ -4413,17 +4440,31 @@ func (m *model) editInput(message tea.KeyPressMsg) {
 		copy(m.input[m.cursor-1:], m.input[m.cursor:])
 		m.input = m.input[:len(m.input)-1]
 		m.cursor--
+		edited = true
 	case key.Code == tea.KeyDelete && m.cursor < len(m.input):
 		m.saveInputUndo()
 		copy(m.input[m.cursor:], m.input[m.cursor+1:])
 		m.input = m.input[:len(m.input)-1]
+		edited = true
 	case stroke == "ctrl+u" && len(m.input) > 0:
 		m.saveInputUndo()
 		m.input = nil
 		m.cursor = 0
+		edited = true
 	case key.Text != "" && utf8.ValidString(key.Text):
 		m.insertInput(key.Text)
+		edited = true
 	}
+	if edited && m.inputClear.observeUserEdit(before, len(m.input)) && m.undoHint.enabled && m.undoHint.shown < 3 {
+		m.undoHint.shown++
+		m.undoHint.nonce++
+		nonce := m.undoHint.nonce
+		m.status = "Input cleared · ctrl+z to undo"
+		return tea.Tick(3*time.Second, func(time.Time) tea.Msg {
+			return contextualUndoClearEvent{nonce: nonce}
+		})
+	}
+	return nil
 }
 
 func (m *model) replaceTranscript(text string, messages []session.Message) {

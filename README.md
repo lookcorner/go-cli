@@ -775,6 +775,10 @@ toggles multiline mode, where Enter inserts a newline and Shift/Alt-Enter sends.
 backslash followed by Enter also continues the prompt on the next line. Mouse
 clicks can answer approval prompts, select structured question options, and
 trigger the three plan-review actions. Double-clicking a question option submits it.
+After a draft reaches 20 characters and is cleared to at most 5 characters,
+the TUI shows `Input cleared · ctrl+z to undo` up to three times per session.
+Set `undo = false` under `[ui.contextual_hints]` to hide this hint without
+disabling undo.
 Dragging across visible transcript text copies the selection through OSC 52.
 `[ui] keep_text_selection` accepts `flash` (the default), `hold`, or
 `word_select`; held highlights clear on Esc or scrolling. `word_select` also

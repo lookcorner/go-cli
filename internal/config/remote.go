@@ -31,6 +31,7 @@ type RemoteSettings struct {
 	RememberToolApprovals            *bool                `json:"remember_tool_approvals"`
 	GroupToolVerbs                   *bool                `json:"group_tool_verbs"`
 	CollapsedEditBlocks              *bool                `json:"collapsed_edit_blocks"`
+	ContextualHints                  *RemoteHints         `json:"contextual_hints"`
 	SubscriptionWatchIntervalSeconds *uint64              `json:"subscription_watch_interval_secs"`
 	OfficialMarketplaceAutoRegister  *bool                `json:"official_marketplace_auto_register"`
 	WebFetchEnabled                  *bool                `json:"web_fetch_enabled"`
@@ -72,6 +73,10 @@ type RemoteSettings struct {
 	ClaudeAgents                     *bool                `json:"claude_agents_enabled"`
 	ClaudeMCPs                       *bool                `json:"claude_mcps_enabled"`
 	ClaudeHooks                      *bool                `json:"claude_hooks_enabled"`
+}
+
+type RemoteHints struct {
+	Undo *bool `json:"undo"`
 }
 
 type RemoteAnnouncement = announcement.Announcement
@@ -186,6 +191,9 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 	}
 	if !c.uiGroupToolVerbsConfigured {
 		c.UI.GroupToolVerbs = remote.GroupToolVerbs == nil || *remote.GroupToolVerbs
+	}
+	if !c.uiContextualUndoConfigured {
+		c.UI.ContextualHints.Undo = remote.ContextualHints == nil || remote.ContextualHints.Undo == nil || *remote.ContextualHints.Undo
 	}
 	if remote.OfficialMarketplaceAutoRegister != nil {
 		c.OfficialMarketplaceAutoRegister = *remote.OfficialMarketplaceAutoRegister

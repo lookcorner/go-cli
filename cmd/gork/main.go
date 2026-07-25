@@ -1172,6 +1172,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			CollapsedEditBlocks: cfg.UI.CollapsedEditBlocks,
 			GroupToolVerbs:      cfg.UI.GroupToolVerbs,
 			RememberApprovals:   cfg.UI.RememberToolApprovals,
+			ContextualUndo:      cfg.UI.ContextualHints.Undo,
 			DefaultPermission:   cfg.UI.DefaultSelectedPermission,
 			CancelSubs:          cfg.UI.CancelSubagents,
 			DefaultModelID:      cfg.DefaultModelID,
@@ -1208,6 +1209,9 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			},
 			SetRememberApprovals: func(enabled bool) error {
 				return config.UpdateRememberToolApprovals(opts.configPath, enabled)
+			},
+			SetContextualUndo: func(enabled bool) error {
+				return config.UpdateContextualUndoHint(opts.configPath, enabled)
 			},
 			SetDefaultPermission: func(value string) error {
 				if err := config.UpdateDefaultSelectedPermission(opts.configPath, value); err != nil {
@@ -3833,11 +3837,11 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			ToggleMCPServer: toggleMCPServer, ToggleMCPTool: toggleMCPTool,
 			UpsertMCPServer: upsertMCPServer, DeleteMCPServer: deleteMCPServer,
 			HandleMCPSDKMessage: mcpRuntime.HandleSDKMessage,
-			UpdateSkills:      updateSkills,
-			UpdatePlugins:     updatePlugins,
-			MarketplaceList:   func() ([]marketplace.ScanResult, error) { return marketplace.List(opts.configPath, ws.Root()) },
-			MarketplaceAction: marketplaceAction,
-			SessionID:         logger.ID(), SessionPath: logger.Path(), Workspace: ws.Root(), PromptWorkspace: sessionConfig.DisplayCWD,
+			UpdateSkills:        updateSkills,
+			UpdatePlugins:       updatePlugins,
+			MarketplaceList:     func() ([]marketplace.ScanResult, error) { return marketplace.List(opts.configPath, ws.Root()) },
+			MarketplaceAction:   marketplaceAction,
+			SessionID:           logger.ID(), SessionPath: logger.Path(), Workspace: ws.Root(), PromptWorkspace: sessionConfig.DisplayCWD,
 		}
 		if subagentManager != nil {
 			runner.AgentDefinitions = subagentManager.Definitions
