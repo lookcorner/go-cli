@@ -2137,6 +2137,8 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKey(msg)
 	case tea.KeyReleaseMsg:
 		return m.handleVoiceRelease(msg)
+	case tea.PasteMsg:
+		return m.handlePaste(msg.Content)
 	case tea.KeyboardEnhancementsMsg:
 		m.voiceKeyReleases = msg.SupportsEventTypes()
 	}
@@ -4563,6 +4565,54 @@ func (m *model) insertInput(value string) {
 	copy(m.input[m.cursor+len(insert):], m.input[m.cursor:oldLength])
 	copy(m.input[m.cursor:], insert)
 	m.cursor += len(insert)
+}
+
+func (m *model) handlePaste(value string) (tea.Model, tea.Cmd) {
+	value = normalizePastedText(value)
+	if value == "" || !m.acceptsPaste() {
+		return m, nil
+	}
+	m.insertInput(value)
+	m.wordSelectHint.active = false
+	if m.historySearch != nil {
+		m.refreshHistorySearch()
+	}
+	return m, nil
+}
+
+func (m *model) acceptsPaste() bool {
+	switch {
+	case m.planReview != nil:
+		return m.planReview.editing
+	case m.question != nil:
+		return true
+	case m.historySearch != nil:
+		return true
+	case m.approval != nil || m.cancelTurn != nil || m.rewind != nil || m.dashboard != nil ||
+		m.jump != nil || m.mcp != nil || m.claudeImport != nil || m.extensions != nil ||
+		m.agentConfig != nil || m.settings != nil || m.docs != nil || m.sessionSelect != nil ||
+		m.forkChoice != nil || m.modelSelect != nil || m.viewer != nil || m.scrollSearch != nil ||
+		m.remember != nil || m.scrollFocused:
+		return false
+	default:
+		return !m.running || m.feedbackInput || m.rememberInput
+	}
+}
+
+func normalizePastedText(value string) string {
+	if !strings.Contains(value, "\r") {
+		return value
+	}
+	var normalized strings.Builder
+	normalized.Grow(len(value))
+	for index := 0; index < len(value); index++ {
+		if value[index] == '\r' && (index+1 == len(value) || value[index+1] != '\n') {
+			normalized.WriteByte('\n')
+		} else {
+			normalized.WriteByte(value[index])
+		}
+	}
+	return normalized.String()
 }
 
 func (m *model) inputLineBounds() (int, int) {

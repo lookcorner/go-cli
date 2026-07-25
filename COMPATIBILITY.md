@@ -171,6 +171,9 @@ coordinate a single background leader spawn when `--leader` or
 Voice dictation supports the reference default `hold` capture mode on terminals
 with key-release reporting, runtime fallback to `toggle` elsewhere, and
 rollback-safe live `/settings` persistence of `[ui].voice_capture_mode`.
+The TUI accepts Bubble Tea v2 bracketed-paste events as one undoable edit,
+preserves Unicode, multiline and trailing-newline content, normalizes bare
+carriage returns, and suppresses typed-only contextual nudges for pasted text.
 The top-level `gork leader list/info/kill` commands discover reference lock/socket
 candidates, verify live Unix sockets or Windows named pipes with the reference
 length-prefixed registration/control protocol, classify stale/unreachable/unsupported entries,
