@@ -1164,6 +1164,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			ScrollSpeed: cfg.UI.ScrollSpeed, ScrollMode: cfg.UI.ScrollMode, ScrollLines: cfg.UI.ScrollLines, InvertScroll: cfg.UI.InvertScroll, PromptSuggestions: cfg.UI.PromptSuggestions,
 			CollapsedEditBlocks: cfg.UI.CollapsedEditBlocks,
 			GroupToolVerbs:      cfg.UI.GroupToolVerbs,
+			RememberApprovals:   cfg.UI.RememberToolApprovals,
 			CursorBlink:         cfg.UI.CursorBlink,
 			CompactMode:         cfg.UI.CompactMode,
 			ShowTimestamps:      cfg.UI.ShowTimestamps,
@@ -1186,6 +1187,9 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			},
 			SetPromptSuggestions: func(enabled bool) error {
 				return config.UpdatePromptSuggestions(opts.configPath, enabled)
+			},
+			SetRememberApprovals: func(enabled bool) error {
+				return config.UpdateRememberToolApprovals(opts.configPath, enabled)
 			},
 			SetDashboardPinned: func(ids []string) error {
 				return config.UpdateDashboardPinned(opts.configPath, ids)

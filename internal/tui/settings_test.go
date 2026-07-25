@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/session"
+	"github.com/lookcorner/go-cli/internal/tools"
 )
 
 func TestSettingsCommandAliasesOpenAndClose(t *testing.T) {
@@ -67,6 +69,10 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 			booleans = append(booleans, "suggestions")
 			return nil
 		},
+		persistRemember: func(value bool) error {
+			booleans = append(booleans, "remember")
+			return nil
+		},
 		persistScreenMode: func(value string) error {
 			screenModes = append(screenModes, value)
 			return nil
@@ -78,12 +84,16 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 		m.settings.selected = index
 		updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 		m = updated.(*model)
-		if command != nil || m.settings.err != "" || m.status != "settings updated" {
+		wantStatus := "settings updated"
+		if index == 8 {
+			wantStatus = "settings updated; restart to apply"
+		}
+		if command != nil || m.settings.err != "" || m.status != wantStatus {
 			t.Fatalf("index=%d command=%v err=%q status=%q", index, command != nil, m.settings.err, m.status)
 		}
 	}
-	if !m.showTimestamps || !m.showTimeline || !m.compactMode || !m.vimMode || !m.defaultMinimal || !m.groupToolVerbs || !m.collapsedEditBlocks || !m.suggestionsEnabled ||
-		strings.Join(booleans, ",") != "timestamps,timeline,compact,vim,group,edits,suggestions" || strings.Join(screenModes, ",") != "minimal" {
+	if !m.showTimestamps || !m.showTimeline || !m.compactMode || !m.vimMode || !m.defaultMinimal || !m.groupToolVerbs || !m.collapsedEditBlocks || !m.suggestionsEnabled || !m.rememberApprovals ||
+		strings.Join(booleans, ",") != "timestamps,timeline,compact,vim,group,edits,suggestions,remember" || strings.Join(screenModes, ",") != "minimal" {
 		t.Fatalf("timestamps=%v timeline=%v compact=%v vim=%v persisted=%v", m.showTimestamps, m.showTimeline, m.compactMode, m.vimMode, booleans)
 	}
 	if m.themeName != "grokday" || m.theme.name != "grokday" || strings.Join(themes, ",") != "grokday" {
@@ -116,7 +126,7 @@ func TestSettingsPanelRollsBackFailedPersistence(t *testing.T) {
 		t.Fatalf("command=%v minimal=%v err=%q", command != nil, m.defaultMinimal, m.settings.err)
 	}
 
-	m.settings.selected = 8
+	m.settings.selected = 9
 	m.mermaidMode = "auto"
 	m.persistMermaid = func(string) error { return errors.New("read only") }
 	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
@@ -125,7 +135,7 @@ func TestSettingsPanelRollsBackFailedPersistence(t *testing.T) {
 		t.Fatalf("command=%v Mermaid=%q err=%q", command != nil, m.mermaidMode, m.settings.err)
 	}
 
-	m.settings.selected = 9
+	m.settings.selected = 10
 	m.persistTheme = func(string) error { return errors.New("read only") }
 	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)
@@ -158,6 +168,14 @@ func TestSettingsPanelRollsBackFailedPersistence(t *testing.T) {
 	m = updated.(*model)
 	if command != nil || !m.suggestionsEnabled || m.promptSuggestion != "run tests" || m.settings.err != "read only" {
 		t.Fatalf("command=%v enabled=%v suggestion=%q err=%q", command != nil, m.suggestionsEnabled, m.promptSuggestion, m.settings.err)
+	}
+
+	m.settings.selected = 8
+	m.persistRemember = func(bool) error { return errors.New("read only") }
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.rememberApprovals || m.settings.err != "read only" {
+		t.Fatalf("command=%v remember=%v err=%q", command != nil, m.rememberApprovals, m.settings.err)
 	}
 }
 
@@ -334,5 +352,36 @@ func TestSettingsPromptSuggestionsApplyImmediately(t *testing.T) {
 	m = updated.(*model)
 	if command != nil || !m.suggestionsEnabled || !persisted {
 		t.Fatalf("command=%v enabled=%v persisted=%v", command != nil, m.suggestionsEnabled, persisted)
+	}
+}
+
+func TestSettingsRememberToolApprovalsAppliesAfterRestart(t *testing.T) {
+	bridge := NewBridge(context.Background(), tools.PermissionPrompt)
+	defer bridge.Close()
+	bridge.ConfigurePermissionPrompts("allow_once", false)
+	persisted := false
+	m := &model{
+		width: 60, height: 16, bridge: bridge, settings: &settingsState{selected: 8},
+		persistRemember: func(value bool) error { persisted = value; return nil },
+	}
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || !m.rememberApprovals || !persisted || m.status != "settings updated; restart to apply" {
+		t.Fatalf("command=%v remember=%v persisted=%v status=%q", command != nil, m.rememberApprovals, persisted, m.status)
+	}
+	done := make(chan error, 1)
+	go func() { done <- bridge.Approve(context.Background(), "shell", "git status") }()
+	request := (<-bridge.events).(approvalEvent)
+	if len(request.options) != 3 {
+		t.Fatalf("current session options=%#v", request.options)
+	}
+	for _, option := range request.options {
+		if option.choice == approvalCommandAlways {
+			t.Fatalf("restart-scoped choice applied to current session: %#v", request.options)
+		}
+	}
+	request.reply <- approvalOnce
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }

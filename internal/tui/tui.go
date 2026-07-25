@@ -676,6 +676,8 @@ type model struct {
 	persistGroupTools   func(bool) error
 	persistEditBlocks   func(bool) error
 	persistSuggestions  func(bool) error
+	rememberApprovals   bool
+	persistRemember     func(bool) error
 	themeName           string
 	autoDarkTheme       string
 	autoLightTheme      string
@@ -858,6 +860,8 @@ type UIOptions struct {
 	SetGroupToolVerbs    func(bool) error
 	PromptSuggestions    bool
 	SetPromptSuggestions func(bool) error
+	RememberApprovals    bool
+	SetRememberApprovals func(bool) error
 	CursorBlink          *bool
 	Theme                string
 	AutoDarkTheme        string
@@ -999,6 +1003,8 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		persistGroupTools:   options.SetGroupToolVerbs,
 		suggestionsEnabled:  options.PromptSuggestions,
 		persistSuggestions:  options.SetPromptSuggestions,
+		rememberApprovals:   options.RememberApprovals,
+		persistRemember:     options.SetRememberApprovals,
 		hyperlinks:          detectTerminalHyperlinks(),
 		themeName:           options.Theme,
 		autoDarkTheme:       options.AutoDarkTheme,

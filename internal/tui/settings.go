@@ -14,7 +14,7 @@ type settingsState struct {
 	err      string
 }
 
-const settingsCount = 10
+const settingsCount = 11
 
 func (m *model) openSettings() {
 	m.settings = &settingsState{}
@@ -47,6 +47,7 @@ func (m *model) handleSettingsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m *model) applySetting(selected int) {
 	state := m.settings
 	state.err = ""
+	restartRequired := false
 	switch selected {
 	case 0:
 		previous := m.showTimestamps
@@ -111,6 +112,13 @@ func (m *model) applySetting(selected int) {
 			m.clearPromptSuggestion()
 		}
 	case 8:
+		previous := m.rememberApprovals
+		m.rememberApprovals = !previous
+		if m.persistRemember != nil {
+			state.err = persistSetting(m.persistRemember(m.rememberApprovals), func() { m.rememberApprovals = previous })
+		}
+		restartRequired = state.err == ""
+	case 9:
 		previous := m.mermaidMode
 		switch m.mermaidMode {
 		case "auto":
@@ -123,7 +131,7 @@ func (m *model) applySetting(selected int) {
 		if m.persistMermaid != nil {
 			state.err = persistSetting(m.persistMermaid(m.mermaidMode), func() { m.mermaidMode = previous })
 		}
-	case 9:
+	case 10:
 		previousName, previousTheme := m.themeName, m.theme
 		m.themeName = nextTheme(m.themeName)
 		m.theme = paletteForAuto(m.themeName, m.autoDarkTheme, m.autoLightTheme)
@@ -133,6 +141,8 @@ func (m *model) applySetting(selected int) {
 	}
 	if state.err != "" {
 		m.status = "setting update failed"
+	} else if restartRequired {
+		m.status = "settings updated; restart to apply"
 	} else {
 		m.status = "settings updated"
 	}
@@ -173,6 +183,7 @@ func (m *model) settingsContent() string {
 		settingLine("Group tool verbs", m.groupToolVerbs),
 		settingLine("Collapsed edit blocks", m.collapsedEditBlocks),
 		settingLine("Prompt suggestions", m.suggestionsEnabled),
+		settingLine("Remember tool approvals (restart)", m.rememberApprovals),
 		fmt.Sprintf("Mermaid rendering: %s", mermaidMode),
 		fmt.Sprintf("Theme: %s", m.themeName),
 	}
