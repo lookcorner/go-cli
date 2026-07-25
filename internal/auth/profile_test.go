@@ -10,6 +10,7 @@ import (
 )
 
 func TestEnrichMergesRemoteProfile(t *testing.T) {
+	requireLoopback(t)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/v1/user" || request.Header.Get("Authorization") != "Bearer access-1" {
 			t.Fatalf("unexpected request: %s %#v", request.URL, request.Header)

@@ -48,6 +48,7 @@ type testCapture struct{}
 func (testCapture) Stop() {}
 
 func TestClientStreamsAudioAndTranscripts(t *testing.T) {
+	requireLoopback(t)
 	server := httptest.NewServer(websocket.Handler(func(conn *websocket.Conn) {
 		defer conn.Close()
 		_ = websocket.Message.Send(conn, `{"type":"transcript.created"}`)

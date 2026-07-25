@@ -104,7 +104,7 @@ func TestDreamRejectsBadOutputAndRollsBackWriteFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(target, filepath.Join(store.workspaceDir, "MEMORY.md")); err != nil {
-		t.Fatal(err)
+		t.Skipf("symlinks unavailable: %v", err)
 	}
 	if result, err = store.CommitDream("## Valid\n\ncontent", input, 0); err == nil || result.Outcome != "failed" {
 		t.Fatalf("result=%#v err=%v", result, err)

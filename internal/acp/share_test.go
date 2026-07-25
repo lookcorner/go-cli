@@ -17,6 +17,7 @@ import (
 )
 
 func TestShareSessionExtension(t *testing.T) {
+	requireLoopback(t)
 	sessionDir := t.TempDir()
 	logger, err := sessionlog.NewLoggerWithID(sessionDir, "share-session")
 	if err != nil {

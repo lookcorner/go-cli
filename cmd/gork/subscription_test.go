@@ -17,6 +17,7 @@ import (
 )
 
 func TestACPSubscriptionCheckerRefreshesSettingsAndModels(t *testing.T) {
+	requireLoopback(t)
 	path, scope := filepath.Join(t.TempDir(), "auth.json"), "issuer::client"
 	if err := auth.Save(path, scope, auth.Credential{Key: "old-token", AuthMode: "oidc", UserID: "user-1", Email: "user@example.com"}); err != nil {
 		t.Fatal(err)
@@ -63,6 +64,7 @@ func TestACPSubscriptionCheckerRefreshesSettingsAndModels(t *testing.T) {
 }
 
 func TestACPSubscriptionCheckerKeepsGateWithoutExplicitAccess(t *testing.T) {
+	requireLoopback(t)
 	for _, test := range []struct {
 		name        string
 		user        string
@@ -139,6 +141,7 @@ func TestACPSubscriptionCheckerBypassesOAuthGateForStaticCredentials(t *testing.
 }
 
 func TestACPSubscriptionCatalogRefresherMatchesAndRetriesJWT(t *testing.T) {
+	requireLoopback(t)
 	for _, test := range []struct {
 		name         string
 		initialTier  int

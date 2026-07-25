@@ -107,6 +107,10 @@ func TestAddValidation(t *testing.T) {
 }
 
 func TestDoctorReportsSuccessFailureAndDisabled(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("GROK_HOME", filepath.Join(home, ".grok"))
 	root := testRepo(t)
 	userPath := filepath.Join(t.TempDir(), "config.toml")
 	writeFile(t, userPath, `
@@ -167,6 +171,7 @@ func testRepo(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("GROK_HOME", filepath.Join(home, ".grok"))
 	root := t.TempDir()
 	if err := exec.Command("git", "init", "-q", root).Run(); err != nil {

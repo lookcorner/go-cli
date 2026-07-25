@@ -18,6 +18,7 @@ import (
 )
 
 func TestServiceSyncFallsBackToLegacyBundle(t *testing.T) {
+	requireLoopback(t)
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		requests.Add(1)
@@ -60,6 +61,7 @@ func TestServiceSyncFallsBackToLegacyBundle(t *testing.T) {
 }
 
 func TestServiceSyncUsesArchiveAndDeploymentHeaders(t *testing.T) {
+	requireLoopback(t)
 	archive := testArchive(t, map[string][]byte{
 		"bundle.json":              []byte(`{"version":"archive-v1"}`),
 		"subagents/agents/a.md":    []byte("# A\n"),
@@ -91,6 +93,7 @@ func TestServiceSyncUsesArchiveAndDeploymentHeaders(t *testing.T) {
 }
 
 func TestServiceArchiveUnauthorizedDoesNotFallback(t *testing.T) {
+	requireLoopback(t)
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		requests.Add(1)
@@ -106,6 +109,7 @@ func TestServiceArchiveUnauthorizedDoesNotFallback(t *testing.T) {
 }
 
 func TestServiceRefreshesRejectedSessionTokenOnce(t *testing.T) {
+	requireLoopback(t)
 	archive := testArchive(t, map[string][]byte{"bundle.json": []byte(`{"version":"refreshed"}`)})
 	var requests, credentials atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

@@ -52,7 +52,7 @@ func TestMCPServerConfigLifecyclePreservesOtherSettings(t *testing.T) {
 	if _, exists := cfg.MCPServers["added"]; exists || len(cfg.DisabledMCPServers) != 0 || len(cfg.DisabledMCPTools) != 0 || cfg.MCPServers["keep"].Command != "keep" {
 		t.Fatalf("delete damaged config: %#v", cfg)
 	}
-	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o640 {
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != wantConfigPerm(0o640) {
 		t.Fatalf("config mode=%v err=%v", info.Mode().Perm(), err)
 	}
 }

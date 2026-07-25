@@ -235,7 +235,7 @@ func TestUpdateContextualUndoHintPreservesConfig(t *testing.T) {
 				data, _ := json.Marshal(root)
 				t.Fatalf("config=%s", data)
 			}
-			if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o640 {
+			if info, err := os.Stat(path); err != nil || info.Mode().Perm() != wantConfigPerm(0o640) {
 				t.Fatalf("mode=%v err=%v", info, err)
 			}
 		})

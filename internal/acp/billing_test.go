@@ -19,6 +19,7 @@ import (
 )
 
 func TestBillingReturnsReferenceShapeAndMetadata(t *testing.T) {
+	requireLoopback(t)
 	path, scope := filepath.Join(t.TempDir(), "auth.json"), "issuer::client"
 	if err := auth.Save(path, scope, auth.Credential{Key: "token", UserID: "user-1", AuthMode: "oidc"}); err != nil {
 		t.Fatal(err)
@@ -54,6 +55,7 @@ func TestBillingReturnsReferenceShapeAndMetadata(t *testing.T) {
 }
 
 func TestAutoTopupRuleReturnsUpstreamJSONAndRawFallback(t *testing.T) {
+	requireLoopback(t)
 	path, scope := filepath.Join(t.TempDir(), "auth.json"), "issuer::client"
 	if err := auth.Save(path, scope, auth.Credential{Key: "token", UserID: "user-1", AuthMode: "oidc"}); err != nil {
 		t.Fatal(err)
@@ -86,6 +88,7 @@ func TestAutoTopupRuleReturnsUpstreamJSONAndRawFallback(t *testing.T) {
 }
 
 func TestBillingRefreshesOnceAfterUnauthorized(t *testing.T) {
+	requireLoopback(t)
 	path, scope := filepath.Join(t.TempDir(), "auth.json"), "issuer::client"
 	if err := auth.Save(path, scope, auth.Credential{Key: "old", UserID: "user-1", AuthMode: "oidc"}); err != nil {
 		t.Fatal(err)
@@ -125,6 +128,7 @@ func (f billingRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, 
 }
 
 func TestBillingErrors(t *testing.T) {
+	requireLoopback(t)
 	path, scope := filepath.Join(t.TempDir(), "auth.json"), "issuer::client"
 	var output bytes.Buffer
 	server := &Server{output: &output, Auth: AuthConfig{Path: path, Scope: scope}}
@@ -178,6 +182,7 @@ func TestBillingErrors(t *testing.T) {
 }
 
 func TestBillingExtensionsRouteThroughServer(t *testing.T) {
+	requireLoopback(t)
 	path, scope := filepath.Join(t.TempDir(), "auth.json"), "issuer::client"
 	if err := auth.Save(path, scope, auth.Credential{Key: "token", UserID: "user-1", AuthMode: "oidc"}); err != nil {
 		t.Fatal(err)

@@ -92,6 +92,7 @@ func TestAgentHelp(t *testing.T) {
 }
 
 func TestAgentWebSocketAuthentication(t *testing.T) {
+	requireLoopback(t)
 	relay := newAgentWebSocketRelay()
 	defer relay.Close()
 	server := httptest.NewServer(agentWebSocketHandler("test-secret", relay))
@@ -127,6 +128,7 @@ func TestAgentWebSocketAuthentication(t *testing.T) {
 }
 
 func TestAgentWebSocketRelayAcceptsBinaryAndReconnects(t *testing.T) {
+	requireLoopback(t)
 	relay := newAgentWebSocketRelay()
 	defer relay.Close()
 	server := httptest.NewServer(agentWebSocketHandler("test-secret", relay))

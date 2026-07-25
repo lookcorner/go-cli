@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -1248,7 +1249,7 @@ func TestThemeConfigCanonicalizationAndUpdate(t *testing.T) {
 	if raw["models"].(map[string]any)["default"] != "local" || ui["theme"] != "rosepine-moon" || ui["auto_dark_theme"] != "tokyonight" || ui["auto_light_theme"] != "oscura-midnight" {
 		t.Fatalf("updated config=%#v", raw)
 	}
-	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o640 {
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != wantConfigPerm(0o640) {
 		t.Fatalf("mode info=%v err=%v", info, err)
 	}
 	invalidPath := filepath.Join(t.TempDir(), "config.toml")
@@ -2117,7 +2118,7 @@ func TestUpdateSkillsPreservesOtherConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o640 {
+	if info.Mode().Perm() != wantConfigPerm(0o640) {
 		t.Fatalf("config mode=%v", info.Mode().Perm())
 	}
 	if err := UpdateSkills(path, func(settings *SkillsConfig) { *settings = SkillsConfig{} }); err != nil {
@@ -2227,7 +2228,7 @@ func TestUIConfigPersistenceAndPermissionPrecedence(t *testing.T) {
 	if cfg.UI.PermissionMode != "auto" || cfg.UI.VimMode || !cfg.UI.CompactMode || cfg.UI.ShowTimestamps || !cfg.UI.ShowTimeline || cfg.UI.ShowThinkingBlocks || cfg.UI.GroupToolVerbs || !cfg.UI.CollapsedEditBlocks || cfg.UI.PromptSuggestions || !cfg.UI.RememberToolApprovals || cfg.UI.DefaultSelectedPermission != "reject" || cfg.AskUserQuestion.TimeoutEnabled || !cfg.UI.InvertScroll || cfg.UI.ScrollSpeed != 75 || cfg.UI.ScrollMode != "wheel" || cfg.UI.ScrollLines == nil || *cfg.UI.ScrollLines != 5 || cfg.UI.KeepTextSelection != "hold" || cfg.DefaultModelID != "local" || cfg.Model != "local-api" {
 		t.Fatalf("config=%#v", cfg)
 	}
-	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o640 {
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != wantConfigPerm(0o640) {
 		t.Fatalf("mode info=%v err=%v", info, err)
 	}
 	emptyPath := filepath.Join(t.TempDir(), "config.toml")
@@ -2408,4 +2409,13 @@ func anyStrings(value any) []string {
 		result = append(result, item.(string))
 	}
 	return result
+}
+
+// wantConfigPerm maps a Unix permission expectation to what the platform
+// reports; Windows ignores permission bits on create.
+func wantConfigPerm(unix os.FileMode) os.FileMode {
+	if runtime.GOOS == "windows" {
+		return 0o666
+	}
+	return unix
 }

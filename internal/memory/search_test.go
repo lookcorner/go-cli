@@ -149,7 +149,7 @@ func TestStoreGetAllowsOnlyActiveMemoryFilesAndMatchesOptionalRanges(t *testing.
 	}
 	link := filepath.Join(store.sessionsDir, "link.md")
 	if err := os.Symlink(outside, link); err != nil {
-		t.Fatal(err)
+		t.Skipf("symlinks unavailable: %v", err)
 	}
 	if _, err := store.Get(link, 0, nil); err == nil {
 		t.Fatal("symlink was readable")

@@ -103,6 +103,7 @@ func TestModelCachePathUsesGrokHome(t *testing.T) {
 }
 
 func TestFetchModelCacheSessionCatalog(t *testing.T) {
+	requireLoopback(t)
 	home := t.TempDir()
 	t.Setenv("GROK_HOME", home)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -163,6 +164,7 @@ func TestFetchModelCacheSessionCatalog(t *testing.T) {
 }
 
 func TestFetchModelCacheAPIKeyFallbackAndInvalidEntries(t *testing.T) {
+	requireLoopback(t)
 	t.Setenv("GROK_HOME", t.TempDir())
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if got := request.Header.Get("Authorization"); got != "Bearer api-key" {
@@ -191,6 +193,7 @@ func TestFetchModelCacheAPIKeyFallbackAndInvalidEntries(t *testing.T) {
 }
 
 func TestFetchModelCacheFailurePreservesExistingCache(t *testing.T) {
+	requireLoopback(t)
 	home := t.TempDir()
 	t.Setenv("GROK_HOME", home)
 	path := filepath.Join(home, "models_cache.json")

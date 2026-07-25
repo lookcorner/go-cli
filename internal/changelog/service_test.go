@@ -12,6 +12,7 @@ import (
 )
 
 func TestServiceFetchesAndCachesReleaseNotes(t *testing.T) {
+	requireLoopback(t)
 	cache := filepath.Join(t.TempDir(), "cache", "CHANGELOG.md")
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/1.2.3.external.md" {
@@ -33,6 +34,7 @@ func TestServiceFetchesAndCachesReleaseNotes(t *testing.T) {
 }
 
 func TestServiceUsesCacheOfflineAndAfterRemoteFailure(t *testing.T) {
+	requireLoopback(t)
 	cache := filepath.Join(t.TempDir(), "CHANGELOG.md")
 	if err := os.WriteFile(cache, []byte("# Cached notes\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -58,6 +60,7 @@ func TestServiceUsesCacheOfflineAndAfterRemoteFailure(t *testing.T) {
 }
 
 func TestServiceReturnsReferenceErrorWithoutReleaseNotes(t *testing.T) {
+	requireLoopback(t)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		_, _ = writer.Write([]byte("  \n"))
 	}))

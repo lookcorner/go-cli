@@ -38,12 +38,12 @@ func TestBuildDiscoversWorkspaceAndRedactsSecrets(t *testing.T) {
 	configPath := filepath.Join(grokHome, "config.toml")
 	writeInspectFile(t, configPath, `
 [plugins]
-paths = ["`+pluginRoot+`"]
+paths = ["`+filepath.ToSlash(pluginRoot)+`"]
 enabled = ["quality"]
 
 [[marketplace.sources]]
 name = "Local catalog"
-path = "`+marketplaceRoot+`"
+path = "`+filepath.ToSlash(marketplaceRoot)+`"
 
 [[marketplace.sources]]
 name = "Private catalog"

@@ -15,6 +15,7 @@ import (
 )
 
 func TestServiceSharesSessionAndRefreshesUnauthorizedToken(t *testing.T) {
+	requireLoopback(t)
 	sessionDir := t.TempDir()
 	logger, err := session.NewLoggerWithID(sessionDir, "share-session")
 	if err != nil {
@@ -136,6 +137,7 @@ func TestServiceRejectsEmptySession(t *testing.T) {
 }
 
 func TestServiceRejectsRemoteFailures(t *testing.T) {
+	requireLoopback(t)
 	sessionDir := t.TempDir()
 	logger, err := session.NewLoggerWithID(sessionDir, "share-session")
 	if err != nil {

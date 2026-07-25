@@ -91,7 +91,7 @@ func TestServiceExportsOnlyRelatedSessionFiles(t *testing.T) {
 		t.Fatalf("config=%#v err=%v", config, err)
 	}
 	info, err := os.Stat(result.Path)
-	if err != nil || info.Mode().Perm() != 0o600 {
+	if err != nil || info.Mode().Perm() != wantTraceMode(0o600) {
 		t.Fatalf("mode=%v err=%v", info.Mode(), err)
 	}
 }
@@ -187,4 +187,12 @@ func readArchive(t *testing.T, path string) (map[string]bool, map[string][]byte)
 		names[header.Name], contents[header.Name] = true, data
 	}
 	return names, contents
+}
+
+// wantTraceMode maps a Unix permission expectation to the platform's.
+func wantTraceMode(unix os.FileMode) os.FileMode {
+	if runtime.GOOS == "windows" {
+		return 0o666
+	}
+	return unix
 }

@@ -3,6 +3,7 @@ package personas
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -46,7 +47,7 @@ func TestCreateUsesSafeExclusiveFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	if info.Mode().Perm() != wantPersonasMode(0o600) {
 		t.Fatalf("mode=%v", info.Mode().Perm())
 	}
 	content, err := service.Read(created.Path)
@@ -185,4 +186,12 @@ func writePersona(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// wantPersonasMode maps a Unix permission expectation to the platform's.
+func wantPersonasMode(unix os.FileMode) os.FileMode {
+	if runtime.GOOS == "windows" {
+		return 0o666
+	}
+	return unix
 }

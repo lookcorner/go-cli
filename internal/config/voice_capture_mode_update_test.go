@@ -47,7 +47,7 @@ func TestUpdateVoiceCaptureModePreservesConfig(t *testing.T) {
 	if err != nil || !strings.Contains(string(data), `voice_capture_mode = 'toggle'`) {
 		t.Fatalf("config=%q err=%v", data, err)
 	}
-	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o640 {
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != wantConfigPerm(0o640) {
 		t.Fatalf("mode info=%v err=%v", info, err)
 	}
 }

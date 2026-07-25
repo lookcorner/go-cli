@@ -32,7 +32,7 @@ func TestReleaseChannelDefaultsAndPersistsWithoutLosingConfig(t *testing.T) {
 			t.Fatalf("config missing %q:\n%s", want, text)
 		}
 	}
-	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o640 {
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != wantConfigPerm(0o640) {
 		t.Fatalf("mode=%v err=%v", info.Mode().Perm(), err)
 	}
 }

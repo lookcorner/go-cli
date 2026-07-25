@@ -29,6 +29,7 @@ func signedTestPolicy(t *testing.T, private ed25519.PrivateKey, payload signedPa
 }
 
 func TestPolicySyncVerifiesAndPersistsSignedPolicy(t *testing.T) {
+	requireLoopback(t)
 	public, private, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -79,6 +80,7 @@ func TestPolicySyncVerifiesAndPersistsSignedPolicy(t *testing.T) {
 }
 
 func TestPolicySyncRejectsUnsignedOrMismatchedResponse(t *testing.T) {
+	requireLoopback(t)
 	public, private, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -160,6 +162,7 @@ func TestManagedPolicyEndpointResolution(t *testing.T) {
 }
 
 func TestPolicyClientRejectsCrossOriginRedirect(t *testing.T) {
+	requireLoopback(t)
 	called := false
 	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))
 	defer target.Close()
@@ -174,6 +177,7 @@ func TestPolicyClientRejectsCrossOriginRedirect(t *testing.T) {
 }
 
 func TestPolicyClientRetriesTransientServerFailure(t *testing.T) {
+	requireLoopback(t)
 	attempts := 0
 	managed := "[auth]\npreferred_method = \"oidc\"\n"
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
@@ -197,6 +201,7 @@ func TestPolicyClientRetriesTransientServerFailure(t *testing.T) {
 }
 
 func TestManagedPolicyHardStaleUsesMarkerIdentityAndArtifacts(t *testing.T) {
+	requireLoopback(t)
 	home := t.TempDir()
 	marker := policyMarker{SyncedAt: time.Now().Unix(), Principal: "team-1", HadManaged: true}
 	if err := writeJSONAtomic(filepath.Join(home, policyMarkerFile), marker); err != nil {

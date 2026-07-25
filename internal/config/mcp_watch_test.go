@@ -13,6 +13,7 @@ func TestMCPWatchPathsIncludesActiveDiscoverySources(t *testing.T) {
 	root := t.TempDir()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	configPath := filepath.Join(home, ".grok", "config.toml")
 	pluginPath := filepath.Join(root, "plugin", ".mcp.json")
 	disabledPath := filepath.Join(root, "disabled", ".mcp.json")

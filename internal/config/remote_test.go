@@ -18,6 +18,7 @@ func uint32Pointer(value uint32) *uint32 { return &value }
 func uint64Pointer(value uint64) *uint64 { return &value }
 
 func TestFetchRemoteSettingsRetriesAndAuthenticates(t *testing.T) {
+	requireLoopback(t)
 	attempts := 0
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		attempts++
@@ -75,6 +76,7 @@ func TestApplyRemoteSettingsPathNotFoundHints(t *testing.T) {
 }
 
 func TestFetchRemoteSettingsIncludesSessionIdentity(t *testing.T) {
+	requireLoopback(t)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.Header.Get("x-userid") != "user-1" || request.Header.Get("x-email") != "user@example.com" {
 			t.Fatalf("identity headers=%#v", request.Header)

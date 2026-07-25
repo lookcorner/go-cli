@@ -18,6 +18,7 @@ import (
 )
 
 func TestBrowserLoginPKCEAndIDTokenValidation(t *testing.T) {
+	requireLoopback(t)
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
@@ -106,6 +107,7 @@ func TestBrowserLoginPKCEAndIDTokenValidation(t *testing.T) {
 }
 
 func TestBrowserLoginAcceptsAllowedTeamWithoutIDToken(t *testing.T) {
+	requireLoopback(t)
 	var issuer string
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
@@ -152,6 +154,7 @@ func TestBrowserLoginAcceptsAllowedTeamWithoutIDToken(t *testing.T) {
 }
 
 func TestBrowserLoginAcceptsSubmittedAuthorizationCode(t *testing.T) {
+	requireLoopback(t)
 	var issuer string
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
@@ -200,6 +203,7 @@ func TestBrowserLoginAcceptsSubmittedAuthorizationCode(t *testing.T) {
 }
 
 func TestBrowserLoginRejectsMismatchedState(t *testing.T) {
+	requireLoopback(t)
 	issuer := ""
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		_ = json.NewEncoder(writer).Encode(map[string]string{

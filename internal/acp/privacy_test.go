@@ -19,6 +19,7 @@ import (
 )
 
 func TestSetCodingDataRetention(t *testing.T) {
+	requireLoopback(t)
 	path, scope := filepath.Join(t.TempDir(), "auth.json"), "issuer::client"
 	if err := auth.Save(path, scope, auth.Credential{Key: "token", AuthMode: "oidc"}); err != nil {
 		t.Fatal(err)
@@ -48,6 +49,7 @@ func TestSetCodingDataRetention(t *testing.T) {
 }
 
 func TestSetCodingDataRetentionRefreshesAfterUnauthorized(t *testing.T) {
+	requireLoopback(t)
 	path, scope := filepath.Join(t.TempDir(), "auth.json"), "issuer::client"
 	if err := auth.Save(path, scope, auth.Credential{Key: "old", RefreshToken: "refresh", AuthMode: "oidc"}); err != nil {
 		t.Fatal(err)
@@ -83,6 +85,7 @@ func TestSetCodingDataRetentionRefreshesAfterUnauthorized(t *testing.T) {
 }
 
 func TestSetCodingDataRetentionErrors(t *testing.T) {
+	requireLoopback(t)
 	path, scope := filepath.Join(t.TempDir(), "auth.json"), "issuer::client"
 	requests := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
@@ -137,6 +140,7 @@ func (f privacyRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, 
 }
 
 func TestSetCodingDataRetentionProviderAndTransportErrors(t *testing.T) {
+	requireLoopback(t)
 	path, scope := filepath.Join(t.TempDir(), "auth.json"), "issuer::client"
 	if err := auth.Save(path, scope, auth.Credential{Key: "token", AuthMode: "oidc"}); err != nil {
 		t.Fatal(err)
@@ -185,6 +189,7 @@ func TestPrivacyResponseError(t *testing.T) {
 }
 
 func TestPrivacyExtensionRoutesThroughServer(t *testing.T) {
+	requireLoopback(t)
 	path, scope := filepath.Join(t.TempDir(), "auth.json"), "issuer::client"
 	if err := auth.Save(path, scope, auth.Credential{Key: "token", AuthMode: "oidc"}); err != nil {
 		t.Fatal(err)

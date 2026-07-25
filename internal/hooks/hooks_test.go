@@ -271,6 +271,7 @@ func TestHTTPHookRejectsUnsafeTargets(t *testing.T) {
 func TestDiscoverGlobalAndTrustedProjectSources(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("GROK_HOME", filepath.Join(home, ".grok"))
 	root := t.TempDir()
 	if err := exec.Command("git", "init", "-q", root).Run(); err != nil {

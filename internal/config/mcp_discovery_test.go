@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/lookcorner/go-cli/internal/compat"
@@ -22,7 +23,7 @@ command = "project-only"
 	writeMCPFile(t, filepath.Join(root, ".mcp.json"), `{"mcpServers":{"shared":{"command":"local"},"local":{"command":"local-only"}}}`)
 	writeMCPFile(t, filepath.Join(root, ".cursor", "mcp.json"), `{"mcpServers":{"shared":{"command":"cursor-project"},"cursor":{"command":"cursor-project"}}}`)
 	writeMCPFile(t, filepath.Join(home, ".cursor", "mcp.json"), `{"mcpServers":{"cursor":{"command":"cursor-global"},"cursor-global":{"command":"cursor-global"}}}`)
-	writeMCPFile(t, filepath.Join(home, ".claude.json"), `{"mcpServers":{"shared":{"command":"claude-user"},"claude-user":{"command":"claude-user"}},"projects":{"`+root+`":{"mcpServers":{"claude":{"command":"claude-project"}}}}}`)
+	writeMCPFile(t, filepath.Join(home, ".claude.json"), `{"mcpServers":{"shared":{"command":"claude-user"},"claude-user":{"command":"claude-user"}},"projects":{`+strconv.Quote(root)+`:{"mcpServers":{"claude":{"command":"claude-project"}}}}}`)
 	pluginRoot := filepath.Join(root, "plugin")
 	pluginData := filepath.Join(home, ".grok", "plugin-data", "p")
 	writeMCPFile(t, filepath.Join(pluginRoot, ".mcp.json"), `{"mcpServers":{"shared":{"command":"plugin"},"plugin":{"command":"${GROK_PLUGIN_ROOT}/bin","args":["$MCP_TOKEN","$UNKNOWN"],"env":{"DATA":"${GROK_PLUGIN_DATA}"}}}}`)
@@ -94,7 +95,7 @@ func TestDiscoverMCPServersBlocksUntrustedProjectSources(t *testing.T) {
 	writeMCPFile(t, filepath.Join(root, ".mcp.json"), `{"mcpServers":{"project":{"command":"project"}}}`)
 	writeMCPFile(t, filepath.Join(root, ".cursor", "mcp.json"), `{"mcpServers":{"cursor-project":{"command":"project"}}}`)
 	writeMCPFile(t, filepath.Join(home, ".cursor", "mcp.json"), `{"mcpServers":{"cursor-user":{"command":"user"}}}`)
-	writeMCPFile(t, filepath.Join(home, ".claude.json"), `{"mcpServers":{"claude-user":{"command":"user"}},"projects":{"`+root+`":{"mcpServers":{"claude-project":{"command":"project"}}}}}`)
+	writeMCPFile(t, filepath.Join(home, ".claude.json"), `{"mcpServers":{"claude-user":{"command":"user"}},"projects":{`+strconv.Quote(root)+`:{"mcpServers":{"claude-project":{"command":"project"}}}}}`)
 	servers := discoverMCPServers(root, home, Config{Compat: compat.Default(), MCPServers: map[string]MCPServerConfig{
 		"project": {Command: "global-fallback"},
 	}}, []plugin.Plugin{{

@@ -26,7 +26,7 @@ func TestUpdateDefaultModelPreservesConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o640 {
+	if info.Mode().Perm() != wantConfigPerm(0o640) {
 		t.Fatalf("mode=%v", info.Mode().Perm())
 	}
 }

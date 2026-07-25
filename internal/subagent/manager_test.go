@@ -667,6 +667,7 @@ func TestSubagentCustomCWDRebindsToolsAndPersistsOnResume(t *testing.T) {
 
 func TestSanitizeCWD(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("HOME", home)
 	for input, want := range map[string]string{
 		`"  /tmp  "`: "/tmp", "'/tmp": "/tmp", "/tmp`": "/tmp",

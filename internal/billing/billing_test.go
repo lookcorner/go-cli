@@ -88,6 +88,7 @@ func TestFormatUsageClampsAndDisablesUnknownTopup(t *testing.T) {
 }
 
 func TestUsageFetchesBillingAndAutoTopup(t *testing.T) {
+	requireLoopback(t)
 	path, scope := filepath.Join(t.TempDir(), "auth.json"), "issuer::client"
 	if err := auth.Save(path, scope, auth.Credential{Key: "token", UserID: "user-1", AuthMode: "oidc"}); err != nil {
 		t.Fatal(err)

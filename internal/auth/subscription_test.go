@@ -14,6 +14,7 @@ import (
 )
 
 func TestCheckSubscriptionRecognizesExactPaidTiers(t *testing.T) {
+	requireLoopback(t)
 	tiers := []string{"SuperGrokPro", "GrokPro", "SuperGrokLite", "XPremiumPlus", "XPremium", "XBasic"}
 	for _, tier := range tiers {
 		t.Run(tier, func(t *testing.T) {
@@ -41,6 +42,7 @@ func TestCheckSubscriptionRecognizesExactPaidTiers(t *testing.T) {
 }
 
 func TestCheckSubscriptionRejectsMissingFreeAndPartialTiers(t *testing.T) {
+	requireLoopback(t)
 	for _, tier := range []any{nil, "", "Free", "Super", "Grok", "XPremium+", " GrokPro"} {
 		t.Run(fmt.Sprint(tier), func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {

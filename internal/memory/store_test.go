@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -24,7 +25,7 @@ func TestStoreWritesDeduplicatesAndBuildsBoundedContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	if info.Mode().Perm() != wantMemMode(0o600) {
 		t.Fatalf("memory mode=%v", info.Mode().Perm())
 	}
 	if duplicatePath, duplicate, err := store.Write("pre_compaction", content); err != nil || duplicate || duplicatePath != path {
@@ -83,7 +84,7 @@ func TestStoreSeparatesWorkspacesAndRejectsSymlinkSources(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(target, filepath.Join(first.sessionsDir, "escape.md")); err != nil {
-		t.Fatal(err)
+		t.Skipf("symlinks unavailable: %v", err)
 	}
 	context, err := first.Context()
 	if err != nil || strings.Contains(context, "secret") {
@@ -119,7 +120,7 @@ func TestAppendGlobalNormalizesAndRejectsSymlink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	if info.Mode().Perm() != wantMemMode(0o600) {
 		t.Fatalf("mode=%v", info.Mode().Perm())
 	}
 	if _, err := AppendGlobal(root, "   "); err == nil {
@@ -141,7 +142,7 @@ func TestAppendGlobalNormalizesAndRejectsSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(outside, path); err != nil {
-		t.Fatal(err)
+		t.Skipf("symlinks unavailable: %v", err)
 	}
 	if _, err := AppendGlobal(root, "escape"); err == nil {
 		t.Fatal("symlink global memory was accepted")
@@ -186,7 +187,7 @@ func TestClearMemoryScopesAndRejectsSymlinks(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(outside, workspacePath); err != nil {
-		t.Fatal(err)
+		t.Skipf("symlinks unavailable: %v", err)
 	}
 	if _, err := ClearWorkspace(root, workspace); err == nil {
 		t.Fatal("workspace symlink was cleared")
@@ -268,7 +269,7 @@ func TestStoreGCRemovesOnlyEligibleWorkspaceDirectories(t *testing.T) {
 	}
 	linked := filepath.Join(root, "tmp-linked")
 	if err := os.Symlink(t.TempDir(), linked); err != nil {
-		t.Fatal(err)
+		t.Skipf("symlinks unavailable: %v", err)
 	}
 	currentOld := time.Now().Add(-60 * 24 * time.Hour)
 	if err := os.Chtimes(store.workspaceDir, currentOld, currentOld); err != nil {
@@ -300,7 +301,7 @@ func TestStoreGCHandlesMissingAndUnsafeRoots(t *testing.T) {
 	outside := t.TempDir()
 	linked := filepath.Join(t.TempDir(), "memory")
 	if err := os.Symlink(outside, linked); err != nil {
-		t.Fatal(err)
+		t.Skipf("symlinks unavailable: %v", err)
 	}
 	store.root = linked
 	if _, err := store.GC(30); err == nil {
@@ -426,3 +427,11 @@ func TestEditLinesReplacesDeletesAndValidates(t *testing.T) {
 }
 
 func intPtr(value int) *int { return &value }
+
+// wantMemMode maps a Unix permission expectation to what the platform reports.
+func wantMemMode(unix os.FileMode) os.FileMode {
+	if runtime.GOOS == "windows" {
+		return 0o666
+	}
+	return unix
+}

@@ -16,6 +16,7 @@ import (
 )
 
 func TestCloudExtensionsWireContract(t *testing.T) {
+	requireLoopback(t)
 	type requestRecord struct {
 		Method string
 		Path   string

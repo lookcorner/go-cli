@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -15,6 +16,9 @@ import (
 )
 
 func TestLookupPRStatus(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake gh scripts require a POSIX shell")
+	}
 	root := t.TempDir()
 	installFakeGH(t, root, `
 case "$1" in
@@ -29,6 +33,9 @@ esac
 }
 
 func TestLookupPRStatusStatesAndFailures(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake gh scripts require a POSIX shell")
+	}
 	tests := []struct {
 		name, output, want string
 	}{
@@ -56,6 +63,9 @@ func TestLookupPRStatusStatesAndFailures(t *testing.T) {
 }
 
 func TestLookupMergeQueueDegradesToFalse(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake gh scripts require a POSIX shell")
+	}
 	for _, output := range []string{
 		`{"data":{"resource":{"isInMergeQueue":false}}}`,
 		`{"data":{"resource":null}}`,
@@ -75,6 +85,9 @@ func TestLookupMergeQueueDegradesToFalse(t *testing.T) {
 }
 
 func TestPRStatusServeRoute(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake gh scripts require a POSIX shell")
+	}
 	root := t.TempDir()
 	installFakeGH(t, root, "exit 1")
 	var output bytes.Buffer
