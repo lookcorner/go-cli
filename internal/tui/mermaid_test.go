@@ -225,6 +225,106 @@ func TestRenderMermaidMindmap(t *testing.T) {
 	}
 }
 
+func TestRenderMermaidBlock(t *testing.T) {
+	source := "block-beta\ncolumns 2\nA[\"Input\"] --> B['Process']\nC[Output]\nB --> C"
+	lines, ok := renderMermaid(source, 32, paletteFor("groknight"))
+	if !ok {
+		t.Fatal("supported Mermaid block diagram was rejected")
+	}
+	rendered := stripUIANSI(strings.Join(lines, "\n"))
+	for _, expected := range []string{
+		"◇ mermaid block", "columns: 2", "[Input] │ [Process]", "[Output]",
+		"Input → Process", "Process → Output",
+	} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("rendered block diagram missing %q:\n%s", expected, rendered)
+		}
+	}
+	for _, line := range lines {
+		if displayWidth(stripUIANSI(line)) > 32 {
+			t.Fatalf("block diagram line exceeds width: %q", stripUIANSI(line))
+		}
+	}
+}
+
+func TestRenderMermaidBlockMatchesReferenceParsing(t *testing.T) {
+	source := "%% comment\nblock-beta extra\ncolumns 3\ncolumns nope\nblock: group\nspace:2\nstyle A fill:red\nclassDef hot fill:red\nclass A hot\nlinkStyle 0 stroke:red\nend\nA\nA[Explicit]\nA\nB[Missing close\nA --> C\nC[Final]"
+	lines, ok := renderMermaid(source, 52, paletteFor("groknight"))
+	if !ok {
+		t.Fatal("reference-compatible Mermaid block diagram was rejected")
+	}
+	rendered := stripUIANSI(strings.Join(lines, "\n"))
+	for _, expected := range []string{
+		"columns: 3", "[Explicit] │ [Missing close] │ [Final]", "Explicit → Final",
+	} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("block parsing differs from reference, missing %q:\n%s", expected, rendered)
+		}
+	}
+	for _, unexpected := range []string{"group", "space:2", "fill:red", "hot"} {
+		if strings.Contains(rendered, unexpected) {
+			t.Fatalf("block rendered ignored directive %q:\n%s", unexpected, rendered)
+		}
+	}
+}
+
+func TestRenderMermaidBlockAcceptsEmptyAndUnusualColumns(t *testing.T) {
+	for _, test := range []struct {
+		source string
+		want   string
+	}{
+		{source: "block-beta", want: "columns: auto"},
+		{source: "block-beta\ncolumns 0\nA", want: "columns: 0"},
+		{source: "block-beta\ncolumns -2\nA", want: "columns: auto"},
+		{source: "block-beta\ncolumns 2\ncolumns auto\nA", want: "columns: auto"},
+	} {
+		lines, ok := renderMermaid(test.source, 32, paletteFor("groknight"))
+		if !ok {
+			t.Fatalf("reference-compatible block diagram was rejected: %q", test.source)
+		}
+		if rendered := stripUIANSI(strings.Join(lines, "\n")); !strings.Contains(rendered, test.want) {
+			t.Fatalf("block diagram missing %q:\n%s", test.want, rendered)
+		}
+	}
+}
+
+func TestRenderMermaidBlockRejectsReferenceParseErrors(t *testing.T) {
+	for _, source := range []string{
+		"block-beta\n--> B",
+		"block-beta\nA -->",
+		"block-beta\nA --> [Missing id]",
+		"flowchart TD\nA --> B",
+	} {
+		if _, ok := renderMermaidBlock(source, 40, paletteFor("groknight")); ok {
+			t.Fatalf("invalid block diagram was accepted: %q", source)
+		}
+	}
+}
+
+func TestRenderMermaidBlockBoundsStatements(t *testing.T) {
+	var source strings.Builder
+	source.WriteString("block-beta\n")
+	for index := 0; index < maxMermaidStatements; index++ {
+		source.WriteString("A\n")
+	}
+	if _, ok := renderMermaid(source.String(), 40, paletteFor("groknight")); ok {
+		t.Fatal("block diagram exceeding the statement limit was accepted")
+	}
+}
+
+func TestRenderMarkdownRendersClosedMermaidBlock(t *testing.T) {
+	source := "Before\n```mermaid\nblock-beta\nA --> B\n```\nAfter"
+	rendered := stripUIANSI(strings.Join(renderMarkdown(source, 32), "\n"))
+	for _, expected := range []string{"Before", "◇ mermaid block", "[A] │ [B]", "A → B", "After"} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("rendered Mermaid block diagram missing %q:\n%s", expected, rendered)
+		}
+	}
+	if strings.Contains(rendered, "block-beta\nA") {
+		t.Fatalf("closed Mermaid block source was not replaced:\n%s", rendered)
+	}
+}
+
 func TestRenderMermaidMindmapMatchesReferenceParsing(t *testing.T) {
 	source := "%% comment\nmindmap extra\n  plain root\n    rect[Rectangle]\n    round(Rounded)\n    circle((Circle))\n    hex{{Hexagon}}\n    bang))Bang((\n    ::icon(fa fa-book)\n    empty(())\n  sibling root"
 	lines, ok := renderMermaid(source, 48, paletteFor("groknight"))

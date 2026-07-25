@@ -100,6 +100,11 @@ type mermaidMindmapNode struct {
 	children []*mermaidMindmapNode
 }
 
+type mermaidBlockEdge struct {
+	from string
+	to   string
+}
+
 var mermaidOperators = []string{
 	"||--o{", "||--|{", "}o--o{", "}o..o{", "}o--||", "}|..|{",
 	"<|--", "<-->", "--|>", "-.->", "-->>", "->>", "--x", "--o", "-x", "==>", "-->", "<--",
@@ -135,6 +140,9 @@ func renderMermaid(source string, width int, theme themePalette) ([]string, bool
 	}
 	if firstToken == "mindmap" {
 		return renderMermaidMindmap(source, width, theme)
+	}
+	if firstToken == "block-beta" {
+		return renderMermaidBlock(source, width, theme)
 	}
 	statements, complete := mermaidStatements(source)
 	if !complete || len(statements) < 1 {
@@ -186,6 +194,113 @@ func renderMermaid(source string, width int, theme themePalette) ([]string, bool
 		}
 	}
 	return lines, true
+}
+
+func renderMermaidBlock(source string, width int, theme themePalette) ([]string, bool) {
+	nodes := make(map[string]string)
+	order := make([]string, 0)
+	edges := make([]mermaidBlockEdge, 0)
+	columns := -1
+	foundHeader := false
+	statements := 0
+	insertNode := func(id, label string) {
+		if _, exists := nodes[id]; !exists {
+			order = append(order, id)
+			nodes[id] = label
+		} else if label != id {
+			nodes[id] = label
+		}
+	}
+	for _, raw := range strings.Split(source, "\n") {
+		statement := strings.TrimSpace(raw)
+		if statement == "" || strings.HasPrefix(statement, "%%") {
+			continue
+		}
+		statements++
+		if statements > maxMermaidStatements {
+			return nil, false
+		}
+		if !foundHeader {
+			if strings.Fields(statement)[0] != "block-beta" {
+				return nil, false
+			}
+			foundHeader = true
+			continue
+		}
+		if value, ok := strings.CutPrefix(statement, "columns"); ok {
+			value = strings.TrimSpace(value)
+			if value == "auto" {
+				columns = -1
+			} else if parsed, err := strconv.Atoi(value); err == nil {
+				columns = parsed
+			}
+			continue
+		}
+		if statement == "end" || strings.HasPrefix(statement, "block:") || strings.HasPrefix(statement, "block ") ||
+			strings.HasPrefix(statement, "style ") || strings.HasPrefix(statement, "classDef ") ||
+			strings.HasPrefix(statement, "class ") || strings.HasPrefix(statement, "linkStyle ") ||
+			statement == "space" || strings.HasPrefix(statement, "space:") {
+			continue
+		}
+		if left, right, ok := strings.Cut(statement, "-->"); ok {
+			from, fromLabel, valid := mermaidBlockNode(left)
+			if !valid {
+				return nil, false
+			}
+			to, toLabel, valid := mermaidBlockNode(right)
+			if !valid {
+				return nil, false
+			}
+			insertNode(from, fromLabel)
+			insertNode(to, toLabel)
+			edges = append(edges, mermaidBlockEdge{from: from, to: to})
+			continue
+		}
+		if id, label, valid := mermaidBlockNode(statement); valid {
+			insertNode(id, label)
+		}
+	}
+	lines := []string{ansiDim + mermaidFit("◇ mermaid block", width) + ansiReset}
+	columnText := "auto"
+	if columns >= 0 {
+		columnText = strconv.Itoa(columns)
+	}
+	lines = append(lines, theme.heading+mermaidFit("columns: "+columnText, width)+ansiReset)
+	rowSize := len(order)
+	if columns > 0 && columns < rowSize {
+		rowSize = columns
+	}
+	if rowSize > 0 {
+		for start := 0; start < len(order); start += rowSize {
+			end := min(start+rowSize, len(order))
+			labels := make([]string, 0, end-start)
+			for _, id := range order[start:end] {
+				labels = append(labels, "["+nodes[id]+"]")
+			}
+			lines = append(lines, theme.code+mermaidFit(strings.Join(labels, " │ "), width)+ansiReset)
+		}
+	}
+	for _, edge := range edges {
+		lines = append(lines, theme.code+mermaidFit(nodes[edge.from]+" → "+nodes[edge.to], width)+ansiReset)
+	}
+	return lines, true
+}
+
+func mermaidBlockNode(value string) (string, string, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", "", false
+	}
+	if start := strings.IndexByte(value, '['); start >= 0 {
+		id := strings.TrimSpace(value[:start])
+		if id == "" {
+			return "", "", false
+		}
+		label := strings.TrimSpace(value[start+1:])
+		label = strings.TrimSpace(strings.TrimSuffix(label, "]"))
+		return id, mermaidUnquote(label), true
+	}
+	return value, value, true
 }
 
 func renderMermaidMindmap(source string, width int, theme themePalette) ([]string, bool) {
