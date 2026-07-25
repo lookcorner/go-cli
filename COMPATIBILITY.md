@@ -87,6 +87,8 @@ Hook-capable ACP sessions advertise and locally execute the reference
 `/hooks-remove` commands without starting a model turn. Command discovery also
 preserves the reference ordering across the implemented memory, Hook, Goal, and
 scheduler groups.
+Pre-tool hook denials return their reason as the blocked tool result so the
+model can adapt or retry without cancelling the active turn.
 Feedback-capable ACP and TUI sessions advertise `/feedback`; submissions are
 persisted locally without a model turn and deliberately use the reference
 `LocalOnly` outcome because this privacy build does not configure a feedback

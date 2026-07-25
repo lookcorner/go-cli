@@ -16,6 +16,7 @@ import (
 
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/compat"
+	"github.com/lookcorner/go-cli/internal/hooks"
 	"github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/skills"
 	"github.com/lookcorner/go-cli/internal/tools"
@@ -195,6 +196,7 @@ func (f *cloneablePrefireStreamer) state() ([]bool, int) {
 
 type recordingToolObserver struct {
 	results []tools.ExecutionResult
+	errors  []error
 }
 
 type citationResultTool struct{}
@@ -342,7 +344,7 @@ func (p *denyingHookPolicy) UserPromptSubmitted(_ context.Context, prompt string
 }
 func (p *denyingHookPolicy) BeforeTool(_ context.Context, call api.ToolCall) error {
 	p.before = append(p.before, call.Name)
-	return errors.New("blocked by policy")
+	return &hooks.DeniedError{Hook: "client", Reason: "use read_file instead"}
 }
 func (p *denyingHookPolicy) AfterTool(_ context.Context, call api.ToolCall, _ tools.ExecutionResult, _ error) {
 	p.after = append(p.after, call.Name)
@@ -355,8 +357,9 @@ func (*denyingHookPolicy) AfterCompact(context.Context, string)  {}
 
 func (*recordingToolObserver) ToolStarted(api.ToolCall) {}
 
-func (o *recordingToolObserver) ToolFinished(_ api.ToolCall, result tools.ExecutionResult, _ error) {
+func (o *recordingToolObserver) ToolFinished(_ api.ToolCall, result tools.ExecutionResult, err error) {
 	o.results = append(o.results, result)
+	o.errors = append(o.errors, err)
 }
 
 func TestRunnerHookPolicyCanDenyBeforeToolExecution(t *testing.T) {
@@ -375,8 +378,12 @@ func TestRunnerHookPolicyCanDenyBeforeToolExecution(t *testing.T) {
 		HookPolicy: policy, ToolObserver: observer, Model: "test", MaxSteps: 2,
 	}
 	defer runner.Tools.Close()
-	if _, err := runner.Run(context.Background(), "inspect"); err != nil {
+	result, err := runner.Run(context.Background(), "inspect")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if result.Text != "done" {
+		t.Fatalf("result=%#v", result)
 	}
 	if _, err := os.Stat(filepath.Join(ws.Root(), "should-not-exist")); !os.IsNotExist(err) {
 		t.Fatalf("denied tool executed: %v", err)
@@ -384,7 +391,10 @@ func TestRunnerHookPolicyCanDenyBeforeToolExecution(t *testing.T) {
 	if policy.started != 1 || strings.Join(policy.prompts, "|") != "inspect" || strings.Join(policy.before, "|") != "shell" || len(policy.after) != 0 || strings.Join(policy.stopped, "|") != "completed" {
 		t.Fatalf("policy=%#v", policy)
 	}
-	if len(streamer.requests) != 2 || !strings.Contains(streamer.requests[1].Input[0].Output, "blocked by policy") || len(observer.results) != 1 {
+	if len(streamer.requests) != 2 || len(streamer.requests[1].Input) != 1 || streamer.requests[1].Input[0].Output != "ERROR: hook client denied tool use: use read_file instead" {
+		t.Fatalf("requests=%#v", streamer.requests)
+	}
+	if len(observer.results) != 1 || len(observer.errors) != 1 || observer.errors[0] == nil || !strings.Contains(observer.errors[0].Error(), "use read_file instead") {
 		t.Fatalf("requests=%#v observer=%#v", streamer.requests, observer)
 	}
 }
