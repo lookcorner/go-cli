@@ -87,13 +87,8 @@ func (b *Bridge) ToolFinished(call api.ToolCall, result tools.ExecutionResult, e
 
 func (m *model) finishTool(event toolFinishedEvent) {
 	m.finishThought()
-	if m.minimal && len(event.result.Images) > 0 && m.inlineProtocol() != imageProtocolNone {
-		m.pendingImages = append(m.pendingImages, event.result.Images...)
-		if len(m.pendingImages) > 32 {
-			m.pendingImages = m.pendingImages[len(m.pendingImages)-32:]
-		}
-	}
-	full, _ := renderToolBlock(event.call, event.result, event.err, false)
+	images := m.inlineImagesFor(event.result.Images)
+	full, _ := renderToolBlock(event.call, event.result, images, event.err, false)
 	if m.groupToolVerbs {
 		if kind, ok := classifyToolVerb(event.call.Name, event.call.Arguments); ok {
 			m.finishCollapsedEditGroup()
@@ -113,7 +108,7 @@ func (m *model) finishTool(event toolFinishedEvent) {
 		}
 	}
 	m.finishCollapsedEditGroup()
-	compact, folded := renderToolBlock(event.call, event.result, event.err, true)
+	compact, folded := renderToolBlock(event.call, event.result, images, event.err, true)
 	start := m.transcript.Len()
 	m.appendToolDisplay(compact)
 	if folded {
@@ -325,13 +320,7 @@ func toolFoldReplacement(current, body string) string {
 	return leading + strings.TrimSpace(body) + trailing
 }
 
-func renderToolBlock(call api.ToolCall, result tools.ExecutionResult, toolErr error, compact bool) (string, bool) {
-	images := make([]session.DisplayImage, 0, len(result.Images))
-	for _, image := range result.Images {
-		images = append(images, session.DisplayImage{
-			MediaType: image.MediaType, Width: image.Width, Height: image.Height, Bytes: len(image.Data),
-		})
-	}
+func renderToolBlock(call api.ToolCall, result tools.ExecutionResult, images []session.DisplayImage, toolErr error, compact bool) (string, bool) {
 	output := result.Output
 	if toolErr != nil {
 		if strings.TrimSpace(output) != "" {
@@ -376,9 +365,14 @@ func renderStoredToolBlock(tool session.DisplayTool, compact bool) (string, bool
 	if len(tool.Images) > 0 {
 		lines := make([]string, 0, len(tool.Images))
 		for _, image := range tool.Images {
+			if image.KittyID > 0 && len(image.Data) > 0 {
+				cols, rows := inlineImageCells(image.Width, image.Height, 12)
+				lines = append(lines, toolFence(fmt.Sprintf("gork-image:%d:%d:%d", image.KittyID, cols, rows), kittyPlaceholderGrid(cols, rows)))
+				continue
+			}
 			lines = append(lines, fmt.Sprintf("- %s · %dx%d · %d bytes", image.MediaType, image.Width, image.Height, image.Bytes))
 		}
-		sections = append(sections, "Images\n\n"+strings.Join(lines, "\n"))
+		sections = append(sections, "Images\n\n"+strings.Join(lines, "\n\n"))
 	} else if tool.ImageCount > 0 {
 		sections = append(sections, fmt.Sprintf("Images\n\n- %d image attachment(s)", tool.ImageCount))
 	}

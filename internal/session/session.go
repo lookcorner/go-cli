@@ -56,6 +56,10 @@ type DisplayImage struct {
 	Width     int    `json:"width"`
 	Height    int    `json:"height"`
 	Bytes     int    `json:"bytes"`
+	// KittyID and Data are live-only: they drive kitty Unicode placeholder
+	// rendering and are never persisted into session logs.
+	KittyID int    `json:"-"`
+	Data    []byte `json:"-"`
 }
 
 type UserFeedback struct {

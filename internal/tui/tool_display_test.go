@@ -28,8 +28,9 @@ func TestRenderToolBlockFoldsAndPreservesFullOutput(t *testing.T) {
 		Output: strings.Join(lines, "\n"),
 		Images: []tools.ImageAttachment{{MediaType: "image/png", Width: 10, Height: 20, Data: []byte("png")}},
 	}
-	compact, folded := renderToolBlock(call, result, nil, true)
-	full, fullFolded := renderToolBlock(call, result, nil, false)
+	images := []session.DisplayImage{{MediaType: "image/png", Width: 10, Height: 20, Bytes: 3}}
+	compact, folded := renderToolBlock(call, result, images, nil, true)
+	full, fullFolded := renderToolBlock(call, result, images, nil, false)
 	if !folded || fullFolded {
 		t.Fatalf("folded flags: compact=%v full=%v", folded, fullFolded)
 	}

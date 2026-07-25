@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -50,6 +51,15 @@ func renderMarkdownTheme(value string, width int, links bool, theme themePalette
 		trimmed := strings.TrimSpace(raw)
 		ticks, rest := markdownFence(trimmed)
 		mermaidTicks, mermaidRest, quoteDepth := markdownMermaidFence(raw)
+		if codeFence == 0 && ticks >= 3 {
+			if id, ok := parseGorkImageFence(strings.TrimSpace(rest)); ok {
+				if content, closing, found := closedMarkdownFence(rawLines, index+1, ticks); found {
+					lines = append(lines, renderGorkImageFence(content, id)...)
+					index = closing
+					continue
+				}
+			}
+		}
 		if theme.mermaid && codeFence == 0 && mermaidTicks >= 3 {
 			info := strings.Fields(strings.TrimSpace(mermaidRest))
 			if len(info) > 0 && strings.EqualFold(info[0], "mermaid") {
@@ -101,6 +111,38 @@ func markdownMermaidFence(line string) (ticks int, rest string, quoteDepth int) 
 	}
 	ticks, rest = markdownFence(value)
 	return
+}
+
+// parseGorkImageFence reports the kitty image ID of a gork-image fence
+// infostring (gork-image:<id>:<cols>:<rows>).
+func parseGorkImageFence(info string) (int, bool) {
+	if !strings.HasPrefix(info, "gork-image:") {
+		return 0, false
+	}
+	id, err := strconv.Atoi(strings.SplitN(strings.TrimPrefix(info, "gork-image:"), ":", 2)[0])
+	return id, err == nil && id > 0
+}
+
+// renderGorkImageFence colors each placeholder line with its kitty image ID,
+// emitting the grid opaquely without wrapping or markdown styling.
+func renderGorkImageFence(content string, id int) []string {
+	lines := strings.Split(content, "\n")
+	for index, line := range lines {
+		lines[index] = kittyPlaceholderColor(id) + line + "\x1b[39m"
+	}
+	return lines
+}
+
+func closedMarkdownFence(lines []string, start, ticks int) (string, int, bool) {
+	content := make([]string, 0)
+	for index := start; index < len(lines); index++ {
+		count, rest := markdownFence(strings.TrimSpace(lines[index]))
+		if count >= ticks && strings.TrimSpace(rest) == "" {
+			return strings.Join(content, "\n"), index, true
+		}
+		content = append(content, lines[index])
+	}
+	return "", 0, false
 }
 
 func closedMermaidFence(lines []string, start, ticks, quoteDepth int) (string, int, bool) {

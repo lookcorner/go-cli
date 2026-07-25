@@ -575,10 +575,10 @@ responsive. In minimal mode, `/expand` or Ctrl-E reprints the newest folded tool
 block in full beneath the native scrollback; repeated use walks backward through
 up to 256 folded results. In fullscreen mode, focus scrollback with Tab, bring a
 folded tool block into view, and press `e` to expand or collapse it in place.
-In minimal mode, image attachments in tool results are rendered inline on
-terminals that speak the kitty, iTerm2, or sixel graphics protocols (detected
-from the environment); other terminals and fullscreen mode keep the
-metadata-only rendering.
+Image attachments in tool results are rendered inline on kitty terminals via
+Unicode placeholders (both fullscreen and minimal mode), and in minimal mode
+on terminals that speak the iTerm2 or sixel graphics protocols (detected from
+the environment); other terminals keep the metadata-only rendering.
 On directly supported terminals, Markdown links, bare HTTP(S)/FTP/email URLs, and quoted
 absolute file paths use safe OSC 8 targets; spaces in file paths are preserved and
 percent-encoded. The same links remain available through tmux 3.4 or newer when

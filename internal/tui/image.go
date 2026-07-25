@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/tools"
 )
 
@@ -148,4 +149,33 @@ func injectInlineImages(lines []string, images []tools.ImageAttachment, protocol
 		}
 	}
 	return out, consumed
+}
+
+// inlineImagesFor builds the display images for one tool result: kitty
+// terminals get a live ID and an upload queued for Unicode placeholder
+// rendering, other protocols queue bytes for minimal-mode inline blocks.
+func (m *model) inlineImagesFor(attachments []tools.ImageAttachment) []session.DisplayImage {
+	images := make([]session.DisplayImage, 0, len(attachments))
+	for _, image := range attachments {
+		display := session.DisplayImage{MediaType: image.MediaType, Width: image.Width, Height: image.Height, Bytes: len(image.Data)}
+		if len(image.Data) > 0 {
+			switch m.inlineProtocol() {
+			case imageProtocolKitty:
+				m.nextKittyID++
+				display.KittyID = m.nextKittyID
+				display.Data = image.Data
+				cols, rows := inlineImageCells(image.Width, image.Height, 12)
+				m.kittyUploads = append(m.kittyUploads, kittyTransmitVirtual(display.KittyID, image.Data, cols, rows))
+			case imageProtocolITerm2, imageProtocolSixel:
+				if m.minimal {
+					m.pendingImages = append(m.pendingImages, image)
+					if len(m.pendingImages) > 32 {
+						m.pendingImages = m.pendingImages[len(m.pendingImages)-32:]
+					}
+				}
+			}
+		}
+		images = append(images, display)
+	}
+	return images
 }

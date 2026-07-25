@@ -840,6 +840,8 @@ type model struct {
 	imageProtocol        imageProtocol
 	protocolChecked      bool
 	pendingImages        []tools.ImageAttachment
+	nextKittyID          int
+	kittyUploads         [][]byte
 	gboom                *gboomState
 	gboomEpoch           uint64
 	voiceClient          voiceStarter
@@ -1624,7 +1626,7 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitForBridge(m.bridge)
 	case toolFinishedEvent:
 		m.finishTool(msg)
-		return m, waitForBridge(m.bridge)
+		return m, tea.Batch(waitForBridge(m.bridge), m.flushKittyUploads())
 	case cancelSubagentsDoneEvent:
 		if len(msg.errors) > 0 {
 			m.appendSystem("Could not stop subagents: " + strings.Join(msg.errors, "; "))
@@ -5041,6 +5043,22 @@ func (m *model) inlineProtocol() imageProtocol {
 		m.imageProtocol = detectImageProtocol(os.Getenv)
 	}
 	return m.imageProtocol
+}
+
+// flushKittyUploads prints queued kitty image transmissions to the terminal.
+// The escapes are quiet and invisible; placeholder text renders the pixels.
+func (m *model) flushKittyUploads() tea.Cmd {
+	if len(m.kittyUploads) == 0 {
+		return nil
+	}
+	uploads := m.kittyUploads
+	m.kittyUploads = nil
+	return func() tea.Msg {
+		for _, upload := range uploads {
+			_, _ = os.Stdout.Write(upload)
+		}
+		return nil
+	}
 }
 
 func (m *model) beginTurn(prompt string) {
