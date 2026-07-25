@@ -24,6 +24,7 @@ type settingsUpdate struct {
 	RememberToolApprovals            *bool                       `json:"remember_tool_approvals"`
 	GroupToolVerbs                   *bool                       `json:"group_tool_verbs"`
 	CollapsedEditBlocks              *bool                       `json:"collapsed_edit_blocks"`
+	PathNotFoundHints                *bool                       `json:"path_not_found_hints"`
 	SubscriptionWatchIntervalSeconds *uint64                     `json:"subscription_watch_interval_secs"`
 }
 
@@ -63,10 +64,28 @@ func (s *Server) NotifySettingsUpdate(remote *config.RemoteSettings) {
 			PermissionMode: remote.PermissionMode, RememberToolApprovals: remote.RememberToolApprovals,
 			GroupToolVerbs:                   remote.GroupToolVerbs,
 			CollapsedEditBlocks:              remote.CollapsedEditBlocks,
+			PathNotFoundHints:                remote.PathNotFoundHints,
 			SubscriptionWatchIntervalSeconds: remote.SubscriptionWatchIntervalSeconds,
 		},
 	})
 	s.NotifyAnnouncements(remote.Announcements)
+}
+
+func (s *Server) SetPathNotFoundHints(enabled bool) {
+	s.mu.Lock()
+	sessions := make([]*session, 0, len(s.sessions))
+	for _, current := range s.sessions {
+		sessions = append(sessions, current)
+	}
+	s.mu.Unlock()
+	for _, current := range sessions {
+		current.mu.Lock()
+		runner, closed := current.runner, current.closed
+		current.mu.Unlock()
+		if !closed && runner != nil && runner.Tools != nil {
+			runner.Tools.SetPathNotFoundHints(enabled)
+		}
+	}
 }
 
 // NotifyAnnouncements stores a remote snapshot and publishes it when visible state changed.

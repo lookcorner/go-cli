@@ -61,13 +61,16 @@ func (t *readFileTool) readPDFImages(ctx context.Context, raw json.RawMessage) (
 	if requestedPath == "" {
 		requestedPath = args.Path
 	}
-	path, err := t.resolvePath(requestedPath)
+	path, err := t.resolvePathWithHints(requestedPath)
 	if err != nil {
 		return ExecutionResult{}, strings.EqualFold(filepath.Ext(requestedPath), ".pdf"), err
 	}
 	file, err := os.Open(path)
 	if err != nil {
 		if strings.EqualFold(filepath.Ext(requestedPath), ".pdf") {
+			if hinted := enrichPathNotFound(requestedPath, path, t.ws, err, t.pathHints != nil && t.pathHints.Load()); hinted != err {
+				return ExecutionResult{}, true, hinted
+			}
 			return ExecutionResult{}, true, fmt.Errorf("open %q: %w", requestedPath, err)
 		}
 		return ExecutionResult{}, false, nil
@@ -146,13 +149,16 @@ func (t *readFileTool) readImage(raw json.RawMessage) (ExecutionResult, bool, er
 		requestedPath = args.Path
 	}
 	expectedType, knownExtension := imageTypes[strings.ToLower(filepath.Ext(requestedPath))]
-	path, err := t.resolvePath(requestedPath)
+	path, err := t.resolvePathWithHints(requestedPath)
 	if err != nil {
 		return ExecutionResult{}, knownExtension, err
 	}
 	file, err := os.Open(path)
 	if err != nil {
 		if knownExtension {
+			if hinted := enrichPathNotFound(requestedPath, path, t.ws, err, t.pathHints != nil && t.pathHints.Load()); hinted != err {
+				return ExecutionResult{}, true, hinted
+			}
 			return ExecutionResult{}, true, fmt.Errorf("open %q: %w", requestedPath, err)
 		}
 		return ExecutionResult{}, false, nil

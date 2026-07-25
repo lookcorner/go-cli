@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"unicode/utf8"
 
 	"github.com/lookcorner/go-cli/internal/api"
@@ -53,9 +54,9 @@ func (r *Registry) ConfigureFileToolset(mode, scheme string, hashLen, chunkSize 
 		return err
 	}
 	tools := []Tool{
-		&hashlineReadTool{ws: r.readFile.ws, config: config},
-		&hashlineEditTool{ws: r.readFile.ws, approver: r.approver, rewind: r.rewind, config: config},
-		&hashlineGrepTool{ws: r.readFile.ws, config: config},
+		&hashlineReadTool{ws: r.readFile.ws, config: config, pathHints: r.pathHints},
+		&hashlineEditTool{ws: r.readFile.ws, approver: r.approver, rewind: r.rewind, config: config, pathHints: r.pathHints},
+		&hashlineGrepTool{ws: r.readFile.ws, config: config, pathHints: r.pathHints},
 	}
 	if _, err := r.Replace([]string{"read_file", "grep", "search_replace", "write_file", "edit_file"}, tools); err != nil {
 		return err
@@ -170,8 +171,9 @@ func renderHashlineRegions(lines []string, config hashlineConfig, regions [][2]i
 }
 
 type hashlineReadTool struct {
-	ws     *workspace.Workspace
-	config hashlineConfig
+	ws        *workspace.Workspace
+	config    hashlineConfig
+	pathHints *atomic.Bool
 }
 
 func (*hashlineReadTool) WorkspaceBound() bool { return true }
@@ -202,12 +204,15 @@ func (t *hashlineReadTool) Execute(_ context.Context, raw json.RawMessage) (stri
 	if args.TargetFile == "" {
 		return "", errors.New("target_file is required")
 	}
-	path, err := t.ws.Resolve(args.TargetFile)
+	path, err := resolveToolPath(t.ws, args.TargetFile, t.pathHints != nil && t.pathHints.Load())
 	if err != nil {
 		return "", err
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
+		if hinted := enrichPathNotFound(args.TargetFile, path, t.ws, err, t.pathHints != nil && t.pathHints.Load()); hinted != err {
+			return "", hinted
+		}
 		return "", fmt.Errorf("read %q: %w", args.TargetFile, err)
 	}
 	if len(data) > maxReadBytes || !utf8.Valid(data) || strings.IndexByte(string(data), 0) >= 0 {
@@ -234,14 +239,15 @@ func (t *hashlineReadTool) Execute(_ context.Context, raw json.RawMessage) (stri
 }
 
 type hashlineGrepTool struct {
-	ws     *workspace.Workspace
-	config hashlineConfig
+	ws        *workspace.Workspace
+	config    hashlineConfig
+	pathHints *atomic.Bool
 }
 
 func (*hashlineGrepTool) WorkspaceBound() bool { return true }
 
 func (t *hashlineGrepTool) Definition() api.ToolDefinition {
-	definition := (&grepTool{ws: t.ws}).Definition()
+	definition := (&grepTool{ws: t.ws, pathHints: t.pathHints}).Definition()
 	definition.Name = "hashline_grep"
 	definition.Description = "Search file contents and add hashline anchors to matching and context lines."
 	return definition
@@ -250,7 +256,7 @@ func (t *hashlineGrepTool) Definition() api.ToolDefinition {
 var grepOutputLine = regexp.MustCompile(`^(.*)([:\-])([0-9]+)([:\-])(.*)$`)
 
 func (t *hashlineGrepTool) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
-	output, err := (&grepTool{ws: t.ws}).Execute(ctx, raw)
+	output, err := (&grepTool{ws: t.ws, pathHints: t.pathHints}).Execute(ctx, raw)
 	if err != nil || output == "no matches" {
 		return output, err
 	}
@@ -290,10 +296,11 @@ type hashlineEdit struct {
 }
 
 type hashlineEditTool struct {
-	ws       *workspace.Workspace
-	approver Approver
-	rewind   *mutationCheckpoint
-	config   hashlineConfig
+	ws        *workspace.Workspace
+	approver  Approver
+	rewind    *mutationCheckpoint
+	config    hashlineConfig
+	pathHints *atomic.Bool
 }
 
 func (*hashlineEditTool) WorkspaceBound() bool { return true }
@@ -465,13 +472,16 @@ func (t *hashlineEditTool) Execute(ctx context.Context, raw json.RawMessage) (st
 	if err != nil {
 		return "", fmt.Errorf("decode hashline_edit arguments: %w", err)
 	}
-	path, err := t.ws.Resolve(filePath)
+	writeOnly := len(edits) == 1 && edits[0].Op == "write"
+	path, err := resolveToolPath(t.ws, filePath, !writeOnly && t.pathHints != nil && t.pathHints.Load())
 	if err != nil {
 		return "", err
 	}
 	data, readErr := os.ReadFile(path)
-	writeOnly := len(edits) == 1 && edits[0].Op == "write"
 	if readErr != nil && (!writeOnly || !errors.Is(readErr, os.ErrNotExist)) {
+		if hinted := enrichPathNotFound(filePath, path, t.ws, readErr, t.pathHints != nil && t.pathHints.Load()); hinted != readErr {
+			return "", hinted
+		}
 		return "", fmt.Errorf("read %q: %w", filePath, readErr)
 	}
 	if len(data) > maxWriteBytes || !utf8.Valid(data) {

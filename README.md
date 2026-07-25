@@ -1493,7 +1493,11 @@ available. `list_dir` summarizes subdirectories that exceed its output budget
 with file counts and their most common extensions. `search_replace` preserves
 CRLF files and safely matches common
 rich-text typography such as smart quotes, em dashes, ellipses, and
-non-breaking spaces. `todo_write` maintains the ordered task list across tool calls with
+non-breaking spaces. Authenticated remote settings may enable
+`path_not_found_hints`; missing paths then include the current working directory,
+a dropped-workspace-directory correction when applicable, or up to three
+similar entries from the parent directory. The remote setting defaults off and
+updates live ACP sessions. `todo_write` maintains the ordered task list across tool calls with
 replace, merge, partial-status-update, and duplicate-ID behavior matching the
 reference runtime. `update_goal` reports progress and terminal state when
 `--goal` is active and rejects calls outside goal mode. The compatible command

@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -145,6 +146,7 @@ type Registry struct {
 	hashline      hashlineConfig
 	environment   map[string]string
 	sandbox       SandboxProfile
+	pathHints     *atomic.Bool
 }
 
 type mutationCheckpoint struct {
@@ -238,8 +240,9 @@ func NewRegistryWithHunkMode(ws *workspace.Workspace, approver Approver, mode Hu
 	plan := NewPlanMode(ws, approver)
 	questions := &UserQuestions{plan: plan, timeoutEnabled: true, timeout: 30 * time.Minute}
 	rewind := &mutationCheckpoint{}
+	pathHints := &atomic.Bool{}
 	processes.rewind = rewind
-	readFile := &readFileTool{ws: ws}
+	readFile := &readFileTool{ws: ws, pathHints: pathHints}
 	webFetch := &webFetchTool{
 		approver: approver, restrictDomains: true,
 		domainRules: buildWebDomainRules(defaultWebAllowedDomains),
@@ -258,9 +261,9 @@ func NewRegistryWithHunkMode(ws *workspace.Workspace, approver Approver, mode Hu
 		&monitorTool{manager: processes},
 		&taskOutputTool{manager: processes, subagents: subagents},
 		&killTaskTool{manager: processes, subagents: subagents},
-		&listDirTool{ws: ws},
-		&grepTool{ws: ws},
-		&searchReplaceTool{ws: ws, approver: approver, rewind: rewind},
+		&listDirTool{ws: ws, pathHints: pathHints},
+		&grepTool{ws: ws, pathHints: pathHints},
+		&searchReplaceTool{ws: ws, approver: approver, rewind: rewind, pathHints: pathHints},
 		&todoWriteTool{store: todos},
 		&updateGoalTool{store: goal},
 		&schedulerCreateTool{scheduler: scheduler},
@@ -277,6 +280,7 @@ func NewRegistryWithHunkMode(ws *workspace.Workspace, approver Approver, mode Hu
 		subagents: subagents, scheduler: scheduler, ownsScheduler: true, plan: plan, questions: questions,
 		todos:       todos,
 		fileToolset: "standard", hashline: defaultHashlineConfig(),
+		pathHints: pathHints,
 	}
 	for _, item := range items {
 		registry.tools[item.Definition().Name] = item
@@ -291,6 +295,7 @@ func (r *Registry) ForWorkspace(ws *workspace.Workspace) *Registry {
 	}
 	r.mu.RLock()
 	fileToolset, hashline, environment, sandbox := r.fileToolset, r.hashline, cloneEnvironment(r.environment), r.sandbox
+	pathHints := r.pathHints != nil && r.pathHints.Load()
 	r.mu.RUnlock()
 	child := NewRegistry(ws, r.approver)
 	child.ConfigureEnvironment(environment)
@@ -298,6 +303,7 @@ func (r *Registry) ForWorkspace(ws *workspace.Workspace) *Registry {
 	if fileToolset == "hashline" {
 		_ = child.ConfigureFileToolset(fileToolset, hashline.scheme, hashline.hashLen, hashline.chunkSize)
 	}
+	child.SetPathNotFoundHints(pathHints)
 	_ = child.scheduler.Close()
 	child.scheduler, child.ownsScheduler = r.scheduler, false
 	child.plan = r.plan
@@ -353,6 +359,12 @@ func (r *Registry) ConfigureSandbox(value string) error {
 	}
 	r.setSandbox(profile)
 	return nil
+}
+
+func (r *Registry) SetPathNotFoundHints(enabled bool) {
+	if r != nil && r.pathHints != nil {
+		r.pathHints.Store(enabled)
+	}
 }
 
 func (r *Registry) setSandbox(profile SandboxProfile) {
@@ -1151,6 +1163,7 @@ func objectSchema(properties map[string]any, required ...string) map[string]any 
 type readFileTool struct {
 	ws           *workspace.Workspace
 	artifactRoot string
+	pathHints    *atomic.Bool
 }
 
 func (t *readFileTool) Definition() api.ToolDefinition {
@@ -1188,12 +1201,15 @@ func (t *readFileTool) Execute(_ context.Context, raw json.RawMessage) (string, 
 	if requestedPath == "" {
 		return "", errors.New("target_file is required")
 	}
-	path, err := t.resolvePath(requestedPath)
+	path, err := t.resolvePathWithHints(requestedPath)
 	if err != nil {
 		return "", err
 	}
 	file, err := os.Open(path)
 	if err != nil {
+		if hinted := enrichPathNotFound(requestedPath, path, t.ws, err, t.pathHints != nil && t.pathHints.Load()); hinted != err {
+			return "", hinted
+		}
 		return "", fmt.Errorf("open %q: %w", requestedPath, err)
 	}
 	defer file.Close()
@@ -1312,6 +1328,17 @@ func (t *readFileTool) resolvePath(requested string) (string, error) {
 		return "", errors.New("path escapes workspace and session artifacts")
 	}
 	return resolved, nil
+}
+
+func (t *readFileTool) resolvePathWithHints(requested string) (string, error) {
+	path, err := t.resolvePath(requested)
+	if err == nil || t.pathHints == nil || !t.pathHints.Load() {
+		return path, err
+	}
+	if _, hinted := resolveToolPath(t.ws, requested, true); hinted != nil {
+		return "", hinted
+	}
+	return "", err
 }
 
 func pathWithin(root, path string) bool {
@@ -1515,9 +1542,10 @@ func (t *writeFileTool) Execute(ctx context.Context, raw json.RawMessage) (strin
 }
 
 type editFileTool struct {
-	ws       *workspace.Workspace
-	approver Approver
-	rewind   *mutationCheckpoint
+	ws        *workspace.Workspace
+	approver  Approver
+	rewind    *mutationCheckpoint
+	pathHints *atomic.Bool
 }
 
 func (t *editFileTool) Definition() api.ToolDefinition {
@@ -1546,12 +1574,15 @@ func (t *editFileTool) Execute(ctx context.Context, raw json.RawMessage) (string
 	if args.OldText == "" {
 		return "", errors.New("old_text must not be empty")
 	}
-	path, err := t.ws.Resolve(args.Path)
+	path, err := resolveToolPath(t.ws, args.Path, t.pathHints != nil && t.pathHints.Load())
 	if err != nil {
 		return "", err
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
+		if hinted := enrichPathNotFound(args.Path, path, t.ws, err, t.pathHints != nil && t.pathHints.Load()); hinted != err {
+			return "", hinted
+		}
 		return "", fmt.Errorf("read %q: %w", args.Path, err)
 	}
 	if len(data) > maxWriteBytes || !utf8.Valid(data) {

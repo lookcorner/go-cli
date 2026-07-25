@@ -2,12 +2,18 @@ package acp
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/config"
+	"github.com/lookcorner/go-cli/internal/tools"
+	"github.com/lookcorner/go-cli/internal/workspace"
 )
 
 func TestNotifySettingsUpdate(t *testing.T) {
@@ -17,7 +23,7 @@ func TestNotifySettingsUpdate(t *testing.T) {
 		Tips: []string{"tip"}, Announcements: []config.RemoteAnnouncement{{ID: stringPointer("notice")}},
 		GateMessage: &value, GateURL: &value, GateLabel: &value, AllowAccess: &enabled,
 		SubscriptionTierDisplay: &value, AutoMode: &config.AutoModeConfig{Enabled: &enabled},
-		PermissionMode: &value, RememberToolApprovals: &enabled, GroupToolVerbs: &enabled, CollapsedEditBlocks: &enabled,
+		PermissionMode: &value, RememberToolApprovals: &enabled, GroupToolVerbs: &enabled, CollapsedEditBlocks: &enabled, PathNotFoundHints: &enabled,
 		SubscriptionWatchIntervalSeconds: &interval,
 	}
 	var output bytes.Buffer
@@ -26,12 +32,36 @@ func TestNotifySettingsUpdate(t *testing.T) {
 	decoder := json.NewDecoder(&output)
 	notification := decodeACP(t, decoder)
 	params := notification["params"].(map[string]any)
-	if notification["method"] != "x.ai/settings/update" || params["show_resolved_model"] != true || params["sharing_enabled"] != true || params["session_picker_grouped"] != true || params["tips"].([]any)[0] != "tip" || params["announcements"].([]any)[0].(map[string]any)["id"] != "notice" || params["gate_message"] != value || params["gate_url"] != value || params["gate_label"] != value || params["allow_access"] != true || params["subscription_tier_display"] != value || params["auto_permission_mode_enabled"] != true || params["permission_mode"] != value || params["remember_tool_approvals"] != true || params["group_tool_verbs"] != true || params["collapsed_edit_blocks"] != true || params["subscription_watch_interval_secs"] != float64(interval) {
+	if notification["method"] != "x.ai/settings/update" || params["show_resolved_model"] != true || params["sharing_enabled"] != true || params["session_picker_grouped"] != true || params["tips"].([]any)[0] != "tip" || params["announcements"].([]any)[0].(map[string]any)["id"] != "notice" || params["gate_message"] != value || params["gate_url"] != value || params["gate_label"] != value || params["allow_access"] != true || params["subscription_tier_display"] != value || params["auto_permission_mode_enabled"] != true || params["permission_mode"] != value || params["remember_tool_approvals"] != true || params["group_tool_verbs"] != true || params["collapsed_edit_blocks"] != true || params["path_not_found_hints"] != true || params["subscription_watch_interval_secs"] != float64(interval) {
 		t.Fatalf("notification=%#v", notification)
 	}
 	announcement := decodeACP(t, decoder)
 	if announcement["method"] != "x.ai/announcements/update" || announcement["params"].(map[string]any)["announcements"].([]any)[0].(map[string]any)["id"] != "notice" {
 		t.Fatalf("announcement=%#v", announcement)
+	}
+}
+
+func TestSetPathNotFoundHintsUpdatesLiveSessions(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	closedRegistry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer closedRegistry.Close()
+	server := &Server{sessions: map[string]*session{
+		"open":   {runner: &agent.Runner{Tools: registry}},
+		"closed": {runner: &agent.Runner{Tools: closedRegistry}, closed: true},
+	}}
+	server.SetPathNotFoundHints(true)
+	_, err = registry.Execute(context.Background(), "read_file", json.RawMessage(`{"target_file":"missing.txt"}`))
+	if err == nil || !errors.Is(err, os.ErrNotExist) || !strings.Contains(err.Error(), "current working directory") {
+		t.Fatalf("err=%v", err)
+	}
+	_, err = closedRegistry.Execute(context.Background(), "read_file", json.RawMessage(`{"target_file":"missing.txt"}`))
+	if err == nil || strings.Contains(err.Error(), "current working directory") {
+		t.Fatalf("closed session err=%v", err)
 	}
 }
 
@@ -148,7 +178,7 @@ func TestNotifySettingsUpdatePreservesNullFields(t *testing.T) {
 	server := &Server{output: &output}
 	server.NotifySettingsUpdate(&config.RemoteSettings{})
 	params := decodeACP(t, json.NewDecoder(&output))["params"].(map[string]any)
-	for _, field := range []string{"show_resolved_model", "sharing_enabled", "session_picker_grouped", "tips", "announcements", "gate_message", "gate_url", "gate_label", "allow_access", "subscription_tier_display", "auto_permission_mode_enabled", "permission_mode", "remember_tool_approvals", "group_tool_verbs", "collapsed_edit_blocks", "subscription_watch_interval_secs"} {
+	for _, field := range []string{"show_resolved_model", "sharing_enabled", "session_picker_grouped", "tips", "announcements", "gate_message", "gate_url", "gate_label", "allow_access", "subscription_tier_display", "auto_permission_mode_enabled", "permission_mode", "remember_tool_approvals", "group_tool_verbs", "collapsed_edit_blocks", "path_not_found_hints", "subscription_watch_interval_secs"} {
 		if value, ok := params[field]; !ok || value != nil {
 			t.Fatalf("field %q=%#v present=%v", field, value, ok)
 		}

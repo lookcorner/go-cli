@@ -11,12 +11,16 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/workspace"
 )
 
-type listDirTool struct{ ws *workspace.Workspace }
+type listDirTool struct {
+	ws        *workspace.Workspace
+	pathHints *atomic.Bool
+}
 
 const listDirMaxChars = 10_000
 
@@ -86,12 +90,15 @@ func (t *listDirTool) Execute(_ context.Context, raw json.RawMessage) (string, e
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return "", fmt.Errorf("decode list_dir arguments: %w", err)
 	}
-	root, err := t.ws.Resolve(args.TargetDirectory)
+	root, err := resolveToolPath(t.ws, args.TargetDirectory, t.pathHints != nil && t.pathHints.Load())
 	if err != nil {
 		return "", err
 	}
 	info, err := os.Stat(root)
 	if err != nil {
+		if hinted := enrichPathNotFound(args.TargetDirectory, root, t.ws, err, t.pathHints != nil && t.pathHints.Load()); hinted != err {
+			return "", hinted
+		}
 		return "", fmt.Errorf("read directory %q: %w", args.TargetDirectory, err)
 	}
 	if !info.IsDir() {
@@ -202,7 +209,10 @@ func (t *listDirTool) Execute(_ context.Context, raw json.RawMessage) (string, e
 	return strings.TrimRight(output.String(), "\n"), nil
 }
 
-type grepTool struct{ ws *workspace.Workspace }
+type grepTool struct {
+	ws        *workspace.Workspace
+	pathHints *atomic.Bool
+}
 
 func (t *grepTool) Definition() api.ToolDefinition {
 	integer := func(description string) map[string]any {
@@ -242,9 +252,14 @@ func (t *grepTool) Execute(ctx context.Context, raw json.RawMessage) (string, er
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return "", fmt.Errorf("decode grep arguments: %w", err)
 	}
-	root, err := t.ws.Resolve(args.Path)
+	root, err := resolveToolPath(t.ws, args.Path, t.pathHints != nil && t.pathHints.Load())
 	if err != nil {
 		return "", err
+	}
+	if _, err := os.Stat(root); err != nil {
+		if hinted := enrichPathNotFound(args.Path, root, t.ws, err, t.pathHints != nil && t.pathHints.Load()); hinted != err {
+			return "", hinted
+		}
 	}
 	commandArgs := []string{"--line-number", "--with-filename", "--color", "never", "--regexp", args.Pattern}
 	if args.Glob != "" {
@@ -298,9 +313,10 @@ func (t *grepTool) Execute(ctx context.Context, raw json.RawMessage) (string, er
 }
 
 type searchReplaceTool struct {
-	ws       *workspace.Workspace
-	approver Approver
-	rewind   *mutationCheckpoint
+	ws        *workspace.Workspace
+	approver  Approver
+	rewind    *mutationCheckpoint
+	pathHints *atomic.Bool
 }
 
 func (t *searchReplaceTool) Definition() api.ToolDefinition {
@@ -340,5 +356,5 @@ func (t *searchReplaceTool) Execute(ctx context.Context, raw json.RawMessage) (s
 		"path": args.FilePath, "old_text": args.OldString,
 		"new_text": args.NewString, "replace_all": args.ReplaceAll,
 	})
-	return (&editFileTool{ws: t.ws, approver: t.approver, rewind: t.rewind}).Execute(ctx, encoded)
+	return (&editFileTool{ws: t.ws, approver: t.approver, rewind: t.rewind, pathHints: t.pathHints}).Execute(ctx, encoded)
 }

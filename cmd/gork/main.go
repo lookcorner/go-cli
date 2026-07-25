@@ -675,6 +675,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		_ = registry.Close()
 		return err
 	}
+	registry.SetPathNotFoundHints(cfg.PathNotFoundHints)
 	if err := tools.RegisterMemoryTools(registry, memoryStore, cfg.Memory); err != nil {
 		_ = registry.Close()
 		return err
@@ -3138,6 +3139,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		runtimeConfigMu.Unlock()
 		setBillingMeta(current)
 		if server != nil {
+			server.SetPathNotFoundHints(current.PathNotFoundHints)
 			server.NotifySettingsUpdate(remote)
 		}
 	}
@@ -3367,6 +3369,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			_ = registry.Close()
 			return nil, nil, err
 		}
+		registry.SetPathNotFoundHints(sessionCfg.PathNotFoundHints)
 		registry.ConfigureUserQuestions(sessionCfg.AskUserQuestion.TimeoutEnabled, time.Duration(sessionCfg.AskUserQuestion.TimeoutSeconds)*time.Second)
 		registry.ConfigureGoalRoles(goalRoleConfig(sessionCfg, true))
 		if search, enabled := cfg.WebSearchEndpoint(); enabled && !opts.disableWebSearch {

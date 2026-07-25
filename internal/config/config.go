@@ -88,6 +88,7 @@ type Config struct {
 	FolderTrustEnabled              bool                       `json:"folder_trust_enabled"`
 	AutoWakeEnabled                 bool                       `json:"-"`
 	FeedbackEnabled                 bool                       `json:"-"`
+	PathNotFoundHints               bool                       `json:"-"`
 	UseLeader                       bool                       `json:"-"`
 	ModelProfiles                   map[string]ModelProfile    `json:"-"`
 	AllowedModels                   []string                   `json:"-"`

@@ -51,6 +51,29 @@ func TestApplyRemoteSettingsCopiesAnnouncements(t *testing.T) {
 	}
 }
 
+func TestApplyRemoteSettingsPathNotFoundHints(t *testing.T) {
+	var cfg Config
+	if cfg.PathNotFoundHints {
+		t.Fatal("path hints must default off")
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{PathNotFoundHints: boolPointer(true)})
+	if !cfg.PathNotFoundHints {
+		t.Fatal("remote true was ignored")
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{})
+	if cfg.PathNotFoundHints {
+		t.Fatal("missing remote value did not restore the default")
+	}
+
+	var remote RemoteSettings
+	if err := json.Unmarshal([]byte(`{"path_not_found_hints":true}`), &remote); err != nil {
+		t.Fatal(err)
+	}
+	if remote.PathNotFoundHints == nil || !*remote.PathNotFoundHints {
+		t.Fatalf("remote=%#v", remote.PathNotFoundHints)
+	}
+}
+
 func TestFetchRemoteSettingsIncludesSessionIdentity(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.Header.Get("x-userid") != "user-1" || request.Header.Get("x-email") != "user@example.com" {

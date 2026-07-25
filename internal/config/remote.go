@@ -35,6 +35,7 @@ type RemoteSettings struct {
 	SubscriptionWatchIntervalSeconds *uint64              `json:"subscription_watch_interval_secs"`
 	OfficialMarketplaceAutoRegister  *bool                `json:"official_marketplace_auto_register"`
 	WebFetchEnabled                  *bool                `json:"web_fetch_enabled"`
+	PathNotFoundHints                *bool                `json:"path_not_found_hints"`
 	AutoWakeEnabled                  *bool                `json:"auto_wake_enabled"`
 	FeedbackEnabled                  *bool                `json:"feedback_enabled"`
 	TwoPassCompactionEnabled         *bool                `json:"two_pass_compaction_enabled"`
@@ -215,6 +216,7 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 	if remote.OfficialMarketplaceAutoRegister != nil {
 		c.OfficialMarketplaceAutoRegister = *remote.OfficialMarketplaceAutoRegister
 	}
+	c.PathNotFoundHints = remote.PathNotFoundHints != nil && *remote.PathNotFoundHints
 	value := AutoModeConfig{}
 	if remote.AutoMode != nil {
 		value, _ = normalizeAutoModeConfig(*remote.AutoMode)
