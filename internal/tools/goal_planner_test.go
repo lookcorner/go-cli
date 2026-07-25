@@ -37,7 +37,7 @@ func TestGoalPlannerPersistsPrivatePlanAndRunsOnce(t *testing.T) {
 	for _, target := range []string{path, registry.goal.planBaselinePath} {
 		data, readErr := os.ReadFile(target)
 		info, statErr := os.Stat(target)
-		if readErr != nil || statErr != nil || strings.TrimSpace(string(data)) != testGoalPlan || info.Mode().Perm() != 0o600 {
+		if readErr != nil || statErr != nil || strings.TrimSpace(string(data)) != testGoalPlan || info.Mode().Perm() != wantPerm(0o600) {
 			t.Fatalf("artifact=%q data=%q read=%v stat=%v mode=%v", target, data, readErr, statErr, info)
 		}
 	}

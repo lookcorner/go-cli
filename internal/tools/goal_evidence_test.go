@@ -106,14 +106,14 @@ func TestGoalVerificationCapturesGitEvidenceAndDetails(t *testing.T) {
 		if err != nil {
 			t.Fatalf("artifact %s: %v", path, err)
 		}
-		if info.Mode().Perm() != 0o600 {
+		if info.Mode().Perm() != wantPerm(0o600) {
 			t.Fatalf("artifact %s mode=%v", path, info.Mode().Perm())
 		}
 	}
 	if leftovers, err := filepath.Glob(filepath.Join(artifactDir, ".goal-plan-current-*")); err != nil || len(leftovers) != 0 {
 		t.Fatalf("temporary plan snapshots=%v err=%v", leftovers, err)
 	}
-	if _, err := registry.Execute(context.Background(), "read_file", json.RawMessage(`{"target_file":"`+patchPath+`"}`)); err != nil {
+	if _, err := registry.Execute(context.Background(), "read_file", json.RawMessage(`{"target_file":`+quoted(patchPath)+`}`)); err != nil {
 		t.Fatalf("read evidence artifact: %v", err)
 	}
 }

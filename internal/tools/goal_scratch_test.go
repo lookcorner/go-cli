@@ -20,7 +20,7 @@ func TestGoalScratchCreatesRestoresAndCleansPrivateDirectory(t *testing.T) {
 		t.Fatalf("scratch=%q ready=%v", scratch, ready)
 	}
 	for _, path := range []string{filepath.Dir(scratch), scratch} {
-		if info, err := os.Lstat(path); err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0o700 {
+		if info, err := os.Lstat(path); err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != wantPerm(0o700) {
 			t.Fatalf("private directory %q info=%#v err=%v", path, info, err)
 		}
 	}
@@ -29,7 +29,7 @@ func TestGoalScratchCreatesRestoresAndCleansPrivateDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	reader := registry.View(nil, nil, "read-only")
-	output, err := reader.Execute(context.Background(), "read_file", json.RawMessage(`{"target_file":"`+proof+`"}`))
+	output, err := reader.Execute(context.Background(), "read_file", json.RawMessage(`{"target_file":`+quoted(proof)+`}`))
 	if err != nil || !strings.Contains(output, "verified output") {
 		t.Fatalf("read-only verifier output=%q err=%v", output, err)
 	}

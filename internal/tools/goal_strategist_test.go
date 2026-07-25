@@ -53,7 +53,7 @@ func TestGoalStrategistRunsAtCadenceProtectsPlanAndPersistsNote(t *testing.T) {
 		t.Fatalf("strategist state bonus=%d path=%q note=%q stall=%d", state.strategistBonus, state.strategyPath, state.strategyNote, state.verificationStall)
 	}
 	info, err := os.Stat(state.strategyPath)
-	if err != nil || info.Mode().Perm() != 0o600 {
+	if err != nil || info.Mode().Perm() != wantPerm(0o600) {
 		t.Fatalf("strategy artifact mode=%v err=%v", info, err)
 	}
 	if again := registry.RunGoalStrategist(context.Background()); again != "" || len(backend.requests) != 1 {

@@ -67,7 +67,7 @@ func TestGoalStatePersistsResumesAndCompletes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	if info.Mode().Perm() != wantPerm(0o600) {
 		t.Fatalf("goal state mode=%v", info.Mode().Perm())
 	}
 	second := newPersistentGoalRegistry(t, root, artifactDir)

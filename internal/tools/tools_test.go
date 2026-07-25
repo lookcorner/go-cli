@@ -551,3 +551,16 @@ func TestListDirSummarizesLargeSubdirectory(t *testing.T) {
 		t.Fatalf("collapsed subtree should replace individual entries without truncating:\n%s", output)
 	}
 }
+
+// wantPerm maps a Unix permission expectation to what the platform reports:
+// Windows ignores permission bits, reporting 0666 on files and 0777 on
+// directories regardless of the requested mode.
+func wantPerm(unix os.FileMode) os.FileMode {
+	if runtime.GOOS == "windows" {
+		if unix == 0o700 {
+			return 0o777
+		}
+		return 0o666
+	}
+	return unix
+}
