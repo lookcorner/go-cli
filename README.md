@@ -608,12 +608,14 @@ turns, clicking a tick top-aligns it, and hovering shows the prompt preview.
 `/settings` (aliases `/config`, `/preferences`, and `/prefs`) opens a keyboard
 settings panel for timestamps, the timeline, compact mode, Vim navigation,
 default screen mode, grouped tool verbs, collapsed edit blocks, prompt
-suggestions, remembered tool approvals, Mermaid rendering, and the terminal
-theme. Enter or Space changes the selected value through atomic configuration
-writers, including rollback on write failure. Changing grouped tool verbs or
-collapsed edit blocks immediately rebuilds the full-screen transcript from the
-local session log; disabling prompt suggestions immediately clears the current
-ghost text. Remembered tool approval changes apply to new sessions.
+suggestions, remembered tool approvals, session multiline input, Mermaid
+rendering, and the terminal theme. Enter or Space changes the selected value;
+persisted settings use atomic configuration writers with rollback on write
+failure. Changing grouped tool verbs or collapsed edit blocks immediately
+rebuilds the full-screen transcript from the local session log; disabling
+prompt suggestions immediately clears the current ghost text. Multiline input
+applies to the current session, while remembered tool approval changes apply to
+new sessions.
 `/docs` (aliases `/howto` and `/guides`) opens a 24-entry in-TUI guide picker.
 Enter opens the selected guide and Esc returns to the preserved list; a guide
 title opens it directly with a case-insensitive exact match. `/docs web` and its

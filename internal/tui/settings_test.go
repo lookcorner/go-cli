@@ -92,7 +92,7 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 			t.Fatalf("index=%d command=%v err=%q status=%q", index, command != nil, m.settings.err, m.status)
 		}
 	}
-	if !m.showTimestamps || !m.showTimeline || !m.compactMode || !m.vimMode || !m.defaultMinimal || !m.groupToolVerbs || !m.collapsedEditBlocks || !m.suggestionsEnabled || !m.rememberApprovals ||
+	if !m.showTimestamps || !m.showTimeline || !m.compactMode || !m.vimMode || !m.defaultMinimal || !m.groupToolVerbs || !m.collapsedEditBlocks || !m.suggestionsEnabled || !m.rememberApprovals || !m.multiline ||
 		strings.Join(booleans, ",") != "timestamps,timeline,compact,vim,group,edits,suggestions,remember" || strings.Join(screenModes, ",") != "minimal" {
 		t.Fatalf("timestamps=%v timeline=%v compact=%v vim=%v persisted=%v", m.showTimestamps, m.showTimeline, m.compactMode, m.vimMode, booleans)
 	}
@@ -126,7 +126,7 @@ func TestSettingsPanelRollsBackFailedPersistence(t *testing.T) {
 		t.Fatalf("command=%v minimal=%v err=%q", command != nil, m.defaultMinimal, m.settings.err)
 	}
 
-	m.settings.selected = 9
+	m.settings.selected = 10
 	m.mermaidMode = "auto"
 	m.persistMermaid = func(string) error { return errors.New("read only") }
 	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
@@ -135,7 +135,7 @@ func TestSettingsPanelRollsBackFailedPersistence(t *testing.T) {
 		t.Fatalf("command=%v Mermaid=%q err=%q", command != nil, m.mermaidMode, m.settings.err)
 	}
 
-	m.settings.selected = 10
+	m.settings.selected = 11
 	m.persistTheme = func(string) error { return errors.New("read only") }
 	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)
@@ -383,5 +383,25 @@ func TestSettingsRememberToolApprovalsAppliesAfterRestart(t *testing.T) {
 	request.reply <- approvalOnce
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSettingsMultilineInputAppliesImmediately(t *testing.T) {
+	m := &model{
+		ctx: context.Background(), runner: &agent.Runner{},
+		width: 60, height: 16, settings: &settingsState{selected: 9},
+	}
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || !m.multiline || m.status != "settings updated" {
+		t.Fatalf("command=%v multiline=%v status=%q", command != nil, m.multiline, m.status)
+	}
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
+	m = updated.(*model)
+	m.setInput("first")
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || string(m.input) != "first\n" || m.running {
+		t.Fatalf("command=%v input=%q running=%v", command != nil, m.input, m.running)
 	}
 }

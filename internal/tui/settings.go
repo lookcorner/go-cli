@@ -14,7 +14,7 @@ type settingsState struct {
 	err      string
 }
 
-const settingsCount = 11
+const settingsCount = 12
 
 func (m *model) openSettings() {
 	m.settings = &settingsState{}
@@ -119,6 +119,8 @@ func (m *model) applySetting(selected int) {
 		}
 		restartRequired = state.err == ""
 	case 9:
+		m.toggleMultiline()
+	case 10:
 		previous := m.mermaidMode
 		switch m.mermaidMode {
 		case "auto":
@@ -131,7 +133,7 @@ func (m *model) applySetting(selected int) {
 		if m.persistMermaid != nil {
 			state.err = persistSetting(m.persistMermaid(m.mermaidMode), func() { m.mermaidMode = previous })
 		}
-	case 10:
+	case 11:
 		previousName, previousTheme := m.themeName, m.theme
 		m.themeName = nextTheme(m.themeName)
 		m.theme = paletteForAuto(m.themeName, m.autoDarkTheme, m.autoLightTheme)
@@ -184,6 +186,7 @@ func (m *model) settingsContent() string {
 		settingLine("Collapsed edit blocks", m.collapsedEditBlocks),
 		settingLine("Prompt suggestions", m.suggestionsEnabled),
 		settingLine("Remember tool approvals (restart)", m.rememberApprovals),
+		settingLine("Multiline input", m.multiline),
 		fmt.Sprintf("Mermaid rendering: %s", mermaidMode),
 		fmt.Sprintf("Theme: %s", m.themeName),
 	}
