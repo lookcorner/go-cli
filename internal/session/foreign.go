@@ -126,6 +126,13 @@ func scanCodex(cwd string, now time.Time) []ForeignSummary {
 			home = filepath.Join(userHome, ".codex")
 		}
 	}
+	if summaries := scanCodexDatabases(home, cwd, now); len(summaries) > 0 {
+		return summaries
+	}
+	return scanCodexFiles(home, cwd, now)
+}
+
+func scanCodexFiles(home, cwd string, now time.Time) []ForeignSummary {
 	root := filepath.Join(home, "sessions")
 	if !safeForeignDir(root) {
 		return nil
