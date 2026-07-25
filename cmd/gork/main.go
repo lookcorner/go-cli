@@ -1184,6 +1184,9 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			SetCollapsedEdits: func(enabled bool) error {
 				return config.UpdateCollapsedEditBlocks(opts.configPath, enabled)
 			},
+			SetPromptSuggestions: func(enabled bool) error {
+				return config.UpdatePromptSuggestions(opts.configPath, enabled)
+			},
 			SetDashboardPinned: func(ids []string) error {
 				return config.UpdateDashboardPinned(opts.configPath, ids)
 			},

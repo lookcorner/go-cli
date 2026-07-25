@@ -14,7 +14,7 @@ type settingsState struct {
 	err      string
 }
 
-const settingsCount = 9
+const settingsCount = 10
 
 func (m *model) openSettings() {
 	m.settings = &settingsState{}
@@ -102,6 +102,15 @@ func (m *model) applySetting(selected int) {
 			m.refreshToolDisplay(previous, m.groupToolVerbs)
 		}
 	case 7:
+		previous := m.suggestionsEnabled
+		m.suggestionsEnabled = !previous
+		if m.persistSuggestions != nil {
+			state.err = persistSetting(m.persistSuggestions(m.suggestionsEnabled), func() { m.suggestionsEnabled = previous })
+		}
+		if state.err == "" && !m.suggestionsEnabled {
+			m.clearPromptSuggestion()
+		}
+	case 8:
 		previous := m.mermaidMode
 		switch m.mermaidMode {
 		case "auto":
@@ -114,7 +123,7 @@ func (m *model) applySetting(selected int) {
 		if m.persistMermaid != nil {
 			state.err = persistSetting(m.persistMermaid(m.mermaidMode), func() { m.mermaidMode = previous })
 		}
-	case 8:
+	case 9:
 		previousName, previousTheme := m.themeName, m.theme
 		m.themeName = nextTheme(m.themeName)
 		m.theme = paletteForAuto(m.themeName, m.autoDarkTheme, m.autoLightTheme)
@@ -163,6 +172,7 @@ func (m *model) settingsContent() string {
 		settingLine("Minimal by default", m.defaultMinimal),
 		settingLine("Group tool verbs", m.groupToolVerbs),
 		settingLine("Collapsed edit blocks", m.collapsedEditBlocks),
+		settingLine("Prompt suggestions", m.suggestionsEnabled),
 		fmt.Sprintf("Mermaid rendering: %s", mermaidMode),
 		fmt.Sprintf("Theme: %s", m.themeName),
 	}

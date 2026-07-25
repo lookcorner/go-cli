@@ -63,6 +63,10 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 			booleans = append(booleans, "edits")
 			return nil
 		},
+		persistSuggestions: func(value bool) error {
+			booleans = append(booleans, "suggestions")
+			return nil
+		},
 		persistScreenMode: func(value string) error {
 			screenModes = append(screenModes, value)
 			return nil
@@ -78,8 +82,8 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 			t.Fatalf("index=%d command=%v err=%q status=%q", index, command != nil, m.settings.err, m.status)
 		}
 	}
-	if !m.showTimestamps || !m.showTimeline || !m.compactMode || !m.vimMode || !m.defaultMinimal || !m.groupToolVerbs || !m.collapsedEditBlocks ||
-		strings.Join(booleans, ",") != "timestamps,timeline,compact,vim,group,edits" || strings.Join(screenModes, ",") != "minimal" {
+	if !m.showTimestamps || !m.showTimeline || !m.compactMode || !m.vimMode || !m.defaultMinimal || !m.groupToolVerbs || !m.collapsedEditBlocks || !m.suggestionsEnabled ||
+		strings.Join(booleans, ",") != "timestamps,timeline,compact,vim,group,edits,suggestions" || strings.Join(screenModes, ",") != "minimal" {
 		t.Fatalf("timestamps=%v timeline=%v compact=%v vim=%v persisted=%v", m.showTimestamps, m.showTimeline, m.compactMode, m.vimMode, booleans)
 	}
 	if m.themeName != "grokday" || m.theme.name != "grokday" || strings.Join(themes, ",") != "grokday" {
@@ -112,7 +116,7 @@ func TestSettingsPanelRollsBackFailedPersistence(t *testing.T) {
 		t.Fatalf("command=%v minimal=%v err=%q", command != nil, m.defaultMinimal, m.settings.err)
 	}
 
-	m.settings.selected = 7
+	m.settings.selected = 8
 	m.mermaidMode = "auto"
 	m.persistMermaid = func(string) error { return errors.New("read only") }
 	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
@@ -121,7 +125,7 @@ func TestSettingsPanelRollsBackFailedPersistence(t *testing.T) {
 		t.Fatalf("command=%v Mermaid=%q err=%q", command != nil, m.mermaidMode, m.settings.err)
 	}
 
-	m.settings.selected = 8
+	m.settings.selected = 9
 	m.persistTheme = func(string) error { return errors.New("read only") }
 	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)
@@ -144,6 +148,16 @@ func TestSettingsPanelRollsBackFailedPersistence(t *testing.T) {
 	m = updated.(*model)
 	if command != nil || m.collapsedEditBlocks || m.settings.err != "read only" {
 		t.Fatalf("command=%v collapsed=%v err=%q", command != nil, m.collapsedEditBlocks, m.settings.err)
+	}
+
+	m.settings.selected = 7
+	m.suggestionsEnabled = true
+	m.promptSuggestion = "run tests"
+	m.persistSuggestions = func(bool) error { return errors.New("read only") }
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || !m.suggestionsEnabled || m.promptSuggestion != "run tests" || m.settings.err != "read only" {
+		t.Fatalf("command=%v enabled=%v suggestion=%q err=%q", command != nil, m.suggestionsEnabled, m.promptSuggestion, m.settings.err)
 	}
 }
 
@@ -296,5 +310,29 @@ func TestSettingsCollapsedEditBlocksRefoldsTranscriptImmediately(t *testing.T) {
 	if command != nil || m.collapsedEditBlocks || persisted ||
 		strings.Count(m.transcript.String(), "#### Tool: `edit_file`") != 2 {
 		t.Fatalf("command=%v collapsed=%v persisted=%v transcript=%q", command != nil, m.collapsedEditBlocks, persisted, m.transcript.String())
+	}
+}
+
+func TestSettingsPromptSuggestionsApplyImmediately(t *testing.T) {
+	persisted := true
+	m := &model{
+		width: 60, height: 16, suggestionsEnabled: true, promptSuggestion: "run tests",
+		settings:           &settingsState{selected: 7},
+		persistSuggestions: func(value bool) error { persisted = value; return nil },
+	}
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.suggestionsEnabled || persisted || m.promptSuggestion != "" || m.suggestionDismissed {
+		t.Fatalf("command=%v enabled=%v persisted=%v suggestion=%q dismissed=%v", command != nil, m.suggestionsEnabled, persisted, m.promptSuggestion, m.suggestionDismissed)
+	}
+	updated, command = m.Update(promptSuggestionEvent{text: "stale", serial: m.promptSerial})
+	m = updated.(*model)
+	if command != nil || m.promptSuggestion != "" {
+		t.Fatalf("disabled suggestion accepted: command=%v suggestion=%q", command != nil, m.promptSuggestion)
+	}
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || !m.suggestionsEnabled || !persisted {
+		t.Fatalf("command=%v enabled=%v persisted=%v", command != nil, m.suggestionsEnabled, persisted)
 	}
 }

@@ -675,6 +675,7 @@ type model struct {
 	persistTimeline     func(bool) error
 	persistGroupTools   func(bool) error
 	persistEditBlocks   func(bool) error
+	persistSuggestions  func(bool) error
 	themeName           string
 	autoDarkTheme       string
 	autoLightTheme      string
@@ -856,6 +857,7 @@ type UIOptions struct {
 	GroupToolVerbs       bool
 	SetGroupToolVerbs    func(bool) error
 	PromptSuggestions    bool
+	SetPromptSuggestions func(bool) error
 	CursorBlink          *bool
 	Theme                string
 	AutoDarkTheme        string
@@ -996,6 +998,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		groupToolVerbs:      options.GroupToolVerbs,
 		persistGroupTools:   options.SetGroupToolVerbs,
 		suggestionsEnabled:  options.PromptSuggestions,
+		persistSuggestions:  options.SetPromptSuggestions,
 		hyperlinks:          detectTerminalHyperlinks(),
 		themeName:           options.Theme,
 		autoDarkTheme:       options.AutoDarkTheme,
@@ -1452,7 +1455,7 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, runPromptSuggestion(m.ctx, m.runner, m.workspace, m.promptSerial)
 		}
 	case promptSuggestionEvent:
-		if msg.serial == m.promptSerial && !m.running && strings.TrimSpace(msg.text) != "" {
+		if m.suggestionsEnabled && msg.serial == m.promptSerial && !m.running && strings.TrimSpace(msg.text) != "" {
 			m.promptSuggestion = msg.text
 			m.suggestionDismissed = false
 		}
