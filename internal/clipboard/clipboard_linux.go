@@ -42,3 +42,24 @@ func readPlatform(ctx context.Context) (Content, error) {
 	}
 	return Content{}, errors.New("no native clipboard tool is available")
 }
+
+func readPrimaryPlatform(ctx context.Context) (string, error) {
+	if os.Getenv("DISPLAY") == "" {
+		return "", errors.New("X11 primary selection is unavailable")
+	}
+	for _, candidate := range []struct {
+		name string
+		args []string
+	}{
+		{"xclip", []string{"-o", "-selection", "primary"}},
+		{"xsel", []string{"--primary", "--output"}},
+	} {
+		if _, err := exec.LookPath(candidate.name); err != nil {
+			continue
+		}
+		if output, err := exec.CommandContext(ctx, candidate.name, candidate.args...).Output(); err == nil {
+			return string(output), nil
+		}
+	}
+	return "", errors.New("no X11 primary selection tool is available")
+}

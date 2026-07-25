@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -100,6 +101,10 @@ type thoughtEvent struct{ text string }
 type clipboardEvent struct {
 	content appclipboard.Content
 	err     error
+}
+type primarySelectionEvent struct {
+	text string
+	err  error
 }
 type statusEvent struct{ text string }
 type mouseSelectionPhase uint8
@@ -830,6 +835,7 @@ type model struct {
 	pendingPromptImages [][]api.ContentPart
 	promptImages        []api.ContentPart
 	clipboardRead       func(context.Context) (appclipboard.Content, error)
+	primaryRead         func(context.Context) (string, error)
 	scheduled           []tools.ScheduledTaskFired
 	activeTask          string
 	promptSerial        uint64
@@ -1205,6 +1211,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		suggestionsEnabled:  options.PromptSuggestions,
 		persistSuggestions:  options.SetPromptSuggestions,
 		clipboardRead:       appclipboard.Read,
+		primaryRead:         appclipboard.ReadPrimary,
 		rememberApprovals:   options.RememberApprovals,
 		persistRemember:     options.SetRememberApprovals,
 		undoHint: contextualHintState{
@@ -2341,6 +2348,14 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.handlePaste(msg.content.Text)
+	case primarySelectionEvent:
+		if msg.err != nil {
+			if !errors.Is(msg.err, appclipboard.ErrEmpty) {
+				m.status = "primary selection unavailable · try Shift+Insert"
+			}
+			return m, nil
+		}
+		return m.handlePaste(msg.text)
 	case tea.KeyboardEnhancementsMsg:
 		m.voiceKeyReleases = msg.SupportsEventTypes()
 	}
@@ -5509,6 +5524,18 @@ func readClipboard(ctx context.Context, read func(context.Context) (appclipboard
 	}
 }
 
+func readPrimarySelection(ctx context.Context, goos string, mouse tea.Mouse, read func(context.Context) (string, error)) tea.Cmd {
+	if goos != "linux" || mouse.Button != tea.MouseMiddle || mouse.Mod != 0 || read == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		readCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		text, err := read(readCtx)
+		return primarySelectionEvent{text: text, err: err}
+	}
+}
+
 func (m *model) takePromptImages() []api.ContentPart {
 	images := m.promptImages
 	m.promptImages = nil
@@ -6051,6 +6078,9 @@ func (m *model) View() tea.View {
 				return mouseScrollEvent{direction: direction, at: time.Now(), scale: true}
 			}
 		case tea.MouseClickMsg:
+			if command := readPrimarySelection(m.ctx, runtime.GOOS, mouse, m.primaryRead); command != nil {
+				return command
+			}
 			if mouse.Button != tea.MouseLeft {
 				return nil
 			}

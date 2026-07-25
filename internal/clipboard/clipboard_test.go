@@ -45,3 +45,17 @@ func TestReadValidatesClipboardContent(t *testing.T) {
 		})
 	}
 }
+
+func TestReadPrimaryRejectsEmptySelection(t *testing.T) {
+	original := readPrimaryPlatformFn
+	defer func() { readPrimaryPlatformFn = original }()
+
+	readPrimaryPlatformFn = func(context.Context) (string, error) { return "selected text", nil }
+	if text, err := ReadPrimary(context.Background()); err != nil || text != "selected text" {
+		t.Fatalf("text=%q err=%v", text, err)
+	}
+	readPrimaryPlatformFn = func(context.Context) (string, error) { return "", nil }
+	if _, err := ReadPrimary(context.Background()); !errors.Is(err, ErrEmpty) {
+		t.Fatalf("empty selection err=%v", err)
+	}
+}

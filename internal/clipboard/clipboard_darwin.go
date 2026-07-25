@@ -50,3 +50,7 @@ end run`
 	}
 	return Content{Text: string(output)}, nil
 }
+
+func readPrimaryPlatform(context.Context) (string, error) {
+	return "", errors.New("primary selection is unavailable on this platform")
+}

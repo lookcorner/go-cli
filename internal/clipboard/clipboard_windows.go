@@ -31,3 +31,7 @@ func readPlatform(ctx context.Context) (Content, error) {
 	}
 	return Content{Text: string(data)}, nil
 }
+
+func readPrimaryPlatform(context.Context) (string, error) {
+	return "", errors.New("primary selection is unavailable on this platform")
+}

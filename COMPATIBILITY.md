@@ -194,6 +194,8 @@ The dashboard shortcut panel uses `j` and `k` for scrolling only when Vim mode
 is enabled; arrow, page, and home/end navigation remain available in both modes.
 Linux and BSD browser launches fail fast without a display server or explicit
 `BROWSER`, allowing TUI, ACP, and terminal commands to show the full URL instead.
+On Linux X11/XWayland, an unmodified middle-button press reads PRIMARY through
+`xclip` or `xsel` exactly once; Ctrl-V remains isolated to CLIPBOARD.
 Plain TUI exits print a pasteable session resume command after terminal restore,
 including `--minimal` when the active session used native scrollback mode.
 Ctrl-V reads native clipboard text or validated PNG data, with Alt-V as a

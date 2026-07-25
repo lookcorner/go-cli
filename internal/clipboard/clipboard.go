@@ -13,6 +13,7 @@ const maxImageBytes = 20 << 20
 
 var ErrEmpty = errors.New("clipboard has no text or image")
 var readPlatformFn = readPlatform
+var readPrimaryPlatformFn = readPrimaryPlatform
 
 type Content struct {
 	Text      string
@@ -22,6 +23,17 @@ type Content struct {
 
 func Read(ctx context.Context) (Content, error) {
 	return read(ctx)
+}
+
+func ReadPrimary(ctx context.Context) (string, error) {
+	text, err := readPrimaryPlatformFn(ctx)
+	if err != nil {
+		return "", err
+	}
+	if text == "" {
+		return "", ErrEmpty
+	}
+	return text, nil
 }
 
 func read(ctx context.Context) (Content, error) {

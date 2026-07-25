@@ -2,7 +2,9 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"image"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -130,4 +132,77 @@ func TestClipboardPasteReadsTextAndImage(t *testing.T) {
 			t.Fatalf("images=%d status=%q", len(m.promptImages), m.status)
 		}
 	})
+}
+
+func TestLinuxMiddleClickReadsPrimarySelectionOnce(t *testing.T) {
+	reads := 0
+	read := func(context.Context) (string, error) {
+		reads++
+		return "PRIMARY\nexact", nil
+	}
+	mouse := tea.Mouse{Button: tea.MouseMiddle}
+	command := readPrimarySelection(context.Background(), "linux", mouse, read)
+	if command == nil {
+		t.Fatal("middle click did not request PRIMARY")
+	}
+	m := &model{}
+	updated, next := m.Update(command())
+	m = updated.(*model)
+	if next != nil || reads != 1 || string(m.input) != "PRIMARY\nexact" {
+		t.Fatalf("next=%v reads=%d input=%q", next != nil, reads, m.input)
+	}
+	for _, event := range []struct {
+		goos  string
+		mouse tea.Mouse
+	}{
+		{goos: "darwin", mouse: mouse},
+		{goos: "linux", mouse: tea.Mouse{Button: tea.MouseMiddle, Mod: tea.ModShift}},
+		{goos: "linux", mouse: tea.Mouse{Button: tea.MouseLeft}},
+	} {
+		if command := readPrimarySelection(context.Background(), event.goos, event.mouse, read); command != nil {
+			t.Fatalf("unexpected PRIMARY read for %s %#v", event.goos, event.mouse)
+		}
+	}
+	if reads != 1 {
+		t.Fatalf("nonqualifying events read PRIMARY %d times", reads)
+	}
+}
+
+func TestLinuxMiddleClickPrimaryFailureShowsHint(t *testing.T) {
+	command := readPrimarySelection(context.Background(), "linux", tea.Mouse{Button: tea.MouseMiddle}, func(context.Context) (string, error) {
+		return "", errors.New("xclip failed")
+	})
+	m := &model{}
+	updated, _ := m.Update(command())
+	m = updated.(*model)
+	if m.status != "primary selection unavailable · try Shift+Insert" || len(m.input) != 0 {
+		t.Fatalf("status=%q input=%q", m.status, m.input)
+	}
+}
+
+func TestViewRoutesMiddlePressButNotReleaseToPrimarySelection(t *testing.T) {
+	reads := 0
+	m := &model{
+		ctx: context.Background(), width: 80, height: 18,
+		primaryRead: func(context.Context) (string, error) {
+			reads++
+			return "selected", nil
+		},
+	}
+	command := m.View().OnMouse(tea.MouseClickMsg(tea.Mouse{Button: tea.MouseMiddle}))
+	if runtime.GOOS == "linux" {
+		if command == nil {
+			t.Fatal("middle press was not routed")
+		}
+		updated, _ := m.Update(command())
+		m = updated.(*model)
+		if reads != 1 || string(m.input) != "selected" {
+			t.Fatalf("reads=%d input=%q", reads, m.input)
+		}
+	} else if command != nil {
+		t.Fatalf("middle press routed on %s", runtime.GOOS)
+	}
+	if command := m.View().OnMouse(tea.MouseReleaseMsg(tea.Mouse{Button: tea.MouseMiddle})); command != nil || reads > 1 {
+		t.Fatalf("release command=%v reads=%d", command != nil, reads)
+	}
 }
