@@ -4,6 +4,10 @@ func UpdateContextualUndoHint(path string, enabled bool) error {
 	return updateContextualHint(path, "undo", enabled)
 }
 
+func UpdateContextualPlanModeHint(path string, enabled bool) error {
+	return updateContextualHint(path, "plan_mode", enabled)
+}
+
 func UpdateContextualSendNowHint(path string, enabled bool) error {
 	return updateContextualHint(path, "send_now", enabled)
 }

@@ -107,6 +107,7 @@ type mouseSelectionEvent struct {
 }
 type selectionClearEvent struct{ nonce uint64 }
 type contextualUndoClearEvent struct{ nonce uint64 }
+type planNudgeClearEvent struct{ nonce uint64 }
 type sendNowClearEvent struct{ nonce uint64 }
 
 type contextualHintState struct {
@@ -670,6 +671,7 @@ type model struct {
 	inputUndo           []inputSnapshot
 	inputClear          inputClearDetector
 	undoHint            contextualHintState
+	planModeHint        contextualHintState
 	sendNowHint         contextualHintState
 	multiline           bool
 	history             []string
@@ -912,6 +914,8 @@ type UIOptions struct {
 	SetRememberApprovals func(bool) error
 	ContextualUndo       bool
 	SetContextualUndo    func(bool) error
+	ContextualPlan       bool
+	SetContextualPlan    func(bool) error
 	ContextualSendNow    bool
 	SetContextualSendNow func(bool) error
 	DefaultPermission    string
@@ -1094,6 +1098,10 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		undoHint: contextualHintState{
 			enabled: options.ContextualUndo,
 			persist: options.SetContextualUndo,
+		},
+		planModeHint: contextualHintState{
+			enabled: options.ContextualPlan,
+			persist: options.SetContextualPlan,
 		},
 		sendNowHint: contextualHintState{
 			enabled: options.ContextualSendNow,
@@ -1413,6 +1421,11 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case contextualUndoClearEvent:
 		if m.undoHint.nonce == msg.nonce && m.status == "Input cleared · ctrl+z to undo" {
+			m.status = "ready"
+		}
+		return m, nil
+	case planNudgeClearEvent:
+		if m.planModeHint.nonce == msg.nonce && m.status == "Planning? Check out plan mode via shift+tab" {
 			m.status = "ready"
 		}
 		return m, nil
@@ -4447,6 +4460,7 @@ func (m *model) editInput(message tea.KeyPressMsg) tea.Cmd {
 	key, stroke := message.Key(), message.Keystroke()
 	m.cursor = min(max(m.cursor, 0), len(m.input))
 	before := len(m.input)
+	beforePlanning := m.planModeHint.enabled && promptMentionsPlanning(string(m.input))
 	edited := false
 	switch {
 	case stroke == "ctrl+z" || stroke == "super+z":
@@ -4497,7 +4511,83 @@ func (m *model) editInput(message tea.KeyPressMsg) tea.Cmd {
 			return contextualUndoClearEvent{nonce: nonce}
 		})
 	}
+	if edited && m.shouldShowPlanNudge(key, beforePlanning) {
+		m.planModeHint.shown++
+		m.planModeHint.nonce++
+		nonce := m.planModeHint.nonce
+		m.status = "Planning? Check out plan mode via shift+tab"
+		return tea.Tick(3*time.Second, func(time.Time) tea.Msg {
+			return planNudgeClearEvent{nonce: nonce}
+		})
+	}
 	return nil
+}
+
+func (m *model) shouldShowPlanNudge(key tea.Key, beforePlanning bool) bool {
+	if !m.planModeHint.enabled || m.planModeHint.shown >= 3 || !m.planModeAvailable() || m.running || m.planMode ||
+		m.feedbackInput || m.rememberInput || isPasteKey(key) {
+		return false
+	}
+	text := string(m.input)
+	return !beforePlanning && promptMentionsPlanning(text) && !strings.HasPrefix(text, "/") && !strings.HasPrefix(text, "!")
+}
+
+func isPasteKey(key tea.Key) bool {
+	return key.Mod&(tea.ModCtrl|tea.ModSuper) != 0 &&
+		(key.Code == 'v' || strings.EqualFold(key.Text, "v"))
+}
+
+var planningKeywords = [...]string{
+	"plan",
+	"planning",
+	"design",
+	"architect",
+	"step by step",
+	"break this down",
+	"lay out",
+	"approach",
+	"strategy",
+}
+
+func promptMentionsPlanning(text string) bool {
+	for _, keyword := range planningKeywords {
+		if containsWholeWordFold(text, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsWholeWordFold(text, keyword string) bool {
+	haystack, needle := []byte(text), []byte(keyword)
+	if len(needle) == 0 || len(haystack) < len(needle) {
+		return false
+	}
+	isWord := func(value byte) bool {
+		return value >= '0' && value <= '9' || value >= 'A' && value <= 'Z' ||
+			value >= 'a' && value <= 'z' || value >= 0x80
+	}
+	for start := 0; start+len(needle) <= len(haystack); start++ {
+		matches := true
+		for index, want := range needle {
+			got := haystack[start+index]
+			if got >= 'A' && got <= 'Z' {
+				got += 'a' - 'A'
+			}
+			if got != want {
+				matches = false
+				break
+			}
+		}
+		if !matches {
+			continue
+		}
+		end := start + len(needle)
+		if (start == 0 || !isWord(haystack[start-1])) && (end == len(haystack) || !isWord(haystack[end])) {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *model) replaceTranscript(text string, messages []session.Message) {

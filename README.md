@@ -783,6 +783,11 @@ After a draft reaches 20 characters and is cleared to at most 5 characters,
 the TUI shows `Input cleared · ctrl+z to undo` up to three times per session.
 Set `undo = false` under `[ui.contextual_hints]` to hide this hint without
 disabling undo.
+When an idle prompt first crosses into a planning keyword such as `plan`,
+`design`, or `strategy`, the TUI shows
+`Planning? Check out plan mode via shift+tab` up to three times per session.
+Whole-word matching avoids near neighbours such as `explain` and `planet`.
+Set `plan_mode = false` under `[ui.contextual_hints]` to hide the nudge.
 While a turn is running, Enter queues a non-empty follow-up. The TUI then
 shows `Queued · Enter to send now`; pressing Enter again with an empty composer
 injects the oldest queued follow-up into the current turn. Set
