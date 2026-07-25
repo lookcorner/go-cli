@@ -42,9 +42,10 @@ const (
 )
 
 type toolVerbMember struct {
-	kind   toolVerbKind
-	failed bool
-	full   string
+	kind      toolVerbKind
+	failed    bool
+	full      string
+	citations []string
 }
 
 type toolVerbGroup struct {
@@ -80,7 +81,9 @@ func (m *model) finishTool(event toolFinishedEvent) {
 	if m.groupToolVerbs {
 		if kind, ok := classifyToolVerb(event.call.Name, event.call.Arguments); ok {
 			m.finishCollapsedEditGroup()
-			m.addToolVerbMember(toolVerbMember{kind: kind, failed: event.err != nil, full: full})
+			m.addToolVerbMember(toolVerbMember{
+				kind: kind, failed: event.err != nil, full: full, citations: event.result.Citations,
+			})
 			m.status = "tool finished: " + event.call.Name
 			return
 		}
@@ -316,6 +319,7 @@ func sessionDisplayTranscript(path, workspace string, collapsedEditBlocks, group
 			full, _ := renderStoredToolBlock(tool, false)
 			kind, _ := classifyToolVerb(tool.Name, tool.Arguments)
 			members = append(members, toolVerbMember{kind: kind, failed: tool.Failed, full: full})
+			members[len(members)-1].citations = tool.Citations
 		}
 		text.WriteString(toolVerbGroupLabel(members))
 		expands = appendBoundedExpansion(expands, toolVerbGroupExpansion(members))
@@ -439,8 +443,9 @@ func classifyToolVerb(name string, raw json.RawMessage) (toolVerbKind, bool) {
 
 func toolVerbGroupLabel(members []toolVerbMember) string {
 	type bucket struct {
-		kind  toolVerbKind
-		count int
+		kind      toolVerbKind
+		count     int
+		citations map[string]bool
 	}
 	var buckets []bucket
 	failed := 0
@@ -453,10 +458,17 @@ func toolVerbGroupLabel(members []toolVerbMember) string {
 			}
 		}
 		if index < 0 {
-			buckets = append(buckets, bucket{kind: member.kind})
+			buckets = append(buckets, bucket{kind: member.kind, citations: make(map[string]bool)})
 			index = len(buckets) - 1
 		}
 		buckets[index].count++
+		if member.kind == toolVerbWebSearch && !member.failed {
+			for _, citation := range member.citations {
+				if citation != "" {
+					buckets[index].citations[citation] = true
+				}
+			}
+		}
 		if member.failed {
 			failed++
 		}
@@ -464,11 +476,15 @@ func toolVerbGroupLabel(members []toolVerbMember) string {
 	labels := make([]string, 0, len(buckets))
 	for _, item := range buckets {
 		verb, one, many := toolVerbWords(item.kind)
+		count := item.count
+		if len(item.citations) > 0 {
+			count = len(item.citations)
+		}
 		noun := many
-		if item.count == 1 {
+		if count == 1 {
 			noun = one
 		}
-		labels = append(labels, fmt.Sprintf("%s %d %s", verb, item.count, noun))
+		labels = append(labels, fmt.Sprintf("%s %d %s", verb, count, noun))
 	}
 	result := strings.Join(labels, ", ")
 	if failed > 0 {

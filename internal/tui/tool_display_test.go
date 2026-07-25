@@ -100,6 +100,45 @@ func TestToolVerbGroupLabelPreservesBucketOrderAndFailures(t *testing.T) {
 	}
 }
 
+func TestToolVerbGroupCountsDistinctWebSearchCitations(t *testing.T) {
+	members := []toolVerbMember{
+		{kind: toolVerbWebSearch, citations: []string{"https://a.example/1", "https://b.example/"}},
+		{kind: toolVerbWebSearch, citations: []string{"https://a.example/1", "https://c.example/"}},
+	}
+	if got, want := toolVerbGroupLabel(members), "Searched 3 websites"; got != want {
+		t.Fatalf("label=%q want=%q", got, want)
+	}
+	members = []toolVerbMember{
+		{kind: toolVerbWebSearch},
+		{kind: toolVerbWebSearch, failed: true, citations: []string{"https://ignored.example/"}},
+	}
+	if got, want := toolVerbGroupLabel(members), "Searched 2 websites · 1 failed"; got != want {
+		t.Fatalf("fallback label=%q want=%q", got, want)
+	}
+}
+
+func TestLiveToolVerbGroupCountsDistinctWebSearchCitations(t *testing.T) {
+	m := &model{groupToolVerbs: true, width: 80, height: 20}
+	for index, citations := range [][]string{
+		{"https://a.example/", "https://b.example/"},
+		{"https://b.example/", "https://c.example/"},
+	} {
+		m.finishTool(toolFinishedEvent{
+			call: api.ToolCall{
+				CallID: fmt.Sprintf("call-%d", index),
+				Name:   "web_search",
+				Arguments: json.RawMessage(
+					fmt.Sprintf(`{"query":"query %d"}`, index),
+				),
+			},
+			result: tools.ExecutionResult{Output: "results", Citations: citations},
+		})
+	}
+	if got, want := m.transcript.String(), "Searched 3 websites\n"; got != want {
+		t.Fatalf("transcript=%q want=%q", got, want)
+	}
+}
+
 func TestFullscreenToolVerbGroupUpdatesInPlaceAndEndsAtEdit(t *testing.T) {
 	m := &model{groupToolVerbs: true, width: 80, height: 20}
 	m.finishTool(toolFinishedEvent{

@@ -183,6 +183,27 @@ type recordingToolObserver struct {
 	results []tools.ExecutionResult
 }
 
+type citationResultTool struct{}
+
+func (citationResultTool) Definition() api.ToolDefinition {
+	return api.ToolDefinition{
+		Type: "function", Name: "citation_tool",
+		Parameters: map[string]any{"type": "object"},
+	}
+}
+
+func (citationResultTool) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
+	result, err := (citationResultTool{}).ExecuteResult(ctx, raw)
+	return result.Output, err
+}
+
+func (citationResultTool) ExecuteResult(context.Context, json.RawMessage) (tools.ExecutionResult, error) {
+	return tools.ExecutionResult{
+		Output:    "results",
+		Citations: []string{"https://a.example/", "https://b.example/"},
+	}, nil
+}
+
 type denyingHookPolicy struct {
 	started int
 	prompts []string
@@ -1047,6 +1068,51 @@ func TestRunnerForwardsReadFileImages(t *testing.T) {
 		persisted.Images[0].Width != 1 || persisted.Images[0].Height != 1 || persisted.Images[0].Bytes != len(pngData) {
 		t.Fatalf("tool image metadata was not persisted: %#v", persisted)
 	}
+}
+
+func TestRunnerPersistsResultToolCitations(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	if err := registry.Register(citationResultTool{}); err != nil {
+		t.Fatal(err)
+	}
+	streamer := &fakeStreamer{results: []api.StreamResult{
+		{ResponseID: "resp_1", ToolCalls: []api.ToolCall{
+			{CallID: "call_1", Name: "citation_tool", Arguments: json.RawMessage(`{}`)},
+		}},
+		{ResponseID: "resp_2", Text: "done"},
+	}}
+	logger, err := session.NewLoggerWithID(t.TempDir(), "citation-tool")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := Runner{
+		Client: streamer, Tools: registry, Logger: logger, Model: "test", MaxSteps: 2,
+	}
+	if _, err := runner.Run(context.Background(), "search"); err != nil {
+		t.Fatal(err)
+	}
+	path := logger.Path()
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	timeline, err := session.DisplayTimeline(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range timeline {
+		if entry.Tool != nil && entry.Tool.Name == "citation_tool" {
+			if got, want := strings.Join(entry.Tool.Citations, ","), "https://a.example/,https://b.example/"; got != want {
+				t.Fatalf("citations=%q want=%q", got, want)
+			}
+			return
+		}
+	}
+	t.Fatal("citation tool result was not restored")
 }
 
 func TestRunnerAcceptsMultimodalPromptParts(t *testing.T) {

@@ -164,7 +164,7 @@ func TestDisplayTimelineRestoresCompletedToolEvents(t *testing.T) {
 		`{"time":"2026-07-23T01:00:00Z","kind":"user_prompt","data":{"text":"inspect"}}` + "\n" +
 		`{"time":"2026-07-23T01:00:01Z","kind":"model_response","data":{"response_id":"r1","text":"checking ","tool_call_count":1}}` + "\n" +
 		`{"kind":"tool_call","data":{"call_id":"call-1","name":"shell","arguments":{"id":9007199254740993}}}` + "\n" +
-		`{"time":"2026-07-23T01:00:02Z","kind":"tool_result","data":{"call_id":"call-1","name":"shell","output":"ok","image_count":1,"images":[{"media_type":"image/png","width":10,"height":20,"bytes":30}]}}` + "\n" +
+		`{"time":"2026-07-23T01:00:02Z","kind":"tool_result","data":{"call_id":"call-1","name":"shell","output":"ok","image_count":1,"images":[{"media_type":"image/png","width":10,"height":20,"bytes":30}],"citations":["https://example.com/a","https://example.com/b"]}}` + "\n" +
 		`{"time":"2026-07-23T01:00:03Z","kind":"model_response","data":{"response_id":"r2","text":"done","tool_call_count":0}}` + "\n" +
 		`{"kind":"user_prompt","data":{"text":"pending"}}` + "\n" +
 		`{"kind":"tool_call","data":{"call_id":"call-pending","name":"shell","arguments":{}}}` + "\n" +
@@ -181,7 +181,8 @@ func TestDisplayTimelineRestoresCompletedToolEvents(t *testing.T) {
 	}
 	tool := entries[2].Tool
 	if tool == nil || tool.Name != "shell" || !strings.Contains(string(tool.Arguments), "9007199254740993") ||
-		tool.Output != "ok" || tool.ImageCount != 1 || len(tool.Images) != 1 || tool.Images[0].Bytes != 30 {
+		tool.Output != "ok" || tool.ImageCount != 1 || len(tool.Images) != 1 || tool.Images[0].Bytes != 30 ||
+		strings.Join(tool.Citations, ",") != "https://example.com/a,https://example.com/b" {
 		t.Fatalf("tool event lost persisted details: %#v", tool)
 	}
 	if entries[3].Text != "done" || !entries[3].Time.Equal(time.Date(2026, 7, 23, 1, 0, 3, 0, time.UTC)) {

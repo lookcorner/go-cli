@@ -48,6 +48,7 @@ type DisplayTool struct {
 	Failed     bool
 	ImageCount int
 	Images     []DisplayImage
+	Citations  []string
 }
 
 type DisplayImage struct {
@@ -853,6 +854,7 @@ func DisplayTimeline(path string) ([]DisplayEntry, error) {
 				Failed     bool           `json:"failed"`
 				ImageCount int            `json:"image_count"`
 				Images     []DisplayImage `json:"images"`
+				Citations  []string       `json:"citations"`
 			}
 			if err := json.Unmarshal(event.Data, &data); err != nil {
 				return nil, fmt.Errorf("parse display tool result on session line %d: %w", line, err)
@@ -865,7 +867,8 @@ func DisplayTimeline(path string) ([]DisplayEntry, error) {
 			if tool.Name == "" {
 				tool.Name = data.Name
 			}
-			tool.Output, tool.Failed, tool.ImageCount, tool.Images = data.Output, data.Failed, data.ImageCount, data.Images
+			tool.Output, tool.Failed, tool.ImageCount, tool.Images, tool.Citations =
+				data.Output, data.Failed, data.ImageCount, data.Images, data.Citations
 			result = append(result, DisplayEntry{Time: event.Time, Kind: "tool", Tool: tool})
 		}
 	}

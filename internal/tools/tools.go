@@ -95,8 +95,9 @@ type ResultTool interface {
 }
 
 type ExecutionResult struct {
-	Output string
-	Images []ImageAttachment
+	Output    string
+	Images    []ImageAttachment
+	Citations []string
 }
 
 type ImageAttachment struct {

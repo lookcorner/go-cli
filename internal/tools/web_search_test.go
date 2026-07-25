@@ -21,17 +21,20 @@ func TestWebSearchUsesResponsesToolAndFormatsOutput(t *testing.T) {
 		}
 		return &http.Response{
 			StatusCode: http.StatusOK, Status: "200 OK", Header: make(http.Header), Request: incoming,
-			Body: io.NopCloser(strings.NewReader(`{"output":[{"type":"web_search_call","status":"completed"},{"type":"message","content":[{"type":"output_text","text":"First result."},{"type":"output_text","text":" Second result."}]}]}`)),
+			Body: io.NopCloser(strings.NewReader(`{"output":[{"type":"web_search_call","status":"completed"},{"type":"message","content":[{"type":"input_text","text":"ignored","annotations":[{"type":"url_citation","url":"https://ignored.example/"}]},{"type":"output_text","text":"First result.","annotations":[{"type":"url_citation","url":"https://go.dev/doc/"},{"type":"url_citation","url":"https://go.dev/doc/"}]},{"type":"output_text","text":" Second result.","annotations":[{"type":"url_citation","url":"https://pkg.go.dev/"}]}]}]}`)),
 		}, nil
 	})}
 
 	tool := NewWebSearchTool("https://api.example/v1", "secret", "search-model", client)
-	output, err := tool.Execute(context.Background(), json.RawMessage(`{"query":"latest Go release","allowed_domains":["go.dev"]}`))
+	result, err := tool.(ResultTool).ExecuteResult(context.Background(), json.RawMessage(`{"query":"latest Go release","allowed_domains":["go.dev"]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if output != "Web search results for: \"latest Go release\"\n\nFirst result. Second result." {
-		t.Fatalf("unexpected output: %q", output)
+	if result.Output != "Web search results for: \"latest Go release\"\n\nFirst result. Second result." {
+		t.Fatalf("unexpected output: %q", result.Output)
+	}
+	if strings.Join(result.Citations, ",") != "https://go.dev/doc/,https://pkg.go.dev/" {
+		t.Fatalf("unexpected citations: %#v", result.Citations)
 	}
 	if request["model"] != "search-model" || request["input"] != "latest Go release" || request["store"] != false {
 		t.Fatalf("unexpected request body: %#v", request)

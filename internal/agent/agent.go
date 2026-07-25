@@ -851,7 +851,7 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 			r.log("tool_result", map[string]any{
 				"step": step, "call_id": call.CallID, "name": call.Name,
 				"output": output, "failed": toolErr != nil, "image_count": len(toolResult.Images),
-				"images": imageLog,
+				"images": imageLog, "citations": toolResult.Citations,
 			})
 			if prefire != nil {
 				appendCompactTrace(&compactTrace, "Tool result: "+output+"\n")

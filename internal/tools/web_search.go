@@ -45,12 +45,17 @@ func (t *webSearchTool) Definition() api.ToolDefinition {
 }
 
 func (t *webSearchTool) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
+	result, err := t.ExecuteResult(ctx, raw)
+	return result.Output, err
+}
+
+func (t *webSearchTool) ExecuteResult(ctx context.Context, raw json.RawMessage) (ExecutionResult, error) {
 	var args struct {
 		Query          string   `json:"query"`
 		AllowedDomains []string `json:"allowed_domains"`
 	}
 	if json.Unmarshal(raw, &args) != nil || strings.TrimSpace(args.Query) == "" {
-		return "", errors.New("query is required")
+		return ExecutionResult{}, errors.New("query is required")
 	}
 	tool := map[string]any{"type": "web_search"}
 	if args.AllowedDomains != nil {
@@ -61,11 +66,11 @@ func (t *webSearchTool) Execute(ctx context.Context, raw json.RawMessage) (strin
 		"temperature": 0.1, "top_p": 0.95, "max_output_tokens": 8192,
 	})
 	if err != nil {
-		return "", err
+		return ExecutionResult{}, err
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, t.baseURL+"/responses", bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return ExecutionResult{}, err
 	}
 	apiKey := t.apiKey
 	if refreshed := strings.TrimSpace(os.Getenv("GORK_WEB_SEARCH_API_KEY")); refreshed != "" {
@@ -80,39 +85,54 @@ func (t *webSearchTool) Execute(ctx context.Context, raw json.RawMessage) (strin
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		return "", fmt.Errorf("web search request: %w", err)
+		return ExecutionResult{}, fmt.Errorf("web search request: %w", err)
 	}
 	defer response.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(response.Body, maxWebSearchResponseBytes+1))
 	if err != nil {
-		return "", fmt.Errorf("read web search response: %w", err)
+		return ExecutionResult{}, fmt.Errorf("read web search response: %w", err)
 	}
 	if len(data) > maxWebSearchResponseBytes {
-		return "", fmt.Errorf("web search response exceeds %d bytes", maxWebSearchResponseBytes)
+		return ExecutionResult{}, fmt.Errorf("web search response exceeds %d bytes", maxWebSearchResponseBytes)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return "", fmt.Errorf("web search returned %s: %s", response.Status, strings.TrimSpace(string(data)))
+		return ExecutionResult{}, fmt.Errorf("web search returned %s: %s", response.Status, strings.TrimSpace(string(data)))
 	}
 	var result struct {
 		Output []struct {
 			Type    string `json:"type"`
 			Content []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
+				Type        string `json:"type"`
+				Text        string `json:"text"`
+				Annotations []struct {
+					Type string `json:"type"`
+					URL  string `json:"url"`
+				} `json:"annotations"`
 			} `json:"content"`
 		} `json:"output"`
 	}
 	if err := json.Unmarshal(data, &result); err != nil {
-		return "", fmt.Errorf("decode web search response: %w", err)
+		return ExecutionResult{}, fmt.Errorf("decode web search response: %w", err)
 	}
 	var content []string
+	var citations []string
+	seen := make(map[string]bool)
 	for _, output := range result.Output {
 		if output.Type != "message" {
 			continue
 		}
 		for _, part := range output.Content {
-			if part.Type == "output_text" && part.Text != "" {
+			if part.Type != "output_text" {
+				continue
+			}
+			if part.Text != "" {
 				content = append(content, part.Text)
+			}
+			for _, annotation := range part.Annotations {
+				if annotation.Type == "url_citation" && annotation.URL != "" && !seen[annotation.URL] {
+					seen[annotation.URL] = true
+					citations = append(citations, annotation.URL)
+				}
 			}
 		}
 	}
@@ -120,5 +140,7 @@ func (t *webSearchTool) Execute(ctx context.Context, raw json.RawMessage) (strin
 	if text == "" {
 		text = "No search results found."
 	}
-	return fmt.Sprintf("Web search results for: %q\n\n%s", args.Query, text), nil
+	return ExecutionResult{
+		Output: fmt.Sprintf("Web search results for: %q\n\n%s", args.Query, text), Citations: citations,
+	}, nil
 }
