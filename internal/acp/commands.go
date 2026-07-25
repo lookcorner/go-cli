@@ -120,6 +120,7 @@ func availableCommands(runner *agent.Runner, workspaceSkills bool) []map[string]
 	}
 	items := runner.Skills.List()
 	counts := make(map[string]int)
+	nativeCounts := make(map[string]int)
 	builtin := make(map[string]bool, len(commands))
 	for _, command := range commands {
 		builtin[command["name"].(string)] = true
@@ -127,6 +128,9 @@ func availableCommands(runner *agent.Runner, workspaceSkills bool) []map[string]
 	for _, item := range items {
 		if item.Enabled && item.UserInvocable && (workspaceSkills || item.Scope == "user") {
 			counts[item.Name]++
+			if item.PluginName == "" {
+				nativeCounts[item.Name]++
+			}
 		}
 	}
 	sort.Slice(items, func(i, j int) bool {
@@ -140,18 +144,28 @@ func availableCommands(runner *agent.Runner, workspaceSkills bool) []map[string]
 		if !item.Enabled || !item.UserInvocable || !workspaceSkills && item.Scope != "user" {
 			continue
 		}
-		name := item.Name
-		if counts[name] > 1 || builtin[name] {
-			name = qualifiedCommandName(item)
-		}
 		description := strings.TrimSpace(item.ShortDescription)
 		if description == "" {
 			description = item.Description
 		}
-		commands = append(commands, availableCommand(name, description, item.ArgumentHint, map[string]any{
-			"scope": item.Scope,
-			"path":  item.Path,
-		}))
+		command := func(name string) map[string]any {
+			return availableCommand(name, description, item.ArgumentHint, map[string]any{
+				"scope": item.Scope,
+				"path":  item.Path,
+			})
+		}
+		if item.PluginName != "" {
+			commands = append(commands, command(qualifiedCommandName(item)))
+			if counts[item.Name] == 1 && !builtin[item.Name] {
+				commands = append(commands, command(item.Name))
+			}
+			continue
+		}
+		name := item.Name
+		if nativeCounts[name] > 1 || builtin[name] {
+			name = qualifiedCommandName(item)
+		}
+		commands = append(commands, command(name))
 	}
 	return commands
 }

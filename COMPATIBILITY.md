@@ -33,6 +33,8 @@ sessions request a fail-closed trust decision once per workspace and hot-reload
 their executable project components after an explicit grant.
 Skill catalogs support all-session `x.ai/skills/refresh-baseline` and
 `x.ai/internal/reload_skills` disk refreshes.
+ACP command discovery always exposes plugin skills by `plugin:name`, adds the
+bare name only when unambiguous, and preserves native or built-in bare commands.
 Plugin extensions also support sessionless forced `x.ai/plugins/reload` with
 live component fan-out.
 ACP bulk history now includes rewind-filtered, paginated/tail/turn-indexed

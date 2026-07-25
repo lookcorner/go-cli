@@ -97,6 +97,53 @@ func TestCommandsListAdvertisesCapabilitiesAndSkills(t *testing.T) {
 	}
 }
 
+func TestCommandsListKeepsPluginSkillsReachableByQualifiedName(t *testing.T) {
+	root := t.TempDir()
+	plugins := make([]plugin.Plugin, 0, 3)
+	addPluginSkill := func(pluginName, skillName string) {
+		t.Helper()
+		pluginRoot := filepath.Join(root, pluginName)
+		dir := filepath.Join(pluginRoot, "skills", skillName)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("---\nname: "+skillName+"\ndescription: "+skillName+"\n---\n"+skillName), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		plugins = append(plugins, plugin.Plugin{Name: pluginName, Root: pluginRoot, SkillDirs: []string{filepath.Join(pluginRoot, "skills")}})
+	}
+	addPluginSkill("acme", "deploy")
+	addPluginSkill("acme-login", "login")
+	addPluginSkill("globex-login", "login")
+	writeCommandSkill(t, root, "compact", "---\nname: compact\ndescription: Native compact\n---\ncompact")
+	addPluginSkill("acme-compact", "compact")
+
+	catalog, err := skills.Discover(root, skills.Config{Plugins: plugins})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commands := availableCommands(&agent.Runner{Skills: catalog}, true)
+	byName := make(map[string][]map[string]any)
+	for _, command := range commands {
+		name := command["name"].(string)
+		byName[name] = append(byName[name], command)
+	}
+	for _, name := range []string{"deploy", "acme:deploy", "acme-login:login", "globex-login:login", "acme-compact:compact"} {
+		if len(byName[name]) != 1 {
+			t.Fatalf("command %q entries=%#v all=%#v", name, byName[name], commands)
+		}
+	}
+	if byName["login"] != nil {
+		t.Fatalf("ambiguous plugin bare name advertised: %#v", byName["login"])
+	}
+	if len(byName["compact"]) != 1 || byName["compact"][0]["_meta"] != nil {
+		t.Fatalf("builtin compact was shadowed: %#v", byName["compact"])
+	}
+	if meta := byName["acme:deploy"][0]["_meta"].(map[string]any); meta["scope"] != "plugin" || meta["path"] == "" {
+		t.Fatalf("qualified plugin metadata=%#v", meta)
+	}
+}
+
 func TestBuiltinCommandsFollowReferenceOrderAndCapabilityGates(t *testing.T) {
 	runner := &agent.Runner{HookCatalog: hooks.DiscoverPlugins(nil), PluginInventory: func() []plugin.Plugin { return nil }, MCPServerCatalog: func() []mcppkg.ServerConfig { return nil }, SubmitFeedback: func(sessionlog.UserFeedback) error { return nil }}
 	commands := availableCommands(runner, true)
