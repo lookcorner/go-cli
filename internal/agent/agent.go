@@ -188,6 +188,7 @@ type Runner struct {
 	SubmitFeedback          func(session.UserFeedback) error
 	FetchUsage              func(context.Context) (string, error)
 	FetchReleaseNotes       func(context.Context) (string, error)
+	FetchChangelog          func(context.Context) []string
 	OpenURL                 func(string) bool
 	Login                   func(context.Context) error
 	Logout                  func(context.Context) error

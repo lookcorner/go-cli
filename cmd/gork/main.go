@@ -1105,6 +1105,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 	releaseNotes := newChangelogService()
 	runner.FetchReleaseNotes = releaseNotes.Fetch
+	runner.FetchChangelog = func(ctx context.Context) []string { return releaseNotes.FetchAll(ctx).Bullets }
 	if home, homeErr := config.PolicyHome(); homeErr == nil {
 		runner.Announcements = announcement.New(cfg.Announcements, home)
 	}
@@ -2595,11 +2596,12 @@ func newShareService(cfg config.Config, tokenProvider api.TokenProvider, session
 }
 
 func newChangelogService() changelog.Service {
-	cachePath := ""
+	cachePath, jsonCachePath := "", ""
 	if path, err := config.DefaultPath(); err == nil {
 		cachePath = filepath.Join(filepath.Dir(path), "CHANGELOG.md")
+		jsonCachePath = filepath.Join(filepath.Dir(path), "CHANGELOG.json")
 	}
-	return changelog.Service{CachePath: cachePath, HTTP: &http.Client{Timeout: 3 * time.Second}}
+	return changelog.Service{CachePath: cachePath, JSONCachePath: jsonCachePath, HTTP: &http.Client{Timeout: 3 * time.Second}}
 }
 
 func newPermissionClassifierConfig(cfg config.Config, tokenProvider api.TokenProvider) (agent.PermissionClassifierConfig, error) {
@@ -3892,6 +3894,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		runner.FetchUsage, runner.OpenURL = usage.Usage, openBrowser
 		releaseNotes := newChangelogService()
 		runner.FetchReleaseNotes = releaseNotes.Fetch
+		runner.FetchChangelog = func(ctx context.Context) []string { return releaseNotes.FetchAll(ctx).Bullets }
 		sharingEnabled := func() bool { return runtimeConfigSnapshot().SharingEnabled }
 		sharing := newShareService(cfg, sessionTokenProvider, opts.sessionDir, sharingEnabled)
 		runner.ShareSession, runner.SharingEnabled = func(ctx context.Context) (string, error) { return sharing.Share(ctx, logger.ID()) }, sharingEnabled

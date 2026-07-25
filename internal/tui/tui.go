@@ -120,6 +120,7 @@ type sendNowClearEvent struct{ nonce uint64 }
 type smallScreenHintTickEvent struct{ nonce uint64 }
 type wordSelectHintTickEvent struct{ nonce uint64 }
 type foreignResumeEvent struct{ session *session.RecentForeignSession }
+type welcomeChangelogEvent struct{ bullets []string }
 
 type contextualHintState struct {
 	enabled bool
@@ -707,6 +708,8 @@ type model struct {
 	foreignSessions     session.ForeignSources
 	foreignResume       *session.RecentForeignSession
 	foreignResumeReady  bool
+	welcomeChangelog    []string
+	welcomeReady        bool
 	modelName           string
 	defaultModelID      string
 	previousID          string
@@ -1153,6 +1156,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		ctx: ctx, runner: runner, bridge: bridge, workspace: workspace,
 		foreignSessions:    options.Foreign,
 		foreignResumeReady: initialPrompt == "" && initialTranscript == "" && !options.OpenDashboard,
+		welcomeReady:       initialPrompt == "" && initialTranscript == "" && !options.OpenDashboard,
 		modelName:          modelName, defaultModelID: options.DefaultModelID, previousID: previousID, width: 80, height: 24,
 		minimal:       options.Minimal,
 		contextWindow: runner.ContextWindow,
@@ -1316,17 +1320,18 @@ func (m *model) Init() tea.Cmd {
 		m.startupDashboard = false
 		return tea.Sequence(initial, m.openDashboard(), wait)
 	}
-	if m.foreignResumeReady && (m.foreignSessions.Claude || m.foreignSessions.Codex) {
-		workspace, sources := m.workspace, m.foreignSessions
-		detect := func() tea.Msg {
-			return foreignResumeEvent{session: session.MostRecentForeignSession(workspace, sources, 10*time.Minute)}
-		}
-		if m.initial == "" {
-			return tea.Sequence(initial, tea.Batch(detect, wait))
-		}
-	}
 	if m.initial == "" {
-		return tea.Sequence(initial, wait)
+		commands := []tea.Cmd{wait}
+		if m.foreignResumeReady && (m.foreignSessions.Claude || m.foreignSessions.Codex) {
+			workspace, sources := m.workspace, m.foreignSessions
+			commands = append(commands, func() tea.Msg {
+				return foreignResumeEvent{session: session.MostRecentForeignSession(workspace, sources, 10*time.Minute)}
+			})
+		}
+		if command := m.welcomeChangelogCmd(); command != nil {
+			commands = append(commands, command)
+		}
+		return tea.Sequence(initial, tea.Batch(commands...))
 	}
 	prompt := m.initial
 	m.initial = ""
@@ -1339,6 +1344,15 @@ func (m *model) Init() tea.Cmd {
 	m.stashInFlightPrompt(prompt, nil, requestRewind)
 	m.beginTurn(prompt)
 	return tea.Sequence(initial, tea.Batch(wait, runTurn(turnCtx, m.runner, prompt, m.previousID, m.activeTurnSerial)))
+}
+
+func (m *model) welcomeChangelogCmd() tea.Cmd {
+	if !m.welcomeReady || m.runner == nil || m.runner.FetchChangelog == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		return welcomeChangelogEvent{bullets: m.runner.FetchChangelog(m.ctx)}
+	}
 }
 
 func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
@@ -1598,6 +1612,10 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case foreignResumeEvent:
 		if m.foreignResumeReady && !m.running && len(m.input) == 0 && len(m.promptImages) == 0 && m.transcript.Len() == 0 {
 			m.foreignResume = msg.session
+		}
+	case welcomeChangelogEvent:
+		if m.welcomeReady && !m.running && m.transcript.Len() == 0 {
+			m.welcomeChangelog = append([]string(nil), msg.bullets...)
 		}
 	case mouseClickEvent:
 		switch msg.action {
@@ -5513,6 +5531,9 @@ func (m *model) View() tea.View {
 	header := fmt.Sprintf("%s%s Gork Go%s%s  %s%s · %s%s", ansiBold, colors.title, ansiReset, mode, ansiDim, truncate(m.modelName, 24), truncate(m.workspace, max(width-45, 10)), ansiReset)
 	header = padRight(truncateANSIUnsafe(header, width), width)
 	banner := m.announcementBanner(width)
+	if len(banner) == 0 && m.welcomeReady && !m.running && m.transcript.Len() == 0 {
+		banner = m.welcomeChangelogBanner(width)
+	}
 	content := m.transcriptText()
 	showingTranscript := true
 	gboomVisible := m.gboom != nil
@@ -5901,6 +5922,23 @@ func (m *model) announcementBanner(width int) []string {
 	return []string{m.colors().warning + line + ansiReset}
 }
 
+func (m *model) welcomeChangelogBanner(width int) []string {
+	if len(m.welcomeChangelog) == 0 {
+		return nil
+	}
+	lines := []string{ansiBold + m.colors().heading + "What's new" + ansiReset}
+	for _, item := range m.welcomeChangelog {
+		item = strings.TrimSpace(sanitizeTerminalText(item))
+		if item != "" {
+			lines = append(lines, ansiDim+truncate("- "+item, width)+ansiReset)
+		}
+	}
+	if len(lines) == 1 {
+		return nil
+	}
+	return lines
+}
+
 func (m *model) pinnedAnnouncementURL() string {
 	if m.runner == nil || m.runner.Announcements == nil {
 		return ""
@@ -6187,7 +6225,7 @@ func renderedLabelContains(line, label string, x, width int) bool {
 }
 
 func (m *model) contentHeight() int {
-	banner := m.announcementHeight()
+	banner := m.bannerHeight()
 	if m.approval != nil {
 		return max(m.height-4-banner-len(m.approval.options), 3)
 	}
@@ -6223,6 +6261,16 @@ func (m *model) announcementHeight() int {
 		return 2
 	}
 	return 1
+}
+
+func (m *model) bannerHeight() int {
+	if height := m.announcementHeight(); height > 0 {
+		return height
+	}
+	if m.welcomeReady && !m.running && m.transcript.Len() == 0 {
+		return len(m.welcomeChangelogBanner(max(m.width, 20)))
+	}
+	return 0
 }
 
 func (m *model) visiblePromptInputRows() int {
