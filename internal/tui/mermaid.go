@@ -9,6 +9,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -105,6 +107,18 @@ type mermaidBlockEdge struct {
 	to   string
 }
 
+type mermaidKanbanColumn struct {
+	title string
+	tasks []mermaidKanbanTask
+}
+
+type mermaidKanbanTask struct {
+	label    string
+	assigned *string
+	priority *string
+	ticket   *string
+}
+
 var mermaidOperators = []string{
 	"||--o{", "||--|{", "}o--o{", "}o..o{", "}o--||", "}|..|{",
 	"<|--", "<-->", "--|>", "-.->", "-->>", "->>", "--x", "--o", "-x", "==>", "-->", "<--",
@@ -143,6 +157,9 @@ func renderMermaid(source string, width int, theme themePalette) ([]string, bool
 	}
 	if firstToken == "block-beta" {
 		return renderMermaidBlock(source, width, theme)
+	}
+	if firstToken == "kanban" {
+		return renderMermaidKanban(source, width, theme)
 	}
 	statements, complete := mermaidStatements(source)
 	if !complete || len(statements) < 1 {
@@ -194,6 +211,130 @@ func renderMermaid(source string, width int, theme themePalette) ([]string, bool
 		}
 	}
 	return lines, true
+}
+
+func renderMermaidKanban(source string, width int, theme themePalette) ([]string, bool) {
+	columns := make([]mermaidKanbanColumn, 0)
+	foundHeader := false
+	statements := 0
+	for _, raw := range strings.Split(source, "\n") {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" || strings.HasPrefix(trimmed, "%%") {
+			continue
+		}
+		statements++
+		if statements > maxMermaidStatements {
+			return nil, false
+		}
+		if !foundHeader {
+			if strings.Fields(trimmed)[0] != "kanban" {
+				return nil, false
+			}
+			foundHeader = true
+			continue
+		}
+		first, _ := utf8.DecodeRuneInString(raw)
+		if !unicode.IsSpace(first) {
+			columns = append(columns, mermaidKanbanColumn{title: trimmed})
+			continue
+		}
+		if len(columns) == 0 {
+			return nil, false
+		}
+		task, ok := mermaidKanbanParseTask(trimmed)
+		if !ok {
+			return nil, false
+		}
+		last := len(columns) - 1
+		columns[last].tasks = append(columns[last].tasks, task)
+	}
+	if !foundHeader {
+		return nil, false
+	}
+
+	lines := []string{ansiDim + mermaidFit("◇ mermaid kanban", width) + ansiReset}
+	for _, column := range columns {
+		lines = append(lines, theme.heading+mermaidFit(column.title, width)+ansiReset)
+		for index, task := range column.tasks {
+			connector := "├─ "
+			if index == len(column.tasks)-1 {
+				connector = "└─ "
+			}
+			lines = append(lines, theme.code+mermaidFit(connector+task.label, width)+ansiReset)
+			metadata := make([]string, 0, 3)
+			if task.assigned != nil {
+				metadata = append(metadata, "assigned: "+*task.assigned)
+			}
+			if task.priority != nil {
+				metadata = append(metadata, "priority: "+*task.priority)
+			}
+			if task.ticket != nil {
+				metadata = append(metadata, "ticket: "+*task.ticket)
+			}
+			if len(metadata) > 0 {
+				lines = append(lines, ansiDim+mermaidFit("   "+strings.Join(metadata, " · "), width)+ansiReset)
+			}
+		}
+	}
+	return lines, true
+}
+
+func mermaidKanbanParseTask(line string) (mermaidKanbanTask, bool) {
+	task := mermaidKanbanTask{label: line}
+	start := strings.Index(line, "@{")
+	if start < 0 || !strings.HasSuffix(line, "}") {
+		return task, true
+	}
+	task.label = strings.TrimRightFunc(line[:start], unicode.IsSpace)
+	metadata := strings.TrimSpace(line[start+2 : len(line)-1])
+	yamlText := "{\n" + metadata + "\n}"
+	var document yaml.Node
+	if yaml.Unmarshal([]byte(yamlText), &document) != nil || len(document.Content) != 1 {
+		return mermaidKanbanTask{}, false
+	}
+	mapping := document.Content[0]
+	if mapping.Kind != yaml.MappingNode {
+		return mermaidKanbanTask{}, false
+	}
+	for index := 0; index+1 < len(mapping.Content); index += 2 {
+		key, value := mapping.Content[index], mapping.Content[index+1]
+		if key.Kind != yaml.ScalarNode {
+			continue
+		}
+		text, ok := mermaidKanbanScalar(value)
+		if !ok {
+			continue
+		}
+		switch key.Value {
+		case "label":
+			task.label = text
+		case "assigned":
+			task.assigned = &text
+		case "priority":
+			task.priority = &text
+		case "ticket":
+			task.ticket = &text
+		}
+	}
+	return task, true
+}
+
+func mermaidKanbanScalar(node *yaml.Node) (string, bool) {
+	if node.Kind != yaml.ScalarNode {
+		return "", false
+	}
+	switch node.Tag {
+	case "!!str", "!!int", "!!float":
+		return node.Value, true
+	case "!!bool":
+		value, err := strconv.ParseBool(node.Value)
+		if err != nil {
+			return "", false
+		}
+		return strconv.FormatBool(value), true
+	default:
+		return "", false
+	}
 }
 
 func renderMermaidBlock(source string, width int, theme themePalette) ([]string, bool) {

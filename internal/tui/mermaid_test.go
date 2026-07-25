@@ -247,6 +247,97 @@ func TestRenderMermaidBlock(t *testing.T) {
 	}
 }
 
+func TestRenderMermaidKanban(t *testing.T) {
+	source := "kanban\nTodo\n  Draft API @{ assigned: Alice, priority: High, ticket: API-12 }\n  Review\nDoing\n\tImplement @{ label: Build endpoint }"
+	lines, ok := renderMermaid(source, 64, paletteFor("groknight"))
+	if !ok {
+		t.Fatal("supported Mermaid kanban was rejected")
+	}
+	rendered := stripUIANSI(strings.Join(lines, "\n"))
+	for _, expected := range []string{
+		"◇ mermaid kanban", "Todo", "├─ Draft API", "assigned: Alice · priority: High · ticket: API-12",
+		"└─ Review", "Doing", "└─ Build endpoint",
+	} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("rendered kanban missing %q:\n%s", expected, rendered)
+		}
+	}
+	if strings.Index(rendered, "Todo") > strings.Index(rendered, "Doing") || strings.Index(rendered, "Draft API") > strings.Index(rendered, "Review") {
+		t.Fatalf("kanban source order was not preserved:\n%s", rendered)
+	}
+	for _, line := range lines {
+		if displayWidth(stripUIANSI(line)) > 64 {
+			t.Fatalf("kanban line exceeds width: %q", stripUIANSI(line))
+		}
+	}
+}
+
+func TestRenderMermaidKanbanMatchesReferenceMetadata(t *testing.T) {
+	source := "kanban extra\nBacklog\n  Scalars @{ assigned: 42, priority: true, ticket: 3.5 }\n  Empty @{ assigned: '' }\n  Complex @{ assigned: [Alice], priority: { level: High }, ticket: null }\n  Broken @{ assigned: Alice\n\u2003Unicode indent"
+	lines, ok := renderMermaid(source, 80, paletteFor("groknight"))
+	if !ok {
+		t.Fatal("reference-compatible Mermaid kanban was rejected")
+	}
+	rendered := stripUIANSI(strings.Join(lines, "\n"))
+	for _, expected := range []string{
+		"Scalars", "assigned: 42 · priority: true · ticket: 3.5", "Empty", "assigned: ", "Complex", "Broken @{ assigned: Alice", "Unicode indent",
+	} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("rendered kanban missing %q:\n%s", expected, rendered)
+		}
+	}
+	if strings.Contains(rendered, "assigned: [Alice]") || strings.Contains(rendered, "level: High") || strings.Contains(rendered, "ticket: null") {
+		t.Fatalf("non-scalar metadata was rendered:\n%s", rendered)
+	}
+}
+
+func TestRenderMermaidKanbanAcceptsEmptyCommentsAndBlankLines(t *testing.T) {
+	for _, source := range []string{"kanban", "%% before\n\nkanban extra\n%% after"} {
+		lines, ok := renderMermaid(source, 24, paletteFor("groknight"))
+		if !ok || !strings.Contains(stripUIANSI(strings.Join(lines, "\n")), "◇ mermaid kanban") {
+			t.Fatalf("empty kanban was rejected: %q", source)
+		}
+	}
+}
+
+func TestRenderMermaidKanbanRejectsReferenceParseErrors(t *testing.T) {
+	for _, source := range []string{
+		"flowchart TD\nA --> B",
+		"kanban\n  Task before column",
+		"kanban\nTodo\n  Task @{ assigned: [ }",
+	} {
+		if _, ok := renderMermaidKanban(source, 40, paletteFor("groknight")); ok {
+			t.Fatalf("invalid kanban was accepted: %q", source)
+		}
+	}
+}
+
+func TestRenderMermaidKanbanBoundsStatements(t *testing.T) {
+	var source strings.Builder
+	source.WriteString("kanban\n")
+	for index := 0; index < maxMermaidStatements; index++ {
+		source.WriteString("Column ")
+		source.WriteString(strconv.Itoa(index))
+		source.WriteByte('\n')
+	}
+	if _, ok := renderMermaid(source.String(), 40, paletteFor("groknight")); ok {
+		t.Fatal("kanban exceeding the statement limit was accepted")
+	}
+}
+
+func TestRenderMarkdownRendersClosedMermaidKanban(t *testing.T) {
+	source := "Before\n```mermaid\nkanban\nTodo\n  Ship @{ assigned: Alice }\n```\nAfter"
+	rendered := stripUIANSI(strings.Join(renderMarkdown(source, 40), "\n"))
+	for _, expected := range []string{"Before", "◇ mermaid kanban", "Todo", "Ship", "assigned: Alice", "After"} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("rendered Markdown missing %q:\n%s", expected, rendered)
+		}
+	}
+	if strings.Contains(rendered, "```mermaid") || strings.Contains(rendered, "@{ assigned") {
+		t.Fatalf("closed Mermaid kanban source was not replaced:\n%s", rendered)
+	}
+}
+
 func TestRenderMermaidBlockMatchesReferenceParsing(t *testing.T) {
 	source := "%% comment\nblock-beta extra\ncolumns 3\ncolumns nope\nblock: group\nspace:2\nstyle A fill:red\nclassDef hot fill:red\nclass A hot\nlinkStyle 0 stroke:red\nend\nA\nA[Explicit]\nA\nB[Missing close\nA --> C\nC[Final]"
 	lines, ok := renderMermaid(source, 52, paletteFor("groknight"))
