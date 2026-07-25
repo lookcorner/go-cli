@@ -86,6 +86,10 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 			booleans = append(booleans, "question-timeout")
 			return nil
 		},
+		persistInvertScroll: func(value bool) error {
+			booleans = append(booleans, "invert-scroll")
+			return nil
+		},
 		persistScreenMode: func(value string) error {
 			screenModes = append(screenModes, value)
 			return nil
@@ -105,8 +109,8 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 			t.Fatalf("index=%d command=%v err=%q status=%q", index, command != nil, m.settings.err, m.status)
 		}
 	}
-	if !m.showTimestamps || !m.showTimeline || !m.compactMode || !m.vimMode || !m.defaultMinimal || !m.groupToolVerbs || !m.collapsedEditBlocks || !m.suggestionsEnabled || !m.rememberApprovals || !m.questionTimeout || !m.multiline ||
-		strings.Join(booleans, ",") != "timestamps,timeline,compact,vim,group,edits,suggestions,remember,question-timeout" || strings.Join(screenModes, ",") != "minimal" {
+	if !m.showTimestamps || !m.showTimeline || !m.compactMode || !m.vimMode || !m.defaultMinimal || !m.groupToolVerbs || !m.collapsedEditBlocks || !m.suggestionsEnabled || !m.rememberApprovals || !m.questionTimeout || !m.multiline || !m.invertScroll ||
+		strings.Join(booleans, ",") != "timestamps,timeline,compact,vim,group,edits,suggestions,remember,question-timeout,invert-scroll" || strings.Join(screenModes, ",") != "minimal" {
 		t.Fatalf("timestamps=%v timeline=%v compact=%v vim=%v persisted=%v", m.showTimestamps, m.showTimeline, m.compactMode, m.vimMode, booleans)
 	}
 	if m.themeName != "grokday" || m.theme.name != "grokday" || strings.Join(themes, ",") != "grokday" {
@@ -139,7 +143,7 @@ func TestSettingsPanelRollsBackFailedPersistence(t *testing.T) {
 		t.Fatalf("command=%v minimal=%v err=%q", command != nil, m.defaultMinimal, m.settings.err)
 	}
 
-	m.settings.selected = 11
+	m.settings.selected = 12
 	m.mermaidMode = "auto"
 	m.persistMermaid = func(string) error { return errors.New("read only") }
 	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
@@ -148,7 +152,7 @@ func TestSettingsPanelRollsBackFailedPersistence(t *testing.T) {
 		t.Fatalf("command=%v Mermaid=%q err=%q", command != nil, m.mermaidMode, m.settings.err)
 	}
 
-	m.settings.selected = 12
+	m.settings.selected = 13
 	m.persistTheme = func(string) error { return errors.New("read only") }
 	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)
@@ -198,6 +202,14 @@ func TestSettingsPanelRollsBackFailedPersistence(t *testing.T) {
 	m = updated.(*model)
 	if command != nil || !m.questionTimeout || m.settings.err != "read only" {
 		t.Fatalf("command=%v timeout=%v err=%q", command != nil, m.questionTimeout, m.settings.err)
+	}
+
+	m.settings.selected = 11
+	m.persistInvertScroll = func(bool) error { return errors.New("read only") }
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.invertScroll || m.settings.err != "read only" {
+		t.Fatalf("command=%v invert=%v err=%q", command != nil, m.invertScroll, m.settings.err)
 	}
 }
 
@@ -454,5 +466,30 @@ func TestSettingsQuestionTimeoutAppliesAfterRestart(t *testing.T) {
 	}
 	if !observer.hasDeadline {
 		t.Fatal("restart-scoped timeout change applied to current session")
+	}
+}
+
+func TestSettingsInvertScrollAppliesImmediately(t *testing.T) {
+	persisted := false
+	m := &model{
+		width: 60, height: 16, scroll: 10, scrollLines: 5,
+		settings:            &settingsState{selected: 11},
+		persistInvertScroll: func(value bool) error { persisted = value; return nil },
+	}
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || !m.invertScroll || !persisted {
+		t.Fatalf("command=%v invert=%v persisted=%v", command != nil, m.invertScroll, persisted)
+	}
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
+	m = updated.(*model)
+	wheel := m.View().OnMouse(tea.MouseWheelMsg(tea.Mouse{Y: 1, Button: tea.MouseWheelUp}))
+	if wheel == nil {
+		t.Fatal("wheel event was ignored")
+	}
+	updated, _ = m.Update(wheel())
+	m = updated.(*model)
+	if m.scroll != 5 {
+		t.Fatalf("inverted wheel-up scroll=%d", m.scroll)
 	}
 }

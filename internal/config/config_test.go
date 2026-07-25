@@ -2173,13 +2173,16 @@ func TestUIConfigPersistenceAndPermissionPrecedence(t *testing.T) {
 	if err := UpdateQuestionTimeout(path, false); err != nil {
 		t.Fatal(err)
 	}
+	if err := UpdateInvertScroll(path, true); err != nil {
+		t.Fatal(err)
+	}
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	remoteMode := "always-approve"
 	cfg.ApplyRemoteSettings(&RemoteSettings{PermissionMode: &remoteMode})
-	if cfg.UI.PermissionMode != "auto" || cfg.UI.VimMode || !cfg.UI.CompactMode || cfg.UI.ShowTimestamps || !cfg.UI.ShowTimeline || cfg.UI.GroupToolVerbs || !cfg.UI.CollapsedEditBlocks || cfg.UI.PromptSuggestions || !cfg.UI.RememberToolApprovals || cfg.AskUserQuestion.TimeoutEnabled || cfg.DefaultModelID != "local" || cfg.Model != "local-api" {
+	if cfg.UI.PermissionMode != "auto" || cfg.UI.VimMode || !cfg.UI.CompactMode || cfg.UI.ShowTimestamps || !cfg.UI.ShowTimeline || cfg.UI.GroupToolVerbs || !cfg.UI.CollapsedEditBlocks || cfg.UI.PromptSuggestions || !cfg.UI.RememberToolApprovals || cfg.AskUserQuestion.TimeoutEnabled || !cfg.UI.InvertScroll || cfg.DefaultModelID != "local" || cfg.Model != "local-api" {
 		t.Fatalf("config=%#v", cfg)
 	}
 	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o640 {
@@ -2213,8 +2216,11 @@ func TestUIConfigPersistenceAndPermissionPrecedence(t *testing.T) {
 	if err := UpdateQuestionTimeout(emptyPath, false); err != nil {
 		t.Fatal(err)
 	}
+	if err := UpdateInvertScroll(emptyPath, true); err != nil {
+		t.Fatal(err)
+	}
 	emptyConfig, err := Load(emptyPath)
-	if err != nil || !emptyConfig.UI.VimMode || !emptyConfig.UI.CompactMode || emptyConfig.UI.ShowTimestamps || !emptyConfig.UI.ShowTimeline || emptyConfig.UI.GroupToolVerbs || !emptyConfig.UI.CollapsedEditBlocks || emptyConfig.UI.PromptSuggestions || !emptyConfig.UI.RememberToolApprovals || emptyConfig.AskUserQuestion.TimeoutEnabled {
+	if err != nil || !emptyConfig.UI.VimMode || !emptyConfig.UI.CompactMode || emptyConfig.UI.ShowTimestamps || !emptyConfig.UI.ShowTimeline || emptyConfig.UI.GroupToolVerbs || !emptyConfig.UI.CollapsedEditBlocks || emptyConfig.UI.PromptSuggestions || !emptyConfig.UI.RememberToolApprovals || emptyConfig.AskUserQuestion.TimeoutEnabled || !emptyConfig.UI.InvertScroll {
 		t.Fatalf("new config=%#v err=%v", emptyConfig, err)
 	}
 
@@ -2252,8 +2258,11 @@ func TestUIConfigPersistenceAndPermissionPrecedence(t *testing.T) {
 	if err := UpdateQuestionTimeout(jsonPath, false); err != nil {
 		t.Fatal(err)
 	}
+	if err := UpdateInvertScroll(jsonPath, true); err != nil {
+		t.Fatal(err)
+	}
 	jsonConfig, err := Load(jsonPath)
-	if err != nil || jsonConfig.UI.PermissionMode != "always-approve" || jsonConfig.UI.VimMode || jsonConfig.UI.CompactMode || jsonConfig.UI.ShowTimestamps || !jsonConfig.UI.ShowTimeline || jsonConfig.UI.GroupToolVerbs || !jsonConfig.UI.CollapsedEditBlocks || jsonConfig.UI.PromptSuggestions || !jsonConfig.UI.RememberToolApprovals || jsonConfig.AskUserQuestion.TimeoutEnabled {
+	if err != nil || jsonConfig.UI.PermissionMode != "always-approve" || jsonConfig.UI.VimMode || jsonConfig.UI.CompactMode || jsonConfig.UI.ShowTimestamps || !jsonConfig.UI.ShowTimeline || jsonConfig.UI.GroupToolVerbs || !jsonConfig.UI.CollapsedEditBlocks || jsonConfig.UI.PromptSuggestions || !jsonConfig.UI.RememberToolApprovals || jsonConfig.AskUserQuestion.TimeoutEnabled || !jsonConfig.UI.InvertScroll {
 		t.Fatalf("JSON config=%#v err=%v", jsonConfig, err)
 	}
 

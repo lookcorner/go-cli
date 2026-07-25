@@ -1182,6 +1182,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			SetCompactMode:      func(enabled bool) error { return config.UpdateCompactMode(opts.configPath, enabled) },
 			SetShowTimestamps:   func(enabled bool) error { return config.UpdateShowTimestamps(opts.configPath, enabled) },
 			SetShowTimeline:     func(enabled bool) error { return config.UpdateShowTimeline(opts.configPath, enabled) },
+			SetInvertScroll:     func(enabled bool) error { return config.UpdateInvertScroll(opts.configPath, enabled) },
 			SetGroupToolVerbs:   func(enabled bool) error { return config.UpdateGroupToolVerbs(opts.configPath, enabled) },
 			SetCollapsedEdits: func(enabled bool) error {
 				return config.UpdateCollapsedEditBlocks(opts.configPath, enabled)
