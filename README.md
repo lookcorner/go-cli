@@ -764,6 +764,9 @@ writes it to disk with `~`, spaces, relative paths, and parent creation supporte
 While a turn is running, additional prompts are queued FIFO; `/queue` prints a
 read-only snapshot and queued prompts run before scheduled wake-ups. The status
 line places the elapsed turn time before the persistent queued-message hint.
+Blocking background-task waits add one scrollback marker with the elapsed turn
+time and remaining work counts; live subagent completions refresh that marker
+in place without moving status below queued user input.
 `/tasks` instantly lists background commands, subagents, and scheduled tasks
 without creating a model turn.
 `/dashboard` (also `/sessions` and `/agents-dashboard`) opens an interactive

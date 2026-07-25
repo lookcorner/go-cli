@@ -807,6 +807,7 @@ type model struct {
 	status              string
 	turnStarted         time.Time
 	turnStatusTicking   bool
+	parkedWait          *parkedWaitState
 	approval            *approvalEvent
 	cancelTurn          *cancelTurnState
 	cancelSubagents     string
@@ -1626,6 +1627,7 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case turnStatusTickEvent:
 		m.turnStatusTicking = false
+		m.refreshParkedWait(time.Now())
 		return m, m.ensureTurnStatusTick()
 	case smallScreenHintTickEvent:
 		if !m.smallScreenHint.active || m.smallScreenHint.nonce != msg.nonce {
@@ -1728,9 +1730,15 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.inFlightPrompt = nil
 		m.finishThought()
 		m.status = "tool running: " + msg.call.Name
-		return m, waitForBridge(m.bridge)
+		if startsParkedWait(msg.call) {
+			m.finishToolVerbGroup()
+			m.finishCollapsedEditGroup()
+			m.startParkedWait(msg.call)
+		}
+		return m, tea.Batch(waitForBridge(m.bridge), m.ensureTurnStatusTick())
 	case toolFinishedEvent:
 		m.inFlightPrompt = nil
+		m.finishParkedWait(msg.call)
 		m.finishTool(msg)
 		return m, waitForBridge(m.bridge)
 	case cancelSubagentsDoneEvent:
@@ -1804,6 +1812,7 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.finishThought()
 		m.running = false
 		m.turnStarted = time.Time{}
+		m.parkedWait = nil
 		m.turnCancel = nil
 		m.cancelTurn = nil
 		m.transcript.WriteString("\n")
@@ -3471,6 +3480,7 @@ func (m *model) handleRunningKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.clearPromptSuggestion()
 		m.pendingPrompts = append(m.pendingPrompts, prompt)
 		m.pendingPromptImages = append(m.pendingPromptImages, images)
+		m.suppressParkedWait()
 		if !m.sendNowHint.enabled || m.sendNowHint.shown >= 3 {
 			m.status = fmt.Sprintf("queued prompt #%d", len(m.pendingPrompts))
 			return m, m.ensureTurnStatusTick()
@@ -5351,6 +5361,7 @@ func (m *model) enrichReplayImage(image *session.DisplayImage, sessionPath strin
 
 func (m *model) beginTurn(prompt string) {
 	m.promptSerial++
+	m.parkedWait = nil
 	m.clearPromptSuggestion()
 	m.appendPromptTranscript(prompt)
 	m.status = "thinking"
@@ -5358,7 +5369,8 @@ func (m *model) beginTurn(prompt string) {
 }
 
 func (m *model) ensureTurnStatusTick() tea.Cmd {
-	if !m.running || m.turnStarted.IsZero() || len(m.pendingPrompts) == 0 || m.turnStatusTicking {
+	parked := m.parkedWait != nil && !m.parkedWait.suppressed
+	if !m.running || m.turnStarted.IsZero() || len(m.pendingPrompts) == 0 && !parked || m.turnStatusTicking {
 		return nil
 	}
 	m.turnStatusTicking = true
