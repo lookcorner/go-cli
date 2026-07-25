@@ -1071,6 +1071,50 @@ func TestBusyQueueShowsSendNowHintAndInjectsFirstPrompt(t *testing.T) {
 	}
 }
 
+func TestQueuedHintRendersAfterTurnElapsedTime(t *testing.T) {
+	started := time.Now().Add(-5*time.Minute - 59*time.Second)
+	m := &model{
+		running: true, status: "Waiting on subagent…", turnStarted: started,
+		pendingPrompts: []string{"follow-up"}, width: 80, height: 18,
+	}
+	status := m.runningStatusText(started.Add(5*time.Minute+59*time.Second), 80)
+	if status != "Waiting on subagent… 5m59s · 1 queued — Enter to send now" {
+		t.Fatalf("status=%q", status)
+	}
+
+	m.status = "Queued · Enter to send now"
+	status = m.runningStatusText(started.Add(6*time.Minute), 80)
+	if status != "thinking 6m0s · 1 queued — Enter to send now" {
+		t.Fatalf("queued toast duplicated in status=%q", status)
+	}
+
+	m.status = "tool running: an unusually long command that would otherwise hide the queue"
+	status = m.runningStatusText(started.Add(6*time.Minute), 55)
+	if !strings.HasSuffix(status, "6m0s · 1 queued — Enter to send now") || displayWidth(status) > 55 {
+		t.Fatalf("long status did not preserve queue suffix: %q", status)
+	}
+}
+
+func TestTurnStatusTickRunsOnlyDuringTimedTurn(t *testing.T) {
+	m := &model{running: true, turnStarted: time.Now(), pendingPrompts: []string{"follow-up"}}
+	if command := m.ensureTurnStatusTick(); command == nil || !m.turnStatusTicking {
+		t.Fatalf("command=%v ticking=%v", command != nil, m.turnStatusTicking)
+	}
+	if command := m.ensureTurnStatusTick(); command != nil {
+		t.Fatal("scheduled duplicate turn status tick")
+	}
+	m.running = false
+	m.turnStatusTicking = false
+	if command := m.ensureTurnStatusTick(); command != nil {
+		t.Fatal("scheduled turn status tick while idle")
+	}
+	m.running = true
+	m.pendingPrompts = nil
+	if command := m.ensureTurnStatusTick(); command != nil {
+		t.Fatal("scheduled turn status tick without a queued prompt")
+	}
+}
+
 func TestBusyQueuePreservesPromptImagesForSendNow(t *testing.T) {
 	runner := &agent.Runner{}
 	image := api.ContentPart{Type: "input_image", ImageURL: "data:image/png;base64,cG5n"}

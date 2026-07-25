@@ -762,7 +762,8 @@ model.
 `/export` copies the completed conversation as Markdown; `/export <filename>`
 writes it to disk with `~`, spaces, relative paths, and parent creation supported.
 While a turn is running, additional prompts are queued FIFO; `/queue` prints a
-read-only snapshot and queued prompts run before scheduled wake-ups.
+read-only snapshot and queued prompts run before scheduled wake-ups. The status
+line places the elapsed turn time before the persistent queued-message hint.
 `/tasks` instantly lists background commands, subagents, and scheduled tasks
 without creating a model turn.
 `/dashboard` (also `/sessions` and `/agents-dashboard`) opens an interactive

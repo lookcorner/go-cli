@@ -124,6 +124,7 @@ type selectionClearEvent struct{ nonce uint64 }
 type contextualUndoClearEvent struct{ nonce uint64 }
 type planNudgeClearEvent struct{ nonce uint64 }
 type sendNowClearEvent struct{ nonce uint64 }
+type turnStatusTickEvent struct{}
 type smallScreenHintTickEvent struct{ nonce uint64 }
 type wordSelectHintTickEvent struct{ nonce uint64 }
 type foreignResumeEvent struct{ session *session.RecentForeignSession }
@@ -804,6 +805,8 @@ type model struct {
 	scrollAnchor        *int
 	running             bool
 	status              string
+	turnStarted         time.Time
+	turnStatusTicking   bool
 	approval            *approvalEvent
 	cancelTurn          *cancelTurnState
 	cancelSubagents     string
@@ -1621,6 +1624,9 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "thinking"
 		}
 		return m, nil
+	case turnStatusTickEvent:
+		m.turnStatusTicking = false
+		return m, m.ensureTurnStatusTick()
 	case smallScreenHintTickEvent:
 		if !m.smallScreenHint.active || m.smallScreenHint.nonce != msg.nonce {
 			return m, nil
@@ -1797,6 +1803,7 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.finishCollapsedEditGroup()
 		m.finishThought()
 		m.running = false
+		m.turnStarted = time.Time{}
 		m.turnCancel = nil
 		m.cancelTurn = nil
 		m.transcript.WriteString("\n")
@@ -3466,15 +3473,16 @@ func (m *model) handleRunningKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.pendingPromptImages = append(m.pendingPromptImages, images)
 		if !m.sendNowHint.enabled || m.sendNowHint.shown >= 3 {
 			m.status = fmt.Sprintf("queued prompt #%d", len(m.pendingPrompts))
-			return m, nil
+			return m, m.ensureTurnStatusTick()
 		}
 		m.sendNowHint.shown++
 		m.sendNowHint.nonce++
 		nonce := m.sendNowHint.nonce
 		m.status = "Queued · Enter to send now"
-		return m, tea.Tick(3*time.Second, func(time.Time) tea.Msg {
-			return sendNowClearEvent{nonce: nonce}
-		})
+		return m, tea.Batch(
+			tea.Tick(3*time.Second, func(time.Time) tea.Msg { return sendNowClearEvent{nonce: nonce} }),
+			m.ensureTurnStatusTick(),
+		)
 	}
 	return m, m.editInput(msg)
 }
@@ -5346,6 +5354,31 @@ func (m *model) beginTurn(prompt string) {
 	m.clearPromptSuggestion()
 	m.appendPromptTranscript(prompt)
 	m.status = "thinking"
+	m.turnStarted = time.Now()
+}
+
+func (m *model) ensureTurnStatusTick() tea.Cmd {
+	if !m.running || m.turnStarted.IsZero() || len(m.pendingPrompts) == 0 || m.turnStatusTicking {
+		return nil
+	}
+	m.turnStatusTicking = true
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return turnStatusTickEvent{} })
+}
+
+func (m *model) runningStatusText(now time.Time, width int) string {
+	if !m.running || m.turnStarted.IsZero() || len(m.pendingPrompts) == 0 {
+		return m.status
+	}
+	status := m.status
+	if status == "Queued · Enter to send now" || strings.HasPrefix(status, "queued prompt #") {
+		status = "thinking"
+	}
+	elapsed := max(now.Sub(m.turnStarted), 0).Truncate(time.Second)
+	suffix := fmt.Sprintf("%s · %d queued — Enter to send now", elapsed, len(m.pendingPrompts))
+	if available := width - displayWidth(suffix) - 1; available > 0 {
+		return truncate(status, available) + " " + suffix
+	}
+	return truncate(status+" "+suffix, width)
 }
 
 func (m *model) appendPromptTranscript(prompt string) {
@@ -5929,7 +5962,7 @@ func (m *model) View() tea.View {
 		parts = append(parts, inputLines...)
 		footer = strings.Join(parts, "\n") + "\n" + ansiDim + truncate(hint, width) + ansiReset
 	}
-	statusText := m.status
+	statusText := m.runningStatusText(time.Now(), width)
 	if m.foreignResume != nil && !m.running && len(m.input) == 0 && len(m.promptImages) == 0 && m.transcript.Len() == 0 {
 		minutes := m.foreignResume.Age / time.Minute
 		when := "moments ago"
