@@ -1044,9 +1044,17 @@ func TestBusyQueueShowsSendNowHintAndInjectsFirstPrompt(t *testing.T) {
 	m.clearInput()
 	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)
+	transcript := m.transcript.String()
 	pending := runner.TakeInterjections()
-	if command != nil || m.status != "sent queued prompt now" || len(m.pendingPrompts) != 1 || m.pendingPrompts[0] != "second follow-up" || len(pending) != 1 || pending[0].Text != "first follow-up" {
-		t.Fatalf("command=%v status=%q queue=%#v interjections=%#v", command != nil, m.status, m.pendingPrompts, pending)
+	if command != nil || m.status != "sent queued prompt now" || len(m.pendingPrompts) != 1 || m.pendingPrompts[0] != "second follow-up" || len(pending) != 1 || pending[0].Text != "first follow-up" ||
+		!strings.Contains(transcript, "You\nfirst follow-up\n\nGork\n") {
+		t.Fatalf("command=%v status=%q queue=%#v interjections=%#v transcript=%q", command != nil, m.status, m.pendingPrompts, pending, transcript)
+	}
+	m.setInput("/queue")
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || !strings.Contains(m.transcript.String(), "Queued prompt (1):\n  #1  second follow-up") {
+		t.Fatalf("command=%v transcript=%q", command != nil, m.transcript.String())
 	}
 }
 
@@ -1066,8 +1074,38 @@ func TestBusyQueuePreservesPromptImagesForSendNow(t *testing.T) {
 	m = updated.(*model)
 	pending := runner.TakeInterjections()
 	if command != nil || len(pending) != 1 || len(pending[0].Content) != 1 || pending[0].Content[0] != image ||
-		len(m.pendingPrompts) != 0 || len(m.pendingPromptImages) != 0 {
-		t.Fatalf("command=%v pending=%#v prompts=%#v images=%#v", command != nil, pending, m.pendingPrompts, m.pendingPromptImages)
+		len(m.pendingPrompts) != 0 || len(m.pendingPromptImages) != 0 || !strings.Contains(m.transcript.String(), "You\ninspect\n\nGork\n") {
+		t.Fatalf("command=%v pending=%#v prompts=%#v images=%#v transcript=%q", command != nil, pending, m.pendingPrompts, m.pendingPromptImages, m.transcript.String())
+	}
+}
+
+func TestBusyQueueRapidEnterSendsPromptsInOrder(t *testing.T) {
+	runner := &agent.Runner{}
+	m := &model{runner: runner, running: true, pendingPrompts: []string{"first", "second"}}
+
+	for range 2 {
+		updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+		m = updated.(*model)
+		if command != nil {
+			t.Fatal("send-now unexpectedly returned a command")
+		}
+	}
+	pending := runner.TakeInterjections()
+	if len(pending) != 2 || pending[0].Text != "first" || pending[1].Text != "second" || len(m.pendingPrompts) != 0 {
+		t.Fatalf("interjections=%#v queue=%#v", pending, m.pendingPrompts)
+	}
+	transcript := m.transcript.String()
+	if first, second := strings.Index(transcript, "You\nfirst\n"), strings.Index(transcript, "You\nsecond\n"); first < 0 || second <= first {
+		t.Fatalf("transcript=%q", transcript)
+	}
+}
+
+func TestMinimalBusyQueueSendNowFlushesPromptImmediately(t *testing.T) {
+	m := &model{runner: &agent.Runner{}, running: true, minimal: true, pendingPrompts: []string{"send now"}}
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command == nil || m.minimalCommitted != m.transcript.Len() || len(m.pendingPrompts) != 0 {
+		t.Fatalf("command=%v committed=%d transcript=%d queue=%#v", command != nil, m.minimalCommitted, m.transcript.Len(), m.pendingPrompts)
 	}
 }
 

@@ -3375,6 +3375,10 @@ func (m *model) handleRunningKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			prompt := m.pendingPrompts[0]
 			m.pendingPrompts = m.pendingPrompts[1:]
 			images := m.shiftPendingPromptImages()
+			m.appendPromptTranscript(prompt)
+			if m.minimal {
+				m.minimalFlushTo = m.transcript.Len()
+			}
 			m.runner.QueueInterjection(prompt, images)
 			m.sendNowHint.nonce++
 			m.status = "sent queued prompt now"
@@ -5317,14 +5321,19 @@ func (m *model) enrichReplayImage(image *session.DisplayImage, sessionPath strin
 }
 
 func (m *model) beginTurn(prompt string) {
+	m.promptSerial++
+	m.clearPromptSuggestion()
+	m.appendPromptTranscript(prompt)
+	m.status = "thinking"
+}
+
+func (m *model) appendPromptTranscript(prompt string) {
 	m.finishToolVerbGroup()
 	m.finishCollapsedEditGroup()
 	m.finishThought()
 	if m.minimal && m.transcript.Len() > m.minimalCommitted {
 		m.minimalFlushTo = m.transcript.Len()
 	}
-	m.promptSerial++
-	m.clearPromptSuggestion()
 	m.clearTranscriptAnchor()
 	if m.transcript.Len() > 0 {
 		m.transcript.WriteString("\n")
@@ -5336,7 +5345,6 @@ func (m *model) beginTurn(prompt string) {
 	m.transcript.WriteString("\n" + prompt + "\n\nGork")
 	m.transcriptMessages = append(m.transcriptMessages, transcriptMessage{start: m.transcript.Len() - len("Gork"), offset: m.transcript.Len(), at: now, role: "assistant"})
 	m.transcript.WriteString("\n")
-	m.status = "thinking"
 	m.scroll = 0
 }
 
