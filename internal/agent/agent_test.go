@@ -374,6 +374,7 @@ func TestRunnerExportSessionCopiesOrWritesMarkdown(t *testing.T) {
 	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	_, path, err = runner.ExportSession("~/exports/conversation.md", root)
 	if err != nil || path != filepath.Join(home, "exports", "conversation.md") {
 		t.Fatalf("path=%q err=%v", path, err)
