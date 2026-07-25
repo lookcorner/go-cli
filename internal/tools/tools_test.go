@@ -208,7 +208,7 @@ func TestRegistryBlocksWriteWhenCheckpointCannotPersist(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(filepath.Join(t.TempDir(), "outside.jsonl"), storePath); err != nil {
-		t.Fatal(err)
+		t.Skipf("symlinks unavailable: %v", err)
 	}
 	registry := NewRegistry(ws, PromptApprover{Mode: PermissionAuto})
 	defer registry.Close()
@@ -378,6 +378,9 @@ func TestRegistryNormalizesStringArguments(t *testing.T) {
 }
 
 func TestGorkFileToolCompatibility(t *testing.T) {
+	if _, err := exec.LookPath("rg"); err != nil {
+		t.Skip("ripgrep (rg) is not installed")
+	}
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "sample.go"), []byte("one\nTwo\nthree\n"), 0o600); err != nil {
 		t.Fatal(err)

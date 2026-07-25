@@ -36,6 +36,9 @@ func TestSandboxOffLeavesCommandUnwrapped(t *testing.T) {
 }
 
 func TestSeatbeltPolicyScopesWorkspaceWrites(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("seatbelt policies target macOS paths")
+	}
 	workspacePolicy, err := seatbeltPolicy(SandboxWorkspace, `/work/with "quote"`)
 	if err != nil {
 		t.Fatal(err)

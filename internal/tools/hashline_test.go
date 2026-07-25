@@ -212,7 +212,7 @@ func TestHashlineEditFailsClosedWhenCheckpointFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(filepath.Join(t.TempDir(), "outside.jsonl"), storePath); err != nil {
-		t.Fatal(err)
+		t.Skipf("symlinks unavailable: %v", err)
 	}
 	registry.SetRewindStore(store, func() int { return 0 })
 	arguments := `{"file_path":"sample.txt","edits":[{"op":"write","content":"new"}]}`

@@ -251,7 +251,7 @@ func TestWebFetchPersistsOverflowArtifactAndSkipsCache(t *testing.T) {
 		if err != nil || statErr != nil {
 			t.Fatalf("readErr=%v statErr=%v", err, statErr)
 		}
-		if string(data) != body || info.Mode().Perm() != 0o600 {
+		if string(data) != body || info.Mode().Perm() != wantPerm(0o600) {
 			t.Fatalf("artifact=%q mode=%v", data, info.Mode().Perm())
 		}
 	}
@@ -262,13 +262,13 @@ func TestWebFetchPersistsOverflowArtifactAndSkipsCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if dirInfo.Mode().Perm() != 0o700 {
+	if dirInfo.Mode().Perm() != wantPerm(0o700) {
 		t.Fatalf("artifact directory mode=%v", dirInfo.Mode().Perm())
 	}
 	workspaceRoot := t.TempDir()
 	ws, _ := workspace.Open(workspaceRoot)
 	reader := &readFileTool{ws: ws, artifactRoot: artifactRoot}
-	read, err := reader.Execute(context.Background(), json.RawMessage(`{"target_file":"`+filepath.Join(artifactRoot, "web_fetch", "1.txt")+`","offset":2,"limit":2}`))
+	read, err := reader.Execute(context.Background(), json.RawMessage(`{"target_file":`+quoted(filepath.Join(artifactRoot, "web_fetch", "1.txt"))+`,"offset":2,"limit":2}`))
 	if err != nil || !strings.Contains(read, "complete artifact line") {
 		t.Fatalf("artifact recovery=%q err=%v", read, err)
 	}
@@ -297,7 +297,7 @@ func TestReadFileAbsoluteWorkspacePathBeforeArtifactsExist(t *testing.T) {
 	}
 	ws, _ := workspace.Open(root)
 	reader := &readFileTool{ws: ws, artifactRoot: filepath.Join(t.TempDir(), "artifacts", "session")}
-	output, err := reader.Execute(context.Background(), json.RawMessage(`{"target_file":"`+path+`"}`))
+	output, err := reader.Execute(context.Background(), json.RawMessage(`{"target_file":`+quoted(path)+`}`))
 	if err != nil || !strings.Contains(output, "workspace content") {
 		t.Fatalf("absolute workspace read=%q err=%v", output, err)
 	}
@@ -374,11 +374,11 @@ func TestWebFetchDownloadsSessionMedia(t *testing.T) {
 	}
 	ws, _ := workspace.Open(t.TempDir())
 	reader := &readFileTool{ws: ws, artifactRoot: artifactRoot}
-	pdfText, err := reader.Execute(context.Background(), json.RawMessage(`{"target_file":"`+filepath.Join(artifactRoot, "downloads", "1.pdf")+`","format":"text","pages":"1"}`))
+	pdfText, err := reader.Execute(context.Background(), json.RawMessage(`{"target_file":`+quoted(filepath.Join(artifactRoot, "downloads", "1.pdf"))+`,"format":"text","pages":"1"}`))
 	if err != nil || !strings.Contains(pdfText, "Downloaded PDF") {
 		t.Fatalf("downloaded PDF recovery=%q err=%v", pdfText, err)
 	}
-	imageResult, err := reader.ExecuteResult(context.Background(), json.RawMessage(`{"target_file":"`+filepath.Join(artifactRoot, "images", "1.png")+`"}`))
+	imageResult, err := reader.ExecuteResult(context.Background(), json.RawMessage(`{"target_file":`+quoted(filepath.Join(artifactRoot, "images", "1.png"))+`}`))
 	if err != nil || len(imageResult.Images) != 1 || imageResult.Images[0].MediaType != "image/png" {
 		t.Fatalf("downloaded image recovery=%#v err=%v", imageResult, err)
 	}
