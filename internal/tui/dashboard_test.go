@@ -431,6 +431,69 @@ func TestDashboardStartsNewAgentAndOpensDetails(t *testing.T) {
 	}
 }
 
+func TestDashboardNewAgentMultilineModeIsIndependent(t *testing.T) {
+	var prompts []string
+	runner := dashboardFixtureRunner()
+	runner.StartSubagent = func(_ context.Context, prompt string) (tools.SubagentResult, error) {
+		prompts = append(prompts, prompt)
+		id := "sub-1"
+		if len(prompts) > 1 {
+			id = "sub-2"
+		}
+		return tools.SubagentResult{ID: id, Status: "running", Description: prompt}, nil
+	}
+	m := &model{ctx: context.Background(), runner: runner, workspace: "/work", modelName: "grok", multiline: true}
+	m.openDashboard()
+	pressDashboardKey(t, m, tea.Key{Code: 'n', Text: "n"})
+	pressDashboardKey(t, m, tea.Key{Code: 'a', Text: "first"})
+	pressDashboardKey(t, m, tea.Key{Code: tea.KeyEnter, Mod: tea.ModShift})
+	pressDashboardKey(t, m, tea.Key{Code: 'b', Text: "second"})
+	pressDashboardKey(t, m, tea.Key{Code: tea.KeyEnter, Mod: tea.ModAlt})
+	pressDashboardKey(t, m, tea.Key{Code: 'c', Text: "third"})
+	if string(m.dashboard.dispatchInput) != "first\nsecond\nthird" || m.dashboard.multiline || !m.multiline {
+		t.Fatalf("input=%q dashboard multiline=%v prompt multiline=%v", m.dashboard.dispatchInput, m.dashboard.multiline, m.multiline)
+	}
+	updated, start := m.handleDashboardKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	updated, _ = m.Update(start())
+	m = updated.(*model)
+	if len(prompts) != 1 || prompts[0] != "first\nsecond\nthird" || m.dashboard == nil || m.dashboard.dispatching {
+		t.Fatalf("prompts=%q dashboard=%#v", prompts, m.dashboard)
+	}
+
+	pressDashboardKey(t, m, tea.Key{Code: 'n', Text: "n"})
+	pressDashboardKey(t, m, tea.Key{Code: '/', Text: "/ml"})
+	pressDashboardKey(t, m, tea.Key{Code: tea.KeyEnter, Mod: tea.ModShift})
+	if m.dashboard.multiline || string(m.dashboard.dispatchInput) != "/ml\n" {
+		t.Fatalf("modified slash state=%#v", m.dashboard)
+	}
+	m.dashboard.dispatchInput = []rune("/ml")
+	m.dashboard.dispatchCursor = len(m.dashboard.dispatchInput)
+	pressDashboardKey(t, m, tea.Key{Code: tea.KeyEnter})
+	if !m.dashboard.multiline || len(m.dashboard.dispatchInput) != 0 || m.status != "dashboard multiline input" || !m.multiline {
+		t.Fatalf("state=%#v status=%q prompt multiline=%v", m.dashboard, m.status, m.multiline)
+	}
+	pressDashboardKey(t, m, tea.Key{Code: 'a', Text: "fourth"})
+	pressDashboardKey(t, m, tea.Key{Code: tea.KeyEnter})
+	pressDashboardKey(t, m, tea.Key{Code: 'b', Text: "fifth"})
+	if string(m.dashboard.dispatchInput) != "fourth\nfifth" {
+		t.Fatalf("multiline input=%q", m.dashboard.dispatchInput)
+	}
+	updated, start = m.handleDashboardKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter, Mod: tea.ModAlt}))
+	m = updated.(*model)
+	updated, _ = m.Update(start())
+	m = updated.(*model)
+	if len(prompts) != 2 || prompts[1] != "fourth\nfifth" || !m.multiline {
+		t.Fatalf("prompts=%q prompt multiline=%v", prompts, m.multiline)
+	}
+
+	pressDashboardKey(t, m, tea.Key{Code: 'n', Text: "n"})
+	pressDashboardKey(t, m, tea.Key{Code: 'm', Mod: tea.ModCtrl})
+	if m.dashboard.multiline || m.status != "dashboard single-line input" || !m.multiline {
+		t.Fatalf("state=%#v status=%q prompt multiline=%v", m.dashboard, m.status, m.multiline)
+	}
+}
+
 func TestDashboardPreservesNewAgentDraftAfterFailure(t *testing.T) {
 	runner := dashboardFixtureRunner()
 	runner.StartSubagent = func(context.Context, string) (tools.SubagentResult, error) {

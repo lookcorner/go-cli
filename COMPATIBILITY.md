@@ -185,6 +185,9 @@ preserves Unicode, multiline and trailing-newline content, normalizes bare
 carriage returns, and suppresses typed-only contextual nudges for pasted text.
 PageUp and PageDown scroll the conversation without leaving the prompt in idle
 or running turns, while an open slash menu retains first priority for paging.
+The dashboard new-agent composer has its own session-local multiline mode via
+`Ctrl+M`, `/multiline`, or `/ml`, with Enter and Shift/Alt-Enter send/newline
+semantics independent from the active session prompt.
 Plain TUI exits print a pasteable session resume command after terminal restore,
 including `--minimal` when the active session used native scrollback mode.
 Ctrl-V reads native clipboard text or validated PNG data, with Alt-V as a

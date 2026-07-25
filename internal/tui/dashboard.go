@@ -66,6 +66,7 @@ type dashboardState struct {
 	dispatching    bool
 	dispatchInput  []rune
 	dispatchCursor int
+	multiline      bool
 	shortcuts      bool
 	peekID         string
 	peekKind       dashboardRowKind
@@ -394,7 +395,10 @@ func (m *model) dashboardHint() string {
 		return "Type to filter | Enter keep | Esc cancel | Ctrl+/ cancel"
 	}
 	if m.dashboard != nil && m.dashboard.dispatching {
-		return "Enter start | Ctrl+S start and open | Esc cancel | Left/Right move cursor"
+		if m.dashboard.multiline {
+			return "Shift/Alt-Enter start | Enter newline | Ctrl+M single-line | Ctrl+S start and open | Esc cancel"
+		}
+		return "Enter start | Shift/Alt-Enter newline | Ctrl+M multiline | Ctrl+S start and open | Esc cancel"
 	}
 	if m.dashboard != nil && m.dashboard.attached {
 		return "Esc return to dashboard | Up/Down scroll"
@@ -1077,6 +1081,28 @@ func (m *model) handleDashboardDispatchKey(msg tea.KeyPressMsg) (tea.Model, tea.
 		m.status = "agent dashboard"
 		return m, nil
 	}
+	if msg.Keystroke() == "ctrl+m" {
+		m.toggleDashboardMultiline()
+		return m, nil
+	}
+	if key.Code == tea.KeyEnter {
+		prompt := strings.TrimSpace(string(state.dispatchInput))
+		modified := key.Mod&(tea.ModShift|tea.ModAlt) != 0
+		if !modified && (prompt == "/multiline" || prompt == "/ml") {
+			state.dispatchInput = nil
+			state.dispatchCursor = 0
+			m.toggleDashboardMultiline()
+			return m, nil
+		}
+		if !state.multiline && modified || state.multiline && !modified {
+			if len(string(state.dispatchInput))+1 <= maxDashboardDispatchBytes {
+				state.dispatchInput = slices.Insert(state.dispatchInput, state.dispatchCursor, '\n')
+				state.dispatchCursor++
+			}
+			state.err = ""
+			return m, nil
+		}
+	}
 	if key.Code == tea.KeyEnter || msg.Keystroke() == "ctrl+s" {
 		prompt := strings.TrimSpace(string(state.dispatchInput))
 		if prompt == "" {
@@ -1110,6 +1136,15 @@ func (m *model) handleDashboardDispatchKey(msg tea.KeyPressMsg) (tea.Model, tea.
 	}
 	state.err = ""
 	return m, nil
+}
+
+func (m *model) toggleDashboardMultiline() {
+	m.dashboard.multiline = !m.dashboard.multiline
+	if m.dashboard.multiline {
+		m.status = "dashboard multiline input"
+	} else {
+		m.status = "dashboard single-line input"
+	}
 }
 
 func (m *model) openDashboardRow(row dashboardRow) (tea.Model, tea.Cmd) {
