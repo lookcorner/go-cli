@@ -514,7 +514,11 @@ are read as text. `--output-format` accepts
 `plain`, `json`, or newline-delimited `streaming-json`. A JSON object passed to
 `--json-schema` constrains structured output on Responses, Chat Completions,
 and Anthropic Messages backends and implies JSON output when no format is
-specified.
+specified. JSON formats report uncached, cached, output, reasoning, and total
+tokens for every model call in the run. When every call includes xAI's
+server-reported cost ticks, the final record also includes exact
+`total_cost_usd_ticks`, its `total_cost_usd` conversion, and per-model usage;
+partial costs are flagged and never presented as a complete total.
 
 Prompts can also be piped through stdin:
 

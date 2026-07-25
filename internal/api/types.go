@@ -99,9 +99,10 @@ type StreamResult struct {
 }
 
 type Usage struct {
-	InputTokens      int `json:"input_tokens,omitempty"`
-	OutputTokens     int `json:"output_tokens,omitempty"`
-	TotalTokens      int `json:"total_tokens,omitempty"`
-	CachedReadTokens int `json:"cached_read_tokens,omitempty"`
-	ReasoningTokens  int `json:"reasoning_tokens,omitempty"`
+	InputTokens      int    `json:"input_tokens,omitempty"`
+	OutputTokens     int    `json:"output_tokens,omitempty"`
+	TotalTokens      int    `json:"total_tokens,omitempty"`
+	CachedReadTokens int    `json:"cached_read_tokens,omitempty"`
+	ReasoningTokens  int    `json:"reasoning_tokens,omitempty"`
+	CostUSDTicks     *int64 `json:"cost_usd_ticks,omitempty"`
 }

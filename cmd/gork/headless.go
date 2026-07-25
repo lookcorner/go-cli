@@ -123,6 +123,7 @@ const (
 	headlessOutputPlain         headlessOutputFormat = "plain"
 	headlessOutputJSON          headlessOutputFormat = "json"
 	headlessOutputStreamingJSON headlessOutputFormat = "streaming-json"
+	usdTicksPerUSD                                   = 1e10
 )
 
 func loadHeadlessPrompt(opts options) (headlessPrompt, bool, error) {
@@ -314,6 +315,15 @@ type headlessEmitter struct {
 	last      agent.Result
 	usage     api.Usage
 	turns     int
+	costTicks int64
+	costCalls int
+	models    map[string]*headlessModelUsage
+}
+
+type headlessModelUsage struct {
+	usage     api.Usage
+	costTicks int64
+	calls     int
 }
 
 func (e *headlessEmitter) textWriter() io.Writer {
@@ -338,13 +348,12 @@ func (e *headlessEmitter) Write(data []byte) (int, error) {
 
 func (e *headlessEmitter) add(result agent.Result) error {
 	e.last = result
-	e.turns++
-	if result.Usage != nil {
-		e.usage.InputTokens += result.Usage.InputTokens
-		e.usage.OutputTokens += result.Usage.OutputTokens
-		e.usage.TotalTokens += result.Usage.TotalTokens
-		e.usage.CachedReadTokens += result.Usage.CachedReadTokens
-		e.usage.ReasoningTokens += result.Usage.ReasoningTokens
+	usageHistory := result.UsageHistory
+	if len(usageHistory) == 0 && result.Usage != nil {
+		usageHistory = []agent.ModelUsage{{Model: result.Model, Usage: *result.Usage}}
+	}
+	for _, record := range usageHistory {
+		e.addUsage(record.Model, record.Usage)
 	}
 	switch e.format {
 	case headlessOutputPlain:
@@ -357,6 +366,39 @@ func (e *headlessEmitter) add(result agent.Result) error {
 		e.text.WriteString(result.Text)
 	}
 	return nil
+}
+
+func (e *headlessEmitter) addUsage(model string, usage api.Usage) {
+	e.turns++
+	addHeadlessUsage(&e.usage, usage)
+	if usage.CostUSDTicks != nil {
+		e.costTicks += *usage.CostUSDTicks
+		e.costCalls++
+	}
+	if model == "" {
+		return
+	}
+	if e.models == nil {
+		e.models = make(map[string]*headlessModelUsage)
+	}
+	entry := e.models[model]
+	if entry == nil {
+		entry = &headlessModelUsage{}
+		e.models[model] = entry
+	}
+	entry.calls++
+	addHeadlessUsage(&entry.usage, usage)
+	if usage.CostUSDTicks != nil {
+		entry.costTicks += *usage.CostUSDTicks
+	}
+}
+
+func addHeadlessUsage(total *api.Usage, usage api.Usage) {
+	total.InputTokens += usage.InputTokens
+	total.OutputTokens += usage.OutputTokens
+	total.TotalTokens += usage.InputTokens + usage.OutputTokens
+	total.CachedReadTokens += usage.CachedReadTokens
+	total.ReasoningTokens += usage.ReasoningTokens
 }
 
 func (e *headlessEmitter) finish(structured bool) error {
@@ -376,7 +418,7 @@ func (e *headlessEmitter) finish(structured bool) error {
 	} else {
 		payload["text"] = result.Text
 	}
-	attachHeadlessResult(payload, result, e.usage, e.turns, structured)
+	attachHeadlessResult(payload, result, e, structured)
 	encoder := json.NewEncoder(e.output)
 	if e.format == headlessOutputJSON {
 		encoder.SetIndent("", "  ")
@@ -391,7 +433,8 @@ func (e *headlessEmitter) emitError(err error) {
 	_ = json.NewEncoder(e.output).Encode(map[string]any{"type": "error", "message": err.Error()})
 }
 
-func attachHeadlessResult(payload map[string]any, result agent.Result, usage api.Usage, turns int, structured bool) {
+func attachHeadlessResult(payload map[string]any, result agent.Result, emitter *headlessEmitter, structured bool) {
+	usage, turns := emitter.usage, emitter.turns
 	if usage != (api.Usage{}) {
 		inputTokens := usage.InputTokens - usage.CachedReadTokens
 		if inputTokens < 0 {
@@ -403,6 +446,28 @@ func attachHeadlessResult(payload map[string]any, result agent.Result, usage api
 			"total_tokens": usage.TotalTokens,
 		}
 		payload["num_turns"] = turns
+	}
+	partialCost := emitter.costCalls > 0 && emitter.costCalls < turns
+	if partialCost {
+		payload["cost_is_partial"] = true
+	} else if turns > 0 && emitter.costCalls == turns {
+		payload["total_cost_usd"] = float64(emitter.costTicks) / usdTicksPerUSD
+		payload["total_cost_usd_ticks"] = emitter.costTicks
+	}
+	if len(emitter.models) > 0 {
+		models := make(map[string]any, len(emitter.models))
+		for model, entry := range emitter.models {
+			inputTokens := max(0, entry.usage.InputTokens-entry.usage.CachedReadTokens)
+			row := map[string]any{
+				"inputTokens": inputTokens, "cacheReadInputTokens": entry.usage.CachedReadTokens,
+				"outputTokens": entry.usage.OutputTokens, "modelCalls": entry.calls,
+			}
+			if !partialCost && emitter.costCalls == turns {
+				row["costUSD"] = float64(entry.costTicks) / usdTicksPerUSD
+			}
+			models[model] = row
+		}
+		payload["modelUsage"] = models
 	}
 	if !structured {
 		return

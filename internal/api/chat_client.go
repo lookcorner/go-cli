@@ -275,9 +275,10 @@ func chatContent(content any) any {
 type chatChunk struct {
 	ID    string `json:"id"`
 	Usage *struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
-		TotalTokens      int `json:"total_tokens"`
+		PromptTokens     int    `json:"prompt_tokens"`
+		CompletionTokens int    `json:"completion_tokens"`
+		TotalTokens      int    `json:"total_tokens"`
+		CostUSDTicks     *int64 `json:"cost_in_usd_ticks"`
 		PromptDetails    struct {
 			CachedTokens int `json:"cached_tokens"`
 		} `json:"prompt_tokens_details"`
@@ -333,7 +334,11 @@ func parseChatSSEEvents(reader io.Reader, onEvent func(StreamEvent)) (StreamResu
 			result.ResponseID = chunk.ID
 		}
 		if chunk.Usage != nil {
-			result.Usage = chatUsage(chunk.Usage.PromptTokens, chunk.Usage.CompletionTokens, chunk.Usage.TotalTokens, chunk.Usage.PromptDetails.CachedTokens, chunk.Usage.CompletionDetails.ReasoningTokens)
+			usage := chatUsage(chunk.Usage.PromptTokens, chunk.Usage.CompletionTokens, chunk.Usage.TotalTokens, chunk.Usage.PromptDetails.CachedTokens, chunk.Usage.CompletionDetails.ReasoningTokens, chunk.Usage.CostUSDTicks)
+			if usage.CostUSDTicks == nil {
+				usage.CostUSDTicks = result.Usage.CostUSDTicks
+			}
+			result.Usage = usage
 		}
 		for _, choice := range chunk.Choices {
 			if choice.Delta.Content != "" {
@@ -389,9 +394,10 @@ func parseChatJSONEvents(reader io.Reader, onEvent func(StreamEvent)) (StreamRes
 	var response struct {
 		ID    string `json:"id"`
 		Usage struct {
-			PromptTokens     int `json:"prompt_tokens"`
-			CompletionTokens int `json:"completion_tokens"`
-			TotalTokens      int `json:"total_tokens"`
+			PromptTokens     int    `json:"prompt_tokens"`
+			CompletionTokens int    `json:"completion_tokens"`
+			TotalTokens      int    `json:"total_tokens"`
+			CostUSDTicks     *int64 `json:"cost_in_usd_ticks"`
 			PromptDetails    struct {
 				CachedTokens int `json:"cached_tokens"`
 			} `json:"prompt_tokens_details"`
@@ -411,7 +417,7 @@ func parseChatJSONEvents(reader io.Reader, onEvent func(StreamEvent)) (StreamRes
 	}
 	result := StreamResult{ResponseID: response.ID, Usage: chatUsage(
 		response.Usage.PromptTokens, response.Usage.CompletionTokens, response.Usage.TotalTokens,
-		response.Usage.PromptDetails.CachedTokens, response.Usage.CompletionDetails.ReasoningTokens,
+		response.Usage.PromptDetails.CachedTokens, response.Usage.CompletionDetails.ReasoningTokens, response.Usage.CostUSDTicks,
 	)}
 	for _, choice := range response.Choices {
 		content, _ := choice.Message.Content.(string)
@@ -432,6 +438,6 @@ func parseChatJSONEvents(reader io.Reader, onEvent func(StreamEvent)) (StreamRes
 	return result, nil
 }
 
-func chatUsage(input, output, total, cached, reasoning int) Usage {
-	return Usage{InputTokens: input, OutputTokens: output, TotalTokens: total, CachedReadTokens: cached, ReasoningTokens: reasoning}
+func chatUsage(input, output, total, cached, reasoning int, cost *int64) Usage {
+	return Usage{InputTokens: input, OutputTokens: output, TotalTokens: total, CachedReadTokens: cached, ReasoningTokens: reasoning, CostUSDTicks: reportedCostTicks(cost)}
 }

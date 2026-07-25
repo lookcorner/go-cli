@@ -268,6 +268,8 @@ type Result struct {
 	ResponseID    string
 	Text          string
 	Usage         *api.Usage
+	UsageHistory  []ModelUsage
+	Model         string
 	Steps         int
 	InputTokens   int
 	ContextWindow int
@@ -275,6 +277,11 @@ type Result struct {
 	TokensUsed    int
 	ToolsUsed     []string
 	ErrorCount    int
+}
+
+type ModelUsage struct {
+	Model string
+	Usage api.Usage
 }
 
 type TaskSnapshot struct {
@@ -725,6 +732,7 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 	input = append(input, r.modelHistory...)
 	input = append(input, api.InputItem{Type: "message", Role: "user", Content: content})
 	progress := Progress{}
+	usageHistory := make([]ModelUsage, 0, r.MaxSteps)
 	var inFlightInterjections []Interjection
 	seenTools := make(map[string]bool)
 	publish := func() {
@@ -809,9 +817,11 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 		r.modelHistory = nil
 		inFlightInterjections = nil
 		usage := streamed.Usage
+		usageHistory = append(usageHistory, ModelUsage{Model: r.Model, Usage: usage})
 		final = Result{
 			ResponseID: streamed.ResponseID, Text: streamed.Text, Steps: step,
-			Usage: &usage, InputTokens: streamed.Usage.InputTokens, ContextWindow: r.ContextWindow,
+			Usage: &usage, UsageHistory: append([]ModelUsage(nil), usageHistory...), Model: r.Model,
+			InputTokens: streamed.Usage.InputTokens, ContextWindow: r.ContextWindow,
 		}
 		progress.Turns, progress.InputTokens = step, streamed.Usage.InputTokens
 		tokens := streamed.Usage.TotalTokens

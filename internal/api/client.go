@@ -81,9 +81,10 @@ type wireResponse struct {
 	ID     string            `json:"id"`
 	Output []json.RawMessage `json:"output"`
 	Usage  struct {
-		InputTokens  int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
-		TotalTokens  int `json:"total_tokens"`
+		InputTokens  int    `json:"input_tokens"`
+		OutputTokens int    `json:"output_tokens"`
+		TotalTokens  int    `json:"total_tokens"`
+		CostUSDTicks *int64 `json:"cost_in_usd_ticks"`
 		InputDetails struct {
 			CachedTokens int `json:"cached_tokens"`
 		} `json:"input_tokens_details"`
@@ -219,7 +220,15 @@ func responseUsage(response wireResponse) Usage {
 		InputTokens: response.Usage.InputTokens, OutputTokens: response.Usage.OutputTokens,
 		TotalTokens: response.Usage.TotalTokens, CachedReadTokens: response.Usage.InputDetails.CachedTokens,
 		ReasoningTokens: response.Usage.OutputDetails.ReasoningTokens,
+		CostUSDTicks:    reportedCostTicks(response.Usage.CostUSDTicks),
 	}
+}
+
+func reportedCostTicks(value *int64) *int64 {
+	if value == nil || *value <= 0 {
+		return nil
+	}
+	return value
 }
 
 func appendToolCall(raw json.RawMessage, result *StreamResult, seen map[string]struct{}) {

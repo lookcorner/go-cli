@@ -970,6 +970,7 @@ func TestRunnerAppliesPlanModeChangesWithinToolLoop(t *testing.T) {
 }
 
 func TestRunnerExecutesToolLoop(t *testing.T) {
+	firstCost, secondCost := int64(100), int64(200)
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("hello agent\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -979,8 +980,8 @@ func TestRunnerExecutesToolLoop(t *testing.T) {
 		t.Fatal(err)
 	}
 	streamer := &fakeStreamer{results: []api.StreamResult{
-		{ResponseID: "resp_1", Usage: api.Usage{InputTokens: 10, OutputTokens: 2, TotalTokens: 12}, ToolCalls: []api.ToolCall{{CallID: "call_1", Name: "read_file", Arguments: json.RawMessage(`{"path":"README.md"}`)}}},
-		{ResponseID: "resp_2", Text: "done", Usage: api.Usage{InputTokens: 15, OutputTokens: 3, TotalTokens: 18}},
+		{ResponseID: "resp_1", Usage: api.Usage{InputTokens: 10, OutputTokens: 2, TotalTokens: 12, CostUSDTicks: &firstCost}, ToolCalls: []api.ToolCall{{CallID: "call_1", Name: "read_file", Arguments: json.RawMessage(`{"path":"README.md"}`)}}},
+		{ResponseID: "resp_2", Text: "done", Usage: api.Usage{InputTokens: 15, OutputTokens: 3, TotalTokens: 18, CostUSDTicks: &secondCost}},
 	}}
 	var output bytes.Buffer
 	var progress Progress
@@ -996,6 +997,9 @@ func TestRunnerExecutesToolLoop(t *testing.T) {
 	}
 	if result.Text != "done" || result.Steps != 2 || result.InputTokens != 15 || result.TokensUsed != 30 || result.ToolCalls != 1 || strings.Join(result.ToolsUsed, "|") != "read_file" || result.ErrorCount != 0 || output.String() != "done" {
 		t.Fatalf("unexpected result=%#v output=%q", result, output.String())
+	}
+	if result.Model != "test-model" || len(result.UsageHistory) != 2 || result.UsageHistory[0].Model != "test-model" || result.UsageHistory[0].Usage.InputTokens != 10 || result.UsageHistory[1].Usage.InputTokens != 15 {
+		t.Fatalf("usage history=%#v model=%q", result.UsageHistory, result.Model)
 	}
 	if progress.Turns != 2 || progress.TokensUsed != 30 || progress.InputTokens != 15 || progress.ToolCalls != 1 || strings.Join(progress.ToolsUsed, "|") != "read_file" {
 		t.Fatalf("progress=%#v", progress)

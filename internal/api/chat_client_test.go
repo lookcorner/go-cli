@@ -36,6 +36,7 @@ func TestParseChatSSEIncrementalToolCall(t *testing.T) {
 			"id": "chat_1", "choices": []any{},
 			"usage": map[string]any{
 				"prompt_tokens": 44, "completion_tokens": 6, "total_tokens": 50,
+				"cost_in_usd_ticks":         1_234_500_000,
 				"prompt_tokens_details":     map[string]any{"cached_tokens": 30},
 				"completion_tokens_details": map[string]any{"reasoning_tokens": 4},
 			},
@@ -50,7 +51,7 @@ func TestParseChatSSEIncrementalToolCall(t *testing.T) {
 	if result.ResponseID != "chat_1" || result.Text != "checking " || len(result.ToolCalls) != 1 {
 		t.Fatalf("unexpected result: %#v", result)
 	}
-	if result.Usage.InputTokens != 44 || result.Usage.OutputTokens != 6 || result.Usage.TotalTokens != 50 || result.Usage.CachedReadTokens != 30 || result.Usage.ReasoningTokens != 4 {
+	if result.Usage.InputTokens != 44 || result.Usage.OutputTokens != 6 || result.Usage.TotalTokens != 50 || result.Usage.CachedReadTokens != 30 || result.Usage.ReasoningTokens != 4 || result.Usage.CostUSDTicks == nil || *result.Usage.CostUSDTicks != 1_234_500_000 {
 		t.Fatalf("usage missing: %#v", result.Usage)
 	}
 	call := result.ToolCalls[0]
@@ -78,12 +79,23 @@ func TestParseChatReasoningContent(t *testing.T) {
 }
 
 func TestParseChatJSONUsageDetails(t *testing.T) {
-	result, err := parseChatJSON(strings.NewReader(`{"id":"chat_1","choices":[],"usage":{"prompt_tokens":20,"completion_tokens":4,"total_tokens":24,"prompt_tokens_details":{"cached_tokens":12},"completion_tokens_details":{"reasoning_tokens":3}}}`), nil)
+	result, err := parseChatJSON(strings.NewReader(`{"id":"chat_1","choices":[],"usage":{"prompt_tokens":20,"completion_tokens":4,"total_tokens":24,"cost_in_usd_ticks":99,"prompt_tokens_details":{"cached_tokens":12},"completion_tokens_details":{"reasoning_tokens":3}}}`), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Usage != (Usage{InputTokens: 20, OutputTokens: 4, TotalTokens: 24, CachedReadTokens: 12, ReasoningTokens: 3}) {
+	if result.Usage.InputTokens != 20 || result.Usage.OutputTokens != 4 || result.Usage.TotalTokens != 24 || result.Usage.CachedReadTokens != 12 || result.Usage.ReasoningTokens != 3 || result.Usage.CostUSDTicks == nil || *result.Usage.CostUSDTicks != 99 {
 		t.Fatalf("usage=%#v", result.Usage)
+	}
+}
+
+func TestParseChatSSEKeepsLastReportedCost(t *testing.T) {
+	stream := strings.Join([]string{
+		sseLine(t, map[string]any{"id": "chat_1", "choices": []any{}, "usage": map[string]any{"prompt_tokens": 1, "cost_in_usd_ticks": 99}}),
+		sseLine(t, map[string]any{"id": "chat_1", "choices": []any{}, "usage": map[string]any{"prompt_tokens": 2}}),
+	}, "\n")
+	result, err := parseChatSSE(strings.NewReader(stream), nil)
+	if err != nil || result.Usage.InputTokens != 2 || result.Usage.CostUSDTicks == nil || *result.Usage.CostUSDTicks != 99 {
+		t.Fatalf("usage=%#v err=%v", result.Usage, err)
 	}
 }
 

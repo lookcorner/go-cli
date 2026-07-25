@@ -230,9 +230,10 @@ func TestHeadlessEmitterMachineReadableError(t *testing.T) {
 }
 
 func TestHeadlessEmitterJSONFormats(t *testing.T) {
+	cost := int64(1_234_500_000)
 	result := agent.Result{
-		ResponseID: "response-1", Text: `{"name":"gork"}`,
-		Usage: &api.Usage{InputTokens: 3, OutputTokens: 2, TotalTokens: 5},
+		ResponseID: "response-1", Text: `{"name":"gork"}`, Model: "grok-4.5",
+		Usage: &api.Usage{InputTokens: 3, OutputTokens: 2, TotalTokens: 5, CostUSDTicks: &cost},
 	}
 	var jsonOutput bytes.Buffer
 	jsonEmitter := &headlessEmitter{format: headlessOutputJSON, output: &jsonOutput, sessionID: "session-1"}
@@ -257,6 +258,10 @@ func TestHeadlessEmitterJSONFormats(t *testing.T) {
 		usage["total_tokens"] != float64(5) || payload["num_turns"] != float64(1) {
 		t.Fatalf("usage=%#v payload=%#v", usage, payload)
 	}
+	modelUsage := payload["modelUsage"].(map[string]any)["grok-4.5"].(map[string]any)
+	if payload["total_cost_usd"] != 0.12345 || payload["total_cost_usd_ticks"] != float64(cost) || modelUsage["costUSD"] != 0.12345 || modelUsage["modelCalls"] != float64(1) {
+		t.Fatalf("cost payload=%#v", payload)
+	}
 
 	var streaming bytes.Buffer
 	streamEmitter := &headlessEmitter{format: headlessOutputStreamingJSON, output: &streaming, sessionID: "session-1"}
@@ -273,5 +278,53 @@ func TestHeadlessEmitterJSONFormats(t *testing.T) {
 	lines := strings.Split(strings.TrimSpace(streaming.String()), "\n")
 	if len(lines) != 2 || !strings.Contains(lines[0], `"type":"text"`) || !strings.Contains(lines[1], `"type":"end"`) {
 		t.Fatalf("streaming output=%q", streaming.String())
+	}
+}
+
+func TestHeadlessEmitterAggregatesEveryModelCallAndHidesPartialCost(t *testing.T) {
+	cost := int64(400)
+	result := agent.Result{UsageHistory: []agent.ModelUsage{
+		{Model: "grok", Usage: api.Usage{InputTokens: 10, CachedReadTokens: 4, OutputTokens: 2, TotalTokens: 12, CostUSDTicks: &cost}},
+		{Model: "fast", Usage: api.Usage{InputTokens: 20, CachedReadTokens: 5, OutputTokens: 3, TotalTokens: 23}},
+	}}
+	var output bytes.Buffer
+	emitter := &headlessEmitter{format: headlessOutputJSON, output: &output}
+	if err := emitter.add(result); err != nil {
+		t.Fatal(err)
+	}
+	if err := emitter.finish(false); err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(output.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	usage := payload["usage"].(map[string]any)
+	model := payload["modelUsage"].(map[string]any)["grok"].(map[string]any)
+	fast := payload["modelUsage"].(map[string]any)["fast"].(map[string]any)
+	if payload["num_turns"] != float64(2) || usage["input_tokens"] != float64(21) || usage["cache_read_input_tokens"] != float64(9) || usage["output_tokens"] != float64(5) || model["modelCalls"] != float64(1) || fast["modelCalls"] != float64(1) {
+		t.Fatalf("payload=%#v", payload)
+	}
+	if payload["cost_is_partial"] != true || payload["total_cost_usd"] != nil || payload["total_cost_usd_ticks"] != nil || model["costUSD"] != nil || fast["costUSD"] != nil {
+		t.Fatalf("partial cost leaked: %#v", payload)
+	}
+}
+
+func TestHeadlessEmitterDoesNotCallUnknownCostPartial(t *testing.T) {
+	result := agent.Result{Model: "grok", Usage: &api.Usage{InputTokens: 3, OutputTokens: 2}}
+	var output bytes.Buffer
+	emitter := &headlessEmitter{format: headlessOutputJSON, output: &output}
+	if err := emitter.add(result); err != nil {
+		t.Fatal(err)
+	}
+	if err := emitter.finish(false); err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(output.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["cost_is_partial"] != nil || payload["total_cost_usd"] != nil || payload["total_cost_usd_ticks"] != nil {
+		t.Fatalf("unknown cost was presented as known or partial: %#v", payload)
 	}
 }

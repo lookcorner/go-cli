@@ -472,6 +472,7 @@ func TestHeadlessJSONPromptAndSchemaReachResponsesRequest(t *testing.T) {
 			"id": "response-json",
 			"usage": map[string]any{
 				"input_tokens": 5, "output_tokens": 3, "total_tokens": 8,
+				"cost_in_usd_ticks": 1_234_500_000,
 			},
 			"output": []any{map[string]any{
 				"type":    "message",
@@ -500,6 +501,10 @@ func TestHeadlessJSONPromptAndSchemaReachResponsesRequest(t *testing.T) {
 	if output["text"] != `{"name":"gork"}` || output["requestId"] != "response-json" ||
 		output["stopReason"] != "EndTurn" || structured["name"] != "gork" {
 		t.Fatalf("output=%#v stderr=%q", output, stderr.String())
+	}
+	modelUsage := output["modelUsage"].(map[string]any)["test-model"].(map[string]any)
+	if output["total_cost_usd"] != 0.12345 || output["total_cost_usd_ticks"] != float64(1_234_500_000) || modelUsage["costUSD"] != 0.12345 {
+		t.Fatalf("cost output=%#v", output)
 	}
 	text := request["text"].(map[string]any)
 	format := text["format"].(map[string]any)
