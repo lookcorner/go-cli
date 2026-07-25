@@ -618,8 +618,10 @@ input, inverted scrolling, scroll speed, scroll-input classification, scroll
 lines, text-selection behavior, Mermaid rendering, restart-scoped hunk tracking,
 automatic dark/light theme mappings, the terminal theme, the default permission
 selection, the default model, and voice language when voice capture is
-available. Sessions with Plan tools also expose the live, session-scoped Plan
-mode. Enter or Space changes the selected value.
+available. The same panel configures whether cancelling a turn asks about
+running background subagents, always stops them, or always lets them continue.
+Sessions with Plan tools also expose the live, session-scoped Plan mode. Enter
+or Space changes the selected value.
 Scroll speed and line count open a bounded arrow-key stepper and commit with
 Enter; persisted settings use atomic configuration writers with rollback on
 write failure. Changing
@@ -638,6 +640,10 @@ place.
 The fork-secondary-model row uses the same catalog but does not switch the
 current session. It persists `[ui].fork_secondary_model` and applies to the
 next `/fork`; `(no override)` makes forks inherit the active model.
+With the default `ask` cancel-subagents policy, Ctrl-C opens a four-choice panel
+when background subagents are still running: stop or continue once, or persist
+the corresponding always policy to `[ui].cancel_subagents_on_turn_cancel`.
+Foreground subagents remain bound to the cancelled turn context.
 Plan mode changes immediately through the same registry path as Shift-Tab and
 does not write a user preference.
 Automatic dark/light mapping changes apply immediately only while `theme=auto`

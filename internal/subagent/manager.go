@@ -675,6 +675,7 @@ func (m *Manager) launch(caller context.Context, current *task, prompt string, b
 			ContextWindow: current.runner.ContextWindow, ContextUsage: contextUsage(result.InputTokens, current.runner.ContextWindow),
 			ToolsUsed: append([]string{}, result.ToolsUsed...), ErrorCount: result.ErrorCount,
 			DurationMS: duration, WorktreeDir: worktreeDir, Description: current.description, StartedAtMS: current.started.UnixMilli(),
+			Background: background,
 		}
 		m.finishPersistence(current, final)
 		stopProgress()
@@ -976,6 +977,7 @@ func (m *Manager) consumeWake(current *task) {
 func (t *task) runningResult() tools.SubagentResult {
 	t.mu.Lock()
 	progress := t.progress
+	background := t.background
 	t.mu.Unlock()
 	return tools.SubagentResult{
 		ID: t.id, Type: t.typeName, Status: "running", WorktreeDir: t.worktreePath,
@@ -983,6 +985,7 @@ func (t *task) runningResult() tools.SubagentResult {
 		Turns: progress.Turns, ToolCalls: progress.ToolCalls, TokensUsed: progress.InputTokens,
 		ContextWindow: t.runner.ContextWindow, ContextUsage: contextUsage(progress.InputTokens, t.runner.ContextWindow),
 		ToolsUsed: append([]string{}, progress.ToolsUsed...), ErrorCount: progress.ErrorCount,
+		Background: background,
 	}
 }
 

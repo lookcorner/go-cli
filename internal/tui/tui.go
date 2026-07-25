@@ -725,6 +725,9 @@ type model struct {
 	running             bool
 	status              string
 	approval            *approvalEvent
+	cancelTurn          *cancelTurnState
+	cancelSubagents     string
+	persistCancelSubs   func(string) error
 	question            *questionState
 	planMode            bool
 	planReview          *planReviewState
@@ -893,6 +896,8 @@ type UIOptions struct {
 	SetRememberApprovals func(bool) error
 	DefaultPermission    string
 	SetDefaultPermission func(string) error
+	CancelSubs           string
+	SetCancelSubs        func(string) error
 	DefaultModelID       string
 	QuestionTimeout      bool
 	SetQuestionTimeout   func(bool) error
@@ -1068,6 +1073,8 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		persistRemember:      options.SetRememberApprovals,
 		defaultPermission:    options.DefaultPermission,
 		persistPermission:    options.SetDefaultPermission,
+		cancelSubagents:      options.CancelSubs,
+		persistCancelSubs:    options.SetCancelSubs,
 		questionTimeout:      options.QuestionTimeout,
 		persistQuestionTime:  options.SetQuestionTimeout,
 		hyperlinks:           detectTerminalHyperlinks(),
@@ -1443,6 +1450,11 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case toolFinishedEvent:
 		m.finishTool(msg)
 		return m, waitForBridge(m.bridge)
+	case cancelSubagentsDoneEvent:
+		if len(msg.errors) > 0 {
+			m.appendSystem("Could not stop subagents: " + strings.Join(msg.errors, "; "))
+		}
+		return m, nil
 	case voiceStartedEvent:
 		if !m.voiceStarting {
 			if msg.session != nil {
@@ -1503,6 +1515,7 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.finishCollapsedEditGroup()
 		m.running = false
 		m.turnCancel = nil
+		m.cancelTurn = nil
 		m.transcript.WriteString("\n")
 		if msg.err != nil {
 			m.status = "turn failed: " + msg.err.Error()
@@ -2065,6 +2078,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.planReview != nil {
 		return m.handlePlanReviewKey(msg)
 	}
+	if m.cancelTurn != nil {
+		return m.handleCancelTurnKey(msg)
+	}
 	if m.question != nil {
 		return m.handleQuestionKey(msg)
 	}
@@ -2155,9 +2171,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch stroke {
 	case "ctrl+c":
 		if m.running && m.turnCancel != nil {
-			m.turnCancel()
-			m.status = "cancelling turn"
-			return m, nil
+			return m, m.requestTurnCancel()
 		}
 		return m, tea.Quit
 	case "ctrl+q":
@@ -4776,6 +4790,9 @@ func (m *model) View() tea.View {
 	} else if m.planReview != nil {
 		showingTranscript = false
 		content = "# Review implementation plan\n\n" + m.planReview.event.event.PlanContent
+	} else if m.cancelTurn != nil {
+		showingTranscript = false
+		content = m.cancelTurnContent()
 	} else if m.mcp != nil {
 		showingTranscript = false
 		content = m.mcpContent()
@@ -4883,6 +4900,8 @@ func (m *model) View() tea.View {
 		} else {
 			footer = ansiBold + colors.modal + "Plan review" + ansiReset + "\n" + ansiDim + truncate("[Y] approve · [R] request changes · [A] abandon · Esc keep planning", width) + ansiReset
 		}
+	} else if m.cancelTurn != nil {
+		footer = ansiBold + colors.modal + "Cancel turn" + ansiReset + "\n" + ansiDim + truncate("Up/Down select · Enter confirm · Esc keep running", width) + ansiReset
 	} else if m.question != nil {
 		question := m.question.event.request.Questions[m.question.index]
 		labels := make([]string, 0, len(question.Options))
@@ -5414,7 +5433,7 @@ func (m *model) contentHeight() int {
 	if m.approval != nil {
 		return max(m.height-4-banner-len(m.approval.options), 3)
 	}
-	if m.question != nil || m.planReview != nil || m.remember != nil || m.rememberInput || m.rewind != nil || m.jump != nil || m.modelSelect != nil || m.settings != nil || m.docs != nil || m.sessionSelect != nil || m.forkChoice != nil || m.mcp != nil || m.claudeImport != nil || m.extensions != nil || m.agentConfig != nil || m.dashboard != nil {
+	if m.question != nil || m.planReview != nil || m.cancelTurn != nil || m.remember != nil || m.rememberInput || m.rewind != nil || m.jump != nil || m.modelSelect != nil || m.settings != nil || m.docs != nil || m.sessionSelect != nil || m.forkChoice != nil || m.mcp != nil || m.claudeImport != nil || m.extensions != nil || m.agentConfig != nil || m.dashboard != nil {
 		return max(m.height-7-banner, 3)
 	}
 	if m.historySearch != nil {

@@ -24,7 +24,7 @@ type settingsNumber struct {
 	large int
 }
 
-const settingsCount = 24
+const settingsCount = 25
 
 func (m *model) openSettings() {
 	m.settings = &settingsState{}
@@ -257,6 +257,12 @@ func (m *model) applySetting(selected int) {
 	case 23:
 		m.openModelSelectFromSettings("fork")
 		return
+	case 24:
+		previous := m.cancelSubagents
+		m.cancelSubagents = nextCancelSubagentsPolicy(previous)
+		if m.persistCancelSubs != nil {
+			state.err = persistSetting(m.persistCancelSubs(m.cancelSubagents), func() { m.cancelSubagents = previous })
+		}
 	}
 	if state.err != "" {
 		m.status = "setting update failed"
@@ -389,6 +395,26 @@ func nextDefaultSelectedPermission(current string) string {
 	}
 }
 
+func nextCancelSubagentsPolicy(current string) string {
+	switch currentCancelSubagentsPolicy(current) {
+	case "ask":
+		return "always_stop"
+	case "always_stop":
+		return "always_continue"
+	default:
+		return "ask"
+	}
+}
+
+func currentCancelSubagentsPolicy(current string) string {
+	switch current {
+	case "always_stop", "always_continue":
+		return current
+	default:
+		return "ask"
+	}
+}
+
 func (m *model) settingsContent() string {
 	if m.settings == nil {
 		return ""
@@ -422,6 +448,7 @@ func (m *model) settingsContent() string {
 		fmt.Sprintf("Default selected permission: %s", m.defaultPermission),
 		fmt.Sprintf("Default model: %s", m.settingsModelName()),
 		fmt.Sprintf("Fork secondary model: %s", m.modelOptionName(m.forkSecondaryModel)),
+		fmt.Sprintf("Cancel subagents with turn: %s", currentCancelSubagentsPolicy(m.cancelSubagents)),
 	}
 	if m.planModeAvailable() {
 		lines = append(lines, settingLine("Plan mode", m.planMode))

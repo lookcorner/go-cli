@@ -1173,6 +1173,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			GroupToolVerbs:      cfg.UI.GroupToolVerbs,
 			RememberApprovals:   cfg.UI.RememberToolApprovals,
 			DefaultPermission:   cfg.UI.DefaultSelectedPermission,
+			CancelSubs:          cfg.UI.CancelSubagents,
 			DefaultModelID:      cfg.DefaultModelID,
 			ForkModel:           cfg.UI.ForkSecondaryModel,
 			QuestionTimeout:     cfg.AskUserQuestion.TimeoutEnabled,
@@ -1214,6 +1215,9 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 				}
 				tuiBridge.SetDefaultSelectedPermission(value)
 				return nil
+			},
+			SetCancelSubs: func(value string) error {
+				return config.UpdateCancelSubagentsOnTurnCancel(opts.configPath, value)
 			},
 			SetForkModel: func(id string) error {
 				return config.UpdateForkSecondaryModel(opts.configPath, id)

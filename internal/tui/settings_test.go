@@ -66,6 +66,7 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 	var autoLightThemes []string
 	var hunkTrackerModes []string
 	var defaultPermissions []string
+	var cancelPolicies []string
 	m := &model{
 		width: 70, height: 18, themeName: "groknight", theme: paletteFor("groknight"), mermaidMode: "auto",
 		autoDarkTheme: "groknight", autoLightTheme: "grokday", hunkTrackerMode: "agent_only",
@@ -140,8 +141,15 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 			defaultPermissions = append(defaultPermissions, value)
 			return nil
 		},
+		persistCancelSubs: func(value string) error {
+			cancelPolicies = append(cancelPolicies, value)
+			return nil
+		},
 	}
-	for index := 0; index < settingsCount-2; index++ {
+	for index := 0; index < settingsCount; index++ {
+		if index == 22 || index == 23 {
+			continue
+		}
 		m.settings.selected = index
 		updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 		m = updated.(*model)
@@ -177,6 +185,9 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 	}
 	if m.hunkTrackerMode != "all_dirty" || strings.Join(hunkTrackerModes, ",") != "all_dirty" {
 		t.Fatalf("hunk tracker=%q persisted=%v", m.hunkTrackerMode, hunkTrackerModes)
+	}
+	if m.cancelSubagents != "always_stop" || strings.Join(cancelPolicies, ",") != "always_stop" {
+		t.Fatalf("cancel policy=%q persisted=%v", m.cancelSubagents, cancelPolicies)
 	}
 	if m.defaultPermission != "allow_command_always" || strings.Join(defaultPermissions, ",") != "allow_command_always" {
 		t.Fatalf("default permission=%q persisted=%v", m.defaultPermission, defaultPermissions)
@@ -794,6 +805,36 @@ func TestNextDefaultSelectedPermissionCyclesAllChoices(t *testing.T) {
 	}
 	if value := nextDefaultSelectedPermission("invalid"); value != "always_allow_all_sessions" {
 		t.Fatalf("invalid value normalized to %q", value)
+	}
+}
+
+func TestSettingsCancelSubagentsPolicyCyclesAndRollsBack(t *testing.T) {
+	var persisted []string
+	m := &model{
+		width: 60, height: 16,
+		settings:        &settingsState{selected: 24},
+		cancelSubagents: "ask",
+		persistCancelSubs: func(value string) error {
+			persisted = append(persisted, value)
+			return nil
+		},
+	}
+	for _, want := range []string{"always_stop", "always_continue", "ask"} {
+		updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+		m = updated.(*model)
+		if command != nil || m.cancelSubagents != want || m.settings.err != "" {
+			t.Fatalf("want=%q policy=%q err=%q command=%v", want, m.cancelSubagents, m.settings.err, command != nil)
+		}
+	}
+	if strings.Join(persisted, ",") != "always_stop,always_continue,ask" {
+		t.Fatalf("persisted=%v", persisted)
+	}
+
+	m.persistCancelSubs = func(string) error { return errors.New("read only") }
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if m.cancelSubagents != "ask" || m.settings.err != "read only" || m.status != "setting update failed" {
+		t.Fatalf("policy=%q err=%q status=%q", m.cancelSubagents, m.settings.err, m.status)
 	}
 }
 

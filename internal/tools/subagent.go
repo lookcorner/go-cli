@@ -44,6 +44,7 @@ type SubagentResult struct {
 	ToolsUsed     []string `json:"tools_used,omitempty"`
 	ErrorCount    int      `json:"error_count,omitempty"`
 	WillWake      bool     `json:"will_wake,omitempty"`
+	Background    bool     `json:"run_in_background,omitempty"`
 }
 
 type SubagentBackend interface {

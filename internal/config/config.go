@@ -226,6 +226,7 @@ type UIConfig struct {
 	ScrollLines               *uint8  `json:"scroll_lines,omitempty"`
 	InvertScroll              bool    `json:"invert_scroll,omitempty"`
 	DefaultSelectedPermission string  `json:"default_selected_permission"`
+	CancelSubagents           string  `json:"cancel_subagents_on_turn_cancel,omitempty"`
 	ForkSecondaryModel        string  `json:"fork_secondary_model,omitempty"`
 	RememberToolApprovals     bool    `json:"remember_tool_approvals,omitempty"`
 	CollapsedEditBlocks       bool    `json:"collapsed_edit_blocks,omitempty"`
@@ -495,6 +496,7 @@ type fileUIConfig struct {
 	ScrollLines                  *uint8  `json:"scroll_lines,omitempty" toml:"scroll_lines"`
 	InvertScroll                 *bool   `json:"invert_scroll,omitempty" toml:"invert_scroll"`
 	DefaultSelectedPermission    *string `json:"default_selected_permission,omitempty" toml:"default_selected_permission"`
+	CancelSubagents              *string `json:"cancel_subagents_on_turn_cancel,omitempty" toml:"cancel_subagents_on_turn_cancel"`
 	ForkSecondaryModel           *string `json:"fork_secondary_model,omitempty" toml:"fork_secondary_model"`
 	RememberToolApprovals        *bool   `json:"remember_tool_approvals,omitempty" toml:"remember_tool_approvals"`
 	CollapsedEditBlocks          *bool   `json:"collapsed_edit_blocks,omitempty" toml:"collapsed_edit_blocks"`
@@ -1018,6 +1020,9 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.UI.DefaultSelectedPermission != nil {
 		cfg.UI.DefaultSelectedPermission = normalizeDefaultSelectedPermission(*disk.UI.DefaultSelectedPermission)
+	}
+	if disk.UI.CancelSubagents != nil {
+		cfg.UI.CancelSubagents = normalizeCancelSubagentsOnTurnCancel(*disk.UI.CancelSubagents)
 	}
 	if disk.UI.ForkSecondaryModel != nil {
 		cfg.UI.ForkSecondaryModel = strings.TrimSpace(*disk.UI.ForkSecondaryModel)
@@ -1680,6 +1685,26 @@ func parseDefaultSelectedPermission(value string) (string, bool) {
 		return "allow_once", true
 	case "reject":
 		return "reject", true
+	default:
+		return "", false
+	}
+}
+
+func normalizeCancelSubagentsOnTurnCancel(value string) string {
+	if normalized, ok := parseCancelSubagentsOnTurnCancel(value); ok {
+		return normalized
+	}
+	return "ask"
+}
+
+func parseCancelSubagentsOnTurnCancel(value string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "ask":
+		return "ask", true
+	case "always_stop":
+		return "always_stop", true
+	case "always_continue":
+		return "always_continue", true
 	default:
 		return "", false
 	}
