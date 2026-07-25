@@ -53,7 +53,7 @@ func scrollSpeedMultiplier(speed uint8) float64 {
 		speed = 50
 	}
 	speed = min(max(speed, 1), 100)
-	if speed > 50 {
+	if speed >= 50 {
 		return 1 + float64(speed-50)*(5.0/50)
 	}
 	return 0.1 + float64(speed-1)*(0.9/49)
