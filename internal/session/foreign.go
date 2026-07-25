@@ -35,6 +35,11 @@ type ForeignSummary struct {
 	UpdatedAt time.Time
 }
 
+type RecentForeignSession struct {
+	ForeignSummary
+	Age time.Duration
+}
+
 func ForeignSummaries(cwd string, enabled ForeignSources) []ForeignSummary {
 	if strings.TrimSpace(cwd) == "" {
 		return nil
@@ -61,6 +66,20 @@ func ForeignSummaries(cwd string, enabled ForeignSources) []ForeignSummary {
 		return summaries[i].UpdatedAt.After(summaries[j].UpdatedAt)
 	})
 	return summaries
+}
+
+func MostRecentForeignSession(cwd string, enabled ForeignSources, within time.Duration) *RecentForeignSession {
+	now := time.Now()
+	for _, item := range ForeignSummaries(cwd, enabled) {
+		age := now.Sub(item.UpdatedAt)
+		if age < 0 {
+			age = 0
+		}
+		if age <= within {
+			return &RecentForeignSession{ForeignSummary: item, Age: age}
+		}
+	}
+	return nil
 }
 
 func scanClaude(cwd string, now time.Time) []ForeignSummary {

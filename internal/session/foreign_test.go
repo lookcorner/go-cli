@@ -80,6 +80,57 @@ func TestForeignSummariesRejectsOverlongClaudeProjectKey(t *testing.T) {
 	}
 }
 
+func TestMostRecentForeignSessionUsesWindowAndSourceGates(t *testing.T) {
+	home, cwd := t.TempDir(), t.TempDir()
+	cwd, _ = filepath.EvalSymlinks(cwd)
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+	now := time.Now()
+
+	claudeID := "88888888-8888-4888-8888-888888888888"
+	claudePath := filepath.Join(home, ".claude", "projects", sanitizeClaudeProject(cwd), claudeID+".jsonl")
+	writeForeignFile(t, claudePath, map[string]any{"type": "user", "cwd": cwd, "message": map[string]any{"content": "Claude session"}})
+	setForeignFileTime(t, claudePath, now.Add(-4*time.Minute))
+
+	codexID := "99999999-9999-4999-8999-999999999999"
+	codexPath := filepath.Join(home, ".codex", "sessions", filepath.FromSlash(now.Format("2006/01/02")), "rollout-2026-01-02T03-04-05-"+codexID+".jsonl")
+	writeForeignFile(t, codexPath,
+		map[string]any{"type": "session_meta", "payload": map[string]any{"id": codexID, "cwd": cwd, "source": "cli"}},
+		map[string]any{"type": "event_msg", "payload": map[string]any{"type": "user_message", "message": "Codex session"}},
+	)
+	setForeignFileTime(t, codexPath, now.Add(-2*time.Minute))
+
+	recent := MostRecentForeignSession(cwd, ForeignSources{Claude: true, Codex: true}, 10*time.Minute)
+	if recent == nil || recent.Source != "codex" || recent.ID != codexID || recent.Age < time.Minute || recent.Age > 3*time.Minute {
+		t.Fatalf("recent=%#v", recent)
+	}
+	claudeOnly := MostRecentForeignSession(cwd, ForeignSources{Claude: true}, 10*time.Minute)
+	if claudeOnly == nil || claudeOnly.Source != "claude" || claudeOnly.ID != claudeID {
+		t.Fatalf("claudeOnly=%#v", claudeOnly)
+	}
+	if disabled := MostRecentForeignSession(cwd, ForeignSources{}, 10*time.Minute); disabled != nil {
+		t.Fatalf("disabled=%#v", disabled)
+	}
+	if expired := MostRecentForeignSession(cwd, ForeignSources{Claude: true, Codex: true}, time.Minute); expired != nil {
+		t.Fatalf("expired=%#v", expired)
+	}
+}
+
+func TestMostRecentForeignSessionClampsFutureAge(t *testing.T) {
+	home, cwd := t.TempDir(), t.TempDir()
+	cwd, _ = filepath.EvalSymlinks(cwd)
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
+	id := "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	path := filepath.Join(home, ".claude", "projects", sanitizeClaudeProject(cwd), id+".jsonl")
+	writeForeignFile(t, path, map[string]any{"type": "user", "cwd": cwd, "message": map[string]any{"content": "future session"}})
+	setForeignFileTime(t, path, time.Now().Add(2*time.Minute))
+
+	recent := MostRecentForeignSession(cwd, ForeignSources{Claude: true}, 10*time.Minute)
+	if recent == nil || recent.ID != id || recent.Age != 0 {
+		t.Fatalf("recent=%#v", recent)
+	}
+}
+
 func writeForeignFile(t *testing.T, path string, records ...map[string]any) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -95,5 +146,12 @@ func writeForeignFile(t *testing.T, path string, records ...map[string]any) {
 		if err := encoder.Encode(record); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func setForeignFileTime(t *testing.T, path string, updated time.Time) {
+	t.Helper()
+	if err := os.Chtimes(path, updated, updated); err != nil {
+		t.Fatal(err)
 	}
 }

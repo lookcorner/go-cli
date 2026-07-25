@@ -119,6 +119,7 @@ type planNudgeClearEvent struct{ nonce uint64 }
 type sendNowClearEvent struct{ nonce uint64 }
 type smallScreenHintTickEvent struct{ nonce uint64 }
 type wordSelectHintTickEvent struct{ nonce uint64 }
+type foreignResumeEvent struct{ session *session.RecentForeignSession }
 
 type contextualHintState struct {
 	enabled bool
@@ -704,6 +705,8 @@ type model struct {
 	bridge              *Bridge
 	workspace           string
 	foreignSessions     session.ForeignSources
+	foreignResume       *session.RecentForeignSession
+	foreignResumeReady  bool
 	modelName           string
 	defaultModelID      string
 	previousID          string
@@ -1148,8 +1151,9 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 	defer func() { runner.ToolObserver = previousToolObserver }()
 	m := &model{
 		ctx: ctx, runner: runner, bridge: bridge, workspace: workspace,
-		foreignSessions: options.Foreign,
-		modelName:       modelName, defaultModelID: options.DefaultModelID, previousID: previousID, width: 80, height: 24,
+		foreignSessions:    options.Foreign,
+		foreignResumeReady: initialPrompt == "" && initialTranscript == "" && !options.OpenDashboard,
+		modelName:          modelName, defaultModelID: options.DefaultModelID, previousID: previousID, width: 80, height: 24,
 		minimal:       options.Minimal,
 		contextWindow: runner.ContextWindow,
 		status:        "ready", initial: strings.TrimSpace(initialPrompt), historyIndex: -1,
@@ -1311,6 +1315,15 @@ func (m *model) Init() tea.Cmd {
 	if m.startupDashboard {
 		m.startupDashboard = false
 		return tea.Sequence(initial, m.openDashboard(), wait)
+	}
+	if m.foreignResumeReady && (m.foreignSessions.Claude || m.foreignSessions.Codex) {
+		workspace, sources := m.workspace, m.foreignSessions
+		detect := func() tea.Msg {
+			return foreignResumeEvent{session: session.MostRecentForeignSession(workspace, sources, 10*time.Minute)}
+		}
+		if m.initial == "" {
+			return tea.Sequence(initial, tea.Batch(detect, wait))
+		}
 	}
 	if m.initial == "" {
 		return tea.Sequence(initial, wait)
@@ -1582,6 +1595,10 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, m.wordSelectHintTick()
+	case foreignResumeEvent:
+		if m.foreignResumeReady && !m.running && len(m.input) == 0 && len(m.promptImages) == 0 && m.transcript.Len() == 0 {
+			m.foreignResume = msg.session
+		}
 	case mouseClickEvent:
 		switch msg.action {
 		case "approval_option":
@@ -2284,6 +2301,17 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	stroke := msg.Keystroke()
 	if m.gboom != nil {
 		return m.handleGboomKey(msg)
+	}
+	if stroke == "ctrl+u" && m.foreignResume != nil && len(m.input) == 0 && len(m.promptImages) == 0 && m.transcript.Len() == 0 && !m.running {
+		resume := m.foreignResume
+		m.foreignResume, m.foreignResumeReady = nil, false
+		m.newSession = true
+		m.newSessionPrompt = "/resume-" + resume.Source + " " + resume.ID
+		m.status = "resuming " + resume.Source + " session"
+		return m, tea.Quit
+	}
+	if m.foreignResumeReady {
+		m.foreignResume, m.foreignResumeReady = nil, false
 	}
 	if stroke == "ctrl+y" && m.wordSelectHintCanAccept() {
 		previous := m.selectionMode
@@ -5693,7 +5721,18 @@ func (m *model) View() tea.View {
 		footer = strings.Join(parts, "\n") + "\n" + ansiDim + truncate(hint, width) + ansiReset
 	}
 	statusText := m.status
-	if m.wordSelectHint.active && m.wordSelectHintCanRender() {
+	if m.foreignResume != nil && !m.running && len(m.input) == 0 && len(m.promptImages) == 0 && m.transcript.Len() == 0 {
+		minutes := m.foreignResume.Age / time.Minute
+		when := "moments ago"
+		if minutes > 0 {
+			when = fmt.Sprintf("%dm ago", minutes)
+		}
+		label := "Codex"
+		if m.foreignResume.Source == "claude" {
+			label = "Claude Code"
+		}
+		statusText = fmt.Sprintf("Coming from %s? Resume your session from %s · Ctrl-U", label, when)
+	} else if m.wordSelectHint.active && m.wordSelectHintCanRender() {
 		statusText = "Want double-click to select? /settings → Text selection · Ctrl+Y: enable now"
 	} else if m.smallScreenHint.active && m.smallScreenHintCanRender() {
 		statusText = "Tight on space? Try /compact-mode"
