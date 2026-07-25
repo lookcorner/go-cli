@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -1036,6 +1037,7 @@ func TestRunInteractiveNewCreatesFreshSession(t *testing.T) {
 	home, root, sessionDir := t.TempDir(), t.TempDir(), t.TempDir()
 	t.Setenv("GROK_HOME", home)
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("GORK_API_KEY", "test-key")
 	t.Setenv("GORK_MODEL", "test-model")
 	t.Setenv("XAI_API_KEY", "")
@@ -1381,7 +1383,7 @@ func TestMemoryClearCommandScopesConfirmationAndValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(outside, memory.GlobalPath(root)); err != nil {
-		t.Fatal(err)
+		t.Skipf("symlinks unavailable: %v", err)
 	}
 	stdout.Reset()
 	stderr.Reset()
@@ -2125,7 +2127,7 @@ func TestDiscoverSkillsLoadsConfiguredPlugin(t *testing.T) {
 	if names := strings.Join(catalog.Names(), "|"); names != "team-tools:deploy" {
 		t.Fatalf("plugin skill names = %q", names)
 	}
-	if workspaceCfg.MCPServers["plugin-mcp"].Command != filepath.Join(pluginRoot, "server") {
+	if workspaceCfg.MCPServers["plugin-mcp"].Command != pluginRoot+"/server" {
 		t.Fatalf("plugin MCP config = %#v", workspaceCfg.MCPServers)
 	}
 	if workspaceCfg.LSPServers["plugin-lsp"].Command != "gopls" || strings.Join(workspaceCfg.LSPServers["plugin-lsp"].Extensions, "|") != ".go" {
@@ -2149,7 +2151,12 @@ func TestDiscoverWorkspaceLoadsTrustedEnvrcBelowExplicitEnvironment(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Env["ENVRC_ONLY"] != "yes" || cfg.Env["SHARED"] != "config" {
+	if runtime.GOOS == "windows" {
+		// .envrc execution is Unix-only; explicit environment still wins.
+		if _, ok := cfg.Env["ENVRC_ONLY"]; ok || cfg.Env["SHARED"] != "config" {
+			t.Fatalf("environment=%#v", cfg.Env)
+		}
+	} else if cfg.Env["ENVRC_ONLY"] != "yes" || cfg.Env["SHARED"] != "config" {
 		t.Fatalf("environment=%#v", cfg.Env)
 	}
 

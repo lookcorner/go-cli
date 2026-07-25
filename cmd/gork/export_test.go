@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -40,7 +41,11 @@ func TestExportCLIWritesStdoutFileAndClipboard(t *testing.T) {
 		t.Fatalf("data=%q stdout=%q stderr=%q err=%v", data, stdout.String(), stderr.String(), err)
 	}
 	info, err := os.Stat(target)
-	if err != nil || info.Mode().Perm() != 0o600 {
+	wantMode := os.FileMode(0o600)
+	if runtime.GOOS == "windows" {
+		wantMode = 0o666
+	}
+	if err != nil || info.Mode().Perm() != wantMode {
 		t.Fatalf("mode=%v err=%v", info.Mode(), err)
 	}
 
@@ -91,6 +96,7 @@ func TestExportCLIArgumentsMissingSessionsAndClipboardFailure(t *testing.T) {
 func TestExportPathExpandsHomeAndRelativePaths(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	path, err := exportPath("~/exports/conversation.md")
 	if err != nil || path != filepath.Join(home, "exports", "conversation.md") {
 		t.Fatalf("home path=%q err=%v", path, err)
