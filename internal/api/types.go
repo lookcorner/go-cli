@@ -9,6 +9,15 @@ type Streamer interface {
 	StreamResponse(context.Context, ResponseRequest, func(string)) (StreamResult, error)
 }
 
+type ErrorMapper func(error) error
+
+func mapError(mapper ErrorMapper, err error) error {
+	if mapper == nil {
+		return err
+	}
+	return mapper(err)
+}
+
 type EventStreamer interface {
 	StreamResponseEvents(context.Context, ResponseRequest, func(StreamEvent)) (StreamResult, error)
 }

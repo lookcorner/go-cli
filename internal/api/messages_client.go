@@ -21,6 +21,7 @@ type MessagesClient struct {
 	baseURL       string
 	apiKey        string
 	tokenProvider TokenProvider
+	errorMapper   ErrorMapper
 	http          *http.Client
 	mu            sync.Mutex
 	history       []messagesMessage
@@ -29,6 +30,7 @@ type MessagesClient struct {
 }
 
 func (c *MessagesClient) SetTokenProvider(provider TokenProvider) { c.tokenProvider = provider }
+func (c *MessagesClient) SetErrorMapper(mapper ErrorMapper)       { c.errorMapper = mapper }
 
 type messagesMessage struct {
 	Role    string          `json:"role"`
@@ -68,7 +70,7 @@ func (c *MessagesClient) CloneForCompaction(includeHistory bool) Streamer {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	clone := &MessagesClient{
-		baseURL: c.baseURL, apiKey: c.apiKey, tokenProvider: c.tokenProvider, http: c.http, pruning: c.pruning,
+		baseURL: c.baseURL, apiKey: c.apiKey, tokenProvider: c.tokenProvider, errorMapper: c.errorMapper, http: c.http, pruning: c.pruning,
 	}
 	if includeHistory {
 		clone.history = make([]messagesMessage, len(c.history))
@@ -216,8 +218,7 @@ func (c *MessagesClient) StreamResponseEvents(ctx context.Context, request Respo
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		limited, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-		return StreamResult{}, fmt.Errorf("messages API returned %s: %s", resp.Status, strings.TrimSpace(string(limited)))
+		return StreamResult{}, mapError(c.errorMapper, readHTTPError("messages API", resp))
 	}
 	var result StreamResult
 	if strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {

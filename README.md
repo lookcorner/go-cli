@@ -486,6 +486,9 @@ sent after initialization and returned to server-initiated
 
 API keys may be put in the config for compatibility, but environment variables
 are preferred so secrets are not stored in a plain-text file.
+HTTP 429 responses use the active authentication method when presenting recovery
+guidance: API-key sessions direct team admins to API credits and rate-limit tiers,
+while OAuth sessions retain the personal-plan upgrade message.
 
 ## Run
 

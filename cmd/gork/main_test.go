@@ -354,6 +354,49 @@ func TestScreenModeFlagsAreMutuallyExclusive(t *testing.T) {
 	}
 }
 
+func TestUserModelErrorUsesActiveAuthRateLimitMessage(t *testing.T) {
+	limited := &api.HTTPError{StatusCode: http.StatusTooManyRequests, Status: "429 Too Many Requests"}
+	if got := userModelError(limited, true).Error(); !strings.Contains(got, "team's API rate limit") || !strings.Contains(got, "credits") || strings.Contains(got, "Upgrade your account") {
+		t.Fatalf("API-key message=%q", got)
+	}
+	if got := userModelError(limited, false).Error(); !strings.Contains(got, "Upgrade your account") || strings.Contains(got, "team") {
+		t.Fatalf("OAuth message=%q", got)
+	}
+	original := errors.New("offline")
+	if got := userModelError(original, true); got != original {
+		t.Fatalf("non-rate-limit error changed: %v", got)
+	}
+}
+
+func TestModelClientsMapRateLimitsForActiveAuth(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.WriteHeader(http.StatusTooManyRequests)
+		_, _ = io.WriteString(writer, `{"error":"limited"}`)
+	}))
+	defer server.Close()
+	for _, backend := range []string{"responses", "chat_completions", "anthropic_messages"} {
+		for _, dynamic := range []bool{false, true} {
+			var provider api.TokenProvider
+			if dynamic {
+				provider = func(context.Context, string) (string, error) { return "oauth-token", nil }
+			}
+			client, err := newModelClient(config.Config{
+				Backend: backend, BaseURL: server.URL, APIKey: "api-key", HTTPTimeout: time.Second,
+			}, provider)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = client.StreamResponse(context.Background(), api.ResponseRequest{Model: "model"}, nil)
+			if dynamic && (err == nil || !strings.Contains(err.Error(), "Upgrade your account")) {
+				t.Fatalf("backend=%s OAuth err=%v", backend, err)
+			}
+			if !dynamic && (err == nil || !strings.Contains(err.Error(), "team's API rate limit")) {
+				t.Fatalf("backend=%s API-key err=%v", backend, err)
+			}
+		}
+	}
+}
+
 func TestParseRunOptionsSupportsReferenceAliases(t *testing.T) {
 	opts, flags, err := parseRunOptions([]string{
 		"--cwd", "/work", "-m", "fast", "--effort", "max",

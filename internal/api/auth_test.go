@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -107,5 +108,37 @@ func TestStaticTokenDoesNotRetryUnauthorized(t *testing.T) {
 	}
 	if requests != 1 {
 		t.Fatalf("static token requests=%d", requests)
+	}
+}
+
+func TestClientsReturnStructuredHTTPErrors(t *testing.T) {
+	tests := []struct {
+		name      string
+		newClient func(*http.Client) tokenStreamer
+	}{
+		{name: "responses", newClient: func(httpClient *http.Client) tokenStreamer {
+			return NewClient("https://example.invalid", "key", httpClient)
+		}},
+		{name: "chat", newClient: func(httpClient *http.Client) tokenStreamer {
+			return NewChatClient("https://example.invalid", "key", httpClient)
+		}},
+		{name: "messages", newClient: func(httpClient *http.Client) tokenStreamer {
+			return NewMessagesClient("https://example.invalid", "key", httpClient)
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusTooManyRequests, Status: "429 Too Many Requests",
+					Body: io.NopCloser(strings.NewReader("limited")), Header: make(http.Header), Request: request,
+				}, nil
+			})}
+			_, err := test.newClient(httpClient).StreamResponse(context.Background(), ResponseRequest{Model: "model"}, nil)
+			var httpErr *HTTPError
+			if !errors.As(err, &httpErr) || httpErr.StatusCode != http.StatusTooManyRequests || httpErr.Body != "limited" || !strings.Contains(err.Error(), "429 Too Many Requests") {
+				t.Fatalf("err=%#v httpErr=%#v", err, httpErr)
+			}
+		})
 	}
 }

@@ -16,10 +16,12 @@ type Client struct {
 	baseURL       string
 	apiKey        string
 	tokenProvider TokenProvider
+	errorMapper   ErrorMapper
 	http          *http.Client
 }
 
 func (c *Client) SetTokenProvider(provider TokenProvider) { c.tokenProvider = provider }
+func (c *Client) SetErrorMapper(mapper ErrorMapper)       { c.errorMapper = mapper }
 
 func NewClient(baseURL, apiKey string, httpClient *http.Client) *Client {
 	return &Client{
@@ -54,8 +56,7 @@ func (c *Client) StreamResponseEvents(ctx context.Context, request ResponseReque
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		limited, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-		return StreamResult{}, fmt.Errorf("responses API returned %s: %s", resp.Status, strings.TrimSpace(string(limited)))
+		return StreamResult{}, mapError(c.errorMapper, readHTTPError("responses API", resp))
 	}
 
 	contentType := resp.Header.Get("Content-Type")

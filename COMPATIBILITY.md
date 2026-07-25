@@ -154,6 +154,9 @@ tools without rewriting configuration; disabling web search also removes web
 fetch.
 Explicit CLI values are reapplied after remote settings so command-line intent
 wins.
+Model HTTP 429 errors retain structured status at the API boundary and use the
+active authentication method for user-facing guidance: API-key sessions point to
+team credits and API rate-limit tiers, while OAuth sessions use personal-plan copy.
 Headless prompt files, ACP JSON text/image/resource blocks,
 plain/JSON/streaming-JSON output, and JSON Schema structured output are
 supported. Schemas map to

@@ -20,6 +20,7 @@ type ChatClient struct {
 	baseURL       string
 	apiKey        string
 	tokenProvider TokenProvider
+	errorMapper   ErrorMapper
 	http          *http.Client
 	mu            sync.Mutex
 	history       []chatMessage
@@ -28,6 +29,7 @@ type ChatClient struct {
 }
 
 func (c *ChatClient) SetTokenProvider(provider TokenProvider) { c.tokenProvider = provider }
+func (c *ChatClient) SetErrorMapper(mapper ErrorMapper)       { c.errorMapper = mapper }
 
 type chatMessage struct {
 	Role       string         `json:"role"`
@@ -75,7 +77,7 @@ func (c *ChatClient) CloneForCompaction(includeHistory bool) Streamer {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	clone := &ChatClient{
-		baseURL: c.baseURL, apiKey: c.apiKey, tokenProvider: c.tokenProvider, http: c.http, pruning: c.pruning,
+		baseURL: c.baseURL, apiKey: c.apiKey, tokenProvider: c.tokenProvider, errorMapper: c.errorMapper, http: c.http, pruning: c.pruning,
 	}
 	if includeHistory {
 		clone.history = append([]chatMessage(nil), c.history...)
@@ -209,8 +211,7 @@ func (c *ChatClient) StreamResponseEvents(ctx context.Context, request ResponseR
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		limited, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-		return StreamResult{}, fmt.Errorf("chat API returned %s: %s", resp.Status, strings.TrimSpace(string(limited)))
+		return StreamResult{}, mapError(c.errorMapper, readHTTPError("chat API", resp))
 	}
 	var result StreamResult
 	if strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {

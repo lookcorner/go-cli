@@ -2576,24 +2576,39 @@ func shouldClearACPModelCache(authMethod string, result auth.LogoutResult) bool 
 
 func newModelClient(cfg config.Config, tokenProvider api.TokenProvider) (agent.ResponseStreamer, error) {
 	httpClient := &http.Client{Timeout: cfg.HTTPTimeout}
+	mapper := func(err error) error { return userModelError(err, tokenProvider == nil) }
 	switch cfg.Backend {
 	case "responses":
 		client := api.NewClient(cfg.BaseURL, cfg.APIKey, httpClient)
 		client.SetTokenProvider(tokenProvider)
+		client.SetErrorMapper(mapper)
 		return client, nil
 	case "chat_completions":
 		client := api.NewChatClient(cfg.BaseURL, cfg.APIKey, httpClient)
 		client.SetTokenProvider(tokenProvider)
+		client.SetErrorMapper(mapper)
 		client.SetPruning(modelPruningConfig(cfg))
 		return client, nil
 	case "anthropic_messages":
 		client := api.NewMessagesClient(cfg.BaseURL, cfg.APIKey, httpClient)
 		client.SetTokenProvider(tokenProvider)
+		client.SetErrorMapper(mapper)
 		client.SetPruning(modelPruningConfig(cfg))
 		return client, nil
 	default:
 		return nil, fmt.Errorf("unsupported backend %q", cfg.Backend)
 	}
+}
+
+func userModelError(err error, apiKeyAuth bool) error {
+	var httpErr *api.HTTPError
+	if !errors.As(err, &httpErr) || httpErr.StatusCode != http.StatusTooManyRequests {
+		return err
+	}
+	if apiKeyAuth {
+		return errors.New("You've hit your team's API rate limit. Ask a team admin to purchase more credits for higher limits, or try again later. See https://docs.x.ai/developers/rate-limits#rate-limit-tiers")
+	}
+	return errors.New("You've hit the rate limit for your plan. Upgrade your account or try again later.")
 }
 
 func newBillingService(cfg config.Config, tokenProvider api.TokenProvider, metadata func() (*bool, *string)) billing.Service {
