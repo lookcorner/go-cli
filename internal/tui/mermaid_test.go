@@ -111,6 +111,85 @@ func TestRenderMermaidPacket(t *testing.T) {
 	}
 }
 
+func TestRenderMermaidGitGraph(t *testing.T) {
+	source := "gitGraph\ncommit\ncommit\nbranch develop\ncheckout develop\ncommit\ncheckout main\nmerge develop"
+	lines, ok := renderMermaid(source, 36, paletteFor("groknight"))
+	if !ok {
+		t.Fatal("supported Mermaid gitGraph was rejected")
+	}
+	rendered := stripUIANSI(strings.Join(lines, "\n"))
+	for _, expected := range []string{
+		"◇ mermaid gitGraph", "branches: main · develop",
+		"● 0 main", "● 1 main ← 0", "● 2 develop ← 1", "◎ 3 main ← 1, 2",
+	} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("rendered gitGraph missing %q:\n%s", expected, rendered)
+		}
+	}
+	for _, line := range lines {
+		if displayWidth(stripUIANSI(line)) > 36 {
+			t.Fatalf("gitGraph line exceeds width: %q", stripUIANSI(line))
+		}
+	}
+}
+
+func TestRenderMermaidGitGraphMatchesReferenceBranchState(t *testing.T) {
+	source := "gitGraph\ncommit\nbranch topic\ncommit\ncheckout missing\ncommit\nbranch topic\ncheckout main\nmerge unknown"
+	lines, ok := renderMermaid(source, 48, paletteFor("groknight"))
+	if !ok {
+		t.Fatal("reference branch-state gitGraph was rejected")
+	}
+	rendered := stripUIANSI(strings.Join(lines, "\n"))
+	for _, expected := range []string{
+		"branches: main · topic · missing",
+		"● 0 main", "● 1 main ← 0", "● 2 missing", "◎ 3 main ← 1",
+	} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("gitGraph state differs from reference, missing %q:\n%s", expected, rendered)
+		}
+	}
+	if strings.Count(rendered, "topic") != 1 {
+		t.Fatalf("branch declaration unexpectedly checked out or duplicated topic:\n%s", rendered)
+	}
+}
+
+func TestRenderMermaidGitGraphAcceptsEmptyGraph(t *testing.T) {
+	lines, ok := renderMermaid("%% comment\ngitGraph", 24, paletteFor("groknight"))
+	if !ok {
+		t.Fatal("empty reference gitGraph was rejected")
+	}
+	rendered := stripUIANSI(strings.Join(lines, "\n"))
+	if !strings.Contains(rendered, "branches: main") {
+		t.Fatalf("empty gitGraph lost main branch:\n%s", rendered)
+	}
+}
+
+func TestRenderMermaidGitGraphRejectsReferenceParseErrors(t *testing.T) {
+	for _, source := range []string{
+		"gitGraph\nbranch",
+		"gitGraph\ncheckout",
+		"gitGraph\nmerge",
+		"gitGraph\nreset main",
+	} {
+		if _, ok := renderMermaid(source, 40, paletteFor("groknight")); ok {
+			t.Fatalf("invalid gitGraph was accepted: %q", source)
+		}
+	}
+}
+
+func TestRenderMarkdownRendersClosedMermaidGitGraph(t *testing.T) {
+	source := "Before\n```mermaid\ngitGraph\ncommit\nbranch dev\ncheckout dev\ncommit\n```\nAfter"
+	rendered := stripUIANSI(strings.Join(renderMarkdown(source, 40), "\n"))
+	for _, expected := range []string{"Before", "◇ mermaid gitGraph", "branches: main · dev", "● 0 main", "● 1 dev ← 0", "After"} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("rendered Mermaid gitGraph missing %q:\n%s", expected, rendered)
+		}
+	}
+	if strings.Contains(rendered, "checkout dev") {
+		t.Fatalf("closed Mermaid gitGraph source was not replaced:\n%s", rendered)
+	}
+}
+
 func TestRenderMermaidPacketSplitsBlocksAtReferenceRowBoundary(t *testing.T) {
 	lines, ok := renderMermaid("packet-beta\n16-47: Wide field", 32, paletteFor("groknight"))
 	if !ok {

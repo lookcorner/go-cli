@@ -61,6 +61,12 @@ type mermaidPacketBlock struct {
 	label string
 }
 
+type mermaidGitCommit struct {
+	branch  string
+	parents []int
+	merge   bool
+}
+
 var mermaidOperators = []string{
 	"||--o{", "||--|{", "}o--o{", "}o..o{", "}o--||", "}|..|{",
 	"<|--", "<-->", "--|>", "-.->", "-->>", "->>", "--x", "--o", "-x", "==>", "-->", "<--",
@@ -75,8 +81,12 @@ func renderMermaid(source string, width int, theme themePalette) ([]string, bool
 	if len(source) > maxMermaidSource {
 		return nil, false
 	}
-	if mermaidFirstToken(source) == "packet-beta" {
+	firstToken := mermaidFirstToken(source)
+	if firstToken == "packet-beta" {
 		return renderMermaidPacket(source, width, theme)
+	}
+	if firstToken == "gitGraph" {
+		return renderMermaidGitGraph(source, width, theme)
 	}
 	statements, complete := mermaidStatements(source)
 	if !complete || len(statements) < 1 {
@@ -126,6 +136,103 @@ func renderMermaid(source string, width int, theme themePalette) ([]string, bool
 		for _, line := range mermaidBox(node.label, min(max(width, 4), maxMermaidLabelWidth+4)) {
 			lines = append(lines, theme.code+line+ansiReset)
 		}
+	}
+	return lines, true
+}
+
+func renderMermaidGitGraph(source string, width int, theme themePalette) ([]string, bool) {
+	branches := map[string]int{"main": -1}
+	branchOrder := []string{"main"}
+	current := "main"
+	head := -1
+	commits := make([]mermaidGitCommit, 0)
+	foundHeader := false
+	statements := 0
+	for _, raw := range strings.Split(source, "\n") {
+		statement := strings.TrimSpace(raw)
+		if statement == "" || strings.HasPrefix(statement, "%%") {
+			continue
+		}
+		statements++
+		if statements > maxMermaidStatements {
+			return nil, false
+		}
+		fields := strings.Fields(statement)
+		if !foundHeader {
+			if fields[0] != "gitGraph" {
+				return nil, false
+			}
+			foundHeader = true
+			continue
+		}
+		switch fields[0] {
+		case "commit":
+			parents := []int(nil)
+			if head >= 0 {
+				parents = []int{head}
+			}
+			commits = append(commits, mermaidGitCommit{branch: current, parents: parents})
+			head = len(commits) - 1
+			branches[current] = head
+		case "branch":
+			if len(fields) < 2 {
+				return nil, false
+			}
+			name := fields[1]
+			if _, exists := branches[name]; !exists {
+				branches[name] = head
+				branchOrder = append(branchOrder, name)
+			}
+		case "checkout":
+			if len(fields) < 2 {
+				return nil, false
+			}
+			name := fields[1]
+			current = name
+			var exists bool
+			head, exists = branches[name]
+			if !exists {
+				head = -1
+				branches[name] = head
+				branchOrder = append(branchOrder, name)
+			}
+		case "merge":
+			if len(fields) < 2 {
+				return nil, false
+			}
+			parents := make([]int, 0, 2)
+			if head >= 0 {
+				parents = append(parents, head)
+			}
+			if otherHead, exists := branches[fields[1]]; exists && otherHead >= 0 {
+				parents = append(parents, otherHead)
+			}
+			commits = append(commits, mermaidGitCommit{branch: current, parents: parents, merge: true})
+			head = len(commits) - 1
+			branches[current] = head
+		default:
+			return nil, false
+		}
+	}
+	if !foundHeader {
+		return nil, false
+	}
+	lines := []string{ansiDim + mermaidFit("◇ mermaid gitGraph", width) + ansiReset}
+	lines = append(lines, theme.heading+mermaidFit("branches: "+strings.Join(branchOrder, " · "), width)+ansiReset)
+	for index, commit := range commits {
+		marker := "●"
+		if commit.merge {
+			marker = "◎"
+		}
+		text := marker + " " + strconv.Itoa(index) + " " + commit.branch
+		if len(commit.parents) > 0 {
+			parents := make([]string, len(commit.parents))
+			for parentIndex, parent := range commit.parents {
+				parents[parentIndex] = strconv.Itoa(parent)
+			}
+			text += " ← " + strings.Join(parents, ", ")
+		}
+		lines = append(lines, theme.code+mermaidFit(text, width)+ansiReset)
 	}
 	return lines, true
 }
