@@ -824,6 +824,7 @@ type model struct {
 	remember            *rememberReviewState
 	rememberInput       bool
 	feedbackInput       bool
+	bashInput           bool
 	rememberNonce       uint64
 	turnCancel          context.CancelFunc
 	cancelRewindEnabled bool
@@ -2562,6 +2563,11 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.status = "reading clipboard"
 		return m, readClipboard(m.ctx, m.clipboardRead)
 	}
+	if m.bashInput && len(m.input) == 0 && (key.Code == tea.KeyEsc || key.Code == tea.KeyBackspace || stroke == "ctrl+c" || stroke == "ctrl+u" || stroke == "ctrl+w") {
+		m.bashInput = false
+		m.status = "ready"
+		return m, nil
+	}
 	switch stroke {
 	case "ctrl+c":
 		if m.running && m.turnCancel != nil {
@@ -2585,6 +2591,11 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if stroke == "ctrl+e" && m.minimal {
 		m.expandLastTool()
+		return m, nil
+	}
+	if !m.running && !m.feedbackInput && !m.rememberInput && !m.bashInput && len(m.input) == 0 && key.Mod == 0 && key.Text == "!" {
+		m.bashInput = true
+		m.status = "Run shell command"
 		return m, nil
 	}
 	if m.voiceSession != nil && key.Code == tea.KeyEsc {
@@ -2706,7 +2717,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	if !slashAcceptedSend && !m.rememberInput && m.insertNewlineForEnter(key) {
+	if !slashAcceptedSend && !m.rememberInput && !m.bashInput && m.insertNewlineForEnter(key) {
 		return m, nil
 	}
 	switch key.Code {
@@ -2720,12 +2731,15 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if len(m.promptImages) > 0 && (strings.HasPrefix(prompt, "/") || strings.HasPrefix(prompt, "!")) {
+		if len(m.promptImages) > 0 && (m.bashInput || strings.HasPrefix(prompt, "/") || strings.HasPrefix(prompt, "!")) {
 			m.status = "images can only be attached to prompts"
 			return m, nil
 		}
 		if prompt == "" {
 			prompt = "[Image]"
+		}
+		if m.bashInput {
+			prompt = "! " + prompt
 		}
 		images := m.takePromptImages()
 		m.clearInput()
@@ -4506,8 +4520,7 @@ func (m *model) browseHistory(direction int) {
 	} else {
 		m.historyIndex--
 	}
-	m.input = []rune(m.history[m.historyIndex])
-	m.cursor = len(m.input)
+	m.setInput(m.history[m.historyIndex])
 }
 
 func (m *model) closeHistory() {
@@ -4808,6 +4821,7 @@ func (m *model) finishQuestion(response tools.UserQuestionResponse) {
 func (m *model) clearInput() {
 	m.input = nil
 	m.cursor = 0
+	m.bashInput = false
 	m.inputUndo = nil
 	m.slashSelected = 0
 	m.slashQuery = ""
@@ -4929,6 +4943,10 @@ func waitVoice(session voice.Session) tea.Cmd {
 }
 
 func (m *model) setInput(value string) {
+	m.bashInput = strings.HasPrefix(value, "!")
+	if m.bashInput {
+		value = strings.TrimSpace(strings.TrimPrefix(value, "!"))
+	}
 	m.input = []rune(value)
 	m.cursor = len(m.input)
 	m.inputUndo = nil
@@ -4974,6 +4992,10 @@ func (m *model) handlePaste(value string) (tea.Model, tea.Cmd) {
 	value = normalizePastedText(value)
 	if value == "" || !m.acceptsPaste() {
 		return m, nil
+	}
+	if !m.bashInput && !m.feedbackInput && !m.rememberInput && len(m.input) == 0 && strings.HasPrefix(value, "!") {
+		m.bashInput = true
+		value = strings.TrimSpace(strings.TrimPrefix(value, "!"))
 	}
 	m.insertInput(value)
 	m.wordSelectHint.active = false
@@ -5985,12 +6007,16 @@ func (m *model) View() tea.View {
 				ghost = m.promptSuggestionGhost()
 			}
 			inputLines = renderPromptInputWithGhost(m.input, m.cursor, ghost, width, m.visiblePromptInputRows())
-			if m.feedbackInput && len(inputLines) > 0 {
+			if m.bashInput && len(inputLines) > 0 {
+				inputLines[0] = colors.warning + "! " + ansiReset + strings.TrimPrefix(inputLines[0], "> ")
+			} else if m.feedbackInput && len(inputLines) > 0 {
 				inputLines[0] = "~ " + strings.TrimPrefix(inputLines[0], "> ")
 			}
 		}
 		hint := "Enter send · Ctrl-V paste image/text · Shift/Alt-Enter newline · Ctrl-M multiline · Ctrl-Z undo"
-		if m.multiline {
+		if m.bashInput {
+			hint = "Enter run · Esc or Backspace exit shell mode · Ctrl-Z undo"
+		} else if m.multiline {
 			hint = "Shift/Alt-Enter send · Enter newline · Ctrl-M single-line · Ctrl-Z undo"
 		}
 		if m.voiceStarting {
@@ -6009,7 +6035,9 @@ func (m *model) View() tea.View {
 		footer = strings.Join(parts, "\n") + "\n" + ansiDim + truncate(hint, width) + ansiReset
 	}
 	statusText := m.runningStatusText(time.Now(), width)
-	if m.foreignResume != nil && !m.running && len(m.input) == 0 && len(m.promptImages) == 0 && m.transcript.Len() == 0 {
+	if m.bashInput && !m.running {
+		statusText = "Run shell command"
+	} else if m.foreignResume != nil && !m.running && len(m.input) == 0 && len(m.promptImages) == 0 && m.transcript.Len() == 0 {
 		minutes := m.foreignResume.Age / time.Minute
 		when := "moments ago"
 		if minutes > 0 {
