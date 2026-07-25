@@ -64,18 +64,23 @@ func TestTurnCancelDoesNotRewindWhenDisabledOrQueued(t *testing.T) {
 		name    string
 		enabled bool
 		queued  []string
+		minimal bool
 	}{
 		{name: "disabled"},
 		{name: "queued", enabled: true, queued: []string{"next"}},
+		{name: "minimal committed", enabled: true, minimal: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			cancelled := false
 			m := &model{
 				ctx: context.Background(), running: true, cancelRewindEnabled: test.enabled,
 				pendingPrompts: test.queued, inFlightPrompt: &inFlightPrompt{text: "request"},
-				turnCancel: func() { cancelled = true },
+				turnCancel: func() { cancelled = true }, minimal: test.minimal,
 			}
 			m.beginTurn("request")
+			if test.minimal {
+				m.minimalCommitted = 1
+			}
 			updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: 'c', Mod: tea.ModCtrl}))
 			m = updated.(*model)
 			if command != nil || !cancelled || !m.running || string(m.input) != "" ||
@@ -84,6 +89,15 @@ func TestTurnCancelDoesNotRewindWhenDisabledOrQueued(t *testing.T) {
 					command != nil, cancelled, m.running, false, m.input, m.transcript.String(), m.status)
 			}
 		})
+	}
+}
+
+func TestStaleRewoundCompletionDoesNotFinishResentTurn(t *testing.T) {
+	m := &model{running: true, activeTurnSerial: 2, turnSerial: 2, status: "thinking"}
+	updated, command := m.Update(turnDoneEvent{err: context.Canceled, serial: 1})
+	m = updated.(*model)
+	if command != nil || !m.running || m.activeTurnSerial != 2 || m.status != "thinking" {
+		t.Fatalf("command=%v running=%v serial=%d status=%q", command != nil, m.running, m.activeTurnSerial, m.status)
 	}
 }
 

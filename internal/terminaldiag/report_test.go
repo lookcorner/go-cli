@@ -1,21 +1,36 @@
 package terminaldiag
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 )
 
 func TestIsCommand(t *testing.T) {
-	for _, prompt := range []string{"/terminal-setup", " /terminal-check ignored ", "/terminal-info"} {
+	for _, prompt := range []string{"/doctor", "/terminal-setup", " /terminal-check ignored ", "/terminal-info"} {
 		if !IsCommand(prompt) {
 			t.Errorf("command not recognized: %q", prompt)
 		}
 	}
-	for _, prompt := range []string{"", "/terminal", "/terminal-setupx", "terminal-setup"} {
+	for _, prompt := range []string{"", "/terminal", "/terminal-setupx", "terminal-setup", "doctor"} {
 		if IsCommand(prompt) {
 			t.Errorf("non-command recognized: %q", prompt)
 		}
+	}
+}
+
+func TestBuildSnapshotJSONShape(t *testing.T) {
+	env := map[string]string{"TERM_PROGRAM": "WezTerm", "TERM": "xterm-256color", "COLORTERM": "truecolor"}
+	snapshot := BuildSnapshot(func(key string) string { return env[key] }, func(string) (string, error) {
+		return "", errors.New("missing")
+	}, "linux")
+	if snapshot.SchemaVersion != SchemaVersion || snapshot.Facts.Terminal != "WezTerm" || snapshot.Counts.Issues != 0 || !snapshot.Facts.OSC52 {
+		t.Fatalf("snapshot=%#v", snapshot)
+	}
+	payload, err := json.Marshal(snapshot)
+	if err != nil || !strings.Contains(string(payload), `"schemaVersion":"1"`) || !strings.Contains(string(payload), `"findings"`) {
+		t.Fatalf("json=%s err=%v", payload, err)
 	}
 }
 

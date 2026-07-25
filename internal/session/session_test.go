@@ -34,6 +34,9 @@ func TestLoggerRewindsLastPromptAndFollowingEvents(t *testing.T) {
 	if err := logger.Append("model_request", map[string]any{"step": 1}); err != nil {
 		t.Fatal(err)
 	}
+	if err := logger.Append("background_task_completed", map[string]any{"task_id": "keep"}); err != nil {
+		t.Fatal(err)
+	}
 	if err := logger.RewindLastPrompt(); err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +51,7 @@ func TestLoggerRewindsLastPromptAndFollowingEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(data), "remove me") || strings.Contains(string(data), "model_request") ||
-		!strings.Contains(string(data), "session_metadata") || !strings.Contains(string(data), "keep me") {
+		!strings.Contains(string(data), "session_metadata") || !strings.Contains(string(data), "background_task_completed") || !strings.Contains(string(data), "keep me") {
 		t.Fatalf("log=%s", data)
 	}
 	if _, err := os.Stat(assetPath); !errors.Is(err, os.ErrNotExist) {

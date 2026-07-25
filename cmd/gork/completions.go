@@ -35,6 +35,7 @@ var completionRoot = completionSpec{
 		},
 		"completions": {children: leaves("bash", "elvish", "fish", "powershell", "zsh")},
 		"dashboard":   {flags: words("--config --fullscreen --minimal --session-dir --trust --workspace")},
+		"doctor":      {flags: []string{"--json"}},
 		"export":      {flags: []string{"--clipboard", "-c"}},
 		"inspect":     {flags: words("--config --json")},
 		"leader": {children: map[string]completionSpec{

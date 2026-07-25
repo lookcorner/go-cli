@@ -603,14 +603,20 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 	if strings.TrimSpace(prompt) == "" {
 		return Result{}, errors.New("prompt must not be empty")
 	}
+	rewindNext := r.rewind.next.Load()
 	if r.rewind.enabled.Load() {
-		active := r.rewind.next.Load()
+		active := rewindNext
 		r.rewind.active.Store(active)
 		defer r.rewind.active.Store(-1)
 	}
+	promptEpoch := r.promptEpoch.Load()
 	if !synthetic {
 		r.promptEpoch.Add(1)
 	}
+	r.memoryMu.Lock()
+	memoryInjected := r.memoryInjected
+	r.memoryMu.Unlock()
+	pendingSummary := r.pendingSummary
 	r.cancelMemoryIdleFlush()
 	r.cancelMemoryDreamCheck()
 	if r.HookPolicy != nil {
@@ -635,6 +641,7 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 	}
 	var prefire *compactionPrefire
 	if r.shouldCompact(previousResponseID) {
+		markCancelRewindActivity(ctx)
 		_, err := r.compact(ctx, previousResponseID, "auto", "")
 		if err != nil {
 			r.log("compaction_error", map[string]any{"error": err.Error(), "input_tokens": r.lastInputTokens})
@@ -643,6 +650,9 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 		}
 	} else if traceable {
 		prefire = r.prefireForTurn(ctx, previousResponseID)
+		if prefire != nil {
+			markCancelRewindActivity(ctx)
+		}
 	}
 	var compactTrace strings.Builder
 	if prefire != nil {
@@ -662,11 +672,15 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 			if logger, ok := r.Logger.(interface{ RewindLastPrompt() error }); ok {
 				if logger.RewindLastPrompt() == nil {
 					if r.rewind.enabled.Load() {
-						r.rewind.next.Add(-1)
+						r.rewind.next.Store(rewindNext)
 					}
 					if !synthetic {
-						r.promptEpoch.Add(^uint64(0))
+						r.promptEpoch.Store(promptEpoch)
 					}
+					r.memoryMu.Lock()
+					r.memoryInjected = memoryInjected
+					r.memoryMu.Unlock()
+					r.pendingSummary = pendingSummary
 				}
 			}
 		}

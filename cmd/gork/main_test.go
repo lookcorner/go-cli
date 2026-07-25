@@ -1072,13 +1072,13 @@ func TestInteractiveTerminalSetupCommandsDoNotRunModelTurn(t *testing.T) {
 	runner := &agent.Runner{Client: streamer, Model: "test"}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	input := newTerminalInput(ctx, bufio.NewReader(strings.NewReader("/terminal-setup\n/terminal-check ignored\n/terminal-info\n/help\n/exit\n")))
+	input := newTerminalInput(ctx, bufio.NewReader(strings.NewReader("/doctor\n/terminal-setup\n/terminal-check ignored\n/terminal-info\n/help\n/exit\n")))
 	var stderr bytes.Buffer
 	if err := interactiveLoop(ctx, runner, newScheduledWakeQueue(), input, io.Discard, &stderr, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	output := stderr.String()
-	if streamer.calls != 0 || strings.Count(output, "Environment\n") != 3 || strings.Count(output, "Clipboard routes") != 3 || !strings.Contains(output, "/terminal-setup") {
+	if streamer.calls != 0 || strings.Count(output, "Environment\n") != 4 || strings.Count(output, "Clipboard routes") != 4 || !strings.Contains(output, "/doctor") {
 		t.Fatalf("model calls=%d output=%q", streamer.calls, output)
 	}
 }

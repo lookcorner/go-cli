@@ -56,7 +56,9 @@ func availableCommands(runner *agent.Runner, workspaceSkills bool) []map[string]
 		availableCommand("compact", "Compress conversation history to save context window", "optional context about what to preserve", nil),
 		availableCommand("always-approve", "Toggle always-approve mode (skip all permission prompts)", "on|off", nil),
 		availableCommand("privacy", "Show privacy status (coding data retention is locked to opt-out)", "opt-out", nil),
-		availableCommand("terminal-setup", "Check terminal, color, and clipboard setup", "", nil),
+		availableCommand("doctor", "Check terminal, color, and clipboard setup", "", map[string]any{
+			"aliases": []string{"terminal-setup", "terminal-check", "terminal-info"},
+		}),
 		availableCommand("usage", "View credit usage or manage billing", "show | manage", nil),
 		availableCommand("release-notes", "View release notes for the current version", "", nil),
 	}

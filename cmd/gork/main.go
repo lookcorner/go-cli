@@ -226,7 +226,7 @@ func parseRunOptions(args []string, stderr io.Writer) (options, *flag.FlagSet, e
 	flags.BoolVar(&opts.noMemory, "no-memory", false, "disable cross-session memory")
 	flags.StringVar(&opts.hunkTrackerMode, "hunk-tracker-mode", "", "hunk tracker mode: agent_only, all_dirty, or off")
 	flags.Usage = func() {
-		fmt.Fprintf(stderr, "Usage: gork [flags] [prompt]\n       gork agent [options] <stdio|serve|leader>\n       gork leader <list|info|kill>\n       gork dashboard [flags]\n       gork login [--oauth|--device-auth]\n       gork logout\n       gork setup\n       gork inspect [--json] [--config path]\n       gork mcp <list|add|remove|doctor>\n       gork models [--config path]\n       gork share <session-id>\n       gork trace <session-id> [--local] [-o path] [--json]\n       gork update [--check] [--json]\n       gork wrap <command> [args...]\n       gork version [--json]\n       gork completions <bash|elvish|fish|powershell|zsh>\n       gork plugin <list|install|update|uninstall|enable|disable|details|validate|marketplace>\n       gork sessions <list|search|delete>\n       gork export <session-id> [output] [-c|--clipboard]\n       gork worktree <list|show|rm|gc|db>\n       gork memory clear [--workspace|--global|--all] [-y|--yes]\n\n")
+		fmt.Fprintf(stderr, "Usage: gork [flags] [prompt]\n       gork agent [options] <stdio|serve|leader>\n       gork leader <list|info|kill>\n       gork dashboard [flags]\n       gork login [--oauth|--device-auth]\n       gork logout\n       gork setup\n       gork doctor [--json]\n       gork inspect [--json] [--config path]\n       gork mcp <list|add|remove|doctor>\n       gork models [--config path]\n       gork share <session-id>\n       gork trace <session-id> [--local] [-o path] [--json]\n       gork update [--check] [--json]\n       gork wrap <command> [args...]\n       gork version [--json]\n       gork completions <bash|elvish|fish|powershell|zsh>\n       gork plugin <list|install|update|uninstall|enable|disable|details|validate|marketplace>\n       gork sessions <list|search|delete>\n       gork export <session-id> [output] [-c|--clipboard]\n       gork worktree <list|show|rm|gc|db>\n       gork memory clear [--workspace|--global|--all] [-y|--yes]\n\n")
 		flags.PrintDefaults()
 	}
 	if err := flags.Parse(args); err != nil {
@@ -293,6 +293,9 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 	if len(args) > 0 && args[0] == "setup" {
 		return runSetup(args[1:], stdout, stderr)
+	}
+	if len(args) > 0 && args[0] == "doctor" {
+		return runDoctor(args[1:], stdout, stderr)
 	}
 	if len(args) > 0 && args[0] == "inspect" {
 		return runInspect(args[1:], stdout, stderr)
@@ -4712,7 +4715,7 @@ func interactiveLoop(
 						imagineCommands += ", /imagine-video <description>"
 					}
 				}
-				fmt.Fprintln(stderr, "Commands: ! <command>"+announcementCommand+", /compact, /context, /flush, /dream, /remember [text], /memory [on|off]"+mcpCommand+", /new (/clear)"+imagineCommands+", /loop, /privacy [opt-out], /release-notes (/changelog), /session-info (/status, /info)"+shareCommand+", /terminal-setup, /usage [show|manage] (/cost), /help, /exit. Every other line is sent as a prompt.")
+				fmt.Fprintln(stderr, "Commands: ! <command>"+announcementCommand+", /compact, /context, /flush, /dream, /remember [text], /memory [on|off]"+mcpCommand+", /new (/clear)"+imagineCommands+", /loop, /privacy [opt-out], /release-notes (/changelog), /session-info (/status, /info)"+shareCommand+", /doctor (/terminal-setup), /usage [show|manage] (/cost), /help, /exit. Every other line is sent as a prompt.")
 				prompt = ""
 				continue
 			case "/mcps":

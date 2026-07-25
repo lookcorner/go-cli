@@ -1,6 +1,7 @@
 package terminaldiag
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -8,13 +9,37 @@ import (
 	"strings"
 )
 
+const SchemaVersion = "1"
+
+type Snapshot struct {
+	SchemaVersion string   `json:"schemaVersion"`
+	Facts         Facts    `json:"facts"`
+	Findings      []string `json:"findings"`
+	Counts        Counts   `json:"counts"`
+}
+
+type Facts struct {
+	Terminal      string `json:"terminal"`
+	Multiplexer   string `json:"multiplexer"`
+	SSH           bool   `json:"ssh"`
+	Color         string `json:"color"`
+	NativeClip    bool   `json:"nativeClipboard"`
+	ClipboardTool string `json:"clipboardTool,omitempty"`
+	OSC52         bool   `json:"osc52"`
+	GOOS          string `json:"goos"`
+}
+
+type Counts struct {
+	Issues int `json:"issues"`
+}
+
 func IsCommand(prompt string) bool {
 	fields := strings.Fields(prompt)
 	if len(fields) == 0 {
 		return false
 	}
 	switch fields[0] {
-	case "/terminal-setup", "/terminal-check", "/terminal-info":
+	case "/doctor", "/terminal-setup", "/terminal-check", "/terminal-info":
 		return true
 	default:
 		return false
@@ -22,10 +47,14 @@ func IsCommand(prompt string) bool {
 }
 
 func Report() string {
-	return buildReport(os.Getenv, exec.LookPath, runtime.GOOS)
+	return BuildSnapshot(os.Getenv, exec.LookPath, runtime.GOOS).Human()
 }
 
-func buildReport(getenv func(string) string, lookPath func(string) (string, error), goos string) string {
+func ReportJSON() ([]byte, error) {
+	return json.MarshalIndent(BuildSnapshot(os.Getenv, exec.LookPath, runtime.GOOS), "", "  ")
+}
+
+func BuildSnapshot(getenv func(string) string, lookPath func(string) (string, error), goos string) Snapshot {
 	term := strings.TrimSpace(getenv("TERM"))
 	brand := terminalBrand(getenv, term)
 	multiplexer := terminalMultiplexer(getenv)
@@ -33,25 +62,40 @@ func buildReport(getenv func(string) string, lookPath func(string) (string, erro
 	color := colorSupport(getenv, term)
 	clipboard, clipboardTool := nativeClipboard(lookPath, goos)
 	osc52 := term != "dumb" && (term != "" || brand != "unknown")
-
-	var out strings.Builder
-	fmt.Fprintf(&out, "Environment\n  terminal     %s\n  multiplexer  %s\n  ssh          %s\n  color        %s\n", brand, multiplexer, yesNo(ssh), color)
-	fmt.Fprintf(&out, "\nClipboard routes\n  native       %s", activeOff(clipboard))
-	if clipboardTool != "" {
-		fmt.Fprintf(&out, " (tool: %s)", clipboardTool)
+	findings := terminalWarnings(term, color, multiplexer, clipboard, osc52)
+	return Snapshot{
+		SchemaVersion: SchemaVersion,
+		Facts: Facts{
+			Terminal: brand, Multiplexer: multiplexer, SSH: ssh, Color: color,
+			NativeClip: clipboard, ClipboardTool: clipboardTool, OSC52: osc52, GOOS: goos,
+		},
+		Findings: findings,
+		Counts:   Counts{Issues: len(findings)},
 	}
-	fmt.Fprintf(&out, "\n  osc 52       %s\n", activeOff(osc52))
+}
 
-	warnings := terminalWarnings(term, color, multiplexer, clipboard, osc52)
-	if len(warnings) == 0 {
+func (s Snapshot) Human() string {
+	var out strings.Builder
+	fmt.Fprintf(&out, "Environment\n  terminal     %s\n  multiplexer  %s\n  ssh          %s\n  color        %s\n",
+		s.Facts.Terminal, s.Facts.Multiplexer, yesNo(s.Facts.SSH), s.Facts.Color)
+	fmt.Fprintf(&out, "\nClipboard routes\n  native       %s", activeOff(s.Facts.NativeClip))
+	if s.Facts.ClipboardTool != "" {
+		fmt.Fprintf(&out, " (tool: %s)", s.Facts.ClipboardTool)
+	}
+	fmt.Fprintf(&out, "\n  osc 52       %s\n", activeOff(s.Facts.OSC52))
+	if len(s.Findings) == 0 {
 		out.WriteString("\nNo issues found.")
 		return out.String()
 	}
-	fmt.Fprintf(&out, "\n%d issue(s)\n", len(warnings))
-	for _, warning := range warnings {
+	fmt.Fprintf(&out, "\n%d issue(s)\n", len(s.Findings))
+	for _, warning := range s.Findings {
 		fmt.Fprintf(&out, "\n  [!] %s", warning)
 	}
 	return out.String()
+}
+
+func buildReport(getenv func(string) string, lookPath func(string) (string, error), goos string) string {
+	return BuildSnapshot(getenv, lookPath, goos).Human()
 }
 
 func terminalBrand(getenv func(string) string, term string) string {

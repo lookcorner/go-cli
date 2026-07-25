@@ -1125,16 +1125,21 @@ func (l *Logger) RewindLastPrompt() error {
 	}
 	offset := 0
 	lastPrompt := -1
+	lastPromptEnd := -1
 	var assets []string
 	for offset < len(data) {
 		end := bytes.IndexByte(data[offset:], '\n')
 		if end < 0 {
 			end = len(data) - offset
 		}
-		line := bytes.TrimSpace(data[offset : offset+end])
+		lineEnd := offset + end
+		if lineEnd < len(data) {
+			lineEnd++
+		}
+		line := bytes.TrimSpace(data[offset:lineEnd])
 		var event storedEvent
 		if len(line) > 0 && json.Unmarshal(line, &event) == nil && event.Kind == "user_prompt" {
-			lastPrompt, assets = offset, nil
+			lastPrompt, lastPromptEnd, assets = offset, lineEnd, nil
 			var prompt struct {
 				Content []Content `json:"content"`
 			}
@@ -1147,23 +1152,85 @@ func (l *Logger) RewindLastPrompt() error {
 				}
 			}
 		}
-		offset += end + 1
+		offset = lineEnd
 	}
 	if lastPrompt < 0 {
 		return nil
 	}
-	if err := l.file.Truncate(int64(lastPrompt)); err != nil {
-		return fmt.Errorf("rewind session prompt: %w", err)
+	rewritten := append([]byte(nil), data[:lastPrompt]...)
+	for offset = lastPromptEnd; offset < len(data); {
+		end := bytes.IndexByte(data[offset:], '\n')
+		if end < 0 {
+			end = len(data) - offset
+		}
+		lineEnd := offset + end
+		if lineEnd < len(data) {
+			lineEnd++
+		}
+		var event storedEvent
+		line := bytes.TrimSpace(data[offset:lineEnd])
+		if len(line) == 0 || json.Unmarshal(line, &event) != nil || !cancelRewindEvent(event.Kind) {
+			rewritten = append(rewritten, data[offset:lineEnd]...)
+		}
+		offset = lineEnd
 	}
-	if _, err := l.file.Seek(0, io.SeekEnd); err != nil {
-		return fmt.Errorf("seek rewound session: %w", err)
-	}
-	l.needsNewline = lastPrompt > 0 && data[lastPrompt-1] != '\n'
-	if err := l.file.Sync(); err != nil {
+	if err := l.replaceLocked(rewritten); err != nil {
 		return err
 	}
 	removeFiles(assets)
 	return nil
+}
+
+func (l *Logger) replaceLocked(data []byte) error {
+	original, err := l.file.Stat()
+	if err != nil {
+		return err
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(l.path), ".session-rewind-*")
+	if err != nil {
+		return fmt.Errorf("create rewound session log: %w", err)
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(original.Mode().Perm()); err == nil {
+		_, err = temporary.Write(data)
+	}
+	if err == nil {
+		err = temporary.Sync()
+	}
+	if closeErr := temporary.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return fmt.Errorf("write rewound session log: %w", err)
+	}
+	current, err := os.Lstat(l.path)
+	if err != nil || current.Mode()&os.ModeSymlink != 0 || !os.SameFile(original, current) {
+		return errors.New("session log changed during rewind")
+	}
+	if err := l.file.Close(); err != nil {
+		return err
+	}
+	l.file = nil
+	if err := atomicReplace(temporaryPath, l.path); err != nil {
+		l.file, _ = os.OpenFile(l.path, os.O_WRONLY|os.O_APPEND, 0)
+		return fmt.Errorf("replace rewound session log: %w", err)
+	}
+	l.file, err = os.OpenFile(l.path, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		return fmt.Errorf("reopen rewound session log: %w", err)
+	}
+	l.needsNewline = len(data) > 0 && data[len(data)-1] != '\n'
+	return nil
+}
+
+func cancelRewindEvent(kind string) bool {
+	switch kind {
+	case "memory_context_error", "memory_context_injected", "model_request", "model_error":
+		return true
+	default:
+		return false
+	}
 }
 
 func (l *Logger) appendPrompt(text string, content []Content, synthetic bool) error {

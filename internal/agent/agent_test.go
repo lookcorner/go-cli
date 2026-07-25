@@ -281,6 +281,7 @@ func TestCancelRewindRemovesOnlyPristinePrompt(t *testing.T) {
 	runner.rewind.enabled.Store(true)
 	runner.rewind.next.Store(4)
 	runner.promptEpoch.Store(9)
+	runner.pendingSummary = "keep this summary"
 	ctx, cancel := context.WithCancel(context.Background())
 	ctx, requestRewind := WithCancelRewind(ctx)
 	done := make(chan error, 1)
@@ -300,8 +301,8 @@ func TestCancelRewindRemovesOnlyPristinePrompt(t *testing.T) {
 	if err != nil || strings.Contains(string(data), "rewind me") {
 		t.Fatalf("log=%q err=%v", data, err)
 	}
-	if runner.rewind.next.Load() != 4 || runner.promptEpoch.Load() != 9 {
-		t.Fatalf("rewind index=%d prompt epoch=%d", runner.rewind.next.Load(), runner.promptEpoch.Load())
+	if runner.rewind.next.Load() != 4 || runner.promptEpoch.Load() != 9 || runner.memoryInjected || runner.pendingSummary != "keep this summary" {
+		t.Fatalf("rewind index=%d prompt epoch=%d memory=%v summary=%q", runner.rewind.next.Load(), runner.promptEpoch.Load(), runner.memoryInjected, runner.pendingSummary)
 	}
 }
 

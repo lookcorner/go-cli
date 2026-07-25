@@ -2826,7 +2826,7 @@ func TestPrivacyCommandsDoNotRunModelTurn(t *testing.T) {
 }
 
 func TestTerminalSetupCommandsDoNotRunModelTurn(t *testing.T) {
-	for _, prompt := range []string{"/terminal-setup", "/terminal-check ignored", "/terminal-info"} {
+	for _, prompt := range []string{"/doctor", "/terminal-setup", "/terminal-check ignored", "/terminal-info"} {
 		t.Run(prompt, func(t *testing.T) {
 			m := &model{ctx: context.Background(), runner: &agent.Runner{}}
 			m.setInput(prompt)
@@ -2841,7 +2841,7 @@ func TestTerminalSetupCommandsDoNotRunModelTurn(t *testing.T) {
 	m := &model{ctx: context.Background(), runner: &agent.Runner{}}
 	m.setInput("/help")
 	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
-	if !strings.Contains(updated.(*model).transcript.String(), "/terminal-setup") {
+	if !strings.Contains(updated.(*model).transcript.String(), "/doctor") {
 		t.Fatalf("help=%q", updated.(*model).transcript.String())
 	}
 

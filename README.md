@@ -908,7 +908,7 @@ context-window usage; `/context` reports only the context usage. `/privacy`
 reports the build's enforced privacy state without calling the model.
 `/privacy opt-out`, `/privacy out`, and `/privacy private` confirm the locked
 state; opt-in aliases and ambiguous values such as `on` or `off` are rejected.
-`/terminal-setup` (also `/terminal-check` or `/terminal-info`) reports the
+`gork doctor [--json]` and `/doctor` (also `/terminal-setup`, `/terminal-check`, or `/terminal-info`) report the
 detected terminal, multiplexer, SSH and color state, available clipboard routes,
 and actionable setup warnings without calling the model.
 `/usage` (also `/usage show`, `/cost`, or `/cost show`) fetches current credit,
