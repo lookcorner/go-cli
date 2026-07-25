@@ -1880,8 +1880,22 @@ func TestScrollbackFocusAndNavigation(t *testing.T) {
 		t.Fatalf("typed focus=%v input=%q", m.scrollFocused, m.input)
 	}
 	press(tea.Key{Code: tea.KeyPgUp})
-	if m.scroll != 0 {
+	if m.scroll != m.contentHeight() || string(m.input) != "x" || m.scrollFocused {
 		t.Fatalf("prompt page-up scroll=%d", m.scroll)
+	}
+	press(tea.Key{Code: tea.KeyPgDown})
+	if m.scroll != 0 || string(m.input) != "x" || m.scrollFocused {
+		t.Fatalf("prompt page-down scroll=%d", m.scroll)
+	}
+	m.running = true
+	press(tea.Key{Code: tea.KeyPgUp})
+	if m.scroll != m.contentHeight() || string(m.input) != "x" {
+		t.Fatalf("running prompt page-up scroll=%d input=%q", m.scroll, m.input)
+	}
+	press(tea.Key{Code: tea.KeyPgDown})
+	m.running = false
+	if m.scroll != 0 || string(m.input) != "x" {
+		t.Fatalf("running prompt page-down scroll=%d input=%q", m.scroll, m.input)
 	}
 	press(tea.Key{Code: tea.KeyTab})
 	press(tea.Key{Code: ' ', Text: " "})

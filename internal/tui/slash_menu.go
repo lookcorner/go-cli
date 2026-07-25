@@ -487,6 +487,12 @@ func (m *model) handleSlashMenuKey(msg tea.KeyPressMsg) (consume, send bool) {
 	case "down", "ctrl+n":
 		m.slashSelected = (m.slashSelected + 1) % len(items)
 		return true, false
+	case "pgup":
+		m.slashSelected = max(m.slashSelected-m.slashMenuRowLimit(), 0)
+		return true, false
+	case "pgdown":
+		m.slashSelected = min(m.slashSelected+m.slashMenuRowLimit(), len(items)-1)
+		return true, false
 	case "esc":
 		m.slashDismissed = string(m.input)
 		return true, false

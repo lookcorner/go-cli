@@ -183,6 +183,8 @@ rollback-safe live `/settings` persistence of `[ui].voice_capture_mode`.
 The TUI accepts Bubble Tea v2 bracketed-paste events as one undoable edit,
 preserves Unicode, multiline and trailing-newline content, normalizes bare
 carriage returns, and suppresses typed-only contextual nudges for pasted text.
+PageUp and PageDown scroll the conversation without leaving the prompt in idle
+or running turns, while an open slash menu retains first priority for paging.
 Plain TUI exits print a pasteable session resume command after terminal restore,
 including `--minimal` when the active session used native scrollback mode.
 Ctrl-V reads native clipboard text or validated PNG data, with Alt-V as a

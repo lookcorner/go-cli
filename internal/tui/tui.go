@@ -2644,6 +2644,14 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.status = "scrollback focused"
 		return m, nil
 	}
+	if stroke == "pgup" || stroke == "pgdown" {
+		lines := max(m.contentHeight(), 1)
+		if stroke == "pgdown" {
+			lines = -lines
+		}
+		m.scrollTranscript(lines)
+		return m, nil
+	}
 	if m.running {
 		return m.handleRunningKey(msg)
 	}

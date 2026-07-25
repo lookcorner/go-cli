@@ -61,6 +61,17 @@ func TestSlashMenuNavigationDismissAndQueryReset(t *testing.T) {
 	if m.slashSelected != len(items)-1 {
 		t.Fatalf("selected=%d items=%d", m.slashSelected, len(items))
 	}
+	m.slashSelected = 0
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyPgDown}))
+	m = updated.(*model)
+	if want := min(m.slashMenuRowLimit(), len(items)-1); m.slashSelected != want || m.scroll != 0 || string(m.input) != "/" {
+		t.Fatalf("page down selected=%d want=%d scroll=%d input=%q", m.slashSelected, want, m.scroll, m.input)
+	}
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyPgUp}))
+	m = updated.(*model)
+	if m.slashSelected != 0 || m.scroll != 0 || string(m.input) != "/" {
+		t.Fatalf("page up selected=%d scroll=%d input=%q", m.slashSelected, m.scroll, m.input)
+	}
 	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
 	m = updated.(*model)
 	if len(m.slashSuggestions()) != 0 || m.slashDismissed != "/" {
