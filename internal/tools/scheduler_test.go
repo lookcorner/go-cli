@@ -93,7 +93,7 @@ func TestSchedulerToolsFireAndRemoveOneShot(t *testing.T) {
 		if event.TaskID != taskID || event.Prompt != "check deployment" {
 			t.Fatalf("fired=%#v", event)
 		}
-	case <-time.After(time.Second):
+	default:
 		t.Fatal("fire_immediately task did not fire")
 	}
 	select {
@@ -101,7 +101,7 @@ func TestSchedulerToolsFireAndRemoveOneShot(t *testing.T) {
 		if removed != taskID {
 			t.Fatalf("removed=%q", removed)
 		}
-	case <-time.After(time.Second):
+	default:
 		t.Fatal("one-shot task was not removed")
 	}
 	listed, err := (&schedulerListTool{scheduler: scheduler}).Execute(context.Background(), nil)

@@ -196,6 +196,9 @@ func (s *Scheduler) Create(interval time.Duration, prompt string, recurring, dur
 		return ScheduledTask{}, err
 	}
 	s.emit(schedulerEvent{kind: "created", created: scheduledPayload(task)})
+	if fireImmediately {
+		s.fireDue()
+	}
 	s.signal()
 	return task, nil
 }
