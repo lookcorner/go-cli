@@ -339,10 +339,12 @@ func pathFromFileURI(value string) (string, error) {
 	if err != nil || parsed.Scheme != "file" || (parsed.Host != "" && !strings.EqualFold(parsed.Host, "localhost")) || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return "", fmt.Errorf("workspace edit URI %q is not a local file URI", value)
 	}
-	path := filepath.FromSlash(parsed.Path)
-	if runtime.GOOS == "windows" && len(path) >= 3 && filepath.IsAbs(path) && path[0] == filepath.Separator && path[2] == ':' {
-		path = path[1:]
+	slashed := parsed.Path
+	if runtime.GOOS == "windows" && len(slashed) >= 3 && slashed[0] == '/' && slashed[2] == ':' &&
+		(slashed[1] >= 'A' && slashed[1] <= 'Z' || slashed[1] >= 'a' && slashed[1] <= 'z') {
+		slashed = slashed[1:]
 	}
+	path := filepath.FromSlash(slashed)
 	if path == "" {
 		return "", errors.New("workspace edit file URI has an empty path")
 	}

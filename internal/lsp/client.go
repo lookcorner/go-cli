@@ -493,7 +493,11 @@ func readContentLength(reader *bufio.Reader) (int, error) {
 
 func fileURI(path string) string {
 	abs, _ := filepath.Abs(path)
-	return (&url.URL{Scheme: "file", Path: filepath.ToSlash(abs)}).String()
+	slashed := filepath.ToSlash(abs)
+	if !strings.HasPrefix(slashed, "/") {
+		slashed = "/" + slashed
+	}
+	return (&url.URL{Scheme: "file", Path: slashed}).String()
 }
 
 func languageID(path string) string {
