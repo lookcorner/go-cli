@@ -911,6 +911,9 @@ state; opt-in aliases and ambiguous values such as `on` or `off` are rejected.
 `gork doctor [--json]` and `/doctor` (also `/terminal-setup`, `/terminal-check`, or `/terminal-info`) report the
 detected terminal, multiplexer, SSH and color state, available clipboard routes,
 and actionable setup warnings without calling the model.
+`gork doctor fix` lists automatic fixes; `gork doctor fix ssh-wrap --yes` installs a
+managed shell alias so interactive `ssh` runs through `gork wrap ssh` (Bash/zsh/fish,
+local non-Windows shells only; preview without `--yes`).
 `/usage` (also `/usage show`, `/cost`, or `/cost show`) fetches current credit,
 reset, auto-topup, and pay-as-you-go metrics without calling the model.
 `/usage manage` and `/cost manage` open the billing management page, with the URL

@@ -5,15 +5,20 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/lookcorner/go-cli/internal/terminaldiag"
 )
 
 func runDoctor(args []string, stdout, stderr io.Writer) error {
+	if len(args) > 0 && args[0] == "fix" {
+		return runDoctorFix(args[1:], stdout, stderr)
+	}
 	flags := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.Usage = func() {
 		fmt.Fprintln(stderr, "Usage: gork doctor [--json]")
+		fmt.Fprintln(stderr, "       gork doctor fix [ssh-wrap] [--yes]")
 		flags.PrintDefaults()
 	}
 	asJSON := flags.Bool("json", false, "emit machine-readable JSON")
@@ -23,7 +28,7 @@ func runDoctor(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	if flags.NArg() != 0 {
-		return errors.New("doctor does not accept positional arguments")
+		return errors.New("doctor does not accept positional arguments; use `gork doctor fix`")
 	}
 	if *asJSON {
 		payload, err := terminaldiag.ReportJSON()
@@ -35,4 +40,64 @@ func runDoctor(args []string, stdout, stderr io.Writer) error {
 	}
 	_, err := fmt.Fprintln(stdout, terminaldiag.Report())
 	return err
+}
+
+func runDoctorFix(args []string, stdout, stderr io.Writer) error {
+	yes, rest, err := parseDoctorFixArgs(args)
+	if errors.Is(err, flag.ErrHelp) {
+		fmt.Fprintln(stderr, "Usage: gork doctor fix [ssh-wrap] [--yes]")
+		return nil
+	} else if err != nil {
+		return err
+	}
+	env := terminaldiag.DefaultFixEnv()
+	if len(rest) == 0 {
+		if yes {
+			return errors.New("--yes requires a fix id")
+		}
+		_, err := fmt.Fprintln(stdout, terminaldiag.FormatFixListing(terminaldiag.ListAutomaticFixes(env)))
+		return err
+	}
+	if len(rest) != 1 {
+		return errors.New("usage: gork doctor fix [ssh-wrap] [--yes]")
+	}
+	id, err := terminaldiag.ResolveFixID(rest[0])
+	if err != nil {
+		return err
+	}
+	if id != terminaldiag.SSHWrapID {
+		return fmt.Errorf("unsupported fix %q", id)
+	}
+	plan, err := terminaldiag.PlanSSHWrap(env)
+	if err != nil {
+		return err
+	}
+	if !yes {
+		fmt.Fprintln(stdout, terminaldiag.FormatFixPreview(plan))
+		fmt.Fprintln(stdout)
+		fmt.Fprintln(stdout, "Re-run with --yes to apply.")
+		return nil
+	}
+	outcome, err := terminaldiag.ApplySSHWrap(plan)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(stdout, terminaldiag.FormatFixSuccess(outcome))
+	return err
+}
+
+func parseDoctorFixArgs(args []string) (yes bool, rest []string, err error) {
+	for _, arg := range args {
+		switch {
+		case arg == "--yes":
+			yes = true
+		case arg == "-h" || arg == "--help":
+			return false, nil, flag.ErrHelp
+		case strings.HasPrefix(arg, "-"):
+			return false, nil, fmt.Errorf("unknown flag %s", arg)
+		default:
+			rest = append(rest, arg)
+		}
+	}
+	return yes, rest, nil
 }
