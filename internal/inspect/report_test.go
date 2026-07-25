@@ -74,6 +74,9 @@ explore = false
 	if report.Permissions.Mode != "auto" || report.Permissions.Rules != 1 {
 		t.Fatalf("permissions=%#v", report.Permissions)
 	}
+	if report.ExternalCompat.RemoteSettingsLoaded || len(report.ExternalCompat.Cells) != 13 {
+		t.Fatalf("external compatibility=%#v", report.ExternalCompat)
+	}
 	if agentEnabled(report, "explore") {
 		t.Fatalf("disabled agent reported enabled: %#v", report.Agents)
 	}

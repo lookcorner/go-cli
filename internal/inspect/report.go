@@ -33,7 +33,13 @@ type Report struct {
 	MCPServers        []MCPServer    `json:"mcpServers"`
 	LSPServers        []LSPServer    `json:"lspServers"`
 	ConfigSources     []ConfigSource `json:"configSources"`
+	ExternalCompat    ExternalCompat `json:"externalCompat"`
 	DiscoveryWarnings []string       `json:"discoveryWarnings,omitempty"`
+}
+
+type ExternalCompat struct {
+	RemoteSettingsLoaded bool                          `json:"remoteSettingsLoaded"`
+	Cells                []config.CompatibilitySetting `json:"cells"`
 }
 
 type Instruction struct {
@@ -183,6 +189,10 @@ func Build(cwd, configPath string) (Report, error) {
 		MCPServers:    inspectMCPServers(mcpServers),
 		LSPServers:    inspectLSPServers(lspServers),
 		ConfigSources: inspectConfigSources(ws.Root(), configPath),
+		ExternalCompat: ExternalCompat{
+			RemoteSettingsLoaded: false,
+			Cells:                cfg.CompatibilitySettings(),
+		},
 	}
 	if root, ok := workspace.FindGitRoot(ws.Root()); ok {
 		report.ProjectRoot = root

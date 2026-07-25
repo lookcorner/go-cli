@@ -94,12 +94,29 @@ func printInspectReport(output io.Writer, report inspectapp.Report) {
 			fmt.Fprintf(output, "  %s [%s]\n", cleanCLIText(item.Path), cleanCLIText(item.Role))
 		}
 	})
+	printInspectCompatibility(output, report.ExternalCompat)
 	if len(report.DiscoveryWarnings) > 0 {
 		printInspectSection(output, "Warnings", len(report.DiscoveryWarnings), func() {
 			for _, warning := range report.DiscoveryWarnings {
 				fmt.Fprintln(output, " ", cleanCLIText(warning))
 			}
 		})
+	}
+}
+
+func printInspectCompatibility(output io.Writer, report inspectapp.ExternalCompat) {
+	fmt.Fprintln(output, "\nHarness compatibility:")
+	currentVendor := ""
+	for _, cell := range report.Cells {
+		if cell.Vendor != currentVendor {
+			currentVendor = cell.Vendor
+			fmt.Fprintf(output, "  %s\n", cleanCLIText(currentVendor))
+		}
+		status := "on"
+		if !cell.Enabled {
+			status = "OFF"
+		}
+		fmt.Fprintf(output, "    %-10s %-3s (%s)\n", cleanCLIText(cell.Surface), status, cleanCLIText(cell.Source))
 	}
 }
 

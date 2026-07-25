@@ -6,8 +6,9 @@ The implementation follows the lightweight DDD boundaries documented in
 Gork Go is a Go reimplementation of [Gork Build](https://github.com/thedavidweng/gork-build),
 the privacy-oriented community build of the Grok Build coding agent.
 
-Use `gork inspect` for a redacted configuration and component report, or
-`gork inspect --json` for machine-readable output.
+Use `gork inspect` for a redacted configuration and component report, including
+effective Cursor, Claude, and Codex compatibility settings with their local
+resolution source, or `gork inspect --json` for machine-readable output.
 Use `gork version [--json]` for reference-shaped version information and
 `gork share <session-id>` to create a share URL for an authenticated,
 share-enabled local session.

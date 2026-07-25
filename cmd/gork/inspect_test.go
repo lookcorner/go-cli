@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/lookcorner/go-cli/internal/config"
+	inspectapp "github.com/lookcorner/go-cli/internal/inspect"
 )
 
 func TestInspectCLIJSONAndHumanOutput(t *testing.T) {
@@ -41,14 +44,33 @@ func TestInspectCLIJSONAndHumanOutput(t *testing.T) {
 	if report["cwd"] != canonicalRoot || !strings.Contains(strings.ToLower(jsonOutput.String()), "agents.md") {
 		t.Fatalf("json output=%s", jsonOutput.String())
 	}
+	external, ok := report["externalCompat"].(map[string]any)
+	cells, cellsOK := external["cells"].([]any)
+	if !ok || !cellsOK || external["remoteSettingsLoaded"] != false || len(cells) != 13 {
+		t.Fatalf("external compatibility=%#v", external)
+	}
 
 	var human bytes.Buffer
 	if err := runInspect(nil, &human, &stderr); err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{"Working directory: " + canonicalRoot, "Project instructions (1):", "Skills (", "MCP servers ("} {
+	for _, expected := range []string{"Working directory: " + canonicalRoot, "Project instructions (1):", "Skills (", "MCP servers (", "Harness compatibility:", "cursor", "sessions   on  (default)"} {
 		if !strings.Contains(human.String(), expected) {
 			t.Fatalf("human output missing %q:\n%s", expected, human.String())
+		}
+	}
+}
+
+func TestInspectCompatibilityHumanOutputShowsDisabledSource(t *testing.T) {
+	var output bytes.Buffer
+	printInspectCompatibility(&output, inspectapp.ExternalCompat{Cells: []config.CompatibilitySetting{
+		{Vendor: "cursor", Surface: "skills", Enabled: true, Source: "env"},
+		{Vendor: "cursor", Surface: "rules", Source: "config"},
+		{Vendor: "codex", Surface: "sessions", Enabled: true, Source: "default"},
+	}})
+	for _, expected := range []string{"Harness compatibility:", "skills     on  (env)", "rules      OFF (config)", "sessions   on  (default)"} {
+		if !strings.Contains(output.String(), expected) {
+			t.Fatalf("output missing %q:\n%s", expected, output.String())
 		}
 	}
 }
