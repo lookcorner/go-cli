@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -32,7 +33,11 @@ func TestHistoryRankingGhostLimitAndUnicodeCursor(t *testing.T) {
 
 func TestTokenOnlyPATHAndCommandPosition(t *testing.T) {
 	bin := t.TempDir()
-	writeExecutable(t, filepath.Join(bin, "gork-safe"))
+	name := "gork-safe"
+	if runtime.GOOS == "windows" {
+		name = "gork-safe.bat"
+	}
+	writeExecutable(t, filepath.Join(bin, name))
 	t.Setenv("PATH", bin)
 	aiCalled := false
 	response := Generate(context.Background(), Request{Text: "gork", Cursor: 4, CWD: t.TempDir(), Limit: 10, IncludeAI: true, TokenOnly: true}, []string{"gork history"}, func(context.Context, string, string, string) (string, error) {
@@ -43,7 +48,7 @@ func TestTokenOnlyPATHAndCommandPosition(t *testing.T) {
 		t.Fatalf("response=%#v aiCalled=%v", response, aiCalled)
 	}
 	row := response.Completions[0]
-	if row.InsertText != "gork-safe" || row.TokenText != "gork-safe" || row.ReplaceRange[0] != 0 || row.ReplaceRange[1] != 4 {
+	if row.InsertText != name || row.TokenText != name || row.ReplaceRange[0] != 0 || row.ReplaceRange[1] != 4 {
 		t.Fatalf("row=%#v", row)
 	}
 	quoted := Generate(context.Background(), Request{Text: `echo "a | gor`, Cursor: len(`echo "a | gor`), CWD: t.TempDir(), Limit: 10, TokenOnly: true}, nil, nil)

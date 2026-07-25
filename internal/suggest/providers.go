@@ -3,6 +3,7 @@ package suggest
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -72,7 +73,7 @@ func executables() []string {
 				continue
 			}
 			info, err := os.Stat(filepath.Join(dir, entry.Name()))
-			if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+			if err != nil || !isExecutable(info) {
 				continue
 			}
 			seen[entry.Name()] = true
@@ -89,6 +90,28 @@ type fileEntry struct {
 	directory   bool
 	tier, score int
 }
+
+// isExecutable reports whether a regular file is launchable: executable bits
+// on Unix, a PATHEXT extension on Windows.
+func isExecutable(info os.FileInfo) bool {
+	if !info.Mode().IsRegular() {
+		return false
+	}
+	if runtime.GOOS == "windows" {
+		return pathextExts()[strings.ToLower(filepath.Ext(info.Name()))]
+	}
+	return info.Mode().Perm()&0o111 != 0
+}
+
+var pathextExts = sync.OnceValue(func() map[string]bool {
+	exts := map[string]bool{".com": true, ".exe": true, ".bat": true, ".cmd": true}
+	for _, ext := range strings.Split(os.Getenv("PATHEXT"), string(os.PathListSeparator)) {
+		if ext = strings.ToLower(strings.TrimSpace(ext)); ext != "" {
+			exts[ext] = true
+		}
+	}
+	return exts
+})
 
 func fileSuggestions(prefix, text, cwd string) []Completion {
 	tok := parseToken(prefix)

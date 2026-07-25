@@ -2,7 +2,6 @@ package suggest
 
 import (
 	"context"
-	"runtime"
 	"sort"
 	"strings"
 )
@@ -58,10 +57,8 @@ func Generate(ctx context.Context, req Request, history []string, ai AICompleter
 	}
 
 	var pathRows, fileRows []Completion
-	if runtime.GOOS != "windows" {
-		pathRows = pathSuggestions(prefix, req.Text)
-		fileRows = fileSuggestions(prefix, req.Text, req.CWD)
-	}
+	pathRows = pathSuggestions(prefix, req.Text)
+	fileRows = fileSuggestions(prefix, req.Text, req.CWD)
 
 	rows := append(append(append([]Completion{}, historyRows...), pathRows...), fileRows...)
 	if req.IncludeAI && !req.TokenOnly && ai != nil && !skipAI(historyRows, prefix) && prefix != "" {
