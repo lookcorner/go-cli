@@ -167,6 +167,7 @@ func TestExtraSourcesUseReferenceOrderAndDeduplication(t *testing.T) {
 }`)
 
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	sources := extraSources([]Source{{Name: "configured", Git: "https://example.com/configured.git"}}, []string{grokRoot, claudeRoot})
 	byName := make(map[string]Source, len(sources))
 	for _, source := range sources {
@@ -470,4 +471,22 @@ func gitValue(t *testing.T, root string, args ...string) string {
 		t.Fatal(err)
 	}
 	return strings.TrimSpace(string(output))
+}
+
+func TestSourceNameDerivesBaseAcrossPlatforms(t *testing.T) {
+	t.Parallel()
+	for value, want := range map[string]string{
+		"/home/user/team-catalog":              "team-catalog",
+		`C:\Users\dev\team-catalog`:            "team-catalog",
+		`D:\mixed/slashes\team-catalog`:        "team-catalog",
+		"https://github.com/owner/plugins.git": "plugins",
+		"git@github.com:owner/plugins.git":     "plugins",
+		"github.com:owner":                     "owner",
+		"catalog":                              "catalog",
+		`C:\`:                                  "marketplace",
+	} {
+		if got := sourceName(value); got != want {
+			t.Errorf("sourceName(%q) = %q, want %q", value, got, want)
+		}
+	}
 }

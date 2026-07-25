@@ -988,8 +988,11 @@ func pathWithin(root, path string) bool {
 }
 
 func sourceName(value string) string {
-	value = strings.TrimSuffix(strings.TrimRight(value, "/"), ".git")
-	if index := strings.LastIndexAny(value, "/:"); index >= 0 {
+	value = strings.TrimSuffix(strings.TrimRight(value, `/\`), ".git")
+	if index := strings.LastIndexAny(value, "/\\"); index >= 0 {
+		value = value[index+1:]
+	}
+	if index := strings.LastIndexByte(value, ':'); index >= 0 && !strings.ContainsAny(value, `/\`) {
 		value = value[index+1:]
 	}
 	if value == "" {
