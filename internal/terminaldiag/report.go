@@ -65,9 +65,17 @@ func BuildSnapshot(getenv func(string) string, lookPath func(string) (string, er
 	color := colorSupport(getenv, term)
 	clipboard, clipboardTool := nativeClipboard(lookPath, goos)
 	osc52 := term != "dumb" && (term != "" || brand != "unknown")
-	tmux := collectTmuxProbe(getenv)
 	findings := terminalWarnings(term, color, multiplexer, clipboard, osc52)
-	findings = append(findings, tmuxProbeFindings(tmux)...)
+	var tmux tmuxProbe
+	if strings.Contains(multiplexer, "byobu (screen)") {
+		findings = append(findings, "Byobu is using GNU screen, which has limited clipboard and display support.\n    Switch Byobu to its tmux backend, then restart or reattach the session.")
+	} else {
+		tmux = collectTmuxProbe(getenv)
+		findings = append(findings, tmuxProbeFindings(tmux)...)
+	}
+	if finding := sshWrapRecommendation(getenv, ssh); finding != "" {
+		findings = append(findings, finding)
+	}
 	return Snapshot{
 		SchemaVersion: SchemaVersion,
 		Facts: Facts{
@@ -132,9 +140,10 @@ func terminalBrand(getenv func(string) string, term string) string {
 }
 
 func terminalMultiplexer(getenv func(string) string) string {
+	backend := strings.ToLower(strings.TrimSpace(getenv("BYOBU_BACKEND")))
 	if getenv("TMUX") != "" {
-		if getenv("BYOBU_BACKEND") != "" {
-			return "byobu (tmux)"
+		if backend != "" {
+			return "byobu (" + backend + ")"
 		}
 		return "tmux"
 	}
@@ -142,9 +151,25 @@ func terminalMultiplexer(getenv func(string) string) string {
 		return "zellij"
 	}
 	if getenv("STY") != "" {
+		if backend == "screen" {
+			return "byobu (screen)"
+		}
 		return "screen"
 	}
 	return "none"
+}
+
+func sshWrapRecommendation(getenv func(string) string, ssh bool) string {
+	if !ssh {
+		return ""
+	}
+	if getenv("GROK_OSC52_SINK") != "" || getenv("LC_GROK_OSC52_SINK") != "" {
+		return ""
+	}
+	if getenv("VSCODE_INJECTION") != "" || strings.Contains(getenv("TERM_PROGRAM"), "vscode") {
+		return ""
+	}
+	return "Use local SSH wrapping for more reliable clipboard copy and terminal recovery.\n    Run `gork wrap ssh <host>` on your local computer, or `gork doctor fix ssh-wrap` there for a persistent alias."
 }
 
 func colorSupport(getenv func(string) string, term string) string {

@@ -52,7 +52,7 @@ func TestBuildReportDescribesTerminalAndRoutes(t *testing.T) {
 
 	env := map[string]string{
 		"TERM_PROGRAM": "WezTerm", "TERM": "xterm-256color", "COLORTERM": "truecolor",
-		"TMUX": "/tmp/tmux", "SSH_CONNECTION": "client server",
+		"TMUX": "/tmp/tmux", "SSH_CONNECTION": "client server", "GROK_OSC52_SINK": "1",
 	}
 	report := buildReport(func(key string) string { return env[key] }, func(name string) (string, error) {
 		if name == "pbcopy" {
@@ -64,6 +64,43 @@ func TestBuildReportDescribesTerminalAndRoutes(t *testing.T) {
 		if !strings.Contains(report, want) {
 			t.Errorf("missing %q in %q", want, report)
 		}
+	}
+}
+
+func TestBuildReportRecommendsSSHWrap(t *testing.T) {
+	env := map[string]string{
+		"TERM": "xterm-256color", "COLORTERM": "truecolor",
+		"SSH_CONNECTION": "1 2 3 4", "TERM_PROGRAM": "TestTerm",
+	}
+	snapshot := BuildSnapshot(func(key string) string { return env[key] }, func(string) (string, error) {
+		return "/bin/pbcopy", nil
+	}, "darwin")
+	if snapshot.Counts.Issues != 1 || !strings.Contains(strings.Join(snapshot.Findings, "\n"), "gork doctor fix ssh-wrap") {
+		t.Fatalf("snapshot=%#v", snapshot)
+	}
+	env["GROK_OSC52_SINK"] = "1"
+	snapshot = BuildSnapshot(func(key string) string { return env[key] }, func(string) (string, error) {
+		return "/bin/pbcopy", nil
+	}, "darwin")
+	if snapshot.Counts.Issues != 0 {
+		t.Fatalf("wrap sink should silence hint: %#v", snapshot)
+	}
+}
+
+func TestBuildReportWarnsForByobuScreen(t *testing.T) {
+	prev := probeTmuxOption
+	probeTmuxOption = func(string, bool) (string, bool) {
+		t.Fatal("tmux options should not be probed under byobu screen")
+		return "", false
+	}
+	t.Cleanup(func() { probeTmuxOption = prev })
+
+	env := map[string]string{"TERM": "xterm-256color", "COLORTERM": "truecolor", "STY": "123.pts", "BYOBU_BACKEND": "screen"}
+	snapshot := BuildSnapshot(func(key string) string { return env[key] }, func(string) (string, error) {
+		return "/usr/bin/wl-copy", nil
+	}, "linux")
+	if snapshot.Facts.Multiplexer != "byobu (screen)" || snapshot.Counts.Issues != 1 || !strings.Contains(snapshot.Findings[0], "GNU screen") {
+		t.Fatalf("snapshot=%#v", snapshot)
 	}
 }
 
