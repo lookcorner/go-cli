@@ -1049,6 +1049,72 @@ func TestRunnerExecutesToolLoop(t *testing.T) {
 	}
 }
 
+func TestRunnerStopsRepeatedIdenticalToolCalls(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := make([]api.StreamResult, stationarityStopAt)
+	for index := range results {
+		results[index] = api.StreamResult{ResponseID: fmt.Sprintf("resp-%d", index+1), ToolCalls: []api.ToolCall{{
+			CallID: fmt.Sprintf("call-%d", index+1), Name: "read_file", Arguments: json.RawMessage(`{"path":"README.md"}`),
+		}}}
+	}
+	streamer := &fakeStreamer{results: results}
+	runner := Runner{Client: streamer, Tools: tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto}), Model: "test", MaxSteps: stationarityStopAt}
+	defer runner.Tools.Close()
+
+	result, err := runner.Run(context.Background(), "inspect")
+	if err != nil || result.ResponseID != "resp-16" || result.Steps != stationarityStopAt || len(streamer.requests) != stationarityStopAt {
+		t.Fatalf("result=%#v requests=%d err=%v", result, len(streamer.requests), err)
+	}
+	nudgeInput := streamer.requests[stationarityNudgeAt].Input
+	if len(nudgeInput) != 2 || nudgeInput[1].Type != "message" || !strings.Contains(fmt.Sprint(nudgeInput[1].Content), "called the same tool (read_file)") {
+		t.Fatalf("stationarity nudge input=%#v", nudgeInput)
+	}
+}
+
+func TestRunnerStopsTrueNoopThrashAfterFourCalls(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := make([]api.StreamResult, stationarityTrueNoopStopAt)
+	commands := []string{"true", " true ", "TRUE", "\tTrUe\n"}
+	for index := range results {
+		arguments, _ := json.Marshal(map[string]string{"command": commands[index]})
+		results[index] = api.StreamResult{ResponseID: fmt.Sprintf("resp-%d", index+1), ToolCalls: []api.ToolCall{{
+			CallID: fmt.Sprintf("call-%d", index+1), Name: "run_terminal_cmd", Arguments: arguments,
+		}}}
+	}
+	streamer := &fakeStreamer{results: results}
+	runner := Runner{Client: streamer, Tools: tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto}), Model: "test", MaxSteps: stationarityTrueNoopStopAt}
+	defer runner.Tools.Close()
+
+	result, err := runner.Run(context.Background(), "wait")
+	if err != nil || result.ResponseID != "resp-4" || result.Steps != stationarityTrueNoopStopAt || len(streamer.requests) != stationarityTrueNoopStopAt {
+		t.Fatalf("result=%#v requests=%d err=%v", result, len(streamer.requests), err)
+	}
+}
+
+func TestIdenticalToolCallRunResetsForDifferentCalls(t *testing.T) {
+	var run identicalToolCallRun
+	read := []api.ToolCall{{Name: "read_file", Arguments: json.RawMessage(`{"path":"a"}`)}}
+	other := []api.ToolCall{{Name: "read_file", Arguments: json.RawMessage(`{"path":"b"}`)}}
+	if run.observe(read) != 1 || run.observe(read) != 2 || run.observe(other) != 1 || run.trueNoop {
+		t.Fatalf("run=%#v", run)
+	}
+	if !isTrueNoopStep([]api.ToolCall{{Name: "shell", Arguments: json.RawMessage(`{"command":" TRUE "}`)}}) ||
+		isTrueNoopStep([]api.ToolCall{{Name: "shell", Arguments: json.RawMessage(`{"command":"true && echo done"}`)}}) ||
+		isTrueNoopStep([]api.ToolCall{{Name: "run_terminal_cmd", Arguments: json.RawMessage(`{"command":"true","is_background":true}`)}}) {
+		t.Fatal("true no-op classification mismatch")
+	}
+}
+
 func TestRunnerContinuesFinalResponseWithQueuedInterjections(t *testing.T) {
 	ws, err := workspace.Open(t.TempDir())
 	if err != nil {

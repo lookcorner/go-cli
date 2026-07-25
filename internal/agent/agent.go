@@ -45,6 +45,12 @@ const sideQuestionInstruction = `<system-reminder>This is a side question from t
 
 You are a separate lightweight agent. The main agent continues independently. You share its conversation context, but you have no tools and cannot read files, run commands, search, or take actions. There will be no follow-up turn. Never promise to check or do something later. If the answer is not present in the conversation context, say so.</system-reminder>`
 
+const (
+	stationarityNudgeAt        = 8
+	stationarityStopAt         = 16
+	stationarityTrueNoopStopAt = 4
+)
+
 var (
 	ErrRecapUnavailable = errors.New("no conversation to recap")
 	ErrRecapInProgress  = errors.New("recap already in progress")
@@ -756,6 +762,7 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 	progress := Progress{}
 	usageHistory := make([]ModelUsage, 0, r.MaxSteps)
 	var inFlightInterjections []Interjection
+	var repeatedCalls identicalToolCallRun
 	seenTools := make(map[string]bool)
 	publish := func() {
 		final.Steps, final.ToolCalls = progress.Turns, progress.ToolCalls
@@ -891,6 +898,7 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 			publish()
 			return final, errors.New("model returned tool calls without a response ID")
 		}
+		repeated := repeatedCalls.observe(streamed.ToolCalls)
 		previousResponseID = streamed.ResponseID
 		input = make([]api.InputItem, 0, len(streamed.ToolCalls))
 		var imageParts []api.ContentPart
@@ -978,6 +986,21 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 		if len(imageParts) > 0 {
 			input = append(input, api.InputItem{Type: "message", Role: "user", Content: imageParts})
 		}
+		if repeated == stationarityNudgeAt {
+			input = append(input, api.InputItem{Type: "message", Role: "user", Content: fmt.Sprintf(
+				"<system-reminder>You have called the same tool (%s) with the exact same arguments %d times in a row and received the same result. Stop repeating this call. If you are waiting on a long-running command, use a background task or monitor it without tight polling. If you cannot make progress, stop and tell the user what you are waiting for. This turn will end automatically if the identical call continues.</system-reminder>",
+				repeatedCalls.toolName, repeated,
+			)})
+			r.log("action_stationarity_nudge", map[string]any{"tool": repeatedCalls.toolName, "run_length": repeated})
+		}
+		if repeated >= repeatedCalls.stopAt() {
+			r.log("action_stationarity_stop", map[string]any{
+				"tool": repeatedCalls.toolName, "run_length": repeated, "true_noop": repeatedCalls.trueNoop,
+			})
+			r.scheduleMemoryIdleFlush(ctx, final.ResponseID)
+			r.scheduleMemoryDreamCheck(ctx)
+			return final, nil
+		}
 		if step < r.MaxSteps {
 			pending := r.TakeInterjections()
 			if err := r.appendInterjections(&input, pending); err != nil {
@@ -990,6 +1013,56 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 	progress.ErrorCount++
 	publish()
 	return final, fmt.Errorf("agent reached maximum of %d model steps", r.MaxSteps)
+}
+
+type identicalToolCallRun struct {
+	signature string
+	toolName  string
+	count     int
+	trueNoop  bool
+}
+
+func (r *identicalToolCallRun) observe(calls []api.ToolCall) int {
+	trueNoop := isTrueNoopStep(calls)
+	var signature strings.Builder
+	if trueNoop {
+		signature.WriteString("\x00true-noop")
+	} else {
+		for _, call := range calls {
+			signature.WriteString(call.Name)
+			signature.WriteByte(0x1f)
+			signature.Write(call.Arguments)
+			signature.WriteByte(0x1e)
+		}
+	}
+	value := signature.String()
+	if r.signature == value {
+		r.count++
+	} else {
+		r.signature, r.count, r.trueNoop = value, 1, trueNoop
+	}
+	if len(calls) > 0 {
+		r.toolName = calls[0].Name
+	}
+	return r.count
+}
+
+func (r identicalToolCallRun) stopAt() int {
+	if r.trueNoop {
+		return stationarityTrueNoopStopAt
+	}
+	return stationarityStopAt
+}
+
+func isTrueNoopStep(calls []api.ToolCall) bool {
+	if len(calls) != 1 || calls[0].Name != "shell" && calls[0].Name != "run_terminal_cmd" {
+		return false
+	}
+	var args struct {
+		Command      string `json:"command"`
+		IsBackground bool   `json:"is_background"`
+	}
+	return json.Unmarshal(calls[0].Arguments, &args) == nil && !args.IsBackground && strings.EqualFold(strings.TrimSpace(args.Command), "true")
 }
 
 type cancelRewindKey struct{}
