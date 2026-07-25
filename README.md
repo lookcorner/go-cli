@@ -570,7 +570,8 @@ resume and rewind without adding presentation text to the model's conversation
 history. Output beyond 20 lines or 4,000 characters is folded to keep navigation
 responsive. In minimal mode, `/expand` or Ctrl-E reprints the newest folded tool
 block in full beneath the native scrollback; repeated use walks backward through
-up to 256 folded results.
+up to 256 folded results. In fullscreen mode, focus scrollback with Tab, bring a
+folded tool block into view, and press `e` to expand or collapse it in place.
 On directly supported terminals, Markdown links, bare HTTP(S)/FTP/email URLs, and quoted
 absolute file paths use safe OSC 8 targets; spaces in file paths are preserved and
 percent-encoded. The same links remain available through tmux 3.4 or newer when
@@ -816,10 +817,11 @@ Adjacent successful edits to the same normalized path share one row with
 summed counts; assistant text, another tool, a failure, or a different file
 ends the row. The expansion preserves every original tool call in order.
 The full tool arguments and result remain available through `/expand` or
-Ctrl-E in minimal mode. Local configuration overrides the remote setting,
-while managed requirements have final precedence. Whole-file writes and
-failed edits stay expanded because their previous contents or diagnostics
-cannot be summarized safely.
+Ctrl-E in minimal mode, or `e` on the visible row while fullscreen scrollback
+is focused. Local configuration overrides the remote setting, while managed
+requirements have final precedence. Whole-file writes and failed edits stay
+expanded because their previous contents or diagnostics cannot be summarized
+safely.
 
 `[ui] group_tool_verbs` defaults to `true`. Consecutive read, search,
 directory-listing, web, memory-search, and subagent tool results collapse into
@@ -827,10 +829,11 @@ one ordered summary such as `Read 3 files, Searched 2 patterns`; failed members
 add a `N failed` suffix. WebSearch summaries count distinct successful citation
 URLs, falling back to call count when no citations are returned. Edits,
 commands, other tools, assistant text, and new user turns end the current
-group. `/expand` or Ctrl-E in minimal mode prints the complete member blocks.
-The behavior is identical for live output, resumed/rewound sessions, the
-transcript viewer, and dashboard previews. Local configuration overrides the
-remote value, while managed requirements have final precedence.
+group. `/expand` or Ctrl-E in minimal mode prints the complete member blocks;
+fullscreen scrollback toggles the visible group in place with `e`. The behavior
+is identical for live output and resumed/rewound sessions, while transcript and
+dashboard previews retain the grouped summary. Local configuration overrides
+the remote value, while managed requirements have final precedence.
 
 `[ui] cursor_blink = true` forces a blinking block cursor at TUI startup, while
 `false` forces a steady block. Leaving it unset preserves the terminal's cursor

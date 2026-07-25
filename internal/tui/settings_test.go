@@ -414,7 +414,7 @@ func TestSettingsGroupToolVerbsRefoldsTranscriptImmediately(t *testing.T) {
 	if err := logger.Close(); err != nil {
 		t.Fatal(err)
 	}
-	grouped, messages, expands, err := sessionDisplayTranscript(path, "", false, true)
+	grouped, messages, expands, folds, err := sessionDisplayTranscript(path, "", false, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -424,7 +424,7 @@ func TestSettingsGroupToolVerbsRefoldsTranscriptImmediately(t *testing.T) {
 		groupToolVerbs: true, settings: &settingsState{selected: 5},
 		persistGroupTools: func(value bool) error { persisted = value; return nil },
 	}
-	m.replaceDisplayTranscript(grouped, messages, expands)
+	m.replaceDisplayTranscript(grouped, messages, expands, folds)
 	if !strings.Contains(m.transcript.String(), "Read 2 files") {
 		t.Fatalf("initial transcript=%q", m.transcript.String())
 	}
@@ -502,7 +502,7 @@ func TestSettingsCollapsedEditBlocksRefoldsTranscriptImmediately(t *testing.T) {
 	if err := logger.Close(); err != nil {
 		t.Fatal(err)
 	}
-	expanded, messages, expands, err := sessionDisplayTranscript(path, "", false, true)
+	expanded, messages, expands, folds, err := sessionDisplayTranscript(path, "", false, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -512,7 +512,7 @@ func TestSettingsCollapsedEditBlocksRefoldsTranscriptImmediately(t *testing.T) {
 		groupToolVerbs: true, settings: &settingsState{selected: 6},
 		persistEditBlocks: func(value bool) error { persisted = value; return nil },
 	}
-	m.replaceDisplayTranscript(expanded, messages, expands)
+	m.replaceDisplayTranscript(expanded, messages, expands, folds)
 	if strings.Count(m.transcript.String(), "#### Tool: `edit_file`") != 2 {
 		t.Fatalf("initial transcript=%q", m.transcript.String())
 	}

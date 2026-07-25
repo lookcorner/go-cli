@@ -52,6 +52,7 @@ type toolVerbGroup struct {
 	prefix      string
 	members     []toolVerbMember
 	expandIndex int
+	foldIndex   int
 	rendered    bool
 }
 
@@ -65,7 +66,15 @@ type collapsedEditGroup struct {
 	prefix      string
 	members     []collapsedEditMember
 	expandIndex int
+	foldIndex   int
 	rendered    bool
+}
+
+type toolFold struct {
+	start, end int
+	collapsed  string
+	full       string
+	expanded   bool
 }
 
 func (b *Bridge) ToolStarted(call api.ToolCall) {
@@ -98,9 +107,13 @@ func (m *model) finishTool(event toolFinishedEvent) {
 	}
 	m.finishCollapsedEditGroup()
 	compact, folded := renderToolBlock(event.call, event.result, event.err, true)
+	start := m.transcript.Len()
 	m.appendToolDisplay(compact)
 	if folded {
 		m.rememberToolExpansion(full)
+		if !m.minimal {
+			m.rememberToolFold(start, full)
+		}
 	}
 	if m.minimal {
 		m.minimalFlushTo = m.transcript.Len()
@@ -121,9 +134,21 @@ func (m *model) rememberToolExpansion(full string) int {
 	return len(m.toolExpand) - 1
 }
 
+func (m *model) rememberToolFold(start int, full string) int {
+	fold := toolFold{
+		start: start, end: m.transcript.Len(),
+		collapsed: m.transcript.String()[start:], full: full,
+	}
+	m.toolFolds = append(m.toolFolds, fold)
+	if len(m.toolFolds) > toolExpandLimit {
+		m.toolFolds = m.toolFolds[len(m.toolFolds)-toolExpandLimit:]
+	}
+	return len(m.toolFolds) - 1
+}
+
 func (m *model) addToolVerbMember(member toolVerbMember) {
 	if m.toolVerbGroup == nil {
-		m.toolVerbGroup = &toolVerbGroup{prefix: m.transcript.String(), expandIndex: -1}
+		m.toolVerbGroup = &toolVerbGroup{prefix: m.transcript.String(), expandIndex: -1, foldIndex: -1}
 	}
 	group := m.toolVerbGroup
 	group.members = append(group.members, member)
@@ -140,8 +165,10 @@ func (m *model) addToolVerbMember(member toolVerbMember) {
 	group.rendered = true
 	if group.expandIndex < 0 {
 		group.expandIndex = m.rememberToolExpansion(full)
+		group.foldIndex = m.rememberToolFold(len(group.prefix), full)
 	} else if group.expandIndex < len(m.toolExpand) {
 		m.toolExpand[group.expandIndex] = full
+		m.updateToolFold(group.foldIndex, len(group.prefix), full)
 	}
 }
 
@@ -163,7 +190,7 @@ func (m *model) addCollapsedEditMember(member collapsedEditMember) {
 		m.finishCollapsedEditGroup()
 	}
 	if m.collapsedEditGroup == nil {
-		m.collapsedEditGroup = &collapsedEditGroup{prefix: m.transcript.String(), expandIndex: -1}
+		m.collapsedEditGroup = &collapsedEditGroup{prefix: m.transcript.String(), expandIndex: -1, foldIndex: -1}
 	}
 	group := m.collapsedEditGroup
 	group.members = append(group.members, member)
@@ -180,9 +207,20 @@ func (m *model) addCollapsedEditMember(member collapsedEditMember) {
 	group.rendered = true
 	if group.expandIndex < 0 {
 		group.expandIndex = m.rememberToolExpansion(full)
+		group.foldIndex = m.rememberToolFold(len(group.prefix), full)
 	} else if group.expandIndex < len(m.toolExpand) {
 		m.toolExpand[group.expandIndex] = full
+		m.updateToolFold(group.foldIndex, len(group.prefix), full)
 	}
+}
+
+func (m *model) updateToolFold(index, start int, full string) {
+	if index < 0 || index >= len(m.toolFolds) {
+		return
+	}
+	fold := &m.toolFolds[index]
+	fold.start, fold.end = start, m.transcript.Len()
+	fold.collapsed, fold.full, fold.expanded = m.transcript.String()[start:], full, false
 }
 
 func (m *model) finishCollapsedEditGroup() {
@@ -214,6 +252,70 @@ func (m *model) expandLastTool() {
 	m.appendSystem(block)
 	m.minimalFlushTo = m.transcript.Len()
 	m.status = "tool output expanded"
+}
+
+func (m *model) toggleVisibleToolFold() bool {
+	if m.minimal || len(m.toolFolds) == 0 {
+		return false
+	}
+	text := m.transcript.String()
+	width := m.transcriptRenderWidth()
+	total := len(renderMarkdownTheme(m.transcriptText(), width, false, m.colors()))
+	bottom := max(total-m.scroll, 0)
+	top := max(bottom-m.contentHeight(), 0)
+	selected := -1
+	selectedLine := -1
+	for index := range m.toolFolds {
+		fold := m.toolFolds[index]
+		if fold.start < 0 || fold.end > len(text) || fold.start > fold.end {
+			continue
+		}
+		line := len(renderMarkdownTheme(m.transcriptTextPrefix(fold.start), width, false, m.colors()))
+		if line >= top && line < bottom && line >= selectedLine {
+			selected, selectedLine = index, line
+		}
+	}
+	if selected < 0 {
+		return false
+	}
+	fold := &m.toolFolds[selected]
+	replacement := fold.full
+	if fold.expanded {
+		replacement = fold.collapsed
+	}
+	replacement = toolFoldReplacement(text[fold.start:fold.end], replacement)
+	beforeLines := len(renderMarkdownTheme(m.transcriptTextPrefix(fold.end), width, false, m.colors()))
+	delta := len(replacement) - (fold.end - fold.start)
+	m.transcript.Reset()
+	m.transcript.WriteString(text[:fold.start])
+	m.transcript.WriteString(replacement)
+	m.transcript.WriteString(text[fold.end:])
+	fold.end += delta
+	fold.expanded = !fold.expanded
+	for index := selected + 1; index < len(m.toolFolds); index++ {
+		m.toolFolds[index].start += delta
+		m.toolFolds[index].end += delta
+	}
+	for index := range m.transcriptMessages {
+		if m.transcriptMessages[index].start >= fold.end-delta {
+			m.transcriptMessages[index].start += delta
+			m.transcriptMessages[index].offset += delta
+		}
+	}
+	afterLines := len(renderMarkdownTheme(m.transcriptTextPrefix(fold.end), width, false, m.colors()))
+	m.scroll = min(max(m.scroll+afterLines-beforeLines, 0), m.maxTranscriptScroll())
+	if fold.expanded {
+		m.status = "tool group expanded"
+	} else {
+		m.status = "tool group collapsed"
+	}
+	return true
+}
+
+func toolFoldReplacement(current, body string) string {
+	leading := current[:len(current)-len(strings.TrimLeft(current, "\n"))]
+	trailing := current[len(strings.TrimRight(current, "\n")):]
+	return leading + strings.TrimSpace(body) + trailing
 }
 
 func renderToolBlock(call api.ToolCall, result tools.ExecutionResult, toolErr error, compact bool) (string, bool) {
@@ -276,14 +378,15 @@ func renderStoredToolBlock(tool session.DisplayTool, compact bool) (string, bool
 	return fmt.Sprintf("#### %s: `%s`\n\n%s", title, tool.Name, strings.Join(sections, "\n\n")), folded
 }
 
-func sessionDisplayTranscript(path, workspace string, collapsedEditBlocks, groupToolVerbs bool) (string, []transcriptMessage, []string, error) {
+func sessionDisplayTranscript(path, workspace string, collapsedEditBlocks, groupToolVerbs bool) (string, []transcriptMessage, []string, []toolFold, error) {
 	entries, err := session.DisplayTimeline(path)
 	if err != nil {
-		return "", nil, nil, err
+		return "", nil, nil, nil, err
 	}
 	var text strings.Builder
 	var messages []transcriptMessage
 	var expands []string
+	var folds []toolFold
 	assistantOpen := false
 	lastKind := ""
 	var verbGroup []session.DisplayTool
@@ -301,10 +404,14 @@ func sessionDisplayTranscript(path, workspace string, collapsedEditBlocks, group
 	}
 	writeTool := func(tool session.DisplayTool) {
 		compact, folded := renderStoredToolBlock(tool, true)
+		start := text.Len()
 		text.WriteString(compact)
 		if folded {
 			full, _ := renderStoredToolBlock(tool, false)
 			expands = appendBoundedExpansion(expands, full)
+			folds = appendBoundedFold(folds, toolFold{
+				start: start, end: text.Len(), collapsed: compact, full: full,
+			})
 		}
 	}
 	flushVerbGroup := func() {
@@ -321,8 +428,14 @@ func sessionDisplayTranscript(path, workspace string, collapsedEditBlocks, group
 			members = append(members, toolVerbMember{kind: kind, failed: tool.Failed, full: full})
 			members[len(members)-1].citations = tool.Citations
 		}
-		text.WriteString(toolVerbGroupLabel(members))
-		expands = appendBoundedExpansion(expands, toolVerbGroupExpansion(members))
+		collapsed := toolVerbGroupLabel(members)
+		full := toolVerbGroupExpansion(members)
+		start := text.Len()
+		text.WriteString(collapsed)
+		expands = appendBoundedExpansion(expands, full)
+		folds = appendBoundedFold(folds, toolFold{
+			start: start, end: text.Len(), collapsed: collapsed, full: full,
+		})
 		verbGroup = nil
 		lastKind = "tool"
 	}
@@ -333,8 +446,14 @@ func sessionDisplayTranscript(path, workspace string, collapsedEditBlocks, group
 		if lastKind != "" {
 			text.WriteString("\n\n")
 		}
-		text.WriteString(collapsedEditGroupLabel(editGroup))
-		expands = appendBoundedExpansion(expands, collapsedEditGroupExpansion(editGroup))
+		collapsed := collapsedEditGroupLabel(editGroup)
+		full := collapsedEditGroupExpansion(editGroup)
+		start := text.Len()
+		text.WriteString(collapsed)
+		expands = appendBoundedExpansion(expands, full)
+		folds = appendBoundedFold(folds, toolFold{
+			start: start, end: text.Len(), collapsed: collapsed, full: full,
+		})
 		editGroup = nil
 		lastKind = "tool"
 	}
@@ -397,7 +516,13 @@ func sessionDisplayTranscript(path, workspace string, collapsedEditBlocks, group
 	}
 	flushVerbGroup()
 	flushEditGroup()
-	return strings.TrimSpace(text.String()), messages, expands, nil
+	rendered := strings.TrimSpace(text.String())
+	trimmed := len(text.String()) - len(strings.TrimLeft(text.String(), " \t\r\n"))
+	for index := range folds {
+		folds[index].start -= trimmed
+		folds[index].end -= trimmed
+	}
+	return rendered, messages, expands, folds, nil
 }
 
 func appendBoundedExpansion(expands []string, full string) []string {
@@ -406,6 +531,14 @@ func appendBoundedExpansion(expands []string, full string) []string {
 		expands = expands[len(expands)-toolExpandLimit:]
 	}
 	return expands
+}
+
+func appendBoundedFold(folds []toolFold, fold toolFold) []toolFold {
+	folds = append(folds, fold)
+	if len(folds) > toolExpandLimit {
+		folds = folds[len(folds)-toolExpandLimit:]
+	}
+	return folds
 }
 
 func classifyToolVerb(name string, raw json.RawMessage) (toolVerbKind, bool) {

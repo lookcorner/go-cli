@@ -381,6 +381,65 @@ func TestExpandCommandAndShortcutAreMinimalOnly(t *testing.T) {
 	}
 }
 
+func TestFullscreenScrollbackTogglesVisibleToolFold(t *testing.T) {
+	m := &model{width: 80, height: 20, scrollFocused: true, groupToolVerbs: true}
+	m.finishTool(toolFinishedEvent{
+		call:   api.ToolCall{Name: "read_file", Arguments: json.RawMessage(`{"path":"main.go"}`)},
+		result: tools.ExecutionResult{Output: "package main"},
+	})
+	m.finishToolVerbGroup()
+	collapsed := m.transcript.String()
+	if len(m.toolFolds) != 1 || !strings.Contains(collapsed, "Read 1 file") {
+		t.Fatalf("folds=%#v transcript=%q", m.toolFolds, collapsed)
+	}
+
+	updated, command := m.handleKey(tea.KeyPressMsg(tea.Key{Code: 'e', Text: "e"}))
+	m = updated.(*model)
+	if command != nil || !strings.Contains(m.transcript.String(), "#### Tool: `read_file`") ||
+		m.status != "tool group expanded" || !m.toolFolds[0].expanded {
+		t.Fatalf("command=%v status=%q fold=%#v transcript=%q", command != nil, m.status, m.toolFolds[0], m.transcript.String())
+	}
+
+	updated, command = m.handleKey(tea.KeyPressMsg(tea.Key{Code: 'e', Text: "e"}))
+	m = updated.(*model)
+	if command != nil || m.transcript.String() != collapsed || m.status != "tool group collapsed" || m.toolFolds[0].expanded {
+		t.Fatalf("command=%v status=%q fold=%#v transcript=%q", command != nil, m.status, m.toolFolds[0], m.transcript.String())
+	}
+}
+
+func TestFullscreenScrollbackExpandRequiresVisibleFold(t *testing.T) {
+	m := &model{width: 80, height: 5, scrollFocused: true}
+	m.transcript.WriteString("plain transcript")
+	updated, command := m.handleKey(tea.KeyPressMsg(tea.Key{Code: 'e', Text: "e"}))
+	m = updated.(*model)
+	if command != nil || m.status != "no folded tool group in view" || !m.scrollFocused {
+		t.Fatalf("command=%v status=%q focused=%v", command != nil, m.status, m.scrollFocused)
+	}
+}
+
+func TestFullscreenToolFoldKeepsLaterOffsetsAndTimestamps(t *testing.T) {
+	m := &model{width: 80, height: 40, scrollFocused: true, showTimestamps: true}
+	m.transcript.WriteString("Gork\n")
+	m.transcriptMessages = []transcriptMessage{{start: 0, offset: 4, at: time.Date(2026, 7, 25, 12, 0, 0, 0, time.Local), role: "assistant"}}
+	firstStart := m.transcript.Len()
+	m.appendToolDisplay("First folded")
+	first := m.rememberToolFold(firstStart, "#### Tool: `first`\n\nfull first")
+	m.appendToolDisplay("between")
+	secondStart := m.transcript.Len()
+	m.appendToolDisplay("Second folded")
+	second := m.rememberToolFold(secondStart, "#### Tool: `second`\n\nfull second")
+
+	if !m.toggleVisibleToolFold() || !m.toolFolds[second].expanded || m.toolFolds[first].expanded {
+		t.Fatalf("first=%#v second=%#v transcript=%q", m.toolFolds[first], m.toolFolds[second], m.transcript.String())
+	}
+	if !strings.Contains(m.transcriptText(), "12:00 PM") || !strings.Contains(m.transcript.String(), "full second") {
+		t.Fatalf("timestamp or expansion lost: %q", m.transcriptText())
+	}
+	if !m.toggleVisibleToolFold() || m.toolFolds[second].expanded {
+		t.Fatalf("second fold did not collapse: %#v", m.toolFolds[second])
+	}
+}
+
 func TestBridgePublishesToolLifecycle(t *testing.T) {
 	bridge := NewBridge(context.Background(), tools.PermissionAuto)
 	defer bridge.Close()
@@ -433,7 +492,7 @@ func TestSessionDisplayTranscriptRestoresToolsInOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	text, messages, expands, err := sessionDisplayTranscript(path, "", false, false)
+	text, messages, expands, folds, err := sessionDisplayTranscript(path, "", false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -446,6 +505,9 @@ func TestSessionDisplayTranscriptRestoresToolsInOrder(t *testing.T) {
 	}
 	if len(expands) != 1 || !strings.Contains(expands[0], strings.Repeat("result line\n", toolCompactLines)) {
 		t.Fatalf("full output was not retained: %#v", expands)
+	}
+	if len(folds) != 1 || folds[0].collapsed == "" || !strings.Contains(folds[0].full, "result line") {
+		t.Fatalf("folds=%#v", folds)
 	}
 	if len(messages) != 2 || messages[0].role != "user" || messages[1].role != "assistant" ||
 		text[messages[0].start:messages[0].offset] != "You" ||
@@ -485,7 +547,7 @@ func TestSessionDisplayTranscriptRestoresCollapsedEdit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	text, _, expands, err := sessionDisplayTranscript(path, "", true, false)
+	text, _, expands, _, err := sessionDisplayTranscript(path, "", true, false)
 	if err != nil || !strings.Contains(text, "Edit `main.go` +2/-1") || strings.Contains(text, "Arguments") {
 		t.Fatalf("text=%q err=%v", text, err)
 	}
@@ -527,7 +589,7 @@ func TestSessionDisplayTranscriptCoalescesAdjacentSameFileEdits(t *testing.T) {
 	if err := logger.Close(); err != nil {
 		t.Fatal(err)
 	}
-	text, _, expands, err := sessionDisplayTranscript(path, workspace, true, false)
+	text, _, expands, _, err := sessionDisplayTranscript(path, workspace, true, false)
 	if err != nil || strings.Count(text, "Edit `main.go`") != 1 || !strings.Contains(text, "Edit `main.go` +2/-2") {
 		t.Fatalf("text=%q err=%v", text, err)
 	}
@@ -577,7 +639,7 @@ func TestSessionDisplayTranscriptGroupsConsecutiveToolVerbs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	text, _, expands, err := sessionDisplayTranscript(path, "", true, true)
+	text, _, expands, _, err := sessionDisplayTranscript(path, "", true, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -590,7 +652,7 @@ func TestSessionDisplayTranscriptGroupsConsecutiveToolVerbs(t *testing.T) {
 		t.Fatalf("expansions=%#v", expands)
 	}
 
-	ungrouped, _, _, err := sessionDisplayTranscript(path, "", true, false)
+	ungrouped, _, _, _, err := sessionDisplayTranscript(path, "", true, false)
 	if err != nil || strings.Contains(ungrouped, first) || !strings.Contains(ungrouped, "#### Tool failed: `grep`") {
 		t.Fatalf("ungrouped transcript=%q err=%v", ungrouped, err)
 	}
@@ -620,7 +682,7 @@ func TestSessionDisplayTranscriptKeepsSyntheticAssistantBoundary(t *testing.T) {
 	if err := logger.Close(); err != nil {
 		t.Fatal(err)
 	}
-	text, messages, _, err := sessionDisplayTranscript(path, "", false, false)
+	text, messages, _, _, err := sessionDisplayTranscript(path, "", false, false)
 	if err != nil || strings.Count(text, "Gork\n") != 2 || strings.Contains(text, "internal") || len(messages) != 3 {
 		t.Fatalf("text=%q messages=%#v err=%v", text, messages, err)
 	}

@@ -791,6 +791,7 @@ type model struct {
 	voiceInterim         string
 	voiceSendOnStop      bool
 	toolExpand           []string
+	toolFolds            []toolFold
 	toolVerbGroup        *toolVerbGroup
 	collapsedEditGroup   *collapsedEditGroup
 
@@ -1136,8 +1137,8 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 	m.replaceTranscript(initialTranscript, nil)
 	if runner != nil && strings.TrimSpace(runner.SessionPath) != "" {
 		if messages, err := session.Transcript(runner.SessionPath); err == nil && strings.TrimSpace(session.FormatTranscript(messages)) == strings.TrimSpace(initialTranscript) {
-			if text, displayMessages, expands, displayErr := sessionDisplayTranscript(runner.SessionPath, m.workspace, m.collapsedEditBlocks, m.groupToolVerbs); displayErr == nil {
-				m.replaceDisplayTranscript(text, displayMessages, expands)
+			if text, displayMessages, expands, folds, displayErr := sessionDisplayTranscript(runner.SessionPath, m.workspace, m.collapsedEditBlocks, m.groupToolVerbs); displayErr == nil {
+				m.replaceDisplayTranscript(text, displayMessages, expands, folds)
 			} else {
 				m.replaceTranscript(initialTranscript, messages)
 			}
@@ -1588,8 +1589,8 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		mode := msg.result.Mode
 		if mode == agent.RewindAll || mode == agent.RewindConversationOnly {
 			m.previousID = msg.result.PreviousResponseID
-			if text, messages, expands, err := sessionDisplayTranscript(m.runner.SessionPath, m.workspace, m.collapsedEditBlocks, m.groupToolVerbs); err == nil {
-				m.replaceDisplayTranscript(text, messages, expands)
+			if text, messages, expands, folds, err := sessionDisplayTranscript(m.runner.SessionPath, m.workspace, m.collapsedEditBlocks, m.groupToolVerbs); err == nil {
+				m.replaceDisplayTranscript(text, messages, expands, folds)
 			} else {
 				m.replaceTranscript(session.FormatTranscript(msg.result.Messages), msg.result.Messages)
 			}
@@ -2761,7 +2762,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.status = "no active session to view"
 				return m, nil
 			}
-			content, _, _, err := sessionDisplayTranscript(m.runner.SessionPath, m.workspace, m.collapsedEditBlocks, m.groupToolVerbs)
+			content, _, _, _, err := sessionDisplayTranscript(m.runner.SessionPath, m.workspace, m.collapsedEditBlocks, m.groupToolVerbs)
 			if err != nil {
 				m.status = "transcript failed: " + err.Error()
 				return m, nil
@@ -3732,6 +3733,10 @@ func (m *model) handleScrollbackKey(msg tea.KeyPressMsg) bool {
 		m.scrollTranscript(m.maxTranscriptScroll())
 	case m.vimMode && key.Mod == 0 && key.Text == "G":
 		m.scrollTranscript(-m.scroll)
+	case key.Mod == 0 && key.Text == "e":
+		if !m.toggleVisibleToolFold() {
+			m.status = "no folded tool group in view"
+		}
 	case m.vimMode && key.Mod == 0 && key.Text == "/":
 		m.openScrollSearch("")
 	default:
@@ -4447,21 +4452,30 @@ func (m *model) replaceTranscript(text string, messages []session.Message) {
 	}
 }
 
-func (m *model) replaceDisplayTranscript(text string, messages []transcriptMessage, expands []string) {
+func (m *model) replaceDisplayTranscript(text string, messages []transcriptMessage, expands []string, folds []toolFold) {
 	m.replaceTranscript(text, nil)
 	m.transcriptMessages = messages
 	m.toolExpand = expands
+	m.toolFolds = folds
 }
 
 func (m *model) transcriptText() string {
+	return m.transcriptTextPrefix(len(m.transcript.String()))
+}
+
+func (m *model) transcriptTextPrefix(end int) string {
 	text := m.transcript.String()
+	end = min(max(end, 0), len(text))
 	if len(m.transcriptMessages) == 0 || !m.showTimestamps && !m.effectiveCompact() {
-		return text
+		return text[:end]
 	}
 	var rendered strings.Builder
 	start := 0
 	for index, message := range m.transcriptMessages {
-		if message.start < start || message.offset < message.start || message.offset > len(text) {
+		if message.start >= end {
+			break
+		}
+		if message.start < start || message.offset < message.start || message.offset > end {
 			continue
 		}
 		previousUser := index > 0 && m.transcriptMessages[index-1].role == "user"
@@ -4476,7 +4490,7 @@ func (m *model) transcriptText() string {
 		}
 		start = message.offset
 	}
-	rendered.WriteString(text[start:])
+	rendered.WriteString(text[start:end])
 	return rendered.String()
 }
 
@@ -4954,6 +4968,8 @@ func (m *model) View() tea.View {
 		footer = ansiBold + colors.positive + "Prompt history" + ansiReset + "\n> " + renderInput(m.input, m.cursor, max(width-2, 1)) + "\n" + ansiDim + "Enter/Tab restore · Esc cancel · Up/Down select" + ansiReset
 	} else if m.scrollSearch != nil {
 		footer = ansiBold + colors.positive + "Search scrollback" + ansiReset + "\n> " + renderInput(m.scrollSearch.query, m.scrollSearch.cursor, max(width-2, 1)) + "\n" + ansiDim + truncate(m.scrollSearch.status(), width) + ansiReset
+	} else if m.scrollFocused {
+		footer = "> \n" + ansiDim + truncate("Up/Down scroll · e expand/collapse visible tool group · Tab/Space return", width) + ansiReset
 	} else {
 		inputLines := []string{"> "}
 		if m.running {

@@ -539,17 +539,17 @@ func (m *model) refreshToolDisplay(previousCollapsedEditBlocks, previousGroupToo
 	if m.runner == nil || strings.TrimSpace(m.runner.SessionPath) == "" {
 		return
 	}
-	previous, _, _, err := sessionDisplayTranscript(
+	previous, _, _, _, err := sessionDisplayTranscript(
 		m.runner.SessionPath, m.workspace, previousCollapsedEditBlocks, previousGroupToolVerbs,
 	)
 	if err != nil || strings.TrimSpace(m.transcript.String()) != strings.TrimSpace(previous) {
 		return
 	}
-	text, messages, expands, err := sessionDisplayTranscript(
+	text, messages, expands, folds, err := sessionDisplayTranscript(
 		m.runner.SessionPath, m.workspace, m.collapsedEditBlocks, m.groupToolVerbs,
 	)
 	if err == nil {
-		m.replaceDisplayTranscript(text, messages, expands)
+		m.replaceDisplayTranscript(text, messages, expands, folds)
 	}
 }
 
