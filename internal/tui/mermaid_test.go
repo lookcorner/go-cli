@@ -191,6 +191,90 @@ func TestRenderMermaidTimelineIgnoresEntriesOutsideSections(t *testing.T) {
 	}
 }
 
+func TestRenderMermaidJourney(t *testing.T) {
+	source := "journey\ntitle My working day\nsection Go to work\nMake tea: 5: Me\nGo upstairs: 3: Me, Team\nsection Go home\nGo downstairs: 4\nsection Go to work\nReturn: 2"
+	lines, ok := renderMermaid(source, 32, paletteFor("groknight"))
+	if !ok {
+		t.Fatal("supported Mermaid journey was rejected")
+	}
+	rendered := stripUIANSI(strings.Join(lines, "\n"))
+	for _, expected := range []string{"◇ mermaid journey", "My working day", "Go to work", "Make tea [5]", "Me", "Go upstairs [3]", "Team", "Go home", "Go downstairs [4]", "Return [2]"} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("rendered journey missing %q:\n%s", expected, rendered)
+		}
+	}
+	if strings.Count(rendered, "Go to work") != 2 || strings.Index(rendered, "Go downstairs") > strings.Index(rendered, "Return") {
+		t.Fatalf("journey section order changed:\n%s", rendered)
+	}
+	for _, line := range lines {
+		if displayWidth(stripUIANSI(line)) > 32 {
+			t.Fatalf("journey line exceeds width: %q", stripUIANSI(line))
+		}
+	}
+}
+
+func TestRenderMermaidGantt(t *testing.T) {
+	source := "gantt\ntitle Release\ndateFormat YYYY-MM-DD\nsection Build\nSetup :a1, 2026-01-01, 2d\nImplement :a2, after a1, 1w\nsection Ship\nRelease :a3, after a2, 1d"
+	lines, ok := renderMermaid(source, 48, paletteFor("groknight"))
+	if !ok {
+		t.Fatal("supported Mermaid gantt was rejected")
+	}
+	rendered := stripUIANSI(strings.Join(lines, "\n"))
+	for _, expected := range []string{"◇ mermaid gantt", "Release", "Build", "Setup", "2026-01-01", "2026-01-03", "Implement", "2026-01-10", "Ship", "2026-01-11"} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("rendered gantt missing %q:\n%s", expected, rendered)
+		}
+	}
+	for _, line := range lines {
+		if displayWidth(stripUIANSI(line)) > 48 {
+			t.Fatalf("gantt line exceeds width: %q", stripUIANSI(line))
+		}
+	}
+}
+
+func TestRenderMermaidGanttNormalizesReferenceDates(t *testing.T) {
+	lines, ok := renderMermaid("gantt\nTask :a1, 2026-13-01, 1d", 60, paletteFor("groknight"))
+	if !ok {
+		t.Fatal("reference-compatible normalized date was rejected")
+	}
+	rendered := stripUIANSI(strings.Join(lines, "\n"))
+	if !strings.Contains(rendered, "2027-01-01") || !strings.Contains(rendered, "2027-01-02") {
+		t.Fatalf("date was not normalized:\n%s", rendered)
+	}
+}
+
+func TestRenderMermaidJourneyAndGanttRejectInvalidInput(t *testing.T) {
+	for _, source := range []string{
+		"journey\ntitle Empty",
+		"journey\nTask only",
+		"journey\nTask: nope: Me",
+		"gantt\ntitle Empty",
+		"gantt\nTask :a1, 2026-01-01",
+		"gantt\nTask :a1, invalid, 2d",
+		"gantt\nTask :a1, after missing, 2d",
+		"gantt\nTask :a1, 2026-01-01, 2h",
+	} {
+		if _, ok := renderMermaid(source, 60, paletteFor("groknight")); ok {
+			t.Fatalf("invalid diagram was accepted: %q", source)
+		}
+	}
+}
+
+func TestRenderMarkdownRendersClosedMermaidJourneyAndGantt(t *testing.T) {
+	for _, test := range []struct {
+		source string
+		want   string
+	}{
+		{source: "```mermaid\njourney\nTask: 5: Me\n```", want: "Task [5]"},
+		{source: "```mermaid\ngantt\nTask :a1, 2026-01-01, 2d\n```", want: "2026-01-03"},
+	} {
+		rendered := stripUIANSI(strings.Join(renderMarkdown(test.source, 60), "\n"))
+		if !strings.Contains(rendered, test.want) || strings.Contains(rendered, "Task :") {
+			t.Fatalf("closed Mermaid source was not replaced:\n%s", rendered)
+		}
+	}
+}
+
 func TestRenderMarkdownKeepsIncompleteAndUnsupportedMermaidSource(t *testing.T) {
 	for _, test := range []struct {
 		source string
@@ -199,6 +283,8 @@ func TestRenderMarkdownKeepsIncompleteAndUnsupportedMermaidSource(t *testing.T) 
 		{source: "```mermaid\nflowchart TD\nA --> B", want: "A"},
 		{source: "```mermaid\npie\n  \"A\" : nope\n```", want: "A"},
 		{source: "```mermaid\ntimeline\ntitle Empty\n```", want: "Empty"},
+		{source: "```mermaid\njourney\nTask only\n```", want: "Task only"},
+		{source: "```mermaid\ngantt\nTask :a1, bad, 2d\n```", want: "bad"},
 	} {
 		rendered := stripUIANSI(strings.Join(renderMarkdown(test.source, 80), "\n"))
 		if strings.Contains(rendered, "◇ mermaid") || !strings.Contains(rendered, "mermaid") || !strings.Contains(rendered, test.want) {

@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -40,6 +41,20 @@ type mermaidTimelineEntry struct {
 	section string
 }
 
+type mermaidJourneyTask struct {
+	name    string
+	score   int
+	actors  []string
+	section string
+}
+
+type mermaidGanttTask struct {
+	name     string
+	section  string
+	start    time.Time
+	duration int
+}
+
 var mermaidOperators = []string{
 	"||--o{", "||--|{", "}o--o{", "}o..o{", "}o--||", "}|..|{",
 	"<|--", "<-->", "--|>", "-.->", "-->>", "->>", "--x", "--o", "-x", "==>", "-->", "<--",
@@ -67,6 +82,12 @@ func renderMermaid(source string, width int, theme themePalette) ([]string, bool
 	}
 	if header[0] == "timeline" {
 		return renderMermaidTimeline(statements, width, theme)
+	}
+	if header[0] == "journey" {
+		return renderMermaidJourney(statements, width, theme)
+	}
+	if header[0] == "gantt" {
+		return renderMermaidGantt(statements, width, theme)
 	}
 	var relations []mermaidRelation
 	var nodes []mermaidNode
@@ -98,6 +119,176 @@ func renderMermaid(source string, width int, theme themePalette) ([]string, bool
 		}
 	}
 	return lines, true
+}
+
+func renderMermaidJourney(statements []string, width int, theme themePalette) ([]string, bool) {
+	title := ""
+	section := ""
+	tasks := make([]mermaidJourneyTask, 0, len(statements)-1)
+	for _, statement := range statements[1:] {
+		if value, ok := strings.CutPrefix(statement, "title "); ok {
+			title = mermaidCleanLabel(value)
+			continue
+		}
+		if value, ok := strings.CutPrefix(statement, "section "); ok {
+			section = mermaidCleanLabel(value)
+			continue
+		}
+		parts := strings.Split(statement, ":")
+		values := make([]string, 0, len(parts))
+		for _, part := range parts {
+			if value := strings.TrimSpace(part); value != "" {
+				values = append(values, value)
+			}
+		}
+		if len(values) < 2 {
+			return nil, false
+		}
+		score, err := strconv.Atoi(values[1])
+		if err != nil {
+			return nil, false
+		}
+		actors := []string(nil)
+		if len(values) > 2 {
+			for _, actor := range strings.Split(strings.Join(values[2:], ": "), ",") {
+				if actor = mermaidCleanLabel(actor); actor != "" {
+					actors = append(actors, actor)
+				}
+			}
+		}
+		tasks = append(tasks, mermaidJourneyTask{name: mermaidCleanLabel(values[0]), score: score, actors: actors, section: section})
+	}
+	if len(tasks) == 0 {
+		return nil, false
+	}
+	lines := []string{ansiDim + mermaidFit("◇ mermaid journey", width) + ansiReset}
+	if title != "" {
+		lines = append(lines, theme.heading+mermaidFit(title, width)+ansiReset)
+	}
+	lastSection := ""
+	for _, task := range tasks {
+		if task.section != "" && task.section != lastSection {
+			lines = append(lines, theme.heading+mermaidFit(task.section, width)+ansiReset)
+		}
+		lastSection = task.section
+		lines = append(lines, renderMermaidJourneyTask(task, width, theme))
+	}
+	return lines, true
+}
+
+func renderMermaidJourneyTask(task mermaidJourneyTask, width int, theme themePalette) string {
+	text := fmt.Sprintf("%s [%d]", task.name, task.score)
+	if len(task.actors) > 0 {
+		text += " · " + strings.Join(task.actors, ", ")
+	}
+	return theme.code + mermaidFit("• "+text, width) + ansiReset
+}
+
+func renderMermaidGantt(statements []string, width int, theme themePalette) ([]string, bool) {
+	title := ""
+	section := ""
+	tasks := make([]mermaidGanttTask, 0, len(statements)-1)
+	completed := make(map[string]mermaidGanttTask)
+	for _, statement := range statements[1:] {
+		if value, ok := strings.CutPrefix(statement, "title "); ok {
+			title = mermaidCleanLabel(value)
+			continue
+		}
+		if strings.HasPrefix(statement, "dateFormat ") {
+			continue
+		}
+		if value, ok := strings.CutPrefix(statement, "section "); ok {
+			section = mermaidCleanLabel(value)
+			continue
+		}
+		name, rawSpec, ok := strings.Cut(statement, ":")
+		parts := strings.Split(rawSpec, ",")
+		spec := make([]string, 0, len(parts))
+		for _, part := range parts {
+			if value := strings.TrimSpace(part); value != "" {
+				spec = append(spec, value)
+			}
+		}
+		if !ok || len(spec) < 3 {
+			return nil, false
+		}
+		duration, ok := mermaidGanttDuration(spec[2])
+		if !ok {
+			return nil, false
+		}
+		start := time.Time{}
+		if id, found := strings.CutPrefix(spec[1], "after "); found {
+			previous, exists := completed[strings.TrimSpace(id)]
+			if !exists {
+				return nil, false
+			}
+			start = previous.start.AddDate(0, 0, previous.duration)
+		} else {
+			var valid bool
+			start, valid = mermaidGanttDate(spec[1])
+			if !valid {
+				return nil, false
+			}
+		}
+		task := mermaidGanttTask{name: mermaidCleanLabel(name), section: section, start: start, duration: duration}
+		if task.name == "" {
+			return nil, false
+		}
+		tasks = append(tasks, task)
+		completed[spec[0]] = task
+	}
+	if len(tasks) == 0 {
+		return nil, false
+	}
+	lines := []string{ansiDim + mermaidFit("◇ mermaid gantt", width) + ansiReset}
+	if title != "" {
+		lines = append(lines, theme.heading+mermaidFit(title, width)+ansiReset)
+	}
+	lastSection := ""
+	for _, task := range tasks {
+		if task.section != "" && task.section != lastSection {
+			lines = append(lines, theme.heading+mermaidFit(task.section, width)+ansiReset)
+		}
+		lastSection = task.section
+		end := task.start.AddDate(0, 0, task.duration)
+		text := fmt.Sprintf("• %s  %s → %s", task.name, task.start.Format("2006-01-02"), end.Format("2006-01-02"))
+		lines = append(lines, theme.code+mermaidFit(text, width)+ansiReset)
+	}
+	return lines, true
+}
+
+func mermaidGanttDate(value string) (time.Time, bool) {
+	parts := strings.Split(strings.TrimSpace(value), "-")
+	if len(parts) != 3 {
+		return time.Time{}, false
+	}
+	values := [3]int{}
+	for index, part := range parts {
+		parsed, err := strconv.Atoi(part)
+		if err != nil {
+			return time.Time{}, false
+		}
+		values[index] = parsed
+	}
+	return time.Date(values[0], time.Month(values[1]), values[2], 0, 0, 0, 0, time.UTC), true
+}
+
+func mermaidGanttDuration(value string) (int, bool) {
+	if len(value) < 2 {
+		return 0, false
+	}
+	count, err := strconv.Atoi(strings.TrimSpace(value[:len(value)-1]))
+	if err != nil {
+		return 0, false
+	}
+	switch value[len(value)-1] {
+	case 'd', 'D':
+		return count, true
+	case 'w', 'W':
+		return count * 7, true
+	default:
+		return 0, false
+	}
 }
 
 func renderMermaidTimeline(statements []string, width int, theme themePalette) ([]string, bool) {

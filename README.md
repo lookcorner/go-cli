@@ -560,8 +560,9 @@ Within a session, `/minimal` reopens the same session in minimal mode and
 The TUI streams model output as it arrives, renders headings, emphasis, links,
 lists, quotes, pipe tables, and inline or fenced code, strips untrusted terminal
 control characters, and keeps a scrollable transcript. Closed Mermaid fences for
-flowcharts, graphs, state, sequence, class, entity-relationship, pie, and timeline diagrams
-are rendered as width-bounded Unicode relationship, percentage, or chronology art. Unknown diagram kinds,
+flowcharts, graphs, state, sequence, class, entity-relationship, pie, timeline, journey,
+and Gantt diagrams are rendered as width-bounded Unicode relationship, percentage,
+chronology, or task art. Unknown diagram kinds,
 unparseable input, incomplete streaming fences, and terminals narrower than five
 columns retain the selectable Mermaid source instead of dropping content.
 `[ui].render_mermaid` accepts `auto` (the default), `on`, or `off`; `auto` and
