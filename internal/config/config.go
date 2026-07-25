@@ -126,6 +126,8 @@ type Config struct {
 	uiCollapsedEditsConfigured      bool
 	uiGroupToolVerbsConfigured      bool
 	uiContextualUndoConfigured      bool
+	uiContextualSendNowConfigured   bool
+	uiContextualHintsEnvironment    *bool
 	modelConfigured                 bool
 	defaultModelConfigured          bool
 	allowedModelsConfigured         bool
@@ -240,7 +242,8 @@ type UIConfig struct {
 }
 
 type Hints struct {
-	Undo bool `json:"undo"`
+	Undo    bool `json:"undo"`
+	SendNow bool `json:"send_now"`
 }
 
 type DashboardConfig struct {
@@ -517,7 +520,8 @@ type fileUIConfig struct {
 }
 
 type hints struct {
-	Undo *bool `json:"undo,omitempty" toml:"undo"`
+	Undo    *bool `json:"undo,omitempty" toml:"undo"`
+	SendNow *bool `json:"send_now,omitempty" toml:"send_now"`
 }
 
 type fileFolderTrustConfig struct {
@@ -732,7 +736,7 @@ func Load(path string) (Config, error) {
 		AskUserQuestion:             AskUserQuestionConfig{TimeoutEnabled: true, TimeoutSeconds: 30 * 60},
 		Toolset:                     ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}},
 		Goal:                        GoalConfig{VerifierCount: 3, ClassifierMaxRuns: 10, ReverifyAfter: 8},
-		UI:                          UIConfig{Theme: "groknight", AutoDarkTheme: "groknight", AutoLightTheme: "grokday", HunkTrackerMode: "agent_only", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, ScrollSpeed: 50, ScrollMode: "auto", DefaultSelectedPermission: "always_allow_all_sessions", GroupToolVerbs: true, PromptSuggestions: true, ContextualHints: Hints{Undo: true}, VoiceSTTLanguage: "en", PermissionMode: "ask"},
+		UI:                          UIConfig{Theme: "groknight", AutoDarkTheme: "groknight", AutoLightTheme: "grokday", HunkTrackerMode: "agent_only", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, ScrollSpeed: 50, ScrollMode: "auto", DefaultSelectedPermission: "always_allow_all_sessions", GroupToolVerbs: true, PromptSuggestions: true, ContextualHints: Hints{Undo: true, SendNow: true}, VoiceSTTLanguage: "en", PermissionMode: "ask"},
 		Dashboard:                   DashboardConfig{Enabled: true, Grouping: "state"},
 		Sandbox:                     SandboxConfig{Profile: "off"},
 		Pruning:                     PruningConfig{Enabled: true, KeepLastNTurns: 3, SoftTrimThreshold: 4000, SoftTrimHead: 1500, SoftTrimTail: 1500, HardClearAgeTurns: 10},
@@ -785,6 +789,7 @@ func Load(path string) (Config, error) {
 	if err := applyRequirementsFiles(&cfg, requirementsPaths()); err != nil {
 		return Config{}, err
 	}
+	applyContextualHintsEnvironment(&cfg)
 	cfg.BaseURL = strings.TrimRight(cfg.BaseURL, "/")
 	cfg.WebSearch.BaseURL = strings.TrimRight(cfg.WebSearch.BaseURL, "/")
 	return cfg, nil
@@ -1057,6 +1062,10 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	if disk.UI.ContextualHints != nil && disk.UI.ContextualHints.Undo != nil {
 		cfg.UI.ContextualHints.Undo = *disk.UI.ContextualHints.Undo
 		cfg.uiContextualUndoConfigured = true
+	}
+	if disk.UI.ContextualHints != nil && disk.UI.ContextualHints.SendNow != nil {
+		cfg.UI.ContextualHints.SendNow = *disk.UI.ContextualHints.SendNow
+		cfg.uiContextualSendNowConfigured = true
 	}
 	if disk.UI.CursorBlink != nil {
 		value := *disk.UI.CursorBlink
@@ -1798,6 +1807,10 @@ func applyEnv(cfg *Config) {
 	if value, ok := envBool("GROK_PROMPT_SUGGESTIONS"); ok {
 		cfg.UI.PromptSuggestions = value
 	}
+	if value, ok := envBool("GROK_CONTEXTUAL_HINTS"); ok {
+		cfg.UI.ContextualHints = Hints{Undo: value, SendNow: value}
+		cfg.uiContextualHintsEnvironment = &value
+	}
 	if value := strings.TrimSpace(os.Getenv("GROK_HUNK_TRACKER")); value != "" {
 		cfg.UI.HunkTrackerMode = normalizeHunkTrackerMode(value)
 	}
@@ -2193,6 +2206,14 @@ func normalizedSemver(value string) (string, error) {
 	return value, nil
 }
 
+func applyContextualHintsEnvironment(cfg *Config) {
+	if cfg.uiContextualHintsEnvironment == nil {
+		return
+	}
+	value := *cfg.uiContextualHintsEnvironment
+	cfg.UI.ContextualHints = Hints{Undo: value, SendNow: value}
+}
+
 func applyRequirementsFiles(cfg *Config, paths []string) error {
 	envFailClosed, _ := envBoolValue(os.Getenv("GROK_MANAGED_CONFIG_FAIL_CLOSED"))
 	envDisablesAPIKey, _ := envBoolValue(os.Getenv("GROK_DISABLE_API_KEY_AUTH"))
@@ -2281,6 +2302,10 @@ func applyRequirementsData(cfg *Config, data []byte, source string, envFailClose
 	if requirement.UI.ContextualHints != nil && requirement.UI.ContextualHints.Undo != nil {
 		cfg.UI.ContextualHints.Undo = *requirement.UI.ContextualHints.Undo
 		cfg.uiContextualUndoConfigured = true
+	}
+	if requirement.UI.ContextualHints != nil && requirement.UI.ContextualHints.SendNow != nil {
+		cfg.UI.ContextualHints.SendNow = *requirement.UI.ContextualHints.SendNow
+		cfg.uiContextualSendNowConfigured = true
 	}
 	if requirement.GrokComConfig == nil {
 		return nil

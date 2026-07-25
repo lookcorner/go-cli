@@ -41,7 +41,7 @@ func TestInputClearDetectorResyncsProgrammaticChanges(t *testing.T) {
 }
 
 func TestContextualUndoHintAndUndo(t *testing.T) {
-	m := &model{undoHint: undoHintState{enabled: true}, status: "ready"}
+	m := &model{undoHint: contextualHintState{enabled: true}, status: "ready"}
 	m.setInput(strings.Repeat("x", 25))
 	command := m.editInput(tea.KeyPressMsg(tea.Key{Code: 'u', Mod: tea.ModCtrl}))
 	if m.status != "Input cleared · ctrl+z to undo" || m.undoHint.shown != 1 || len(m.input) != 0 {
@@ -57,7 +57,7 @@ func TestContextualUndoHintAndUndo(t *testing.T) {
 }
 
 func TestContextualUndoHintExpiryDoesNotOverwriteNewStatus(t *testing.T) {
-	m := &model{undoHint: undoHintState{enabled: true}, status: "ready"}
+	m := &model{undoHint: contextualHintState{enabled: true}, status: "ready"}
 	m.setInput(strings.Repeat("x", 25))
 	if command := m.editInput(tea.KeyPressMsg(tea.Key{Code: 'u', Mod: tea.ModCtrl})); command == nil {
 		t.Fatal("contextual hint did not schedule expiry")
@@ -80,7 +80,7 @@ func TestContextualUndoHintGateAndSessionCap(t *testing.T) {
 		t.Fatalf("shown=%d input=%q", disabled.undoHint.shown, disabled.input)
 	}
 
-	m := &model{undoHint: undoHintState{enabled: true}}
+	m := &model{undoHint: contextualHintState{enabled: true}}
 	for iteration := 0; iteration < 4; iteration++ {
 		m.setInput(strings.Repeat("x", 25))
 		m.editInput(tea.KeyPressMsg(tea.Key{Code: 'u', Mod: tea.ModCtrl}))
@@ -91,7 +91,7 @@ func TestContextualUndoHintGateAndSessionCap(t *testing.T) {
 }
 
 func TestShortDraftDoesNotShowContextualUndoHint(t *testing.T) {
-	m := &model{undoHint: undoHintState{enabled: true}, status: "ready"}
+	m := &model{undoHint: contextualHintState{enabled: true}, status: "ready"}
 	m.setInput(strings.Repeat("x", 19))
 	m.editInput(tea.KeyPressMsg(tea.Key{Code: 'u', Mod: tea.ModCtrl}))
 	if m.status != "ready" || m.undoHint.shown != 0 {

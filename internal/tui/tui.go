@@ -107,8 +107,9 @@ type mouseSelectionEvent struct {
 }
 type selectionClearEvent struct{ nonce uint64 }
 type contextualUndoClearEvent struct{ nonce uint64 }
+type sendNowClearEvent struct{ nonce uint64 }
 
-type undoHintState struct {
+type contextualHintState struct {
 	enabled bool
 	shown   int
 	nonce   uint64
@@ -668,7 +669,8 @@ type model struct {
 	cursor              int
 	inputUndo           []inputSnapshot
 	inputClear          inputClearDetector
-	undoHint            undoHintState
+	undoHint            contextualHintState
+	sendNowHint         contextualHintState
 	multiline           bool
 	history             []string
 	historyIndex        int
@@ -910,6 +912,8 @@ type UIOptions struct {
 	SetRememberApprovals func(bool) error
 	ContextualUndo       bool
 	SetContextualUndo    func(bool) error
+	ContextualSendNow    bool
+	SetContextualSendNow func(bool) error
 	DefaultPermission    string
 	SetDefaultPermission func(string) error
 	CancelSubs           string
@@ -1087,9 +1091,13 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		persistSuggestions:  options.SetPromptSuggestions,
 		rememberApprovals:   options.RememberApprovals,
 		persistRemember:     options.SetRememberApprovals,
-		undoHint: undoHintState{
+		undoHint: contextualHintState{
 			enabled: options.ContextualUndo,
 			persist: options.SetContextualUndo,
+		},
+		sendNowHint: contextualHintState{
+			enabled: options.ContextualSendNow,
+			persist: options.SetContextualSendNow,
 		},
 		defaultPermission:    options.DefaultPermission,
 		persistPermission:    options.SetDefaultPermission,
@@ -1406,6 +1414,11 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case contextualUndoClearEvent:
 		if m.undoHint.nonce == msg.nonce && m.status == "Input cleared · ctrl+z to undo" {
 			m.status = "ready"
+		}
+		return m, nil
+	case sendNowClearEvent:
+		if m.sendNowHint.nonce == msg.nonce && m.status == "Queued · Enter to send now" {
+			m.status = "thinking"
 		}
 		return m, nil
 	case mouseClickEvent:
@@ -3018,6 +3031,14 @@ func (m *model) appendToolDisplay(text string) {
 func (m *model) handleRunningKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := msg.Key()
 	if key.Code == tea.KeyEnter {
+		if strings.TrimSpace(string(m.input)) == "" && len(m.pendingPrompts) > 0 && m.runner != nil {
+			prompt := m.pendingPrompts[0]
+			m.pendingPrompts = m.pendingPrompts[1:]
+			m.runner.QueueInterjection(prompt, nil)
+			m.sendNowHint.nonce++
+			m.status = "sent queued prompt now"
+			return m, nil
+		}
 		if m.insertNewlineForEnter(key) {
 			return m, nil
 		}
@@ -3068,8 +3089,17 @@ func (m *model) handleRunningKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.promptSerial++
 		m.clearPromptSuggestion()
 		m.pendingPrompts = append(m.pendingPrompts, prompt)
-		m.status = fmt.Sprintf("queued prompt #%d", len(m.pendingPrompts))
-		return m, nil
+		if !m.sendNowHint.enabled || m.sendNowHint.shown >= 3 {
+			m.status = fmt.Sprintf("queued prompt #%d", len(m.pendingPrompts))
+			return m, nil
+		}
+		m.sendNowHint.shown++
+		m.sendNowHint.nonce++
+		nonce := m.sendNowHint.nonce
+		m.status = "Queued · Enter to send now"
+		return m, tea.Tick(3*time.Second, func(time.Time) tea.Msg {
+			return sendNowClearEvent{nonce: nonce}
+		})
 	}
 	return m, m.editInput(msg)
 }

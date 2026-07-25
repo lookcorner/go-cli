@@ -783,6 +783,12 @@ After a draft reaches 20 characters and is cleared to at most 5 characters,
 the TUI shows `Input cleared · ctrl+z to undo` up to three times per session.
 Set `undo = false` under `[ui.contextual_hints]` to hide this hint without
 disabling undo.
+While a turn is running, Enter queues a non-empty follow-up. The TUI then
+shows `Queued · Enter to send now`; pressing Enter again with an empty composer
+injects the oldest queued follow-up into the current turn. Set
+`send_now = false` under `[ui.contextual_hints]` to hide this hint without
+disabling send-now. `GROK_CONTEXTUAL_HINTS=0` disables all implemented
+contextual hints, while `1` forces them on.
 Dragging across visible transcript text copies the selection through OSC 52.
 `[ui] keep_text_selection` accepts `flash` (the default), `hold`, or
 `word_select`; held highlights clear on Esc or scrolling. `word_select` also

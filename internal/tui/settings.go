@@ -24,7 +24,7 @@ type settingsNumber struct {
 	large int
 }
 
-const settingsCount = 26
+const settingsCount = 27
 
 func (m *model) openSettings() {
 	m.settings = &settingsState{}
@@ -269,6 +269,12 @@ func (m *model) applySetting(selected int) {
 		if m.undoHint.persist != nil {
 			state.err = persistSetting(m.undoHint.persist(m.undoHint.enabled), func() { m.undoHint.enabled = previous })
 		}
+	case 26:
+		previous := m.sendNowHint.enabled
+		m.sendNowHint.enabled = !previous
+		if m.sendNowHint.persist != nil {
+			state.err = persistSetting(m.sendNowHint.persist(m.sendNowHint.enabled), func() { m.sendNowHint.enabled = previous })
+		}
 	}
 	if state.err != "" {
 		m.status = "setting update failed"
@@ -456,6 +462,7 @@ func (m *model) settingsContent() string {
 		fmt.Sprintf("Fork secondary model: %s", m.modelOptionName(m.forkSecondaryModel)),
 		fmt.Sprintf("Cancel subagents with turn: %s", currentCancelSubagentsPolicy(m.cancelSubagents)),
 		settingLine("Undo hint", m.undoHint.enabled),
+		settingLine("Send-now hint", m.sendNowHint.enabled),
 	}
 	if m.planModeAvailable() {
 		lines = append(lines, settingLine("Plan mode", m.planMode))

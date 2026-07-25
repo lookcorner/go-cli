@@ -1,6 +1,14 @@
 package config
 
 func UpdateContextualUndoHint(path string, enabled bool) error {
+	return updateContextualHint(path, "undo", enabled)
+}
+
+func UpdateContextualSendNowHint(path string, enabled bool) error {
+	return updateContextualHint(path, "send_now", enabled)
+}
+
+func updateContextualHint(path, name string, enabled bool) error {
 	return updateUserConfig(path, func(root map[string]any) error {
 		ui, _ := root["ui"].(map[string]any)
 		if ui == nil {
@@ -10,7 +18,7 @@ func UpdateContextualUndoHint(path string, enabled bool) error {
 		if hints == nil {
 			hints = make(map[string]any)
 		}
-		hints["undo"] = enabled
+		hints[name] = enabled
 		ui["contextual_hints"] = hints
 		root["ui"] = ui
 		return nil

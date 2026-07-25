@@ -76,7 +76,8 @@ type RemoteSettings struct {
 }
 
 type RemoteHints struct {
-	Undo *bool `json:"undo"`
+	Undo    *bool `json:"undo"`
+	SendNow *bool `json:"send_now"`
 }
 
 type RemoteAnnouncement = announcement.Announcement
@@ -195,6 +196,10 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 	if !c.uiContextualUndoConfigured {
 		c.UI.ContextualHints.Undo = remote.ContextualHints == nil || remote.ContextualHints.Undo == nil || *remote.ContextualHints.Undo
 	}
+	if !c.uiContextualSendNowConfigured {
+		c.UI.ContextualHints.SendNow = remote.ContextualHints == nil || remote.ContextualHints.SendNow == nil || *remote.ContextualHints.SendNow
+	}
+	applyContextualHintsEnvironment(c)
 	if remote.OfficialMarketplaceAutoRegister != nil {
 		c.OfficialMarketplaceAutoRegister = *remote.OfficialMarketplaceAutoRegister
 	}

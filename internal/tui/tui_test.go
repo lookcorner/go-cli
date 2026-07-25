@@ -975,6 +975,67 @@ func TestBusyModelQueuesPromptsAndShowsQueueWithoutModelTurn(t *testing.T) {
 	}
 }
 
+func TestBusyQueueShowsSendNowHintAndInjectsFirstPrompt(t *testing.T) {
+	runner := &agent.Runner{}
+	m := &model{
+		ctx: context.Background(), runner: runner, running: true, status: "thinking",
+		sendNowHint: contextualHintState{enabled: true},
+	}
+	m.setInput("first follow-up")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command == nil || m.status != "Queued · Enter to send now" || m.sendNowHint.shown != 1 || len(m.pendingPrompts) != 1 {
+		t.Fatalf("command=%v status=%q shown=%d queue=%#v", command != nil, m.status, m.sendNowHint.shown, m.pendingPrompts)
+	}
+	updated, next := m.Update(sendNowClearEvent{nonce: m.sendNowHint.nonce})
+	m = updated.(*model)
+	if next != nil || m.status != "thinking" {
+		t.Fatalf("command=%v status=%q", next != nil, m.status)
+	}
+
+	m.setInput("second follow-up")
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	m.clearInput()
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	pending := runner.TakeInterjections()
+	if command != nil || m.status != "sent queued prompt now" || len(m.pendingPrompts) != 1 || m.pendingPrompts[0] != "second follow-up" || len(pending) != 1 || pending[0].Text != "first follow-up" {
+		t.Fatalf("command=%v status=%q queue=%#v interjections=%#v", command != nil, m.status, m.pendingPrompts, pending)
+	}
+}
+
+func TestBusyQueueSendNowHintGateAndSessionCap(t *testing.T) {
+	disabled := &model{runner: &agent.Runner{}, running: true, status: "thinking"}
+	disabled.setInput("follow-up")
+	updated, command := disabled.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	disabled = updated.(*model)
+	if command != nil || disabled.status != "queued prompt #1" || disabled.sendNowHint.shown != 0 {
+		t.Fatalf("command=%v status=%q shown=%d", command != nil, disabled.status, disabled.sendNowHint.shown)
+	}
+
+	m := &model{runner: &agent.Runner{}, running: true, sendNowHint: contextualHintState{enabled: true}}
+	for index := 0; index < 4; index++ {
+		m.setInput(fmt.Sprintf("follow-up %d", index))
+		updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+		m = updated.(*model)
+	}
+	if m.sendNowHint.shown != 3 || m.status != "queued prompt #4" {
+		t.Fatalf("shown=%d status=%q", m.sendNowHint.shown, m.status)
+	}
+}
+
+func TestBusyQueueSendNowWorksInMultilineMode(t *testing.T) {
+	runner := &agent.Runner{}
+	m := &model{runner: runner, running: true, multiline: true, pendingPrompts: []string{"send this now"}}
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	pending := runner.TakeInterjections()
+	if command != nil || len(pending) != 1 || pending[0].Text != "send this now" || len(m.input) != 0 {
+		t.Fatalf("command=%v interjections=%#v input=%q", command != nil, pending, m.input)
+	}
+}
+
 func TestQueuedPromptsRunFIFOBeforeScheduledWake(t *testing.T) {
 	ws, err := workspace.Open(t.TempDir())
 	if err != nil {
