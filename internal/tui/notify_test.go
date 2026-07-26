@@ -105,6 +105,18 @@ func TestUnconfiguredEventsAndDisabledPolicyStaySilent(t *testing.T) {
 	bare.Update(turnDoneEvent{})
 }
 
+func TestBackgroundTaskCompletionNotifies(t *testing.T) {
+	m, emitted := notifyModel(t, notify.ConditionAlways)
+	m.bridge.NotifyTaskComplete()
+	m.Update(taskCompleteEvent{})
+	if len(*emitted) != 1 || !strings.Contains((*emitted)[0], "Task complete · workspace") {
+		t.Fatalf("emitted=%q", *emitted)
+	}
+
+	var absent *Bridge
+	absent.NotifyTaskComplete()
+}
+
 func TestNotificationHooksRunForConfiguredEvents(t *testing.T) {
 	dir := t.TempDir()
 	path := func(name string) string { return filepath.Join(dir, name) }

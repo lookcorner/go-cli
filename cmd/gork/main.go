@@ -871,7 +871,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			TwoPassCompaction: cfg.TwoPassCompaction,
 			ResolveModel:      resolveSubagentModel, AvailableModels: cfg.ModelSlugs(), Skills: skillCatalog,
 			SkillConfig: workspaceSkillsConfig(cfg, plugins), Worktrees: worktreeManager,
-			Observer:   &sessionSubagentObserver{sessionID: logger.ID(), logger: logger, autoWake: cfg.AutoWakeEnabled, wake: wakeSink},
+			Observer:   &sessionSubagentObserver{sessionID: logger.ID(), logger: logger, autoWake: cfg.AutoWakeEnabled, wake: wakeSink, notify: tuiBridge},
 			SessionDir: filepath.Dir(logger.Path()), ParentSessionID: logger.ID(),
 			AutoWake: func(result tools.SubagentResult) bool {
 				return cfg.AutoWakeEnabled && wakeSink != nil && wakeSink.QueueWake(result.ID, formatLocalSubagentWake(result))
@@ -2862,7 +2862,11 @@ type sessionSubagentObserver struct {
 	logger    *session.Logger
 	autoWake  bool
 	wake      localWakeSink
+	notify    taskCompleteNotifier
 }
+
+// taskCompleteNotifier receives background-task completions for notifications.
+type taskCompleteNotifier interface{ NotifyTaskComplete() }
 
 type localWakeSink interface {
 	TrackWake(string)
@@ -3062,6 +3066,9 @@ func (o *sessionSubagentObserver) SubagentEnded(_ context.Context, result tools.
 		o.server.NotifySubagentEnded(o.sessionID, result)
 	} else if !result.WillWake && o.wake != nil {
 		o.wake.CancelWake(result.ID)
+	}
+	if result.Background && o.notify != nil {
+		o.notify.NotifyTaskComplete()
 	}
 }
 

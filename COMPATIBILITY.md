@@ -322,8 +322,9 @@ at exit. The spinner and the half-second `⚠ Action Required` blink animate on 
 250-millisecond tick that is only armed while a turn runs or a prompt waits
 unfocused; a focused terminal shows the label statically. Activity reports
 `Thinking`, `Waiting`, and `Responding`; the reference's per-tool
-`Running: <tool>` detail is not sourced yet. `task_complete` events and
-`session_recap` remain.
+`Running: <tool>` detail is not sourced yet. `task_complete` fires when a
+background subagent finishes, successfully or not, while foreground children stay
+silent because the turn itself already reports. `session_recap` remains.
 
 Compatibility is verified with Go unit/integration tests and will additionally
 use captured protocol fixtures from the Rust implementation. A status is only

@@ -310,6 +310,7 @@ type btwDoneEvent struct {
 }
 type scheduledFiredEvent struct{ event tools.ScheduledTaskFired }
 type wakeCancelledEvent struct{ id string }
+type taskCompleteEvent struct{}
 type mouseScrollEvent struct {
 	lines     int
 	direction int
@@ -409,6 +410,14 @@ func (b *Bridge) QueueWake(id, prompt string) bool {
 }
 
 func (b *Bridge) CancelWake(id string) { b.send(wakeCancelledEvent{id: id}) }
+
+// NotifyTaskComplete reports that a background subagent task finished so the
+// session can raise a task_complete notification.
+func (b *Bridge) NotifyTaskComplete() {
+	if b != nil {
+		b.send(taskCompleteEvent{})
+	}
+}
 
 func (b *Bridge) PlanModeEntered(tools.PlanModeEvent) { b.send(planModeEvent{active: true}) }
 func (b *Bridge) PlanModeExited(tools.PlanModeEvent)  { b.send(planModeEvent{}) }
@@ -2143,6 +2152,9 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if command := m.startNext(); command != nil {
 			return m, tea.Batch(waitForBridge(m.bridge), command)
 		}
+		return m, waitForBridge(m.bridge)
+	case taskCompleteEvent:
+		m.notifyEvent(notify.TaskComplete)
 		return m, waitForBridge(m.bridge)
 	case wakeCancelledEvent:
 		kept := m.scheduled[:0]

@@ -1806,6 +1806,27 @@ func TestLocalObserversIgnoreBackgroundWorkWhenAutoWakeDisabled(t *testing.T) {
 	}
 }
 
+type countingTaskNotifier struct{ calls int }
+
+func (c *countingTaskNotifier) NotifyTaskComplete() { c.calls++ }
+
+func TestSubagentObserverNotifiesOnlyBackgroundCompletions(t *testing.T) {
+	notifier := &countingTaskNotifier{}
+	observer := &sessionSubagentObserver{notify: notifier}
+	observer.SubagentEnded(context.Background(), tools.SubagentResult{ID: "child-1", Status: "completed"})
+	if notifier.calls != 0 {
+		t.Fatalf("foreground completion notified %d times", notifier.calls)
+	}
+	observer.SubagentEnded(context.Background(), tools.SubagentResult{ID: "child-2", Status: "completed", Background: true})
+	observer.SubagentEnded(context.Background(), tools.SubagentResult{ID: "child-3", Status: "failed", Background: true})
+	if notifier.calls != 2 {
+		t.Fatalf("background completions notified %d times, want 2", notifier.calls)
+	}
+
+	silent := &sessionSubagentObserver{}
+	silent.SubagentEnded(context.Background(), tools.SubagentResult{ID: "child-4", Background: true})
+}
+
 func TestParseGoalBudget(t *testing.T) {
 	valid := map[string]struct {
 		objective string

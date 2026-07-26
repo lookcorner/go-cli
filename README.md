@@ -998,8 +998,8 @@ Ghostty, VTE, Terminator, and foot, stays silent on Grok Desktop, and rings the
 terminal bell everywhere else. Zellij always falls back to the bell because it
 does not forward OSC notifications; under tmux the sequence is wrapped in DCS
 passthrough instead. Supported events are `turn_complete`, `approval_required`
-(one notification per queued permission batch), `session_ready`, and
-`agent_error`. The notification names the current workspace, or the session
+(one notification per queued permission batch), `session_ready`, `agent_error`,
+and `task_complete` when a background subagent finishes. The notification names the current workspace, or the session
 title once `/rename` sets one. An unrecognized value in the table leaves the
 inherited defaults in place rather than failing startup.
 
