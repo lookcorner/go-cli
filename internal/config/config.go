@@ -217,6 +217,7 @@ type AskUserQuestionConfig struct {
 }
 
 type UIConfig struct {
+	MaxThoughtsWidth          int                  `json:"max_thoughts_width"`
 	Theme                     string               `json:"theme"`
 	AutoDarkTheme             string               `json:"auto_dark_theme"`
 	AutoLightTheme            string               `json:"auto_light_theme"`
@@ -513,6 +514,7 @@ type fileHashlineConfig struct {
 }
 
 type fileUIConfig struct {
+	MaxThoughtsWidth             *int             `json:"max_thoughts_width,omitempty" toml:"max_thoughts_width"`
 	Theme                        *string          `json:"theme,omitempty" toml:"theme"`
 	AutoDarkTheme                *string          `json:"auto_dark_theme,omitempty" toml:"auto_dark_theme"`
 	AutoLightTheme               *string          `json:"auto_light_theme,omitempty" toml:"auto_light_theme"`
@@ -781,7 +783,7 @@ func Load(path string) (Config, error) {
 		CancelRewindEnabled:         true,
 		Toolset:                     ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}},
 		Goal:                        GoalConfig{VerifierCount: 3, ClassifierMaxRuns: 10, ReverifyAfter: 8},
-		UI:                          UIConfig{Theme: "groknight", AutoDarkTheme: "groknight", AutoLightTheme: "grokday", HunkTrackerMode: "agent_only", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, ShowThinkingBlocks: true, DisplayRefresh: DisplayRefreshConfig{ProbeEnabled: true, FloorMS: 8, CeilingMS: 16, MinHz: 55, MaxHz: 165}, ScrollSpeed: 50, ScrollMode: "auto", DefaultSelectedPermission: "always_allow_all_sessions", GroupToolVerbs: true, PromptSuggestions: true, ContextualHints: Hints{Undo: true, PlanMode: true, SendNow: true, SmallScreen: true, WordSelect: true}, VoiceCaptureMode: "hold", VoiceSTTLanguage: "en", PermissionMode: "ask"},
+		UI:                          UIConfig{MaxThoughtsWidth: 120, Theme: "groknight", AutoDarkTheme: "groknight", AutoLightTheme: "grokday", HunkTrackerMode: "agent_only", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, ShowThinkingBlocks: true, DisplayRefresh: DisplayRefreshConfig{ProbeEnabled: true, FloorMS: 8, CeilingMS: 16, MinHz: 55, MaxHz: 165}, ScrollSpeed: 50, ScrollMode: "auto", DefaultSelectedPermission: "always_allow_all_sessions", GroupToolVerbs: true, PromptSuggestions: true, ContextualHints: Hints{Undo: true, PlanMode: true, SendNow: true, SmallScreen: true, WordSelect: true}, VoiceCaptureMode: "hold", VoiceSTTLanguage: "en", PermissionMode: "ask"},
 		Dashboard:                   DashboardConfig{Enabled: true, Grouping: "state"},
 		Sandbox:                     SandboxConfig{Profile: "off"},
 		Pruning:                     PruningConfig{Enabled: true, KeepLastNTurns: 3, SoftTrimThreshold: 4000, SoftTrimHead: 1500, SoftTrimTail: 1500, HardClearAgeTurns: 10},
@@ -996,6 +998,9 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.Toolset.Hashline.ChunkSize != nil && cfg.Toolset.Hashline.Scheme == "chunk" && cfg.Toolset.Hashline.ChunkSize < 1 {
 		return errors.New("toolset hashline chunk_size must be greater than zero")
+	}
+	if disk.UI.MaxThoughtsWidth != nil {
+		cfg.UI.MaxThoughtsWidth = min(max(*disk.UI.MaxThoughtsWidth, 40), 500)
 	}
 	if disk.UI.Theme != nil {
 		canonical, ok := theme.Canonical(*disk.UI.Theme)

@@ -189,7 +189,7 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 		m.settings.selected = index
 		updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 		m = updated.(*model)
-		if index == 12 || index == 14 {
+		if index == 12 || index == 14 || index == 30 {
 			if command != nil || m.settings.number == nil || m.status != "editing setting" {
 				t.Fatalf("index=%d did not open number editor: command=%v settings=%#v status=%q", index, command != nil, m.settings, m.status)
 			}
@@ -199,7 +199,7 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 			m = updated.(*model)
 		}
 		wantStatus := "settings updated"
-		if index == 8 || index == 9 || index == 17 || index == 31 {
+		if index == 8 || index == 9 || index == 17 || index == 32 {
 			wantStatus = "settings updated; restart to apply"
 		}
 		if command != nil || m.settings.err != "" || m.status != wantStatus {
@@ -262,7 +262,7 @@ func TestSettingsDisplayRefreshRollsBackPersistenceFailure(t *testing.T) {
 		persistRefresh: func(bool) error {
 			return errors.New("read only")
 		},
-		settings: &settingsState{selected: 31},
+		settings: &settingsState{selected: 32},
 	}
 	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)
@@ -557,7 +557,7 @@ func TestSettingsGroupToolVerbsRefoldsTranscriptImmediately(t *testing.T) {
 	if err := logger.Close(); err != nil {
 		t.Fatal(err)
 	}
-	grouped, messages, expands, folds, err := sessionDisplayTranscript(path, "", false, true, true)
+	grouped, messages, expands, folds, err := sessionDisplayTranscript(path, "", false, true, true, 120)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -613,14 +613,14 @@ func TestSettingsThinkingToggleRebuildsExistingTranscript(t *testing.T) {
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	shown, messages, expands, folds, err := sessionDisplayTranscript(path, "", false, false, true)
+	shown, messages, expands, folds, err := sessionDisplayTranscript(path, "", false, false, true, 120)
 	if err != nil {
 		t.Fatal(err)
 	}
 	persisted := true
 	m := &model{
 		width: 80, height: 20, runner: &agent.Runner{SessionPath: path},
-		showThinking: true, settings: &settingsState{selected: 30},
+		showThinking: true, settings: &settingsState{selected: 31},
 		persistThinking: func(value bool) error { persisted = value; return nil },
 	}
 	m.replaceDisplayTranscript(shown, messages, expands, folds)
@@ -638,13 +638,46 @@ func TestSettingsThinkingToggleRebuildsExistingTranscript(t *testing.T) {
 
 func TestSettingsThinkingToggleRollsBackPersistenceFailure(t *testing.T) {
 	m := &model{
-		showThinking: true, settings: &settingsState{selected: 30},
+		showThinking: true, settings: &settingsState{selected: 31},
 		persistThinking: func(bool) error { return errors.New("write failed") },
 	}
 	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)
 	if !m.showThinking || m.settings.err != "write failed" || m.status != "setting update failed" {
 		t.Fatalf("show=%v err=%q status=%q", m.showThinking, m.settings.err, m.status)
+	}
+}
+
+func TestSettingsMaxThoughtsWidthCommitsAndRollsBack(t *testing.T) {
+	var persisted []int
+	m := &model{
+		maxThoughtsWidth: 120,
+		settings:         &settingsState{selected: 30},
+		persistThoughtWidth: func(value int) error {
+			persisted = append(persisted, value)
+			return nil
+		},
+	}
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyRight}))
+	m = updated.(*model)
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if m.maxThoughtsWidth != 130 || !reflect.DeepEqual(persisted, []int{130}) || m.settings.number != nil {
+		t.Fatalf("width=%d persisted=%v settings=%#v", m.maxThoughtsWidth, persisted, m.settings)
+	}
+
+	m.settings.selected = 30
+	m.persistThoughtWidth = func(int) error { return errors.New("read only") }
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
+	m = updated.(*model)
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if m.maxThoughtsWidth != 130 || m.settings.err != "read only" || m.status != "setting update failed" {
+		t.Fatalf("width=%d err=%q status=%q", m.maxThoughtsWidth, m.settings.err, m.status)
 	}
 }
 
@@ -689,7 +722,7 @@ func TestSettingsCollapsedEditBlocksRefoldsTranscriptImmediately(t *testing.T) {
 	if err := logger.Close(); err != nil {
 		t.Fatal(err)
 	}
-	expanded, messages, expands, folds, err := sessionDisplayTranscript(path, "", false, true, true)
+	expanded, messages, expands, folds, err := sessionDisplayTranscript(path, "", false, true, true, 120)
 	if err != nil {
 		t.Fatal(err)
 	}

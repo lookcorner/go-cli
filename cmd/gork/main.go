@@ -1206,6 +1206,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			CompactMode:         cfg.UI.CompactMode,
 			ShowTimestamps:      cfg.UI.ShowTimestamps,
 			ShowThinkingBlocks:  cfg.UI.ShowThinkingBlocks,
+			MaxThoughtsWidth:    cfg.UI.MaxThoughtsWidth,
 			MatchRefresh:        cfg.UI.DisplayRefresh.AutoCadenceEnabled,
 			ShowTimeline:        cfg.UI.ShowTimeline,
 			OpenDashboard:       opts.dashboard,
@@ -1226,6 +1227,9 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			SetCompactMode:    func(enabled bool) error { return config.UpdateCompactMode(opts.configPath, enabled) },
 			SetShowTimestamps: func(enabled bool) error { return config.UpdateShowTimestamps(opts.configPath, enabled) },
 			SetShowThinking:   func(enabled bool) error { return config.UpdateShowThinkingBlocks(opts.configPath, enabled) },
+			SetMaxThoughtsWidth: func(value int) error {
+				return config.UpdateMaxThoughtsWidth(opts.configPath, value)
+			},
 			SetMatchRefresh: func(enabled bool) error {
 				return config.UpdateDisplayRefreshAutoCadence(opts.configPath, enabled)
 			},

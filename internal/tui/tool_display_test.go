@@ -495,7 +495,7 @@ func TestSessionDisplayTranscriptRestoresToolsInOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	text, messages, expands, folds, err := sessionDisplayTranscript(path, "", false, false, true)
+	text, messages, expands, folds, err := sessionDisplayTranscript(path, "", false, false, true, 120)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -550,7 +550,7 @@ func TestSessionDisplayTranscriptRestoresCollapsedEdit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	text, _, expands, _, err := sessionDisplayTranscript(path, "", true, false, true)
+	text, _, expands, _, err := sessionDisplayTranscript(path, "", true, false, true, 120)
 	if err != nil || !strings.Contains(text, "Edit `main.go` +2/-1") || strings.Contains(text, "Arguments") {
 		t.Fatalf("text=%q err=%v", text, err)
 	}
@@ -568,11 +568,11 @@ func TestSessionDisplayTranscriptCanHideAndRestoreThoughts(t *testing.T) {
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	shown, _, _, _, err := sessionDisplayTranscript(path, "", false, false, true)
+	shown, _, _, _, err := sessionDisplayTranscript(path, "", false, false, true, 120)
 	if err != nil || !strings.Contains(shown, "> Thinking\n>\n> inspect\n> inputs") || !strings.Contains(shown, "answer") {
 		t.Fatalf("shown=%q err=%v", shown, err)
 	}
-	hidden, _, _, _, err := sessionDisplayTranscript(path, "", false, false, false)
+	hidden, _, _, _, err := sessionDisplayTranscript(path, "", false, false, false, 120)
 	if err != nil || strings.Contains(hidden, "Thinking") || strings.Contains(hidden, "inspect") || !strings.Contains(hidden, "answer") {
 		t.Fatalf("hidden=%q err=%v", hidden, err)
 	}
@@ -611,7 +611,7 @@ func TestSessionDisplayTranscriptCoalescesAdjacentSameFileEdits(t *testing.T) {
 	if err := logger.Close(); err != nil {
 		t.Fatal(err)
 	}
-	text, _, expands, _, err := sessionDisplayTranscript(path, workspace, true, false, true)
+	text, _, expands, _, err := sessionDisplayTranscript(path, workspace, true, false, true, 120)
 	if err != nil || strings.Count(text, "Edit `main.go`") != 1 || !strings.Contains(text, "Edit `main.go` +2/-2") {
 		t.Fatalf("text=%q err=%v", text, err)
 	}
@@ -661,7 +661,7 @@ func TestSessionDisplayTranscriptGroupsConsecutiveToolVerbs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	text, _, expands, _, err := sessionDisplayTranscript(path, "", true, true, true)
+	text, _, expands, _, err := sessionDisplayTranscript(path, "", true, true, true, 120)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -674,7 +674,7 @@ func TestSessionDisplayTranscriptGroupsConsecutiveToolVerbs(t *testing.T) {
 		t.Fatalf("expansions=%#v", expands)
 	}
 
-	ungrouped, _, _, _, err := sessionDisplayTranscript(path, "", true, false, true)
+	ungrouped, _, _, _, err := sessionDisplayTranscript(path, "", true, false, true, 120)
 	if err != nil || strings.Contains(ungrouped, first) || !strings.Contains(ungrouped, "#### Tool failed: `grep`") {
 		t.Fatalf("ungrouped transcript=%q err=%v", ungrouped, err)
 	}
@@ -704,11 +704,42 @@ func TestSessionDisplayTranscriptKeepsSyntheticAssistantBoundary(t *testing.T) {
 	if err := logger.Close(); err != nil {
 		t.Fatal(err)
 	}
-	text, messages, _, _, err := sessionDisplayTranscript(path, "", false, false, true)
+	text, messages, _, _, err := sessionDisplayTranscript(path, "", false, false, true, 120)
 	if err != nil || strings.Count(text, "Gork\n") != 2 || strings.Contains(text, "internal") || len(messages) != 3 {
 		t.Fatalf("text=%q messages=%#v err=%v", text, messages, err)
 	}
 	if messages[1].at.After(time.Now()) {
 		t.Fatalf("unexpected future timestamp: %v", messages[1].at)
+	}
+}
+
+func TestThoughtWidthUsesDisplayColumnsForLiveAndRestoredText(t *testing.T) {
+	value := strings.Repeat("界", 21)
+	want := strings.Repeat("界", 20) + "\n> 界"
+	if got := formatThought(value, 40); got != want {
+		t.Fatalf("formatted=%q want=%q", got, want)
+	}
+	if got := formatThought("line\n", 40); got != "line\n" {
+		t.Fatalf("trailing newline formatted=%q", got)
+	}
+
+	m := &model{maxThoughtsWidth: 40}
+	m.appendThought(value)
+	m.finishThought()
+	if !strings.Contains(m.transcript.String(), want) {
+		t.Fatalf("live transcript=%q", m.transcript.String())
+	}
+
+	path := filepath.Join(t.TempDir(), "thought-width.jsonl")
+	content := "" +
+		`{"kind":"user_prompt","data":{"text":"question"}}` + "\n" +
+		`{"kind":"model_thought","data":{"text":"` + value + `"}}` + "\n" +
+		`{"kind":"model_response","data":{"response_id":"r1","text":"answer","tool_call_count":0}}` + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	restored, _, _, _, err := sessionDisplayTranscript(path, "", false, false, true, 40)
+	if err != nil || !strings.Contains(restored, want) {
+		t.Fatalf("restored transcript=%q err=%v", restored, err)
 	}
 }

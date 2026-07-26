@@ -10,6 +10,10 @@ func UpdateScrollLines(path string, value uint8) error {
 	return updateUIValue(path, "scroll_lines", value)
 }
 
+func UpdateMaxThoughtsWidth(path string, value int) error {
+	return updateUIValue(path, "max_thoughts_width", min(max(value, 40), 500))
+}
+
 func updateUIValue(path, key string, value any) error {
 	return updateUserConfig(path, func(root map[string]any) error {
 		ui, _ := root["ui"].(map[string]any)

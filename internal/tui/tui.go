@@ -763,10 +763,13 @@ type model struct {
 	persistTimeline     func(bool) error
 	showThinking        bool
 	persistThinking     func(bool) error
+	maxThoughtsWidth    int
+	persistThoughtWidth func(int) error
 	matchRefresh        bool
 	persistRefresh      func(bool) error
 	thoughtOpen         bool
 	thoughtLineStart    bool
+	thoughtColumn       int
 	persistGroupTools   func(bool) error
 	persistEditBlocks   func(bool) error
 	persistSuggestions  func(bool) error
@@ -997,6 +1000,8 @@ type UIOptions struct {
 	SetShowTimeline      func(bool) error
 	ShowThinkingBlocks   bool
 	SetShowThinking      func(bool) error
+	MaxThoughtsWidth     int
+	SetMaxThoughtsWidth  func(int) error
 	MatchRefresh         bool
 	SetMatchRefresh      func(bool) error
 	ScrollSpeed          uint8
@@ -1200,6 +1205,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		showTimestamps: options.ShowTimestamps, persistTimestamps: options.SetShowTimestamps,
 		showTimeline: options.ShowTimeline, persistTimeline: options.SetShowTimeline,
 		showThinking: options.ShowThinkingBlocks, persistThinking: options.SetShowThinking,
+		maxThoughtsWidth: normalizedThoughtWidth(options.MaxThoughtsWidth), persistThoughtWidth: options.SetMaxThoughtsWidth,
 		matchRefresh: options.MatchRefresh, persistRefresh: options.SetMatchRefresh,
 		scrollLines: mouseWheelScrollLines, scrollSpeed: options.ScrollSpeed, persistScrollSpeed: options.SetScrollSpeed,
 		scrollInput: scrollInput{mode: options.ScrollMode}, persistScrollMode: options.SetScrollMode, persistScrollLines: options.SetScrollLines,
@@ -1302,7 +1308,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 	m.replaceTranscript(initialTranscript, nil)
 	if runner != nil && strings.TrimSpace(runner.SessionPath) != "" {
 		if messages, err := session.Transcript(runner.SessionPath); err == nil && strings.TrimSpace(session.FormatTranscript(messages)) == strings.TrimSpace(initialTranscript) {
-			if text, displayMessages, expands, folds, displayErr := sessionDisplayTranscript(runner.SessionPath, m.workspace, m.collapsedEditBlocks, m.groupToolVerbs, m.showThinking, m.enrichReplayImage); displayErr == nil {
+			if text, displayMessages, expands, folds, displayErr := sessionDisplayTranscript(runner.SessionPath, m.workspace, m.collapsedEditBlocks, m.groupToolVerbs, m.showThinking, m.maxThoughtsWidth, m.enrichReplayImage); displayErr == nil {
 				m.replaceDisplayTranscript(text, displayMessages, expands, folds)
 			} else {
 				m.replaceTranscript(initialTranscript, messages)
@@ -1897,7 +1903,7 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		mode := msg.result.Mode
 		if mode == agent.RewindAll || mode == agent.RewindConversationOnly {
 			m.previousID = msg.result.PreviousResponseID
-			if text, messages, expands, folds, err := sessionDisplayTranscript(m.runner.SessionPath, m.workspace, m.collapsedEditBlocks, m.groupToolVerbs, m.showThinking, m.enrichReplayImage); err == nil {
+			if text, messages, expands, folds, err := sessionDisplayTranscript(m.runner.SessionPath, m.workspace, m.collapsedEditBlocks, m.groupToolVerbs, m.showThinking, m.maxThoughtsWidth, m.enrichReplayImage); err == nil {
 				m.replaceDisplayTranscript(text, messages, expands, folds)
 			} else {
 				m.replaceTranscript(session.FormatTranscript(msg.result.Messages), msg.result.Messages)
@@ -3203,7 +3209,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.status = "no active session to view"
 				return m, nil
 			}
-			content, _, _, _, err := sessionDisplayTranscript(m.runner.SessionPath, m.workspace, m.collapsedEditBlocks, m.groupToolVerbs, m.showThinking, m.enrichReplayImage)
+			content, _, _, _, err := sessionDisplayTranscript(m.runner.SessionPath, m.workspace, m.collapsedEditBlocks, m.groupToolVerbs, m.showThinking, m.maxThoughtsWidth, m.enrichReplayImage)
 			if err != nil {
 				m.status = "transcript failed: " + err.Error()
 				return m, nil
@@ -5491,21 +5497,38 @@ func (m *model) appendThought(text string) {
 	if text == "" {
 		return
 	}
+	maxWidth := normalizedThoughtWidth(m.maxThoughtsWidth)
 	if !m.thoughtOpen {
 		m.transcript.WriteString("> Thinking\n>\n")
 		m.thoughtOpen = true
 		m.thoughtLineStart = true
+		m.thoughtColumn = 0
 	}
 	for _, char := range text {
 		if m.thoughtLineStart {
 			m.transcript.WriteString("> ")
 			m.thoughtLineStart = false
 		}
+		charWidth := displayWidth(string(char))
+		if char != '\n' && m.thoughtColumn > 0 && m.thoughtColumn+charWidth > maxWidth {
+			m.transcript.WriteString("\n> ")
+			m.thoughtColumn = 0
+		}
 		m.transcript.WriteRune(char)
 		if char == '\n' {
 			m.thoughtLineStart = true
+			m.thoughtColumn = 0
+		} else {
+			m.thoughtColumn += charWidth
 		}
 	}
+}
+
+func normalizedThoughtWidth(width int) int {
+	if width == 0 {
+		return 120
+	}
+	return min(max(width, 40), 500)
 }
 
 func (m *model) finishThought() {
@@ -5517,6 +5540,7 @@ func (m *model) finishThought() {
 		}
 		m.thoughtOpen = false
 		m.thoughtLineStart = false
+		m.thoughtColumn = 0
 	}
 }
 

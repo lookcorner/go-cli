@@ -580,6 +580,9 @@ columns retain the selectable Mermaid source instead of dropping content.
 `[ui].render_mermaid` accepts `auto` (the default), `on`, or `off`; `auto` and
 `on` render supported diagrams, while `off` always keeps the source. The setting
 is also available in `/settings`.
+`[ui].max_thoughts_width` limits reasoning display lines to 40-500 columns and
+defaults to 120. `/settings` applies it immediately to live and restored
+thinking blocks and saves it atomically.
 Tool calls are rendered into the transcript with formatted arguments, results,
 errors, and image metadata. Their persisted event history is reconstructed after
 resume and rewind without adding presentation text to the model's conversation

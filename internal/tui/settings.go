@@ -24,7 +24,7 @@ type settingsNumber struct {
 	large int
 }
 
-const settingsCount = 32
+const settingsCount = 33
 
 func (m *model) openSettings() {
 	m.settings = &settingsState{}
@@ -308,6 +308,10 @@ func (m *model) applySetting(selected int) {
 			m.wordSelectHint.active = false
 		}
 	case 30:
+		m.settings.number = &settingsNumber{value: normalizedThoughtWidth(m.maxThoughtsWidth), min: 40, max: 500, small: 5, large: 10}
+		m.status = "editing setting"
+		return
+	case 31:
 		previous := m.showThinking
 		m.showThinking = !previous
 		if m.persistThinking != nil {
@@ -316,7 +320,7 @@ func (m *model) applySetting(selected int) {
 		if state.err == "" && !m.minimal {
 			m.refreshToolDisplay(m.collapsedEditBlocks, m.groupToolVerbs, previous)
 		}
-	case 31:
+	case 32:
 		if m.minimal {
 			return
 		}
@@ -356,6 +360,17 @@ func (m *model) commitSettingsNumber(value int) {
 		if state.err == "" {
 			m.scrollLines = value
 			m.resetScrollInput()
+		}
+	case 30:
+		previous := m.maxThoughtsWidth
+		if m.persistThoughtWidth != nil {
+			state.err = errorString(m.persistThoughtWidth(value))
+		}
+		if state.err == "" {
+			m.maxThoughtsWidth = normalizedThoughtWidth(value)
+			m.refreshThoughtWidth(previous)
+		} else {
+			m.maxThoughtsWidth = previous
 		}
 	}
 	state.number = nil
@@ -517,6 +532,7 @@ func (m *model) settingsContent() string {
 		settingLine("Send-now hint", m.sendNowHint.enabled),
 		settingLine("Small-screen hint", m.smallScreenHint.enabled),
 		settingLine("Word-select hint", m.wordSelectHint.enabled),
+		fmt.Sprintf("Max thoughts width: %d", m.settingNumberValue(30, normalizedThoughtWidth(m.maxThoughtsWidth))),
 		settingLine("Show thinking blocks", m.showThinking),
 	}
 	if !m.minimal {
@@ -637,13 +653,31 @@ func (m *model) refreshToolDisplay(previousCollapsedEditBlocks, previousGroupToo
 		beforeThinking = previousThinking[0]
 	}
 	previous, _, _, _, err := sessionDisplayTranscript(
-		m.runner.SessionPath, m.workspace, previousCollapsedEditBlocks, previousGroupToolVerbs, beforeThinking, m.enrichReplayImage,
+		m.runner.SessionPath, m.workspace, previousCollapsedEditBlocks, previousGroupToolVerbs, beforeThinking, m.maxThoughtsWidth, m.enrichReplayImage,
 	)
 	if err != nil || strings.TrimSpace(m.transcript.String()) != strings.TrimSpace(previous) {
 		return
 	}
 	text, messages, expands, folds, err := sessionDisplayTranscript(
-		m.runner.SessionPath, m.workspace, m.collapsedEditBlocks, m.groupToolVerbs, m.showThinking, m.enrichReplayImage,
+		m.runner.SessionPath, m.workspace, m.collapsedEditBlocks, m.groupToolVerbs, m.showThinking, m.maxThoughtsWidth, m.enrichReplayImage,
+	)
+	if err == nil {
+		m.replaceDisplayTranscript(text, messages, expands, folds)
+	}
+}
+
+func (m *model) refreshThoughtWidth(previousWidth int) {
+	if m.runner == nil || strings.TrimSpace(m.runner.SessionPath) == "" {
+		return
+	}
+	previous, _, _, _, err := sessionDisplayTranscript(
+		m.runner.SessionPath, m.workspace, m.collapsedEditBlocks, m.groupToolVerbs, m.showThinking, previousWidth, m.enrichReplayImage,
+	)
+	if err != nil || strings.TrimSpace(m.transcript.String()) != strings.TrimSpace(previous) {
+		return
+	}
+	text, messages, expands, folds, err := sessionDisplayTranscript(
+		m.runner.SessionPath, m.workspace, m.collapsedEditBlocks, m.groupToolVerbs, m.showThinking, m.maxThoughtsWidth, m.enrichReplayImage,
 	)
 	if err == nil {
 		m.replaceDisplayTranscript(text, messages, expands, folds)

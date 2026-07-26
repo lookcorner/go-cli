@@ -379,7 +379,7 @@ func renderStoredToolBlock(tool session.DisplayTool, compact bool) (string, bool
 	return fmt.Sprintf("#### %s: `%s`\n\n%s", title, tool.Name, strings.Join(sections, "\n\n")), folded
 }
 
-func sessionDisplayTranscript(path, workspace string, collapsedEditBlocks, groupToolVerbs, showThinking bool, imageHooks ...func(*session.DisplayImage, string)) (string, []transcriptMessage, []string, []toolFold, error) {
+func sessionDisplayTranscript(path, workspace string, collapsedEditBlocks, groupToolVerbs, showThinking bool, maxThoughtsWidth int, imageHooks ...func(*session.DisplayImage, string)) (string, []transcriptMessage, []string, []toolFold, error) {
 	entries, err := session.DisplayTimeline(path)
 	if err != nil {
 		return "", nil, nil, nil, err
@@ -497,7 +497,7 @@ func sessionDisplayTranscript(path, workspace string, collapsedEditBlocks, group
 				text.WriteString("\n\n")
 			}
 			text.WriteString("> Thinking\n>\n> ")
-			text.WriteString(strings.ReplaceAll(entry.Text, "\n", "\n> "))
+			text.WriteString(formatThought(entry.Text, maxThoughtsWidth))
 			lastKind = "thought"
 		case "assistant", "tool":
 			if !assistantOpen {
@@ -550,6 +550,30 @@ func sessionDisplayTranscript(path, workspace string, collapsedEditBlocks, group
 		folds[index].end -= trimmed
 	}
 	return rendered, messages, expands, folds, nil
+}
+
+func formatThought(value string, width int) string {
+	width = normalizedThoughtWidth(width)
+	runes := []rune(value)
+	var text strings.Builder
+	column := 0
+	for index, char := range runes {
+		charWidth := displayWidth(string(char))
+		if char != '\n' && column > 0 && column+charWidth > width {
+			text.WriteString("\n> ")
+			column = 0
+		}
+		text.WriteRune(char)
+		if char == '\n' {
+			if index+1 < len(runes) {
+				text.WriteString("> ")
+			}
+			column = 0
+		} else {
+			column += charWidth
+		}
+	}
+	return text.String()
 }
 
 func appendBoundedExpansion(expands []string, full string) []string {

@@ -2224,6 +2224,9 @@ func TestUIConfigPersistenceAndPermissionPrecedence(t *testing.T) {
 	if err := UpdateShowThinkingBlocks(path, false); err != nil {
 		t.Fatal(err)
 	}
+	if err := UpdateMaxThoughtsWidth(path, 200); err != nil {
+		t.Fatal(err)
+	}
 	if err := UpdateGroupToolVerbs(path, false); err != nil {
 		t.Fatal(err)
 	}
@@ -2263,7 +2266,7 @@ func TestUIConfigPersistenceAndPermissionPrecedence(t *testing.T) {
 	}
 	remoteMode := "always-approve"
 	cfg.ApplyRemoteSettings(&RemoteSettings{PermissionMode: &remoteMode})
-	if cfg.UI.PermissionMode != "auto" || cfg.UI.VimMode || !cfg.UI.CompactMode || cfg.UI.ShowTimestamps || !cfg.UI.ShowTimeline || cfg.UI.ShowThinkingBlocks || cfg.UI.GroupToolVerbs || !cfg.UI.CollapsedEditBlocks || cfg.UI.PromptSuggestions || !cfg.UI.RememberToolApprovals || cfg.UI.DefaultSelectedPermission != "reject" || cfg.AskUserQuestion.TimeoutEnabled || !cfg.UI.InvertScroll || cfg.UI.ScrollSpeed != 75 || cfg.UI.ScrollMode != "wheel" || cfg.UI.ScrollLines == nil || *cfg.UI.ScrollLines != 5 || cfg.UI.KeepTextSelection != "hold" || cfg.DefaultModelID != "local" || cfg.Model != "local-api" {
+	if cfg.UI.PermissionMode != "auto" || cfg.UI.VimMode || !cfg.UI.CompactMode || cfg.UI.ShowTimestamps || !cfg.UI.ShowTimeline || cfg.UI.ShowThinkingBlocks || cfg.UI.MaxThoughtsWidth != 200 || cfg.UI.GroupToolVerbs || !cfg.UI.CollapsedEditBlocks || cfg.UI.PromptSuggestions || !cfg.UI.RememberToolApprovals || cfg.UI.DefaultSelectedPermission != "reject" || cfg.AskUserQuestion.TimeoutEnabled || !cfg.UI.InvertScroll || cfg.UI.ScrollSpeed != 75 || cfg.UI.ScrollMode != "wheel" || cfg.UI.ScrollLines == nil || *cfg.UI.ScrollLines != 5 || cfg.UI.KeepTextSelection != "hold" || cfg.DefaultModelID != "local" || cfg.Model != "local-api" {
 		t.Fatalf("config=%#v", cfg)
 	}
 	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != wantConfigPerm(0o640) {

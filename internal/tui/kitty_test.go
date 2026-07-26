@@ -148,7 +148,7 @@ func TestReplayEnrichmentReloadsPersistedAssets(t *testing.T) {
 	if err := logger.Close(); err != nil {
 		t.Fatal(err)
 	}
-	text, _, _, _, err := sessionDisplayTranscript(sessionPath, "", false, false, true, m.enrichReplayImage)
+	text, _, _, _, err := sessionDisplayTranscript(sessionPath, "", false, false, true, 120, m.enrichReplayImage)
 	if err != nil {
 		t.Fatal(err)
 	}
