@@ -30,7 +30,7 @@ var completionRoot = completionSpec{
 	},
 	children: map[string]completionSpec{
 		"agent": {
-			flags:    words("--always-approve --allow --bind --config --cwd --deny --disable-web-search --effort --experimental-memory --leader --model --no-ask-user --no-exit-on-disconnect --no-leader --no-memory --no-plan --no-subagents --permission-mode --reasoning-effort --secret --session-dir --trust --workspace --yolo -m"),
+			flags:    words("--always-approve --allow --bind --cli-chat-proxy-base-url --config --cwd --deny --disable-web-search --effort --experimental-memory --leader --model --no-ask-user --no-exit-on-disconnect --no-leader --no-memory --no-plan --no-subagents --permission-mode --plugin-dir --reasoning-effort --secret --session-dir --trust --workspace --xai-api-base-url --yolo -m"),
 			children: leaves("leader", "serve", "stdio"),
 		},
 		"completions": {children: leaves("bash", "elvish", "fish", "powershell", "zsh")},
@@ -93,14 +93,14 @@ var completionRoot = completionSpec{
 
 var completionValueFlags = map[string]bool{
 	"--allow": true, "--approval": true, "--auth-file": true, "--audience": true, "--bind": true,
-	"--append-system-prompt": true, "--backend": true, "--base-url": true, "--client-id": true, "--config": true, "--cwd": true,
+	"--append-system-prompt": true, "--backend": true, "--base-url": true, "--cli-chat-proxy-base-url": true, "--client-id": true, "--config": true, "--cwd": true,
 	"--deny": true, "--goal-runs": true, "--issuer": true, "--limit": true, "--pid": true,
 	"--effort": true, "--json-schema": true, "--max-age": true, "--max-steps": true, "--max-turns": true, "--model": true,
 	"--load": true, "--output-format": true, "--permission-mode": true, "--previous-response-id": true, "--print": true,
-	"--prompt-file": true, "--prompt-json": true, "--reasoning-effort": true, "--rules": true, "--single": true,
+	"--plugin-dir": true, "--prompt-file": true, "--prompt-json": true, "--reasoning-effort": true, "--rules": true, "--single": true,
 	"--args": true, "--command": true, "--env": true, "--header": true, "--repo": true, "--resume": true, "--sandbox": true, "--scope": true, "--scopes": true,
 	"--secret": true, "--session-dir": true, "--session-id": true, "--system": true, "--system-prompt": true, "--system-prompt-override": true,
-	"--timeout": true, "--type": true, "--transport": true, "--url": true, "--version": true, "--workspace": true, "-H": true, "-e": true, "-m": true,
+	"--timeout": true, "--type": true, "--transport": true, "--url": true, "--version": true, "--workspace": true, "--xai-api-base-url": true, "-H": true, "-e": true, "-m": true,
 	"--worktree": true, "--worktree-ref": true, "--ref": true, "-n": true, "-p": true, "-r": true, "-s": true,
 	"-t": true, "-w": true,
 }
