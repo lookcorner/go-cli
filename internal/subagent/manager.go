@@ -1192,11 +1192,17 @@ func (m *Manager) resolve(model string) (ModelRuntime, bool) {
 }
 
 func (m *Manager) ownedMCPServers(definition agents.Definition) ([]mcp.ServerConfig, error) {
+	return ResolveProfileMCPServers(definition, m.parentMCPServers)
+}
+
+// ResolveProfileMCPServers resolves named and inline MCP servers declared by an
+// agent profile against the session's inherited server catalog.
+func ResolveProfileMCPServers(definition agents.Definition, inherited []mcp.ServerConfig) ([]mcp.ServerConfig, error) {
 	if definition.Plugin != "" || len(definition.MCPServers) == 0 {
 		return nil, nil
 	}
-	parent := make(map[string]mcp.ServerConfig, len(m.parentMCPServers))
-	for _, server := range m.parentMCPServers {
+	parent := make(map[string]mcp.ServerConfig, len(inherited))
+	for _, server := range inherited {
 		parent[server.Name] = server
 	}
 	servers := make([]mcp.ServerConfig, 0, len(definition.MCPServers))

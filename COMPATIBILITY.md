@@ -178,7 +178,11 @@ Responses `text.format`, Chat Completions `response_format`, and Anthropic
 Messages `output_config.format`.
 The reference `gork agent stdio` command routes its supported model, reasoning,
 permission, workspace, session, trust, memory, and capability flags through the
-same complete ACP stdio runtime as `--acp`. Repeatable `--plugin-dir` paths
+same complete ACP stdio runtime as `--acp`. `--agent-profile PATH` is
+canonicalized and parsed at startup, then its primary-session prompt, model,
+effort, maximum turns, permission bypass, tools, skills, MCP, hooks, and scoped
+memory semantics are applied across direct stdio, serve, and leader runtimes.
+Repeatable `--plugin-dir` paths
 inject always-enabled, trusted process-local plugins at highest priority for
 direct stdio and serve runtimes, while leader-backed sessions warn and ignore
 them. `gork agent serve` exposes that

@@ -74,6 +74,7 @@ type options struct {
 	sandboxSet         bool
 	sessionDir         string
 	maxSteps           int
+	maxStepsSet        bool
 	timeout            time.Duration
 	showVersion        bool
 	single             string
@@ -112,6 +113,8 @@ type options struct {
 	hunkTrackerMode    string
 	hunkTrackerModeSet bool
 	pluginDirs         stringListFlag
+	agentProfilePath   string
+	agentProfile       *agents.Definition
 	allow              stringListFlag
 	deny               stringListFlag
 }
@@ -230,6 +233,7 @@ func parseRunOptions(args []string, stderr io.Writer) (options, *flag.FlagSet, e
 	flags.BoolVar(&opts.noMemory, "no-memory", false, "disable cross-session memory")
 	flags.StringVar(&opts.hunkTrackerMode, "hunk-tracker-mode", "", "hunk tracker mode: agent_only, all_dirty, or off")
 	flags.Var(&opts.pluginDirs, "plugin-dir", "load a trusted plugin directory for this process; repeatable")
+	flags.StringVar(&opts.agentProfilePath, "agent-profile", "", "load an agent profile from a Markdown file")
 	flags.Usage = func() {
 		fmt.Fprintf(stderr, "Usage: gork [flags] [prompt]\n       gork agent [options] <stdio|serve|leader>\n       gork leader <list|info|kill>\n       gork dashboard [flags]\n       gork login [--oauth|--device-auth]\n       gork logout\n       gork setup\n       gork doctor [--json]\n       gork doctor fix [ssh-wrap|tmux-clipboard|dcs-passthrough|tmux-extended-keys] [--yes]\n       gork inspect [--json] [--config path]\n       gork mcp <list|add|remove|doctor>\n       gork models [--config path]\n       gork share <session-id>\n       gork trace <session-id> [--local] [-o path] [--json]\n       gork update [--check] [--json]\n       gork wrap <command> [args...]\n       gork version [--json]\n       gork completions <bash|elvish|fish|powershell|zsh>\n       gork plugin <list|install|update|uninstall|enable|disable|details|validate|marketplace>\n       gork sessions <list|search|delete>\n       gork export <session-id> [output] [-c|--clipboard]\n       gork worktree <list|show|rm|gc|db>\n       gork memory clear [--workspace|--global|--all] [-y|--yes]\n\n")
 		flags.PrintDefaults()
@@ -246,6 +250,9 @@ func parseRunOptions(args []string, stderr io.Writer) (options, *flag.FlagSet, e
 		}
 		if flag.Name == "hunk-tracker-mode" {
 			opts.hunkTrackerModeSet = true
+		}
+		if flag.Name == "max-steps" || flag.Name == "max-turns" {
+			opts.maxStepsSet = true
 		}
 		switch flag.Name {
 		case "single", "print", "p":
@@ -273,6 +280,9 @@ func parseRunOptions(args []string, stderr io.Writer) (options, *flag.FlagSet, e
 		default:
 			return options{}, flags, fmt.Errorf("invalid --reasoning-effort %q", cleanCLIText(opts.reasoningEffort))
 		}
+	}
+	if opts.maxStepsSet && opts.maxSteps < 1 {
+		return options{}, flags, errors.New("--max-turns must be greater than zero")
 	}
 	if opts.dashboard && len(flags.Args()) > 0 {
 		return options{}, flags, errors.New("dashboard does not accept positional arguments")
@@ -351,6 +361,13 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	opts, flags, err := parseRunOptions(args, stderr)
 	if err != nil {
 		return err
+	}
+	if opts.agentProfilePath != "" {
+		profile, profileErr := loadAgentProfile(opts.agentProfilePath)
+		if profileErr != nil {
+			return profileErr
+		}
+		opts.agentProfilePath, opts.agentProfile = profile.Path, &profile
 	}
 	if opts.dashboard {
 		opts.tui = true
@@ -3462,6 +3479,10 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		if err != nil {
 			return nil, nil, err
 		}
+		ws, profileMemory, err := bindProfileMemory(opts.agentProfile, ws)
+		if err != nil {
+			return nil, nil, err
+		}
 		instructionFiles, err := ws.LoadInstructions(cfg.Compat)
 		if err != nil {
 			return nil, nil, err
@@ -3483,7 +3504,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		sessionCfg.ApplyModelCache(modelCacheSnapshot())
 		modelCatalog := sessionCfg
 		var modelCatalogMu sync.RWMutex
-		modelID, sessionCfg := resolveACPSessionModelEntry(sessionCfg, sessionConfig.Model, sessionConfig.ResumePath != "")
+		modelID, sessionCfg := resolveACPSessionModelEntry(sessionCfg, profileModelRequest(opts.agentProfile, sessionConfig.Model, opts.model), sessionConfig.ResumePath != "")
 		if sessionConfig.ResumePath != "" {
 			sessionCfg.Sandbox.Profile, err = resumeSandboxProfile(
 				sessionConfig.ResumePath, sessionCfg.Sandbox.Profile,
@@ -3493,14 +3514,25 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 				return nil, nil, err
 			}
 		}
-		reasoningEffort := sessionCfg.ReasoningEffort
-		if sessionConfig.ReasoningEffort != "" && sessionCfg.ModelSupportsReasoningEffort {
-			reasoningEffort = sessionConfig.ReasoningEffort
+		reasoningEffort := profileEffort(opts.agentProfile, sessionConfig.ReasoningEffort, opts.reasoningEffort, sessionCfg.ReasoningEffort, sessionCfg.ModelSupportsReasoningEffort)
+		runnerSkills, preloadedSkills, err := applyProfileSkills(opts.agentProfile, catalog, ws.Root(), sessionCfg, enabledPlugins(plugins))
+		if err != nil {
+			return nil, nil, err
 		}
-		instructions := joinInstructions(cfg.SystemPrompt, workspace.FormatInstructions(instructionFiles), catalog.Summary())
+		if runnerSkills != nil {
+			catalog = runnerSkills
+		}
+		profilePrompt := cfg.SystemPrompt
+		if opts.agentProfile != nil && opts.system == "" {
+			profilePrompt = opts.agentProfile.Prompt
+		}
+		instructions := joinInstructions(profilePrompt, profileMemory, preloadedSkills, workspace.FormatInstructions(instructionFiles))
+		if runnerSkills != nil {
+			instructions = joinInstructions(instructions, runnerSkills.Summary())
+		}
 		permissionPrompts := &permissionPromptApprover{base: protocolApprover}
 		sessionMode := resolveACPSessionPermissionMode(
-			mode, sessionConfig.YoloMode, sessionConfig.AutoMode,
+			profilePermissionMode(opts.agentProfile, mode, opts.approvalSet), sessionConfig.YoloMode, sessionConfig.AutoMode,
 			sessionCfg.DisableBypassPermissionsMode, sessionCfg.AutoModeEnabled(),
 		)
 		modeApprover, err := tools.NewModeApproverWithLocks(sessionMode, permissionPrompts, sessionCfg.DisableBypassPermissionsMode, !sessionCfg.AutoModeEnabled())
@@ -3513,6 +3545,13 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		}
 		registry := tools.NewRegistryWithHunkMode(ws, approver, sessionConfig.HunkTrackerMode)
 		applyRunToolDisables(registry, opts)
+		if opts.agentProfile != nil {
+			allowed := opts.agentProfile.Tools
+			if opts.agentProfile.Memory != "" && len(allowed) > 0 {
+				allowed = append(append([]string(nil), allowed...), "read_file", "search_replace", "write_file")
+			}
+			registry.SetToolFilter(allowed, opts.agentProfile.DisallowedTools)
+		}
 		if err := registry.ConfigureSandbox(sessionCfg.Sandbox.Profile); err != nil {
 			_ = registry.Close()
 			return nil, nil, err
@@ -3618,7 +3657,14 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			_ = registry.Close()
 			_ = logger.Close()
 		}
-		if err := registry.Register(catalog.Tool()); err != nil {
+		if runnerSkills != nil {
+			if err := registry.Register(runnerSkills.Tool()); err != nil {
+				cleanup()
+				return nil, nil, err
+			}
+		}
+		profileMCPServers, err := applyProfileMCP(opts.agentProfile, &sessionCfg)
+		if err != nil {
 			cleanup()
 			return nil, nil, err
 		}
@@ -3630,7 +3676,8 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 				server.NotifyMCPToolsChanged(logger.ID(), name, tools)
 			}
 		})
-		if err = mcpRuntime.Update(sessionCtx, sessionConfig.MCPServers); err != nil {
+		requestedMCP := append(cloneMCPServerConfigs(sessionConfig.MCPServers), profileMCPServers...)
+		if err = mcpRuntime.Update(sessionCtx, requestedMCP); err != nil {
 			cleanup()
 			return nil, nil, err
 		}
@@ -3675,7 +3722,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		pluginState.hookCfg = hooks.Config{
 			WorkspaceRoot: ws.Root(), Compat: sessionCfg.Compat, ProjectTrusted: projectTrusted, Plugins: enabledPlugins(plugins),
 		}
-		pluginState.hooks = hooks.Discover(pluginState.hookCfg)
+		pluginState.hooks = applyProfileHooks(opts.agentProfile, hooks.Discover(pluginState.hookCfg), ws.Root())
 		pluginState.hookRun = &hooks.Runtime{
 			Catalog: pluginState.hooks, WorkspaceRoot: ws.Root(), SessionID: logger.ID(), Model: sessionCfg.Model,
 		}
@@ -3708,7 +3755,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 				PermissionClassifier: permissionClassifier,
 				ContextWindow:        sessionCfg.ContextWindow, CompactThresholdPercent: sessionCfg.AutoCompactThresholdPercent,
 				TwoPassCompaction: sessionCfg.TwoPassCompaction,
-				ResolveModel:      resolveSubagentModel, AvailableModels: sessionCfg.ModelSlugs(), Skills: catalog,
+				ResolveModel:      resolveSubagentModel, AvailableModels: sessionCfg.ModelSlugs(), Skills: runnerSkills,
 				SkillConfig: workspaceSkillsConfig(sessionCfg, plugins), Worktrees: server.WorktreeManager(),
 				Observer:   &sessionSubagentObserver{server: server, sessionID: logger.ID(), logger: logger},
 				SessionDir: filepath.Dir(logger.Path()), ParentSessionID: logger.ID(),
@@ -3768,6 +3815,9 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			source.Compat = reloaded.Compat
 			base := source
 			base.MCPServers = config.DiscoverMCPServers(pluginState.root, base, enabledPlugins(inventory), pluginState.trusted)
+			if _, err := applyProfileMCP(opts.agentProfile, &base); err != nil {
+				return err
+			}
 			if err := pluginState.mcp.UpdateBase(updateCtx, base); err != nil {
 				return err
 			}
@@ -3872,6 +3922,10 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 				}
 				mcpBase := mcpSource
 				mcpBase.MCPServers = config.DiscoverMCPServers(state.root, mcpBase, enabledPlugins(inventory), trusted)
+				if _, err := applyProfileMCP(opts.agentProfile, &mcpBase); err != nil {
+					state.updateMu.Unlock()
+					return nil, err
+				}
 				if err := state.mcp.UpdateBase(updateCtx, mcpBase); err != nil {
 					rollbackErr := state.catalog.ReconfigurePlugins(enabledPlugins(previousInventory))
 					state.updateMu.Unlock()
@@ -3889,6 +3943,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 					}
 					previousMCP := mcpSource
 					previousMCP.MCPServers = config.DiscoverMCPServers(state.root, previousMCP, enabledPlugins(previousInventory), previousTrusted)
+					_, _ = applyProfileMCP(opts.agentProfile, &previousMCP)
 					if mcpErr := state.mcp.UpdateBase(updateCtx, previousMCP); mcpErr != nil {
 						rollbackErr = errors.Join(rollbackErr, mcpErr)
 					}
@@ -3982,8 +4037,12 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			}
 			return reloadMCPBase(updateCtx)
 		}
+		maxSteps := cfg.MaxSteps
+		if opts.agentProfile != nil && opts.agentProfile.MaxTurns > 0 && opts.maxSteps == 0 {
+			maxSteps = opts.agentProfile.MaxTurns
+		}
 		runner := &agent.Runner{
-			Client: modelClient, Tools: registry, Skills: catalog, PluginInventory: pluginInventory,
+			Client: modelClient, Tools: registry, Skills: runnerSkills, PluginInventory: pluginInventory,
 			Personas: personas.New(pluginState.root), Logger: logger,
 			HookCatalog: pluginState.hooks, HookPolicy: pluginState.hookRun,
 			ListTasks: registry.BackgroundTasks, KillTask: registry.KillBackgroundTask,
@@ -4005,7 +4064,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			},
 			ModelID: modelID, Model: sessionCfg.Model, ModelOptions: acpModelOptions(modelCatalog), ReasoningEffort: reasoningEffort,
 			Authentication: sessionAuthentication(sessionCfg.APIKey, authPath, authConfig.Scope()),
-			Instructions:   instructions, MaxSteps: cfg.MaxSteps,
+			Instructions:   instructions, MaxSteps: maxSteps,
 			PermissionClassifier: permissionClassifier,
 			TextOutput:           textOutput, StatusOutput: statusOutput,
 			ContextWindow: sessionCfg.ContextWindow, CompactThresholdPercent: sessionCfg.AutoCompactThresholdPercent,

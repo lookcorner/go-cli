@@ -77,6 +77,8 @@ type Catalog struct {
 	mu           sync.RWMutex
 	specs        []Spec
 	loadErrors   []string
+	inlineSpecs  []Spec
+	inlineErrors []string
 	disabled     map[string]bool
 	disabledPath string
 	config       Config
@@ -162,6 +164,8 @@ func (c *Catalog) Reconfigure(config Config) {
 		loadErrors = append(loadErrors, warnings...)
 	}
 	c.mu.Lock()
+	specs = append(specs, c.inlineSpecs...)
+	loadErrors = append(loadErrors, c.inlineErrors...)
 	for index := range specs {
 		specs[index].Disabled = c.disabled[specs[index].Name]
 	}
@@ -283,6 +287,8 @@ func (c *Catalog) WithInline(data []byte, sourceDir, prefix, label string) *Cata
 		c.mu.RLock()
 		result.specs = append(result.specs, c.specs...)
 		result.loadErrors = append(result.loadErrors, c.loadErrors...)
+		result.inlineSpecs = append(result.inlineSpecs, c.inlineSpecs...)
+		result.inlineErrors = append(result.inlineErrors, c.inlineErrors...)
 		result.disabledPath, result.config = c.disabledPath, c.config
 		result.clientHooks, result.client = cloneClientHooks(c.clientHooks), c.client
 		for name, disabled := range c.disabled {
@@ -292,6 +298,8 @@ func (c *Catalog) WithInline(data []byte, sourceDir, prefix, label string) *Cata
 	}
 	result.specs = append(result.specs, loaded...)
 	result.loadErrors = append(result.loadErrors, warnings...)
+	result.inlineSpecs = append(result.inlineSpecs, loaded...)
+	result.inlineErrors = append(result.inlineErrors, warnings...)
 	return result
 }
 

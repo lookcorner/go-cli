@@ -358,6 +358,32 @@ func TestRegistryReplaceAtomicallyUpdatesDefinitions(t *testing.T) {
 	}
 }
 
+func TestRegistryToolFilterAppliesToExistingAndDynamicTools(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry(ws, PromptApprover{Mode: PermissionAuto})
+	defer registry.Close()
+	registry.SetToolFilter([]string{"read", "dynamic_keep", "update_goal"}, []string{"list_files"})
+	if !registry.HasTool("read_file") || !registry.HasTool("update_goal") || registry.HasTool("list_files") || registry.HasTool("shell") {
+		t.Fatalf("filtered tools=%v", registry.Definitions())
+	}
+	if err := registry.Register(fixtureTool{name: "dynamic_drop"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(fixtureTool{name: "dynamic_keep"}); err != nil {
+		t.Fatal(err)
+	}
+	if registry.HasTool("dynamic_drop") || !registry.HasTool("dynamic_keep") {
+		t.Fatalf("dynamic tools=%v", registry.Definitions())
+	}
+	registry.SetWebFetchEnabled(true)
+	if registry.HasTool("web_fetch") {
+		t.Fatal("feature toggle bypassed the profile tool filter")
+	}
+}
+
 func TestRegistryNormalizesStringArguments(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("hello\n"), 0o600); err != nil {

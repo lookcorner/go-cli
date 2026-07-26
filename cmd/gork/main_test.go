@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/lookcorner/go-cli/internal/agent"
+	"github.com/lookcorner/go-cli/internal/agents"
 	"github.com/lookcorner/go-cli/internal/announcement"
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/auth"
@@ -416,6 +417,44 @@ func TestParseRunOptionsSupportsReferenceAliases(t *testing.T) {
 	}
 }
 
+func TestAgentProfileExplicitOverridesKeepPrecedence(t *testing.T) {
+	profile := &agents.Definition{Model: "profile-model", Effort: "high", PermissionMode: "bypassPermissions"}
+	if got := profileModelRequest(profile, "session-model", "cli-model"); got != "session-model" {
+		t.Fatalf("session model=%q", got)
+	}
+	if got := profileModelRequest(profile, "", "cli-model"); got != "cli-model" {
+		t.Fatalf("CLI model=%q", got)
+	}
+	if got := profileEffort(profile, "medium", "low", "minimal", true); got != "medium" {
+		t.Fatalf("session effort=%q", got)
+	}
+	if got := profileEffort(profile, "", "low", "minimal", true); got != "low" {
+		t.Fatalf("CLI effort=%q", got)
+	}
+	if got := profilePermissionMode(profile, tools.PermissionPrompt, true); got != tools.PermissionPrompt {
+		t.Fatalf("CLI permission=%q", got)
+	}
+}
+
+func TestAgentProfileExplicitMCPServerOverridesInheritance(t *testing.T) {
+	enabled := true
+	cfg := config.Config{MCPServers: map[string]config.MCPServerConfig{
+		"kept": {Command: "fixture", Enabled: &enabled},
+		"drop": {Command: "other", Enabled: &enabled},
+	}}
+	profile := &agents.Definition{
+		Name: "reviewer", MCPInheritance: agents.MCPInheritance{Mode: "none"},
+		MCPServers: []agents.MCPServerRef{{Name: "kept"}},
+	}
+	owned, err := applyProfileMCP(profile, &cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(owned) != 1 || owned[0].Name != "kept" || owned[0].Disabled || cfg.MCPServers["kept"].IsEnabled() || cfg.MCPServers["drop"].IsEnabled() {
+		t.Fatalf("owned=%#v config=%#v", owned, cfg.MCPServers)
+	}
+}
+
 func TestParseRunOptionsSupportsApprovalAndPromptAliases(t *testing.T) {
 	for _, test := range []struct {
 		args   []string
@@ -436,6 +475,15 @@ func TestParseRunOptionsRejectsInvalidReasoningEffort(t *testing.T) {
 	if _, _, err := parseRunOptions([]string{"--reasoning-effort", "extreme"}, io.Discard); err == nil ||
 		!strings.Contains(err.Error(), "invalid --reasoning-effort") {
 		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestParseRunOptionsRejectsInvalidMaxTurns(t *testing.T) {
+	for _, value := range []string{"0", "-1"} {
+		if _, _, err := parseRunOptions([]string{"--max-turns", value}, io.Discard); err == nil ||
+			!strings.Contains(err.Error(), "greater than zero") {
+			t.Fatalf("value=%s error=%v", value, err)
+		}
 	}
 }
 

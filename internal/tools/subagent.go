@@ -154,6 +154,8 @@ func (r *Registry) SetSubagentBackend(backend SubagentBackend) error {
 		return errors.New("task tool is already registered")
 	}
 	r.subagents.set(backend)
-	r.tools["task"] = &subagentTool{holder: r.subagents}
+	if r.toolAllowedLocked("task") {
+		r.tools["task"] = &subagentTool{holder: r.subagents}
+	}
 	return nil
 }

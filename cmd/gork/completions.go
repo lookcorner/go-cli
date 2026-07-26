@@ -30,7 +30,7 @@ var completionRoot = completionSpec{
 	},
 	children: map[string]completionSpec{
 		"agent": {
-			flags:    words("--always-approve --allow --bind --cli-chat-proxy-base-url --config --cwd --deny --disable-web-search --effort --experimental-memory --leader --model --no-ask-user --no-exit-on-disconnect --no-leader --no-memory --no-plan --no-subagents --permission-mode --plugin-dir --reasoning-effort --secret --session-dir --trust --workspace --xai-api-base-url --yolo -m"),
+			flags:    words("--agent-profile --always-approve --allow --bind --cli-chat-proxy-base-url --config --cwd --deny --disable-web-search --effort --experimental-memory --leader --max-turns --model --no-ask-user --no-exit-on-disconnect --no-leader --no-memory --no-plan --no-subagents --permission-mode --plugin-dir --reasoning-effort --secret --session-dir --trust --workspace --xai-api-base-url --yolo -m"),
 			children: leaves("leader", "serve", "stdio"),
 		},
 		"completions": {children: leaves("bash", "elvish", "fish", "powershell", "zsh")},
@@ -97,7 +97,7 @@ var completionValueFlags = map[string]bool{
 	"--deny": true, "--goal-runs": true, "--issuer": true, "--limit": true, "--pid": true,
 	"--effort": true, "--json-schema": true, "--max-age": true, "--max-steps": true, "--max-turns": true, "--model": true,
 	"--load": true, "--output-format": true, "--permission-mode": true, "--previous-response-id": true, "--print": true,
-	"--plugin-dir": true, "--prompt-file": true, "--prompt-json": true, "--reasoning-effort": true, "--rules": true, "--single": true,
+	"--agent-profile": true, "--plugin-dir": true, "--prompt-file": true, "--prompt-json": true, "--reasoning-effort": true, "--rules": true, "--single": true,
 	"--args": true, "--command": true, "--env": true, "--header": true, "--repo": true, "--resume": true, "--sandbox": true, "--scope": true, "--scopes": true,
 	"--secret": true, "--session-dir": true, "--session-id": true, "--system": true, "--system-prompt": true, "--system-prompt-override": true,
 	"--timeout": true, "--type": true, "--transport": true, "--url": true, "--version": true, "--workspace": true, "--xai-api-base-url": true, "-H": true, "-e": true, "-m": true,

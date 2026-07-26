@@ -31,7 +31,7 @@ func TestCompletionCandidatesFollowCommandTree(t *testing.T) {
 	}{
 		{nil, []string{"--always-approve", "--continue", "--cwd", "--disable-web-search", "--fork-session", "--json-schema", "--load", "--max-turns", "--no-ask-user", "--no-plan", "--no-subagents", "--output-format", "--prompt-file", "--prompt-json", "--reasoning-effort", "--ref", "--session-id", "--single", "--worktree", "--worktree-ref", "-c", "-m", "-p", "-r", "-s", "-w", "-V", "agent", "completions", "dashboard", "leader", "models", "plugin", "share", "trace", "update", "version", "wrap", "worktree"}},
 		{[]string{"agent", ""}, []string{"leader", "serve", "stdio"}},
-		{[]string{"agent", "--"}, []string{"--always-approve", "--bind", "--cli-chat-proxy-base-url", "--leader", "--model", "--no-leader", "--plugin-dir", "--reasoning-effort", "--secret", "--xai-api-base-url"}},
+		{[]string{"agent", "--"}, []string{"--agent-profile", "--always-approve", "--bind", "--cli-chat-proxy-base-url", "--leader", "--max-turns", "--model", "--no-leader", "--plugin-dir", "--reasoning-effort", "--secret", "--xai-api-base-url"}},
 		{[]string{"dashboard", "--"}, []string{"--config", "--fullscreen", "--minimal", "--session-dir", "--trust", "--workspace"}},
 		{[]string{"leader", ""}, []string{"info", "kill", "list"}},
 		{[]string{"leader", "info", "--"}, []string{"--json", "--pid"}},
@@ -71,7 +71,7 @@ func TestCompletionCandidatesSkipFlagValues(t *testing.T) {
 	if len(choices) != 1 || choices[0] != "--limit" {
 		t.Fatalf("flags after a consumed value=%v", choices)
 	}
-	for _, flag := range []string{"--plugin-dir", "--cli-chat-proxy-base-url", "--xai-api-base-url"} {
+	for _, flag := range []string{"--agent-profile", "--plugin-dir", "--cli-chat-proxy-base-url", "--xai-api-base-url"} {
 		if choices := completionCandidates([]string{"agent", flag, "value"}); len(choices) != 0 {
 			t.Fatalf("%s value received command completions: %v", flag, choices)
 		}

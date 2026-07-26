@@ -232,6 +232,10 @@ func TestCatalogWithInlineHooksIsIsolatedAndRemapsStop(t *testing.T) {
 	if len(snapshot.Hooks) != 3 || !stop || !post {
 		t.Fatalf("snapshot=%#v", snapshot)
 	}
+	child.Reconfigure(Config{})
+	if reloaded := child.Snapshot(); len(reloaded.Hooks) != 2 {
+		t.Fatalf("inline hooks were lost on reload: %#v", reloaded)
+	}
 }
 
 func TestPluginHooksFilterNonPluginEvents(t *testing.T) {

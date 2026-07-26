@@ -1127,7 +1127,12 @@ editor/IDE integrations:
 
 `gork agent stdio` is the reference command form and uses the same ACP runtime
 as `--acp`. It accepts model, reasoning, permission, workspace, session, endpoint,
-folder-trust, memory, and capability flags before `stdio`. Repeatable
+folder-trust, memory, and capability flags before `stdio`.
+`--agent-profile PATH` loads a Markdown agent definition once at startup and
+applies its prompt, model, effort, maximum turns, permission bypass, tool and
+skill policy, MCP inheritance/private servers, inline hooks, and scoped agent
+memory to every primary ACP session. Explicit client and CLI model, effort,
+permission, prompt, and maximum-turn overrides keep precedence. Repeatable
 `--plugin-dir DIR` arguments inject trusted process-local plugins at highest
 priority for direct stdio and WebSocket server runtimes; leader-backed sessions
 warn and ignore them. Shared leader use is

@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -167,9 +168,11 @@ func TestAgentFollowerConfigAndNoLeaderPrecedence(t *testing.T) {
 	t.Setenv("GROK_HOME", home)
 	t.Setenv("GORK_API_KEY", "test-key")
 	var spawnCount int
+	var spawnedArgs []string
 	previous := spawnAgentLeader
 	spawnAgentLeader = func(root string, args []string) error {
 		spawnCount++
+		spawnedArgs = append([]string(nil), args...)
 		server, err := leader.Start(context.Background(), leader.ServerConfig{
 			Root: root,
 		})
@@ -186,10 +189,14 @@ func TestAgentFollowerConfigAndNoLeaderPrecedence(t *testing.T) {
 	t.Cleanup(func() { spawnAgentLeader = previous })
 
 	request := `{"jsonrpc":"2.0","id":12,"method":"initialize","params":{"protocolVersion":1}}` + "\n"
+	profilePath := filepath.Join(home, "reviewer.md")
+	if err := os.WriteFile(profilePath, []byte("---\nname: reviewer\ndescription: Review code\n---\nReview carefully."), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	var output bytes.Buffer
 	var stderr bytes.Buffer
 	if err := runAgent([]string{
-		"--config", configPath, "--plugin-dir", t.TempDir(), "--model", "test-model", "stdio",
+		"--config", configPath, "--plugin-dir", t.TempDir(), "--agent-profile", profilePath, "--model", "test-model", "stdio",
 	}, strings.NewReader(request), &output, &stderr); err != nil {
 		t.Fatal(err)
 	}
@@ -198,6 +205,13 @@ func TestAgentFollowerConfigAndNoLeaderPrecedence(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "--plugin-dir is ignored in leader mode") {
 		t.Fatalf("stderr=%q", stderr.String())
+	}
+	canonicalProfile, err := filepath.EvalSymlinks(profilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(spawnedArgs, canonicalProfile) {
+		t.Fatalf("profile was not forwarded to leader: %v", spawnedArgs)
 	}
 
 	output.Reset()
@@ -219,9 +233,7 @@ func waitForLeaderSocket(t *testing.T, socketPath string, done <-chan error, std
 			t.Fatalf("leader exited before listening: %v\n%s", err, stderr.String())
 		default:
 		}
-		connection, err := net.Dial("unix", socketPath)
-		if err == nil {
-			_ = connection.Close()
+		if _, err := os.Lstat(socketPath); err == nil {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)

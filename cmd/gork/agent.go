@@ -25,6 +25,14 @@ func runAgent(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if options.agentProfile != "" {
+		profile, err := canonicalAgentProfilePath(options.agentProfile)
+		if err != nil {
+			return err
+		}
+		normalized = removeAgentValueOption(normalized, "--agent-profile")
+		normalized = append(normalized, "--agent-profile", profile)
+	}
 	usesLeader := agentUsesLeader(*options, normalized)
 	if len(options.pluginDirs) > 0 && usesLeader {
 		fmt.Fprintln(stderr, "gork: --plugin-dir is ignored in leader mode; run with --no-leader to load per-process plugins")
@@ -61,6 +69,7 @@ type agentServerOptions struct {
 	noLeader           bool
 	noExitOnDisconnect bool
 	pluginDirs         []string
+	agentProfile       string
 }
 
 func normalizeAgentArgs(args []string) ([]string, *agentServerOptions, error) {
@@ -84,8 +93,8 @@ func normalizeAgentArgs(args []string) ([]string, *agentServerOptions, error) {
 			}
 			mode = arg
 		case "-m", "--model", "--reasoning-effort", "--effort", "--config", "--cwd", "--workspace",
-			"--session-dir", "--allow", "--deny", "--permission-mode", "--plugin-dir",
-			"--cli-chat-proxy-base-url", "--xai-api-base-url":
+			"--session-dir", "--allow", "--deny", "--permission-mode", "--plugin-dir", "--max-turns",
+			"--agent-profile", "--cli-chat-proxy-base-url", "--xai-api-base-url":
 			value, err := next()
 			if err != nil {
 				return nil, nil, err
@@ -93,6 +102,9 @@ func normalizeAgentArgs(args []string) ([]string, *agentServerOptions, error) {
 			switch arg {
 			case "--plugin-dir":
 				server.pluginDirs = append(server.pluginDirs, value)
+				result = append(result, arg, value)
+			case "--agent-profile":
+				server.agentProfile = value
 				result = append(result, arg, value)
 			case "--xai-api-base-url":
 				result = append(result, "--base-url", value)
@@ -123,7 +135,7 @@ func normalizeAgentArgs(args []string) ([]string, *agentServerOptions, error) {
 			return nil, nil, flag.ErrHelp
 		case "--leader":
 			server.forceLeader = true
-		case "--reauth", "--reauthenticate", "--agent-profile",
+		case "--reauth", "--reauthenticate",
 			"--grok-ws-origin", "--grok-ws-url":
 			return nil, nil, fmt.Errorf("agent option %q is not implemented", cleanCLIText(arg))
 		default:
@@ -144,6 +156,9 @@ func normalizeAgentArgs(args []string) ([]string, *agentServerOptions, error) {
 				}
 				if value, ok := strings.CutPrefix(arg, "--plugin-dir="); ok {
 					server.pluginDirs = append(server.pluginDirs, value)
+				}
+				if value, ok := strings.CutPrefix(arg, "--agent-profile="); ok {
+					server.agentProfile = value
 				}
 				result = append(result, arg)
 				continue
@@ -218,7 +233,7 @@ func agentValueOption(arg string) bool {
 	for _, name := range []string{
 		"--model=", "--reasoning-effort=", "--effort=", "--config=", "--cwd=", "--workspace=",
 		"--session-dir=", "--allow=", "--deny=", "--permission-mode=", "--bind=", "--secret=",
-		"--plugin-dir=", "--cli-chat-proxy-base-url=", "--xai-api-base-url=",
+		"--plugin-dir=", "--agent-profile=", "--max-turns=", "--cli-chat-proxy-base-url=", "--xai-api-base-url=",
 	} {
 		if strings.HasPrefix(arg, name) && len(arg) > len(name) {
 			return true
@@ -249,13 +264,17 @@ func canonicalAgentPluginDirs(paths []string, output io.Writer) []string {
 }
 
 func removeAgentPluginDirs(args []string) []string {
+	return removeAgentValueOption(args, "--plugin-dir")
+}
+
+func removeAgentValueOption(args []string, option string) []string {
 	result := make([]string, 0, len(args))
 	for index := 0; index < len(args); index++ {
-		if args[index] == "--plugin-dir" {
+		if args[index] == option {
 			index++
 			continue
 		}
-		if strings.HasPrefix(args[index], "--plugin-dir=") {
+		if strings.HasPrefix(args[index], option+"=") {
 			continue
 		}
 		result = append(result, args[index])
@@ -277,6 +296,8 @@ Supported options:
       --cwd DIR, --workspace DIR
       --session-dir DIR
       --plugin-dir DIR      load a trusted plugin for this process (repeatable)
+      --agent-profile PATH  load an agent profile from a Markdown file
+      --max-turns N         maximum number of agent turns
       --cli-chat-proxy-base-url URL
       --xai-api-base-url URL
       --trust

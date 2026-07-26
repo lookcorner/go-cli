@@ -147,6 +147,8 @@ type Registry struct {
 	environment   map[string]string
 	sandbox       SandboxProfile
 	pathHints     *atomic.Bool
+	allowedTools  map[string]bool
+	deniedTools   map[string]bool
 }
 
 type mutationCheckpoint struct {
@@ -443,7 +445,7 @@ func (r *Registry) ConfigureWebFetch(config WebFetchConfig) {
 func (r *Registry) SetWebFetchEnabled(enabled bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if enabled {
+	if enabled && r.toolAllowedLocked("web_fetch") {
 		r.tools["web_fetch"] = r.webFetch
 	} else {
 		delete(r.tools, "web_fetch")
@@ -904,6 +906,9 @@ func (r *Registry) Register(tool Tool) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if !r.toolAllowedLocked(name) {
+		return nil
+	}
 	if _, exists := r.tools[name]; exists {
 		return fmt.Errorf("tool %q is already registered", name)
 	}
@@ -938,9 +943,33 @@ func (r *Registry) Replace(oldNames []string, replacements []Tool) ([]string, er
 		delete(r.tools, name)
 	}
 	for index, replacement := range replacements {
+		if !r.toolAllowedLocked(newNames[index]) {
+			continue
+		}
 		r.tools[newNames[index]] = replacement
 	}
 	return newNames, nil
+}
+
+// SetToolFilter applies a primary-session allow/deny policy to current and
+// subsequently registered tools.
+func (r *Registry) SetToolFilter(allowed, denied []string) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.allowedTools, r.deniedTools = toolNameSet(allowed), toolNameSet(denied)
+	for name := range r.tools {
+		if !r.toolAllowedLocked(name) {
+			delete(r.tools, name)
+		}
+	}
+	r.mu.Unlock()
+}
+
+func (r *Registry) toolAllowedLocked(name string) bool {
+	canonical := strings.ToLower(name)
+	return !r.deniedTools[canonical] && (len(r.allowedTools) == 0 || r.allowedTools[canonical])
 }
 
 func (r *Registry) Definitions() []api.ToolDefinition {
