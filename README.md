@@ -346,8 +346,10 @@ interactive command in a local Unix PTY or Windows ConPTY. OSC 52 clipboard
 writes, including tmux passthrough sequences, are copied to the local native
 clipboard and removed from visible output. Latched mouse/paste/focus/alt-screen
 and kitty keyboard modes are restored when a child dies dirty; clean exits stay
-byte-transparent. Non-interactive and unsupported-platform runs execute the
-command directly, preserving its output and exit status.
+byte-transparent. When a wrapped remote session misses a local image paste, wrap
+answers the private host-image OSC with a bracketed clipboard PNG frame.
+Non-interactive and unsupported-platform runs execute the command directly,
+preserving its output and exit status.
 
 While the ACP server is running, model changes in `config.toml`, local/system
 `managed_config.toml`, and `requirements.toml` are detected automatically.

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"image"
 	"runtime"
@@ -11,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	appclipboard "github.com/lookcorner/go-cli/internal/clipboard"
+	"github.com/lookcorner/go-cli/internal/wrap"
 )
 
 func TestBracketedPasteInsertsAtCursorAsOneUndoStep(t *testing.T) {
@@ -132,6 +134,42 @@ func TestClipboardPasteReadsTextAndImage(t *testing.T) {
 			t.Fatalf("images=%d status=%q", len(m.promptImages), m.status)
 		}
 	})
+}
+
+func TestWrapHostImagePasteAttachesImage(t *testing.T) {
+	data := encodeTestPNG(t, image.NewRGBA(image.Rect(0, 0, 2, 2)))
+	body := wrap.MagicIMG + "\nimage/png\n" + base64.StdEncoding.EncodeToString(data)
+	m := &model{status: "ready"}
+	updated, command := m.Update(tea.PasteMsg{Content: body})
+	m = updated.(*model)
+	if command != nil || len(m.promptImages) != 1 || !strings.HasPrefix(m.promptImages[0].ImageURL, "data:image/png;base64,") {
+		t.Fatalf("command=%v images=%#v", command != nil, m.promptImages)
+	}
+	updated, _ = m.Update(tea.PasteMsg{Content: wrap.MagicNONE})
+	m = updated.(*model)
+	if len(m.promptImages) != 1 || string(m.input) != "" {
+		t.Fatalf("NONE should not insert text: images=%d input=%q", len(m.promptImages), m.input)
+	}
+}
+
+func TestClipboardEmptyRequestsWrapHostImage(t *testing.T) {
+	t.Setenv("GROK_OSC52_SINK", "1")
+	m := &model{
+		ctx: context.Background(),
+		clipboardRead: func(context.Context) (appclipboard.Content, error) {
+			return appclipboard.Content{}, appclipboard.ErrEmpty
+		},
+	}
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: 'v', Text: "v", Mod: tea.ModCtrl}))
+	m = updated.(*model)
+	if command == nil {
+		t.Fatal("expected clipboard read command")
+	}
+	updated, _ = m.Update(command())
+	m = updated.(*model)
+	if m.status != "requesting host clipboard image" {
+		t.Fatalf("status=%q", m.status)
+	}
 }
 
 func TestLinuxMiddleClickReadsPrimarySelectionOnce(t *testing.T) {

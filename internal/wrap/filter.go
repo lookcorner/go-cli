@@ -27,12 +27,14 @@ var tmuxPrefix = []byte("tmux;\x1b\x1b]")
 
 // Filter removes valid OSC 52 writes from a byte stream and forwards their
 // decoded payload to the local clipboard sink. Complete CSI sequences are
-// observed for latched-mode restore and forwarded unchanged.
+// observed for latched-mode restore and forwarded unchanged. Private wrap
+// host-image request OSCs are consumed and handed to onImageRequest.
 type Filter struct {
-	state filterState
-	buf   []byte
-	sink  func([]byte)
-	modes *ModeTracker
+	state          filterState
+	buf            []byte
+	sink           func([]byte)
+	modes          *ModeTracker
+	onImageRequest func()
 }
 
 func NewFilter(sink func([]byte)) *Filter {
@@ -40,6 +42,13 @@ func NewFilter(sink func([]byte)) *Filter {
 		sink = func([]byte) {}
 	}
 	return &Filter{sink: sink, modes: NewModeTracker()}
+}
+
+// SetImageRequestHandler registers the callback for OSC 999;GrokWrapClipboardImage?.
+func (f *Filter) SetImageRequestHandler(handler func()) {
+	if f != nil {
+		f.onImageRequest = handler
+	}
 }
 
 // Modes returns the latched DEC-mode tracker used for dirty-exit restore.
@@ -169,6 +178,12 @@ func (f *Filter) finishTmux(output []byte) []byte {
 }
 
 func (f *Filter) consume(body []byte) bool {
+	if string(body) == RequestOSCBody {
+		if f.onImageRequest != nil {
+			f.onImageRequest()
+		}
+		return true
+	}
 	if len(body) < 4 || string(body[:3]) != "52;" {
 		return false
 	}

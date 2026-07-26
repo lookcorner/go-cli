@@ -38,6 +38,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/terminaldiag"
 	"github.com/lookcorner/go-cli/internal/tools"
 	"github.com/lookcorner/go-cli/internal/voice"
+	"github.com/lookcorner/go-cli/internal/wrap"
 )
 
 const (
@@ -2535,9 +2536,13 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handlePaste(msg.Content)
 	case clipboardEvent:
 		if msg.err != nil {
-			if !errors.Is(msg.err, appclipboard.ErrEmpty) {
-				m.status = "clipboard paste failed: " + msg.err.Error()
+			if errors.Is(msg.err, appclipboard.ErrEmpty) {
+				if requestWrapHostImage() {
+					m.status = "requesting host clipboard image"
+				}
+				return m, nil
 			}
+			m.status = "clipboard paste failed: " + msg.err.Error()
 			return m, nil
 		}
 		if len(msg.content.Data) > 0 {
@@ -2548,6 +2553,12 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 					base64.StdEncoding.EncodeToString(msg.content.Data),
 			})
 			m.status = fmt.Sprintf("image attached · %d total", len(m.promptImages))
+			return m, nil
+		}
+		if strings.TrimSpace(msg.content.Text) == "" {
+			if requestWrapHostImage() {
+				m.status = "requesting host clipboard image"
+			}
 			return m, nil
 		}
 		return m.handlePaste(msg.content.Text)
@@ -5424,6 +5435,19 @@ func (m *model) insertInput(value string) {
 
 func (m *model) handlePaste(value string) (tea.Model, tea.Cmd) {
 	value = normalizePastedText(value)
+	if decoded := wrap.TryDecodeHostImagePaste(value); decoded != nil {
+		if decoded.NoImage || decoded.Image == nil || len(decoded.Image.Data) == 0 || !m.acceptsPaste() {
+			return m, nil
+		}
+		m.imageInputHint.active = false
+		m.promptImages = append(m.promptImages, api.ContentPart{
+			Type: "input_image",
+			ImageURL: "data:" + decoded.Image.MediaType + ";base64," +
+				base64.StdEncoding.EncodeToString(decoded.Image.Data),
+		})
+		m.status = fmt.Sprintf("image attached · %d total", len(m.promptImages))
+		return m, nil
+	}
 	if value == "" || !m.acceptsPaste() {
 		return m, nil
 	}
@@ -5438,6 +5462,13 @@ func (m *model) handlePaste(value string) (tea.Model, tea.Cmd) {
 		m.refreshHistorySearch()
 	}
 	return m, nil
+}
+
+func requestWrapHostImage() bool {
+	return wrap.MaybeRequestHostImage(wrap.SinkActive(), false, "", "", func() error {
+		_, err := fmt.Fprint(os.Stderr, string(wrap.RequestOSCBytes()))
+		return err
+	})
 }
 
 func (m *model) acceptsPaste() bool {

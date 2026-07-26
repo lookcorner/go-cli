@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"sync"
 	"syscall"
 	"unicode/utf8"
 
@@ -55,7 +56,26 @@ func RunPTY(program string, args []string, stdin, stdout, stderr *os.File, copyT
 		}
 	}()
 	resize <- syscall.SIGWINCH
-	go func() { _, _ = io.Copy(master, stdin) }()
+	var masterMu sync.Mutex
+	writeMaster := func(p []byte) (int, error) {
+		masterMu.Lock()
+		defer masterMu.Unlock()
+		return master.Write(p)
+	}
+	go func() {
+		buffer := make([]byte, 8192)
+		for {
+			count, err := stdin.Read(buffer)
+			if count > 0 {
+				if _, writeErr := writeMaster(buffer[:count]); writeErr != nil {
+					return
+				}
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
 
 	filter := NewFilter(func(data []byte) {
 		if copyText == nil || !utf8.Valid(data) {
@@ -64,6 +84,13 @@ func RunPTY(program string, args []string, stdin, stdout, stderr *os.File, copyT
 		if err := copyText(string(data)); err != nil {
 			fmt.Fprintln(stderr, "gork wrap: clipboard copy failed:", err)
 		}
+	})
+	filter.SetImageRequestHandler(func() {
+		go func() {
+			frame := HostClipboardImageFrame(nil)
+			frame = append(frame, '\n')
+			_, _ = writeMaster(frame)
+		}()
 	})
 	defer func() {
 		if restore := filter.EmitRestore(); len(restore) > 0 {
