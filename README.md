@@ -1068,7 +1068,8 @@ reports the build's enforced privacy state without calling the model.
 state; opt-in aliases and ambiguous values such as `on` or `off` are rejected.
 `gork doctor [--json]` and `/doctor` (also `/terminal-setup`, `/terminal-check`, or `/terminal-info`) report the
 detected terminal, multiplexer, SSH and color state, available clipboard routes,
-live tmux option probes when inside tmux, and actionable setup warnings without calling the model.
+live tmux option probes when inside tmux, and actionable setup warnings — including
+`NO_COLOR`, Apple Terminal truecolor/OSC 52 limits, and Byobu-on-screen — without calling the model.
 `gork doctor fix` and `/doctor fix` list automatic fixes. `gork doctor fix ssh-wrap --yes`
 or `/doctor fix ssh-wrap --yes` installs a managed shell alias so interactive `ssh`
 runs through `gork wrap ssh` (Bash/zsh/fish, local non-Windows shells only). Inside

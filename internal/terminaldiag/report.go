@@ -74,7 +74,7 @@ func BuildSnapshot(getenv func(string) string, lookPath func(string) (string, er
 	color := colorSupport(getenv, term)
 	clipboard, clipboardTool := nativeClipboard(lookPath, goos)
 	osc52 := term != "dumb" && (term != "" || brand != "unknown")
-	findings := terminalWarnings(term, color, multiplexer, clipboard, osc52)
+	findings := terminalFindings(getenv, term, brand, color, multiplexer, ssh, clipboard, osc52)
 	var tmux tmuxProbe
 	if strings.Contains(multiplexer, "byobu (screen)") {
 		findings = append(findings, "Byobu is using GNU screen, which has limited clipboard and display support.\n    Switch Byobu to its tmux backend, then restart or reattach the session.")
@@ -213,23 +213,43 @@ func nativeClipboard(lookPath func(string) (string, error), goos string) (bool, 
 	return false, ""
 }
 
-func terminalWarnings(term, color, multiplexer string, clipboard, osc52 bool) []string {
-	var warnings []string
+func terminalFindings(getenv func(string) string, term, brand, color, multiplexer string, ssh, clipboard, osc52 bool) []string {
+	var findings []string
 	if term == "" {
-		warnings = append(warnings, "TERM is not set; terminal capabilities cannot be detected.")
+		findings = append(findings, "TERM is not set; terminal capabilities cannot be detected.")
 	} else if term == "dumb" {
-		warnings = append(warnings, "TERM=dumb disables interactive terminal features.")
+		findings = append(findings, "TERM=dumb disables interactive terminal features.")
 	}
-	if color == "basic" {
-		warnings = append(warnings, "Limited color support; set COLORTERM=truecolor when your terminal supports it.\n    → Automatic setup: `gork doctor fix colorterm`")
-	}
-	if strings.Contains(multiplexer, "tmux") && !strings.Contains(strings.ToLower(term), "256color") {
-		warnings = append(warnings, "tmux is not advertising 256 colors; use tmux-256color as its default terminal.\n    → Automatic setup: `gork doctor fix tmux-truecolor`")
+	findings = append(findings, colorFindings(getenv, term, brand, color, multiplexer)...)
+	if isAppleTerminal(brand) && ssh {
+		findings = append(findings, "Apple Terminal doesn't support OSC 52, so clipboard copy over SSH is unavailable.\n    Run `gork wrap ssh <host>` on your local computer, or use a terminal that supports OSC 52. Gork also saves each copy to the backup file shown in the copy message.")
 	}
 	if !clipboard && !osc52 {
-		warnings = append(warnings, "No clipboard route is available; install a native clipboard tool or enable OSC 52.")
+		findings = append(findings, "No clipboard route is available; install a native clipboard tool or enable OSC 52.")
 	}
-	return warnings
+	return findings
+}
+
+func colorFindings(getenv func(string) string, term, brand, color, multiplexer string) []string {
+	if getenv("NO_COLOR") != "" {
+		return []string{"Colors are off because `NO_COLOR` is set.\n    Unset `NO_COLOR`, then restart Gork."}
+	}
+	if isAppleTerminal(brand) && color != "truecolor" && color != "none" {
+		return []string{"Apple Terminal supports 256 colors, so truecolor themes are unavailable.\n    Use a terminal that supports truecolor, such as Ghostty."}
+	}
+	var findings []string
+	if color == "basic" {
+		findings = append(findings, "Limited color support; set COLORTERM=truecolor when your terminal supports it.\n    → Automatic setup: `gork doctor fix colorterm`")
+	}
+	if strings.Contains(multiplexer, "tmux") && !strings.Contains(strings.ToLower(term), "256color") {
+		findings = append(findings, "tmux is not advertising 256 colors; use tmux-256color as its default terminal.\n    → Automatic setup: `gork doctor fix tmux-truecolor`")
+	}
+	return findings
+}
+
+func isAppleTerminal(brand string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(brand))
+	return normalized == "apple_terminal" || normalized == "apple terminal"
 }
 
 func yesNo(value bool) string {

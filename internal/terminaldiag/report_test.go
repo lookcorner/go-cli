@@ -188,6 +188,41 @@ func TestBuildReportWarnsForBasicTmuxColor(t *testing.T) {
 	}
 }
 
+func TestBuildSnapshotWarnsForNoColor(t *testing.T) {
+	env := map[string]string{"TERM": "xterm-256color", "COLORTERM": "truecolor", "NO_COLOR": "1"}
+	snapshot := BuildSnapshot(func(key string) string { return env[key] }, func(string) (string, error) {
+		return "/bin/pbcopy", nil
+	}, "darwin")
+	if snapshot.Facts.Color != "none" || snapshot.Counts.Issues != 1 ||
+		!strings.Contains(snapshot.Findings[0], "NO_COLOR") ||
+		strings.Contains(strings.Join(snapshot.Findings, "\n"), "colorterm") {
+		t.Fatalf("snapshot=%#v", snapshot)
+	}
+}
+
+func TestBuildSnapshotWarnsForAppleTerminalLimits(t *testing.T) {
+	env := map[string]string{
+		"TERM_PROGRAM": "Apple_Terminal", "TERM": "xterm-256color",
+		"SSH_CONNECTION": "1 2 3 4",
+	}
+	snapshot := BuildSnapshot(func(key string) string { return env[key] }, func(string) (string, error) {
+		return "/bin/pbcopy", nil
+	}, "darwin")
+	joined := strings.Join(snapshot.Findings, "\n")
+	for _, want := range []string{
+		"Apple Terminal supports 256 colors",
+		"doesn't support OSC 52",
+		"gork wrap ssh",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("missing %q in %q", want, joined)
+		}
+	}
+	if strings.Contains(joined, "colorterm") {
+		t.Fatalf("Apple Terminal should not recommend COLORTERM fix: %q", joined)
+	}
+}
+
 func TestTerminalDetectionVariants(t *testing.T) {
 	tests := []struct {
 		env               map[string]string
