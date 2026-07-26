@@ -878,7 +878,8 @@ Legacy boolean `keep_text_selection`, `selection_highlight_duration_ms = 0`, and
 `[ui] word_separators` overrides the default separator set,
 including an explicit empty string.
 Tab focuses the transcript scrollback; Ctrl-K/Ctrl-J move one line, Ctrl-U/Ctrl-D
-move half a page, and Page Up/Page Down move a page. By default, typing a letter or
+move half a page, and Page Up/Page Down move a page while retaining two context
+rows. By default, typing a letter or
 `/` returns to the prompt and forwards it. Set `[ui] vim_mode = true` to use j/k for
 line movement, g/G for the top/bottom, and `/` for search while scrollback is focused.
 Tab or Space always returns to the prompt.

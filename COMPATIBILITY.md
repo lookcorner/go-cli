@@ -198,7 +198,8 @@ The TUI accepts Bubble Tea v2 bracketed-paste events as one undoable edit,
 preserves Unicode, multiline and trailing-newline content, normalizes bare
 carriage returns, and suppresses typed-only contextual nudges for pasted text.
 PageUp and PageDown scroll the conversation without leaving the prompt in idle
-or running turns, while an open slash menu retains first priority for paging.
+or running turns, preserve the reference two-row overlap between pages, and
+leave an open slash menu with first priority for paging.
 The dashboard new-agent composer has its own session-local multiline mode via
 `Ctrl+M`, `/multiline`, or `/ml`, with Enter and Shift/Alt-Enter send/newline
 semantics independent from the active session prompt.

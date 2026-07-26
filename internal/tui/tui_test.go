@@ -1843,7 +1843,7 @@ func TestScrollbackFocusAndNavigation(t *testing.T) {
 		t.Fatalf("ctrl-d scroll=%d", m.scroll)
 	}
 	press(tea.Key{Code: tea.KeyPgUp})
-	if m.scroll != m.contentHeight() {
+	if m.scroll != max(m.contentHeight()-2, 0) {
 		t.Fatalf("page-up scroll=%d", m.scroll)
 	}
 	press(tea.Key{Code: tea.KeyPgDown})
@@ -1880,7 +1880,7 @@ func TestScrollbackFocusAndNavigation(t *testing.T) {
 		t.Fatalf("typed focus=%v input=%q", m.scrollFocused, m.input)
 	}
 	press(tea.Key{Code: tea.KeyPgUp})
-	if m.scroll != m.contentHeight() || string(m.input) != "x" || m.scrollFocused {
+	if m.scroll != max(m.contentHeight()-2, 0) || string(m.input) != "x" || m.scrollFocused {
 		t.Fatalf("prompt page-up scroll=%d", m.scroll)
 	}
 	press(tea.Key{Code: tea.KeyPgDown})
@@ -1889,7 +1889,7 @@ func TestScrollbackFocusAndNavigation(t *testing.T) {
 	}
 	m.running = true
 	press(tea.Key{Code: tea.KeyPgUp})
-	if m.scroll != m.contentHeight() || string(m.input) != "x" {
+	if m.scroll != max(m.contentHeight()-2, 0) || string(m.input) != "x" {
 		t.Fatalf("running prompt page-up scroll=%d input=%q", m.scroll, m.input)
 	}
 	press(tea.Key{Code: tea.KeyPgDown})

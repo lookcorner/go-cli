@@ -2739,7 +2739,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if stroke == "pgup" || stroke == "pgdown" {
-		lines := max(m.contentHeight(), 1)
+		lines := max(m.contentHeight()-2, 0)
 		if stroke == "pgdown" {
 			lines = -lines
 		}
@@ -4402,9 +4402,9 @@ func (m *model) handleScrollbackKey(msg tea.KeyPressMsg) bool {
 	case stroke == "ctrl+d":
 		m.scrollTranscript(-max(m.contentHeight()/2, 1))
 	case stroke == "pgup":
-		m.scrollTranscript(max(m.contentHeight(), 1))
+		m.scrollTranscript(max(m.contentHeight()-2, 0))
 	case stroke == "pgdown":
-		m.scrollTranscript(-max(m.contentHeight(), 1))
+		m.scrollTranscript(-max(m.contentHeight()-2, 0))
 	case m.vimMode && key.Mod == 0 && key.Text == "k":
 		m.scrollTranscript(1)
 	case m.vimMode && key.Mod == 0 && key.Text == "j":
