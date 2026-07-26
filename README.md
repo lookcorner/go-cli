@@ -214,6 +214,10 @@ go build -o gork ./cmd/gork
 make build VERSION=0.2.0
 ```
 
+CI runs formatting, the complete test suite, the race detector, vet, and the
+native build. It also cross-builds the reference release matrix with CGO
+disabled: Linux, macOS, and Windows on amd64 and arm64.
+
 The headless runtime uses the Go standard library; the full-screen UI pins
 [Bubble Tea v2](https://github.com/charmbracelet/bubbletea) and its terminal
 runtime dependencies.

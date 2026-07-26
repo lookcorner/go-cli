@@ -1,9 +1,13 @@
 # Gork Build compatibility
 
 This file tracks behavioral compatibility against
-`thedavidweng/gork-build@5785865da66c6f9d9fbdcf1afabdfcddbefb5ecc`.
+`thedavidweng/gork-build@b875c32e283ca04eee36ddeec1f3886be9f3f21a`.
 
 Status values: **done**, **partial**, **planned**.
+
+The reference release matrix's six desktop targets are enforced continuously:
+Linux, macOS, and Windows on amd64 and arm64. CI also gates formatting, the full
+test suite, the race detector, vet, and the native build.
 
 Trusted workspace roots load `.envrc` through `direnv export json` when
 available and otherwise through a Bash subshell with common direnv helpers;
