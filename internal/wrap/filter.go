@@ -7,6 +7,7 @@ import (
 const (
 	maxEscapeBytes   = 1 << 20
 	maxClipboardSize = 768 << 10
+	maxCSIBuffer     = 128
 )
 
 type filterState uint8
@@ -14,6 +15,7 @@ type filterState uint8
 const (
 	filterNormal filterState = iota
 	filterEscape
+	filterCSI
 	filterOSC
 	filterOSCEscape
 	filterDCS
@@ -24,18 +26,28 @@ const (
 var tmuxPrefix = []byte("tmux;\x1b\x1b]")
 
 // Filter removes valid OSC 52 writes from a byte stream and forwards their
-// decoded payload to the local clipboard sink.
+// decoded payload to the local clipboard sink. Complete CSI sequences are
+// observed for latched-mode restore and forwarded unchanged.
 type Filter struct {
 	state filterState
 	buf   []byte
 	sink  func([]byte)
+	modes *ModeTracker
 }
 
 func NewFilter(sink func([]byte)) *Filter {
 	if sink == nil {
 		sink = func([]byte) {}
 	}
-	return &Filter{sink: sink}
+	return &Filter{sink: sink, modes: NewModeTracker()}
+}
+
+// Modes returns the latched DEC-mode tracker used for dirty-exit restore.
+func (f *Filter) Modes() *ModeTracker {
+	if f == nil {
+		return nil
+	}
+	return f.modes
 }
 
 func (f *Filter) Feed(data []byte) []byte {
@@ -56,7 +68,24 @@ func (f *Filter) Feed(data []byte) []byte {
 				f.state = filterOSC
 			case 'P':
 				f.state = filterDCS
+			case '[':
+				f.state = filterCSI
 			default:
+				output = f.flushTo(output)
+			}
+		case filterCSI:
+			f.buf = append(f.buf, value)
+			switch {
+			case value >= 0x40 && value <= 0x7e:
+				f.modes.ObserveCSI(f.buf)
+				output = append(output, f.buf...)
+				f.reset()
+			case value == 0x1b:
+				f.buf = f.buf[:len(f.buf)-1]
+				output = append(output, f.buf...)
+				f.buf = append(f.buf[:0], 0x1b)
+				f.state = filterEscape
+			case value < 0x20 || value > 0x3f || len(f.buf) > maxCSIBuffer:
 				output = f.flushTo(output)
 			}
 		case filterOSC:
@@ -95,16 +124,29 @@ func (f *Filter) Feed(data []byte) []byte {
 				f.state = filterTmuxOSC
 			}
 		}
-		if len(f.buf) > maxEscapeBytes {
+		if f.state != filterCSI && len(f.buf) > maxEscapeBytes {
 			output = f.flushTo(output)
 		}
 	}
 	return output
 }
 
-// Flush returns an incomplete escape sequence unchanged at end of stream.
+// Flush returns an incomplete escape sequence unchanged at end of stream,
+// except an unfinished CSI which is dropped so restore bytes are not eaten.
 func (f *Filter) Flush() []byte {
+	if f.state == filterCSI {
+		f.reset()
+		return nil
+	}
 	return f.flushTo(nil)
+}
+
+// EmitRestore writes restore sequences for latched modes once.
+func (f *Filter) EmitRestore() []byte {
+	if f == nil || f.modes == nil || !f.modes.ClaimRestore() {
+		return nil
+	}
+	return RestoreBytes(f.modes.Snapshot())
 }
 
 func (f *Filter) finishOSC(output []byte) []byte {

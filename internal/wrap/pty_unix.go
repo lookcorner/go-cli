@@ -65,6 +65,11 @@ func RunPTY(program string, args []string, stdin, stdout, stderr *os.File, copyT
 			fmt.Fprintln(stderr, "gork wrap: clipboard copy failed:", err)
 		}
 	})
+	defer func() {
+		if restore := filter.EmitRestore(); len(restore) > 0 {
+			_, _ = stdout.Write(restore)
+		}
+	}()
 	buffer := make([]byte, 8192)
 	for {
 		count, readErr := master.Read(buffer)
