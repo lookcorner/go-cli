@@ -981,6 +981,11 @@ progress_bar = true
 # Prevent idle sleep while a turn runs (macOS/Linux).
 sleep_prevention = true
 
+[ui.notifications.title]
+enabled = true
+# action-required, spinner, activity, session-name, cwd, model, turn-timer, grok
+items = ["action-required", "spinner", "activity", "session-name", "grok"]
+
 [[ui.notifications.hooks]]
 command = "terminal-notifier -title Gork -message \"$GROK_MESSAGE\""
 events = ["turn_complete", "approval_required"]  # empty matches every event
@@ -1006,6 +1011,13 @@ later render OSC 9;4; other terminals ignore the setting.
 `caffeinate` on macOS and `systemd-inhibit` on Linux. The macOS helper waits on
 the Gork process, so quitting or crashing releases it. When neither command is
 available the setting has no effect and is not retried.
+
+`[ui.notifications.title]` sets the terminal title from the listed items, joined
+with ` - ` in the order you write them. The spinner and the `⚠ Action Required`
+blink animate only while a turn runs or a prompt is waiting on an unfocused
+terminal; a focused terminal shows the label without flashing. Long session
+names, models, and directories are truncated, control characters are stripped,
+and the title returns to `gork` when the session ends.
 
 Each `[[ui.notifications.hooks]]` entry runs `sh -c <command>` in its own
 process group with `GROK_EVENT`, `GROK_MESSAGE`, and `GROK_SESSION_ID` in the

@@ -137,6 +137,7 @@ type imageInputHintProbeEvent struct {
 }
 type turnStatusTickEvent struct{}
 type progressTickEvent struct{}
+type titleTickEvent struct{}
 type smallScreenHintTickEvent struct{ nonce uint64 }
 type wordSelectHintTickEvent struct{ nonce uint64 }
 type imageInputHintTickEvent struct{ nonce uint64 }
@@ -819,6 +820,8 @@ type model struct {
 	progress            *notify.Progress
 	progressTicking     bool
 	sleepInhibitor      *notify.SleepInhibitor
+	title               *notify.TitleManager
+	titleTicking        bool
 	themeName           string
 	autoDarkTheme       string
 	autoLightTheme      string
@@ -1042,6 +1045,8 @@ type UIOptions struct {
 	ProgressBar          bool
 	SleepPrevention      bool
 	NotificationHooks    []notify.Hook
+	TitleEnabled         bool
+	TitleItems           []string
 	ShowThinkingBlocks   bool
 	SetShowThinking      func(bool) error
 	ShowTips             bool
@@ -1267,6 +1272,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		notifySessionID: runner.SessionID,
 		progress:        notify.NewProgress(options.ProgressBar, notifyTerminal),
 		sleepInhibitor:  notify.NewSleepInhibitor(options.SleepPrevention),
+		title:           notify.NewTitleManager(options.TitleEnabled, options.TitleItems),
 		showThinking:    options.ShowThinkingBlocks, persistThinking: options.SetShowThinking,
 		showTips: options.ShowTips, persistShowTips: options.SetShowTips, startupTip: options.StartupTip,
 		respectManualFolds: options.RespectManualFolds, persistManualFolds: options.SetManualFolds,
@@ -1398,6 +1404,9 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 	m.stopVoice()
 	m.clearProgress()
 	m.sleepInhibitor.Release()
+	if escape := m.title.Reset(); escape != "" && m.notifySink != nil {
+		m.notifySink(escape)
+	}
 	if errors.Is(err, tea.ErrInterrupted) || errors.Is(err, context.Canceled) {
 		return nil, nil
 	}
@@ -1717,6 +1726,9 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.imageInputHintTick()
 	case progressTickEvent:
 		m.progressTicking = false
+		return m, nil
+	case titleTickEvent:
+		m.titleTicking = false
 		return m, nil
 	case turnStatusTickEvent:
 		m.turnStatusTicking = false
@@ -4642,6 +4654,53 @@ func (m *model) syncTurnActivity() tea.Cmd {
 	} else {
 		m.sleepInhibitor.Release()
 	}
+	return tea.Batch(m.syncTitle(), m.syncProgress())
+}
+
+// titleState samples the session state the terminal title is composed from.
+func (m *model) titleState() notify.TitleState {
+	state := notify.TitleState{
+		SessionName:       m.notifyTitle,
+		Model:             m.modelName,
+		Cwd:               m.workspace,
+		Busy:              m.running,
+		PendingPermission: m.approval != nil || m.question != nil || m.planReview != nil,
+		Focused:           m.notifier == nil || m.notifier.Focused(),
+	}
+	if m.running && !m.turnStarted.IsZero() {
+		state.TurnElapsed = time.Since(m.turnStarted)
+	}
+	switch {
+	case m.parkedWait != nil:
+		state.Activity = "Waiting"
+	case m.thoughtOpen:
+		state.Activity = "Thinking"
+	case m.running:
+		state.Activity = "Responding"
+	}
+	return state
+}
+
+// syncTitle writes the composed terminal title and keeps an animation tick
+// armed while the title still changes on its own.
+func (m *model) syncTitle() tea.Cmd {
+	if m.title == nil {
+		return nil
+	}
+	state := m.titleState()
+	if escape := m.title.Update(state); escape != "" && m.notifySink != nil {
+		m.notifySink(escape)
+	}
+	if m.titleTicking || !m.title.Animating(state) {
+		return nil
+	}
+	m.titleTicking = true
+	return tea.Tick(notify.TitleTick, func(time.Time) tea.Msg { return titleTickEvent{} })
+}
+
+// syncProgress writes the OSC 9;4 tab indicator and keeps its keep-alive tick
+// armed for as long as a turn runs.
+func (m *model) syncProgress() tea.Cmd {
 	if m.progress == nil {
 		return nil
 	}

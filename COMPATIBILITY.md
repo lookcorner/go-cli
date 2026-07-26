@@ -311,8 +311,18 @@ exported, null standard streams, and a whole-tree kill once `timeout_secs`
 timeouts stay out of the session. Each hook filters on its own `events` list —
 empty matches every event — and default-on `only_unfocused`, independent of
 `method` and `condition`, since the reference dispatcher lives outside its
-notifications module and only the field semantics are documented.
-`task_complete` events, `[ui.notifications.title]` terminal titles, and
+notifications module and only the field semantics are documented. Default-on
+`[ui.notifications.title]` composes the terminal title from its `items` order —
+`action-required`, `spinner`, `activity`, `session-name`, `cwd`, `model`,
+`turn-timer`, and `grok` — joined with ` - `, falling back to the product name
+when nothing contributes, truncating session names at 40 and model, cwd, and
+tool names at 30 runes, stripping control characters so a remote-sourced title
+cannot escape the OSC sequence, emitting only on change, and resetting to `gork`
+at exit. The spinner and the half-second `⚠ Action Required` blink animate on a
+250-millisecond tick that is only armed while a turn runs or a prompt waits
+unfocused; a focused terminal shows the label statically. Activity reports
+`Thinking`, `Waiting`, and `Responding`; the reference's per-tool
+`Running: <tool>` detail is not sourced yet. `task_complete` events and
 `session_recap` remain.
 
 Compatibility is verified with Go unit/integration tests and will additionally

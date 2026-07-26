@@ -17,6 +17,7 @@ import (
 
 	"github.com/lookcorner/go-cli/internal/compat"
 	"github.com/lookcorner/go-cli/internal/memory"
+	"github.com/lookcorner/go-cli/internal/notify"
 	"github.com/lookcorner/go-cli/internal/theme"
 	"github.com/lookcorner/go-cli/internal/tips"
 	"github.com/lookcorner/go-cli/internal/version"
@@ -271,7 +272,15 @@ type NotificationsConfig struct {
 	Events            []string                 `json:"events"`
 	ProgressBar       bool                     `json:"progress_bar"`
 	SleepPrevention   bool                     `json:"sleep_prevention"`
+	Title             NotificationTitleConfig  `json:"title"`
 	Hooks             []NotificationHookConfig `json:"hooks,omitempty"`
+}
+
+// NotificationTitleConfig is the [ui.notifications.title] table controlling
+// what the terminal title tracks.
+type NotificationTitleConfig struct {
+	Enabled bool     `json:"enabled"`
+	Items   []string `json:"items"`
 }
 
 // NotificationHookConfig is one [[ui.notifications.hooks]] entry: a shell
@@ -305,6 +314,11 @@ func (n NotificationsConfig) valid() bool {
 			if !slices.Contains(notificationEvents, event) {
 				return false
 			}
+		}
+	}
+	for _, item := range n.Title.Items {
+		if !slices.Contains(notify.TitleItems, item) {
+			return false
 		}
 	}
 	return true
@@ -621,7 +635,13 @@ type fileNotificationsConfig struct {
 	Events            []string               `json:"events,omitempty" toml:"events"`
 	ProgressBar       *bool                  `json:"progress_bar,omitempty" toml:"progress_bar"`
 	SleepPrevention   *bool                  `json:"sleep_prevention,omitempty" toml:"sleep_prevention"`
+	Title             *fileNotificationTitle `json:"title,omitempty" toml:"title"`
 	Hooks             []fileNotificationHook `json:"hooks,omitempty" toml:"hooks"`
+}
+
+type fileNotificationTitle struct {
+	Enabled *bool    `json:"enabled,omitempty" toml:"enabled"`
+	Items   []string `json:"items,omitempty" toml:"items"`
 }
 
 type fileNotificationHook struct {
@@ -866,7 +886,7 @@ func Load(path string) (Config, error) {
 		CancelRewindEnabled:         true,
 		Toolset:                     ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}},
 		Goal:                        GoalConfig{VerifierCount: 3, ClassifierMaxRuns: 10, ReverifyAfter: 8},
-		UI:                          UIConfig{MaxThoughtsWidth: 120, Theme: "groknight", AutoDarkTheme: "groknight", AutoLightTheme: "grokday", HunkTrackerMode: "agent_only", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, PageFlipOnSend: true, ShowThinkingBlocks: true, DisplayRefresh: DisplayRefreshConfig{ProbeEnabled: true, FloorMS: 8, CeilingMS: 16, MinHz: 55, MaxHz: 165}, ScrollSpeed: 50, ScrollMode: "auto", DefaultSelectedPermission: "always_allow_all_sessions", GroupToolVerbs: true, PromptSuggestions: true, ContextualHints: Hints{Undo: true, PlanMode: true, ImageInput: true, SendNow: true, SmallScreen: true, WordSelect: true}, VoiceCaptureMode: "hold", VoiceSTTLanguage: "en", PermissionMode: "ask", Notifications: NotificationsConfig{Method: "auto", Condition: "unfocused", IdleThresholdSecs: 3, Events: []string{"turn_complete", "approval_required"}, ProgressBar: true, SleepPrevention: true}},
+		UI:                          UIConfig{MaxThoughtsWidth: 120, Theme: "groknight", AutoDarkTheme: "groknight", AutoLightTheme: "grokday", HunkTrackerMode: "agent_only", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, PageFlipOnSend: true, ShowThinkingBlocks: true, DisplayRefresh: DisplayRefreshConfig{ProbeEnabled: true, FloorMS: 8, CeilingMS: 16, MinHz: 55, MaxHz: 165}, ScrollSpeed: 50, ScrollMode: "auto", DefaultSelectedPermission: "always_allow_all_sessions", GroupToolVerbs: true, PromptSuggestions: true, ContextualHints: Hints{Undo: true, PlanMode: true, ImageInput: true, SendNow: true, SmallScreen: true, WordSelect: true}, VoiceCaptureMode: "hold", VoiceSTTLanguage: "en", PermissionMode: "ask", Notifications: NotificationsConfig{Method: "auto", Condition: "unfocused", IdleThresholdSecs: 3, Events: []string{"turn_complete", "approval_required"}, ProgressBar: true, SleepPrevention: true, Title: NotificationTitleConfig{Enabled: true, Items: []string{"action-required", "spinner", "activity", "session-name", "grok"}}}},
 		Dashboard:                   DashboardConfig{Enabled: true, Grouping: "state"},
 		Sandbox:                     SandboxConfig{Profile: "off"},
 		Pruning:                     PruningConfig{Enabled: true, KeepLastNTurns: 3, SoftTrimThreshold: 4000, SoftTrimHead: 1500, SoftTrimTail: 1500, HardClearAgeTurns: 10},

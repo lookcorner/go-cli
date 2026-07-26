@@ -2600,6 +2600,19 @@ func TestNotificationsDefaultsMergeAndRejectUnknownValues(t *testing.T) {
 	if bad := load(t, "[[ui.notifications.hooks]]\ncommand = \"log\"\nevents = [\"typo\"]\n").Hooks; len(bad) != 0 {
 		t.Fatalf("invalid hook event kept: %+v", bad)
 	}
+
+	title := load(t, "").Title
+	if !title.Enabled || strings.Join(title.Items, ",") != "action-required,spinner,activity,session-name,grok" {
+		t.Fatalf("title defaults=%+v", title)
+	}
+	title = load(t, "[ui.notifications.title]\nenabled = false\nitems = [\"CWD\", \"turn-timer\"]\n").Title
+	if title.Enabled || strings.Join(title.Items, ",") != "cwd,turn-timer" {
+		t.Fatalf("title overrides=%+v", title)
+	}
+	title = load(t, "[ui.notifications.title]\nitems = [\"cwd\", \"nope\"]\n").Title
+	if !title.Enabled || strings.Join(title.Items, ",") != "action-required,spinner,activity,session-name,grok" {
+		t.Fatalf("invalid title item kept: %+v", title)
+	}
 }
 
 func TestPageFlipOnSendDefaultsAndPersists(t *testing.T) {

@@ -192,6 +192,62 @@ func TestProgressBarTracksTurnLifecycle(t *testing.T) {
 	}
 }
 
+func TestTerminalTitleTracksSessionState(t *testing.T) {
+	bridge := NewBridge(context.Background(), tools.PermissionAuto)
+	t.Cleanup(bridge.Close)
+	emitted := []string{}
+	items := []string{notify.TitleActionRequired, notify.TitleSpinner, notify.TitleActivity, notify.TitleSessionName, notify.TitleGrok}
+	m := &model{
+		bridge: bridge, width: 80, height: 24, workspace: "/tmp/demo", notifyTitle: "demo",
+		title:      notify.NewTitleManager(true, items),
+		notifySink: func(sequence string) { emitted = append(emitted, sequence) },
+	}
+	titles := func() []string {
+		seen := make([]string, 0, len(emitted))
+		for _, sequence := range emitted {
+			if title, ok := strings.CutPrefix(sequence, "\x1b]0;"); ok {
+				seen = append(seen, strings.TrimSuffix(title, "\x07"))
+			}
+		}
+		return seen
+	}
+
+	m.Update(titleTickEvent{})
+	if got := titles(); len(got) != 1 || got[0] != "demo - gork" {
+		t.Fatalf("idle titles=%q", got)
+	}
+
+	m.running, m.thoughtOpen = true, true
+	updated, command := m.Update(titleTickEvent{})
+	m = updated.(*model)
+	if got := titles(); len(got) != 2 || got[1] != "⠙ - Thinking - demo - gork" {
+		t.Fatalf("busy titles=%q", got)
+	}
+	if command == nil || !m.titleTicking {
+		t.Fatalf("animation tick not armed: command=%v ticking=%v", command != nil, m.titleTicking)
+	}
+
+	m.thoughtOpen = false
+	m.approval = &approvalEvent{action: "shell"}
+	m.Update(titleTickEvent{})
+	if got := titles(); len(got) != 3 || !strings.HasPrefix(got[2], "⚠ Action Required - ") {
+		t.Fatalf("approval titles=%q", got)
+	}
+
+	if escape := m.title.Reset(); escape != "\x1b]0;gork\x07" {
+		t.Fatalf("reset=%q", escape)
+	}
+
+	disabled := &model{
+		bridge: bridge, width: 80, height: 24, running: true,
+		title:      notify.NewTitleManager(false, items),
+		notifySink: func(string) { t.Error("disabled title manager wrote an escape") },
+	}
+	if _, command = disabled.Update(titleTickEvent{}); command != nil {
+		t.Fatal("disabled title manager armed a tick")
+	}
+}
+
 func TestFocusReportingFollowsNotificationPolicy(t *testing.T) {
 	events := []notify.Event{notify.TurnComplete}
 	for _, test := range []struct {

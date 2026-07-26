@@ -1262,6 +1262,8 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			ProgressBar:         cfg.UI.Notifications.ProgressBar,
 			SleepPrevention:     cfg.UI.Notifications.SleepPrevention,
 			NotificationHooks:   notificationHooks(cfg.UI.Notifications.Hooks),
+			TitleEnabled:        cfg.UI.Notifications.Title.Enabled,
+			TitleItems:          cfg.UI.Notifications.Title.Items,
 			OpenDashboard:       opts.dashboard,
 			Foreign: session.ForeignSources{
 				Claude: cfg.Compat.Claude.Sessions && skillCatalog.Has("resume-claude"),
