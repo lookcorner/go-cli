@@ -8,6 +8,10 @@ func UpdateContextualPlanModeHint(path string, enabled bool) error {
 	return updateContextualHint(path, "plan_mode", enabled)
 }
 
+func UpdateContextualImageInputHint(path string, enabled bool) error {
+	return updateContextualHint(path, "image_input", enabled)
+}
+
 func UpdateContextualSendNowHint(path string, enabled bool) error {
 	return updateContextualHint(path, "send_now", enabled)
 }

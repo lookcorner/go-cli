@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -129,9 +130,14 @@ type selectionClearEvent struct{ nonce uint64 }
 type contextualUndoClearEvent struct{ nonce uint64 }
 type planNudgeClearEvent struct{ nonce uint64 }
 type sendNowClearEvent struct{ nonce uint64 }
+type imageInputHintProbeEvent struct {
+	content appclipboard.Content
+	err     error
+}
 type turnStatusTickEvent struct{}
 type smallScreenHintTickEvent struct{ nonce uint64 }
 type wordSelectHintTickEvent struct{ nonce uint64 }
+type imageInputHintTickEvent struct{ nonce uint64 }
 type foreignResumeEvent struct{ session *session.RecentForeignSession }
 type welcomeChangelogEvent struct{ bullets []string }
 
@@ -140,6 +146,16 @@ type contextualHintState struct {
 	shown   int
 	nonce   uint64
 	persist func(bool) error
+}
+
+type imageInputHintState struct {
+	enabled    bool
+	active     bool
+	remaining  time.Duration
+	nonce      uint64
+	lastDigest [sha256.Size]byte
+	lastFired  time.Time
+	persist    func(bool) error
 }
 
 type smallScreenHintState struct {
@@ -735,6 +751,7 @@ type model struct {
 	inputClear          inputClearDetector
 	undoHint            contextualHintState
 	planModeHint        contextualHintState
+	imageInputHint      imageInputHintState
 	sendNowHint         contextualHintState
 	smallScreenHint     smallScreenHintState
 	wordSelectHint      wordSelectHintState
@@ -1024,6 +1041,8 @@ type UIOptions struct {
 	SetContextualUndo    func(bool) error
 	ContextualPlan       bool
 	SetContextualPlan    func(bool) error
+	ContextualImage      bool
+	SetContextualImage   func(bool) error
 	ContextualSendNow    bool
 	SetContextualSendNow func(bool) error
 	ContextualSmall      bool
@@ -1227,6 +1246,10 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		planModeHint: contextualHintState{
 			enabled: options.ContextualPlan,
 			persist: options.SetContextualPlan,
+		},
+		imageInputHint: imageInputHintState{
+			enabled: options.ContextualImage,
+			persist: options.SetContextualImage,
 		},
 		sendNowHint: contextualHintState{
 			enabled: options.ContextualSendNow,
@@ -1638,6 +1661,18 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "thinking"
 		}
 		return m, nil
+	case imageInputHintTickEvent:
+		if !m.imageInputHint.active || m.imageInputHint.nonce != msg.nonce {
+			return m, nil
+		}
+		if m.imageInputHintCanRender() {
+			m.imageInputHint.remaining -= 100 * time.Millisecond
+			if m.imageInputHint.remaining <= 0 {
+				m.imageInputHint.active = false
+				return m, nil
+			}
+		}
+		return m, m.imageInputHintTick()
 	case turnStatusTickEvent:
 		m.turnStatusTicking = false
 		m.refreshParkedWait(time.Now())
@@ -2320,10 +2355,14 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = "opening fork"
 		return m, tea.Quit
 	case tea.KeyPressMsg:
+		if isPasteKey(msg.Key()) {
+			m.imageInputHint.active = false
+		}
 		return m.handleKey(msg)
 	case tea.KeyReleaseMsg:
 		return m.handleVoiceRelease(msg)
 	case tea.PasteMsg:
+		m.imageInputHint.active = false
 		if msg.Content == "" && m.clipboardRead != nil {
 			m.status = "reading clipboard"
 			return m, readClipboard(m.ctx, m.clipboardRead)
@@ -2337,6 +2376,7 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if len(msg.content.Data) > 0 {
+			m.imageInputHint.active = false
 			m.promptImages = append(m.promptImages, api.ContentPart{
 				Type: "input_image",
 				ImageURL: "data:" + msg.content.MediaType + ";base64," +
@@ -2346,6 +2386,23 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.handlePaste(msg.content.Text)
+	case tea.FocusMsg:
+		if m.imageInputHintProbeEligible() {
+			return m, probeClipboardImage(m.ctx, m.clipboardRead)
+		}
+	case imageInputHintProbeEvent:
+		if msg.err == nil && msg.content.MediaType == "image/png" && len(msg.content.Data) > 0 && m.imageInputHintCanRender() {
+			digest := sha256.Sum256(msg.content.Data)
+			now := time.Now()
+			if digest != m.imageInputHint.lastDigest && (m.imageInputHint.lastFired.IsZero() || now.Sub(m.imageInputHint.lastFired) >= 30*time.Second) {
+				m.imageInputHint.active = true
+				m.imageInputHint.remaining = 20 * time.Second
+				m.imageInputHint.nonce++
+				m.imageInputHint.lastDigest = digest
+				m.imageInputHint.lastFired = now
+				return m, m.imageInputHintTick()
+			}
+		}
 	case primarySelectionEvent:
 		if msg.err != nil {
 			if !errors.Is(msg.err, appclipboard.ErrEmpty) {
@@ -5020,6 +5077,7 @@ func (m *model) handlePaste(value string) (tea.Model, tea.Cmd) {
 		value = strings.TrimSpace(strings.TrimPrefix(value, "!"))
 	}
 	m.insertInput(value)
+	m.imageInputHint.active = false
 	m.wordSelectHint.active = false
 	if m.historySearch != nil {
 		m.refreshHistorySearch()
@@ -5215,6 +5273,22 @@ func (m *model) wordSelectHintCanAccept() bool {
 
 func (m *model) wordSelectHintCanRender() bool {
 	return m.smallScreenHintCanRender()
+}
+
+func (m *model) imageInputHintProbeEligible() bool {
+	return m.imageInputHint.enabled && m.clipboardRead != nil && !m.running && len(m.promptImages) == 0 &&
+		m.imageInputHintCanRender()
+}
+
+func (m *model) imageInputHintCanRender() bool {
+	return m.imageInputHint.enabled && !m.running && len(m.promptImages) == 0 && m.smallScreenHintCanRender()
+}
+
+func (m *model) imageInputHintTick() tea.Cmd {
+	nonce := m.imageInputHint.nonce
+	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
+		return imageInputHintTickEvent{nonce: nonce}
+	})
 }
 
 func smallScreenBandContains(rows int) bool {
@@ -5583,6 +5657,15 @@ func readClipboard(ctx context.Context, read func(context.Context) (appclipboard
 		defer cancel()
 		content, err := read(readCtx)
 		return clipboardEvent{content: content, err: err}
+	}
+}
+
+func probeClipboardImage(ctx context.Context, read func(context.Context) (appclipboard.Content, error)) tea.Cmd {
+	return func() tea.Msg {
+		readCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		content, err := read(readCtx)
+		return imageInputHintProbeEvent{content: content, err: err}
 	}
 }
 
@@ -6090,6 +6173,8 @@ func (m *model) View() tea.View {
 		statusText = fmt.Sprintf("Coming from %s? Resume your session from %s · Ctrl-U", label, when)
 	} else if m.wordSelectHint.active && m.wordSelectHintCanRender() {
 		statusText = "Want double-click to select? /settings → Text selection · Ctrl+Y: enable now"
+	} else if m.imageInputHint.active && m.imageInputHintCanRender() {
+		statusText = "Image in clipboard · Ctrl-V to paste"
 	} else if m.smallScreenHint.active && m.smallScreenHintCanRender() {
 		statusText = "Tight on space? Try /compact-mode"
 	}
@@ -6100,6 +6185,7 @@ func (m *model) View() tea.View {
 	}
 	view := tea.NewView(prefix + body + status + "\n" + footer)
 	view.AltScreen = !m.minimal
+	view.ReportFocus = m.imageInputHint.enabled
 	view.MouseMode = tea.MouseModeNone
 	view.KeyboardEnhancements.ReportEventTypes = true
 	if m.minimal {

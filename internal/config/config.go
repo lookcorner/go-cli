@@ -130,6 +130,7 @@ type Config struct {
 	uiRefreshConfigured             refreshConfigured
 	uiContextualUndoConfigured      bool
 	uiContextualPlanModeConfigured  bool
+	uiContextualImageConfigured     bool
 	uiContextualSendNowConfigured   bool
 	uiContextualSmallConfigured     bool
 	uiContextualWordConfigured      bool
@@ -267,6 +268,7 @@ type refreshConfigured struct {
 type Hints struct {
 	Undo        bool `json:"undo"`
 	PlanMode    bool `json:"plan_mode"`
+	ImageInput  bool `json:"image_input"`
 	SendNow     bool `json:"send_now"`
 	SmallScreen bool `json:"small_screen"`
 	WordSelect  bool `json:"word_select"`
@@ -562,6 +564,7 @@ type RefreshSettings struct {
 type hints struct {
 	Undo        *bool `json:"undo,omitempty" toml:"undo"`
 	PlanMode    *bool `json:"plan_mode,omitempty" toml:"plan_mode"`
+	ImageInput  *bool `json:"image_input,omitempty" toml:"image_input"`
 	SendNow     *bool `json:"send_now,omitempty" toml:"send_now"`
 	SmallScreen *bool `json:"small_screen,omitempty" toml:"small_screen"`
 	WordSelect  *bool `json:"word_select,omitempty" toml:"word_select"`
@@ -783,7 +786,7 @@ func Load(path string) (Config, error) {
 		CancelRewindEnabled:         true,
 		Toolset:                     ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}},
 		Goal:                        GoalConfig{VerifierCount: 3, ClassifierMaxRuns: 10, ReverifyAfter: 8},
-		UI:                          UIConfig{MaxThoughtsWidth: 120, Theme: "groknight", AutoDarkTheme: "groknight", AutoLightTheme: "grokday", HunkTrackerMode: "agent_only", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, ShowThinkingBlocks: true, DisplayRefresh: DisplayRefreshConfig{ProbeEnabled: true, FloorMS: 8, CeilingMS: 16, MinHz: 55, MaxHz: 165}, ScrollSpeed: 50, ScrollMode: "auto", DefaultSelectedPermission: "always_allow_all_sessions", GroupToolVerbs: true, PromptSuggestions: true, ContextualHints: Hints{Undo: true, PlanMode: true, SendNow: true, SmallScreen: true, WordSelect: true}, VoiceCaptureMode: "hold", VoiceSTTLanguage: "en", PermissionMode: "ask"},
+		UI:                          UIConfig{MaxThoughtsWidth: 120, Theme: "groknight", AutoDarkTheme: "groknight", AutoLightTheme: "grokday", HunkTrackerMode: "agent_only", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, ShowThinkingBlocks: true, DisplayRefresh: DisplayRefreshConfig{ProbeEnabled: true, FloorMS: 8, CeilingMS: 16, MinHz: 55, MaxHz: 165}, ScrollSpeed: 50, ScrollMode: "auto", DefaultSelectedPermission: "always_allow_all_sessions", GroupToolVerbs: true, PromptSuggestions: true, ContextualHints: Hints{Undo: true, PlanMode: true, ImageInput: true, SendNow: true, SmallScreen: true, WordSelect: true}, VoiceCaptureMode: "hold", VoiceSTTLanguage: "en", PermissionMode: "ask"},
 		Dashboard:                   DashboardConfig{Enabled: true, Grouping: "state"},
 		Sandbox:                     SandboxConfig{Profile: "off"},
 		Pruning:                     PruningConfig{Enabled: true, KeepLastNTurns: 3, SoftTrimThreshold: 4000, SoftTrimHead: 1500, SoftTrimTail: 1500, HardClearAgeTurns: 10},
@@ -1123,6 +1126,10 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	if disk.UI.ContextualHints != nil && disk.UI.ContextualHints.PlanMode != nil {
 		cfg.UI.ContextualHints.PlanMode = *disk.UI.ContextualHints.PlanMode
 		cfg.uiContextualPlanModeConfigured = true
+	}
+	if disk.UI.ContextualHints != nil && disk.UI.ContextualHints.ImageInput != nil {
+		cfg.UI.ContextualHints.ImageInput = *disk.UI.ContextualHints.ImageInput
+		cfg.uiContextualImageConfigured = true
 	}
 	if disk.UI.ContextualHints != nil && disk.UI.ContextualHints.SendNow != nil {
 		cfg.UI.ContextualHints.SendNow = *disk.UI.ContextualHints.SendNow
@@ -1894,7 +1901,7 @@ func applyEnv(cfg *Config) {
 		cfg.uiRefreshConfigured.auto = true
 	}
 	if value, ok := envBool("GROK_CONTEXTUAL_HINTS"); ok {
-		cfg.UI.ContextualHints = Hints{Undo: value, PlanMode: value, SendNow: value, SmallScreen: value, WordSelect: value}
+		cfg.UI.ContextualHints = Hints{Undo: value, PlanMode: value, ImageInput: value, SendNow: value, SmallScreen: value, WordSelect: value}
 		cfg.uiContextualHintsEnvironment = &value
 	}
 	if value := strings.TrimSpace(os.Getenv("GROK_HUNK_TRACKER")); value != "" {
@@ -2301,7 +2308,7 @@ func applyContextualHintsEnvironment(cfg *Config) {
 		return
 	}
 	value := *cfg.uiContextualHintsEnvironment
-	cfg.UI.ContextualHints = Hints{Undo: value, PlanMode: value, SendNow: value, SmallScreen: value, WordSelect: value}
+	cfg.UI.ContextualHints = Hints{Undo: value, PlanMode: value, ImageInput: value, SendNow: value, SmallScreen: value, WordSelect: value}
 }
 
 func applyRequirementsFiles(cfg *Config, paths []string) error {
@@ -2397,6 +2404,10 @@ func applyRequirementsData(cfg *Config, data []byte, source string, envFailClose
 	if requirement.UI.ContextualHints != nil && requirement.UI.ContextualHints.PlanMode != nil {
 		cfg.UI.ContextualHints.PlanMode = *requirement.UI.ContextualHints.PlanMode
 		cfg.uiContextualPlanModeConfigured = true
+	}
+	if requirement.UI.ContextualHints != nil && requirement.UI.ContextualHints.ImageInput != nil {
+		cfg.UI.ContextualHints.ImageInput = *requirement.UI.ContextualHints.ImageInput
+		cfg.uiContextualImageConfigured = true
 	}
 	if requirement.UI.ContextualHints != nil && requirement.UI.ContextualHints.SendNow != nil {
 		cfg.UI.ContextualHints.SendNow = *requirement.UI.ContextualHints.SendNow

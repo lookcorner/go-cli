@@ -112,6 +112,12 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 				return nil
 			},
 		},
+		imageInputHint: imageInputHintState{
+			persist: func(value bool) error {
+				booleans = append(booleans, "image-input-hint")
+				return nil
+			},
+		},
 		sendNowHint: contextualHintState{
 			persist: func(value bool) error {
 				booleans = append(booleans, "send-now-hint")
@@ -189,7 +195,7 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 		m.settings.selected = index
 		updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 		m = updated.(*model)
-		if index == 12 || index == 14 || index == 30 {
+		if index == 12 || index == 14 || index == 31 {
 			if command != nil || m.settings.number == nil || m.status != "editing setting" {
 				t.Fatalf("index=%d did not open number editor: command=%v settings=%#v status=%q", index, command != nil, m.settings, m.status)
 			}
@@ -199,15 +205,15 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 			m = updated.(*model)
 		}
 		wantStatus := "settings updated"
-		if index == 8 || index == 9 || index == 17 || index == 32 {
+		if index == 8 || index == 9 || index == 17 || index == 33 {
 			wantStatus = "settings updated; restart to apply"
 		}
 		if command != nil || m.settings.err != "" || m.status != wantStatus {
 			t.Fatalf("index=%d command=%v err=%q status=%q", index, command != nil, m.settings.err, m.status)
 		}
 	}
-	if !m.showTimestamps || !m.showTimeline || !m.compactMode || !m.vimMode || !m.defaultMinimal || !m.groupToolVerbs || !m.collapsedEditBlocks || !m.suggestionsEnabled || !m.rememberApprovals || !m.questionTimeout || !m.multiline || !m.invertScroll || !m.undoHint.enabled || !m.planModeHint.enabled || !m.sendNowHint.enabled || !m.smallScreenHint.enabled || !m.wordSelectHint.enabled || !m.matchRefresh ||
-		strings.Join(booleans, ",") != "timestamps,timeline,compact,vim,group,edits,suggestions,remember,question-timeout,invert-scroll,undo-hint,plan-mode-hint,send-now-hint,small-screen-hint,word-select-hint,display-refresh" || strings.Join(screenModes, ",") != "minimal" {
+	if !m.showTimestamps || !m.showTimeline || !m.compactMode || !m.vimMode || !m.defaultMinimal || !m.groupToolVerbs || !m.collapsedEditBlocks || !m.suggestionsEnabled || !m.rememberApprovals || !m.questionTimeout || !m.multiline || !m.invertScroll || !m.undoHint.enabled || !m.planModeHint.enabled || !m.imageInputHint.enabled || !m.sendNowHint.enabled || !m.smallScreenHint.enabled || !m.wordSelectHint.enabled || !m.matchRefresh ||
+		strings.Join(booleans, ",") != "timestamps,timeline,compact,vim,group,edits,suggestions,remember,question-timeout,invert-scroll,undo-hint,plan-mode-hint,image-input-hint,send-now-hint,small-screen-hint,word-select-hint,display-refresh" || strings.Join(screenModes, ",") != "minimal" {
 		t.Fatalf("timestamps=%v timeline=%v compact=%v vim=%v persisted=%v", m.showTimestamps, m.showTimeline, m.compactMode, m.vimMode, booleans)
 	}
 	if m.themeName != "grokday" || m.theme.name != "grokday" || strings.Join(themes, ",") != "grokday" {
@@ -262,7 +268,7 @@ func TestSettingsDisplayRefreshRollsBackPersistenceFailure(t *testing.T) {
 		persistRefresh: func(bool) error {
 			return errors.New("read only")
 		},
-		settings: &settingsState{selected: 32},
+		settings: &settingsState{selected: 33},
 	}
 	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)
@@ -286,7 +292,7 @@ func TestSettingsContextualSendNowHintRollsBackPersistenceFailure(t *testing.T) 
 				return errors.New("read only")
 			},
 		},
-		settings: &settingsState{selected: 27},
+		settings: &settingsState{selected: 28},
 	}
 	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)
@@ -320,7 +326,7 @@ func TestSettingsContextualSmallScreenHintRollsBackPersistenceFailure(t *testing
 				return errors.New("read only")
 			},
 		},
-		settings: &settingsState{selected: 28},
+		settings: &settingsState{selected: 29},
 	}
 	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)
@@ -337,7 +343,7 @@ func TestSettingsContextualWordSelectHintRollsBackPersistenceFailure(t *testing.
 				return errors.New("read only")
 			},
 		},
-		settings: &settingsState{selected: 29},
+		settings: &settingsState{selected: 30},
 	}
 	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)
@@ -620,7 +626,7 @@ func TestSettingsThinkingToggleRebuildsExistingTranscript(t *testing.T) {
 	persisted := true
 	m := &model{
 		width: 80, height: 20, runner: &agent.Runner{SessionPath: path},
-		showThinking: true, settings: &settingsState{selected: 31},
+		showThinking: true, settings: &settingsState{selected: 32},
 		persistThinking: func(value bool) error { persisted = value; return nil },
 	}
 	m.replaceDisplayTranscript(shown, messages, expands, folds)
@@ -638,7 +644,7 @@ func TestSettingsThinkingToggleRebuildsExistingTranscript(t *testing.T) {
 
 func TestSettingsThinkingToggleRollsBackPersistenceFailure(t *testing.T) {
 	m := &model{
-		showThinking: true, settings: &settingsState{selected: 31},
+		showThinking: true, settings: &settingsState{selected: 32},
 		persistThinking: func(bool) error { return errors.New("write failed") },
 	}
 	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
@@ -652,7 +658,7 @@ func TestSettingsMaxThoughtsWidthCommitsAndRollsBack(t *testing.T) {
 	var persisted []int
 	m := &model{
 		maxThoughtsWidth: 120,
-		settings:         &settingsState{selected: 30},
+		settings:         &settingsState{selected: 31},
 		persistThoughtWidth: func(value int) error {
 			persisted = append(persisted, value)
 			return nil
@@ -668,7 +674,7 @@ func TestSettingsMaxThoughtsWidthCommitsAndRollsBack(t *testing.T) {
 		t.Fatalf("width=%d persisted=%v settings=%#v", m.maxThoughtsWidth, persisted, m.settings)
 	}
 
-	m.settings.selected = 30
+	m.settings.selected = 31
 	m.persistThoughtWidth = func(int) error { return errors.New("read only") }
 	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)

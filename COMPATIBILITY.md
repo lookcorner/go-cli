@@ -115,6 +115,10 @@ completed scrollback so hidden thoughts disappear and can be restored without
 entering model history or Markdown exports. `[ui].max_thoughts_width` defaults
 to 120, clamps to 40-500 display columns, persists atomically, and applies
 immediately to live and restored thinking blocks.
+The default-on `[ui.contextual_hints].image_input` gate performs one bounded
+clipboard check when an idle, unobscured TUI regains focus; pasteable PNGs show
+the reference Ctrl-V hint without attaching data, with content deduplication and
+a 30-second fire cooldown.
 Voice STT accepts TLS, WSS, or scheme-less API bases, inherits the active model
 endpoint, and de-duplicates existing `/v1` path prefixes.
 

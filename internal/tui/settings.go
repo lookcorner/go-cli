@@ -24,7 +24,7 @@ type settingsNumber struct {
 	large int
 }
 
-const settingsCount = 33
+const settingsCount = 34
 
 func (m *model) openSettings() {
 	m.settings = &settingsState{}
@@ -287,18 +287,27 @@ func (m *model) applySetting(selected int) {
 			state.err = persistSetting(m.planModeHint.persist(m.planModeHint.enabled), func() { m.planModeHint.enabled = previous })
 		}
 	case 27:
+		previous := m.imageInputHint.enabled
+		m.imageInputHint.enabled = !previous
+		if m.imageInputHint.persist != nil {
+			state.err = persistSetting(m.imageInputHint.persist(m.imageInputHint.enabled), func() { m.imageInputHint.enabled = previous })
+		}
+		if state.err == "" && !m.imageInputHint.enabled {
+			m.imageInputHint.active = false
+		}
+	case 28:
 		previous := m.sendNowHint.enabled
 		m.sendNowHint.enabled = !previous
 		if m.sendNowHint.persist != nil {
 			state.err = persistSetting(m.sendNowHint.persist(m.sendNowHint.enabled), func() { m.sendNowHint.enabled = previous })
 		}
-	case 28:
+	case 29:
 		previous := m.smallScreenHint.enabled
 		m.smallScreenHint.enabled = !previous
 		if m.smallScreenHint.persist != nil {
 			state.err = persistSetting(m.smallScreenHint.persist(m.smallScreenHint.enabled), func() { m.smallScreenHint.enabled = previous })
 		}
-	case 29:
+	case 30:
 		previous := m.wordSelectHint.enabled
 		m.wordSelectHint.enabled = !previous
 		if m.wordSelectHint.persist != nil {
@@ -307,11 +316,11 @@ func (m *model) applySetting(selected int) {
 		if state.err == "" && !m.wordSelectHint.enabled {
 			m.wordSelectHint.active = false
 		}
-	case 30:
+	case 31:
 		m.settings.number = &settingsNumber{value: normalizedThoughtWidth(m.maxThoughtsWidth), min: 40, max: 500, small: 5, large: 10}
 		m.status = "editing setting"
 		return
-	case 31:
+	case 32:
 		previous := m.showThinking
 		m.showThinking = !previous
 		if m.persistThinking != nil {
@@ -320,7 +329,7 @@ func (m *model) applySetting(selected int) {
 		if state.err == "" && !m.minimal {
 			m.refreshToolDisplay(m.collapsedEditBlocks, m.groupToolVerbs, previous)
 		}
-	case 32:
+	case 33:
 		if m.minimal {
 			return
 		}
@@ -361,7 +370,7 @@ func (m *model) commitSettingsNumber(value int) {
 			m.scrollLines = value
 			m.resetScrollInput()
 		}
-	case 30:
+	case 31:
 		previous := m.maxThoughtsWidth
 		if m.persistThoughtWidth != nil {
 			state.err = errorString(m.persistThoughtWidth(value))
@@ -529,10 +538,11 @@ func (m *model) settingsContent() string {
 		fmt.Sprintf("Cancel subagents with turn: %s", currentCancelSubagentsPolicy(m.cancelSubagents)),
 		settingLine("Undo hint", m.undoHint.enabled),
 		settingLine("Plan-mode hint", m.planModeHint.enabled),
+		settingLine("Image-input hint", m.imageInputHint.enabled),
 		settingLine("Send-now hint", m.sendNowHint.enabled),
 		settingLine("Small-screen hint", m.smallScreenHint.enabled),
 		settingLine("Word-select hint", m.wordSelectHint.enabled),
-		fmt.Sprintf("Max thoughts width: %d", m.settingNumberValue(30, normalizedThoughtWidth(m.maxThoughtsWidth))),
+		fmt.Sprintf("Max thoughts width: %d", m.settingNumberValue(31, normalizedThoughtWidth(m.maxThoughtsWidth))),
 		settingLine("Show thinking blocks", m.showThinking),
 	}
 	if !m.minimal {

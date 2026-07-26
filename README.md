@@ -833,6 +833,11 @@ When an idle prompt first crosses into a planning keyword such as `plan`,
 `Planning? Check out plan mode via shift+tab` up to three times per session.
 Whole-word matching avoids near neighbours such as `explain` and `planet`.
 Set `plan_mode = false` under `[ui.contextual_hints]` to hide the nudge.
+When the terminal regains focus while the composer is idle, Gork checks the
+clipboard once. If it contains a PNG and no image is already attached, the TUI
+shows `Image in clipboard · Ctrl-V to paste` without copying the image into the
+session. Repeated content and rapid clipboard changes are suppressed. Set
+`image_input = false` under `[ui.contextual_hints]` to disable this hint.
 On the first measured terminal size, heights from 21 through 28 rows show
 `Tight on space? Try /compact-mode` once per session when compact mode is off.
 The three-second visible lifetime pauses while a modal or announcement covers

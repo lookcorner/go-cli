@@ -84,6 +84,7 @@ type RemoteSettings struct {
 type RemoteHints struct {
 	Undo        *bool `json:"undo"`
 	PlanMode    *bool `json:"plan_mode"`
+	ImageInput  *bool `json:"image_input"`
 	SendNow     *bool `json:"send_now"`
 	SmallScreen *bool `json:"small_screen"`
 	WordSelect  *bool `json:"word_select"`
@@ -208,6 +209,9 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 	}
 	if !c.uiContextualPlanModeConfigured {
 		c.UI.ContextualHints.PlanMode = remote.ContextualHints == nil || remote.ContextualHints.PlanMode == nil || *remote.ContextualHints.PlanMode
+	}
+	if !c.uiContextualImageConfigured {
+		c.UI.ContextualHints.ImageInput = remote.ContextualHints == nil || remote.ContextualHints.ImageInput == nil || *remote.ContextualHints.ImageInput
 	}
 	if !c.uiContextualSendNowConfigured {
 		c.UI.ContextualHints.SendNow = remote.ContextualHints == nil || remote.ContextualHints.SendNow == nil || *remote.ContextualHints.SendNow

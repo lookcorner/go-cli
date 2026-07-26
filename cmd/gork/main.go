@@ -1193,6 +1193,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			RememberApprovals:   cfg.UI.RememberToolApprovals,
 			ContextualUndo:      cfg.UI.ContextualHints.Undo,
 			ContextualPlan:      cfg.UI.ContextualHints.PlanMode,
+			ContextualImage:     cfg.UI.ContextualHints.ImageInput,
 			ContextualSendNow:   cfg.UI.ContextualHints.SendNow,
 			ContextualSmall:     cfg.UI.ContextualHints.SmallScreen,
 			ContextualWord:      cfg.UI.ContextualHints.WordSelect,
@@ -1255,6 +1256,9 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			},
 			SetContextualPlan: func(enabled bool) error {
 				return config.UpdateContextualPlanModeHint(opts.configPath, enabled)
+			},
+			SetContextualImage: func(enabled bool) error {
+				return config.UpdateContextualImageInputHint(opts.configPath, enabled)
 			},
 			SetContextualSendNow: func(enabled bool) error {
 				return config.UpdateContextualSendNowHint(opts.configPath, enabled)

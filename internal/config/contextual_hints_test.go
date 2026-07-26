@@ -12,15 +12,16 @@ func TestContextualHintsDefaultAndLocalConfig(t *testing.T) {
 	t.Setenv("GROK_CONTEXTUAL_HINTS", "")
 	cfg, err := Load(filepath.Join(t.TempDir(), "missing.toml"))
 	if err != nil || !cfg.UI.ContextualHints.Undo || !cfg.UI.ContextualHints.PlanMode ||
-		!cfg.UI.ContextualHints.SendNow || !cfg.UI.ContextualHints.SmallScreen || !cfg.UI.ContextualHints.WordSelect {
+		!cfg.UI.ContextualHints.ImageInput || !cfg.UI.ContextualHints.SendNow ||
+		!cfg.UI.ContextualHints.SmallScreen || !cfg.UI.ContextualHints.WordSelect {
 		t.Fatalf("default=%#v err=%v", cfg.UI.ContextualHints, err)
 	}
 
 	for _, test := range []struct {
 		name, file, content string
 	}{
-		{name: "toml", file: "config.toml", content: "[ui.contextual_hints]\nundo = false\nplan_mode = false\nsend_now = false\nsmall_screen = false\nword_select = false\n"},
-		{name: "json", file: "config.json", content: `{"ui":{"contextual_hints":{"undo":false,"plan_mode":false,"send_now":false,"small_screen":false,"word_select":false}}}`},
+		{name: "toml", file: "config.toml", content: "[ui.contextual_hints]\nundo = false\nplan_mode = false\nimage_input = false\nsend_now = false\nsmall_screen = false\nword_select = false\n"},
+		{name: "json", file: "config.json", content: `{"ui":{"contextual_hints":{"undo":false,"plan_mode":false,"image_input":false,"send_now":false,"small_screen":false,"word_select":false}}}`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), test.file)
@@ -28,11 +29,34 @@ func TestContextualHintsDefaultAndLocalConfig(t *testing.T) {
 				t.Fatal(err)
 			}
 			cfg, err := Load(path)
-			if err != nil || cfg.UI.ContextualHints.Undo || cfg.UI.ContextualHints.PlanMode ||
+			if err != nil || cfg.UI.ContextualHints.Undo || cfg.UI.ContextualHints.PlanMode || cfg.UI.ContextualHints.ImageInput ||
 				cfg.UI.ContextualHints.SendNow || cfg.UI.ContextualHints.SmallScreen || cfg.UI.ContextualHints.WordSelect {
 				t.Fatalf("config=%#v err=%v", cfg.UI.ContextualHints, err)
 			}
 		})
+	}
+}
+
+func TestContextualImageInputHintRemoteAndLocalPrecedence(t *testing.T) {
+	cfg := Config{UI: UIConfig{ContextualHints: Hints{ImageInput: true}}}
+	cfg.ApplyRemoteSettings(&RemoteSettings{ContextualHints: &RemoteHints{ImageInput: boolPointer(false)}})
+	if cfg.UI.ContextualHints.ImageInput {
+		t.Fatal("remote false was ignored")
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{})
+	if !cfg.UI.ContextualHints.ImageInput {
+		t.Fatal("missing remote value did not restore the default")
+	}
+
+	for _, local := range []bool{false, true} {
+		cfg = Config{
+			UI:                          UIConfig{ContextualHints: Hints{ImageInput: local}},
+			uiContextualImageConfigured: true,
+		}
+		cfg.ApplyRemoteSettings(&RemoteSettings{ContextualHints: &RemoteHints{ImageInput: boolPointer(!local)}})
+		if cfg.UI.ContextualHints.ImageInput != local {
+			t.Fatalf("local=%v resolved=%v", local, cfg.UI.ContextualHints.ImageInput)
+		}
 	}
 }
 
@@ -156,7 +180,7 @@ func TestContextualHintsEnvironmentOverridesLocalAndRemote(t *testing.T) {
 		t.Run(map[bool]string{false: "off", true: "on"}[enabled], func(t *testing.T) {
 			t.Setenv("GROK_CONTEXTUAL_HINTS", map[bool]string{false: "0", true: "1"}[enabled])
 			path := filepath.Join(t.TempDir(), "config.toml")
-			if err := os.WriteFile(path, []byte("[ui.contextual_hints]\nundo = true\nplan_mode = true\nsend_now = true\nsmall_screen = true\nword_select = true\n"), 0o600); err != nil {
+			if err := os.WriteFile(path, []byte("[ui.contextual_hints]\nundo = true\nplan_mode = true\nimage_input = true\nsend_now = true\nsmall_screen = true\nword_select = true\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			cfg, err := Load(path)
@@ -164,10 +188,10 @@ func TestContextualHintsEnvironmentOverridesLocalAndRemote(t *testing.T) {
 				t.Fatal(err)
 			}
 			cfg.ApplyRemoteSettings(&RemoteSettings{ContextualHints: &RemoteHints{
-				Undo: boolPointer(!enabled), PlanMode: boolPointer(!enabled),
+				Undo: boolPointer(!enabled), PlanMode: boolPointer(!enabled), ImageInput: boolPointer(!enabled),
 				SendNow: boolPointer(!enabled), SmallScreen: boolPointer(!enabled), WordSelect: boolPointer(!enabled),
 			}})
-			if cfg.UI.ContextualHints.Undo != enabled || cfg.UI.ContextualHints.PlanMode != enabled ||
+			if cfg.UI.ContextualHints.Undo != enabled || cfg.UI.ContextualHints.PlanMode != enabled || cfg.UI.ContextualHints.ImageInput != enabled ||
 				cfg.UI.ContextualHints.SendNow != enabled || cfg.UI.ContextualHints.SmallScreen != enabled ||
 				cfg.UI.ContextualHints.WordSelect != enabled {
 				t.Fatalf("hints=%#v", cfg.UI.ContextualHints)
@@ -182,7 +206,7 @@ func TestContextualHintsEnvironmentOverridesRequirements(t *testing.T) {
 	t.Setenv("GROK_CONTEXTUAL_HINTS", "0")
 	if err := os.WriteFile(
 		filepath.Join(home, "requirements.toml"),
-		[]byte("[ui.contextual_hints]\nundo = true\nplan_mode = true\nsend_now = true\nsmall_screen = true\nword_select = true\n"),
+		[]byte("[ui.contextual_hints]\nundo = true\nplan_mode = true\nimage_input = true\nsend_now = true\nsmall_screen = true\nword_select = true\n"),
 		0o600,
 	); err != nil {
 		t.Fatal(err)
@@ -191,7 +215,7 @@ func TestContextualHintsEnvironmentOverridesRequirements(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.UI.ContextualHints.Undo || cfg.UI.ContextualHints.PlanMode ||
+	if cfg.UI.ContextualHints.Undo || cfg.UI.ContextualHints.PlanMode || cfg.UI.ContextualHints.ImageInput ||
 		cfg.UI.ContextualHints.SendNow || cfg.UI.ContextualHints.SmallScreen || cfg.UI.ContextualHints.WordSelect {
 		t.Fatalf("requirements overrode environment: %#v", cfg.UI.ContextualHints)
 	}
@@ -215,6 +239,9 @@ func TestUpdateContextualUndoHintPreservesConfig(t *testing.T) {
 			if err := UpdateContextualPlanModeHint(path, true); err != nil {
 				t.Fatal(err)
 			}
+			if err := UpdateContextualImageInputHint(path, false); err != nil {
+				t.Fatal(err)
+			}
 			if err := UpdateContextualSendNowHint(path, false); err != nil {
 				t.Fatal(err)
 			}
@@ -230,7 +257,7 @@ func TestUpdateContextualUndoHintPreservesConfig(t *testing.T) {
 			}
 			ui := root["ui"].(map[string]any)
 			hints := ui["contextual_hints"].(map[string]any)
-			if root["model_name"] != "test" || hints["plan_mode"] != true || hints["undo"] != false ||
+			if root["model_name"] != "test" || hints["plan_mode"] != true || hints["undo"] != false || hints["image_input"] != false ||
 				hints["send_now"] != false || hints["small_screen"] != false || hints["word_select"] != false {
 				data, _ := json.Marshal(root)
 				t.Fatalf("config=%s", data)
@@ -244,11 +271,12 @@ func TestUpdateContextualUndoHintPreservesConfig(t *testing.T) {
 
 func TestRemoteSettingsDecodesContextualHints(t *testing.T) {
 	var settings RemoteSettings
-	if err := json.Unmarshal([]byte(`{"contextual_hints":{"undo":false,"plan_mode":true,"send_now":true,"small_screen":false,"word_select":true}}`), &settings); err != nil {
+	if err := json.Unmarshal([]byte(`{"contextual_hints":{"undo":false,"plan_mode":true,"image_input":false,"send_now":true,"small_screen":false,"word_select":true}}`), &settings); err != nil {
 		t.Fatal(err)
 	}
 	if settings.ContextualHints == nil || settings.ContextualHints.Undo == nil || *settings.ContextualHints.Undo ||
 		settings.ContextualHints.PlanMode == nil || !*settings.ContextualHints.PlanMode ||
+		settings.ContextualHints.ImageInput == nil || *settings.ContextualHints.ImageInput ||
 		settings.ContextualHints.SendNow == nil || !*settings.ContextualHints.SendNow ||
 		settings.ContextualHints.SmallScreen == nil || *settings.ContextualHints.SmallScreen ||
 		settings.ContextualHints.WordSelect == nil || !*settings.ContextualHints.WordSelect {
