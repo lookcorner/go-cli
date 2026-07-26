@@ -71,18 +71,25 @@ Managed connectors, agent-level ACP MCP pools, plugin marketplace OAuth.
 
 ---
 
-## Phase 2 — Linux cgroups
+## Phase 2 — Linux cgroups (active)
 
 ### Goal
 
 Apply cgroup v2 limits to model-started shell / background tasks on Linux
-(CPU/memory as reference), with clear no-op on unsupported hosts.
+(memory.high/max as reference; cpu controller enabled but no cpu.max), with
+clear no-op on unsupported hosts.
 
 ### Done when
 
-- [ ] Detect cgroup v2; skip/warn otherwise.
-- [ ] Foreground + background shell paths covered by tests (or integration with fake fs).
-- [ ] COMPAT Shell row drops “cgroups remain”.
+- [x] Detect cgroup v2; skip/warn otherwise.
+- [x] Foreground + background shell paths covered by tests (or integration with fake fs).
+- [x] COMPAT Shell row drops “cgroups remain” (shell children done; ACP terminals / OOM-137 remain).
+
+### Notes
+
+- Shared ProcessManager cgroup for FG/BG/monitor; legacy `shell` tool uses a
+  per-invocation guard. ACP terminals and inotify OOM-137 signaling deferred.
+  Done on `compat/linux-cgroups-shell`.
 
 ---
 

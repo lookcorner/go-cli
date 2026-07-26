@@ -1789,7 +1789,15 @@ func (t *shellTool) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	var output cappedBuffer
 	command.Stdout = &output
 	command.Stderr = &output
-	err = command.Run()
+	if err = command.Start(); err != nil {
+		checkpointErr := t.rewind.afterWorkspace(checkpoint)
+		return output.String(), errors.Join(fmt.Errorf("start command: %w", err), checkpointErr)
+	}
+	if guard := tryShellCgroup(DefaultCgroupMemoryConfig()); guard != nil {
+		_ = guard.AddProcess(command.Process.Pid)
+		defer guard.Close()
+	}
+	err = command.Wait()
 	checkpointErr := t.rewind.afterWorkspace(checkpoint)
 	if commandCtx.Err() != nil {
 		return output.String(), errors.Join(fmt.Errorf("command timed out after %s", t.timeout), checkpointErr)
