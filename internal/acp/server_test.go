@@ -56,6 +56,9 @@ func TestInitializeCallbackRunsOnceAfterResponse(t *testing.T) {
 		if message["result"].(map[string]any)["_meta"].(map[string]any)["cancelRewind"] != true {
 			t.Fatalf("message %d missing cancel rewind: %#v", id, message)
 		}
+		if message["result"].(map[string]any)["_meta"].(map[string]any)["sessionRecap"] != true {
+			t.Fatalf("message %d missing session recap: %#v", id, message)
+		}
 	}
 	if calls != 1 {
 		t.Fatalf("initialized calls=%d", calls)

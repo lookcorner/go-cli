@@ -26,6 +26,12 @@ func mergeNotifications(current NotificationsConfig, disk *fileNotificationsConf
 	if disk.SleepPrevention != nil {
 		merged.SleepPrevention = *disk.SleepPrevention
 	}
+	if disk.SessionRecap != nil {
+		merged.SessionRecap = *disk.SessionRecap
+	}
+	if disk.RecapThresholdSecs != nil {
+		merged.RecapThresholdSecs = *disk.RecapThresholdSecs
+	}
 	if disk.Events != nil {
 		merged.Events = normalizeNames(disk.Events)
 	}

@@ -118,6 +118,7 @@ type Server struct {
 	BillingMeta           func() (*bool, *string)
 	SharingEnabled        func() bool
 	CancelRewindEnabled   func() bool
+	SessionRecapEnabled   func() bool
 	SessionDir            string
 	FolderTrustEnabled    bool
 	RememberToolApprovals func() bool
@@ -314,6 +315,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			if s.CancelRewindEnabled != nil {
 				meta["cancelRewind"] = s.CancelRewindEnabled()
 			}
+			meta["sessionRecap"] = s.SessionRecapEnabled == nil || s.SessionRecapEnabled()
 			if authConfig.DefaultMethodID != "" {
 				meta["defaultAuthMethodId"] = authConfig.DefaultMethodID
 			}

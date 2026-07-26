@@ -130,6 +130,36 @@ func TestRecapAutoGateIsSilent(t *testing.T) {
 	}
 }
 
+func TestRecapFeatureGateAcknowledgesWithoutGenerating(t *testing.T) {
+	for _, auto := range []bool{false, true} {
+		t.Run(map[bool]string{false: "manual", true: "auto"}[auto], func(t *testing.T) {
+			streamer := &acpRecapStreamer{result: api.StreamResult{Text: "unused"}}
+			current := &session{id: "disabled", runner: &agent.Runner{Client: streamer}, promptIndex: 3}
+			var output bytes.Buffer
+			server := &Server{
+				output: &output, sessions: map[string]*session{"disabled": current},
+				SessionRecapEnabled: func() bool { return false },
+			}
+			params, _ := json.Marshal(map[string]any{"sessionId": "disabled", "auto": auto})
+			server.handleRecap(context.Background(), message{ID: json.RawMessage("1"), Params: params})
+			messages := decodeACPOutput(t, output.Bytes())
+			want := 2
+			if auto {
+				want = 1
+			}
+			if len(messages) != want {
+				t.Fatalf("messages=%#v", messages)
+			}
+			streamer.mu.Lock()
+			requests := len(streamer.requests)
+			streamer.mu.Unlock()
+			if requests != 0 {
+				t.Fatalf("generated %d recap requests", requests)
+			}
+		})
+	}
+}
+
 func TestRecapManualUnavailableAndConcurrent(t *testing.T) {
 	started, release := make(chan struct{}), make(chan struct{})
 	streamer := &acpRecapStreamer{result: api.StreamResult{Text: "first recap"}, started: started, release: release}

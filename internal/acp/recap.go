@@ -25,6 +25,13 @@ func (s *Server) handleRecap(parent context.Context, incoming message) {
 		s.respondError(incoming.ID, -32602, "session not found: "+params.SessionID)
 		return
 	}
+	if s.SessionRecapEnabled != nil && !s.SessionRecapEnabled() {
+		s.ackRecap(incoming)
+		if !params.Auto {
+			s.notifyRecapUnavailable(params.SessionID)
+		}
+		return
+	}
 
 	current.mu.Lock()
 	if current.closed {

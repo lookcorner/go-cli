@@ -94,6 +94,7 @@ type Config struct {
 	FolderTrustEnabled              bool                       `json:"folder_trust_enabled"`
 	AutoWakeEnabled                 bool                       `json:"-"`
 	FeedbackEnabled                 bool                       `json:"-"`
+	SessionRecapEnabled             bool                       `json:"-"`
 	PathNotFoundHints               bool                       `json:"-"`
 	CancelRewindEnabled             bool                       `json:"-"`
 	UseLeader                       bool                       `json:"-"`
@@ -108,6 +109,7 @@ type Config struct {
 	autoWakeConfigured              bool
 	feedbackConfigured              bool
 	feedbackEnvConfigured           bool
+	sessionRecapConfigured          bool
 	twoPassCompactionConfigured     bool
 	memoryConfigured                bool
 	memoryInjectionConfigured       bool
@@ -279,14 +281,16 @@ type UIConfig struct {
 // policy: which protocol carries a notification, when focus allows one, and
 // which session events qualify.
 type NotificationsConfig struct {
-	Method            string                   `json:"method"`
-	Condition         string                   `json:"condition"`
-	IdleThresholdSecs uint64                   `json:"idle_threshold_secs"`
-	Events            []string                 `json:"events"`
-	ProgressBar       bool                     `json:"progress_bar"`
-	SleepPrevention   bool                     `json:"sleep_prevention"`
-	Title             NotificationTitleConfig  `json:"title"`
-	Hooks             []NotificationHookConfig `json:"hooks,omitempty"`
+	Method             string                   `json:"method"`
+	Condition          string                   `json:"condition"`
+	IdleThresholdSecs  uint64                   `json:"idle_threshold_secs"`
+	Events             []string                 `json:"events"`
+	ProgressBar        bool                     `json:"progress_bar"`
+	SleepPrevention    bool                     `json:"sleep_prevention"`
+	SessionRecap       bool                     `json:"session_recap"`
+	RecapThresholdSecs uint64                   `json:"session_recap_threshold_secs"`
+	Title              NotificationTitleConfig  `json:"title"`
+	Hooks              []NotificationHookConfig `json:"hooks,omitempty"`
 }
 
 // NotificationTitleConfig is the [ui.notifications.title] table controlling
@@ -560,6 +564,7 @@ type fileConfig struct {
 		WebFetch          *bool `json:"web_fetch,omitempty" toml:"web_fetch"`
 		AutoWake          *bool `json:"auto_wake,omitempty" toml:"auto_wake"`
 		Feedback          *bool `json:"feedback,omitempty" toml:"feedback"`
+		SessionRecap      *bool `json:"session_recap,omitempty" toml:"session_recap"`
 		CancelRewind      *bool `json:"cancel_rewind,omitempty" toml:"cancel_rewind"`
 		TwoPassCompaction *bool `json:"two_pass_compaction,omitempty" toml:"two_pass_compaction"`
 	} `json:"features,omitempty" toml:"features"`
@@ -651,14 +656,16 @@ type fileUIConfig struct {
 }
 
 type fileNotificationsConfig struct {
-	Method            *string                `json:"method,omitempty" toml:"method"`
-	Condition         *string                `json:"condition,omitempty" toml:"condition"`
-	IdleThresholdSecs *uint64                `json:"idle_threshold_secs,omitempty" toml:"idle_threshold_secs"`
-	Events            []string               `json:"events,omitempty" toml:"events"`
-	ProgressBar       *bool                  `json:"progress_bar,omitempty" toml:"progress_bar"`
-	SleepPrevention   *bool                  `json:"sleep_prevention,omitempty" toml:"sleep_prevention"`
-	Title             *fileNotificationTitle `json:"title,omitempty" toml:"title"`
-	Hooks             []fileNotificationHook `json:"hooks,omitempty" toml:"hooks"`
+	Method             *string                `json:"method,omitempty" toml:"method"`
+	Condition          *string                `json:"condition,omitempty" toml:"condition"`
+	IdleThresholdSecs  *uint64                `json:"idle_threshold_secs,omitempty" toml:"idle_threshold_secs"`
+	Events             []string               `json:"events,omitempty" toml:"events"`
+	ProgressBar        *bool                  `json:"progress_bar,omitempty" toml:"progress_bar"`
+	SleepPrevention    *bool                  `json:"sleep_prevention,omitempty" toml:"sleep_prevention"`
+	SessionRecap       *bool                  `json:"session_recap,omitempty" toml:"session_recap"`
+	RecapThresholdSecs *uint64                `json:"session_recap_threshold_secs,omitempty" toml:"session_recap_threshold_secs"`
+	Title              *fileNotificationTitle `json:"title,omitempty" toml:"title"`
+	Hooks              []fileNotificationHook `json:"hooks,omitempty" toml:"hooks"`
 }
 
 type fileNotificationTitle struct {
@@ -905,12 +912,13 @@ func Load(path string) (Config, error) {
 		FolderTrustEnabled:          true,
 		AutoWakeEnabled:             true,
 		FeedbackEnabled:             true,
+		SessionRecapEnabled:         true,
 		ShowTips:                    true,
 		AskUserQuestion:             AskUserQuestionConfig{TimeoutEnabled: true, TimeoutSeconds: 30 * 60},
 		CancelRewindEnabled:         true,
 		Toolset:                     ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}, Bash: BashConfig{TimeoutSeconds: 120, OutputByteLimit: 20000}},
 		Goal:                        GoalConfig{VerifierCount: 3, ClassifierMaxRuns: 10, ReverifyAfter: 8},
-		UI:                          UIConfig{MaxThoughtsWidth: 120, Theme: "groknight", AutoDarkTheme: "groknight", AutoLightTheme: "grokday", HunkTrackerMode: "agent_only", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, PageFlipOnSend: true, ShowThinkingBlocks: true, DisplayRefresh: DisplayRefreshConfig{ProbeEnabled: true, FloorMS: 8, CeilingMS: 16, MinHz: 55, MaxHz: 165}, ScrollSpeed: 50, ScrollMode: "auto", DefaultSelectedPermission: "always_allow_all_sessions", GroupToolVerbs: true, PromptSuggestions: true, ContextualHints: Hints{Undo: true, PlanMode: true, ImageInput: true, SendNow: true, SmallScreen: true, WordSelect: true, SSHWrap: true}, VoiceCaptureMode: "hold", VoiceSTTLanguage: "en", VoiceKeybindEnabled: true, PermissionMode: "ask", Notifications: NotificationsConfig{Method: "auto", Condition: "unfocused", IdleThresholdSecs: 3, Events: []string{"turn_complete", "approval_required"}, ProgressBar: true, SleepPrevention: true, Title: NotificationTitleConfig{Enabled: true, Items: []string{"action-required", "spinner", "activity", "session-name", "grok"}}}},
+		UI:                          UIConfig{MaxThoughtsWidth: 120, Theme: "groknight", AutoDarkTheme: "groknight", AutoLightTheme: "grokday", HunkTrackerMode: "agent_only", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, PageFlipOnSend: true, ShowThinkingBlocks: true, DisplayRefresh: DisplayRefreshConfig{ProbeEnabled: true, FloorMS: 8, CeilingMS: 16, MinHz: 55, MaxHz: 165}, ScrollSpeed: 50, ScrollMode: "auto", DefaultSelectedPermission: "always_allow_all_sessions", GroupToolVerbs: true, PromptSuggestions: true, ContextualHints: Hints{Undo: true, PlanMode: true, ImageInput: true, SendNow: true, SmallScreen: true, WordSelect: true, SSHWrap: true}, VoiceCaptureMode: "hold", VoiceSTTLanguage: "en", VoiceKeybindEnabled: true, PermissionMode: "ask", Notifications: NotificationsConfig{Method: "auto", Condition: "unfocused", IdleThresholdSecs: 3, Events: []string{"turn_complete", "approval_required"}, ProgressBar: true, SleepPrevention: true, SessionRecap: true, RecapThresholdSecs: 30, Title: NotificationTitleConfig{Enabled: true, Items: []string{"action-required", "spinner", "activity", "session-name", "grok"}}}},
 		Dashboard:                   DashboardConfig{Enabled: true, Grouping: "state"},
 		Sandbox:                     SandboxConfig{Profile: "off"},
 		Pruning:                     PruningConfig{Enabled: true, KeepLastNTurns: 3, SoftTrimThreshold: 4000, SoftTrimHead: 1500, SoftTrimTail: 1500, HardClearAgeTurns: 10},
@@ -1154,6 +1162,9 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.Features.Feedback != nil {
 		cfg.FeedbackEnabled, cfg.feedbackConfigured = *disk.Features.Feedback, true
+	}
+	if disk.Features.SessionRecap != nil {
+		cfg.SessionRecapEnabled, cfg.sessionRecapConfigured = *disk.Features.SessionRecap, true
 	}
 	if disk.Features.CancelRewind != nil {
 		cfg.CancelRewindEnabled = *disk.Features.CancelRewind
@@ -2266,6 +2277,9 @@ func applyEnv(cfg *Config) {
 	}
 	if value, ok := envBool("GROK_FEEDBACK_ENABLED"); ok {
 		cfg.FeedbackEnabled, cfg.feedbackConfigured, cfg.feedbackEnvConfigured = value, true, true
+	}
+	if value, ok := envBool("GROK_SESSION_RECAP"); ok {
+		cfg.SessionRecapEnabled, cfg.sessionRecapConfigured = value, true
 	}
 	if value, ok := envBool("GROK_CANCEL_REWIND"); ok {
 		cfg.CancelRewindEnabled = value

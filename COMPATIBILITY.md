@@ -332,7 +332,13 @@ unfocused; a focused terminal shows the label statically. Activity reports
 an ellipsis when tool input provides `description`), and `Responding` with
 parked-wait then thinking then tool then responding priority. `task_complete` fires when a
 background subagent finishes, successfully or not, while foreground children stay
-silent because the turn itself already reports. `session_recap` remains.
+silent because the turn itself already reports. With `[ui.notifications] session_recap`
+(and the feature gate), an automatic return-from-away recap pre-generates while
+unfocused past `session_recap_threshold_secs` (default 30s) and also runs on
+focus-gained when due: once per away period, 90s retry backoff after attempts the
+shell may no-op, UI-idle (no modal/question/live background work), and shell gates
+of ≥3 completed turns, ≥3 minutes since the last main turn, and no repeat until a
+newer turn completes. Manual `/recap` still works whenever the feature is on.
 
 Compatibility is verified with Go unit/integration tests and will additionally
 use captured protocol fixtures from the Rust implementation. A status is only

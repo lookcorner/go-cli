@@ -116,6 +116,11 @@ type RewindPoint struct {
 	PromptPreview    *string `json:"prompt_preview"`
 }
 
+type RecapActivity struct {
+	CompletedTurns int
+	LastCompleted  time.Time
+}
+
 type RewindResult struct {
 	TargetPromptIndex  int
 	PreviousResponseID string
@@ -591,6 +596,31 @@ func RewindPoints(path string) ([]RewindPoint, error) {
 		points = append(points, RewindPoint{PromptIndex: index, CreatedAt: created, PromptPreview: prompt})
 	}
 	return points, nil
+}
+
+// RecapActivityAt returns the completed main-turn count and latest completion
+// time from the rewind-aware live timeline.
+func RecapActivityAt(path string) (RecapActivity, error) {
+	events, _, _, err := liveTimeline(path)
+	if err != nil {
+		return RecapActivity{}, err
+	}
+	var activity RecapActivity
+	for _, event := range events {
+		if event.Kind != "model_response" {
+			continue
+		}
+		var data struct {
+			ResponseID    string `json:"response_id"`
+			ToolCallCount int    `json:"tool_call_count"`
+		}
+		if json.Unmarshal(event.Data, &data) != nil || data.ResponseID == "" || data.ToolCallCount != 0 {
+			continue
+		}
+		activity.CompletedTurns++
+		activity.LastCompleted = event.Time
+	}
+	return activity, nil
 }
 
 // PreviewRewind resolves a conversation checkpoint without changing the log.

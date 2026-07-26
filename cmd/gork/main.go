@@ -1265,6 +1265,9 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			Notifications:        notificationSettings(cfg.UI.Notifications),
 			ProgressBar:          cfg.UI.Notifications.ProgressBar,
 			SleepPrevention:      cfg.UI.Notifications.SleepPrevention,
+			SessionRecap:         cfg.SessionRecapEnabled,
+			AutomaticRecap:       cfg.UI.Notifications.SessionRecap,
+			RecapThreshold:       time.Duration(cfg.UI.Notifications.RecapThresholdSecs) * time.Second,
 			NotificationHooks:    notificationHooks(cfg.UI.Notifications.Hooks),
 			TitleEnabled:         cfg.UI.Notifications.Title.Enabled,
 			TitleItems:           cfg.UI.Notifications.Title.Items,
@@ -3386,6 +3389,8 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		return runtimeConfigSnapshot().UI.RememberToolApprovals
 	}, CancelRewindEnabled: func() bool {
 		return runtimeConfigSnapshot().CancelRewindEnabled
+	}, SessionRecapEnabled: func() bool {
+		return runtimeConfigSnapshot().SessionRecapEnabled
 	}, BillingMeta: getBillingMeta, SharingEnabled: func() bool {
 		return runtimeConfigSnapshot().SharingEnabled
 	}, Auth: acp.AuthConfig{

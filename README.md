@@ -828,6 +828,10 @@ per second; polling stops when the dashboard closes.
 `/recap` makes a tool-free, display-only model call against the current
 conversation. It can run beside an active turn, never enters the prompt queue or
 changes conversation history, and discards its result if a newer prompt starts.
+With `[ui.notifications] session_recap` (default on when the feature gate is
+enabled), the TUI also auto-recaps after you leave the terminal long enough
+(`session_recap_threshold_secs`, default 30): it may pre-generate while away and
+shows on return when the session is idle with enough recent turns.
 `/btw <question>` asks one display-only side question from an isolated snapshot
 of the current conversation, including the active prompt. It can run beside the
 main turn, exposes tool definitions for context but never executes returned tool

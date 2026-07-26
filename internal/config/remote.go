@@ -41,6 +41,7 @@ type RemoteSettings struct {
 	CancelRewindEnabled              *bool                `json:"cancel_rewind_enabled"`
 	AutoWakeEnabled                  *bool                `json:"auto_wake_enabled"`
 	FeedbackEnabled                  *bool                `json:"feedback_enabled"`
+	SessionRecap                     *bool                `json:"session_recap"`
 	TwoPassCompactionEnabled         *bool                `json:"two_pass_compaction_enabled"`
 	MemoryEnabled                    *bool                `json:"memory_enabled"`
 	MemoryInitialInjectionEnabled    *bool                `json:"memory_initial_injection_enabled"`
@@ -281,6 +282,9 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 		if remote.FeedbackEnabled != nil {
 			c.FeedbackEnabled = *remote.FeedbackEnabled
 		}
+	}
+	if !c.sessionRecapConfigured {
+		c.SessionRecapEnabled = remote.SessionRecap == nil || *remote.SessionRecap
 	}
 	if !c.twoPassCompactionConfigured && remote.TwoPassCompactionEnabled != nil {
 		c.TwoPassCompaction = *remote.TwoPassCompactionEnabled

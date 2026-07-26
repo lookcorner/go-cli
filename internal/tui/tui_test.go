@@ -1446,7 +1446,7 @@ func TestRecapCommandIsDisplayOnlyWhenIdle(t *testing.T) {
 	streamer := &recapTUIStreamer{}
 	m := &model{
 		ctx: context.Background(), runner: &agent.Runner{Client: streamer, SessionID: "session-1", Model: "test"},
-		previousID: "response-1", status: "ready",
+		previousID: "response-1", status: "ready", sessionRecap: true,
 	}
 	m.setInput("/recap ignored")
 	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
@@ -1468,7 +1468,7 @@ func TestRecapCommandBypassesBusyPromptQueue(t *testing.T) {
 	streamer := &recapTUIStreamer{}
 	m := &model{
 		ctx: context.Background(), runner: &agent.Runner{Client: streamer, SessionID: "session-1"},
-		previousID: "response-1", running: true, status: "thinking",
+		previousID: "response-1", running: true, status: "thinking", sessionRecap: true,
 	}
 	m.setInput("/recap")
 	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
@@ -1489,7 +1489,7 @@ func TestRecapCommandBypassesBusyPromptQueue(t *testing.T) {
 }
 
 func TestRecapCommandRequiresSessionAndDropsStaleResult(t *testing.T) {
-	m := &model{ctx: context.Background(), runner: &agent.Runner{}}
+	m := &model{ctx: context.Background(), runner: &agent.Runner{}, sessionRecap: true}
 	m.setInput("/recap")
 	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)

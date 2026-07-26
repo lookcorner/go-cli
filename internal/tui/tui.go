@@ -303,7 +303,9 @@ type recapDoneEvent struct {
 	text   string
 	err    error
 	serial uint64
+	auto   bool
 }
+type autoRecapTickEvent struct{}
 type btwDoneEvent struct {
 	question string
 	answer   string
@@ -916,21 +918,31 @@ type model struct {
 	slashQuery          string
 	slashDismissed      string
 
-	recapRunning  bool
-	pendingRecap  string
-	btwRunning    bool
-	rewind        *rewindState
-	jump          *jumpState
-	timelineHover *timelineHit
-	modelSelect   *modelSelectState
-	settings      *settingsState
-	docs          *docsState
-	sessionSelect *sessionSelectState
-	forkChoice    *forkChoiceState
-	mcp           *mcpModal
-	claudeImport  *claudeImportState
-	extensions    *extensionsState
-	agentConfig   *agentConfigState
+	recapRunning      bool
+	pendingRecap      string
+	sessionRecap      bool
+	automaticRecap    bool
+	recapThreshold    time.Duration
+	recapTurns        int
+	lastTurnCompleted time.Time
+	lastRecapTurn     int
+	recapFocusLost    time.Time
+	recapAttempted    time.Time
+	recapShownAway    bool
+	autoRecapTicking  bool
+	btwRunning        bool
+	rewind            *rewindState
+	jump              *jumpState
+	timelineHover     *timelineHit
+	modelSelect       *modelSelectState
+	settings          *settingsState
+	docs              *docsState
+	sessionSelect     *sessionSelectState
+	forkChoice        *forkChoiceState
+	mcp               *mcpModal
+	claudeImport      *claudeImportState
+	extensions        *extensionsState
+	agentConfig       *agentConfigState
 
 	minimal              bool
 	minimalCommitted     int
@@ -1063,6 +1075,9 @@ type UIOptions struct {
 	Notifications        notify.Settings
 	ProgressBar          bool
 	SleepPrevention      bool
+	SessionRecap         bool
+	AutomaticRecap       bool
+	RecapThreshold       time.Duration
 	NotificationHooks    []notify.Hook
 	TitleEnabled         bool
 	TitleItems           []string
@@ -1299,6 +1314,9 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		progress:        notify.NewProgress(options.ProgressBar, notifyTerminal),
 		sleepInhibitor:  notify.NewSleepInhibitor(options.SleepPrevention),
 		title:           notify.NewTitleManager(options.TitleEnabled, options.TitleItems),
+		sessionRecap:    options.SessionRecap,
+		automaticRecap:  options.AutomaticRecap,
+		recapThreshold:  options.RecapThreshold,
 		showThinking:    options.ShowThinkingBlocks, persistThinking: options.SetShowThinking,
 		showTips: options.ShowTips, persistShowTips: options.SetShowTips, startupTip: options.StartupTip,
 		respectManualFolds: options.RespectManualFolds, persistManualFolds: options.SetManualFolds,
@@ -1414,6 +1432,12 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 	}
 	if runner.Tools != nil {
 		m.planMode = runner.Tools.PlanModeActive()
+	}
+	if m.sessionRecap && strings.TrimSpace(runner.SessionPath) != "" {
+		if activity, err := session.RecapActivityAt(runner.SessionPath); err == nil {
+			m.recapTurns = activity.CompletedTurns
+			m.lastTurnCompleted = activity.LastCompleted
+		}
 	}
 	m.replaceTranscript(initialTranscript, nil)
 	if runner != nil && strings.TrimSpace(runner.SessionPath) != "" {
@@ -1981,6 +2005,8 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.notifyEvent(notify.TurnComplete)
 			m.previousID = msg.result.ResponseID
+			m.recapTurns++
+			m.lastTurnCompleted = time.Now()
 			if msg.result.InputTokens > 0 && msg.result.ContextWindow > 0 {
 				m.inputTokens = msg.result.InputTokens
 				m.contextWindow = msg.result.ContextWindow
@@ -2286,24 +2312,39 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case recapDoneEvent:
 		m.recapRunning = false
 		if msg.serial != m.promptSerial || errors.Is(msg.err, agent.ErrRecapSuperseded) {
+			if msg.auto {
+				return m, m.ensureAutoRecapTick()
+			}
 			return m, nil
 		}
 		if msg.err != nil {
-			if !m.running {
+			if !msg.auto && !m.running {
 				if errors.Is(msg.err, agent.ErrRecapUnavailable) || errors.Is(msg.err, agent.ErrRecapInProgress) {
 					m.status = "recap unavailable"
 				} else {
 					m.status = "recap failed: " + msg.err.Error()
 				}
 			}
+			if msg.auto {
+				return m, m.ensureAutoRecapTick()
+			}
 			return m, nil
 		}
+		if msg.auto && m.running {
+			return m, m.ensureAutoRecapTick()
+		}
+		m.lastRecapTurn = m.recapTurns
+		m.recapShownAway = true
 		if m.running {
 			m.pendingRecap = msg.text
 		} else {
 			m.appendSystem(recapLabel + msg.text)
-			m.status = "recap"
+			if !msg.auto {
+				m.status = "recap"
+			}
 		}
+	case autoRecapTickEvent:
+		return m, m.pollAutomaticRecap(time.Now())
 	case btwDoneEvent:
 		m.btwRunning = false
 		content := "**Question:** " + msg.question + "\n\n"
@@ -2514,13 +2555,16 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if m.notifier != nil {
 			m.notifier.Focus()
 		}
+		recapCommand := m.focusForAutomaticRecap(time.Now())
 		if m.imageInputHintProbeEligible() {
-			return m, probeClipboardImage(m.ctx, m.clipboardRead)
+			return m, tea.Batch(recapCommand, probeClipboardImage(m.ctx, m.clipboardRead))
 		}
+		return m, recapCommand
 	case tea.BlurMsg:
 		if m.notifier != nil {
 			m.notifier.Blur(time.Now())
 		}
+		return m, m.blurForAutomaticRecap(time.Now())
 	case imageInputHintProbeEvent:
 		if msg.err == nil && msg.content.MediaType == "image/png" && len(msg.content.Data) > 0 && m.imageInputHintCanRender() {
 			digest := sha256.Sum256(msg.content.Data)
@@ -4296,21 +4340,36 @@ func rewindModes(points []session.RewindPoint, target int) []agent.RewindMode {
 }
 
 func (m *model) startRecap() tea.Cmd {
+	return m.startRecapWithAuto(false)
+}
+
+func (m *model) startRecapWithAuto(auto bool) tea.Cmd {
+	if !m.sessionRecap {
+		if !auto {
+			m.status = "session recap is not enabled"
+		}
+		return nil
+	}
 	if m.runner == nil || strings.TrimSpace(m.runner.SessionID) == "" {
-		m.status = "no active session"
+		if !auto {
+			m.status = "no active session"
+		}
+		return nil
+	}
+	if auto && !m.autoRecapTurnEligible(time.Now()) {
 		return nil
 	}
 	if m.recapRunning {
-		if !m.running {
+		if !auto && !m.running {
 			m.status = "recap already in progress"
 		}
 		return nil
 	}
 	m.recapRunning = true
-	if !m.running {
+	if !auto && !m.running {
 		m.status = "generating recap"
 	}
-	return runRecap(m.ctx, m.runner, m.previousID, m.promptSerial)
+	return runRecap(m.ctx, m.runner, m.previousID, m.promptSerial, auto)
 }
 
 func (m *model) startBtw(question string) tea.Cmd {
@@ -6110,10 +6169,10 @@ func runWorkspaceChange(ctx context.Context, runner *agent.Runner, path string) 
 	}
 }
 
-func runRecap(ctx context.Context, runner *agent.Runner, previousID string, serial uint64) tea.Cmd {
+func runRecap(ctx context.Context, runner *agent.Runner, previousID string, serial uint64, auto bool) tea.Cmd {
 	return func() tea.Msg {
 		text, err := runner.Recap(ctx, previousID)
-		return recapDoneEvent{text: text, err: err, serial: serial}
+		return recapDoneEvent{text: text, err: err, serial: serial, auto: auto}
 	}
 }
 
@@ -6586,7 +6645,8 @@ func (m *model) View() tea.View {
 	}
 	view := tea.NewView(prefix + body + status + "\n" + footer)
 	view.AltScreen = !m.minimal
-	view.ReportFocus = m.imageInputHint.enabled || m.notifier != nil && m.notifier.NeedsFocusReports()
+	view.ReportFocus = m.imageInputHint.enabled || m.sessionRecap && m.automaticRecap ||
+		m.notifier != nil && m.notifier.NeedsFocusReports()
 	view.MouseMode = tea.MouseModeNone
 	view.KeyboardEnhancements.ReportEventTypes = true
 	if m.minimal {
