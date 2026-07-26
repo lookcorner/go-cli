@@ -266,6 +266,54 @@ func TestSupportsFocusTracking(t *testing.T) {
 	}
 }
 
+func TestBuildSnapshotWarnsForITerm2ClipboardPermission(t *testing.T) {
+	env := map[string]string{
+		"TERM_PROGRAM": "iTerm.app", "TERM": "xterm-256color", "COLORTERM": "truecolor",
+		"SSH_CONNECTION": "1 2 3 4",
+	}
+	snapshot := BuildSnapshot(func(key string) string { return env[key] }, func(string) (string, error) {
+		return "/bin/pbcopy", nil
+	}, "darwin")
+	joined := strings.Join(snapshot.Findings, "\n")
+	if !strings.Contains(joined, "iTerm2 may block OSC 52") || !strings.Contains(joined, "Applications in terminal may access clipboard") {
+		t.Fatalf("missing iTerm2 clipboard finding: %q", joined)
+	}
+	env["GROK_OSC52_SINK"] = "1"
+	snapshot = BuildSnapshot(func(key string) string { return env[key] }, func(string) (string, error) {
+		return "/bin/pbcopy", nil
+	}, "darwin")
+	if strings.Contains(strings.Join(snapshot.Findings, "\n"), "iTerm2 may block") {
+		t.Fatalf("wrap sink should silence iTerm2 caveat: %#v", snapshot.Findings)
+	}
+}
+
+func TestBuildSnapshotSilentForLocalITerm2WithNativeClipboard(t *testing.T) {
+	env := map[string]string{"TERM_PROGRAM": "iTerm.app", "TERM": "xterm-256color", "COLORTERM": "truecolor"}
+	snapshot := BuildSnapshot(func(key string) string { return env[key] }, func(string) (string, error) {
+		return "/bin/pbcopy", nil
+	}, "darwin")
+	if strings.Contains(strings.Join(snapshot.Findings, "\n"), "iTerm2 may block") {
+		t.Fatalf("local native clipboard should skip iTerm2 caveat: %#v", snapshot.Findings)
+	}
+}
+
+func TestBuildSnapshotWarnsForVSCodeSSHNonASCII(t *testing.T) {
+	env := map[string]string{
+		"TERM_PROGRAM": "vscode", "TERM": "xterm-256color", "COLORTERM": "truecolor",
+		"SSH_CONNECTION": "1 2 3 4",
+	}
+	snapshot := BuildSnapshot(func(key string) string { return env[key] }, func(string) (string, error) {
+		return "/bin/pbcopy", nil
+	}, "darwin")
+	joined := strings.Join(snapshot.Findings, "\n")
+	if !strings.Contains(joined, "non-ASCII text copied with OSC 52") || !strings.Contains(joined, "`/minimal`") {
+		t.Fatalf("missing vscode SSH finding: %q", joined)
+	}
+	if strings.Contains(joined, "ssh-wrap") {
+		t.Fatalf("vscode remote should not recommend ssh-wrap: %q", joined)
+	}
+}
+
 func TestTerminalDetectionVariants(t *testing.T) {
 	tests := []struct {
 		env               map[string]string
@@ -273,6 +321,7 @@ func TestTerminalDetectionVariants(t *testing.T) {
 	}{
 		{map[string]string{"WT_SESSION": "id"}, "Windows Terminal", "none", "truecolor"},
 		{map[string]string{"KITTY_WINDOW_ID": "1", "TERM": "xterm-kitty", "COLORTERM": "24bit", "ZELLIJ": "0"}, "Kitty", "zellij", "truecolor"},
+		{map[string]string{"LC_TERMINAL": "iTerm2", "TERM": "xterm-256color"}, "iTerm2", "none", "256 colors"},
 		{map[string]string{"TERM": "xterm-256color", "STY": "screen"}, "xterm-256color", "screen", "256 colors"},
 		{map[string]string{"TERM": "xterm", "NO_COLOR": "1"}, "xterm", "none", "none"},
 		{map[string]string{}, "unknown", "none", "none"},

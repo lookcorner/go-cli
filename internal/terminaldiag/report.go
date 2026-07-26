@@ -139,6 +139,11 @@ func terminalBrand(getenv func(string) string, term string) string {
 	if value := strings.TrimSpace(getenv("TERM_PROGRAM")); value != "" {
 		return value
 	}
+	// iTerm2's LC_TERMINAL / session markers survive SSH when TERM_PROGRAM does not.
+	if getenv("ITERM_SESSION_ID") != "" || getenv("ITERM_PROFILE") != "" ||
+		strings.EqualFold(strings.TrimSpace(getenv("LC_TERMINAL")), "iTerm2") {
+		return "iTerm2"
+	}
 	if getenv("WT_SESSION") != "" {
 		return "Windows Terminal"
 	}
@@ -227,10 +232,60 @@ func terminalFindings(getenv func(string) string, term, brand, color, multiplexe
 	if isAppleTerminal(brand) && ssh {
 		findings = append(findings, "Apple Terminal doesn't support OSC 52, so clipboard copy over SSH is unavailable.\n    Run `gork wrap ssh <host>` on your local computer, or use a terminal that supports OSC 52. Gork also saves each copy to the backup file shown in the copy message.")
 	}
+	findings = append(findings, clipboardCaveatFindings(getenv, brand, ssh, clipboard, osc52)...)
 	if !clipboard && !osc52 {
 		findings = append(findings, "No clipboard route is available; install a native clipboard tool or enable OSC 52.")
 	}
 	return findings
+}
+
+// clipboardCaveatFindings mirrors reference clipboard recommendations for hosts
+// that can deliver OSC 52 but may still mangle or block copies.
+func clipboardCaveatFindings(getenv func(string) string, brand string, ssh, clipboard, osc52 bool) []string {
+	if !osc52 || wrapSinkActive(getenv) {
+		return nil
+	}
+	var findings []string
+	if ssh && isVSCodeFamily(getenv, brand) {
+		findings = append(findings, "This remote editor may change non-ASCII text copied with OSC 52.\n    If pasted non-ASCII text is incorrect, use `/minimal` and select text in the terminal. ASCII copy and the backup file shown after the copy remain available.")
+	}
+	if isITerm2(brand) && (ssh || !clipboard) {
+		findings = append(findings, "iTerm2 may block OSC 52 clipboard access.\n    In iTerm2, open Settings → General → Selection and turn on “Applications in terminal may access clipboard.” Grok can't read this setting, so check it there if copies don't paste.")
+	}
+	return findings
+}
+
+func wrapSinkActive(getenv func(string) string) bool {
+	return getenv("GROK_OSC52_SINK") != "" || getenv("LC_GROK_OSC52_SINK") != ""
+}
+
+func isITerm2(brand string) bool {
+	switch normalizeBrandKey(brand) {
+	case "iterm", "iterm2", "itermapp":
+		return true
+	default:
+		return false
+	}
+}
+
+func isVSCodeFamily(getenv func(string) string, brand string) bool {
+	switch normalizeBrandKey(brand) {
+	case "vscode", "cursor", "windsurf", "zed":
+		return true
+	}
+	if getenv("CURSOR_TRACE_ID") != "" {
+		return true
+	}
+	return getenv("VSCODE_GIT_ASKPASS_MAIN") != ""
+}
+
+func normalizeBrandKey(brand string) string {
+	return strings.Map(func(char rune) rune {
+		if char == ' ' || char == '-' || char == '_' || char == '.' {
+			return -1
+		}
+		return char
+	}, strings.ToLower(strings.TrimSpace(brand)))
 }
 
 func colorFindings(getenv func(string) string, term, brand, color, multiplexer string) []string {
