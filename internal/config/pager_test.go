@@ -14,18 +14,19 @@ func TestRespectManualFoldsPagerConfig(t *testing.T) {
 	if err != nil || path != filepath.Join(home, "pager.toml") {
 		t.Fatalf("path=%q err=%v", path, err)
 	}
-	if enabled, err := LoadRespectManualFolds(path); err != nil || enabled {
-		t.Fatalf("default=%v err=%v", enabled, err)
+	settings, err := LoadPagerScroll(path)
+	if err != nil || !settings.AnchorOnFold || settings.RespectManualFolds {
+		t.Fatalf("defaults=%#v err=%v", settings, err)
 	}
-	if err := os.WriteFile(path, []byte("[other]\nvalue = 1\n"), 0o640); err != nil {
+	if err := os.WriteFile(path, []byte("[scrollback.scroll]\nanchor_on_fold = false\n\n[other]\nvalue = 1\n"), 0o640); err != nil {
 		t.Fatal(err)
 	}
 	if err := UpdateRespectManualFolds(path, true); err != nil {
 		t.Fatal(err)
 	}
-	enabled, err := LoadRespectManualFolds(path)
-	if err != nil || !enabled {
-		t.Fatalf("enabled=%v err=%v", enabled, err)
+	settings, err = LoadPagerScroll(path)
+	if err != nil || settings.AnchorOnFold || !settings.RespectManualFolds {
+		t.Fatalf("settings=%#v err=%v", settings, err)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {

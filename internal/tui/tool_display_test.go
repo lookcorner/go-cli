@@ -410,6 +410,48 @@ func TestFullscreenScrollbackTogglesVisibleToolFold(t *testing.T) {
 	}
 }
 
+func TestFoldAnchorConfigurationControlsViewportPosition(t *testing.T) {
+	newModel := func(disabled bool) *model {
+		m := &model{width: 40, height: 8, scrollFocused: true, disableFoldAnchor: disabled}
+		for index := 0; index < 8; index++ {
+			fmt.Fprintf(&m.transcript, "before %d\n", index)
+		}
+		start := m.transcript.Len()
+		m.appendToolDisplay("Folded tool")
+		m.rememberToolFold(start, "#### Tool: `read_file`\n\nArguments\n\n```json\n{\"path\":\"main.go\"}\n```\n\nResult\n\n```text\nline 1\nline 2\nline 3\nline 4\n```")
+		for index := 0; index < 8; index++ {
+			fmt.Fprintf(&m.transcript, "after %d\n", index)
+		}
+		width := m.transcriptRenderWidth()
+		total := len(renderMarkdownTheme(m.transcriptText(), width, false, m.colors()))
+		line := len(renderMarkdownTheme(m.transcriptTextPrefix(start), width, false, m.colors()))
+		m.scroll = min(max(2-line+total-m.contentHeight(), 0), m.maxTranscriptScroll())
+		return m
+	}
+	row := func(m *model) int {
+		width := m.transcriptRenderWidth()
+		total := len(renderMarkdownTheme(m.transcriptText(), width, false, m.colors()))
+		line := len(renderMarkdownTheme(m.transcriptTextPrefix(m.toolFolds[0].start), width, false, m.colors()))
+		return line - max(total-m.scroll-m.contentHeight(), 0)
+	}
+
+	anchored := newModel(false)
+	anchoredBefore := row(anchored)
+	if !anchored.toggleVisibleToolFold() || row(anchored) != anchoredBefore {
+		t.Fatalf("anchored row before=%d after=%d scroll=%d", anchoredBefore, row(anchored), anchored.scroll)
+	}
+
+	minimal := newModel(true)
+	minimalBefore := row(minimal)
+	if !minimal.toggleVisibleToolFold() {
+		t.Fatal("anchor-off fold did not expand")
+	}
+	minimalAfter := row(minimal)
+	if minimalAfter == minimalBefore || minimalAfter < 0 || minimalAfter >= minimal.contentHeight() {
+		t.Fatalf("minimal row before=%d after=%d scroll=%d", minimalBefore, minimalAfter, minimal.scroll)
+	}
+}
+
 func TestRespectManualFoldsKeepsGrowingToolGroupExpanded(t *testing.T) {
 	m := &model{width: 40, height: 8, scrollFocused: true, groupToolVerbs: true, respectManualFolds: true}
 	m.finishTool(toolFinishedEvent{

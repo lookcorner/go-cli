@@ -264,6 +264,9 @@ same structured breakdown is returned by `x.ai/session/info`.
 | Markdown/media/Mermaid | partial | TUI headings, emphasis, links, ordered/unordered lists, quotes, pipe tables, inline code and fenced code render with streaming-safe markers and visible-width wrapping; closed flowchart, graph, state, sequence, class, ER, C4 Context/Container/Component/Dynamic/Deployment, requirementDiagram, info, pie, timeline, journey, Gantt, packet-beta, block-beta, kanban, gitGraph, sankey-beta, quadrantChart, radar-beta, xychart-beta, and mindmap Mermaid fences render as bounded Unicode relationship, architecture, requirement, version, percentage, chronology, task, bit-range, commit-history, flow, grid, board, coordinate, axis/value, series, or hierarchy art with safe source fallback; image attachments render inline via kitty Unicode placeholders on kitty terminals and via iTerm2 or sixel protocol blocks in native scrollback mode, with metadata fallback elsewhere; tool-result images persist to session assets for inline replay, while non-Kitty fullscreen pixel overlays remain |
 | Telemetry/privacy hard-offs | done | No analytics, research uploads, feedback/review uploads, auto-update or retention opt-in code exists; `/privacy` reports and confirms the enforced opt-out state locally, explicit `/feedback` text and review citation events are stored only in the local session log, while review comment bodies are discarded |
 
+Pager scroll compatibility includes default-on `[scrollback.scroll].anchor_on_fold`
+with reference-style minimal visibility scrolling when explicitly disabled.
+
 Compatibility is verified with Go unit/integration tests and will additionally
 use captured protocol fixtures from the Rust implementation. A status is only
 changed to **done** after its relevant compatibility tests exist.

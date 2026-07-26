@@ -1174,13 +1174,17 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			voiceClient = voice.New(voice.Config{BaseURL: cfg.BaseURL, Language: cfg.UI.VoiceSTTLanguage}, cfg.APIKey, voice.TokenProvider(tokenProvider))
 		}
 		startupTip := ""
+		anchorOnFold := true
 		respectManualFolds := false
 		if home, homeErr := config.PolicyHome(); homeErr == nil {
 			startupTip = tips.PickAndAdvance(cfg.Tips, home)
 		}
 		pagerPath, pagerPathErr := config.PagerPath()
 		if pagerPathErr == nil {
-			respectManualFolds, _ = config.LoadRespectManualFolds(pagerPath)
+			if pagerScroll, loadErr := config.LoadPagerScroll(pagerPath); loadErr == nil {
+				anchorOnFold = pagerScroll.AnchorOnFold
+				respectManualFolds = pagerScroll.RespectManualFolds
+			}
 		}
 		exit, err := tui.Run(ctx, runner, tuiBridge, prompt, opts.previousID, resumedTranscript, ws.Root(), cfg.Model, tui.UIOptions{
 			Minimal: minimal, RendererFPS: tui.RendererFPS(cfg.UI.DisplayRefresh), ScreenMode: cfg.UI.ScreenMode,
@@ -1219,6 +1223,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			ShowThinkingBlocks:  cfg.UI.ShowThinkingBlocks,
 			ShowTips:            cfg.ShowTips,
 			StartupTip:          startupTip,
+			DisableFoldAnchor:   !anchorOnFold,
 			RespectManualFolds:  respectManualFolds,
 			MaxThoughtsWidth:    cfg.UI.MaxThoughtsWidth,
 			MatchRefresh:        cfg.UI.DisplayRefresh.AutoCadenceEnabled,

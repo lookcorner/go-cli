@@ -323,13 +323,30 @@ func (m *model) toggleVisibleToolFold() bool {
 		}
 	}
 	afterLines := len(renderMarkdownTheme(m.transcriptTextPrefix(fold.end), width, false, m.colors()))
-	m.scroll = min(max(m.scroll+afterLines-beforeLines, 0), m.maxTranscriptScroll())
+	if m.disableFoldAnchor {
+		m.ensureTranscriptLineVisible(selectedLine)
+	} else {
+		m.scroll = min(max(m.scroll+afterLines-beforeLines, 0), m.maxTranscriptScroll())
+	}
 	if fold.expanded {
 		m.status = "tool group expanded"
 	} else {
 		m.status = "tool group collapsed"
 	}
 	return true
+}
+
+func (m *model) ensureTranscriptLineVisible(line int) {
+	total := len(renderMarkdownTheme(m.transcriptText(), m.transcriptRenderWidth(), false, m.colors()))
+	height := m.contentHeight()
+	top := max(total-m.scroll-height, 0)
+	bottom := max(total-m.scroll, 0)
+	if line < top {
+		m.scroll = total - height - line
+	} else if line >= bottom {
+		m.scroll = total - line - 1
+	}
+	m.scroll = min(max(m.scroll, 0), m.maxTranscriptScroll())
 }
 
 func toolFoldReplacement(current, body string) string {

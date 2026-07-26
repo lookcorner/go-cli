@@ -935,7 +935,9 @@ Set `[scrollback.scroll].respect_manual_folds = true` in
 keep a manually expanded tool, verb, or edit group expanded while more results
 join it. Expansion also leaves bottom-follow mode and anchors the current
 viewport as the group grows. The setting applies immediately and defaults to
-`false` for the reference legacy behavior.
+`false` for the reference legacy behavior. The same table accepts
+`anchor_on_fold = false` to use minimal scrolling that only keeps the toggled
+group visible; its default `true` keeps the group header at the same screen row.
 
 `[ui] cursor_blink = true` forces a blinking block cursor at TUI startup, while
 `false` forces a steady block. Leaving it unset preserves the terminal's cursor

@@ -2,6 +2,11 @@ package config
 
 import "path/filepath"
 
+type PagerScroll struct {
+	AnchorOnFold       bool
+	RespectManualFolds bool
+}
+
 func PagerPath() (string, error) {
 	home, err := PolicyHome()
 	if err != nil {
@@ -10,15 +15,19 @@ func PagerPath() (string, error) {
 	return filepath.Join(home, "pager.toml"), nil
 }
 
-func LoadRespectManualFolds(path string) (bool, error) {
+func LoadPagerScroll(path string) (PagerScroll, error) {
+	settings := PagerScroll{AnchorOnFold: true}
 	root, err := readConfigMap(path)
 	if err != nil {
-		return false, err
+		return settings, err
 	}
 	scrollback, _ := root["scrollback"].(map[string]any)
 	scroll, _ := scrollback["scroll"].(map[string]any)
-	enabled, _ := scroll["respect_manual_folds"].(bool)
-	return enabled, nil
+	if enabled, ok := scroll["anchor_on_fold"].(bool); ok {
+		settings.AnchorOnFold = enabled
+	}
+	settings.RespectManualFolds, _ = scroll["respect_manual_folds"].(bool)
+	return settings, nil
 }
 
 func UpdateRespectManualFolds(path string, enabled bool) error {
