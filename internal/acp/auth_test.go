@@ -76,6 +76,23 @@ func TestAuthReadFallbacks(t *testing.T) {
 	}
 }
 
+func TestBearerTokenFailsClosedForExpiredSessionMethods(t *testing.T) {
+	for _, method := range []string{"cached_token", "grok.com", "oidc"} {
+		t.Run(method, func(t *testing.T) {
+			var output bytes.Buffer
+			server := &Server{output: &output, Auth: AuthConfig{
+				MethodID: method, Token: "expired-token",
+				TokenProvider: func(context.Context, string) (string, error) { return "", errors.New("refresh failed") },
+			}}
+			server.handleAuth(context.Background(), message{ID: json.RawMessage("1"), Method: "x.ai/auth/getBearerToken"})
+			response := decodeACP(t, json.NewDecoder(&output))["result"].(map[string]any)
+			if response["token"] != nil {
+				t.Fatalf("expired session token leaked: %#v", response)
+			}
+		})
+	}
+}
+
 func TestBearerTokenHonorsActiveAPIKeyMethod(t *testing.T) {
 	var output bytes.Buffer
 	providerCalls := 0

@@ -247,6 +247,8 @@ func (s *Server) handleAuth(ctx context.Context, incoming message) {
 		if config.MethodID != "xai.api_key" && config.TokenProvider != nil {
 			if refreshed, err := config.TokenProvider(ctx, ""); err == nil {
 				token = refreshed
+			} else if isSessionAuthMethod(config.MethodID) {
+				token = ""
 			}
 		}
 		s.respond(incoming.ID, map[string]any{"token": optionalString(token)})
