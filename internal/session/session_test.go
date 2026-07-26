@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -678,6 +679,46 @@ func TestForkAtPromptUsesLiveTimeline(t *testing.T) {
 	messages, err := Transcript(filepath.Join(dir, "child.jsonl"))
 	if err != nil || len(messages) != 2 || messages[0].Text != "first" || messages[1].Text != "one" {
 		t.Fatalf("forked timeline: %#v err=%v", messages, err)
+	}
+}
+
+func TestForkAtPromptExcludesRewoundBranch(t *testing.T) {
+	dir := t.TempDir()
+	logger, err := NewLoggerWithID(dir, "parent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []struct {
+		kind string
+		data any
+	}{
+		{"session_metadata", map[string]any{"cwd": "/old"}},
+		{"user_prompt", map[string]any{"text": "first"}},
+		{"model_response", map[string]any{"text": "one", "response_id": "r1", "tool_call_count": 0}},
+		{"user_prompt", map[string]any{"text": "discarded"}},
+		{"model_response", map[string]any{"text": "old answer", "response_id": "r2", "tool_call_count": 0}},
+		{"session_rewind", map[string]any{"target_prompt_index": 1}},
+		{"user_prompt", map[string]any{"text": "replacement"}},
+		{"model_response", map[string]any{"text": "new answer", "response_id": "r3", "tool_call_count": 0}},
+	} {
+		if err := logger.Append(event.kind, event.data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	target := 1
+	if _, _, err := Fork(dir, "parent", "child", "/new", "", &target); err != nil {
+		t.Fatal(err)
+	}
+	messages, err := Transcript(filepath.Join(dir, "child.jsonl"))
+	if err != nil || len(messages) != 4 {
+		t.Fatalf("forked timeline: %#v err=%v", messages, err)
+	}
+	texts := []string{messages[0].Text, messages[1].Text, messages[2].Text, messages[3].Text}
+	if !reflect.DeepEqual(texts, []string{"first", "one", "replacement", "new answer"}) {
+		t.Fatalf("forked timeline texts=%q", texts)
 	}
 }
 

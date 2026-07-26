@@ -845,7 +845,7 @@ type model struct {
 	resumeSession       *ResumeSessionError
 	screenMode          *ScreenModeError
 	forkResult          *ForkSessionError
-	forkSession         func(context.Context, bool, string) (ForkResult, error)
+	forkSession         func(context.Context, bool, string, *int) (ForkResult, error)
 	forkInGit           bool
 	forkSecondaryModel  string
 	persistForkModel    func(string) error
@@ -1044,7 +1044,7 @@ type UIOptions struct {
 	SetRenderMermaid     func(string) error
 	HunkTrackerMode      string
 	SetHunkTrackerMode   func(string) error
-	ForkSession          func(context.Context, bool, string) (ForkResult, error)
+	ForkSession          func(context.Context, bool, string, *int) (ForkResult, error)
 	ForkInGit            bool
 	ForkModel            string
 	SetForkModel         func(string) error
@@ -3069,12 +3069,12 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 					m.status = "fork unavailable"
 					return m, nil
 				}
-				return m, m.startFork(*parsed.worktree, parsed.directive)
+				return m, m.startFork(*parsed.worktree, parsed.directive, parsed.target)
 			}
 			if !m.forkInGit {
-				return m, m.startFork(false, parsed.directive)
+				return m, m.startFork(false, parsed.directive, parsed.target)
 			}
-			m.forkChoice = &forkChoiceState{directive: parsed.directive}
+			m.forkChoice = &forkChoiceState{directive: parsed.directive, target: parsed.target}
 			m.status = "choose fork workspace"
 			return m, nil
 		case "/rewind":

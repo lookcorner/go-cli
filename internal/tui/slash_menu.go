@@ -38,7 +38,7 @@ var slashCommandCatalog = []slashCommandItem{
 	{name: "docs", placeholder: "[web|title]", description: "Browse documentation"},
 	{name: "home", aliases: []string{"welcome"}, description: "Start a new session"},
 	{name: "new", aliases: []string{"clear"}, description: "Start a new session"},
-	{name: "fork", placeholder: "[--worktree|--no-worktree] [directive]", description: "Fork this session"},
+	{name: "fork", placeholder: "[--worktree|--no-worktree] [--at N] [directive]", description: "Fork this session"},
 	{name: "compact", description: "Compact conversation context"},
 	{name: "copy", placeholder: "[N]", description: "Copy an assistant response"},
 	{name: "find", placeholder: "[text]", description: "Search the transcript"},

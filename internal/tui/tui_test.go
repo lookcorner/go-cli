@@ -2188,6 +2188,7 @@ func TestParseForkArgs(t *testing.T) {
 		name      string
 		input     string
 		worktree  *bool
+		target    *int
 		directive string
 		err       string
 	}{
@@ -2195,12 +2196,19 @@ func TestParseForkArgs(t *testing.T) {
 		{name: "directive", input: "investigate the bug", directive: "investigate the bug"},
 		{name: "worktree", input: "\t--worktree  investigate", worktree: boolPointer(true), directive: "investigate"},
 		{name: "no worktree", input: "--no-worktree", worktree: boolPointer(false)},
+		{name: "at", input: "--at 2 continue", target: intPointer(2), directive: "continue"},
+		{name: "at equals", input: "--worktree --at=0", worktree: boolPointer(true), target: intPointer(0)},
+		{name: "at before worktree", input: "--at 1 --no-worktree continue", worktree: boolPointer(false), target: intPointer(1), directive: "continue"},
 		{name: "unknown flag is directive", input: "--other value", directive: "--other value"},
 		{name: "conflict", input: "--worktree --no-worktree", err: "mutually exclusive"},
 		{name: "reverse conflict", input: "--no-worktree --worktree", err: "mutually exclusive"},
 		{name: "duplicate worktree", input: "--worktree --worktree", err: "twice"},
 		{name: "duplicate no worktree", input: "--no-worktree --no-worktree", err: "twice"},
-		{name: "at unsupported", input: "--at 2", err: "not supported"},
+		{name: "at missing", input: "--at", err: "requires"},
+		{name: "at empty", input: "--at=", err: "invalid"},
+		{name: "at negative", input: "--at -1", err: "invalid"},
+		{name: "at non numeric", input: "--at nope", err: "invalid"},
+		{name: "duplicate at", input: "--at 1 --at=2", err: "twice"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			parsed, err := parseForkArgs(test.input)
@@ -2210,7 +2218,7 @@ func TestParseForkArgs(t *testing.T) {
 				}
 				return
 			}
-			if err != nil || !reflect.DeepEqual(parsed.worktree, test.worktree) || parsed.directive != test.directive {
+			if err != nil || !reflect.DeepEqual(parsed.worktree, test.worktree) || !reflect.DeepEqual(parsed.target, test.target) || parsed.directive != test.directive {
 				t.Fatalf("parsed=%#v err=%v", parsed, err)
 			}
 		})
@@ -2220,18 +2228,20 @@ func TestParseForkArgs(t *testing.T) {
 func TestForkCommandCompletesWithoutModelTurn(t *testing.T) {
 	called := 0
 	var modelID string
+	var target *int
 	m := &model{
 		ctx: context.Background(), runner: &agent.Runner{ModelID: "active"}, status: "ready", forkInGit: true,
-		forkSession: func(_ context.Context, isolated bool, model string) (ForkResult, error) {
+		forkSession: func(_ context.Context, isolated bool, model string, at *int) (ForkResult, error) {
 			called++
 			modelID = model
+			target = at
 			if isolated {
 				t.Fatal("no-worktree command requested a worktree")
 			}
 			return ForkResult{Path: "/sessions/child.jsonl", Workspace: "/workspace"}, nil
 		},
 	}
-	m.setInput("/fork --no-worktree continue here")
+	m.setInput("/fork --no-worktree --at 2 continue here")
 	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)
 	if command == nil || !m.running || called != 0 {
@@ -2239,7 +2249,7 @@ func TestForkCommandCompletesWithoutModelTurn(t *testing.T) {
 	}
 	updated, quit := m.Update(command())
 	m = updated.(*model)
-	if quit == nil || called != 1 || modelID != "active" || m.running || m.forkResult == nil {
+	if quit == nil || called != 1 || modelID != "active" || target == nil || *target != 2 || m.running || m.forkResult == nil {
 		t.Fatalf("quit=%v called=%d model=%q running=%v result=%#v", quit != nil, called, modelID, m.running, m.forkResult)
 	}
 	if m.forkResult.Path != "/sessions/child.jsonl" || m.forkResult.Workspace != "/workspace" || m.forkResult.Directive != "continue here" {
@@ -2249,12 +2259,14 @@ func TestForkCommandCompletesWithoutModelTurn(t *testing.T) {
 
 func TestForkCommandAsksInGitAndFallsBackOutsideGit(t *testing.T) {
 	var isolated []bool
-	fork := func(_ context.Context, worktree bool, _ string) (ForkResult, error) {
+	var targets []*int
+	fork := func(_ context.Context, worktree bool, _ string, target *int) (ForkResult, error) {
 		isolated = append(isolated, worktree)
+		targets = append(targets, target)
 		return ForkResult{Path: "/sessions/child.jsonl", Workspace: "/workspace"}, nil
 	}
 	inGit := &model{ctx: context.Background(), runner: &agent.Runner{}, status: "ready", forkInGit: true, forkSession: fork, width: 70, height: 18}
-	inGit.setInput("/fork investigate")
+	inGit.setInput("/fork --at=1 investigate")
 	updated, command := inGit.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	inGit = updated.(*model)
 	if command != nil || inGit.forkChoice == nil || !strings.Contains(inGit.View().Content, "isolated Git worktree") {
@@ -2277,6 +2289,9 @@ func TestForkCommandAsksInGitAndFallsBackOutsideGit(t *testing.T) {
 	if !reflect.DeepEqual(isolated, []bool{false, false}) {
 		t.Fatalf("worktree choices=%v", isolated)
 	}
+	if len(targets) != 2 || targets[0] == nil || *targets[0] != 1 || targets[1] != nil {
+		t.Fatalf("fork targets=%v", targets)
+	}
 
 	explicit := &model{ctx: context.Background(), runner: &agent.Runner{}, status: "ready", forkSession: fork}
 	explicit.setInput("/fork --worktree")
@@ -2289,7 +2304,9 @@ func TestForkCommandAsksInGitAndFallsBackOutsideGit(t *testing.T) {
 func TestForkFailureKeepsCurrentSession(t *testing.T) {
 	m := &model{
 		ctx: context.Background(), runner: &agent.Runner{}, status: "ready",
-		forkSession: func(context.Context, bool, string) (ForkResult, error) { return ForkResult{}, errors.New("disk full") },
+		forkSession: func(context.Context, bool, string, *int) (ForkResult, error) {
+			return ForkResult{}, errors.New("disk full")
+		},
 	}
 	m.setInput("/fork --no-worktree")
 	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
@@ -2303,7 +2320,7 @@ func TestForkFailureKeepsCurrentSession(t *testing.T) {
 
 func TestForkRejectsRunningRequests(t *testing.T) {
 	called := 0
-	fork := func(context.Context, bool, string) (ForkResult, error) {
+	fork := func(context.Context, bool, string, *int) (ForkResult, error) {
 		called++
 		return ForkResult{}, nil
 	}
@@ -2337,12 +2354,12 @@ func TestForkUsesConfiguredSecondaryModel(t *testing.T) {
 	m := &model{
 		ctx: context.Background(), runner: &agent.Runner{ModelID: "active"}, status: "ready",
 		forkSecondaryModel: "secondary",
-		forkSession: func(_ context.Context, _ bool, model string) (ForkResult, error) {
+		forkSession: func(_ context.Context, _ bool, model string, _ *int) (ForkResult, error) {
 			modelID = model
 			return ForkResult{}, nil
 		},
 	}
-	command := m.startFork(false, "")
+	command := m.startFork(false, "", nil)
 	if command == nil {
 		t.Fatal("fork did not start")
 	}
@@ -2353,6 +2370,8 @@ func TestForkUsesConfiguredSecondaryModel(t *testing.T) {
 }
 
 func boolPointer(value bool) *bool { return &value }
+
+func intPointer(value int) *int { return &value }
 
 func writeResumePickerSession(t *testing.T, dir, id, cwd, title, response string) string {
 	t.Helper()

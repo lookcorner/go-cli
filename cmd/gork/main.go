@@ -1302,8 +1302,8 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			},
 			SetTheme:  func(value string) error { return config.UpdateTheme(opts.configPath, value) },
 			ForkInGit: forkGitErr == nil,
-			ForkSession: func(forkCtx context.Context, isolated bool, modelID string) (tui.ForkResult, error) {
-				return forkCurrentSession(forkCtx, worktreeManager, filepath.Dir(logger.Path()), logger.ID(), ws.Root(), modelID, isolated)
+			ForkSession: func(forkCtx context.Context, isolated bool, modelID string, target *int) (tui.ForkResult, error) {
+				return forkCurrentSession(forkCtx, worktreeManager, filepath.Dir(logger.Path()), logger.ID(), ws.Root(), modelID, isolated, target)
 			},
 		})
 		if err != nil {
@@ -1449,7 +1449,7 @@ func resolveWorkspacePath(raw, base string) (string, error) {
 	return filepath.Clean(path), nil
 }
 
-func forkCurrentSession(ctx context.Context, manager *worktrees.Manager, sessionDir, sourceID, cwd, modelID string, isolated bool) (tui.ForkResult, error) {
+func forkCurrentSession(ctx context.Context, manager *worktrees.Manager, sessionDir, sourceID, cwd, modelID string, isolated bool, target *int) (tui.ForkResult, error) {
 	newID := fmt.Sprintf("gork-%s-fork-%d", time.Now().UTC().Format("20060102T150405.000000000Z"), forkSessionSequence.Add(1))
 	workspace := cwd
 	var worktreePath string
@@ -1472,7 +1472,7 @@ func forkCurrentSession(ctx context.Context, manager *worktrees.Manager, session
 			return tui.ForkResult{}, err
 		}
 	}
-	if _, _, err := session.Fork(sessionDir, sourceID, newID, workspace, modelID, nil); err != nil {
+	if _, _, err := session.Fork(sessionDir, sourceID, newID, workspace, modelID, target); err != nil {
 		if worktreePath != "" {
 			_, _, _ = manager.Remove(context.Background(), worktrees.RemoveRequest{WorktreePath: worktreePath, Force: true})
 		}

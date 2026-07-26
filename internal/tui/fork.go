@@ -3,6 +3,8 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -24,12 +26,14 @@ func (e *ForkSessionError) Error() string { return "fork session " + e.Path }
 
 type forkArgs struct {
 	worktree  *bool
+	target    *int
 	directive string
 }
 
 func parseForkArgs(value string) (forkArgs, error) {
 	rest := strings.TrimLeft(value, " \t\r\n")
 	var worktree *bool
+	var target *int
 	for rest != "" {
 		separator := strings.IndexFunc(rest, unicode.IsSpace)
 		flag, after := rest, ""
@@ -56,17 +60,54 @@ func parseForkArgs(value string) (forkArgs, error) {
 			selected := false
 			worktree = &selected
 		case "--at":
-			return forkArgs{}, errors.New("--at is not supported in this version")
+			if target != nil {
+				return forkArgs{}, errors.New("--at specified twice")
+			}
+			after = strings.TrimLeft(after, " \t\r\n")
+			if after == "" {
+				return forkArgs{}, errors.New("--at requires a prompt index")
+			}
+			separator = strings.IndexFunc(after, unicode.IsSpace)
+			value, remaining := after, ""
+			if separator >= 0 {
+				value, remaining = after[:separator], after[separator:]
+			}
+			parsed, err := parseForkTarget(value)
+			if err != nil {
+				return forkArgs{}, err
+			}
+			target = &parsed
+			after = remaining
 		default:
-			return forkArgs{worktree: worktree, directive: rest}, nil
+			if value, ok := strings.CutPrefix(flag, "--at="); ok {
+				if target != nil {
+					return forkArgs{}, errors.New("--at specified twice")
+				}
+				parsed, err := parseForkTarget(value)
+				if err != nil {
+					return forkArgs{}, err
+				}
+				target = &parsed
+				break
+			}
+			return forkArgs{worktree: worktree, target: target, directive: rest}, nil
 		}
 		rest = strings.TrimLeft(after, " \t\r\n")
 	}
-	return forkArgs{worktree: worktree}, nil
+	return forkArgs{worktree: worktree, target: target}, nil
+}
+
+func parseForkTarget(value string) (int, error) {
+	target, err := strconv.Atoi(value)
+	if err != nil || target < 0 {
+		return 0, fmt.Errorf("invalid --at prompt index %q", value)
+	}
+	return target, nil
 }
 
 type forkChoiceState struct {
 	directive string
+	target    *int
 	selected  int
 }
 
@@ -76,14 +117,14 @@ type forkDoneEvent struct {
 	err       error
 }
 
-func runFork(ctx context.Context, fork func(context.Context, bool, string) (ForkResult, error), worktree bool, modelID, directive string) tea.Cmd {
+func runFork(ctx context.Context, fork func(context.Context, bool, string, *int) (ForkResult, error), worktree bool, modelID, directive string, target *int) tea.Cmd {
 	return func() tea.Msg {
-		result, err := fork(ctx, worktree, modelID)
+		result, err := fork(ctx, worktree, modelID, target)
 		return forkDoneEvent{result: result, directive: directive, err: err}
 	}
 }
 
-func (m *model) startFork(worktree bool, directive string) tea.Cmd {
+func (m *model) startFork(worktree bool, directive string, target *int) tea.Cmd {
 	if m.forkSession == nil {
 		m.appendSystem("Forking is unavailable.")
 		m.status = "fork unavailable"
@@ -98,7 +139,7 @@ func (m *model) startFork(worktree bool, directive string) tea.Cmd {
 	if modelID == "" && m.runner != nil {
 		modelID = m.runner.ModelID
 	}
-	return runFork(turnCtx, m.forkSession, worktree, modelID, directive)
+	return runFork(turnCtx, m.forkSession, worktree, modelID, directive, target)
 }
 
 func (m *model) handleForkChoiceKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -108,13 +149,13 @@ func (m *model) handleForkChoiceKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.forkChoice = nil
 		m.status = "fork cancelled"
 	case stroke == "y":
-		return m, m.startFork(true, m.forkChoice.directive)
+		return m, m.startFork(true, m.forkChoice.directive, m.forkChoice.target)
 	case stroke == "n":
-		return m, m.startFork(false, m.forkChoice.directive)
+		return m, m.startFork(false, m.forkChoice.directive, m.forkChoice.target)
 	case key.Code == tea.KeyUp || key.Code == tea.KeyDown || key.Code == tea.KeyTab:
 		m.forkChoice.selected = 1 - m.forkChoice.selected
 	case key.Code == tea.KeyEnter:
-		return m, m.startFork(m.forkChoice.selected == 0, m.forkChoice.directive)
+		return m, m.startFork(m.forkChoice.selected == 0, m.forkChoice.directive, m.forkChoice.target)
 	}
 	return m, nil
 }

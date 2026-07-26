@@ -728,12 +728,13 @@ delete resolves an exact validated session ID.
 `gork export <session-id> [output]` exports completed conversation history as
 Markdown, including compact tool summaries. Without an output path it writes to
 stdout; `-c`/`--clipboard` copies through the platform's native clipboard tool.
-`/fork [--worktree|--no-worktree] [directive]` copies the completed conversation
-into a child session without a model turn, then restarts the TUI in that child.
-The optional directive becomes the child's first prompt after restart. Without a
-flag, Git workspaces ask whether to use an isolated worktree; non-Git workspaces
-use the current directory. A failed fork leaves the parent session open, and
-`/resume` can return to the unchanged parent later. `--at` is not supported yet.
+`/fork [--worktree|--no-worktree] [--at N] [directive]` copies the completed
+conversation into a child session without a model turn, then restarts the TUI in
+that child. `--at N` inclusively truncates the child at the zero-based prompt
+index N. The optional directive becomes the child's first prompt after restart.
+Without a worktree flag, Git workspaces ask whether to use an isolated worktree;
+non-Git workspaces use the current directory. A failed fork leaves the parent
+session open, and `/resume` can return to the unchanged parent later.
 `/view-plan`, `/show-plan`, and `/plan-view` open the current confined plan file
 in a read-only preview; Esc returns to the conversation.
 `/transcript` and `/log` open the completed persisted conversation in the same

@@ -1021,7 +1021,7 @@ func TestForkCurrentSessionCopiesParentWithoutChangingIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := forkCurrentSession(context.Background(), nil, dir, "parent", cwd, "new-model", false)
+	result, err := forkCurrentSession(context.Background(), nil, dir, "parent", cwd, "new-model", false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1042,6 +1042,40 @@ func TestForkCurrentSessionCopiesParentWithoutChangingIt(t *testing.T) {
 	}
 }
 
+func TestForkCurrentSessionAtPrompt(t *testing.T) {
+	dir, cwd := t.TempDir(), t.TempDir()
+	logger, err := session.NewLoggerWithID(dir, "parent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []struct {
+		kind string
+		data any
+	}{
+		{kind: "session_metadata", data: map[string]any{"cwd": cwd}},
+		{kind: "user_prompt", data: map[string]any{"text": "first"}},
+		{kind: "model_response", data: map[string]any{"text": "one", "response_id": "r1", "tool_call_count": 0}},
+		{kind: "user_prompt", data: map[string]any{"text": "second"}},
+		{kind: "model_response", data: map[string]any{"text": "two", "response_id": "r2", "tool_call_count": 0}},
+	} {
+		if err := logger.Append(event.kind, event.data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	target := 0
+	result, err := forkCurrentSession(context.Background(), nil, dir, "parent", cwd, "model", false, &target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages, err := session.Transcript(result.Path)
+	if err != nil || len(messages) != 2 || messages[0].Text != "first" || messages[1].Text != "one" {
+		t.Fatalf("messages=%#v err=%v", messages, err)
+	}
+}
+
 func TestForkCurrentSessionCreatesWorktree(t *testing.T) {
 	root, dir := newGitRepo(t), t.TempDir()
 	logger, err := session.NewLoggerWithID(dir, "parent")
@@ -1058,7 +1092,7 @@ func TestForkCurrentSessionCreatesWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := forkCurrentSession(context.Background(), manager, dir, "parent", root, "model", true)
+	result, err := forkCurrentSession(context.Background(), manager, dir, "parent", root, "model", true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1080,7 +1114,7 @@ func TestForkCurrentSessionCleansWorktreeWhenSessionCopyFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := forkCurrentSession(context.Background(), manager, dir, "missing", root, "model", true); err == nil {
+	if _, err := forkCurrentSession(context.Background(), manager, dir, "missing", root, "model", true, nil); err == nil {
 		t.Fatal("missing parent session was accepted")
 	}
 	if records := manager.List("", nil, true); len(records) != 0 {
