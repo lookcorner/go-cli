@@ -964,6 +964,29 @@ stays in bottom follow, or leaves an active manual reading position unchanged.
 `[ui] cursor_blink = true` forces a blinking block cursor at TUI startup, while
 `false` forces a steady block. Leaving it unset preserves the terminal's cursor
 style, and the TUI restores the terminal default after a forced style exits.
+
+Desktop notifications are configured under `[ui.notifications]`:
+
+```toml
+[ui.notifications]
+# auto|osc9|osc99|osc777|bel|none — auto picks the protocol for your terminal.
+method = "auto"
+# unfocused|always|never
+condition = "unfocused"
+# Seconds the terminal must stay unfocused before a notification fires.
+idle_threshold_secs = 3
+events = ["turn_complete", "approval_required"]
+```
+
+`auto` sends OSC 9 to iTerm2, WezTerm, and Warp, OSC 99 to Kitty, OSC 777 to
+Ghostty, VTE, Terminator, and foot, stays silent on Grok Desktop, and rings the
+terminal bell everywhere else. Zellij always falls back to the bell because it
+does not forward OSC notifications; under tmux the sequence is wrapped in DCS
+passthrough instead. Supported events are `turn_complete`, `approval_required`
+(one notification per queued permission batch), `session_ready`, and
+`agent_error`. The notification names the current workspace, or the session
+title once `/rename` sets one. An unrecognized value in the table leaves the
+inherited defaults in place rather than failing startup.
 The hidden, release-safe `/debug` command reports diagnostic state without a
 model turn. `/debug scroll` (also `/scroll-debug`) overlays live viewport and
 wheel state, `/debug fps` overlays bounded render-rate percentiles, and

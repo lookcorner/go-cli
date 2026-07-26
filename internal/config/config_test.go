@@ -2543,6 +2543,49 @@ func anyStrings(value any) []string {
 	return result
 }
 
+func TestNotificationsDefaultsMergeAndRejectUnknownValues(t *testing.T) {
+	load := func(t *testing.T, body string) NotificationsConfig {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "config.toml")
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := Load(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cfg.UI.Notifications
+	}
+
+	defaults := load(t, "")
+	if defaults.Method != "auto" || defaults.Condition != "unfocused" || defaults.IdleThresholdSecs != 3 ||
+		strings.Join(defaults.Events, ",") != "turn_complete,approval_required" {
+		t.Fatalf("defaults=%+v", defaults)
+	}
+
+	merged := load(t, "[ui.notifications]\nmethod = \"OSC99\"\nidle_threshold_secs = 60\nevents = [\"agent_error\"]\n")
+	if merged.Method != "osc99" || merged.Condition != "unfocused" || merged.IdleThresholdSecs != 60 ||
+		strings.Join(merged.Events, ",") != "agent_error" {
+		t.Fatalf("merged=%+v", merged)
+	}
+
+	// An unknown enum value discards the whole table, matching the reference.
+	for _, body := range []string{
+		"[ui.notifications]\nmethod = \"osc-9\"\nidle_threshold_secs = 60\n",
+		"[ui.notifications]\ncondition = \"idle\"\nidle_threshold_secs = 60\n",
+		"[ui.notifications]\nevents = [\"turn_complete\", \"typo\"]\nidle_threshold_secs = 60\n",
+	} {
+		if got := load(t, body); got.Method != "auto" || got.Condition != "unfocused" || got.IdleThresholdSecs != 3 ||
+			strings.Join(got.Events, ",") != "turn_complete,approval_required" {
+			t.Fatalf("%q kept an invalid table: %+v", body, got)
+		}
+	}
+
+	if empty := load(t, "[ui.notifications]\nevents = []\n"); len(empty.Events) != 0 {
+		t.Fatalf("explicit empty events=%v", empty.Events)
+	}
+}
+
 func TestPageFlipOnSendDefaultsAndPersists(t *testing.T) {
 	defaultPath := filepath.Join(t.TempDir(), "config.toml")
 	cfg, err := Load(defaultPath)

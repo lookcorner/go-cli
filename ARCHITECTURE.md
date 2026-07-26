@@ -51,6 +51,9 @@ implementation.
   expansion for the image and video slash commands.
 - `internal/mcp` owns MCP transport types and the small URL/command parsing rule
   used by interactive server management.
+- `internal/notify` owns desktop-notification policy: terminal identity, protocol
+  selection, focus/idle and event gating, and exact escape sequences; adapters
+  supply the terminal environment and perform the write.
 - `internal/memory` owns workspace-isolated persistence, safe retrieval,
   Markdown chunking, and deterministic text ranking; tool adapters only format
   these domain results.

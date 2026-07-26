@@ -33,6 +33,7 @@ import (
 	guides "github.com/lookcorner/go-cli/internal/docs"
 	"github.com/lookcorner/go-cli/internal/imagine"
 	"github.com/lookcorner/go-cli/internal/memory"
+	"github.com/lookcorner/go-cli/internal/notify"
 	"github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/terminaldiag"
 	"github.com/lookcorner/go-cli/internal/tools"
@@ -809,6 +810,9 @@ type model struct {
 	persistScrollLines  func(uint8) error
 	pageFlipOnSend      bool
 	persistPageFlip     func(bool) error
+	notifier            *notify.Notifier
+	notifySink          func(string)
+	notifyTitle         string
 	themeName           string
 	autoDarkTheme       string
 	autoLightTheme      string
@@ -1028,6 +1032,7 @@ type UIOptions struct {
 	SetShowTimeline      func(bool) error
 	PageFlipOnSend       bool
 	SetPageFlipOnSend    func(bool) error
+	Notifications        notify.Settings
 	ShowThinkingBlocks   bool
 	SetShowThinking      func(bool) error
 	ShowTips             bool
@@ -1245,6 +1250,9 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		showTimestamps: options.ShowTimestamps, persistTimestamps: options.SetShowTimestamps,
 		showTimeline: options.ShowTimeline, persistTimeline: options.SetShowTimeline,
 		pageFlipOnSend: options.PageFlipOnSend, persistPageFlip: options.SetPageFlipOnSend,
+		notifier:     notify.New(options.Notifications, notify.DetectTerminal(os.LookupEnv)),
+		notifySink:   func(sequence string) { fmt.Fprint(os.Stderr, sequence) },
+		notifyTitle:  filepath.Base(workspace),
 		showThinking: options.ShowThinkingBlocks, persistThinking: options.SetShowThinking,
 		showTips: options.ShowTips, persistShowTips: options.SetShowTips, startupTip: options.StartupTip,
 		respectManualFolds: options.RespectManualFolds, persistManualFolds: options.SetManualFolds,
@@ -1409,6 +1417,7 @@ func exitInfo(current *model, runner *agent.Runner) *ExitInfo {
 }
 
 func (m *model) Init() tea.Cmd {
+	m.notifyEvent(notify.SessionReady)
 	wait := waitForBridge(m.bridge)
 	initial := tea.Cmd(nil)
 	if m.minimalInitial != "" {
@@ -1764,6 +1773,10 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = cleanStatus(msg.text)
 		return m, waitForBridge(m.bridge)
 	case approvalEvent:
+		if m.approval == nil {
+			// Queued permissions share one notification until the queue drains.
+			m.notifyEvent(notify.ApprovalRequired)
+		}
 		m.approval = &msg
 		m.status = "approval required"
 		return m, waitForBridge(m.bridge)
@@ -1877,9 +1890,11 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.cancelTurn = nil
 		m.transcript.WriteString("\n")
 		if msg.err != nil {
+			m.notifyEvent(notify.AgentError)
 			m.status = "turn failed: " + msg.err.Error()
 			m.transcript.WriteString("\n[error] " + msg.err.Error() + "\n")
 		} else {
+			m.notifyEvent(notify.TurnComplete)
 			m.previousID = msg.result.ResponseID
 			if msg.result.InputTokens > 0 && msg.result.ContextWindow > 0 {
 				m.inputTokens = msg.result.InputTokens
@@ -2408,8 +2423,15 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m.handlePaste(msg.content.Text)
 	case tea.FocusMsg:
+		if m.notifier != nil {
+			m.notifier.Focus()
+		}
 		if m.imageInputHintProbeEligible() {
 			return m, probeClipboardImage(m.ctx, m.clipboardRead)
+		}
+	case tea.BlurMsg:
+		if m.notifier != nil {
+			m.notifier.Blur(time.Now())
 		}
 	case imageInputHintProbeEvent:
 		if msg.err == nil && msg.content.MediaType == "image/png" && len(msg.content.Data) > 0 && m.imageInputHintCanRender() {
@@ -3281,6 +3303,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.status = "rename failed: " + err.Error()
 				return m, nil
 			}
+			m.notifyTitle = title
 			m.status = fmt.Sprintf("session renamed to %q", title)
 			return m, nil
 		case "/transcript", "/log":
@@ -4575,6 +4598,18 @@ func (m *model) updateFollowAfterScroll(lines, before int) {
 	}
 	if lines < 0 && before == 0 && m.scroll == 0 && !m.disableOverscroll {
 		m.stopFollow = false
+	}
+}
+
+// notifyEvent writes a desktop notification when focus and event policy allow
+// one. Sequences bypass the frame pipeline so one-shot events reach the
+// terminal immediately.
+func (m *model) notifyEvent(event notify.Event) {
+	if m.notifier == nil || m.notifySink == nil {
+		return
+	}
+	if sequence := m.notifier.Sequence(event, m.notifyTitle, event.Label(), time.Now()); sequence != "" {
+		m.notifySink(sequence)
 	}
 }
 
@@ -6282,7 +6317,7 @@ func (m *model) View() tea.View {
 	}
 	view := tea.NewView(prefix + body + status + "\n" + footer)
 	view.AltScreen = !m.minimal
-	view.ReportFocus = m.imageInputHint.enabled
+	view.ReportFocus = m.imageInputHint.enabled || m.notifier != nil && m.notifier.NeedsFocusReports()
 	view.MouseMode = tea.MouseModeNone
 	view.KeyboardEnhancements.ReportEventTypes = true
 	if m.minimal {

@@ -41,6 +41,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/marketplace"
 	"github.com/lookcorner/go-cli/internal/mcp"
 	"github.com/lookcorner/go-cli/internal/memory"
+	"github.com/lookcorner/go-cli/internal/notify"
 	"github.com/lookcorner/go-cli/internal/personas"
 	"github.com/lookcorner/go-cli/internal/plugin"
 	"github.com/lookcorner/go-cli/internal/session"
@@ -1257,6 +1258,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			MatchRefresh:        cfg.UI.DisplayRefresh.AutoCadenceEnabled,
 			ShowTimeline:        cfg.UI.ShowTimeline,
 			PageFlipOnSend:      cfg.UI.PageFlipOnSend,
+			Notifications:       notificationSettings(cfg.UI.Notifications),
 			OpenDashboard:       opts.dashboard,
 			Foreign: session.ForeignSources{
 				Claude: cfg.Compat.Claude.Sessions && skillCatalog.Has("resume-claude"),
@@ -6015,4 +6017,18 @@ func permissionRules(permission config.PermissionConfig, cliAllow, cliDeny []str
 		}
 	}
 	return allow, ask, deny, nil
+}
+
+// notificationSettings converts resolved configuration into the notification
+// domain's policy value.
+func notificationSettings(cfg config.NotificationsConfig) notify.Settings {
+	settings := notify.Settings{
+		Method:        cfg.Method,
+		Condition:     cfg.Condition,
+		IdleThreshold: time.Duration(cfg.IdleThresholdSecs) * time.Second,
+	}
+	for _, event := range cfg.Events {
+		settings.Events = append(settings.Events, notify.Event(event))
+	}
+	return settings
 }

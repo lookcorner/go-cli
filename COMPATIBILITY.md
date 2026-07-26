@@ -284,6 +284,20 @@ new prompt to the viewport top until the streamed reply fills the rows below it
 and bottom follow resumes; disabling it keeps bottom follow or an active manual
 reading position unchanged.
 
+Desktop notifications resolve `[ui.notifications] method` over reference terminal
+detection: iTerm2/WezTerm/Warp use OSC 9, Kitty OSC 99, Ghostty/VTE/Terminator/foot
+OSC 777, Grok Desktop stays silent, every other brand rings the bell, and Zellij
+forces the bell because it cannot forward OSC notifications. Sequences are wrapped
+in tmux DCS passthrough with doubled escapes when tmux backs the session. Emission
+honours `condition` (`unfocused` with an `idle_threshold_secs` clock, `always`, or
+`never`) and the `events` list across `turn_complete`, `agent_error`,
+`approval_required` — one notification per queued permission batch — and
+`session_ready`; focus reporting is only requested when the condition depends on
+it. An unknown enum value discards the whole table and keeps inherited defaults,
+matching the reference decoder. `task_complete` events, `[ui.notifications.title]`
+terminal titles, `progress_bar`, `sleep_prevention`, `session_recap`, and
+`[[ui.notifications.hooks]]` remain.
+
 Compatibility is verified with Go unit/integration tests and will additionally
 use captured protocol fixtures from the Rust implementation. A status is only
 changed to **done** after its relevant compatibility tests exist.
