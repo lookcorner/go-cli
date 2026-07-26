@@ -807,6 +807,8 @@ type model struct {
 	persistScrollSpeed  func(uint8) error
 	persistScrollMode   func(string) error
 	persistScrollLines  func(uint8) error
+	pageFlipOnSend      bool
+	persistPageFlip     func(bool) error
 	themeName           string
 	autoDarkTheme       string
 	autoLightTheme      string
@@ -1024,6 +1026,8 @@ type UIOptions struct {
 	SetShowTimestamps    func(bool) error
 	ShowTimeline         bool
 	SetShowTimeline      func(bool) error
+	PageFlipOnSend       bool
+	SetPageFlipOnSend    func(bool) error
 	ShowThinkingBlocks   bool
 	SetShowThinking      func(bool) error
 	ShowTips             bool
@@ -1240,6 +1244,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		defaultMinimal: options.ScreenMode == "minimal", persistScreenMode: options.SetScreenMode,
 		showTimestamps: options.ShowTimestamps, persistTimestamps: options.SetShowTimestamps,
 		showTimeline: options.ShowTimeline, persistTimeline: options.SetShowTimeline,
+		pageFlipOnSend: options.PageFlipOnSend, persistPageFlip: options.SetPageFlipOnSend,
 		showThinking: options.ShowThinkingBlocks, persistThinking: options.SetShowThinking,
 		showTips: options.ShowTips, persistShowTips: options.SetShowTips, startupTip: options.StartupTip,
 		respectManualFolds: options.RespectManualFolds, persistManualFolds: options.SetManualFolds,
@@ -3457,12 +3462,14 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.rememberPrompt(prompt)
+			before := m.transcriptGrowthAnchor()
+			m.clearTranscriptAnchor()
 			if m.transcript.Len() > 0 {
 				m.transcript.WriteString("\n")
 			}
 			fmt.Fprintf(&m.transcript, "[Shell] $ %s\n", command)
 			m.status = "running shell command"
-			m.scroll = 0
+			m.preserveTranscriptGrowth(before)
 			m.stopFollow = false
 			return m, runShell(turnCtx, m.runner, command)
 		}
@@ -4578,7 +4585,23 @@ func (m *model) transcriptGrowthAnchor() int {
 	return len(renderMarkdownTheme(m.transcriptText(), m.transcriptRenderWidth(), false, m.colors()))
 }
 
+// pinTranscriptMessage top-aligns a message while blank rows remain below it,
+// and follows the bottom instead once there is no room left to fill.
+func (m *model) pinTranscriptMessage(message int) {
+	m.anchorTranscriptMessage(message)
+	if m.scrollTail == 0 {
+		m.scroll, m.scrollAnchor = 0, nil
+	}
+}
+
+// preserveTranscriptGrowth holds the visible top still as the transcript grows.
+// A tail-backed pin spends its blank rows and then releases to bottom follow; a
+// manual reading position gains scroll.
 func (m *model) preserveTranscriptGrowth(before int) {
+	if m.scrollAnchor != nil && m.scroll == 0 {
+		m.pinTranscriptMessage(*m.scrollAnchor)
+		return
+	}
 	if before < 0 {
 		return
 	}
@@ -5586,6 +5609,10 @@ func (m *model) runningStatusText(now time.Time, width int) string {
 }
 
 func (m *model) appendPromptTranscript(prompt string) {
+	before := -1
+	if !m.pageFlipOnSend {
+		before = m.transcriptGrowthAnchor()
+	}
 	m.finishToolVerbGroup()
 	m.finishCollapsedEditGroup()
 	m.finishThought()
@@ -5603,8 +5630,15 @@ func (m *model) appendPromptTranscript(prompt string) {
 	m.transcript.WriteString("\n" + prompt + "\n\nGork")
 	m.transcriptMessages = append(m.transcriptMessages, transcriptMessage{start: m.transcript.Len() - len("Gork"), offset: m.transcript.Len(), at: now, role: "assistant"})
 	m.transcript.WriteString("\n")
-	m.scroll = 0
-	m.stopFollow = false
+	if m.pageFlipOnSend {
+		m.pinTranscriptMessage(len(m.transcriptMessages) - 2)
+		m.stopFollow = false
+	} else if before >= 0 {
+		m.preserveTranscriptGrowth(before)
+	} else {
+		m.scroll = 0
+		m.stopFollow = false
+	}
 }
 
 func (m *model) stashInFlightPrompt(prompt string, images []api.ContentPart, requestRewind func() bool) {

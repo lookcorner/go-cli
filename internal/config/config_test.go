@@ -2543,6 +2543,30 @@ func anyStrings(value any) []string {
 	return result
 }
 
+func TestPageFlipOnSendDefaultsAndPersists(t *testing.T) {
+	defaultPath := filepath.Join(t.TempDir(), "config.toml")
+	cfg, err := Load(defaultPath)
+	if err != nil || !cfg.UI.PageFlipOnSend {
+		t.Fatalf("default page flip=%v err=%v", cfg.UI.PageFlipOnSend, err)
+	}
+	if err := UpdatePageFlipOnSend(defaultPath, false); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(defaultPath)
+	if err != nil || cfg.UI.PageFlipOnSend {
+		t.Fatalf("TOML page flip=%v err=%v", cfg.UI.PageFlipOnSend, err)
+	}
+
+	jsonPath := filepath.Join(t.TempDir(), "config.json")
+	if err := UpdatePageFlipOnSend(jsonPath, false); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(jsonPath)
+	if err != nil || cfg.UI.PageFlipOnSend {
+		t.Fatalf("JSON page flip=%v err=%v", cfg.UI.PageFlipOnSend, err)
+	}
+}
+
 // wantConfigPerm maps a Unix permission expectation to what the platform
 // reports; Windows ignores permission bits on create.
 func wantConfigPerm(unix os.FileMode) os.FileMode {

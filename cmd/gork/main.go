@@ -1256,6 +1256,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			MaxThoughtsWidth:    cfg.UI.MaxThoughtsWidth,
 			MatchRefresh:        cfg.UI.DisplayRefresh.AutoCadenceEnabled,
 			ShowTimeline:        cfg.UI.ShowTimeline,
+			PageFlipOnSend:      cfg.UI.PageFlipOnSend,
 			OpenDashboard:       opts.dashboard,
 			Foreign: session.ForeignSources{
 				Claude: cfg.Compat.Claude.Sessions && skillCatalog.Has("resume-claude"),
@@ -1288,6 +1289,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 				return config.UpdateDisplayRefreshAutoCadence(opts.configPath, enabled)
 			},
 			SetShowTimeline:   func(enabled bool) error { return config.UpdateShowTimeline(opts.configPath, enabled) },
+			SetPageFlipOnSend: func(enabled bool) error { return config.UpdatePageFlipOnSend(opts.configPath, enabled) },
 			SetInvertScroll:   func(enabled bool) error { return config.UpdateInvertScroll(opts.configPath, enabled) },
 			SetScrollSpeed:    func(value uint8) error { return config.UpdateScrollSpeed(opts.configPath, value) },
 			SetScrollMode:     func(mode string) error { return config.UpdateScrollMode(opts.configPath, mode) },

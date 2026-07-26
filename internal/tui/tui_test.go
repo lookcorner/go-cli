@@ -1948,8 +1948,8 @@ func TestFollowIndicatorTracksTranscriptScroll(t *testing.T) {
 		t.Fatalf("manual bottom view omitted indicator: %q", view)
 	}
 	m.appendPromptTranscript("next prompt")
-	if m.stopFollow {
-		t.Fatal("new prompt did not restore follow")
+	if !m.stopFollow || m.scroll == 0 {
+		t.Fatalf("new prompt did not preserve manual reading: scroll=%d stopped=%v", m.scroll, m.stopFollow)
 	}
 
 	hidden := newModel()
@@ -1962,6 +1962,73 @@ func TestFollowIndicatorTracksTranscriptScroll(t *testing.T) {
 	modal.scroll, modal.settings = 3, &settingsState{}
 	if view := stripUIANSI(modal.View().Content); strings.Contains(view, "▼") {
 		t.Fatalf("settings view rendered transcript indicator: %q", view)
+	}
+}
+
+func TestPageFlipOnSendScrollPolicies(t *testing.T) {
+	newModel := func(pageFlip bool) *model {
+		m := &model{width: 40, height: 10, pageFlipOnSend: pageFlip}
+		for line := 0; line < 30; line++ {
+			fmt.Fprintf(&m.transcript, "line %02d\n", line)
+		}
+		return m
+	}
+
+	flipped := newModel(true)
+	flipped.appendPromptTranscript("next prompt")
+	lines := renderMarkdownTheme(flipped.transcriptText(), flipped.transcriptRenderWidth(), false, flipped.colors())
+	top := len(lines) + flipped.scrollTail - flipped.contentHeight() - flipped.scroll
+	if top != flipped.jumpLine(0) || flipped.stopFollow {
+		t.Fatalf("flipped top=%d prompt=%d scroll=%d tail=%d stopped=%v", top, flipped.jumpLine(0), flipped.scroll, flipped.scrollTail, flipped.stopFollow)
+	}
+
+	tall := newModel(true)
+	tall.appendPromptTranscript(strings.Repeat("prompt line\n", 10))
+	if tall.scroll != 0 || tall.scrollTail != 0 || tall.scrollAnchor != nil || tall.stopFollow {
+		t.Fatalf("prompt taller than the viewport stayed pinned: scroll=%d tail=%d anchored=%v stopped=%v", tall.scroll, tall.scrollTail, tall.scrollAnchor != nil, tall.stopFollow)
+	}
+
+	bottom := newModel(false)
+	bottom.appendPromptTranscript("next prompt")
+	if bottom.scroll != 0 || bottom.stopFollow {
+		t.Fatalf("disabled bottom scroll=%d stopped=%v", bottom.scroll, bottom.stopFollow)
+	}
+
+	reading := newModel(false)
+	reading.scroll, reading.stopFollow = 5, true
+	beforeLines := renderMarkdownTheme(reading.transcriptText(), reading.transcriptRenderWidth(), false, reading.colors())
+	beforeTop := len(beforeLines) - reading.contentHeight() - reading.scroll
+	reading.appendPromptTranscript("next prompt")
+	afterLines := renderMarkdownTheme(reading.transcriptText(), reading.transcriptRenderWidth(), false, reading.colors())
+	afterTop := len(afterLines) + reading.scrollTail - reading.contentHeight() - reading.scroll
+	if afterTop != beforeTop || !reading.stopFollow {
+		t.Fatalf("disabled reading top=%d want=%d scroll=%d stopped=%v", afterTop, beforeTop, reading.scroll, reading.stopFollow)
+	}
+}
+
+func TestPageFlipPinHoldsUntilStreamedResponseFillsViewport(t *testing.T) {
+	m := &model{width: 40, height: 20, pageFlipOnSend: true}
+	for line := 0; line < 30; line++ {
+		fmt.Fprintf(&m.transcript, "line %02d\n", line)
+	}
+	m.appendPromptTranscript("next prompt")
+	promptTop, tail := m.jumpLine(len(m.transcriptMessages)-2), m.scrollTail
+	if tail == 0 {
+		t.Fatal("page flip left no room below the prompt")
+	}
+	viewportTop := func() int {
+		lines := renderMarkdownTheme(m.transcriptText(), m.transcriptRenderWidth(), false, m.colors())
+		return len(lines) + m.scrollTail - m.contentHeight() - m.scroll
+	}
+	for step := 1; step <= tail; step++ {
+		m.update(textEvent{text: "response\n"})
+		if viewportTop() != promptTop || m.scrollTail != tail-step {
+			t.Fatalf("step %d: top=%d want=%d tail=%d want=%d", step, viewportTop(), promptTop, m.scrollTail, tail-step)
+		}
+	}
+	m.update(textEvent{text: "response\n"})
+	if m.scroll != 0 || m.scrollTail != 0 || viewportTop() != promptTop+1 {
+		t.Fatalf("filled viewport kept the pin: top=%d want=%d scroll=%d tail=%d", viewportTop(), promptTop+1, m.scroll, m.scrollTail)
 	}
 }
 

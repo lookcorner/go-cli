@@ -666,8 +666,9 @@ turns, clicking a tick top-aligns it, and hovering shows the prompt preview.
 settings panel for timestamps, the timeline, thinking blocks, compact mode, Vim navigation,
 default screen mode, grouped tool verbs, collapsed edit blocks, prompt
 suggestions, remembered tool approvals, ask-question timeouts, session multiline
-input, inverted scrolling, scroll speed, scroll-input classification, scroll
-lines, text-selection behavior, Mermaid rendering, restart-scoped hunk tracking,
+input, inverted scrolling, snapping a sent prompt to the viewport top, scroll
+speed, scroll-input classification, scroll lines, text-selection behavior,
+Mermaid rendering, restart-scoped hunk tracking,
 automatic dark/light theme mappings, the terminal theme, the default permission
 selection, the default model, and voice language when voice capture is
 available. The same panel configures whether cancelling a turn asks about
@@ -952,6 +953,13 @@ Set `follow_indicator = "none"` to hide the centered `▼` shown below the
 transcript when the viewport is above the latest content; the default is `center`.
 Set `follow_by_overscroll = false` to prevent an extra downward scroll at the
 bottom from resuming automatic follow; it defaults to `true`.
+
+Sending a prompt flips the page by default. `[ui] page_flip_on_send = true` pins
+the new prompt to the viewport top so the reply fills the blank rows below it,
+and bottom follow resumes once the reply fills the screen. The `/settings`
+"Snap prompt to top on send" row toggles it immediately, atomically saves the
+value, and rolls back the display state if the write fails. Disabled, sending
+stays in bottom follow, or leaves an active manual reading position unchanged.
 
 `[ui] cursor_blink = true` forces a blinking block cursor at TUI startup, while
 `false` forces a steady block. Leaving it unset preserves the terminal's cursor

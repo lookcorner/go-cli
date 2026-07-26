@@ -238,6 +238,7 @@ type UIConfig struct {
 	CompactMode               bool                 `json:"compact_mode,omitempty"`
 	ShowTimestamps            bool                 `json:"show_timestamps"`
 	ShowTimeline              bool                 `json:"show_timeline,omitempty"`
+	PageFlipOnSend            bool                 `json:"page_flip_on_send"`
 	ShowThinkingBlocks        bool                 `json:"show_thinking_blocks"`
 	DisplayRefresh            DisplayRefreshConfig `json:"display_refresh"`
 	ScrollSpeed               uint8                `json:"scroll_speed,omitempty"`
@@ -536,6 +537,7 @@ type fileUIConfig struct {
 	CompactMode                  *bool            `json:"compact_mode,omitempty" toml:"compact_mode"`
 	ShowTimestamps               *bool            `json:"show_timestamps,omitempty" toml:"show_timestamps"`
 	ShowTimeline                 *bool            `json:"show_timeline,omitempty" toml:"show_timeline"`
+	PageFlipOnSend               *bool            `json:"page_flip_on_send,omitempty" toml:"page_flip_on_send"`
 	ShowThinkingBlocks           *bool            `json:"show_thinking_blocks,omitempty" toml:"show_thinking_blocks"`
 	DisplayRefresh               *RefreshSettings `json:"display_refresh,omitempty" toml:"display_refresh"`
 	ScrollSpeed                  *uint8           `json:"scroll_speed,omitempty" toml:"scroll_speed"`
@@ -795,7 +797,7 @@ func Load(path string) (Config, error) {
 		CancelRewindEnabled:         true,
 		Toolset:                     ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}},
 		Goal:                        GoalConfig{VerifierCount: 3, ClassifierMaxRuns: 10, ReverifyAfter: 8},
-		UI:                          UIConfig{MaxThoughtsWidth: 120, Theme: "groknight", AutoDarkTheme: "groknight", AutoLightTheme: "grokday", HunkTrackerMode: "agent_only", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, ShowThinkingBlocks: true, DisplayRefresh: DisplayRefreshConfig{ProbeEnabled: true, FloorMS: 8, CeilingMS: 16, MinHz: 55, MaxHz: 165}, ScrollSpeed: 50, ScrollMode: "auto", DefaultSelectedPermission: "always_allow_all_sessions", GroupToolVerbs: true, PromptSuggestions: true, ContextualHints: Hints{Undo: true, PlanMode: true, ImageInput: true, SendNow: true, SmallScreen: true, WordSelect: true}, VoiceCaptureMode: "hold", VoiceSTTLanguage: "en", PermissionMode: "ask"},
+		UI:                          UIConfig{MaxThoughtsWidth: 120, Theme: "groknight", AutoDarkTheme: "groknight", AutoLightTheme: "grokday", HunkTrackerMode: "agent_only", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, PageFlipOnSend: true, ShowThinkingBlocks: true, DisplayRefresh: DisplayRefreshConfig{ProbeEnabled: true, FloorMS: 8, CeilingMS: 16, MinHz: 55, MaxHz: 165}, ScrollSpeed: 50, ScrollMode: "auto", DefaultSelectedPermission: "always_allow_all_sessions", GroupToolVerbs: true, PromptSuggestions: true, ContextualHints: Hints{Undo: true, PlanMode: true, ImageInput: true, SendNow: true, SmallScreen: true, WordSelect: true}, VoiceCaptureMode: "hold", VoiceSTTLanguage: "en", PermissionMode: "ask"},
 		Dashboard:                   DashboardConfig{Enabled: true, Grouping: "state"},
 		Sandbox:                     SandboxConfig{Profile: "off"},
 		Pruning:                     PruningConfig{Enabled: true, KeepLastNTurns: 3, SoftTrimThreshold: 4000, SoftTrimHead: 1500, SoftTrimTail: 1500, HardClearAgeTurns: 10},
@@ -1148,6 +1150,9 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.UI.ShowTimeline != nil {
 		cfg.UI.ShowTimeline = *disk.UI.ShowTimeline
+	}
+	if disk.UI.PageFlipOnSend != nil {
+		cfg.UI.PageFlipOnSend = *disk.UI.PageFlipOnSend
 	}
 	if disk.UI.ShowThinkingBlocks != nil {
 		cfg.UI.ShowThinkingBlocks = *disk.UI.ShowThinkingBlocks
