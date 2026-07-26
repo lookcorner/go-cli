@@ -24,7 +24,7 @@ type settingsNumber struct {
 	large int
 }
 
-const settingsCount = 34
+const settingsCount = 35
 
 func (m *model) openSettings() {
 	m.settings = &settingsState{}
@@ -330,6 +330,13 @@ func (m *model) applySetting(selected int) {
 			m.refreshToolDisplay(m.collapsedEditBlocks, m.groupToolVerbs, previous)
 		}
 	case 33:
+		previous := m.showTips
+		m.showTips = !previous
+		if m.persistShowTips != nil {
+			state.err = persistSetting(m.persistShowTips(m.showTips), func() { m.showTips = previous })
+		}
+		restartRequired = state.err == ""
+	case 34:
 		if m.minimal {
 			return
 		}
@@ -544,6 +551,7 @@ func (m *model) settingsContent() string {
 		settingLine("Word-select hint", m.wordSelectHint.enabled),
 		fmt.Sprintf("Max thoughts width: %d", m.settingNumberValue(31, normalizedThoughtWidth(m.maxThoughtsWidth))),
 		settingLine("Show thinking blocks", m.showThinking),
+		settingLine("Show startup tips (restart)", m.showTips),
 	}
 	if !m.minimal {
 		lines = append(lines, settingLine("Match display refresh rate (restart)", m.matchRefresh))

@@ -10,6 +10,7 @@ import (
 
 	"github.com/lookcorner/go-cli/internal/announcement"
 	"github.com/lookcorner/go-cli/internal/compat"
+	"github.com/lookcorner/go-cli/internal/tips"
 	"github.com/lookcorner/go-cli/internal/version"
 )
 
@@ -79,6 +80,7 @@ type RemoteSettings struct {
 	ClaudeHooks                      *bool                `json:"claude_hooks_enabled"`
 	ClaudeSessions                   *bool                `json:"claude_sessions_enabled"`
 	CodexSessions                    *bool                `json:"codex_sessions_enabled"`
+	tipsConfigured                   bool
 }
 
 type RemoteHints struct {
@@ -98,12 +100,20 @@ func (r *RemoteSettings) UnmarshalJSON(data []byte) error {
 	var raw struct {
 		*alias
 		AutoMode json.RawMessage `json:"auto_mode"`
+		Tips     json.RawMessage `json:"tips"`
 	}
 	raw.alias = (*alias)(r)
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
 	r.AutoMode = nil
+	r.Tips = nil
+	r.tipsConfigured = false
+	if len(raw.Tips) > 0 && string(raw.Tips) != "null" {
+		if json.Unmarshal(raw.Tips, &r.Tips) == nil {
+			r.tipsConfigured = true
+		}
+	}
 	if len(raw.AutoMode) == 0 || string(raw.AutoMode) == "null" {
 		return nil
 	}
@@ -181,6 +191,11 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 	c.OnDemandEnabled = remote.OnDemandEnabled
 	c.SharingEnabled = remote.SharingEnabled != nil && *remote.SharingEnabled
 	c.Announcements = append([]announcement.Announcement(nil), remote.Announcements...)
+	if !c.ShowTips {
+		c.Tips = nil
+	} else if remote.tipsConfigured || remote.Tips != nil {
+		c.Tips = tips.Merge(c.tipRequirements, c.tipUser, c.tipManaged, remote.Tips)
+	}
 	c.AllowAccess = remote.AllowAccess
 	c.GateMessage = remote.GateMessage
 	c.GateURL = remote.GateURL

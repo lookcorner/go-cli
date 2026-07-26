@@ -48,6 +48,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/skills"
 	"github.com/lookcorner/go-cli/internal/subagent"
 	"github.com/lookcorner/go-cli/internal/terminaldiag"
+	"github.com/lookcorner/go-cli/internal/tips"
 	"github.com/lookcorner/go-cli/internal/tools"
 	"github.com/lookcorner/go-cli/internal/tui"
 	"github.com/lookcorner/go-cli/internal/version"
@@ -1172,6 +1173,10 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		if voice.Supported() {
 			voiceClient = voice.New(voice.Config{BaseURL: cfg.BaseURL, Language: cfg.UI.VoiceSTTLanguage}, cfg.APIKey, voice.TokenProvider(tokenProvider))
 		}
+		startupTip := ""
+		if home, homeErr := config.PolicyHome(); homeErr == nil {
+			startupTip = tips.PickAndAdvance(cfg.Tips, home)
+		}
 		exit, err := tui.Run(ctx, runner, tuiBridge, prompt, opts.previousID, resumedTranscript, ws.Root(), cfg.Model, tui.UIOptions{
 			Minimal: minimal, RendererFPS: tui.RendererFPS(cfg.UI.DisplayRefresh), ScreenMode: cfg.UI.ScreenMode,
 			SetScreenMode: func(mode string) error { return config.UpdateScreenMode(opts.configPath, mode) },
@@ -1207,6 +1212,8 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			CompactMode:         cfg.UI.CompactMode,
 			ShowTimestamps:      cfg.UI.ShowTimestamps,
 			ShowThinkingBlocks:  cfg.UI.ShowThinkingBlocks,
+			ShowTips:            cfg.ShowTips,
+			StartupTip:          startupTip,
 			MaxThoughtsWidth:    cfg.UI.MaxThoughtsWidth,
 			MatchRefresh:        cfg.UI.DisplayRefresh.AutoCadenceEnabled,
 			ShowTimeline:        cfg.UI.ShowTimeline,
@@ -1228,6 +1235,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			SetCompactMode:    func(enabled bool) error { return config.UpdateCompactMode(opts.configPath, enabled) },
 			SetShowTimestamps: func(enabled bool) error { return config.UpdateShowTimestamps(opts.configPath, enabled) },
 			SetShowThinking:   func(enabled bool) error { return config.UpdateShowThinkingBlocks(opts.configPath, enabled) },
+			SetShowTips:       func(enabled bool) error { return config.UpdateShowTips(opts.configPath, enabled) },
 			SetMaxThoughtsWidth: func(value int) error {
 				return config.UpdateMaxThoughtsWidth(opts.configPath, value)
 			},

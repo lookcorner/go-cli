@@ -738,6 +738,7 @@ type model struct {
 	foreignResume       *session.RecentForeignSession
 	foreignResumeReady  bool
 	welcomeChangelog    []string
+	startupTip          string
 	welcomeReady        bool
 	modelName           string
 	defaultModelID      string
@@ -780,6 +781,8 @@ type model struct {
 	persistTimeline     func(bool) error
 	showThinking        bool
 	persistThinking     func(bool) error
+	showTips            bool
+	persistShowTips     func(bool) error
 	maxThoughtsWidth    int
 	persistThoughtWidth func(int) error
 	matchRefresh        bool
@@ -1017,6 +1020,9 @@ type UIOptions struct {
 	SetShowTimeline      func(bool) error
 	ShowThinkingBlocks   bool
 	SetShowThinking      func(bool) error
+	ShowTips             bool
+	SetShowTips          func(bool) error
+	StartupTip           string
 	MaxThoughtsWidth     int
 	SetMaxThoughtsWidth  func(int) error
 	MatchRefresh         bool
@@ -1224,6 +1230,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		showTimestamps: options.ShowTimestamps, persistTimestamps: options.SetShowTimestamps,
 		showTimeline: options.ShowTimeline, persistTimeline: options.SetShowTimeline,
 		showThinking: options.ShowThinkingBlocks, persistThinking: options.SetShowThinking,
+		showTips: options.ShowTips, persistShowTips: options.SetShowTips, startupTip: options.StartupTip,
 		maxThoughtsWidth: normalizedThoughtWidth(options.MaxThoughtsWidth), persistThoughtWidth: options.SetMaxThoughtsWidth,
 		matchRefresh: options.MatchRefresh, persistRefresh: options.SetMatchRefresh,
 		scrollLines: mouseWheelScrollLines, scrollSpeed: options.ScrollSpeed, persistScrollSpeed: options.SetScrollSpeed,
@@ -5943,6 +5950,9 @@ func (m *model) View() tea.View {
 	header := fmt.Sprintf("%s%s Gork Go%s%s  %s%s · %s%s", ansiBold, colors.title, ansiReset, mode, ansiDim, truncate(m.modelName, 24), truncate(m.workspace, max(width-45, 10)), ansiReset)
 	header = padRight(truncateANSIUnsafe(header, width), width)
 	banner := m.announcementBanner(width)
+	if len(banner) == 0 {
+		banner = m.startupTipBanner(width)
+	}
 	if len(banner) == 0 && m.welcomeReady && !m.running && m.transcript.Len() == 0 {
 		banner = m.welcomeChangelogBanner(width)
 	}
@@ -6364,6 +6374,14 @@ func (m *model) welcomeChangelogBanner(width int) []string {
 	return lines
 }
 
+func (m *model) startupTipBanner(width int) []string {
+	tip := strings.TrimSpace(sanitizeTerminalText(m.startupTip))
+	if tip == "" {
+		return nil
+	}
+	return []string{ansiBold + m.colors().heading + "Tip: " + ansiReset + ansiDim + truncate(tip, max(width-5, 1)) + ansiReset}
+}
+
 func (m *model) pinnedAnnouncementURL() string {
 	if m.runner == nil || m.runner.Announcements == nil {
 		return ""
@@ -6690,6 +6708,9 @@ func (m *model) announcementHeight() int {
 
 func (m *model) bannerHeight() int {
 	if height := m.announcementHeight(); height > 0 {
+		return height
+	}
+	if height := len(m.startupTipBanner(max(m.width, 20))); height > 0 {
 		return height
 	}
 	if m.welcomeReady && !m.running && m.transcript.Len() == 0 {

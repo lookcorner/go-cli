@@ -59,6 +59,26 @@ func TestWelcomeChangelogBannerFitsAndYieldsToAnnouncement(t *testing.T) {
 	}
 }
 
+func TestStartupTipFitsAndPrecedesChangelog(t *testing.T) {
+	m := &model{
+		width: 24, height: 16, welcomeReady: true,
+		startupTip:       "Use [31m/settings to control very long startup tips",
+		welcomeChangelog: []string{"Added sessions"},
+	}
+	banner := m.startupTipBanner(24)
+	if len(banner) != 1 || m.bannerHeight() != 1 {
+		t.Fatalf("banner=%q height=%d", banner, m.bannerHeight())
+	}
+	plain := stripUIANSI(banner[0])
+	if strings.Contains(plain, "\x1b") || displayWidth(plain) > 24 || !strings.HasPrefix(plain, "Tip: ") {
+		t.Fatalf("banner=%q width=%d", plain, displayWidth(plain))
+	}
+	content := stripUIANSI(m.View().Content)
+	if !strings.Contains(content, "Tip:") || strings.Contains(content, "What's new") {
+		t.Fatalf("content=%q", content)
+	}
+}
+
 func TestWelcomeChangelogInitFetchesOnlyForBlankStartup(t *testing.T) {
 	calls := 0
 	m := &model{

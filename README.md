@@ -31,6 +31,13 @@ Permission startup mode uses `[ui].permission_mode`. Legacy
 `permission_mode` > `approval_mode` > `yolo`; invalid or disabled legacy values
 fall back to `ask` and still override remote defaults.
 
+The TUI rotates startup tips from remote settings and optional local `[tips]`
+entries using `$GROK_HOME/tip_cursor.json`. Requirements tips come first,
+followed by remote, user, and managed entries. Set `exclude_default = true` in
+any local `[tips]` section to omit remote tips, or set `[cli].show_tips = false`
+to suppress the startup tip. The same restart-scoped switch is available in
+`/settings`.
+
 Interactive REPL, full-screen, and ACP sessions accept `/compact` to summarize
 the current completed response chain and continue from a fresh context. When
 workspace memory is enabled, `/flush` saves reusable context without changing

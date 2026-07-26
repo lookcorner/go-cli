@@ -17,6 +17,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/compat"
 	"github.com/lookcorner/go-cli/internal/memory"
 	"github.com/lookcorner/go-cli/internal/theme"
+	"github.com/lookcorner/go-cli/internal/tips"
 	"github.com/lookcorner/go-cli/internal/version"
 	"github.com/lookcorner/go-cli/internal/voice"
 	"github.com/pelletier/go-toml/v2"
@@ -60,6 +61,8 @@ type Config struct {
 	OnDemandEnabled                 *bool                      `json:"-"`
 	SharingEnabled                  bool                       `json:"-"`
 	Announcements                   []RemoteAnnouncement       `json:"-"`
+	Tips                            []string                   `json:"-"`
+	ShowTips                        bool                       `json:"-"`
 	AllowAccess                     *bool                      `json:"-"`
 	GateMessage                     *string                    `json:"-"`
 	GateURL                         *string                    `json:"-"`
@@ -135,6 +138,9 @@ type Config struct {
 	uiContextualSmallConfigured     bool
 	uiContextualWordConfigured      bool
 	uiContextualHintsEnvironment    *bool
+	tipRequirements                 tips.Source
+	tipUser                         tips.Source
+	tipManaged                      tips.Source
 	modelConfigured                 bool
 	defaultModelConfigured          bool
 	allowedModelsConfigured         bool
@@ -784,6 +790,7 @@ func Load(path string) (Config, error) {
 		FolderTrustEnabled:          true,
 		AutoWakeEnabled:             true,
 		FeedbackEnabled:             true,
+		ShowTips:                    true,
 		AskUserQuestion:             AskUserQuestionConfig{TimeoutEnabled: true, TimeoutSeconds: 30 * 60},
 		CancelRewindEnabled:         true,
 		Toolset:                     ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}},
@@ -842,9 +849,70 @@ func Load(path string) (Config, error) {
 		return Config{}, err
 	}
 	applyContextualHintsEnvironment(&cfg)
+	if err := loadTipSources(&cfg, path); err != nil {
+		return Config{}, err
+	}
+	cfg.Tips = tips.Merge(cfg.tipRequirements, cfg.tipUser, cfg.tipManaged, nil)
 	cfg.BaseURL = strings.TrimRight(cfg.BaseURL, "/")
 	cfg.WebSearch.BaseURL = strings.TrimRight(cfg.WebSearch.BaseURL, "/")
 	return cfg, nil
+}
+
+func loadTipSources(cfg *Config, userPath string) error {
+	load := func(paths []string) (tips.Source, *bool, error) {
+		merged := make(map[string]any)
+		for _, path := range paths {
+			data, err := os.ReadFile(path)
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if err != nil {
+				return tips.Source{}, nil, err
+			}
+			var layer map[string]any
+			if strings.EqualFold(filepath.Ext(path), ".json") {
+				err = json.Unmarshal(data, &layer)
+			} else {
+				err = toml.Unmarshal(data, &layer)
+			}
+			if err != nil {
+				return tips.Source{}, nil, err
+			}
+			if err := applyVersionOverrides(layer, version.Current); err != nil {
+				return tips.Source{}, nil, err
+			}
+			deepMergeMap(merged, layer)
+		}
+		var source tips.Source
+		if raw, ok := merged["tips"]; ok {
+			data, _ := json.Marshal(raw)
+			_ = json.Unmarshal(data, &source)
+		}
+		var show *bool
+		if cli, ok := merged["cli"].(map[string]any); ok {
+			if value, ok := cli["show_tips"].(bool); ok {
+				show = &value
+			}
+		}
+		return source, show, nil
+	}
+	managed, _, err := load(managedConfigPaths())
+	if err != nil {
+		return err
+	}
+	user, userShow, err := load([]string{userPath})
+	if err != nil {
+		return err
+	}
+	requirements, requirementsShow, err := load(requirementsPaths())
+	if err != nil {
+		return err
+	}
+	cfg.tipManaged, cfg.tipUser, cfg.tipRequirements = managed, user, requirements
+	if requirementsShow != nil && !*requirementsShow || userShow != nil && !*userShow {
+		cfg.ShowTips = false
+	}
+	return nil
 }
 
 func applyFileConfig(cfg *Config, disk *fileConfig) error {

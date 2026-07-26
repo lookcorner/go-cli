@@ -42,6 +42,9 @@ implementation.
   transport-independent in `internal/acp`.
 - `internal/theme` owns canonical terminal theme identities and aliases shared
   by configuration validation and the TUI adapter.
+- `internal/tips` owns startup-tip source ordering and the persistent
+  cross-session rotation cursor; configuration resolves sources and the TUI
+  only renders the selected text.
 - `internal/docs` owns the immutable built-in guide catalog and title lookup;
   the TUI adapter owns only picker and viewer interaction state.
 - `internal/imagine` owns capability-independent parsing and model-instruction
