@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/lookcorner/go-cli/internal/notify"
@@ -86,6 +87,7 @@ func BuildSnapshot(getenv func(string) string, lookPath func(string) (string, er
 		findings = append(findings, tmuxProbeFindings(tmux)...)
 	}
 	findings = append(findings, notificationFindings(getenv)...)
+	findings = append(findings, newlineFindings(getenv, brand)...)
 	if finding := sshWrapRecommendation(getenv, ssh); finding != "" {
 		findings = append(findings, finding)
 	}
@@ -311,6 +313,77 @@ func colorFindings(getenv func(string) string, term, brand, color, multiplexer s
 func isAppleTerminal(brand string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(brand))
 	return normalized == "apple_terminal" || normalized == "apple terminal"
+}
+
+
+// newlineFindings mirrors reference terminal.newline-fallback for env-detectable
+// hosts where Shift+Enter cannot be distinguished from Enter (VTE < 0.82 and
+// VS Code-family xterm.js). Kitty-protocol-unavailable unknowns stay deferred.
+func newlineFindings(getenv func(string) string, brand string) []string {
+	if finding := vteNewlineFinding(getenv, brand); finding != "" {
+		return []string{finding}
+	}
+	if isVSCodeFamily(getenv, brand) {
+		terminal := vscodeTerminalLabel(getenv, brand)
+		return []string{"Shift+Enter can't insert a newline in this xterm.js terminal.\n    Use Alt+Enter to insert a newline in " + terminal + ". xterm.js sends Shift+Enter as Enter in this setup."}
+	}
+	return nil
+}
+
+func vteNewlineFinding(getenv func(string) string, brand string) string {
+	if !isVTEBased(getenv, brand) {
+		return ""
+	}
+	version := strings.TrimSpace(getenv("VTE_VERSION"))
+	if version != "" {
+		if parsed, err := strconv.Atoi(version); err == nil && parsed >= 8200 {
+			return ""
+		}
+	}
+	note := "Use Alt+Enter to insert a newline. Upgrade to VTE 0.82 or later to use Shift+Enter."
+	if version != "" {
+		if _, err := strconv.Atoi(version); err == nil {
+			note = "Use Alt+Enter to insert a newline. This terminal reports VTE " + version + ". Upgrade to VTE 0.82 or later to use Shift+Enter."
+		}
+	}
+	return "Shift+Enter can't insert a newline in this VTE terminal.\n    " + note
+}
+
+func isVTEBased(getenv func(string) string, brand string) bool {
+	if strings.TrimSpace(getenv("VTE_VERSION")) != "" {
+		return true
+	}
+	switch normalizeBrandKey(brand) {
+	case "vte", "terminator":
+		return true
+	default:
+		return false
+	}
+}
+
+func vscodeTerminalLabel(getenv func(string) string, brand string) string {
+	switch normalizeBrandKey(brand) {
+	case "cursor":
+		return "Cursor"
+	case "windsurf":
+		return "Windsurf"
+	case "zed":
+		return "Zed"
+	case "vscode":
+		return "VS Code"
+	}
+	if getenv("CURSOR_TRACE_ID") != "" {
+		return "Cursor"
+	}
+	ask := strings.ToLower(getenv("VSCODE_GIT_ASKPASS_MAIN"))
+	switch {
+	case strings.Contains(ask, "cursor"):
+		return "Cursor"
+	case strings.Contains(ask, "windsurf"):
+		return "Windsurf"
+	default:
+		return "VS Code"
+	}
 }
 
 // notificationFindings mirrors reference collect_notification_warnings for the

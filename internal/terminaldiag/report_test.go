@@ -349,11 +349,41 @@ func TestBuildSnapshotWarnsForVSCodeSSHNonASCII(t *testing.T) {
 		return "/bin/pbcopy", nil
 	}, "darwin")
 	joined := strings.Join(snapshot.Findings, "\n")
-	if !strings.Contains(joined, "non-ASCII text copied with OSC 52") || !strings.Contains(joined, "`/minimal`") {
-		t.Fatalf("missing vscode SSH finding: %q", joined)
+	for _, want := range []string{
+		"non-ASCII text copied with OSC 52", "`/minimal`",
+		"Shift+Enter can't insert a newline in this xterm.js terminal", "Alt+Enter", "VS Code",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("missing %q in %q", want, joined)
+		}
 	}
 	if strings.Contains(joined, "ssh-wrap") {
 		t.Fatalf("vscode remote should not recommend ssh-wrap: %q", joined)
+	}
+}
+
+func TestBuildSnapshotWarnsForLegacyVTENewline(t *testing.T) {
+	env := map[string]string{
+		"TERM": "xterm-256color", "COLORTERM": "truecolor", "VTE_VERSION": "7402",
+	}
+	snapshot := BuildSnapshot(func(key string) string { return env[key] }, func(string) (string, error) {
+		return "/usr/bin/wl-copy", nil
+	}, "linux")
+	joined := strings.Join(snapshot.Findings, "\n")
+	for _, want := range []string{
+		"Shift+Enter can't insert a newline in this VTE terminal",
+		"VTE 7402", "VTE 0.82", "Alt+Enter",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("missing %q in %q", want, joined)
+		}
+	}
+	env["VTE_VERSION"] = "8200"
+	snapshot = BuildSnapshot(func(key string) string { return env[key] }, func(string) (string, error) {
+		return "/usr/bin/wl-copy", nil
+	}, "linux")
+	if strings.Contains(strings.Join(snapshot.Findings, "\n"), "Shift+Enter") {
+		t.Fatalf("modern VTE should not warn: %#v", snapshot.Findings)
 	}
 }
 
