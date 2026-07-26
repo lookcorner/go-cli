@@ -21,6 +21,16 @@ type HTTPConfig struct {
 	Headers  map[string]string
 	Client   *http.Client
 	Sampling SamplingHandler
+	// Auth enables store-backed Bearer attach and optional 401 refresh.
+	// Enrollment (browser/DCR) is separate; Auth.TokenURL is required to refresh.
+	Auth *HTTPAuth
+}
+
+// HTTPAuth configures MCP OAuth credential use for HTTP/SSE transports.
+type HTTPAuth struct {
+	CredentialsPath string // empty uses DefaultCredentialsPath
+	TokenURL        string // refresh endpoint; required for 401 refresh
+	ClientSecret    string // optional confidential-client secret
 }
 
 func StartHTTP(ctx context.Context, cfg HTTPConfig) (*Client, InitializeResult, error) {
@@ -35,9 +45,11 @@ func StartHTTP(ctx context.Context, cfg HTTPConfig) (*Client, InitializeResult, 
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 10 * time.Minute}
 	}
+	headers := prepareHTTPHeaders(cfg)
 	client := &Client{
 		name: cfg.Name, httpURL: cfg.URL, httpClient: httpClient,
-		headers: cloneHeaders(cfg.Headers), pending: make(map[string]chan response), done: make(chan struct{}),
+		headers: headers, auth: newHTTPAuthState(cfg),
+		pending: make(map[string]chan response), done: make(chan struct{}),
 		sampling: cfg.Sampling,
 	}
 	initCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
@@ -73,65 +85,77 @@ func (c *Client) httpRequest(ctx context.Context, value any, expectResponse bool
 	if err != nil {
 		return rpcMessage{}, err
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.httpURL, bytes.NewReader(body))
-	if err != nil {
-		return rpcMessage{}, err
-	}
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Accept", "application/json, text/event-stream")
-	c.mu.Lock()
-	sessionID := c.sessionID
-	selectedProtocol := c.selectedProtocol
-	c.mu.Unlock()
-	for key, headerValue := range c.headers {
-		request.Header.Set(key, headerValue)
-	}
-	if selectedProtocol != "" {
-		request.Header.Set("MCP-Protocol-Version", selectedProtocol)
-	}
-	if sessionID != "" {
-		request.Header.Set("Mcp-Session-Id", sessionID)
-	}
-	response, err := c.httpClient.Do(request)
-	if err != nil {
-		return rpcMessage{}, fmt.Errorf("MCP HTTP request: %w", err)
-	}
-	defer response.Body.Close()
-	if assigned := response.Header.Get("Mcp-Session-Id"); assigned != "" {
-		c.mu.Lock()
-		c.sessionID = assigned
-		c.mu.Unlock()
-	}
-	if response.StatusCode == http.StatusAccepted || response.StatusCode == http.StatusNoContent {
-		if expectResponse {
-			return rpcMessage{}, fmt.Errorf("MCP HTTP server returned %s without a response", response.Status)
+	retried := false
+	for {
+		request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.httpURL, bytes.NewReader(body))
+		if err != nil {
+			return rpcMessage{}, err
 		}
-		return rpcMessage{}, nil
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Accept", "application/json, text/event-stream")
+		c.mu.Lock()
+		sessionID := c.sessionID
+		selectedProtocol := c.selectedProtocol
+		headers := cloneHeaders(c.headers)
+		c.mu.Unlock()
+		for key, headerValue := range headers {
+			request.Header.Set(key, headerValue)
+		}
+		if selectedProtocol != "" {
+			request.Header.Set("MCP-Protocol-Version", selectedProtocol)
+		}
+		if sessionID != "" {
+			request.Header.Set("Mcp-Session-Id", sessionID)
+		}
+		response, err := c.httpClient.Do(request)
+		if err != nil {
+			return rpcMessage{}, fmt.Errorf("MCP HTTP request: %w", err)
+		}
+		if response.StatusCode == http.StatusUnauthorized && !retried && c.auth != nil && !c.auth.staticAuth {
+			response.Body.Close()
+			if refreshErr := c.refreshAuthorization(ctx); refreshErr == nil {
+				retried = true
+				continue
+			}
+			return rpcMessage{}, fmt.Errorf("MCP HTTP server returned %s", response.Status)
+		}
+		defer response.Body.Close()
+		if assigned := response.Header.Get("Mcp-Session-Id"); assigned != "" {
+			c.mu.Lock()
+			c.sessionID = assigned
+			c.mu.Unlock()
+		}
+		if response.StatusCode == http.StatusAccepted || response.StatusCode == http.StatusNoContent {
+			if expectResponse {
+				return rpcMessage{}, fmt.Errorf("MCP HTTP server returned %s without a response", response.Status)
+			}
+			return rpcMessage{}, nil
+		}
+		if response.StatusCode < 200 || response.StatusCode >= 300 {
+			data, _ := io.ReadAll(io.LimitReader(response.Body, 64<<10))
+			return rpcMessage{}, fmt.Errorf("MCP HTTP server returned %s: %s", response.Status, strings.TrimSpace(string(data)))
+		}
+		if !expectResponse {
+			_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 1<<20))
+			return rpcMessage{}, nil
+		}
+		mediaType, _, _ := mime.ParseMediaType(response.Header.Get("Content-Type"))
+		if mediaType == "text/event-stream" {
+			return readMCPEventStream(response.Body, c.dispatch, c.handleNotification)
+		}
+		data, err := io.ReadAll(io.LimitReader(response.Body, 16<<20+1))
+		if err != nil {
+			return rpcMessage{}, err
+		}
+		if len(data) > 16<<20 {
+			return rpcMessage{}, errors.New("MCP HTTP response exceeds 16 MiB")
+		}
+		var message rpcMessage
+		if err := json.Unmarshal(data, &message); err != nil {
+			return rpcMessage{}, fmt.Errorf("decode MCP HTTP response: %w", err)
+		}
+		return message, nil
 	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		data, _ := io.ReadAll(io.LimitReader(response.Body, 64<<10))
-		return rpcMessage{}, fmt.Errorf("MCP HTTP server returned %s: %s", response.Status, strings.TrimSpace(string(data)))
-	}
-	if !expectResponse {
-		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 1<<20))
-		return rpcMessage{}, nil
-	}
-	mediaType, _, _ := mime.ParseMediaType(response.Header.Get("Content-Type"))
-	if mediaType == "text/event-stream" {
-		return readMCPEventStream(response.Body, c.dispatch, c.handleNotification)
-	}
-	data, err := io.ReadAll(io.LimitReader(response.Body, 16<<20+1))
-	if err != nil {
-		return rpcMessage{}, err
-	}
-	if len(data) > 16<<20 {
-		return rpcMessage{}, errors.New("MCP HTTP response exceeds 16 MiB")
-	}
-	var message rpcMessage
-	if err := json.Unmarshal(data, &message); err != nil {
-		return rpcMessage{}, fmt.Errorf("decode MCP HTTP response: %w", err)
-	}
-	return message, nil
 }
 
 func readMCPEventStream(reader io.Reader, onRequest func(rpcMessage), onNotification func(string, json.RawMessage)) (rpcMessage, error) {

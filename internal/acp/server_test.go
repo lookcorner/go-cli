@@ -732,6 +732,41 @@ func TestMCPAuthExtensionsForLocalServers(t *testing.T) {
 	}
 }
 
+func TestMCPAuthExtensionsForHTTPServers(t *testing.T) {
+	var authenticated string
+	current := &session{id: "mcp-http-auth", runner: &agent.Runner{
+		AuthenticateMCPServer: func(_ context.Context, name string) error {
+			authenticated = name
+			return nil
+		},
+		MCPServerCatalog: func() []MCPServer {
+			return []MCPServer{{Name: "remote", URL: "https://mcp.example/rpc"}}
+		},
+	}, mcpServers: []MCPServer{{Name: "remote", URL: "https://mcp.example/rpc"}}}
+	home := t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	var output bytes.Buffer
+	server := &Server{output: &output, sessions: map[string]*session{"mcp-http-auth": current}}
+	server.handleMCP(context.Background(), message{ID: json.RawMessage("1"), Method: "x.ai/mcp/auth_status", Params: json.RawMessage(`{"session_id":"mcp-http-auth"}`)})
+	var response map[string]any
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	servers := response["result"].(map[string]any)["result"].(map[string]any)["servers"].([]any)
+	if len(servers) != 1 || servers[0].(map[string]any)["server_name"] != "remote" || servers[0].(map[string]any)["status"] != "needs_auth" {
+		t.Fatalf("unexpected auth status: %#v", response)
+	}
+	output.Reset()
+	server.handleMCP(context.Background(), message{ID: json.RawMessage("2"), Method: "x.ai/mcp/auth_trigger", Params: json.RawMessage(`{"session_id":"mcp-http-auth","server_name":"remote"}`)})
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	trigger := response["result"].(map[string]any)["result"].(map[string]any)
+	if authenticated != "remote" || trigger["status"] != "authenticated" {
+		t.Fatalf("authenticated=%q trigger=%#v", authenticated, trigger)
+	}
+}
+
 func TestMCPServerChangeNotifications(t *testing.T) {
 	var output bytes.Buffer
 	server := &Server{output: &output}

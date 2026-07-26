@@ -220,11 +220,31 @@ func (s *Server) handleMCP(ctx context.Context, incoming message) {
 		return
 	}
 	if incoming.Method == "x.ai/mcp/auth_status" {
-		if s.lookupSession(req.SessionID) == nil {
+		current := s.lookupSession(req.SessionID)
+		if current == nil {
 			s.respondError(incoming.ID, -32602, "session not found")
 			return
 		}
-		s.respond(incoming.ID, map[string]any{"result": map[string]any{"servers": []any{}}, "error": nil})
+		current.mu.Lock()
+		configs := append([]MCPServer(nil), current.mcpServers...)
+		var provider func() []MCPServer
+		if current.runner != nil {
+			provider = current.runner.MCPServers
+			if provider == nil {
+				provider = current.runner.MCPServerCatalog
+			}
+		}
+		current.mu.Unlock()
+		if provider != nil {
+			configs = provider()
+		}
+		servers := make([]any, 0)
+		for _, config := range configs {
+			if mcppkg.NeedsMCPAuth(config, "") {
+				servers = append(servers, map[string]any{"server_name": config.Name, "status": "needs_auth"})
+			}
+		}
+		s.respond(incoming.ID, map[string]any{"result": map[string]any{"servers": servers}, "error": nil})
 		return
 	}
 	if incoming.Method == "x.ai/mcp/auth_trigger" {
@@ -240,25 +260,47 @@ func (s *Server) handleMCP(ctx context.Context, incoming message) {
 		current.mu.Lock()
 		configs := append([]MCPServer(nil), current.mcpServers...)
 		provider := current.runner.MCPServers
+		if provider == nil {
+			provider = current.runner.MCPServerCatalog
+		}
+		authenticate := current.runner.AuthenticateMCPServer
 		current.mu.Unlock()
 		if provider != nil {
 			configs = provider()
 		}
-		found := false
-		for _, config := range configs {
-			if config.Name == req.ServerName {
-				found = true
+		var target *MCPServer
+		for index := range configs {
+			if configs[index].Name == req.ServerName {
+				target = &configs[index]
 				break
 			}
 		}
-		if !found {
+		if target == nil {
 			s.respond(incoming.ID, map[string]any{"result": map[string]any{
 				"status": "failed", "error": "MCP server not found",
 			}, "error": nil})
 			return
 		}
+		if strings.TrimSpace(target.URL) == "" {
+			s.respond(incoming.ID, map[string]any{"result": map[string]any{
+				"status": "failed", "error": "MCP OAuth is not supported for local servers",
+			}, "error": nil})
+			return
+		}
+		if authenticate == nil {
+			s.respond(incoming.ID, map[string]any{"result": map[string]any{
+				"status": "failed", "error": "MCP OAuth enrollment is unavailable",
+			}, "error": nil})
+			return
+		}
+		if err := authenticate(ctx, req.ServerName); err != nil {
+			s.respond(incoming.ID, map[string]any{"result": map[string]any{
+				"status": "failed", "error": err.Error(),
+			}, "error": nil})
+			return
+		}
 		s.respond(incoming.ID, map[string]any{"result": map[string]any{
-			"status": "failed", "error": "MCP OAuth is not supported for local servers",
+			"status": "authenticated", "error": nil,
 		}, "error": nil})
 		return
 	}

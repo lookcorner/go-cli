@@ -23,17 +23,24 @@ func StartSSE(ctx context.Context, cfg HTTPConfig) (*Client, InitializeResult, e
 	if httpClient == nil {
 		httpClient = &http.Client{}
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	headers := prepareHTTPHeaders(cfg)
+	authState := newHTTPAuthState(cfg)
+	streamResponse, err := openSSEStream(ctx, httpClient, endpoint.String(), headers)
 	if err != nil {
 		return nil, InitializeResult{}, err
 	}
-	request.Header.Set("Accept", "text/event-stream")
-	for key, value := range cfg.Headers {
-		request.Header.Set(key, value)
-	}
-	streamResponse, err := httpClient.Do(request)
-	if err != nil {
-		return nil, InitializeResult{}, fmt.Errorf("connect MCP SSE stream: %w", err)
+	if streamResponse.StatusCode == http.StatusUnauthorized && authState != nil && !authState.staticAuth {
+		streamResponse.Body.Close()
+		tmp := &Client{name: cfg.Name, httpClient: httpClient, auth: authState, headers: headers}
+		if refreshErr := tmp.refreshAuthorization(ctx); refreshErr == nil {
+			headers = cloneHeaders(tmp.headers)
+			streamResponse, err = openSSEStream(ctx, httpClient, endpoint.String(), headers)
+			if err != nil {
+				return nil, InitializeResult{}, err
+			}
+		} else {
+			return nil, InitializeResult{}, fmt.Errorf("MCP SSE server returned %s", http.StatusText(http.StatusUnauthorized))
+		}
 	}
 	if streamResponse.StatusCode < 200 || streamResponse.StatusCode >= 300 {
 		defer streamResponse.Body.Close()
@@ -68,7 +75,7 @@ func StartSSE(ctx context.Context, cfg HTTPConfig) (*Client, InitializeResult, e
 	}
 	client := &Client{
 		name: cfg.Name, ssePostURL: postURL.String(), sseStream: streamResponse.Body,
-		httpClient: httpClient, headers: cloneHeaders(cfg.Headers),
+		httpClient: httpClient, headers: headers, auth: authState,
 		sampling: cfg.Sampling,
 		pending:  make(map[string]chan response), done: make(chan struct{}),
 	}
@@ -100,24 +107,54 @@ func StartSSE(ctx context.Context, cfg HTTPConfig) (*Client, InitializeResult, e
 func (c *Client) postSSE(data []byte) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.ssePostURL, bytes.NewReader(data))
-	if err != nil {
-		return err
+	retried := false
+	for {
+		request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.ssePostURL, bytes.NewReader(data))
+		if err != nil {
+			return err
+		}
+		request.Header.Set("Content-Type", "application/json")
+		c.mu.Lock()
+		headers := cloneHeaders(c.headers)
+		c.mu.Unlock()
+		for key, value := range headers {
+			request.Header.Set(key, value)
+		}
+		response, err := c.httpClient.Do(request)
+		if err != nil {
+			return fmt.Errorf("post MCP SSE message: %w", err)
+		}
+		if response.StatusCode == http.StatusUnauthorized && !retried && c.auth != nil && !c.auth.staticAuth {
+			response.Body.Close()
+			if refreshErr := c.refreshAuthorization(ctx); refreshErr == nil {
+				retried = true
+				continue
+			}
+			return fmt.Errorf("MCP SSE endpoint returned %s", response.Status)
+		}
+		defer response.Body.Close()
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 1<<20))
+		if response.StatusCode < 200 || response.StatusCode >= 300 {
+			return fmt.Errorf("MCP SSE endpoint returned %s", response.Status)
+		}
+		return nil
 	}
-	request.Header.Set("Content-Type", "application/json")
-	for key, value := range c.headers {
+}
+
+func openSSEStream(ctx context.Context, client *http.Client, endpoint string, headers map[string]string) (*http.Response, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Accept", "text/event-stream")
+	for key, value := range headers {
 		request.Header.Set(key, value)
 	}
-	response, err := c.httpClient.Do(request)
+	streamResponse, err := client.Do(request)
 	if err != nil {
-		return fmt.Errorf("post MCP SSE message: %w", err)
+		return nil, fmt.Errorf("connect MCP SSE stream: %w", err)
 	}
-	defer response.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 1<<20))
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return fmt.Errorf("MCP SSE endpoint returned %s", response.Status)
-	}
-	return nil
+	return streamResponse, nil
 }
 
 func (c *Client) sseReadLoop(reader *bufio.Reader) {

@@ -187,6 +187,7 @@ type Runner struct {
 	ToggleMCPTool           func(context.Context, string, string, bool) error
 	UpsertMCPServer         func(context.Context, mcp.ServerConfig) error
 	DeleteMCPServer         func(context.Context, string) error
+	AuthenticateMCPServer   func(context.Context, string) error
 	HandleMCPSDKMessage     func(context.Context, string, json.RawMessage) (json.RawMessage, error)
 	UpdateSkills            func(context.Context, func(*skills.Settings)) (skills.Settings, error)
 	UpdatePlugins           func(context.Context, func(*plugin.Settings)) ([]plugin.Plugin, error)

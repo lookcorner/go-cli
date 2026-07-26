@@ -1480,12 +1480,18 @@ counts, while successful startup and configuration changes publish the complete
 catalog through `x.ai/mcp/servers_updated`. `x.ai/session/update_mcp_servers` safely
 restarts the session MCP runtime, preserves project/plugin base servers, and
 restores the previous runtime if replacement fails. Sessionless agent-level MCP
-pools and OAuth enrollment are not yet available. Local MCP configuration files
-reload automatically without dropping client-provided session servers.
+pools are not yet available. HTTP/SSE servers attach `Authorization` from
+`$GROK_HOME/mcp_credentials.json` (Rust-compatible `name:url` keys) when no
+static header or `bearer_token_env_var` is set, refresh once on HTTP 401, and
+support interactive OAuth enrollment via RFC 8414/9728 discovery, DCR, and
+PKCE loopback. `x.ai/mcp/auth_status` lists servers that still need auth;
+`x.ai/mcp/auth_trigger` and the TUI `/mcps` `I` key start enrollment for remote
+servers (stdio stays explicitly unsupported). Optional TOML fields
+`oauth_client_id`, `oauth_client_secret_env_var`, `oauth_scopes`, and
+`oauth_callback_port` select BYO clients. Local MCP configuration files reload
+automatically without dropping client-provided session servers.
 The internal global and project-scoped MCP reload endpoints refresh matching
 live sessions from disk while preserving those client-provided overrides.
-For local-only sessions, `x.ai/mcp/auth_status` reports no pending authentication
-and `x.ai/mcp/auth_trigger` returns an explicit unsupported result.
 ACP sessions advertise `/mcps` when the live catalog is available and complete
 the command locally with enabled server and tool counts rather than sending it
 to the model.
@@ -1799,8 +1805,8 @@ Enter to inspect tools, Space to enable or disable a server or tool, `A` to add
 an HTTP(S) URL or stdio command, `X` to remove a user-configured server, `R` to
 reload, and `F` to filter. The plain interactive REPL prints the same server
 catalog with `/mcps`. These commands are local and never start a model turn.
-OAuth enrollment is reported as unavailable because local sessions do not yet
-provide an OAuth flow.
+Press `I` on a remote HTTP/SSE server in `/mcps` (or call
+`x.ai/mcp/auth_trigger`) to open the browser OAuth enrollment flow.
 
 Stdio MCP servers can be configured in the same JSON file. Gork Go performs the
 MCP initialization handshake, discovers all paginated tools, exposes them to

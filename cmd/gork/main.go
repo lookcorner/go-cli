@@ -953,6 +953,9 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		}
 		return reloadMCPBase(updateCtx)
 	}
+	authenticateMCPServer := func(updateCtx context.Context, name string) error {
+		return authenticateMCPServerNamed(updateCtx, opts.configPath, name, mcpRuntime.Catalog, openBrowser, reloadMCPBase)
+	}
 	updateSkills := func(_ context.Context, update func(*skills.Settings)) (skills.Settings, error) {
 		if err := config.UpdateSkills(opts.configPath, func(stored *config.SkillsConfig) {
 			settings := skillSettings(*stored)
@@ -1122,6 +1125,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		MCPServers: mcpRuntime.Configs, MCPServerCatalog: mcpRuntime.Catalog,
 		ToggleMCPServer: toggleMCPServer, ToggleMCPTool: toggleMCPTool,
 		UpsertMCPServer: upsertMCPServer, DeleteMCPServer: deleteMCPServer,
+		AuthenticateMCPServer: authenticateMCPServer,
 		UpdateSkills: updateSkills, UpdatePlugins: updatePlugins,
 		MarketplaceList: func() ([]marketplace.ScanResult, error) { return marketplace.List(opts.configPath, ws.Root()) }, MarketplaceAction: marketplaceAction,
 	}
@@ -4069,6 +4073,9 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			}
 			return reloadMCPBase(updateCtx)
 		}
+		authenticateMCPServer := func(updateCtx context.Context, name string) error {
+			return authenticateMCPServerNamed(updateCtx, opts.configPath, name, mcpRuntime.Catalog, openBrowser, reloadMCPBase)
+		}
 		maxSteps := cfg.MaxSteps
 		if opts.agentProfile != nil && opts.agentProfile.MaxTurns > 0 && opts.maxSteps == 0 {
 			maxSteps = opts.agentProfile.MaxTurns
@@ -4107,7 +4114,8 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			MCPServers: mcpRuntime.Configs, MCPServerCatalog: mcpRuntime.Catalog,
 			ToggleMCPServer: toggleMCPServer, ToggleMCPTool: toggleMCPTool,
 			UpsertMCPServer: upsertMCPServer, DeleteMCPServer: deleteMCPServer,
-			HandleMCPSDKMessage: mcpRuntime.HandleSDKMessage,
+			AuthenticateMCPServer: authenticateMCPServer,
+			HandleMCPSDKMessage:  mcpRuntime.HandleSDKMessage,
 			UpdateSkills:        updateSkills,
 			UpdatePlugins:       updatePlugins,
 			MarketplaceList:     func() ([]marketplace.ScanResult, error) { return marketplace.List(opts.configPath, ws.Root()) },
@@ -5933,6 +5941,54 @@ func mcpHTTPHeaders(server config.MCPServerConfig) map[string]string {
 		headers["Authorization"] = "Bearer " + token
 	}
 	return headers
+}
+
+func authenticateMCPServerNamed(
+	ctx context.Context,
+	configPath, name string,
+	catalog func() []mcp.ServerConfig,
+	openURL func(string) bool,
+	reload func(context.Context) error,
+) error {
+	var target mcp.ServerConfig
+	if catalog != nil {
+		for _, server := range catalog() {
+			if server.Name == name {
+				target = server
+				break
+			}
+		}
+	}
+	if target.Name == "" {
+		return fmt.Errorf("MCP server %q not found", name)
+	}
+	if strings.TrimSpace(target.URL) == "" {
+		return errors.New("MCP OAuth is not supported for local servers")
+	}
+	loaded, err := config.Load(configPath)
+	if err != nil {
+		return err
+	}
+	disk := loaded.MCPServers[name]
+	var callbackPort uint16
+	if disk.OAuthCallbackPort != nil {
+		callbackPort = *disk.OAuthCallbackPort
+	}
+	secret := ""
+	if disk.OAuthClientSecretEnvVar != "" {
+		secret = os.Getenv(disk.OAuthClientSecretEnvVar)
+	}
+	if _, err := mcp.AuthenticateMCPServer(ctx, name, target.URL, mcp.AuthenticateOpts{
+		ClientID: disk.OAuthClientID, ClientSecret: secret,
+		Scopes: append([]string(nil), disk.OAuthScopes...), CallbackPort: callbackPort,
+		OpenURL: openURL, Force: true,
+	}); err != nil {
+		return err
+	}
+	if reload != nil {
+		return reload(ctx)
+	}
+	return nil
 }
 
 func newMCPSamplingHandler(cfg config.Config, approver tools.Approver, tokenProvider api.TokenProvider, serverName string) mcp.SamplingHandler {
