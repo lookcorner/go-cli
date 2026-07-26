@@ -131,6 +131,9 @@ func (f *stringListFlag) Set(value string) error {
 }
 
 func main() {
+	if tools.MaybeExecSeccompNamespaceLockdown(os.Args) {
+		return
+	}
 	if err := run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return
