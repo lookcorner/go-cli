@@ -46,6 +46,14 @@ func TestValidateRejectsUnknownSandboxProfile(t *testing.T) {
 	}
 }
 
+func TestValidateNamesDocumentedModelVariable(t *testing.T) {
+	cfg := Config{APIKey: "key", Backend: "responses", BaseURL: "https://api.example"}
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "GORK_MODEL") || strings.Contains(err.Error(), "GROK_MODEL") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
 func TestLoadGrokTOMLModelAndServers(t *testing.T) {
 	t.Setenv("GORK_API_KEY", "")
 	t.Setenv("XAI_API_KEY", "")
