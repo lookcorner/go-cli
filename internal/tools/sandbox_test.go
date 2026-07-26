@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -16,14 +17,14 @@ import (
 
 func TestParseSandboxProfile(t *testing.T) {
 	for input, want := range map[string]SandboxProfile{
-		"": SandboxOff, "off": SandboxOff, " WORKSPACE ": SandboxWorkspace, "read-only": SandboxReadOnly,
+		"": SandboxOff, "off": SandboxOff, " WORKSPACE ": SandboxWorkspace, "read-only": SandboxReadOnly, "STRICT": SandboxStrict,
 	} {
 		got, err := ParseSandboxProfile(input)
 		if err != nil || got != want {
 			t.Fatalf("ParseSandboxProfile(%q)=%q, %v; want %q", input, got, err, want)
 		}
 	}
-	if _, err := ParseSandboxProfile("strict"); err == nil {
+	if _, err := ParseSandboxProfile("unknown"); err == nil {
 		t.Fatal("unsupported profile was accepted")
 	}
 }
@@ -52,6 +53,48 @@ func TestSeatbeltPolicyScopesWorkspaceWrites(t *testing.T) {
 		strings.Contains(readOnlyPolicy, `(subpath "/work")`) {
 		t.Fatalf("workspace policy:\n%s\nread-only policy:\n%s", workspacePolicy, readOnlyPolicy)
 	}
+}
+
+func TestBubblewrapProfilesAndStrictParents(t *testing.T) {
+	workspace := t.TempDir()
+	strict := bubblewrapArgs(SandboxStrict, workspace, "/bin/sh")
+	strictText := strings.Join(strict, " ")
+	if !strings.Contains(strictText, "--tmpfs / ") || !strings.Contains(strictText, "--unshare-net") ||
+		!hasSandboxArgPair(strict, "--ro-bind", workspace, workspace) || !hasSandboxArgPair(strict, "--bind", workspace, workspace) {
+		t.Fatalf("strict args=%q", strict)
+	}
+	remount, command := slices.Index(strict, "--remount-ro"), slices.Index(strict, "--")
+	lastBind := slices.Index(strict, "--bind")
+	for index, value := range strict {
+		if value == "--bind" {
+			lastBind = index
+		}
+	}
+	if remount <= lastBind || command <= remount || remount+1 >= len(strict) || strict[remount+1] != "/" {
+		t.Fatalf("strict root remount order=%q", strict)
+	}
+	for parent := filepath.Dir(workspace); parent != "/"; parent = filepath.Dir(parent) {
+		if !hasSandboxArgPair(strict, "--dir", parent) {
+			t.Fatalf("strict args missing parent %q: %q", parent, strict)
+		}
+	}
+	readOnlyText := strings.Join(bubblewrapArgs(SandboxReadOnly, workspace, "/bin/sh"), " ")
+	if !strings.Contains(readOnlyText, "--ro-bind / / ") || !strings.Contains(readOnlyText, "--unshare-net") {
+		t.Fatalf("read-only args=%q", readOnlyText)
+	}
+	workspaceText := strings.Join(bubblewrapArgs(SandboxWorkspace, workspace, "/bin/sh"), " ")
+	if strings.Contains(workspaceText, "--unshare-net") || !strings.Contains(workspaceText, "--ro-bind / / ") {
+		t.Fatalf("workspace args=%q", workspaceText)
+	}
+}
+
+func hasSandboxArgPair(args []string, values ...string) bool {
+	for index := 0; index+len(values) <= len(args); index++ {
+		if slices.Equal(args[index:index+len(values)], values) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestWorkspaceSandboxCoversShellAndBackgroundCommands(t *testing.T) {
@@ -130,6 +173,62 @@ func TestReadOnlySandboxDeniesWorkspaceWrite(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "denied.txt")); !os.IsNotExist(err) {
 		t.Fatalf("denied path exists: %v", err)
+	}
+}
+
+func TestStrictSandboxAllowsWorkspaceAndDeniesHomeRead(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("strict sandbox currently requires Linux bubblewrap")
+	}
+	if err := validateSandboxRuntime(SandboxStrict); err != nil {
+		t.Skip(err)
+	}
+	root := userSandboxTempDir(t, ".gork-strict-workspace-*")
+	workspaceFile := filepath.Join(root, "inside.txt")
+	if err := os.WriteFile(workspaceFile, []byte("inside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip(err)
+	}
+	outside, err := os.CreateTemp(home, ".gork-strict-outside-*")
+	if err != nil {
+		t.Skip(err)
+	}
+	outsidePath := outside.Name()
+	if _, err := outside.WriteString("outside"); err != nil {
+		_ = outside.Close()
+		t.Fatal(err)
+	}
+	if err := outside.Close(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(outsidePath) })
+	command, err := sandboxCommand(context.Background(), SandboxStrict, root, "/bin/sh", "-lc",
+		"cat inside.txt && printf written > created.txt && cat "+strconv.Quote(outsidePath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	command.Dir = root
+	output, runErr := command.CombinedOutput()
+	if runErr == nil {
+		t.Fatalf("strict sandbox read outside home: %s", output)
+	}
+	if !strings.Contains(string(output), "inside") {
+		t.Fatalf("strict sandbox could not read workspace: %s (%v)", output, runErr)
+	}
+	if data, err := os.ReadFile(filepath.Join(root, "created.txt")); err != nil || string(data) != "written" {
+		t.Fatalf("strict workspace write=%q err=%v", data, err)
+	}
+}
+
+func TestDarwinStrictSandboxFailsClosed(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS-specific")
+	}
+	if err := validateSandboxRuntime(SandboxStrict); err == nil || !strings.Contains(err.Error(), "unavailable") {
+		t.Fatalf("strict runtime error=%v", err)
 	}
 }
 

@@ -28,13 +28,18 @@ func TestLoadSandboxProfileFromConfigAndEnvironment(t *testing.T) {
 	if err != nil || cfg.Sandbox.Profile != "read-only" {
 		t.Fatalf("environment profile=%q err=%v", cfg.Sandbox.Profile, err)
 	}
+	t.Setenv("GROK_SANDBOX", "strict")
+	cfg, err = Load(path)
+	if err != nil || cfg.Sandbox.Profile != "strict" {
+		t.Fatalf("strict environment profile=%q err=%v", cfg.Sandbox.Profile, err)
+	}
 }
 
 func TestValidateRejectsUnknownSandboxProfile(t *testing.T) {
 	cfg := Config{
 		APIKey: "key", Model: "model", Backend: "responses", BaseURL: "https://api.example",
 		MaxSteps: 1, ContextWindow: 1, Toolset: ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}},
-		Sandbox: SandboxConfig{Profile: "strict"},
+		Sandbox: SandboxConfig{Profile: "unknown"},
 	}
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "sandbox profile") {
 		t.Fatalf("err=%v", err)

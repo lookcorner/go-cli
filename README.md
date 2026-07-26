@@ -1564,11 +1564,15 @@ monitor, legacy shell, and subagent shell processes under macOS Seatbelt or
 Linux bubblewrap: reads remain available, while writes are limited to the
 workspace, temporary directories, and `GROK_HOME` (or `~/.grok`).
 `--sandbox read-only` removes workspace writes. The same value can be set with
-`GROK_SANDBOX` or `[sandbox] profile = "workspace"`; requesting a sandbox fails
-closed when the platform helper is unavailable. This first sandbox boundary
-covers spawned shell processes, not the parent Gork process, MCP/LSP servers,
-or in-process network clients. Approval and the file tools' workspace/symlink
-checks remain independent safety boundaries.
+`GROK_SANDBOX` or `[sandbox] profile = "workspace"`. On Linux,
+`--sandbox strict` also limits reads to the workspace, Gork state, temporary
+directories, and required system runtime paths; `read-only` and `strict` also
+isolate child process networking. Strict mode currently requires Linux
+bubblewrap and fails closed on macOS. Requesting any sandbox fails closed when
+its platform helper is unavailable. This boundary covers spawned shell
+processes, not the parent Gork process, MCP/LSP servers, or in-process network
+clients. Approval and the file tools' workspace/symlink checks remain
+independent safety boundaries.
 
 `monitor` runs a background command whose stdout is delivered as real-time,
 debounced events. It applies the reference line/batch limits, token-bucket rate

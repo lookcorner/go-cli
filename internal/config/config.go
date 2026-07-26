@@ -2636,8 +2636,8 @@ func (c Config) Validate() error {
 	if c.Backend != "responses" && c.Backend != "chat_completions" && c.Backend != "anthropic_messages" {
 		return fmt.Errorf("unsupported backend %q: use responses, chat_completions, or anthropic_messages", c.Backend)
 	}
-	if c.Sandbox.Profile != "" && c.Sandbox.Profile != "off" && c.Sandbox.Profile != "workspace" && c.Sandbox.Profile != "read-only" {
-		return errors.New("sandbox profile must be off, workspace, or read-only")
+	if c.Sandbox.Profile != "" && c.Sandbox.Profile != "off" && c.Sandbox.Profile != "workspace" && c.Sandbox.Profile != "read-only" && c.Sandbox.Profile != "strict" {
+		return errors.New("sandbox profile must be off, workspace, read-only, or strict")
 	}
 	if c.BaseURL == "" {
 		return errors.New("missing API base URL")
