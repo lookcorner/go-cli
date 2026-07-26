@@ -103,6 +103,7 @@ type Client struct {
 	httpClient        *http.Client
 	reverse           ReverseCall
 	headers           map[string]string
+	auth              *httpAuthState
 	sessionID         string
 	selectedProtocol  string
 	resourceSubscribe bool

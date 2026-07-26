@@ -280,7 +280,22 @@ func (m *model) handleMCPKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		state.refresh(m.runner)
 		m.status = "MCP filter: " + []string{"all", "enabled", "disabled"}[state.filter]
 	case strings.EqualFold(key.Text, "i"):
-		state.err = "OAuth is not supported for local MCP servers"
+		if items == 0 {
+			break
+		}
+		server := state.servers[state.selected]
+		if strings.TrimSpace(server.URL) == "" {
+			state.err = "OAuth is not supported for local MCP servers"
+			break
+		}
+		if m.runner.AuthenticateMCPServer == nil {
+			state.err = "MCP OAuth enrollment is unavailable"
+			break
+		}
+		state.busy, state.err = true, ""
+		return m, runMCPAction("authenticated", func(ctx context.Context) error {
+			return m.runner.AuthenticateMCPServer(ctx, server.Name)
+		}, m.ctx)
 	}
 	return m, nil
 }

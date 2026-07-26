@@ -499,14 +499,18 @@ type PruningConfig struct {
 }
 
 type MCPServerConfig struct {
-	Command           string            `json:"command" toml:"command"`
-	Args              []string          `json:"args,omitempty" toml:"args"`
-	Env               map[string]string `json:"env,omitempty" toml:"env"`
-	URL               string            `json:"url,omitempty" toml:"url"`
-	Type              string            `json:"type,omitempty" toml:"type"`
-	Headers           map[string]string `json:"headers,omitempty" toml:"headers"`
-	BearerTokenEnvVar string            `json:"bearer_token_env_var,omitempty" toml:"bearer_token_env_var"`
-	Enabled           *bool             `json:"enabled,omitempty" toml:"enabled"`
+	Command                 string            `json:"command" toml:"command"`
+	Args                    []string          `json:"args,omitempty" toml:"args"`
+	Env                     map[string]string `json:"env,omitempty" toml:"env"`
+	URL                     string            `json:"url,omitempty" toml:"url"`
+	Type                    string            `json:"type,omitempty" toml:"type"`
+	Headers                 map[string]string `json:"headers,omitempty" toml:"headers"`
+	BearerTokenEnvVar       string            `json:"bearer_token_env_var,omitempty" toml:"bearer_token_env_var"`
+	OAuthClientID           string            `json:"oauth_client_id,omitempty" toml:"oauth_client_id"`
+	OAuthClientSecretEnvVar string            `json:"oauth_client_secret_env_var,omitempty" toml:"oauth_client_secret_env_var"`
+	OAuthScopes             []string          `json:"oauth_scopes,omitempty" toml:"oauth_scopes"`
+	OAuthCallbackPort       *uint16           `json:"oauth_callback_port,omitempty" toml:"oauth_callback_port"`
+	Enabled                 *bool             `json:"enabled,omitempty" toml:"enabled"`
 }
 
 type LSPServerConfig struct {

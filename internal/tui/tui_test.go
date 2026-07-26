@@ -3031,6 +3031,30 @@ func TestMCPModalToolsReloadAndFilter(t *testing.T) {
 	}
 }
 
+func TestMCPModalAuthenticatesRemoteServer(t *testing.T) {
+	var authName string
+	runner := &agent.Runner{
+		MCPServerCatalog: func() []mcppkg.ServerConfig {
+			return []mcppkg.ServerConfig{{Name: "remote", URL: "https://mcp.example/rpc"}}
+		},
+		AuthenticateMCPServer: func(_ context.Context, name string) error {
+			authName = name
+			return nil
+		},
+	}
+	m := &model{ctx: context.Background(), runner: runner, width: 80, height: 20, mcp: newMCPModal(runner)}
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: 'i', Text: "i"}))
+	m = updated.(*model)
+	if command == nil {
+		t.Fatal("oauth enroll command is nil")
+	}
+	updated, _ = m.Update(command())
+	m = updated.(*model)
+	if authName != "remote" || m.mcp.err != "" {
+		t.Fatalf("authName=%q err=%q status=%q", authName, m.mcp.err, m.status)
+	}
+}
+
 func TestFeedbackCommandUsesLocalSubmissionWithoutModelTurn(t *testing.T) {
 	var saved []session.UserFeedback
 	runner := &agent.Runner{ModelID: "current-profile", Model: "current-model", SubmitFeedback: func(feedback session.UserFeedback) error {
