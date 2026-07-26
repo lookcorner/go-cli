@@ -1421,11 +1421,12 @@ func TestSettingsVoiceLanguageIsCapabilityGatedAndRollsBack(t *testing.T) {
 	withVoice := &model{
 		width: 60, height: 16,
 		voiceClient:          fakeVoiceStarter{},
+		voiceKeybindEnabled:  true,
 		voiceLanguage:        "en",
-		settings:             &settingsState{selected: settingsCount},
+		settings:             &settingsState{selected: settingsCount + 1},
 		persistVoiceLanguage: func(value string) error { persisted = append(persisted, value); return nil },
 	}
-	if withVoice.settingsCount() != settingsCount+1 || !strings.Contains(withVoice.settingsContent(), "Voice language: en") {
+	if withVoice.settingsCount() != settingsCount+2 || !strings.Contains(withVoice.settingsContent(), "Voice language: en") {
 		t.Fatalf("voice setting missing: count=%d content=%q", withVoice.settingsCount(), withVoice.settingsContent())
 	}
 	updated, command := withVoice.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
@@ -1447,7 +1448,7 @@ func TestSettingsVoiceCaptureModeRequiresKeyReleasesAndRollsBack(t *testing.T) {
 		width: 60, height: 16,
 		voiceClient:      fakeVoiceStarter{},
 		voiceCaptureMode: "hold",
-		settings:         &settingsState{selected: settingsCount},
+		settings:         &settingsState{selected: settingsCount + 1},
 	}
 	if strings.Contains(m.settingsContent(), "Voice capture:") {
 		t.Fatal("voice capture setting shown without key releases")
@@ -1456,7 +1457,7 @@ func TestSettingsVoiceCaptureModeRequiresKeyReleasesAndRollsBack(t *testing.T) {
 	var persisted string
 	m.voiceKeyReleases = true
 	m.persistVoiceMode = func(value string) error { persisted = value; return nil }
-	if m.settingsCount() != settingsCount+2 || !strings.Contains(m.settingsContent(), "Voice capture: hold") {
+	if m.settingsCount() != settingsCount+3 || !strings.Contains(m.settingsContent(), "Voice capture: hold") {
 		t.Fatalf("count=%d content=%q", m.settingsCount(), m.settingsContent())
 	}
 	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
@@ -1470,6 +1471,35 @@ func TestSettingsVoiceCaptureModeRequiresKeyReleasesAndRollsBack(t *testing.T) {
 	m = updated.(*model)
 	if command != nil || m.voiceCaptureMode != "toggle" || m.settings.err != "read only" || m.status != "setting update failed" {
 		t.Fatalf("rollback mode=%q err=%q status=%q", m.voiceCaptureMode, m.settings.err, m.status)
+	}
+}
+
+func TestSettingsVoiceShortcutTogglesAndRollsBack(t *testing.T) {
+	var persisted []bool
+	m := &model{
+		width: 60, height: 16,
+		voiceClient:         fakeVoiceStarter{},
+		voiceKeybindEnabled: true,
+		settings:            &settingsState{selected: settingsCount},
+		persistVoiceKeybind: func(enabled bool) error {
+			persisted = append(persisted, enabled)
+			return nil
+		},
+	}
+	if m.settingsCount() != settingsCount+2 || !strings.Contains(m.settingsContent(), "Voice shortcut: on") {
+		t.Fatalf("count=%d content=%q", m.settingsCount(), m.settingsContent())
+	}
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.voiceKeybindEnabled || len(persisted) != 1 || persisted[0] || m.status != "settings updated" {
+		t.Fatalf("enabled=%v persisted=%v status=%q", m.voiceKeybindEnabled, persisted, m.status)
+	}
+
+	m.persistVoiceKeybind = func(bool) error { return errors.New("read only") }
+	updated, command = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.voiceKeybindEnabled || m.settings.err != "read only" || m.status != "setting update failed" {
+		t.Fatalf("enabled=%v err=%q status=%q", m.voiceKeybindEnabled, m.settings.err, m.status)
 	}
 }
 
@@ -1523,15 +1553,19 @@ func TestSettingsDynamicRowsKeepPlanBeforeVoice(t *testing.T) {
 		width: 60, height: 16,
 		runner:               &agent.Runner{Tools: registry},
 		voiceClient:          fakeVoiceStarter{},
+		voiceKeybindEnabled:  true,
 		voiceLanguage:        "en",
-		settings:             &settingsState{selected: settingsCount + 1},
+		settings:             &settingsState{selected: settingsCount + 2},
 		persistVoiceLanguage: func(value string) error { persisted = value; return nil },
 	}
-	if m.settingsCount() != settingsCount+2 {
+	if m.settingsCount() != settingsCount+3 {
 		t.Fatalf("settings count=%d", m.settingsCount())
 	}
 	content := m.settingsContent()
-	if plan, voice := strings.Index(content, "Plan mode: off"), strings.Index(content, "Voice language: en"); plan < 0 || voice < plan {
+	plan := strings.Index(content, "Plan mode: off")
+	shortcut := strings.Index(content, "Voice shortcut: on")
+	voice := strings.Index(content, "Voice language: en")
+	if plan < 0 || shortcut < plan || voice < shortcut {
 		t.Fatalf("dynamic row order=%q", content)
 	}
 	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))

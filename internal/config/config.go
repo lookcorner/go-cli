@@ -268,6 +268,7 @@ type UIConfig struct {
 	CursorBlink               *bool                `json:"cursor_blink,omitempty"`
 	VoiceCaptureMode          string               `json:"voice_capture_mode"`
 	VoiceSTTLanguage          string               `json:"voice_stt_language"`
+	VoiceKeybindEnabled       bool                 `json:"voice_keybind_enabled"`
 	PermissionMode            string               `json:"permission_mode"`
 	Notifications             NotificationsConfig  `json:"notifications"`
 }
@@ -636,6 +637,7 @@ type fileUIConfig struct {
 	CursorBlink                  *bool                    `json:"cursor_blink,omitempty" toml:"cursor_blink"`
 	VoiceCaptureMode             *string                  `json:"voice_capture_mode,omitempty" toml:"voice_capture_mode"`
 	VoiceSTTLanguage             *string                  `json:"voice_stt_language,omitempty" toml:"voice_stt_language"`
+	VoiceKeybindEnabled          *bool                    `json:"voice_keybind_enabled,omitempty" toml:"voice_keybind_enabled"`
 	PermissionMode               any                      `json:"permission_mode,omitempty" toml:"permission_mode"`
 	ApprovalMode                 any                      `json:"approval_mode,omitempty" toml:"approval_mode"`
 	Yolo                         any                      `json:"yolo,omitempty" toml:"yolo"`
@@ -903,7 +905,7 @@ func Load(path string) (Config, error) {
 		CancelRewindEnabled:         true,
 		Toolset:                     ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}, Bash: BashConfig{TimeoutSeconds: 120, OutputByteLimit: 20000}},
 		Goal:                        GoalConfig{VerifierCount: 3, ClassifierMaxRuns: 10, ReverifyAfter: 8},
-		UI:                          UIConfig{MaxThoughtsWidth: 120, Theme: "groknight", AutoDarkTheme: "groknight", AutoLightTheme: "grokday", HunkTrackerMode: "agent_only", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, PageFlipOnSend: true, ShowThinkingBlocks: true, DisplayRefresh: DisplayRefreshConfig{ProbeEnabled: true, FloorMS: 8, CeilingMS: 16, MinHz: 55, MaxHz: 165}, ScrollSpeed: 50, ScrollMode: "auto", DefaultSelectedPermission: "always_allow_all_sessions", GroupToolVerbs: true, PromptSuggestions: true, ContextualHints: Hints{Undo: true, PlanMode: true, ImageInput: true, SendNow: true, SmallScreen: true, WordSelect: true}, VoiceCaptureMode: "hold", VoiceSTTLanguage: "en", PermissionMode: "ask", Notifications: NotificationsConfig{Method: "auto", Condition: "unfocused", IdleThresholdSecs: 3, Events: []string{"turn_complete", "approval_required"}, ProgressBar: true, SleepPrevention: true, Title: NotificationTitleConfig{Enabled: true, Items: []string{"action-required", "spinner", "activity", "session-name", "grok"}}}},
+		UI:                          UIConfig{MaxThoughtsWidth: 120, Theme: "groknight", AutoDarkTheme: "groknight", AutoLightTheme: "grokday", HunkTrackerMode: "agent_only", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, PageFlipOnSend: true, ShowThinkingBlocks: true, DisplayRefresh: DisplayRefreshConfig{ProbeEnabled: true, FloorMS: 8, CeilingMS: 16, MinHz: 55, MaxHz: 165}, ScrollSpeed: 50, ScrollMode: "auto", DefaultSelectedPermission: "always_allow_all_sessions", GroupToolVerbs: true, PromptSuggestions: true, ContextualHints: Hints{Undo: true, PlanMode: true, ImageInput: true, SendNow: true, SmallScreen: true, WordSelect: true}, VoiceCaptureMode: "hold", VoiceSTTLanguage: "en", VoiceKeybindEnabled: true, PermissionMode: "ask", Notifications: NotificationsConfig{Method: "auto", Condition: "unfocused", IdleThresholdSecs: 3, Events: []string{"turn_complete", "approval_required"}, ProgressBar: true, SleepPrevention: true, Title: NotificationTitleConfig{Enabled: true, Items: []string{"action-required", "spinner", "activity", "session-name", "grok"}}}},
 		Dashboard:                   DashboardConfig{Enabled: true, Grouping: "state"},
 		Sandbox:                     SandboxConfig{Profile: "off"},
 		Pruning:                     PruningConfig{Enabled: true, KeepLastNTurns: 3, SoftTrimThreshold: 4000, SoftTrimHead: 1500, SoftTrimTail: 1500, HardClearAgeTurns: 10},
@@ -1269,6 +1271,9 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.UI.PageFlipOnSend != nil {
 		cfg.UI.PageFlipOnSend = *disk.UI.PageFlipOnSend
+	}
+	if disk.UI.VoiceKeybindEnabled != nil {
+		cfg.UI.VoiceKeybindEnabled = *disk.UI.VoiceKeybindEnabled
 	}
 	if disk.UI.ShowThinkingBlocks != nil {
 		cfg.UI.ShowThinkingBlocks = *disk.UI.ShowThinkingBlocks

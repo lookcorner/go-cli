@@ -86,7 +86,13 @@ func (m *model) applySetting(selected int) {
 		switch {
 		case selected == fixedCount && m.planModeAvailable():
 			state.err = errorString(m.setPlanMode(!m.planMode))
-		case selected == fixedCount+m.planSettingCount() && m.voiceModeSettingAvailable():
+		case selected == fixedCount+m.planSettingCount() && m.voiceClient != nil:
+			previous := m.voiceKeybindEnabled
+			m.voiceKeybindEnabled = !previous
+			if m.persistVoiceKeybind != nil {
+				state.err = persistSetting(m.persistVoiceKeybind(m.voiceKeybindEnabled), func() { m.voiceKeybindEnabled = previous })
+			}
+		case selected == fixedCount+m.planSettingCount()+1 && m.voiceModeSettingAvailable():
 			previous := m.voiceCaptureMode
 			if previous == "hold" {
 				m.voiceCaptureMode = "toggle"
@@ -96,7 +102,7 @@ func (m *model) applySetting(selected int) {
 			if m.persistVoiceMode != nil {
 				state.err = persistSetting(m.persistVoiceMode(m.voiceCaptureMode), func() { m.voiceCaptureMode = previous })
 			}
-		case selected == fixedCount+m.planSettingCount()+m.voiceModeSettingCount() && m.voiceClient != nil:
+		case selected == fixedCount+m.planSettingCount()+1+m.voiceModeSettingCount() && m.voiceClient != nil:
 			previous := m.voiceLanguage
 			m.voiceLanguage = nextVoiceLanguage(previous)
 			if m.persistVoiceLanguage != nil {
@@ -574,6 +580,7 @@ func (m *model) settingsContent() string {
 		lines = append(lines, settingLine("Plan mode", m.planMode))
 	}
 	if m.voiceClient != nil {
+		lines = append(lines, settingLine("Voice shortcut", m.voiceKeybindEnabled))
 		if m.voiceModeSettingAvailable() {
 			lines = append(lines, fmt.Sprintf("Voice capture: %s", canonicalVoiceCaptureMode(m.voiceCaptureMode)))
 		}
@@ -614,7 +621,7 @@ func (m *model) modelOptionName(id string) string {
 func (m *model) settingsCount() int {
 	count := m.fixedSettingsCount() + m.planSettingCount()
 	if m.voiceClient != nil {
-		count += 1 + m.voiceModeSettingCount()
+		count += 2 + m.voiceModeSettingCount()
 	}
 	return count
 }

@@ -204,7 +204,9 @@ coordinate a single background leader spawn when `--leader` or
 `--no-leader` has highest precedence and keeps the direct ACP runtime.
 Voice dictation supports the reference default `hold` capture mode on terminals
 with key-release reporting, runtime fallback to `toggle` elsewhere, and
-rollback-safe live `/settings` persistence of `[ui].voice_capture_mode`.
+rollback-safe live `/settings` persistence of `[ui].voice_capture_mode` plus
+the default-on `[ui].voice_keybind_enabled` Ctrl-Space/F8 gate without disabling
+`/voice`.
 The TUI accepts Bubble Tea v2 bracketed-paste events as one undoable edit,
 preserves Unicode, multiline and trailing-newline content, normalizes bare
 carriage returns, and suppresses typed-only contextual nudges for pasted text.

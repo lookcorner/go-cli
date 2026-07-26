@@ -941,6 +941,8 @@ type model struct {
 	voiceClient          voiceStarter
 	voiceCaptureMode     string
 	persistVoiceMode     func(string) error
+	voiceKeybindEnabled  bool
+	persistVoiceKeybind  func(bool) error
 	voiceKeyReleases     bool
 	voiceHoldOwned       bool
 	voiceLanguage        string
@@ -1133,6 +1135,8 @@ type UIOptions struct {
 	Voice                *voice.Client
 	VoiceCaptureMode     string
 	SetVoiceCaptureMode  func(string) error
+	VoiceKeybindEnabled  bool
+	SetVoiceKeybind      func(bool) error
 	VoiceLanguage        string
 	SetVoiceLanguage     func(string) error
 }
@@ -1360,6 +1364,8 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		voiceClient:          options.Voice,
 		voiceCaptureMode:     canonicalVoiceCaptureMode(options.VoiceCaptureMode),
 		persistVoiceMode:     options.SetVoiceCaptureMode,
+		voiceKeybindEnabled:  options.VoiceKeybindEnabled,
+		persistVoiceKeybind:  options.SetVoiceKeybind,
 		voiceLanguage:        options.VoiceLanguage,
 		persistVoiceLanguage: options.SetVoiceLanguage,
 		debug:                newDebugState(),
@@ -2734,6 +2740,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 	if isVoiceChord(stroke) {
+		if !m.voiceKeybindEnabled {
+			return m, nil
+		}
 		if m.voiceCaptureMode == "hold" && m.voiceKeyReleases {
 			if m.voiceHoldOwned {
 				return m, nil
@@ -6408,9 +6417,15 @@ func (m *model) View() tea.View {
 			hint = "Shift/Alt-Enter send · Enter newline · Ctrl-M single-line · Ctrl-Z undo"
 		}
 		if m.voiceStarting {
-			hint = "Connecting microphone · Ctrl-Space/F8 cancel"
+			hint = "Connecting microphone · /voice cancel"
+			if m.voiceKeybindEnabled {
+				hint = "Connecting microphone · Ctrl-Space/F8 cancel"
+			}
 		} else if m.voiceSession != nil {
-			hint = "Recording · Esc or Ctrl-Space/F8 stop"
+			hint = "Recording · Esc or /voice stop"
+			if m.voiceKeybindEnabled {
+				hint = "Recording · Esc or Ctrl-Space/F8 stop"
+			}
 		}
 		parts := m.slashMenuLines(width)
 		if len(m.promptImages) > 0 {

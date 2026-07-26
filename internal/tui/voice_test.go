@@ -155,7 +155,8 @@ func TestVoiceHoldModeStartsOnPressAndStopsOnRelease(t *testing.T) {
 	session := &fakeVoiceSession{events: make(chan voice.Event)}
 	m := &model{
 		ctx: context.Background(), runner: &agent.Runner{},
-		voiceClient: fakeVoiceStarter{session: session}, voiceCaptureMode: "hold", voiceKeyReleases: true,
+		voiceClient: fakeVoiceStarter{session: session}, voiceCaptureMode: "hold",
+		voiceKeybindEnabled: true, voiceKeyReleases: true,
 	}
 	updated, command := m.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyF8}))
 	m = updated.(*model)
@@ -178,7 +179,7 @@ func TestVoiceHoldModeFallsBackToToggleWithoutKeyReleases(t *testing.T) {
 	session := &fakeVoiceSession{events: make(chan voice.Event)}
 	m := &model{
 		ctx: context.Background(), runner: &agent.Runner{},
-		voiceClient: fakeVoiceStarter{session: session}, voiceCaptureMode: "hold",
+		voiceClient: fakeVoiceStarter{session: session}, voiceCaptureMode: "hold", voiceKeybindEnabled: true,
 	}
 	updated, command := m.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyF8}))
 	m = updated.(*model)
@@ -188,6 +189,30 @@ func TestVoiceHoldModeFallsBackToToggleWithoutKeyReleases(t *testing.T) {
 	m = updated.(*model)
 	if command != nil || session.stopped != 1 || m.voiceHoldOwned {
 		t.Fatalf("fallback command=%v stopped=%d owned=%v", command != nil, session.stopped, m.voiceHoldOwned)
+	}
+}
+
+func TestVoiceShortcutCanBeDisabledWithoutDisablingVoiceCommand(t *testing.T) {
+	session := &fakeVoiceSession{events: make(chan voice.Event)}
+	m := &model{
+		ctx: context.Background(), runner: &agent.Runner{},
+		voiceClient: fakeVoiceStarter{session: session}, voiceCaptureMode: "toggle",
+		width: 80, height: 20,
+	}
+	updated, command := m.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyF8}))
+	m = updated.(*model)
+	if command != nil || m.voiceStarting || m.voiceHoldOwned {
+		t.Fatalf("disabled shortcut command=%v starting=%v owned=%v", command != nil, m.voiceStarting, m.voiceHoldOwned)
+	}
+
+	m.setInput("/voice")
+	updated, command = m.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command == nil || !m.voiceStarting {
+		t.Fatalf("/voice command=%v starting=%v status=%q", command != nil, m.voiceStarting, m.status)
+	}
+	if view := stripUIANSI(m.View().Content); !strings.Contains(view, "/voice cancel") || strings.Contains(view, "Ctrl-Space/F8 cancel") {
+		t.Fatalf("disabled shortcut hint=%q", view)
 	}
 }
 

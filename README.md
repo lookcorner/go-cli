@@ -628,7 +628,9 @@ cancels the current turn with Ctrl-C, and presents write/Shell/MCP approval
 prompts inside the alternate screen. Shift-Tab toggles persisted Plan mode and
 shows a visible mode badge. `/always-approve` toggles automatic approval for
 otherwise unmatched tool actions while preserving explicit deny and ask rules.
-`/voice`, Ctrl-Space, or F8 toggles live voice dictation. Partial transcripts
+`/voice`, Ctrl-Space, or F8 toggles live voice dictation. The shortcut is
+enabled by default and can be changed live through `/settings` or
+`[ui].voice_keybind_enabled`; disabling it leaves `/voice` available. Partial transcripts
 appear above the composer and final text is inserted at the current cursor;
 Esc stops recording, while Enter waits for the trailing final and sends the
 completed prompt. Voice uses the active login or API key with xAI's

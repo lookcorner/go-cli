@@ -2679,6 +2679,30 @@ func TestPageFlipOnSendDefaultsAndPersists(t *testing.T) {
 	}
 }
 
+func TestVoiceKeybindDefaultsAndPersists(t *testing.T) {
+	tomlPath := filepath.Join(t.TempDir(), "config.toml")
+	cfg, err := Load(tomlPath)
+	if err != nil || !cfg.UI.VoiceKeybindEnabled {
+		t.Fatalf("default voice keybind=%v err=%v", cfg.UI.VoiceKeybindEnabled, err)
+	}
+	if err := UpdateVoiceKeybindEnabled(tomlPath, false); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(tomlPath)
+	if err != nil || cfg.UI.VoiceKeybindEnabled {
+		t.Fatalf("TOML voice keybind=%v err=%v", cfg.UI.VoiceKeybindEnabled, err)
+	}
+
+	jsonPath := filepath.Join(t.TempDir(), "config.json")
+	if err := UpdateVoiceKeybindEnabled(jsonPath, false); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(jsonPath)
+	if err != nil || cfg.UI.VoiceKeybindEnabled {
+		t.Fatalf("JSON voice keybind=%v err=%v", cfg.UI.VoiceKeybindEnabled, err)
+	}
+}
+
 // wantConfigPerm maps a Unix permission expectation to what the platform
 // reports; Windows ignores permission bits on create.
 func wantConfigPerm(unix os.FileMode) os.FileMode {
