@@ -238,6 +238,7 @@ func terminalFindings(getenv func(string) string, term, brand, color, multiplexe
 		findings = append(findings, "Apple Terminal doesn't support OSC 52, so clipboard copy over SSH is unavailable.\n    Run `gork wrap ssh <host>` on your local computer, or use a terminal that supports OSC 52. Gork also saves each copy to the backup file shown in the copy message.")
 	}
 	findings = append(findings, clipboardCaveatFindings(getenv, brand, ssh, clipboard, osc52)...)
+	findings = append(findings, clipboardDeliveryFindings(getenv, brand, ssh, osc52)...)
 	if !clipboard && !osc52 {
 		findings = append(findings, "No clipboard route is available; install a native clipboard tool or enable OSC 52.")
 	}
@@ -258,6 +259,39 @@ func clipboardCaveatFindings(getenv func(string) string, brand string, ssh, clip
 		findings = append(findings, "iTerm2 may block OSC 52 clipboard access.\n    In iTerm2, open Settings → General → Selection and turn on “Applications in terminal may access clipboard.” Grok can't read this setting, so check it there if copies don't paste.")
 	}
 	return findings
+}
+
+// clipboardDeliveryFindings mirrors reference clipboard.delivery-unverified for
+// SSH sessions where OSC 52 is the route but the outer brand is unknown.
+func clipboardDeliveryFindings(getenv func(string) string, brand string, ssh, osc52 bool) []string {
+	if !ssh || !osc52 || wrapSinkActive(getenv) {
+		return nil
+	}
+	if supportsOSC52Clipboard(getenv, brand) || isAppleTerminal(brand) {
+		return nil
+	}
+	return []string{"Grok can't verify this clipboard route across the remote boundary.\n    When you copy, Grok sends OSC 52 but can't confirm that the outer terminal accepted it. Each copy is also saved to a backup file; the copy message shows the path. If paste fails, run `gork wrap ssh <host>` on your local computer or use `/minimal`. For repeated SSH sessions, run `gork doctor fix ssh-wrap` on your local computer."}
+}
+
+func supportsOSC52Clipboard(getenv func(string) string, brand string) bool {
+	if osc52BrandSupported(normalizeBrandKey(brand)) {
+		return true
+	}
+	terminal := notify.DetectTerminal(func(name string) (string, bool) {
+		value := getenv(name)
+		return value, value != ""
+	})
+	return osc52BrandSupported(terminal.Brand)
+}
+
+func osc52BrandSupported(brand string) bool {
+	switch brand {
+	case "ghostty", "kitty", "wezterm", "alacritty", "foot", "rio", "windowsterminal",
+		"iterm", "iterm2", "itermapp", "vscode", "cursor", "windsurf", "zed":
+		return true
+	default:
+		return false
+	}
 }
 
 func wrapSinkActive(getenv func(string) string) bool {

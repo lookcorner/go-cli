@@ -362,6 +362,43 @@ func TestBuildSnapshotWarnsForVSCodeSSHNonASCII(t *testing.T) {
 	}
 }
 
+func TestBuildSnapshotWarnsForUnverifiedSSHClipboard(t *testing.T) {
+	env := map[string]string{
+		"TERM": "xterm-256color", "COLORTERM": "truecolor", "SSH_CONNECTION": "1 2 3 4",
+	}
+	snapshot := BuildSnapshot(func(key string) string { return env[key] }, func(string) (string, error) {
+		return "/bin/pbcopy", nil
+	}, "darwin")
+	joined := strings.Join(snapshot.Findings, "\n")
+	for _, want := range []string{
+		"can't verify this clipboard route across the remote boundary",
+		"gork wrap ssh", "gork doctor fix ssh-wrap", "`/minimal`",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("missing %q in %q", want, joined)
+		}
+	}
+	env["TERM_PROGRAM"] = "WezTerm"
+	snapshot = BuildSnapshot(func(key string) string { return env[key] }, func(string) (string, error) {
+		return "/bin/pbcopy", nil
+	}, "darwin")
+	joined = strings.Join(snapshot.Findings, "\n")
+	if strings.Contains(joined, "can't verify this clipboard route") {
+		t.Fatalf("known OSC 52 brand should not be unverified: %q", joined)
+	}
+	if !strings.Contains(joined, "gork doctor fix ssh-wrap") {
+		t.Fatalf("ssh-wrap should remain for WezTerm SSH: %q", joined)
+	}
+	env["GROK_OSC52_SINK"] = "1"
+	delete(env, "TERM_PROGRAM")
+	snapshot = BuildSnapshot(func(key string) string { return env[key] }, func(string) (string, error) {
+		return "/bin/pbcopy", nil
+	}, "darwin")
+	if strings.Contains(strings.Join(snapshot.Findings, "\n"), "can't verify this clipboard route") {
+		t.Fatalf("wrap sink should silence unverified delivery: %#v", snapshot.Findings)
+	}
+}
+
 func TestBuildSnapshotWarnsForLegacyVTENewline(t *testing.T) {
 	env := map[string]string{
 		"TERM": "xterm-256color", "COLORTERM": "truecolor", "VTE_VERSION": "7402",
