@@ -281,6 +281,11 @@ The default API base URL is `https://api.x.ai/v1`. Override it with
 `GORK_BASE_URL`, `--base-url`, or a config file. The default path matches Gork
 Build: `~/.grok/config.toml`.
 
+Agent runtimes also accept the reference endpoint flags
+`--xai-api-base-url URL` and `--cli-chat-proxy-base-url URL`. The first controls
+model inference; the second controls OAuth and auxiliary proxy services. Explicit
+CLI values take precedence over environment, file, managed, and remote settings.
+
 ```toml
 [models]
 default = "gork-default"
@@ -1121,7 +1126,7 @@ editor/IDE integrations:
 ```
 
 `gork agent stdio` is the reference command form and uses the same ACP runtime
-as `--acp`. It accepts model, reasoning, permission, workspace, session,
+as `--acp`. It accepts model, reasoning, permission, workspace, session, endpoint,
 folder-trust, memory, and capability flags before `stdio`. Repeatable
 `--plugin-dir DIR` arguments inject trusted process-local plugins at highest
 priority for direct stdio and WebSocket server runtimes; leader-backed sessions

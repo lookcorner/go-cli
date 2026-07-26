@@ -63,6 +63,7 @@ type options struct {
 	model              string
 	reasoningEffort    string
 	baseURL            string
+	proxyBaseURL       string
 	backend            string
 	system             string
 	rules              string
@@ -171,6 +172,7 @@ func parseRunOptions(args []string, stderr io.Writer) (options, *flag.FlagSet, e
 	flags.StringVar(&opts.reasoningEffort, "reasoning-effort", "", "reasoning effort: none, minimal, low, medium, high, or xhigh")
 	flags.StringVar(&opts.reasoningEffort, "effort", "", "reasoning effort")
 	flags.StringVar(&opts.baseURL, "base-url", "", "Responses-compatible API base URL")
+	flags.StringVar(&opts.proxyBaseURL, "cli-chat-proxy-base-url", "", "cli-chat-proxy base URL")
 	flags.StringVar(&opts.backend, "backend", "", "model API backend: responses, chat_completions, or anthropic_messages")
 	flags.StringVar(&opts.system, "system", "", "additional agent instructions")
 	flags.StringVar(&opts.system, "system-prompt-override", "", "override the agent system prompt")
@@ -1413,6 +1415,9 @@ func applyRunOverrides(cfg *config.Config, opts options) {
 	}
 	if opts.baseURL != "" {
 		cfg.BaseURL = strings.TrimRight(opts.baseURL, "/")
+	}
+	if opts.proxyBaseURL != "" {
+		cfg.ProxyBaseURL = strings.TrimRight(opts.proxyBaseURL, "/")
 	}
 	if opts.backend != "" {
 		cfg.Backend = opts.backend

@@ -84,15 +84,19 @@ func normalizeAgentArgs(args []string) ([]string, *agentServerOptions, error) {
 			}
 			mode = arg
 		case "-m", "--model", "--reasoning-effort", "--effort", "--config", "--cwd", "--workspace",
-			"--session-dir", "--allow", "--deny", "--permission-mode", "--plugin-dir":
+			"--session-dir", "--allow", "--deny", "--permission-mode", "--plugin-dir",
+			"--cli-chat-proxy-base-url", "--xai-api-base-url":
 			value, err := next()
 			if err != nil {
 				return nil, nil, err
 			}
-			if arg == "--plugin-dir" {
+			switch arg {
+			case "--plugin-dir":
 				server.pluginDirs = append(server.pluginDirs, value)
 				result = append(result, arg, value)
-			} else {
+			case "--xai-api-base-url":
+				result = append(result, "--base-url", value)
+			default:
 				result = append(result, arg, value)
 			}
 		case "--bind", "--secret":
@@ -120,10 +124,14 @@ func normalizeAgentArgs(args []string) ([]string, *agentServerOptions, error) {
 		case "--leader":
 			server.forceLeader = true
 		case "--reauth", "--reauthenticate", "--agent-profile",
-			"--grok-ws-origin", "--grok-ws-url", "--cli-chat-proxy-base-url", "--xai-api-base-url":
+			"--grok-ws-origin", "--grok-ws-url":
 			return nil, nil, fmt.Errorf("agent option %q is not implemented", cleanCLIText(arg))
 		default:
 			if agentValueOption(arg) {
+				if value, ok := strings.CutPrefix(arg, "--xai-api-base-url="); ok {
+					result = append(result, "--base-url="+value)
+					continue
+				}
 				if strings.HasPrefix(arg, "--bind=") {
 					serverOptionSet = true
 					server.bind = strings.TrimPrefix(arg, "--bind=")
@@ -210,7 +218,7 @@ func agentValueOption(arg string) bool {
 	for _, name := range []string{
 		"--model=", "--reasoning-effort=", "--effort=", "--config=", "--cwd=", "--workspace=",
 		"--session-dir=", "--allow=", "--deny=", "--permission-mode=", "--bind=", "--secret=",
-		"--plugin-dir=",
+		"--plugin-dir=", "--cli-chat-proxy-base-url=", "--xai-api-base-url=",
 	} {
 		if strings.HasPrefix(arg, name) && len(arg) > len(name) {
 			return true
@@ -269,6 +277,8 @@ Supported options:
       --cwd DIR, --workspace DIR
       --session-dir DIR
       --plugin-dir DIR      load a trusted plugin for this process (repeatable)
+      --cli-chat-proxy-base-url URL
+      --xai-api-base-url URL
       --trust
       --disable-web-search
       --no-plan, --no-subagents, --no-ask-user

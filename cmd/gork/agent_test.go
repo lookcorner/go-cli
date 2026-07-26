@@ -61,6 +61,13 @@ func TestNormalizeAgentArgs(t *testing.T) {
 	if err != nil || strings.Join(got, " ") != "--acp --plugin-dir one --plugin-dir=two" || strings.Join(server.pluginDirs, "|") != "one|two" {
 		t.Fatalf("plugin dirs normalized=%q options=%+v err=%v", got, server, err)
 	}
+	got, _, err = normalizeAgentArgs([]string{
+		"--cli-chat-proxy-base-url", "https://proxy.example/v1/",
+		"--xai-api-base-url=https://api.example/v1/", "serve",
+	})
+	if err != nil || strings.Join(got, " ") != "--acp --cli-chat-proxy-base-url https://proxy.example/v1/ --base-url=https://api.example/v1/" {
+		t.Fatalf("endpoint overrides normalized=%q err=%v", got, err)
+	}
 }
 
 func TestAgentRejectsUnimplementedModesAndOptions(t *testing.T) {
