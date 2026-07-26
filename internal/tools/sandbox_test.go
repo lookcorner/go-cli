@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -52,6 +53,25 @@ func TestSeatbeltPolicyScopesWorkspaceWrites(t *testing.T) {
 		!strings.Contains(workspacePolicy, "(allow file-read*)") ||
 		strings.Contains(readOnlyPolicy, `(subpath "/work")`) {
 		t.Fatalf("workspace policy:\n%s\nread-only policy:\n%s", workspacePolicy, readOnlyPolicy)
+	}
+}
+
+func TestStrictSeatbeltPolicyScopesReadsAndNetwork(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("seatbelt policies target macOS paths")
+	}
+	workspace := t.TempDir()
+	policy, err := seatbeltPolicy(SandboxStrict, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	realWorkspace, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(policy, "(allow file-read*)") || strings.Contains(policy, "(allow network*)") ||
+		!strings.Contains(policy, `(allow file-read* (literal "/") `) || !strings.Contains(policy, `(subpath "`+realWorkspace+`")`) {
+		t.Fatalf("strict policy:\n%s", policy)
 	}
 }
 
@@ -177,8 +197,8 @@ func TestReadOnlySandboxDeniesWorkspaceWrite(t *testing.T) {
 }
 
 func TestStrictSandboxAllowsWorkspaceAndDeniesHomeRead(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("strict sandbox currently requires Linux bubblewrap")
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("strict sandbox requires macOS Seatbelt or Linux bubblewrap")
 	}
 	if err := validateSandboxRuntime(SandboxStrict); err != nil {
 		t.Skip(err)
@@ -223,12 +243,25 @@ func TestStrictSandboxAllowsWorkspaceAndDeniesHomeRead(t *testing.T) {
 	}
 }
 
-func TestDarwinStrictSandboxFailsClosed(t *testing.T) {
+func TestDarwinStrictSandboxDeniesNetwork(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("macOS-specific")
 	}
-	if err := validateSandboxRuntime(SandboxStrict); err == nil || !strings.Contains(err.Error(), "unavailable") {
-		t.Fatalf("strict runtime error=%v", err)
+	if err := validateSandboxRuntime(SandboxStrict); err != nil {
+		t.Skip(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	address := listener.Addr().(*net.TCPAddr)
+	cmd, err := sandboxCommand(context.Background(), SandboxStrict, t.TempDir(), "/usr/bin/nc", "-z", "127.0.0.1", strconv.Itoa(address.Port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Run(); err == nil {
+		t.Fatal("strict Seatbelt allowed network access")
 	}
 }
 

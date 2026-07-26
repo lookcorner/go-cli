@@ -38,9 +38,6 @@ func validateSandboxRuntime(profile SandboxProfile) error {
 	}
 	switch runtime.GOOS {
 	case "darwin":
-		if profile == SandboxStrict {
-			return errors.New("strict sandbox requires Linux bubblewrap; macOS Seatbelt strict mode is unavailable")
-		}
 		if _, err := exec.LookPath("sandbox-exec"); err != nil {
 			return errors.New("sandbox profile requires sandbox-exec on macOS")
 		}
@@ -144,13 +141,24 @@ func seatbeltPolicy(profile SandboxProfile, workspace string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	readRule := `(allow file-read*)`
+	networkRule := `(allow network*)`
+	if profile == SandboxStrict {
+		readFilters, err := seatbeltSubpaths(sandboxReadablePaths(profile, workspace))
+		if err != nil {
+			return "", err
+		}
+		// dyld reads metadata from the root vnode while loading system binaries.
+		readRule = `(allow file-read* (literal "/") ` + strings.Join(readFilters, " ") + `)`
+		networkRule = ""
+	}
 	return `(version 1)
 (deny default)
 (allow process*)
-(allow file-read*)
+` + readRule + `
 (allow file-write* ` + strings.Join(writeFilters, " ") + `)
 (allow file-write* (literal "/dev/null") (literal "/dev/tty"))
-(allow network*)
+` + networkRule + `
 (allow sysctl-read)
 (allow mach-lookup)
 `, nil
@@ -220,9 +228,6 @@ func sandboxReadablePaths(profile SandboxProfile, workspace string) []string {
 	paths := []string{
 		"/usr", "/lib", "/lib64", "/bin", "/sbin", "/etc", "/dev", "/proc", "/sys",
 		"/tmp", "/run", "/var", "/System", "/Library", "/private", workspace,
-	}
-	if home, err := os.UserHomeDir(); err == nil {
-		paths = append(paths, filepath.Join(home, "Library"))
 	}
 	paths = append(paths, sandboxWritableMountPaths(profile, workspace)...)
 	seen := make(map[string]bool, len(paths))
