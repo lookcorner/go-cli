@@ -2894,8 +2894,29 @@ func TestCopyAssistantMessageUsesSessionTranscript(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	m := &model{ctx: context.Background(), runner: &agent.Runner{SessionPath: logger.Path()}, status: "ready"}
-	m.setInput("/copy 2")
+	runner := &agent.Runner{SessionPath: logger.Path()}
+	for _, test := range []struct {
+		name string
+		n    int
+		want string
+	}{
+		{name: "latest", n: 1, want: "latest response"},
+		{name: "second latest", n: 2, want: "first response"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			message := runCopy(runner, test.n)().(copyDoneEvent)
+			if message.err != nil || message.text != test.want {
+				t.Fatalf("copy %d text=%q err=%v", test.n, message.text, message.err)
+			}
+		})
+	}
+	message := runCopy(runner, 3)().(copyDoneEvent)
+	if message.err == nil || message.text != "" {
+		t.Fatalf("out-of-range copy text=%q err=%v", message.text, message.err)
+	}
+
+	m := &model{ctx: context.Background(), runner: runner, status: "ready"}
+	m.setInput("/copy")
 	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)
 	if command == nil || !m.running || m.status != "copying response" {
@@ -2908,6 +2929,12 @@ func TestCopyAssistantMessageUsesSessionTranscript(t *testing.T) {
 	}
 	if _, err := copyMessageNumber("0"); err == nil {
 		t.Fatal("zero copy index was accepted")
+	}
+	if _, err := copyMessageNumber("invalid"); err == nil {
+		t.Fatal("non-numeric copy index was accepted")
+	}
+	if n, err := copyMessageNumber(""); err != nil || n != 1 {
+		t.Fatalf("default copy index=%d err=%v", n, err)
 	}
 	if message := runCopy(&agent.Runner{}, 1)(); message.(copyDoneEvent).err == nil {
 		t.Fatal("copy without a session path was accepted")
@@ -2923,9 +2950,25 @@ func TestCopyAssistantMessageUsesSessionTranscript(t *testing.T) {
 	if err := empty.Append("model_response", map[string]any{"response_id": "empty", "tool_call_count": 0}); err != nil {
 		t.Fatal(err)
 	}
-	message := runCopy(&agent.Runner{SessionPath: empty.Path()}, 1)().(copyDoneEvent)
+	message = runCopy(&agent.Runner{SessionPath: empty.Path()}, 1)().(copyDoneEvent)
 	if message.err != nil || message.text != "" {
 		t.Fatalf("empty copy text=%q err=%v", message.text, message.err)
+	}
+}
+
+func TestCopyAssistantMessageIsUnavailableInMinimalMode(t *testing.T) {
+	m := &model{ctx: context.Background(), runner: &agent.Runner{}, minimal: true, status: "ready"}
+	if m.slashCommandAvailable("copy") {
+		t.Fatal("copy was advertised in minimal mode")
+	}
+	m.setInput("/copy")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command == nil || m.running || m.status != "copy unavailable" {
+		t.Fatalf("command=%v running=%v status=%q", command != nil, m.running, m.status)
+	}
+	if !strings.Contains(m.transcript.String(), "/copy is not available in minimal mode") {
+		t.Fatalf("transcript=%q", m.transcript.String())
 	}
 }
 

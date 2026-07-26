@@ -246,6 +246,8 @@ func (m *model) slashCommandAvailable(name string) bool {
 		return m.minimal
 	case "expand":
 		return m.minimal
+	case "copy":
+		return !m.minimal
 	case "always-approve":
 		return m.bridge != nil
 	case "auto":

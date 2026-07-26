@@ -3327,6 +3327,11 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if fields[0] == "/copy" {
+			if m.minimal {
+				m.appendSystem("/copy is not available in minimal mode")
+				m.status = "copy unavailable"
+				return m, nil
+			}
 			n, err := copyMessageNumber(strings.TrimSpace(strings.TrimPrefix(prompt, "/copy")))
 			if err != nil {
 				m.status = err.Error()
