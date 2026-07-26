@@ -187,8 +187,19 @@ func (s *Scheduler) Create(interval time.Duration, prompt string, recurring, dur
 		return ScheduledTask{}, fmt.Errorf("maximum of %d scheduled tasks reached", maximumScheduledTasks)
 	}
 	s.tasks = append(s.tasks, task)
+	firedTask := task
+	remove := false
+	if fireImmediately {
+		firedTask.LastFiredAt = &now
+		remove = !task.Recurring || task.ExpiresAt != nil && !now.Before(*task.ExpiresAt)
+		if remove {
+			s.tasks = s.tasks[:len(s.tasks)-1]
+		} else {
+			s.tasks[len(s.tasks)-1] = firedTask
+		}
+	}
 	err := s.saveLocked()
-	if err != nil {
+	if err != nil && !remove {
 		s.tasks = s.tasks[:len(s.tasks)-1]
 	}
 	s.mu.Unlock()
@@ -197,7 +208,10 @@ func (s *Scheduler) Create(interval time.Duration, prompt string, recurring, dur
 	}
 	s.emit(schedulerEvent{kind: "created", created: scheduledPayload(task)})
 	if fireImmediately {
-		s.fireDue()
+		s.emit(schedulerEvent{kind: "fired", created: scheduledPayload(firedTask)})
+		if remove {
+			s.emit(schedulerEvent{kind: "removed", taskID: task.ID})
+		}
 	}
 	s.signal()
 	return task, nil

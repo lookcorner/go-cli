@@ -14,6 +14,7 @@ import (
 type recordingSchedulerObserver struct {
 	mu      sync.Mutex
 	created []ScheduledTaskCreated
+	events  []string
 	fired   chan ScheduledTaskFired
 	removed chan string
 }
@@ -21,14 +22,21 @@ type recordingSchedulerObserver struct {
 func (o *recordingSchedulerObserver) ScheduledTaskCreated(event ScheduledTaskCreated) {
 	o.mu.Lock()
 	o.created = append(o.created, event)
+	o.events = append(o.events, "created")
 	o.mu.Unlock()
 }
 
 func (o *recordingSchedulerObserver) ScheduledTaskFired(event ScheduledTaskFired) {
+	o.mu.Lock()
+	o.events = append(o.events, "fired")
+	o.mu.Unlock()
 	o.fired <- event
 }
 
 func (o *recordingSchedulerObserver) ScheduledTaskRemoved(taskID string) {
+	o.mu.Lock()
+	o.events = append(o.events, "removed")
+	o.mu.Unlock()
 	o.removed <- taskID
 }
 
@@ -107,6 +115,12 @@ func TestSchedulerToolsFireAndRemoveOneShot(t *testing.T) {
 	listed, err := (&schedulerListTool{scheduler: scheduler}).Execute(context.Background(), nil)
 	if err != nil || listed != `{"tasks":[]}` {
 		t.Fatalf("list=%s err=%v", listed, err)
+	}
+	observer.mu.Lock()
+	events := strings.Join(observer.events, ",")
+	observer.mu.Unlock()
+	if events != "created,fired,removed" {
+		t.Fatalf("scheduler events=%s", events)
 	}
 }
 
