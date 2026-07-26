@@ -871,6 +871,7 @@ type model struct {
 	turnStarted         time.Time
 	turnStatusTicking   bool
 	parkedWait          *parkedWaitState
+	runningToolActivity string
 	approval            *approvalEvent
 	cancelTurn          *cancelTurnState
 	cancelSubagents     string
@@ -1885,6 +1886,7 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case toolStartedEvent:
 		m.inFlightPrompt = nil
 		m.finishThought()
+		m.runningToolActivity = toolActivityLabel(msg.call)
 		m.status = "tool running: " + msg.call.Name
 		if startsParkedWait(msg.call) {
 			m.finishToolVerbGroup()
@@ -1894,6 +1896,7 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(waitForBridge(m.bridge), m.ensureTurnStatusTick())
 	case toolFinishedEvent:
 		m.inFlightPrompt = nil
+		m.runningToolActivity = ""
 		m.finishParkedWait(msg.call)
 		stopped := m.stopFollow
 		before := m.transcriptGrowthAnchor()
@@ -1967,6 +1970,7 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.running = false
 		m.turnStarted = time.Time{}
 		m.parkedWait = nil
+		m.runningToolActivity = ""
 		m.turnCancel = nil
 		m.cancelTurn = nil
 		m.transcript.WriteString("\n")
@@ -4731,6 +4735,8 @@ func (m *model) titleState() notify.TitleState {
 		state.Activity = "Waiting"
 	case m.thoughtOpen:
 		state.Activity = "Thinking"
+	case m.runningToolActivity != "":
+		state.Activity = m.runningToolActivity
 	case m.running:
 		state.Activity = "Responding"
 	}
@@ -5828,6 +5834,7 @@ func (m *model) beginTurn(prompt string) {
 func (m *model) beginTurnDisplay(prompt string, displayTexts []string) {
 	m.promptSerial++
 	m.parkedWait = nil
+	m.runningToolActivity = ""
 	m.clearPromptSuggestion()
 	m.appendPromptTranscriptDisplay(prompt, displayTexts)
 	m.status = "thinking"

@@ -328,8 +328,9 @@ cannot escape the OSC sequence, emitting only on change, and resetting to `gork`
 at exit. The spinner and the half-second `⚠ Action Required` blink animate on a
 250-millisecond tick that is only armed while a turn runs or a prompt waits
 unfocused; a focused terminal shows the label statically. Activity reports
-`Thinking`, `Waiting`, and `Responding`; the reference's per-tool
-`Running: <tool>` detail is not sourced yet. `task_complete` fires when a
+`Thinking`, `Waiting`, per-tool `Running: <tool>` (or a description subject with
+an ellipsis when tool input provides `description`), and `Responding` with
+parked-wait then thinking then tool then responding priority. `task_complete` fires when a
 background subagent finishes, successfully or not, while foreground children stay
 silent because the turn itself already reports. `session_recap` remains.
 

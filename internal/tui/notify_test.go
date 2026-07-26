@@ -11,6 +11,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/notify"
 	"github.com/lookcorner/go-cli/internal/tools"
 )
@@ -240,9 +241,28 @@ func TestTerminalTitleTracksSessionState(t *testing.T) {
 	}
 
 	m.thoughtOpen = false
+	m.running = true
+	updated, _ = m.Update(toolStartedEvent{call: api.ToolCall{
+		Name: "shell", Arguments: []byte(`{"command":"cargo build"}`),
+	}})
+	m = updated.(*model)
+	if activity := m.titleState().Activity; activity != "Running: cargo build" {
+		t.Fatalf("tool activity=%q", activity)
+	}
+	m.Update(titleTickEvent{})
+	if got := titles(); len(got) < 3 || !strings.Contains(got[len(got)-1], "Running: cargo build") {
+		t.Fatalf("tool titles=%q", got)
+	}
+
+	updated, _ = m.Update(toolFinishedEvent{call: api.ToolCall{Name: "shell"}})
+	m = updated.(*model)
+	if m.runningToolActivity != "" || m.titleState().Activity != "Responding" {
+		t.Fatalf("after tool finish activity=%q runningTool=%q", m.titleState().Activity, m.runningToolActivity)
+	}
+
 	m.approval = &approvalEvent{action: "shell"}
 	m.Update(titleTickEvent{})
-	if got := titles(); len(got) != 3 || !strings.HasPrefix(got[2], "⚠ Action Required - ") {
+	if got := titles(); len(got) < 4 || !strings.HasPrefix(got[len(got)-1], "⚠ Action Required - ") {
 		t.Fatalf("approval titles=%q", got)
 	}
 
