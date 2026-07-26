@@ -1763,7 +1763,9 @@ newest running shell or ACP terminal child and reports exit `137` with signal
 `oom`. On Linux, enabling a sandbox profile also applies a best-effort
 parent-process Landlock FS allowlist (workspace/read-only/strict path sets);
 unsupported kernels warn and continue, and parent TCP stays open for model/MCP
-HTTP. Approval and
+HTTP. Sandboxed Linux shells additionally install a seccomp namespace lockdown
+inside the bubblewrap child so nested `unshare`/`setns`/namespace `clone`
+attempts fail. Approval and
 the file tools' workspace/symlink checks remain independent safety boundaries.
 
 `monitor` runs a background command whose stdout is delivered as real-time,

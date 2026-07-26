@@ -17,7 +17,7 @@ One-round doctor/wrap surface closed at `5c6557d`. Remaining gaps need
 |---|--------|-------------|---------|------------|
 | 1 | **MCP OAuth enrollment** | MCP | Unlocks authenticated remote MCP servers; user-visible | L (multi-PR) |
 | 2 | **Linux cgroups for shell** | Shell execution | Completes shell isolation story after wrap | L |
-| 3 | **Landlock + seccomp** | OS sandbox | Hardens existing bubblewrap/Seatbelt profiles | L (Landlock done; seccomp remain) |
+| 3 | **Landlock + seccomp** | OS sandbox | Hardens existing bubblewrap/Seatbelt profiles | L (Landlock + seccomp ns done; net remain) |
 | 4 | **Cloud ACP / conversations** | ACP | Large protocol surface; defer until local ACP stays green | XL |
 | 5 | **Remote relay / workspace hub** | Session / workspace | Depends on product decisions | XL |
 | 6 | **Vector memory** | Memory | Research + storage + retrieval | XL |
@@ -105,10 +105,11 @@ clear no-op on unsupported hosts.
 - [x] Parent-process Landlock FS allowlists on Linux for built-in profiles
       (`ApplyParentLandlock`, BestEffort warn+continue; no parent net restrict)
       on `compat/linux-landlock`.
+- [x] Per-child seccomp namespace lockdown inside Linux bwrap
+      (`__GROK_SECCOMP_NS__` helper; BPF unit-tested) on `compat/linux-seccomp`.
 
 ### Still open
 
-- [ ] Per-child seccomp namespace lockdown inside Linux bwrap
 - [ ] Child network seccomp for read-only/strict
 - [ ] Parent bwrap re-exec / hook write-deny (Rust-only edge paths)
 - [ ] Custom sandbox.toml profile Landlock parity
