@@ -940,6 +940,8 @@ viewport as the group grows. The setting applies immediately and defaults to
 group visible; its default `true` keeps the group header at the same screen row.
 Set `follow_indicator = "none"` to hide the centered `▼` shown below the
 transcript when the viewport is above the latest content; the default is `center`.
+Set `follow_by_overscroll = false` to prevent an extra downward scroll at the
+bottom from resuming automatic follow; it defaults to `true`.
 
 `[ui] cursor_blink = true` forces a blinking block cursor at TUI startup, while
 `false` forces a steady block. Leaving it unset preserves the terminal's cursor

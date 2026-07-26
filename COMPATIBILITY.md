@@ -266,7 +266,8 @@ same structured breakdown is returned by `x.ai/session/info`.
 
 Pager scroll compatibility includes default-on `[scrollback.scroll].anchor_on_fold`
 with reference-style minimal visibility scrolling when explicitly disabled, plus
-the default centered `follow_indicator` and its `none` opt-out.
+the default centered `follow_indicator`, its `none` opt-out, and configurable
+bottom overscroll follow restoration.
 
 Compatibility is verified with Go unit/integration tests and will additionally
 use captured protocol fixtures from the Rust implementation. A status is only

@@ -60,8 +60,8 @@ func TestTUIScrollbackSearchWorkflow(t *testing.T) {
 	press(tea.Key{Code: tea.KeyTab})
 	press(tea.Key{Code: '/', Text: "/"})
 	press(tea.Key{Code: 'n', Text: "needle"})
-	if m.scrollSearch == nil || len(m.scrollSearch.matches) != 2 || m.scrollSearch.current != 0 || m.scroll == 0 {
-		t.Fatalf("opened search=%#v scroll=%d", m.scrollSearch, m.scroll)
+	if m.scrollSearch == nil || len(m.scrollSearch.matches) != 2 || m.scrollSearch.current != 0 || m.scroll == 0 || !m.stopFollow {
+		t.Fatalf("opened search=%#v scroll=%d stopped=%v", m.scrollSearch, m.scroll, m.stopFollow)
 	}
 	view := m.View().Content
 	if !strings.Contains(view, "Search scrollback") || !strings.Contains(view, ansiSearchMatch+"needle") || !strings.Contains(view, "1/2") {

@@ -1176,6 +1176,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		startupTip := ""
 		anchorOnFold := true
 		followIndicator := "center"
+		followByOverscroll := true
 		respectManualFolds := false
 		if home, homeErr := config.PolicyHome(); homeErr == nil {
 			startupTip = tips.PickAndAdvance(cfg.Tips, home)
@@ -1185,6 +1186,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			if pagerScroll, loadErr := config.LoadPagerScroll(pagerPath); loadErr == nil {
 				anchorOnFold = pagerScroll.AnchorOnFold
 				followIndicator = pagerScroll.FollowIndicator
+				followByOverscroll = pagerScroll.FollowByOverscroll
 				respectManualFolds = pagerScroll.RespectManualFolds
 			}
 		}
@@ -1227,6 +1229,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			StartupTip:          startupTip,
 			DisableFoldAnchor:   !anchorOnFold,
 			HideFollowIndicator: followIndicator == "none",
+			DisableOverscroll:   !followByOverscroll,
 			RespectManualFolds:  respectManualFolds,
 			MaxThoughtsWidth:    cfg.UI.MaxThoughtsWidth,
 			MatchRefresh:        cfg.UI.DisplayRefresh.AutoCadenceEnabled,

@@ -833,6 +833,8 @@ type model struct {
 	width               int
 	height              int
 	scroll              int
+	stopFollow          bool
+	disableOverscroll   bool
 	scrollTail          int
 	scrollAnchor        *int
 	running             bool
@@ -1029,6 +1031,7 @@ type UIOptions struct {
 	StartupTip           string
 	DisableFoldAnchor    bool
 	HideFollowIndicator  bool
+	DisableOverscroll    bool
 	RespectManualFolds   bool
 	SetManualFolds       func(bool) error
 	MaxThoughtsWidth     int
@@ -1241,7 +1244,8 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		showTips: options.ShowTips, persistShowTips: options.SetShowTips, startupTip: options.StartupTip,
 		respectManualFolds: options.RespectManualFolds, persistManualFolds: options.SetManualFolds,
 		disableFoldAnchor: options.DisableFoldAnchor, hideFollowIndicator: options.HideFollowIndicator,
-		maxThoughtsWidth: normalizedThoughtWidth(options.MaxThoughtsWidth), persistThoughtWidth: options.SetMaxThoughtsWidth,
+		disableOverscroll: options.DisableOverscroll,
+		maxThoughtsWidth:  normalizedThoughtWidth(options.MaxThoughtsWidth), persistThoughtWidth: options.SetMaxThoughtsWidth,
 		matchRefresh: options.MatchRefresh, persistRefresh: options.SetMatchRefresh,
 		scrollLines: mouseWheelScrollLines, scrollSpeed: options.ScrollSpeed, persistScrollSpeed: options.SetScrollSpeed,
 		scrollInput: scrollInput{mode: options.ScrollMode}, persistScrollMode: options.SetScrollMode, persistScrollLines: options.SetScrollLines,
@@ -1498,15 +1502,9 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.finishThought()
 		m.selection = nil
 		m.selectionClick = selectionClickState{}
-		before := 0
-		if m.scroll > 0 {
-			before = len(renderMarkdownTheme(m.transcriptText(), m.transcriptRenderWidth(), false, m.colors()))
-		}
+		before := m.transcriptGrowthAnchor()
 		m.transcript.WriteString(msg.text)
-		if m.scroll > 0 {
-			after := len(renderMarkdownTheme(m.transcriptText(), m.transcriptRenderWidth(), false, m.colors()))
-			m.scroll += max(after-before, 0)
-		}
+		m.preserveTranscriptGrowth(before)
 		m.refreshScrollSearch()
 		return m, waitForBridge(m.bridge)
 	case thoughtEvent:
@@ -1514,15 +1512,9 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.finishToolVerbGroup()
 		m.finishCollapsedEditGroup()
 		if m.showThinking {
-			before := 0
-			if m.scroll > 0 {
-				before = len(renderMarkdownTheme(m.transcriptText(), m.transcriptRenderWidth(), false, m.colors()))
-			}
+			before := m.transcriptGrowthAnchor()
 			m.appendThought(msg.text)
-			if m.scroll > 0 {
-				after := len(renderMarkdownTheme(m.transcriptText(), m.transcriptRenderWidth(), false, m.colors()))
-				m.scroll += max(after-before, 0)
-			}
+			m.preserveTranscriptGrowth(before)
 			m.refreshScrollSearch()
 		}
 		return m, waitForBridge(m.bridge)
@@ -1804,7 +1796,13 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case toolFinishedEvent:
 		m.inFlightPrompt = nil
 		m.finishParkedWait(msg.call)
+		stopped := m.stopFollow
+		before := m.transcriptGrowthAnchor()
 		m.finishTool(msg)
+		m.preserveTranscriptGrowth(before)
+		if before >= 0 {
+			m.stopFollow = stopped
+		}
 		return m, waitForBridge(m.bridge)
 	case cancelSubagentsDoneEvent:
 		if len(msg.errors) > 0 {
@@ -1968,6 +1966,7 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.rewind = nil
 		m.scroll = 0
+		m.stopFollow = false
 		if m.inlineEdit != nil && m.inlineEdit.submitting {
 			return m, m.startInlineResubmit()
 		}
@@ -2469,6 +2468,7 @@ func (m *model) applyMouseScroll(lines int) (tea.Model, tea.Cmd) {
 	m.clearTranscriptAnchor()
 	before := m.scroll
 	m.scroll = max(0, m.scroll+lines)
+	m.updateFollowAfterScroll(lines, before)
 	m.debug.recordScroll("wheel", lines, before, m.scroll, m.maxTranscriptScroll(), m.contentHeight())
 	return m, nil
 }
@@ -3463,6 +3463,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			fmt.Fprintf(&m.transcript, "[Shell] $ %s\n", command)
 			m.status = "running shell command"
 			m.scroll = 0
+			m.stopFollow = false
 			return m, runShell(turnCtx, m.runner, command)
 		}
 		prompt, _ = tools.ExpandLoopCommand(prompt)
@@ -3519,6 +3520,7 @@ func (m *model) appendToolDisplay(text string) {
 	}
 	m.transcript.WriteString(strings.TrimSpace(text) + "\n")
 	m.scroll = 0
+	m.stopFollow = false
 }
 
 func (m *model) handleRunningKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -4410,7 +4412,8 @@ func (m *model) handleScrollbackKey(msg tea.KeyPressMsg) bool {
 	case m.vimMode && key.Mod == 0 && key.Text == "g":
 		m.scrollTranscript(m.maxTranscriptScroll())
 	case m.vimMode && key.Mod == 0 && key.Text == "G":
-		m.scrollTranscript(-m.scroll)
+		m.scroll = 0
+		m.stopFollow = false
 	case key.Mod == 0 && key.Text == "e":
 		if !m.toggleVisibleToolFold() {
 			m.status = "no folded tool group in view"
@@ -4540,6 +4543,7 @@ func (m *model) revealScrollSearch() {
 	maxStart := max(len(lines)-height, 0)
 	start := min(max(target-height/2, 0), maxStart)
 	m.scroll = maxStart - start
+	m.stopFollow = true
 }
 
 func (m *model) scrollTranscript(lines int) {
@@ -4547,8 +4551,39 @@ func (m *model) scrollTranscript(lines int) {
 	m.selectionClick = selectionClickState{}
 	m.clearTranscriptAnchor()
 	before := m.scroll
-	m.scroll = min(max(m.scroll+lines, 0), m.maxTranscriptScroll())
+	m.scrollTranscriptBy(lines)
 	m.debug.recordScroll("keyboard", lines, before, m.scroll, m.maxTranscriptScroll(), m.contentHeight())
+}
+
+func (m *model) scrollTranscriptBy(lines int) {
+	before := m.scroll
+	m.scroll = min(max(m.scroll+lines, 0), m.maxTranscriptScroll())
+	m.updateFollowAfterScroll(lines, before)
+}
+
+func (m *model) updateFollowAfterScroll(lines, before int) {
+	if lines > 0 {
+		m.stopFollow = true
+		return
+	}
+	if lines < 0 && before == 0 && m.scroll == 0 && !m.disableOverscroll {
+		m.stopFollow = false
+	}
+}
+
+func (m *model) transcriptGrowthAnchor() int {
+	if m.scroll == 0 && !m.stopFollow {
+		return -1
+	}
+	return len(renderMarkdownTheme(m.transcriptText(), m.transcriptRenderWidth(), false, m.colors()))
+}
+
+func (m *model) preserveTranscriptGrowth(before int) {
+	if before < 0 {
+		return
+	}
+	after := len(renderMarkdownTheme(m.transcriptText(), m.transcriptRenderWidth(), false, m.colors()))
+	m.scroll += max(after-before, 0)
 }
 
 func (m *model) maxTranscriptScroll() int {
@@ -5569,6 +5604,7 @@ func (m *model) appendPromptTranscript(prompt string) {
 	m.transcriptMessages = append(m.transcriptMessages, transcriptMessage{start: m.transcript.Len() - len("Gork"), offset: m.transcript.Len(), at: now, role: "assistant"})
 	m.transcript.WriteString("\n")
 	m.scroll = 0
+	m.stopFollow = false
 }
 
 func (m *model) stashInFlightPrompt(prompt string, images []api.ContentPart, requestRewind func() bool) {
@@ -6054,7 +6090,7 @@ func (m *model) View() tea.View {
 		visible = m.renderTimeline(visible, timelineRail)
 		visible = m.debug.overlay(visible, width, m.scroll, m.maxTranscriptScroll(), m.contentHeight(), transcriptLineCount, m.scrollLines, m.invertScroll, m.scrollFocused)
 	}
-	showFollowIndicator := showingTranscript && !m.minimal && !m.hideFollowIndicator && m.scroll > 0
+	showFollowIndicator := showingTranscript && !m.minimal && !m.hideFollowIndicator && (m.scroll > 0 || m.stopFollow)
 	if showFollowIndicator && len(visible) > 0 {
 		visible[len(visible)-1] = ""
 	}

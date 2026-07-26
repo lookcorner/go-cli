@@ -1943,6 +1943,14 @@ func TestFollowIndicatorTracksTranscriptScroll(t *testing.T) {
 	if view := stripUIANSI(m.View().Content); strings.Contains(view, "▼") {
 		t.Fatalf("returning to bottom kept indicator: %q", view)
 	}
+	m.stopFollow = true
+	if view := stripUIANSI(m.View().Content); !strings.Contains(view, "▼") {
+		t.Fatalf("manual bottom view omitted indicator: %q", view)
+	}
+	m.appendPromptTranscript("next prompt")
+	if m.stopFollow {
+		t.Fatal("new prompt did not restore follow")
+	}
 
 	hidden := newModel()
 	hidden.scroll, hidden.hideFollowIndicator = 3, true
@@ -1954,6 +1962,41 @@ func TestFollowIndicatorTracksTranscriptScroll(t *testing.T) {
 	modal.scroll, modal.settings = 3, &settingsState{}
 	if view := stripUIANSI(modal.View().Content); strings.Contains(view, "▼") {
 		t.Fatalf("settings view rendered transcript indicator: %q", view)
+	}
+}
+
+func TestOverscrollRestoresFollowAfterLandingAtBottom(t *testing.T) {
+	m := &model{width: 40, height: 10}
+	for line := 0; line < 30; line++ {
+		fmt.Fprintf(&m.transcript, "line %02d\n", line)
+	}
+	m.scrollTranscript(2)
+	m.scrollTranscript(-2)
+	if m.scroll != 0 || !m.stopFollow {
+		t.Fatalf("landing scroll=%d stopped=%v", m.scroll, m.stopFollow)
+	}
+	m.scrollTranscript(-1)
+	if m.stopFollow {
+		t.Fatal("bottom overscroll did not restore follow")
+	}
+
+	disabled := &model{width: 40, height: 10, disableOverscroll: true}
+	disabled.transcript.WriteString(m.transcript.String())
+	disabled.scrollTranscript(2)
+	disabled.scrollTranscript(-2)
+	disabled.scrollTranscript(-1)
+	if !disabled.stopFollow {
+		t.Fatal("disabled bottom overscroll restored follow")
+	}
+
+	m.vimMode = true
+	m.scrollTranscript(2)
+	if !m.stopFollow {
+		t.Fatal("scrolling up did not stop follow")
+	}
+	m.handleScrollbackKey(tea.KeyPressMsg(tea.Key{Code: 'G', Text: "G"}))
+	if m.scroll != 0 || m.stopFollow {
+		t.Fatalf("G scroll=%d stopped=%v", m.scroll, m.stopFollow)
 	}
 }
 
@@ -4897,6 +4940,40 @@ func TestStreamingTextPreservesScrolledViewport(t *testing.T) {
 	updated, _ = m.Update(textEvent{text: "\nseven"})
 	if updated.(*model).scroll != 0 {
 		t.Fatal("bottom-pinned viewport stopped following streaming text")
+	}
+}
+
+func TestManualBottomPreservesViewportAcrossStreamingContent(t *testing.T) {
+	bridge := NewBridge(context.Background(), tools.PermissionAuto)
+	defer bridge.Close()
+	newModel := func() *model {
+		m := &model{bridge: bridge, width: 40, height: 10, stopFollow: true}
+		for line := 0; line < 20; line++ {
+			fmt.Fprintf(&m.transcript, "line %02d\n", line)
+		}
+		return m
+	}
+
+	textModel := newModel()
+	updated, _ := textModel.Update(textEvent{text: "streamed text\n"})
+	if current := updated.(*model); current.scroll == 0 || !current.stopFollow {
+		t.Fatalf("text streaming scroll=%d stopped=%v", current.scroll, current.stopFollow)
+	}
+
+	thoughtModel := newModel()
+	thoughtModel.showThinking = true
+	updated, _ = thoughtModel.Update(thoughtEvent{text: "streamed thought"})
+	if current := updated.(*model); current.scroll == 0 || !current.stopFollow {
+		t.Fatalf("thought streaming scroll=%d stopped=%v", current.scroll, current.stopFollow)
+	}
+
+	toolModel := newModel()
+	updated, _ = toolModel.Update(toolFinishedEvent{
+		call:   api.ToolCall{Name: "shell", Arguments: json.RawMessage(`{"command":"pwd"}`)},
+		result: tools.ExecutionResult{Output: "/tmp"},
+	})
+	if current := updated.(*model); current.scroll == 0 || !current.stopFollow {
+		t.Fatalf("tool streaming scroll=%d stopped=%v", current.scroll, current.stopFollow)
 	}
 }
 
