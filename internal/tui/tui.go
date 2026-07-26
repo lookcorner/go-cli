@@ -2759,6 +2759,11 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			return m.startRememberReview(note)
 		}
+		if command := strings.Fields(prompt)[0]; m.minimal && fullscreenSlashCommand(command) {
+			m.appendSystem(command + " is not available in minimal mode")
+			m.status = "command unavailable"
+			return m, nil
+		}
 		if command, ok := billing.ParseCommand(prompt); ok {
 			switch command.Action {
 			case billing.ShowUsage:
@@ -2942,7 +2947,11 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 					imagineCommands += " `/imagine-video <description>`"
 				}
 			}
-			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + announcementCommand + agentCommands + " `/btw <question>` `/cd <path>` `/compact` `/compact-mode` `/context` `/copy [N]` `/dashboard` (`/sessions`, `/agents-dashboard`) `/docs [web|title]` `/dream` `/effort [level]` `/exit` `/export [filename]` `/home` `/login` `/logout`" + feedbackCommand + " `/find` `/flush` `/fork [--worktree|--no-worktree] [directive]` `/help` `/history`" + extensionCommands + imagineCommands + " `/jump` `/loop` `/memory`" + mcpCommand + " `/model [name] [effort]` (`/m`) `/multiline` `/new` (`/clear`)" + screenCommand + " `/plan [description]` `/privacy [opt-out]` `/queue` `/recap` `/release-notes` (`/changelog`) `/remember` `/rename <title>` `/resume` `/rewind` `/session-info` (`/status`, `/info`) `/settings`" + shareCommand + " `/tasks` `/doctor [fix [FIX]]` (`/terminal-setup`) `/theme [name]` (`/t`)" + mouseCommand + " `/timeline` `/timestamps` `/transcript` `/usage [show|manage]` (`/cost`) `/view-plan` `/vim-mode`")
+			fullscreenCommands := ""
+			if !m.minimal {
+				fullscreenCommands = " `/copy [N]` `/dashboard` (`/sessions`, `/agents-dashboard`) `/find` `/jump` `/theme [name]` (`/t`) `/timeline`"
+			}
+			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + announcementCommand + agentCommands + " `/btw <question>` `/cd <path>` `/compact` `/compact-mode` `/context` `/docs [web|title]` `/dream` `/effort [level]` `/exit` `/export [filename]` `/home` `/login` `/logout`" + feedbackCommand + " `/flush` `/fork [--worktree|--no-worktree] [directive]` `/help` `/history`" + extensionCommands + imagineCommands + " `/loop` `/memory`" + mcpCommand + " `/model [name] [effort]` (`/m`) `/multiline` `/new` (`/clear`)" + screenCommand + " `/plan [description]` `/privacy [opt-out]` `/queue` `/recap` `/release-notes` (`/changelog`) `/remember` `/rename <title>` `/resume` `/rewind` `/session-info` (`/status`, `/info`) `/settings`" + shareCommand + " `/tasks` `/doctor [fix [FIX]]` (`/terminal-setup`)" + fullscreenCommands + mouseCommand + " `/timestamps` `/transcript` `/usage [show|manage]` (`/cost`) `/view-plan` `/vim-mode`")
 			m.status = "commands"
 			return m, nil
 		case "/docs", "/howto", "/guides":
@@ -3327,11 +3336,6 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if fields[0] == "/copy" {
-			if m.minimal {
-				m.appendSystem("/copy is not available in minimal mode")
-				m.status = "copy unavailable"
-				return m, nil
-			}
 			n, err := copyMessageNumber(strings.TrimSpace(strings.TrimPrefix(prompt, "/copy")))
 			if err != nil {
 				m.status = err.Error()
@@ -3468,6 +3472,13 @@ func (m *model) handleRunningKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		fields := strings.Fields(prompt)
+		if m.minimal && fullscreenSlashCommand(fields[0]) {
+			m.clearInput()
+			m.appendSystem(fields[0] + " is not available in minimal mode")
+			m.minimalFlushTo = m.transcript.Len()
+			m.status = "command unavailable"
+			return m, nil
+		}
 		switch fields[0] {
 		case "/queue":
 			m.clearInput()

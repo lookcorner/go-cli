@@ -929,7 +929,9 @@ to the next prompt and shown as `[Image xN]`. Image-only prompts and queued
 follow-ups retain their attachments; press Esc on an empty composer to clear
 draft images.
 `/copy [N]` copies the latest (or Nth-latest) assistant response from the session
-transcript to the terminal clipboard.
+transcript to the terminal clipboard. Native scrollback mode hides and rejects
+the fullscreen-only `/copy`, `/dashboard`, `/find`, `/jump`, `/theme`, and
+`/timeline` commands; `/help` only lists commands available in the active mode.
 `/help` lists local commands, `/session-info` (also `/status` or `/info`) shows
 the active session, workspace, model, completed turns, and latest available
 context-window usage; `/context` reports only the context usage. `/privacy`

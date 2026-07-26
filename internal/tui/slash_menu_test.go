@@ -174,6 +174,11 @@ func TestSlashMenuRespectsCapabilitiesAndScreenMode(t *testing.T) {
 	if strings.Contains(labels, "/minimal\n") || !strings.Contains(labels, "/fullscreen\n") {
 		t.Fatalf("screen commands=%q", labels)
 	}
+	for _, hidden := range []string{"/copy", "/dashboard", "/find", "/jump", "/theme", "/timeline"} {
+		if strings.Contains(labels, hidden+"\n") || strings.Contains(labels, hidden+" ") {
+			t.Fatalf("minimal mode advertised %s in %q", hidden, labels)
+		}
+	}
 
 	ws, err := workspace.Open(t.TempDir())
 	if err != nil {

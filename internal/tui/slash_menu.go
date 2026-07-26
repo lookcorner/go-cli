@@ -239,6 +239,9 @@ func qualifiedSlashSkillName(item skills.Info) string {
 
 func (m *model) slashCommandAvailable(name string) bool {
 	runner := m.runner
+	if m.minimal && fullscreenSlashCommand(name) {
+		return false
+	}
 	switch name {
 	case "minimal":
 		return !m.minimal
@@ -246,8 +249,6 @@ func (m *model) slashCommandAvailable(name string) bool {
 		return m.minimal
 	case "expand":
 		return m.minimal
-	case "copy":
-		return !m.minimal
 	case "always-approve":
 		return m.bridge != nil
 	case "auto":
@@ -284,6 +285,15 @@ func (m *model) slashCommandAvailable(name string) bool {
 		return runner != nil && runner.Personas != nil
 	default:
 		return true
+	}
+}
+
+func fullscreenSlashCommand(name string) bool {
+	switch strings.TrimPrefix(strings.ToLower(name), "/") {
+	case "copy", "dashboard", "sessions", "agents-dashboard", "find", "jump", "theme", "t", "timeline":
+		return true
+	default:
+		return false
 	}
 }
 

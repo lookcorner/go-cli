@@ -2956,19 +2956,39 @@ func TestCopyAssistantMessageUsesSessionTranscript(t *testing.T) {
 	}
 }
 
-func TestCopyAssistantMessageIsUnavailableInMinimalMode(t *testing.T) {
-	m := &model{ctx: context.Background(), runner: &agent.Runner{}, minimal: true, status: "ready"}
-	if m.slashCommandAvailable("copy") {
-		t.Fatal("copy was advertised in minimal mode")
+func TestFullscreenCommandsAreUnavailableInMinimalMode(t *testing.T) {
+	for _, command := range []string{"/copy", "/dashboard", "/sessions", "/agents-dashboard", "/find text", "/jump", "/theme", "/t dark", "/timeline"} {
+		t.Run(command, func(t *testing.T) {
+			m := &model{ctx: context.Background(), runner: &agent.Runner{}, minimal: true, status: "ready"}
+			m.setInput(command)
+			updated, print := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+			m = updated.(*model)
+			name := strings.Fields(command)[0]
+			if print == nil || m.running || m.status != "command unavailable" {
+				t.Fatalf("command=%v running=%v status=%q", print != nil, m.running, m.status)
+			}
+			if !strings.Contains(m.transcript.String(), name+" is not available in minimal mode") {
+				t.Fatalf("transcript=%q", m.transcript.String())
+			}
+		})
 	}
-	m.setInput("/copy")
-	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+
+	m := &model{ctx: context.Background(), runner: &agent.Runner{}, minimal: true, running: true, status: "working"}
+	m.setInput("/dashboard")
+	updated, print := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)
-	if command == nil || m.running || m.status != "copy unavailable" {
-		t.Fatalf("command=%v running=%v status=%q", command != nil, m.running, m.status)
+	if print == nil || !m.running || m.dashboard != nil || m.status != "command unavailable" {
+		t.Fatalf("busy command=%v running=%v dashboard=%v status=%q", print != nil, m.running, m.dashboard != nil, m.status)
 	}
-	if !strings.Contains(m.transcript.String(), "/copy is not available in minimal mode") {
-		t.Fatalf("transcript=%q", m.transcript.String())
+
+	m = &model{ctx: context.Background(), runner: &agent.Runner{}, minimal: true, status: "ready"}
+	m.setInput("/help")
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	help := updated.(*model).transcript.String()
+	for _, hidden := range []string{"`/copy", "`/dashboard", "`/find", "`/jump", "`/theme", "`/timeline"} {
+		if strings.Contains(help, hidden) {
+			t.Fatalf("minimal help advertised %s: %q", hidden, help)
+		}
 	}
 }
 
