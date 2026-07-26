@@ -980,6 +980,12 @@ events = ["turn_complete", "approval_required"]
 progress_bar = true
 # Prevent idle sleep while a turn runs (macOS/Linux).
 sleep_prevention = true
+
+[[ui.notifications.hooks]]
+command = "terminal-notifier -title Gork -message \"$GROK_MESSAGE\""
+events = ["turn_complete", "approval_required"]  # empty matches every event
+only_unfocused = true
+timeout_secs = 10
 ```
 
 `auto` sends OSC 9 to iTerm2, WezTerm, and Warp, OSC 99 to Kitty, OSC 777 to
@@ -1000,6 +1006,13 @@ later render OSC 9;4; other terminals ignore the setting.
 `caffeinate` on macOS and `systemd-inhibit` on Linux. The macOS helper waits on
 the Gork process, so quitting or crashing releases it. When neither command is
 available the setting has no effect and is not retried.
+
+Each `[[ui.notifications.hooks]]` entry runs `sh -c <command>` in its own
+process group with `GROK_EVENT`, `GROK_MESSAGE`, and `GROK_SESSION_ID` in the
+environment and all standard streams closed. A hook that outlives
+`timeout_secs` is killed along with anything it started. Hooks fire alongside
+the terminal notification but filter independently: they use their own `events`
+list and `only_unfocused` flag, not `method` or `condition`.
 The hidden, release-safe `/debug` command reports diagnostic state without a
 model turn. `/debug scroll` (also `/scroll-debug`) overlays live viewport and
 wheel state, `/debug fps` overlays bounded render-rate percentiles, and

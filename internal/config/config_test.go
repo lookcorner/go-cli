@@ -2585,6 +2585,21 @@ func TestNotificationsDefaultsMergeAndRejectUnknownValues(t *testing.T) {
 	if empty := load(t, "[ui.notifications]\nevents = []\n"); len(empty.Events) != 0 {
 		t.Fatalf("explicit empty events=%v", empty.Events)
 	}
+
+	hooks := load(t, "[[ui.notifications.hooks]]\ncommand = \"notify-send\"\n\n[[ui.notifications.hooks]]\ncommand = \"log\"\nevents = [\"AGENT_ERROR\"]\nonly_unfocused = false\ntimeout_secs = 5\n").Hooks
+	if len(hooks) != 2 {
+		t.Fatalf("hooks=%+v", hooks)
+	}
+	if hooks[0].Command != "notify-send" || len(hooks[0].Events) != 0 || !hooks[0].OnlyUnfocused || hooks[0].TimeoutSecs != 10 {
+		t.Fatalf("hook defaults=%+v", hooks[0])
+	}
+	if hooks[1].Command != "log" || strings.Join(hooks[1].Events, ",") != "agent_error" ||
+		hooks[1].OnlyUnfocused || hooks[1].TimeoutSecs != 5 {
+		t.Fatalf("hook overrides=%+v", hooks[1])
+	}
+	if bad := load(t, "[[ui.notifications.hooks]]\ncommand = \"log\"\nevents = [\"typo\"]\n").Hooks; len(bad) != 0 {
+		t.Fatalf("invalid hook event kept: %+v", bad)
+	}
 }
 
 func TestPageFlipOnSendDefaultsAndPersists(t *testing.T) {

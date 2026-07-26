@@ -304,8 +304,16 @@ idle-sleep inhibitor for the same window through `caffeinate` on macOS and
 `systemd-inhibit` on Linux; the macOS assertion also waits on the Gork process so
 a crash cannot leave the machine awake. Inhibit and release are idempotent, an
 unavailable platform command is probed once and then left alone, and other
-platforms are no-ops. `task_complete` events, `[ui.notifications.title]` terminal
-titles, `session_recap`, and `[[ui.notifications.hooks]]` remain.
+platforms are no-ops. `[[ui.notifications.hooks]]` entries run `sh -c` in a
+detached process group with `GROK_EVENT`, `GROK_MESSAGE`, and `GROK_SESSION_ID`
+exported, null standard streams, and a whole-tree kill once `timeout_secs`
+(minimum one second, default ten) elapses; spawn failures, non-zero exits, and
+timeouts stay out of the session. Each hook filters on its own `events` list —
+empty matches every event — and default-on `only_unfocused`, independent of
+`method` and `condition`, since the reference dispatcher lives outside its
+notifications module and only the field semantics are documented.
+`task_complete` events, `[ui.notifications.title]` terminal titles, and
+`session_recap` remain.
 
 Compatibility is verified with Go unit/integration tests and will additionally
 use captured protocol fixtures from the Rust implementation. A status is only

@@ -814,6 +814,8 @@ type model struct {
 	notifier            *notify.Notifier
 	notifySink          func(string)
 	notifyTitle         string
+	notifyHooks         []notify.Hook
+	notifySessionID     string
 	progress            *notify.Progress
 	progressTicking     bool
 	sleepInhibitor      *notify.SleepInhibitor
@@ -1039,6 +1041,7 @@ type UIOptions struct {
 	Notifications        notify.Settings
 	ProgressBar          bool
 	SleepPrevention      bool
+	NotificationHooks    []notify.Hook
 	ShowThinkingBlocks   bool
 	SetShowThinking      func(bool) error
 	ShowTips             bool
@@ -1257,12 +1260,14 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		showTimestamps: options.ShowTimestamps, persistTimestamps: options.SetShowTimestamps,
 		showTimeline: options.ShowTimeline, persistTimeline: options.SetShowTimeline,
 		pageFlipOnSend: options.PageFlipOnSend, persistPageFlip: options.SetPageFlipOnSend,
-		notifier:       notify.New(options.Notifications, notifyTerminal),
-		notifySink:     func(sequence string) { fmt.Fprint(os.Stderr, sequence) },
-		notifyTitle:    filepath.Base(workspace),
-		progress:       notify.NewProgress(options.ProgressBar, notifyTerminal),
-		sleepInhibitor: notify.NewSleepInhibitor(options.SleepPrevention),
-		showThinking:   options.ShowThinkingBlocks, persistThinking: options.SetShowThinking,
+		notifier:        notify.New(options.Notifications, notifyTerminal),
+		notifySink:      func(sequence string) { fmt.Fprint(os.Stderr, sequence) },
+		notifyTitle:     filepath.Base(workspace),
+		notifyHooks:     options.NotificationHooks,
+		notifySessionID: runner.SessionID,
+		progress:        notify.NewProgress(options.ProgressBar, notifyTerminal),
+		sleepInhibitor:  notify.NewSleepInhibitor(options.SleepPrevention),
+		showThinking:    options.ShowThinkingBlocks, persistThinking: options.SetShowThinking,
 		showTips: options.ShowTips, persistShowTips: options.SetShowTips, startupTip: options.StartupTip,
 		respectManualFolds: options.RespectManualFolds, persistManualFolds: options.SetManualFolds,
 		disableFoldAnchor: options.DisableFoldAnchor, hideFollowIndicator: options.HideFollowIndicator,
@@ -4664,12 +4669,13 @@ func (m *model) clearProgress() {
 // one. Sequences bypass the frame pipeline so one-shot events reach the
 // terminal immediately.
 func (m *model) notifyEvent(event notify.Event) {
-	if m.notifier == nil || m.notifySink == nil {
+	if m.notifier == nil {
 		return
 	}
-	if sequence := m.notifier.Sequence(event, m.notifyTitle, event.Label(), time.Now()); sequence != "" {
+	if sequence := m.notifier.Sequence(event, m.notifyTitle, event.Label(), time.Now()); sequence != "" && m.notifySink != nil {
 		m.notifySink(sequence)
 	}
+	notify.RunHooks(m.notifyHooks, event, m.notifySessionID, m.notifier.Focused())
 }
 
 func (m *model) transcriptGrowthAnchor() int {

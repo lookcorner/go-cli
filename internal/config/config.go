@@ -265,13 +265,27 @@ type UIConfig struct {
 // policy: which protocol carries a notification, when focus allows one, and
 // which session events qualify.
 type NotificationsConfig struct {
-	Method            string   `json:"method"`
-	Condition         string   `json:"condition"`
-	IdleThresholdSecs uint64   `json:"idle_threshold_secs"`
-	Events            []string `json:"events"`
-	ProgressBar       bool     `json:"progress_bar"`
-	SleepPrevention   bool     `json:"sleep_prevention"`
+	Method            string                   `json:"method"`
+	Condition         string                   `json:"condition"`
+	IdleThresholdSecs uint64                   `json:"idle_threshold_secs"`
+	Events            []string                 `json:"events"`
+	ProgressBar       bool                     `json:"progress_bar"`
+	SleepPrevention   bool                     `json:"sleep_prevention"`
+	Hooks             []NotificationHookConfig `json:"hooks,omitempty"`
 }
+
+// NotificationHookConfig is one [[ui.notifications.hooks]] entry: a shell
+// command run when a notification event fires. An empty event list matches
+// every event.
+type NotificationHookConfig struct {
+	Command       string   `json:"command"`
+	Events        []string `json:"events,omitempty"`
+	OnlyUnfocused bool     `json:"only_unfocused"`
+	TimeoutSecs   uint64   `json:"timeout_secs"`
+}
+
+// notificationEvents lists every event name the reference accepts.
+var notificationEvents = []string{"turn_complete", "approval_required", "session_ready", "task_complete", "agent_error"}
 
 // valid reports whether every enum value is one the reference accepts.
 func (n NotificationsConfig) valid() bool {
@@ -282,8 +296,15 @@ func (n NotificationsConfig) valid() bool {
 		return false
 	}
 	for _, event := range n.Events {
-		if !slices.Contains([]string{"turn_complete", "approval_required", "session_ready", "task_complete", "agent_error"}, event) {
+		if !slices.Contains(notificationEvents, event) {
 			return false
+		}
+	}
+	for _, hook := range n.Hooks {
+		for _, event := range hook.Events {
+			if !slices.Contains(notificationEvents, event) {
+				return false
+			}
 		}
 	}
 	return true
@@ -594,12 +615,20 @@ type fileUIConfig struct {
 }
 
 type fileNotificationsConfig struct {
-	Method            *string  `json:"method,omitempty" toml:"method"`
-	Condition         *string  `json:"condition,omitempty" toml:"condition"`
-	IdleThresholdSecs *uint64  `json:"idle_threshold_secs,omitempty" toml:"idle_threshold_secs"`
-	Events            []string `json:"events,omitempty" toml:"events"`
-	ProgressBar       *bool    `json:"progress_bar,omitempty" toml:"progress_bar"`
-	SleepPrevention   *bool    `json:"sleep_prevention,omitempty" toml:"sleep_prevention"`
+	Method            *string                `json:"method,omitempty" toml:"method"`
+	Condition         *string                `json:"condition,omitempty" toml:"condition"`
+	IdleThresholdSecs *uint64                `json:"idle_threshold_secs,omitempty" toml:"idle_threshold_secs"`
+	Events            []string               `json:"events,omitempty" toml:"events"`
+	ProgressBar       *bool                  `json:"progress_bar,omitempty" toml:"progress_bar"`
+	SleepPrevention   *bool                  `json:"sleep_prevention,omitempty" toml:"sleep_prevention"`
+	Hooks             []fileNotificationHook `json:"hooks,omitempty" toml:"hooks"`
+}
+
+type fileNotificationHook struct {
+	Command       string   `json:"command" toml:"command"`
+	Events        []string `json:"events,omitempty" toml:"events"`
+	OnlyUnfocused *bool    `json:"only_unfocused,omitempty" toml:"only_unfocused"`
+	TimeoutSecs   *uint64  `json:"timeout_secs,omitempty" toml:"timeout_secs"`
 }
 
 type RefreshSettings struct {

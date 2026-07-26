@@ -27,13 +27,40 @@ func mergeNotifications(current NotificationsConfig, disk *fileNotificationsConf
 		merged.SleepPrevention = *disk.SleepPrevention
 	}
 	if disk.Events != nil {
-		merged.Events = make([]string, 0, len(disk.Events))
-		for _, event := range disk.Events {
-			merged.Events = append(merged.Events, strings.ToLower(strings.TrimSpace(event)))
+		merged.Events = normalizeEventNames(disk.Events)
+	}
+	if disk.Hooks != nil {
+		merged.Hooks = make([]NotificationHookConfig, 0, len(disk.Hooks))
+		for _, hook := range disk.Hooks {
+			converted := NotificationHookConfig{
+				Command:       hook.Command,
+				Events:        normalizeEventNames(hook.Events),
+				OnlyUnfocused: true,
+				TimeoutSecs:   10,
+			}
+			if hook.OnlyUnfocused != nil {
+				converted.OnlyUnfocused = *hook.OnlyUnfocused
+			}
+			if hook.TimeoutSecs != nil {
+				converted.TimeoutSecs = *hook.TimeoutSecs
+			}
+			merged.Hooks = append(merged.Hooks, converted)
 		}
 	}
 	if !merged.valid() {
 		return current
 	}
 	return merged
+}
+
+// normalizeEventNames folds case and padding so event lists compare exactly.
+func normalizeEventNames(events []string) []string {
+	if events == nil {
+		return nil
+	}
+	normalized := make([]string, 0, len(events))
+	for _, event := range events {
+		normalized = append(normalized, strings.ToLower(strings.TrimSpace(event)))
+	}
+	return normalized
 }

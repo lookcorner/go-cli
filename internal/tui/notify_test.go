@@ -3,6 +3,8 @@ package tui
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -101,6 +103,40 @@ func TestUnconfiguredEventsAndDisabledPolicyStaySilent(t *testing.T) {
 	bare := &model{bridge: bridge, width: 80, height: 24}
 	bare.notifyEvent(notify.TurnComplete)
 	bare.Update(turnDoneEvent{})
+}
+
+func TestNotificationHooksRunForConfiguredEvents(t *testing.T) {
+	dir := t.TempDir()
+	path := func(name string) string { return filepath.Join(dir, name) }
+	m, _ := notifyModel(t, notify.ConditionNever)
+	m.notifySessionID = "session-9"
+	m.notifyHooks = []notify.Hook{
+		{Command: "printf '%s|%s' \"$GROK_EVENT\" \"$GROK_SESSION_ID\" > " + path("all")},
+		{Command: "touch " + path("listed"), Events: []notify.Event{notify.TurnComplete}},
+		{Command: "touch " + path("unlisted"), Events: []notify.Event{notify.SessionReady}},
+		{Command: "touch " + path("away"), OnlyUnfocused: true},
+	}
+
+	// The terminal channel is off, so any effect here comes from the hooks.
+	m.Update(turnDoneEvent{})
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path("listed")); err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	data, err := os.ReadFile(path("all"))
+	if err != nil || string(data) != "Turn complete|session-9" {
+		t.Fatalf("hook payload=%q err=%v", data, err)
+	}
+	if _, err = os.Stat(path("unlisted")); err == nil {
+		t.Fatal("hook ran for an unconfigured event")
+	}
+	if _, err = os.Stat(path("away")); err == nil {
+		t.Fatal("unfocused-only hook ran while focused")
+	}
 }
 
 func TestProgressBarTracksTurnLifecycle(t *testing.T) {

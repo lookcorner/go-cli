@@ -1261,6 +1261,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			Notifications:       notificationSettings(cfg.UI.Notifications),
 			ProgressBar:         cfg.UI.Notifications.ProgressBar,
 			SleepPrevention:     cfg.UI.Notifications.SleepPrevention,
+			NotificationHooks:   notificationHooks(cfg.UI.Notifications.Hooks),
 			OpenDashboard:       opts.dashboard,
 			Foreign: session.ForeignSources{
 				Claude: cfg.Compat.Claude.Sessions && skillCatalog.Has("resume-claude"),
@@ -6033,4 +6034,22 @@ func notificationSettings(cfg config.NotificationsConfig) notify.Settings {
 		settings.Events = append(settings.Events, notify.Event(event))
 	}
 	return settings
+}
+
+// notificationHooks converts configured hook entries into the notification
+// domain's values, clamping absurd timeouts.
+func notificationHooks(entries []config.NotificationHookConfig) []notify.Hook {
+	hooks := make([]notify.Hook, 0, len(entries))
+	for _, entry := range entries {
+		hook := notify.Hook{
+			Command:       entry.Command,
+			OnlyUnfocused: entry.OnlyUnfocused,
+			Timeout:       time.Duration(min(entry.TimeoutSecs, 86400)) * time.Second,
+		}
+		for _, event := range entry.Events {
+			hook.Events = append(hook.Events, notify.Event(event))
+		}
+		hooks = append(hooks, hook)
+	}
+	return hooks
 }
