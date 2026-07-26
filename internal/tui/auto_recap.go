@@ -79,11 +79,7 @@ func (m *model) recapDue(now time.Time) bool {
 	if !m.recapAttempted.IsZero() && now.Sub(m.recapAttempted) < autoRecapRetryInterval {
 		return false
 	}
-	threshold := m.recapThreshold
-	if threshold <= 0 {
-		threshold = 30 * time.Second
-	}
-	return now.Sub(m.recapFocusLost) >= threshold
+	return now.Sub(m.recapFocusLost) >= m.recapThreshold
 }
 
 // autoRecapUIEligible mirrors the Rust focus-gained / pregenerate UI gates:
@@ -128,7 +124,7 @@ func autoRecapHasLiveWork(snapshot agent.TaskSnapshot) bool {
 			return true
 		}
 	}
-	return len(snapshot.Scheduled) > 0
+	return false
 }
 
 func (m *model) autoRecapTurnEligible(now time.Time) bool {
