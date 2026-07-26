@@ -2438,8 +2438,99 @@ func TestUIConfigPersistenceAndPermissionPrecedence(t *testing.T) {
 	if err := os.WriteFile(invalidPath, []byte("[ui]\npermission_mode = \"deny\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Load(invalidPath); err == nil {
-		t.Fatal("invalid configured mode was accepted")
+	invalidConfig, err := Load(invalidPath)
+	if err != nil || invalidConfig.UI.PermissionMode != "ask" {
+		t.Fatalf("invalid configured mode=%q err=%v", invalidConfig.UI.PermissionMode, err)
+	}
+}
+
+func TestLegacyPermissionConfigPrecedence(t *testing.T) {
+	tests := []struct {
+		name   string
+		ext    string
+		data   string
+		remote string
+		want   string
+	}{
+		{
+			name:   "canonical wins",
+			ext:    ".toml",
+			data:   "[ui]\npermission_mode = \"ask\"\napproval_mode = \"always-approve\"\nyolo = true\n",
+			remote: "always-approve",
+			want:   "ask",
+		},
+		{
+			name:   "approval wins",
+			ext:    ".toml",
+			data:   "[ui]\napproval_mode = \"ask\"\nyolo = true\n",
+			remote: "always-approve",
+			want:   "ask",
+		},
+		{
+			name:   "legacy approval",
+			ext:    ".toml",
+			data:   "[ui]\napproval_mode = \"always-approve\"\n",
+			remote: "ask",
+			want:   "always-approve",
+		},
+		{
+			name:   "legacy yolo enabled",
+			ext:    ".toml",
+			data:   "[ui]\nyolo = true\n",
+			remote: "ask",
+			want:   "always-approve",
+		},
+		{
+			name:   "legacy yolo disabled blocks remote",
+			ext:    ".toml",
+			data:   "[ui]\nyolo = false\n",
+			remote: "always-approve",
+			want:   "ask",
+		},
+		{
+			name:   "invalid canonical blocks remote",
+			ext:    ".toml",
+			data:   "[ui]\npermission_mode = \"garbage\"\n",
+			remote: "always-approve",
+			want:   "ask",
+		},
+		{
+			name:   "wrong canonical type blocks remote",
+			ext:    ".toml",
+			data:   "[ui]\npermission_mode = true\n",
+			remote: "always-approve",
+			want:   "ask",
+		},
+		{
+			name:   "json legacy yolo",
+			ext:    ".json",
+			data:   "{\"ui\":{\"yolo\":true}}",
+			remote: "ask",
+			want:   "always-approve",
+		},
+		{
+			name:   "json invalid approval blocks remote",
+			ext:    ".json",
+			data:   "{\"ui\":{\"approval_mode\":false}}",
+			remote: "always-approve",
+			want:   "ask",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config"+test.ext)
+			if err := os.WriteFile(path, []byte(test.data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg.ApplyRemoteSettings(&RemoteSettings{PermissionMode: &test.remote})
+			if cfg.UI.PermissionMode != test.want {
+				t.Fatalf("mode=%q want=%q", cfg.UI.PermissionMode, test.want)
+			}
+		})
 	}
 }
 

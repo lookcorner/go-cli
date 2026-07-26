@@ -26,6 +26,11 @@ Trusted workspaces load environment changes from the workspace-root `.envrc` by
 default. Set `[session] load_envrc = false` to disable execution. Explicit
 `[env]` values take precedence over `.envrc`.
 
+Permission startup mode uses `[ui].permission_mode`. Legacy
+`[ui].approval_mode` and `[ui].yolo` remain compatible, with precedence
+`permission_mode` > `approval_mode` > `yolo`; invalid or disabled legacy values
+fall back to `ask` and still override remote defaults.
+
 Interactive REPL, full-screen, and ACP sessions accept `/compact` to summarize
 the current completed response chain and continue from a fresh context. When
 workspace memory is enabled, `/flush` saves reusable context without changing

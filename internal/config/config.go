@@ -547,7 +547,9 @@ type fileUIConfig struct {
 	CursorBlink                  *bool            `json:"cursor_blink,omitempty" toml:"cursor_blink"`
 	VoiceCaptureMode             *string          `json:"voice_capture_mode,omitempty" toml:"voice_capture_mode"`
 	VoiceSTTLanguage             *string          `json:"voice_stt_language,omitempty" toml:"voice_stt_language"`
-	PermissionMode               *string          `json:"permission_mode,omitempty" toml:"permission_mode"`
+	PermissionMode               any              `json:"permission_mode,omitempty" toml:"permission_mode"`
+	ApprovalMode                 any              `json:"approval_mode,omitempty" toml:"approval_mode"`
+	Yolo                         any              `json:"yolo,omitempty" toml:"yolo"`
 	SelectionHighlightDurationMS *uint64          `json:"selection_highlight_duration_ms,omitempty" toml:"selection_highlight_duration_ms"`
 	DoubleClickAction            *string          `json:"double_click_action,omitempty" toml:"double_click_action"`
 }
@@ -1153,11 +1155,7 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	if disk.UI.VoiceSTTLanguage != nil {
 		cfg.UI.VoiceSTTLanguage = voice.CanonicalLanguage(*disk.UI.VoiceSTTLanguage)
 	}
-	if disk.UI.PermissionMode != nil {
-		mode, err := normalizePermissionMode(*disk.UI.PermissionMode)
-		if err != nil {
-			return err
-		}
+	if mode, configured := filePermissionMode(disk.UI); configured {
 		cfg.UI.PermissionMode = mode
 		cfg.uiPermissionModeConfigured = true
 	}
@@ -2127,6 +2125,33 @@ func normalizePermissionMode(value string) (string, error) {
 	default:
 		return "", errors.New("ui permission_mode must be ask, auto, always-approve, or default")
 	}
+}
+
+func filePermissionMode(ui fileUIConfig) (string, bool) {
+	if ui.PermissionMode != nil {
+		value, ok := ui.PermissionMode.(string)
+		if !ok {
+			return "ask", true
+		}
+		mode, err := normalizePermissionMode(value)
+		if err != nil {
+			return "ask", true
+		}
+		return mode, true
+	}
+	if ui.ApprovalMode != nil {
+		if value, ok := ui.ApprovalMode.(string); ok && value == "always-approve" {
+			return "always-approve", true
+		}
+		return "ask", true
+	}
+	if ui.Yolo != nil {
+		if value, ok := ui.Yolo.(bool); ok && value {
+			return "always-approve", true
+		}
+		return "ask", true
+	}
+	return "", false
 }
 
 func (c Config) ManagedPolicyURL() string {
