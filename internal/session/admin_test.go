@@ -31,8 +31,9 @@ func TestSessionAdminRenameSearchAndDelete(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = second.Append("session_metadata", map[string]any{"cwd": cwd})
-	_ = second.Append("user_prompt", map[string]any{"text": "needle only in title"})
+	_ = second.Append("user_prompt", map[string]any{"text": "other prompt"})
 	_ = second.Append("model_response", map[string]any{"text": "other", "response_id": "r2", "tool_call_count": 0})
+	_ = second.Append("session_title", map[string]any{"title": "needle only in title", "manual": true})
 	_ = second.Close()
 	if err := Rename(dir, "session-one", "  Renamed Needle  "); err != nil {
 		t.Fatal(err)
