@@ -1640,7 +1640,10 @@ entries may be host-wide (`docs.example.com`) or path-scoped
 (`example.com/docs`). Omitting the list uses Gork Build's built-in documentation
 domain allowlist. TOML proxy configuration takes precedence over
 `GROK_WEB_FETCH_PROXY`; a configured list replaces the defaults, and an
-explicit empty list blocks all fetches. The tool is registered only when enabled
+explicit empty list blocks all fetches. `allow_local = true`, or
+`GROK_WEB_FETCH_ALLOW_LOCAL=true` when the TOML field is absent, permits only
+explicit loopback hosts (`localhost`, `127/8`, and `::1`); other private and
+metadata addresses remain blocked. The tool is registered only when enabled
 by `[features] web_fetch = true`, `GROK_WEB_FETCH=true`, or authenticated remote
 settings; environment and TOML values take precedence over remote settings.
 
@@ -1678,7 +1681,10 @@ behavior. Background commands inherit a state snapshot without changing the
 foreground session when they finish. The earlier aliases
 `start_background_command`, `get_background_command_output`, and
 `kill_background_command` remain available. Output is captured in a bounded
-tail buffer, process groups are terminated on request, and every remaining
+tail buffer. `[toolset.bash] timeout_secs` changes the default foreground
+timeout and `output_byte_limit` changes the captured tail limit; unset values
+default to 120 seconds and 20,000 bytes. Process groups are terminated on
+request, and every remaining
 process is cleaned up when Gork exits. File operations resolve symlinks and
 reject paths outside the selected workspace. Shell commands start in the
 workspace. `--sandbox workspace` runs model-started foreground, background,

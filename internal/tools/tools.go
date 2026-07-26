@@ -394,6 +394,14 @@ func (r *Registry) ConfigureEnvironment(values map[string]string) {
 	r.processes.ConfigureEnvironment(values)
 }
 
+// ConfigureBash applies the [toolset.bash] foreground timeout and output
+// ceiling to commands started by this registry.
+func (r *Registry) ConfigureBash(timeout time.Duration, outputLimit int) {
+	if r != nil {
+		r.processes.ConfigureBash(timeout, outputLimit)
+	}
+}
+
 func (r *Registry) OverlayEnvironment(values map[string]string) {
 	if r == nil {
 		return
@@ -421,6 +429,7 @@ type WebFetchConfig struct {
 	ProxyEndpoint   string
 	AllowedDomains  []string
 	RestrictDomains bool
+	AllowLocal      bool
 }
 
 func (r *Registry) ConfigureWebFetch(config WebFetchConfig) {
@@ -436,6 +445,7 @@ func (r *Registry) ConfigureWebFetch(config WebFetchConfig) {
 		r.webFetch.proxyEndpoint = config.ProxyEndpoint
 		r.webFetch.restrictDomains = true
 		r.webFetch.domainRules = buildWebDomainRules(domains)
+		r.webFetch.allowLocal = config.AllowLocal
 	}
 	if r.readFile != nil {
 		r.readFile.artifactRoot = config.ArtifactDir

@@ -164,6 +164,11 @@ settings = { gopls = { staticcheck = true } }
 [toolset.web_fetch]
 proxy_endpoint = "https://toml-proxy.example"
 allowed_domains = ["example.com", "vercel.com/docs"]
+allow_local = true
+
+[toolset.bash]
+timeout_secs = 45.5
+output_byte_limit = 12345
 
 [skills]
 paths = ["~/shared-skills", "project-skills"]
@@ -266,8 +271,11 @@ pattern = ".env*"
 	if !cfg.LSPServers["gopls"].RestartOnCrash || cfg.LSPServers["gopls"].MaxRestarts == nil || *cfg.LSPServers["gopls"].MaxRestarts != 4 {
 		t.Fatalf("unexpected LSP restart config: %#v", cfg.LSPServers["gopls"])
 	}
-	if cfg.WebFetch.ProxyEndpoint != "https://toml-proxy.example" || !cfg.WebFetch.ProxyConfigured || !cfg.WebFetch.DomainsConfigured || len(cfg.WebFetch.AllowedDomains) != 2 {
+	if cfg.WebFetch.ProxyEndpoint != "https://toml-proxy.example" || !cfg.WebFetch.ProxyConfigured || !cfg.WebFetch.DomainsConfigured || len(cfg.WebFetch.AllowedDomains) != 2 || !cfg.WebFetch.AllowLocal || !cfg.WebFetch.LocalConfigured {
 		t.Fatalf("unexpected web fetch config: %#v", cfg.WebFetch)
+	}
+	if cfg.Toolset.Bash.TimeoutSeconds != 45.5 || cfg.Toolset.Bash.OutputByteLimit != 12345 {
+		t.Fatalf("unexpected bash config: %#v", cfg.Toolset.Bash)
 	}
 	if len(cfg.Permission.Rules) != 2 || cfg.Permission.Rules[0].Action != "allow" || *cfg.Permission.Rules[1].Pattern != ".env*" {
 		t.Fatalf("unexpected permission config: %#v", cfg.Permission)
@@ -740,6 +748,7 @@ func TestLoadRejectsInvalidModelCatalogValues(t *testing.T) {
 
 func TestLoadWebFetchEnvAndExplicitEmptyDomains(t *testing.T) {
 	t.Setenv("GROK_WEB_FETCH_PROXY", "http://127.0.0.1:8080")
+	t.Setenv("GROK_WEB_FETCH_ALLOW_LOCAL", "true")
 	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte("[toolset.web_fetch]\nallowed_domains = []\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -748,8 +757,39 @@ func TestLoadWebFetchEnvAndExplicitEmptyDomains(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.WebFetch.ProxyEndpoint != "http://127.0.0.1:8080" || !cfg.WebFetch.ProxyConfigured || !cfg.WebFetch.DomainsConfigured || len(cfg.WebFetch.AllowedDomains) != 0 {
+	if cfg.WebFetch.ProxyEndpoint != "http://127.0.0.1:8080" || !cfg.WebFetch.ProxyConfigured || !cfg.WebFetch.DomainsConfigured || len(cfg.WebFetch.AllowedDomains) != 0 || !cfg.WebFetch.AllowLocal || !cfg.WebFetch.LocalConfigured {
 		t.Fatalf("unexpected web fetch env config: %#v", cfg.WebFetch)
+	}
+	if err := os.WriteFile(path, []byte("[toolset.web_fetch]\nallow_local = false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(path)
+	if err != nil || cfg.WebFetch.AllowLocal {
+		t.Fatalf("local config did not override environment: %#v err=%v", cfg.WebFetch, err)
+	}
+}
+
+func TestLoadAndValidateBashConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Toolset.Bash.TimeoutSeconds != 120 || cfg.Toolset.Bash.OutputByteLimit != 20000 {
+		t.Fatalf("default bash config=%#v", cfg.Toolset.Bash)
+	}
+	if err := os.WriteFile(path, []byte("[toolset.bash]\ntimeout_secs = 0.05\noutput_byte_limit = 64\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(path)
+	if err != nil || cfg.Toolset.Bash.TimeoutSeconds != 0.05 || cfg.Toolset.Bash.OutputByteLimit != 64 {
+		t.Fatalf("bash config=%#v err=%v", cfg.Toolset.Bash, err)
+	}
+	cfg.APIKey = "test-key"
+	cfg.Model = "test-model"
+	cfg.Toolset.Bash.TimeoutSeconds = -1
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "bash timeout_secs") {
+		t.Fatalf("negative bash timeout error=%v", err)
 	}
 }
 

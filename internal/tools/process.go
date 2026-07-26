@@ -23,13 +23,15 @@ import (
 )
 
 const (
-	backgroundOutputBytes = 1 << 20
-	monitorLineBytes      = 500
-	monitorBatchBytes     = 3000
-	monitorDebounce       = 200 * time.Millisecond
-	monitorRateCapacity   = 10
-	monitorRateRefill     = 2 * time.Second
-	monitorOverloadLimit  = 30 * time.Second
+	defaultBashTimeout     = 2 * time.Minute
+	defaultBashOutputBytes = 20000
+	backgroundOutputBytes  = 1 << 20
+	monitorLineBytes       = 500
+	monitorBatchBytes      = 3000
+	monitorDebounce        = 200 * time.Millisecond
+	monitorRateCapacity    = 10
+	monitorRateRefill      = 2 * time.Second
+	monitorOverloadLimit   = 30 * time.Second
 )
 
 type ProcessManager struct {
@@ -48,6 +50,38 @@ type ProcessManager struct {
 	rewind       *mutationCheckpoint
 	observerMu   sync.RWMutex
 	observer     ProcessObserver
+	bashMu       sync.RWMutex
+	bashTimeout  time.Duration
+	bashOutput   int
+}
+
+// ConfigureBash sets the [toolset.bash] bounds for shell commands. Zero values
+// keep the built-in defaults.
+func (m *ProcessManager) ConfigureBash(timeout time.Duration, outputLimit int) {
+	m.bashMu.Lock()
+	m.bashTimeout, m.bashOutput = max(timeout, 0), max(outputLimit, 0)
+	m.bashMu.Unlock()
+}
+
+// defaultShellTimeout is the configured foreground timeout, or the reference
+// two-minute default.
+func (m *ProcessManager) defaultShellTimeout() time.Duration {
+	m.bashMu.RLock()
+	defer m.bashMu.RUnlock()
+	if m.bashTimeout > 0 {
+		return m.bashTimeout
+	}
+	return defaultBashTimeout
+}
+
+// outputByteLimit is the configured capture ceiling, or the reference default.
+func (m *ProcessManager) outputByteLimit() int {
+	m.bashMu.RLock()
+	defer m.bashMu.RUnlock()
+	if m.bashOutput > 0 {
+		return m.bashOutput
+	}
+	return defaultBashOutputBytes
 }
 
 type ProcessObserver interface {
@@ -205,7 +239,11 @@ func (m *ProcessManager) start(ctx context.Context, command, description string,
 	}
 	cmd.Dir, cmd.Env = m.shellSnapshot()
 	configureProcessGroup(cmd)
-	buffer := &tailBuffer{limit: backgroundOutputBytes}
+	outputLimit := backgroundOutputBytes
+	if kind == "bash" {
+		outputLimit = m.outputByteLimit()
+	}
+	buffer := &tailBuffer{limit: outputLimit}
 	id := fmt.Sprintf("task_%d", m.nextID.Add(1))
 	process := &backgroundProcess{
 		id: id, command: command, cmd: cmd, output: buffer, started: time.Now(), done: make(chan struct{}),
@@ -331,7 +369,7 @@ func (m *ProcessManager) RunForeground(ctx context.Context, command string, time
 	}
 	defer capture.cleanup()
 	configureProcessGroup(cmd)
-	buffer := &tailBuffer{limit: backgroundOutputBytes}
+	buffer := &tailBuffer{limit: m.outputByteLimit()}
 	cmd.Stdout = buffer
 	cmd.Stderr = buffer
 	if err := cmd.Start(); err != nil {
@@ -340,7 +378,7 @@ func (m *ProcessManager) RunForeground(ctx context.Context, command string, time
 	wait := make(chan error, 1)
 	go func() { wait <- cmd.Wait() }()
 	if timeout <= 0 {
-		timeout = 2 * time.Minute
+		timeout = m.defaultShellTimeout()
 	}
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
@@ -1153,7 +1191,7 @@ func (t *runTerminalCommandTool) Execute(ctx context.Context, raw json.RawMessag
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return "", fmt.Errorf("decode run_terminal_cmd arguments: %w", err)
 	}
-	timeout := 2 * time.Minute
+	timeout := t.manager.defaultShellTimeout()
 	if args.IsBackground {
 		timeout = 0
 	}

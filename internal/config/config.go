@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"os"
 	"path"
@@ -160,6 +161,13 @@ type AutoModeConfig struct {
 type ToolsetConfig struct {
 	FileToolset string         `json:"file_toolset"`
 	Hashline    HashlineConfig `json:"hashline"`
+	Bash        BashConfig     `json:"bash"`
+}
+
+// BashConfig is the [toolset.bash] table bounding shell commands.
+type BashConfig struct {
+	TimeoutSeconds  float64 `json:"timeout_secs"`
+	OutputByteLimit uint64  `json:"output_byte_limit"`
 }
 
 type HashlineConfig struct {
@@ -216,8 +224,10 @@ type WebFetchConfig struct {
 	EnabledConfigured bool     `json:"-"`
 	ProxyEndpoint     string   `json:"proxy_endpoint,omitempty"`
 	AllowedDomains    []string `json:"allowed_domains,omitempty"`
+	AllowLocal        bool     `json:"allow_local"`
 	ProxyConfigured   bool     `json:"-"`
 	DomainsConfigured bool     `json:"-"`
+	LocalConfigured   bool     `json:"-"`
 }
 
 type AskUserQuestionConfig struct {
@@ -564,6 +574,7 @@ type fileConfig struct {
 	Toolset      struct {
 		FileToolset     string                    `json:"file_toolset,omitempty" toml:"file_toolset"`
 		Hashline        fileHashlineConfig        `json:"hashline,omitempty" toml:"hashline"`
+		Bash            fileBashConfig            `json:"bash,omitempty" toml:"bash"`
 		WebFetch        fileWebFetchConfig        `json:"web_fetch,omitempty" toml:"web_fetch"`
 		AskUserQuestion fileAskUserQuestionConfig `json:"ask_user_question,omitempty" toml:"ask_user_question"`
 	} `json:"toolset,omitempty" toml:"toolset"`
@@ -585,6 +596,11 @@ type fileHashlineConfig struct {
 	Scheme    *string `json:"scheme,omitempty" toml:"scheme"`
 	HashLen   *int    `json:"hash_len,omitempty" toml:"hash_len"`
 	ChunkSize *int    `json:"chunk_size,omitempty" toml:"chunk_size"`
+}
+
+type fileBashConfig struct {
+	TimeoutSeconds  *float64 `json:"timeout_secs,omitempty" toml:"timeout_secs"`
+	OutputByteLimit *uint64  `json:"output_byte_limit,omitempty" toml:"output_byte_limit"`
 }
 
 type fileUIConfig struct {
@@ -734,6 +750,7 @@ type fileGrokComConfig struct {
 type fileWebFetchConfig struct {
 	ProxyEndpoint  *string  `json:"proxy_endpoint,omitempty" toml:"proxy_endpoint"`
 	AllowedDomains []string `json:"allowed_domains,omitempty" toml:"allowed_domains"`
+	AllowLocal     *bool    `json:"allow_local,omitempty" toml:"allow_local"`
 }
 
 type fileAskUserQuestionConfig struct {
@@ -884,7 +901,7 @@ func Load(path string) (Config, error) {
 		ShowTips:                    true,
 		AskUserQuestion:             AskUserQuestionConfig{TimeoutEnabled: true, TimeoutSeconds: 30 * 60},
 		CancelRewindEnabled:         true,
-		Toolset:                     ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}},
+		Toolset:                     ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}, Bash: BashConfig{TimeoutSeconds: 120, OutputByteLimit: 20000}},
 		Goal:                        GoalConfig{VerifierCount: 3, ClassifierMaxRuns: 10, ReverifyAfter: 8},
 		UI:                          UIConfig{MaxThoughtsWidth: 120, Theme: "groknight", AutoDarkTheme: "groknight", AutoLightTheme: "grokday", HunkTrackerMode: "agent_only", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, PageFlipOnSend: true, ShowThinkingBlocks: true, DisplayRefresh: DisplayRefreshConfig{ProbeEnabled: true, FloorMS: 8, CeilingMS: 16, MinHz: 55, MaxHz: 165}, ScrollSpeed: 50, ScrollMode: "auto", DefaultSelectedPermission: "always_allow_all_sessions", GroupToolVerbs: true, PromptSuggestions: true, ContextualHints: Hints{Undo: true, PlanMode: true, ImageInput: true, SendNow: true, SmallScreen: true, WordSelect: true}, VoiceCaptureMode: "hold", VoiceSTTLanguage: "en", PermissionMode: "ask", Notifications: NotificationsConfig{Method: "auto", Condition: "unfocused", IdleThresholdSecs: 3, Events: []string{"turn_complete", "approval_required"}, ProgressBar: true, SleepPrevention: true, Title: NotificationTitleConfig{Enabled: true, Items: []string{"action-required", "spinner", "activity", "session-name", "grok"}}}},
 		Dashboard:                   DashboardConfig{Enabled: true, Grouping: "state"},
@@ -1138,9 +1155,19 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 		cfg.WebFetch.AllowedDomains = append([]string(nil), disk.Toolset.WebFetch.AllowedDomains...)
 		cfg.WebFetch.DomainsConfigured = true
 	}
+	if disk.Toolset.WebFetch.AllowLocal != nil {
+		cfg.WebFetch.AllowLocal = *disk.Toolset.WebFetch.AllowLocal
+		cfg.WebFetch.LocalConfigured = true
+	}
 	applyAskUserQuestionConfig(&cfg.AskUserQuestion, disk.Toolset.AskUserQuestion)
 	if disk.Toolset.FileToolset != "" {
 		cfg.Toolset.FileToolset = strings.TrimSpace(disk.Toolset.FileToolset)
+	}
+	if disk.Toolset.Bash.TimeoutSeconds != nil {
+		cfg.Toolset.Bash.TimeoutSeconds = *disk.Toolset.Bash.TimeoutSeconds
+	}
+	if disk.Toolset.Bash.OutputByteLimit != nil {
+		cfg.Toolset.Bash.OutputByteLimit = *disk.Toolset.Bash.OutputByteLimit
 	}
 	if disk.Toolset.Hashline.Scheme != nil {
 		cfg.Toolset.Hashline.Scheme = strings.TrimSpace(*disk.Toolset.Hashline.Scheme)
@@ -2152,6 +2179,12 @@ func applyEnv(cfg *Config) {
 			cfg.WebFetch.ProxyConfigured = true
 		}
 	}
+	if !cfg.WebFetch.LocalConfigured {
+		if value, ok := envBool("GROK_WEB_FETCH_ALLOW_LOCAL"); ok {
+			cfg.WebFetch.AllowLocal = value
+			cfg.WebFetch.LocalConfigured = true
+		}
+	}
 	if value := os.Getenv("GROK_AUTO_COMPACT_THRESHOLD_PERCENT"); value != "" {
 		if parsed, err := strconv.Atoi(value); err == nil && parsed >= 0 && parsed <= 100 {
 			cfg.AutoCompactThresholdPercent = parsed
@@ -2892,6 +2925,9 @@ func (c Config) Validate() error {
 	}
 	if c.Toolset.Hashline.Scheme == "chunk" && c.Toolset.Hashline.ChunkSize < 1 {
 		return errors.New("toolset hashline chunk_size must be greater than zero")
+	}
+	if math.IsNaN(c.Toolset.Bash.TimeoutSeconds) || math.IsInf(c.Toolset.Bash.TimeoutSeconds, 0) || c.Toolset.Bash.TimeoutSeconds < 0 {
+		return errors.New("toolset bash timeout_secs must be finite and non-negative")
 	}
 	if c.Pruning.KeepLastNTurns < 0 || c.Pruning.SoftTrimThreshold < 0 || c.Pruning.SoftTrimHead < 0 || c.Pruning.SoftTrimTail < 0 || c.Pruning.HardClearAgeTurns < 0 {
 		return errors.New("compaction pruning values must not be negative")

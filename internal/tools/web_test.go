@@ -9,7 +9,9 @@ import (
 	"image/color"
 	"image/png"
 	"io"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -53,8 +55,66 @@ func TestWebFetchReadsBoundedTextAndRejectsPrivateByDefault(t *testing.T) {
 	}
 }
 
+func TestWebFetchAllowLocalOnlyPermitsExplicitLoopback(t *testing.T) {
+	for _, raw := range []string{"http://localhost:8080/page", "http://127.0.0.1:8080/page", "http://[::1]:8080/page"} {
+		if _, err := validateFetchURL(context.Background(), raw, true); err != nil {
+			t.Fatalf("explicit loopback %q was rejected: %v", raw, err)
+		}
+	}
+	for _, raw := range []string{"http://localhost:8080/page", "http://10.0.0.1/page", "http://192.168.1.1/page", "http://169.254.169.254/latest"} {
+		if _, err := validateFetchURL(context.Background(), raw, false); err == nil {
+			t.Fatalf("private URL %q was accepted by default", raw)
+		}
+	}
+	for _, raw := range []string{"http://10.0.0.1/page", "http://192.168.1.1/page", "http://169.254.169.254/latest"} {
+		if _, err := validateFetchURL(context.Background(), raw, true); err == nil {
+			t.Fatalf("allow_local accepted non-loopback URL %q", raw)
+		}
+	}
+}
+
+func TestWebFetchRejectsSpecialPurposeNetworks(t *testing.T) {
+	for _, raw := range []string{
+		"0.1.2.3", "100.64.0.1", "192.0.0.1", "192.0.2.1", "198.18.0.1",
+		"198.51.100.1", "203.0.113.1", "240.0.0.1", "255.255.255.255",
+	} {
+		if isPublicIP(net.ParseIP(raw)) {
+			t.Errorf("special-purpose address %s was public", raw)
+		}
+	}
+	for _, raw := range []string{"1.1.1.1", "8.8.8.8", "93.184.216.34"} {
+		if !isPublicIP(net.ParseIP(raw)) {
+			t.Errorf("public address %s was blocked", raw)
+		}
+	}
+}
+
+func TestWebFetchAllowLocalReachesLoopbackHTTP(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		fmt.Fprint(writer, "local fixture")
+	}))
+	defer server.Close()
+	parsed, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry(ws, PromptApprover{Mode: PermissionAuto})
+	defer registry.Close()
+	registry.ConfigureWebFetch(WebFetchConfig{
+		AllowedDomains: []string{parsed.Hostname()}, RestrictDomains: true, AllowLocal: true,
+	})
+	output, err := registry.webFetch.Execute(context.Background(), json.RawMessage(`{"url":"`+server.URL+`"}`))
+	if err != nil || !strings.Contains(output, "local fixture") {
+		t.Fatalf("output=%q err=%v", output, err)
+	}
+}
+
 func TestWebFetchURLValidationBounds(t *testing.T) {
-	if _, err := validateFetchURL(context.Background(), "https://localhost/page", true); err == nil || !strings.Contains(err.Error(), "single-label") {
+	if _, err := validateFetchURL(context.Background(), "https://intranet/page", true); err == nil || !strings.Contains(err.Error(), "single-label") {
 		t.Fatalf("unexpected single-label error: %v", err)
 	}
 	tooLong := "https://example.com/" + strings.Repeat("x", maxWebFetchURL)

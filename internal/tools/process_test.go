@@ -520,3 +520,77 @@ func TestProcessWaitOutputTracksBlockingConsumptionAndTimeout(t *testing.T) {
 	default:
 	}
 }
+
+func TestConfigureBashBoundsForegroundTimeoutAndOutput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture is Unix-specific")
+	}
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewProcessManager(ws, PromptApprover{Mode: PermissionAuto})
+	defer manager.Close()
+
+	if got := manager.defaultShellTimeout(); got != defaultBashTimeout {
+		t.Fatalf("default timeout=%s want %s", got, defaultBashTimeout)
+	}
+	if got := manager.outputByteLimit(); got != defaultBashOutputBytes {
+		t.Fatalf("default output limit=%d want %d", got, defaultBashOutputBytes)
+	}
+
+	manager.ConfigureBash(0, 0)
+	if manager.defaultShellTimeout() != defaultBashTimeout || manager.outputByteLimit() != defaultBashOutputBytes {
+		t.Fatal("zero configuration overrode the built-in defaults")
+	}
+
+	manager.ConfigureBash(30*time.Second, 64)
+	if got := manager.defaultShellTimeout(); got != 30*time.Second {
+		t.Fatalf("configured timeout=%s", got)
+	}
+	output, err := manager.RunForeground(context.Background(), "printf '%0.sx' $(seq 1 200)", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, body, found := strings.Cut(output, "\n")
+	if !found || status != "exit: 0" {
+		t.Fatalf("unexpected foreground result %q", output)
+	}
+	// tailBuffer keeps the tail and adds "[earlier output truncated]\n" prefix
+	// when truncation occurred. 200 'x' → 64-byte tail + 27-byte prefix = 91.
+	prefix := "[earlier output truncated]\n"
+	if !strings.HasPrefix(body, prefix) {
+		t.Fatalf("expected truncation prefix, got: %q", body)
+	}
+	tail := strings.TrimPrefix(body, prefix)
+	if len(tail) != 64 {
+		t.Fatalf("tail is %d bytes, want 64", len(tail))
+	}
+	if tail != strings.Repeat("x", 64) {
+		t.Fatalf("tail content mismatch: %q", tail)
+	}
+	id, err := manager.Start(context.Background(), "printf '%0.sy' $(seq 1 200)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	background, err := manager.WaitOutput(context.Background(), id, time.Second)
+	if err != nil || !strings.Contains(background, prefix+strings.Repeat("y", 64)) {
+		t.Fatalf("background output=%q err=%v", background, err)
+	}
+
+	manager.ConfigureBash(50*time.Millisecond, 0)
+	if got := manager.defaultShellTimeout(); got != 50*time.Millisecond {
+		t.Fatalf("timeout not configured: got %s", got)
+	}
+	start := time.Now()
+	output, err = manager.RunForeground(context.Background(), "sleep 5", 0)
+	if err != nil {
+		t.Fatalf("RunForeground returned error: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 4*time.Second {
+		t.Fatalf("configured timeout was ignored: elapsed %s", elapsed)
+	}
+	if !strings.Contains(output, "killed (timeout)") {
+		t.Fatalf("expected timeout status, got: %q", output)
+	}
+}

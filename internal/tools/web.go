@@ -57,6 +57,7 @@ func (e *crossHostRedirectError) Error() string { return "cross-host web redirec
 type webFetchTool struct {
 	approver        Approver
 	client          *http.Client
+	allowLocal      bool
 	allowPrivate    bool
 	cache           webFetchCache
 	artifactDir     string
@@ -121,9 +122,13 @@ func (c *webFetchCache) cacheTTL() time.Duration {
 }
 
 func (t *webFetchTool) Definition() api.ToolDefinition {
+	description := "Fetch a public HTTP(S) URL as bounded text. Private and local network addresses are rejected."
+	if t.allowLocal {
+		description = "Fetch an HTTP(S) URL as bounded text. Explicit loopback hosts are allowed; other private network addresses are rejected."
+	}
 	return api.ToolDefinition{
 		Type: "function", Name: "web_fetch",
-		Description: "Fetch a public HTTP(S) URL as bounded text. Private and local network addresses are rejected.",
+		Description: description,
 		Parameters: objectSchema(map[string]any{
 			"url": map[string]any{"type": "string", "description": "Absolute http or https URL."},
 		}, "url"),
@@ -137,18 +142,20 @@ func (t *webFetchTool) Execute(ctx context.Context, raw json.RawMessage) (string
 	if json.Unmarshal(raw, &args) != nil || strings.TrimSpace(args.URL) == "" {
 		return "", errors.New("url is required")
 	}
-	parsed, err := parseFetchURL(args.URL)
+	parsed, err := parseFetchURL(args.URL, t.allowLocal)
 	if err != nil {
 		return "", err
 	}
-	if parsed.Scheme == "http" {
+	if parsed.Scheme == "http" && !(t.allowLocal && isExplicitLocalHost(parsed.Hostname())) {
 		parsed.Scheme = "https"
 	}
 	if t.restrictDomains && !webDomainAllowed(t.domainRules, parsed) {
 		return fmt.Sprintf("Error: domain %s is not in the allowed domains list", parsed.Hostname()), nil
 	}
-	if err := validateFetchHost(ctx, parsed, t.allowPrivate); err != nil {
-		return "", err
+	if !t.allowPrivate {
+		if err := validateFetchHost(ctx, parsed, t.allowLocal); err != nil {
+			return "", err
+		}
 	}
 	if t.approver != nil {
 		if err := t.approver.Approve(ctx, "web fetch", parsed.String()); err != nil {
@@ -179,8 +186,10 @@ func (t *webFetchTool) Execute(ctx context.Context, raw json.RawMessage) (string
 		if t.restrictDomains && !webDomainAllowed(t.domainRules, request.URL) {
 			return errors.New("redirect URL is not in the allowed domains list")
 		}
-		if _, err := validateFetchURL(request.Context(), request.URL.String(), t.allowPrivate); err != nil {
-			return err
+		if !t.allowPrivate {
+			if _, err := validateFetchURL(request.Context(), request.URL.String(), t.allowLocal); err != nil {
+				return err
+			}
 		}
 		if previousRedirect != nil {
 			return previousRedirect(request, via)
@@ -279,7 +288,9 @@ func (t *webFetchTool) Execute(ctx context.Context, raw json.RawMessage) (string
 }
 
 func (t *webFetchTool) newHTTPClient() (*http.Client, error) {
-	transport := &http.Transport{DialContext: safeDialContext}
+	transport := &http.Transport{DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+		return safeDialContext(ctx, network, address, t.allowLocal)
+	}}
 	if t.proxyEndpoint != "" {
 		proxy, err := url.Parse(t.proxyEndpoint)
 		if err != nil || (proxy.Scheme != "http" && proxy.Scheme != "https") || proxy.Hostname() == "" {
@@ -532,35 +543,32 @@ func isTextWebContent(mediaType string) bool {
 	return strings.HasPrefix(mediaType, "text/") || mediaType == "application/json" || mediaType == "application/javascript" || mediaType == "application/xml" || strings.HasSuffix(mediaType, "+json") || strings.HasSuffix(mediaType, "+xml")
 }
 
-func validateFetchURL(ctx context.Context, raw string, allowPrivate bool) (*url.URL, error) {
-	parsed, err := parseFetchURL(raw)
+func validateFetchURL(ctx context.Context, raw string, allowLocal bool) (*url.URL, error) {
+	parsed, err := parseFetchURL(raw, allowLocal)
 	if err != nil {
 		return nil, err
 	}
-	if err := validateFetchHost(ctx, parsed, allowPrivate); err != nil {
+	if err := validateFetchHost(ctx, parsed, allowLocal); err != nil {
 		return nil, err
 	}
 	return parsed, nil
 }
 
-func parseFetchURL(raw string) (*url.URL, error) {
+func parseFetchURL(raw string, allowLocal bool) (*url.URL, error) {
 	if len(raw) > maxWebFetchURL {
 		return nil, fmt.Errorf("web_fetch URL exceeds %d characters", maxWebFetchURL)
 	}
 	parsed, err := url.Parse(raw)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" || parsed.User != nil {
-		return nil, errors.New("web_fetch requires an absolute public http(s) URL without credentials")
+		return nil, errors.New("web_fetch requires an absolute http(s) URL without credentials")
 	}
-	if !strings.Contains(parsed.Hostname(), ".") {
+	if !strings.Contains(parsed.Hostname(), ".") && !(allowLocal && isExplicitLocalHost(parsed.Hostname())) {
 		return nil, fmt.Errorf("web_fetch rejects single-label host %q", parsed.Hostname())
 	}
 	return parsed, nil
 }
 
-func validateFetchHost(ctx context.Context, parsed *url.URL, allowPrivate bool) error {
-	if allowPrivate {
-		return nil
-	}
+func validateFetchHost(ctx context.Context, parsed *url.URL, allowLocal bool) error {
 	addresses, err := net.DefaultResolver.LookupIPAddr(ctx, parsed.Hostname())
 	if err != nil {
 		return fmt.Errorf("resolve URL host: %w", err)
@@ -570,7 +578,7 @@ func validateFetchHost(ctx context.Context, parsed *url.URL, allowPrivate bool) 
 	}
 	for _, address := range addresses {
 		ip := address.IP
-		if !isPublicIP(ip) {
+		if !isPublicIP(ip) && !(allowLocal && isExplicitLocalHost(parsed.Hostname()) && isLoopbackIP(ip)) {
 			return fmt.Errorf("URL host resolves to a non-public address: %s", ip)
 		}
 	}
@@ -582,7 +590,7 @@ func sameWebHost(first, second *url.URL) bool {
 	return stripWWW(first.Hostname()) == stripWWW(second.Hostname())
 }
 
-func safeDialContext(ctx context.Context, network, address string) (net.Conn, error) {
+func safeDialContext(ctx context.Context, network, address string, allowLocal bool) (net.Conn, error) {
 	host, port, err := net.SplitHostPort(address)
 	if err != nil {
 		return nil, err
@@ -594,7 +602,7 @@ func safeDialContext(ctx context.Context, network, address string) (net.Conn, er
 	dialer := &net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}
 	var lastErr error
 	for _, resolved := range addresses {
-		if !isPublicIP(resolved.IP) {
+		if !isPublicIP(resolved.IP) && !(allowLocal && isExplicitLocalHost(host) && isLoopbackIP(resolved.IP)) {
 			return nil, fmt.Errorf("refusing non-public dial address %s", resolved.IP)
 		}
 		connection, err := dialer.DialContext(ctx, network, net.JoinHostPort(resolved.IP.String(), port))
@@ -610,5 +618,29 @@ func safeDialContext(ctx context.Context, network, address string) (net.Conn, er
 }
 
 func isPublicIP(ip net.IP) bool {
+	if v4 := ip.To4(); v4 != nil {
+		if v4.IsLoopback() || v4.IsPrivate() || v4.IsLinkLocalUnicast() || v4.IsUnspecified() || v4.IsMulticast() {
+			return false
+		}
+		return !(v4[0] == 0 ||
+			v4[0] == 100 && v4[1]&0xc0 == 64 ||
+			v4[0] == 192 && v4[1] == 0 && (v4[2] == 0 || v4[2] == 2) ||
+			v4[0] == 198 && (v4[1]&0xfe == 18 || v4[1] == 51 && v4[2] == 100) ||
+			v4[0] == 203 && v4[1] == 0 && v4[2] == 113 ||
+			v4[0] >= 240)
+	}
 	return !(ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast())
+}
+
+func isLoopbackIP(ip net.IP) bool {
+	return ip.IsLoopback() || ip.To4() != nil && ip.To4().IsLoopback()
+}
+
+func isExplicitLocalHost(host string) bool {
+	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	return ip != nil && isLoopbackIP(ip)
 }

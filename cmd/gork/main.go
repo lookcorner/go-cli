@@ -711,6 +711,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return err
 	}
 	registry.ConfigureEnvironment(cfg.Env)
+	registry.ConfigureBash(bashTimeout(cfg.Toolset.Bash.TimeoutSeconds), bashOutputLimit(cfg.Toolset.Bash.OutputByteLimit))
 	if err := registry.ConfigureFileToolset(cfg.Toolset.FileToolset, cfg.Toolset.Hashline.Scheme, cfg.Toolset.Hashline.HashLen, cfg.Toolset.Hashline.ChunkSize); err != nil {
 		_ = registry.Close()
 		return err
@@ -729,7 +730,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	registry.ConfigureWebFetch(tools.WebFetchConfig{
 		ArtifactDir: artifactDir, ContextWindow: cfg.ContextWindow,
 		ProxyEndpoint: cfg.WebFetch.ProxyEndpoint, AllowedDomains: cfg.WebFetch.AllowedDomains,
-		RestrictDomains: cfg.WebFetch.DomainsConfigured,
+		RestrictDomains: cfg.WebFetch.DomainsConfigured, AllowLocal: cfg.WebFetch.AllowLocal,
 	})
 	registry.SetWebFetchEnabled(cfg.WebFetch.Enabled && !opts.disableWebSearch)
 	if err := registry.ConfigureHunkState(artifactDir); err != nil {
@@ -3573,6 +3574,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			return nil, nil, err
 		}
 		registry.ConfigureEnvironment(sessionCfg.Env)
+		registry.ConfigureBash(bashTimeout(sessionCfg.Toolset.Bash.TimeoutSeconds), bashOutputLimit(sessionCfg.Toolset.Bash.OutputByteLimit))
 		if err := registry.ConfigureFileToolset(sessionCfg.Toolset.FileToolset, sessionCfg.Toolset.Hashline.Scheme, sessionCfg.Toolset.Hashline.HashLen, sessionCfg.Toolset.Hashline.ChunkSize); err != nil {
 			_ = registry.Close()
 			return nil, nil, err
@@ -3625,9 +3627,9 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			return nil, nil, err
 		}
 		registry.ConfigureWebFetch(tools.WebFetchConfig{
-			ArtifactDir: artifactDir, ContextWindow: cfg.ContextWindow,
-			ProxyEndpoint: cfg.WebFetch.ProxyEndpoint, AllowedDomains: cfg.WebFetch.AllowedDomains,
-			RestrictDomains: cfg.WebFetch.DomainsConfigured,
+			ArtifactDir: artifactDir, ContextWindow: sessionCfg.ContextWindow,
+			ProxyEndpoint: sessionCfg.WebFetch.ProxyEndpoint, AllowedDomains: sessionCfg.WebFetch.AllowedDomains,
+			RestrictDomains: sessionCfg.WebFetch.DomainsConfigured, AllowLocal: sessionCfg.WebFetch.AllowLocal,
 		})
 		if err := registry.ConfigureSchedulerState(artifactDir); err != nil {
 			_ = logger.Close()
@@ -6061,4 +6063,17 @@ func notificationHooks(entries []config.NotificationHookConfig) []notify.Hook {
 		hooks = append(hooks, hook)
 	}
 	return hooks
+}
+
+// bashTimeout converts a configured [toolset.bash] second count, treating zero
+// or negative values as "use the built-in default".
+func bashTimeout(seconds float64) time.Duration {
+	if seconds <= 0 {
+		return 0
+	}
+	return time.Duration(min(seconds, 36000) * float64(time.Second))
+}
+
+func bashOutputLimit(bytes uint64) int {
+	return int(min(bytes, uint64(^uint(0)>>1)))
 }

@@ -54,6 +54,21 @@ func TestDashboardDisabledUsesConfigAndEnvironmentOverride(t *testing.T) {
 	}
 }
 
+func TestBashConfigRuntimeBounds(t *testing.T) {
+	if bashTimeout(0) != 0 || bashTimeout(-1) != 0 {
+		t.Fatal("non-positive bash timeout did not select the default")
+	}
+	if got := bashTimeout(0.25); got != 250*time.Millisecond {
+		t.Fatalf("fractional timeout=%s", got)
+	}
+	if got := bashTimeout(40000); got != 10*time.Hour {
+		t.Fatalf("timeout clamp=%s", got)
+	}
+	if got := bashOutputLimit(^uint64(0)); got <= 0 || uint64(got) > uint64(^uint(0)>>1) {
+		t.Fatalf("output limit=%d", got)
+	}
+}
+
 func TestDashboardCommandRejectsPositionalArguments(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	err := runOnce([]string{"dashboard", "prompt"}, strings.NewReader(""), &stdout, &stderr)
