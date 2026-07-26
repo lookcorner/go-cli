@@ -17,6 +17,13 @@ import (
 // Tests replace this to keep reports independent of host microphones.
 var probeVoiceInput = voice.ProbeInput
 
+// pathExists reports whether a filesystem path exists. Tests replace this for
+// container-without-display classification.
+var pathExists = func(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
 const SchemaVersion = "1"
 
 type Snapshot struct {
@@ -257,10 +264,7 @@ func terminalFindings(getenv func(string) string, term, brand, color, multiplexe
 		findings = append(findings, "Apple Terminal doesn't support OSC 52, so clipboard copy over SSH is unavailable.\n    Run `gork wrap ssh <host>` on your local computer, or use a terminal that supports OSC 52. Gork also saves each copy to the backup file shown in the copy message.")
 	}
 	findings = append(findings, clipboardCaveatFindings(getenv, brand, ssh, clipboard, osc52)...)
-	findings = append(findings, clipboardDeliveryFindings(getenv, brand, ssh, osc52)...)
-	if !clipboard && !osc52 {
-		findings = append(findings, "No clipboard route is available; install a native clipboard tool or enable OSC 52.")
-	}
+	findings = append(findings, clipboardDeliveryFindings(getenv, brand, ssh, clipboard, osc52)...)
 	return findings
 }
 
@@ -280,16 +284,47 @@ func clipboardCaveatFindings(getenv func(string) string, brand string, ssh, clip
 	return findings
 }
 
-// clipboardDeliveryFindings mirrors reference clipboard.delivery-unverified for
-// SSH sessions where OSC 52 is the route but the outer brand is unknown.
-func clipboardDeliveryFindings(getenv func(string) string, brand string, ssh, osc52 bool) []string {
-	if !ssh || !osc52 || wrapSinkActive(getenv) {
+// clipboardDeliveryFindings mirrors reference clipboard.delivery-unverified and
+// clipboard.delivery-unavailable based on native/OSC 52 confidence.
+func clipboardDeliveryFindings(getenv func(string) string, brand string, ssh, clipboard, osc52 bool) []string {
+	if wrapSinkActive(getenv) {
 		return nil
 	}
-	if supportsOSC52Clipboard(getenv, brand) || isAppleTerminal(brand) {
+	container := isContainerizedWithoutDisplay(getenv)
+	if clipboard && !ssh && !container {
 		return nil
 	}
-	return []string{"Grok can't verify this clipboard route across the remote boundary.\n    When you copy, Grok sends OSC 52 but can't confirm that the outer terminal accepted it. Each copy is also saved to a backup file; the copy message shows the path. If paste fails, run `gork wrap ssh <host>` on your local computer or use `/minimal`. For repeated SSH sessions, run `gork doctor fix ssh-wrap` on your local computer."}
+	if osc52 && supportsOSC52Clipboard(getenv, brand) {
+		return nil
+	}
+	unknownBrand := osc52 && !supportsOSC52Clipboard(getenv, brand) && !isAppleTerminal(brand)
+	if unknownBrand && ssh {
+		return []string{"Grok can't verify this clipboard route across the remote boundary.\n    When you copy, Grok sends OSC 52 but can't confirm that the outer terminal accepted it. Each copy is also saved to a backup file; the copy message shows the path. If paste fails, run `gork wrap ssh <host>` on your local computer or use `/minimal`. For repeated SSH sessions, run `gork doctor fix ssh-wrap` on your local computer."}
+	}
+	if unknownBrand && container {
+		return []string{"Grok can't verify this clipboard route across the container boundary.\n    When you copy, Grok sends OSC 52 but can't confirm that the outer terminal accepted it. Each copy is also saved to a backup file; the copy message shows the path. If paste fails, start the container command with local `gork wrap <command>`, or use `/minimal`."}
+	}
+	// Apple Terminal over SSH already has a dedicated OSC 52 finding.
+	if isAppleTerminal(brand) && ssh {
+		return nil
+	}
+	if ssh {
+		return []string{"This clipboard route can't reach the target clipboard.\n    When you copy, Grok saves the text to the backup file shown in the copy message. To copy directly, run `gork wrap ssh <host>` on your local computer. For repeated SSH sessions, run `gork doctor fix ssh-wrap` there. You can also use `/copy <file>` or `/minimal`."}
+	}
+	if container {
+		return []string{"This clipboard route can't reach the target clipboard.\n    When you copy, Grok saves the text to the backup file shown in the copy message. Start the container command with local `gork wrap <command>`, use `/copy <file>`, or use `/minimal`."}
+	}
+	return []string{"This clipboard route can't reach the target clipboard.\n    When you copy, Grok saves the text to the backup file shown in the copy message. Use `/copy <file>` or `/minimal`, then check the native clipboard tool listed above."}
+}
+
+func isContainerizedWithoutDisplay(getenv func(string) string) bool {
+	if getenv("DISPLAY") != "" || getenv("WAYLAND_DISPLAY") != "" {
+		return false
+	}
+	if pathExists("/.dockerenv") || pathExists("/run/.containerenv") {
+		return true
+	}
+	return getenv("container") != ""
 }
 
 func supportsOSC52Clipboard(getenv func(string) string, brand string) bool {

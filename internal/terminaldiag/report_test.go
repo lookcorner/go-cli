@@ -10,10 +10,11 @@ import (
 )
 
 func init() {
-	// Keep doctor report tests independent of the host microphone.
+	// Keep doctor report tests independent of the host microphone and container markers.
 	probeVoiceInput = func(func(string) (string, error)) voice.InputProbe {
 		return voice.InputProbe{}
 	}
+	pathExists = func(string) bool { return false }
 }
 
 func TestIsCommand(t *testing.T) {
@@ -217,10 +218,55 @@ func TestBuildReportExplainsDegradedEnvironment(t *testing.T) {
 	}, "linux")
 	for _, want := range []string{
 		"terminal     dumb", "color        none", "native       off", "osc 52       off",
-		"4 issue(s)", "TERM=dumb", "No clipboard route", "terminal bell", "unfocused",
+		"4 issue(s)", "TERM=dumb", "can't reach the target clipboard", "`/copy <file>`",
+		"terminal bell", "unfocused",
 	} {
 		if !strings.Contains(report, want) {
 			t.Errorf("missing %q in %q", want, report)
+		}
+	}
+}
+
+func TestBuildSnapshotWarnsForUnavailableContainerClipboard(t *testing.T) {
+	prev := pathExists
+	pathExists = func(string) bool { return false }
+	t.Cleanup(func() { pathExists = prev })
+
+	env := map[string]string{
+		"TERM": "dumb", "container": "docker",
+	}
+	snapshot := BuildSnapshot(func(key string) string { return env[key] }, func(string) (string, error) {
+		return "", errors.New("missing")
+	}, "linux")
+	joined := strings.Join(snapshot.Findings, "\n")
+	for _, want := range []string{
+		"can't reach the target clipboard", "gork wrap <command>", "`/minimal`",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("missing %q in %q", want, joined)
+		}
+	}
+	if strings.Contains(joined, "wrap ssh") {
+		t.Fatalf("container unavailable should not recommend ssh-wrap: %q", joined)
+	}
+}
+
+func TestBuildSnapshotWarnsForUnverifiedContainerClipboard(t *testing.T) {
+	prev := pathExists
+	pathExists = func(path string) bool { return path == "/.dockerenv" }
+	t.Cleanup(func() { pathExists = prev })
+
+	env := map[string]string{"TERM": "xterm-256color", "COLORTERM": "truecolor"}
+	snapshot := BuildSnapshot(func(key string) string { return env[key] }, func(string) (string, error) {
+		return "", errors.New("missing")
+	}, "linux")
+	joined := strings.Join(snapshot.Findings, "\n")
+	for _, want := range []string{
+		"can't verify this clipboard route across the container boundary",
+		"gork wrap <command>", "`/minimal`",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("missing %q in %q", want, joined)
 		}
 	}
 }
