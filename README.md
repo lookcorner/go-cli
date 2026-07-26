@@ -344,9 +344,10 @@ the community Releases page and the local source-build command.
 Use `gork wrap <command> [args...]` to run a container, SSH client, or other
 interactive command in a local Unix PTY or Windows ConPTY. OSC 52 clipboard
 writes, including tmux passthrough sequences, are copied to the local native
-clipboard and removed from visible output. Non-interactive and
-unsupported-platform runs execute the command directly, preserving its output
-and exit status.
+clipboard and removed from visible output. Latched mouse/paste/focus/alt-screen
+and kitty keyboard modes are restored when a child dies dirty; clean exits stay
+byte-transparent. Non-interactive and unsupported-platform runs execute the
+command directly, preserving its output and exit status.
 
 While the ACP server is running, model changes in `config.toml`, local/system
 `managed_config.toml`, and `requirements.toml` are detected automatically.
