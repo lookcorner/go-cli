@@ -206,7 +206,10 @@ Voice dictation supports the reference default `hold` capture mode on terminals
 with key-release reporting, runtime fallback to `toggle` elsewhere, and
 rollback-safe live `/settings` persistence of `[ui].voice_capture_mode` plus
 the default-on `[ui].voice_keybind_enabled` Ctrl-Space/F8 gate without disabling
-`/voice`.
+`/voice`. The default-on `[ui.contextual_hints].ssh_wrap` gate shows the
+reference one-shot `/doctor` discovery hint only for ordinary unwrapped SSH
+sessions, defers behind other hints, and pauses its ten-second lifetime while
+occluded.
 The TUI accepts Bubble Tea v2 bracketed-paste events as one undoable edit,
 preserves Unicode, multiline and trailing-newline content, normalizes bare
 carriage returns, and suppresses typed-only contextual nudges for pasted text.

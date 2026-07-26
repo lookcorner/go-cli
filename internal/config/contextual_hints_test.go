@@ -13,15 +13,16 @@ func TestContextualHintsDefaultAndLocalConfig(t *testing.T) {
 	cfg, err := Load(filepath.Join(t.TempDir(), "missing.toml"))
 	if err != nil || !cfg.UI.ContextualHints.Undo || !cfg.UI.ContextualHints.PlanMode ||
 		!cfg.UI.ContextualHints.ImageInput || !cfg.UI.ContextualHints.SendNow ||
-		!cfg.UI.ContextualHints.SmallScreen || !cfg.UI.ContextualHints.WordSelect {
+		!cfg.UI.ContextualHints.SmallScreen || !cfg.UI.ContextualHints.WordSelect ||
+		!cfg.UI.ContextualHints.SSHWrap {
 		t.Fatalf("default=%#v err=%v", cfg.UI.ContextualHints, err)
 	}
 
 	for _, test := range []struct {
 		name, file, content string
 	}{
-		{name: "toml", file: "config.toml", content: "[ui.contextual_hints]\nundo = false\nplan_mode = false\nimage_input = false\nsend_now = false\nsmall_screen = false\nword_select = false\n"},
-		{name: "json", file: "config.json", content: `{"ui":{"contextual_hints":{"undo":false,"plan_mode":false,"image_input":false,"send_now":false,"small_screen":false,"word_select":false}}}`},
+		{name: "toml", file: "config.toml", content: "[ui.contextual_hints]\nundo = false\nplan_mode = false\nimage_input = false\nsend_now = false\nsmall_screen = false\nword_select = false\nssh_wrap = false\n"},
+		{name: "json", file: "config.json", content: `{"ui":{"contextual_hints":{"undo":false,"plan_mode":false,"image_input":false,"send_now":false,"small_screen":false,"word_select":false,"ssh_wrap":false}}}`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), test.file)
@@ -30,7 +31,8 @@ func TestContextualHintsDefaultAndLocalConfig(t *testing.T) {
 			}
 			cfg, err := Load(path)
 			if err != nil || cfg.UI.ContextualHints.Undo || cfg.UI.ContextualHints.PlanMode || cfg.UI.ContextualHints.ImageInput ||
-				cfg.UI.ContextualHints.SendNow || cfg.UI.ContextualHints.SmallScreen || cfg.UI.ContextualHints.WordSelect {
+				cfg.UI.ContextualHints.SendNow || cfg.UI.ContextualHints.SmallScreen || cfg.UI.ContextualHints.WordSelect ||
+				cfg.UI.ContextualHints.SSHWrap {
 				t.Fatalf("config=%#v err=%v", cfg.UI.ContextualHints, err)
 			}
 		})
@@ -175,12 +177,35 @@ func TestContextualWordSelectHintRemoteAndLocalPrecedence(t *testing.T) {
 	}
 }
 
+func TestContextualSSHWrapHintRemoteAndLocalPrecedence(t *testing.T) {
+	cfg := Config{UI: UIConfig{ContextualHints: Hints{SSHWrap: true}}}
+	cfg.ApplyRemoteSettings(&RemoteSettings{ContextualHints: &RemoteHints{SSHWrap: boolPointer(false)}})
+	if cfg.UI.ContextualHints.SSHWrap {
+		t.Fatal("remote false was ignored")
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{})
+	if !cfg.UI.ContextualHints.SSHWrap {
+		t.Fatal("missing remote value did not restore the default")
+	}
+
+	for _, local := range []bool{false, true} {
+		cfg = Config{
+			UI:                            UIConfig{ContextualHints: Hints{SSHWrap: local}},
+			uiContextualSSHWrapConfigured: true,
+		}
+		cfg.ApplyRemoteSettings(&RemoteSettings{ContextualHints: &RemoteHints{SSHWrap: boolPointer(!local)}})
+		if cfg.UI.ContextualHints.SSHWrap != local {
+			t.Fatalf("local=%v resolved=%v", local, cfg.UI.ContextualHints.SSHWrap)
+		}
+	}
+}
+
 func TestContextualHintsEnvironmentOverridesLocalAndRemote(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
 		t.Run(map[bool]string{false: "off", true: "on"}[enabled], func(t *testing.T) {
 			t.Setenv("GROK_CONTEXTUAL_HINTS", map[bool]string{false: "0", true: "1"}[enabled])
 			path := filepath.Join(t.TempDir(), "config.toml")
-			if err := os.WriteFile(path, []byte("[ui.contextual_hints]\nundo = true\nplan_mode = true\nimage_input = true\nsend_now = true\nsmall_screen = true\nword_select = true\n"), 0o600); err != nil {
+			if err := os.WriteFile(path, []byte("[ui.contextual_hints]\nundo = true\nplan_mode = true\nimage_input = true\nsend_now = true\nsmall_screen = true\nword_select = true\nssh_wrap = true\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			cfg, err := Load(path)
@@ -190,10 +215,11 @@ func TestContextualHintsEnvironmentOverridesLocalAndRemote(t *testing.T) {
 			cfg.ApplyRemoteSettings(&RemoteSettings{ContextualHints: &RemoteHints{
 				Undo: boolPointer(!enabled), PlanMode: boolPointer(!enabled), ImageInput: boolPointer(!enabled),
 				SendNow: boolPointer(!enabled), SmallScreen: boolPointer(!enabled), WordSelect: boolPointer(!enabled),
+				SSHWrap: boolPointer(!enabled),
 			}})
 			if cfg.UI.ContextualHints.Undo != enabled || cfg.UI.ContextualHints.PlanMode != enabled || cfg.UI.ContextualHints.ImageInput != enabled ||
 				cfg.UI.ContextualHints.SendNow != enabled || cfg.UI.ContextualHints.SmallScreen != enabled ||
-				cfg.UI.ContextualHints.WordSelect != enabled {
+				cfg.UI.ContextualHints.WordSelect != enabled || cfg.UI.ContextualHints.SSHWrap != enabled {
 				t.Fatalf("hints=%#v", cfg.UI.ContextualHints)
 			}
 		})
@@ -206,7 +232,7 @@ func TestContextualHintsEnvironmentOverridesRequirements(t *testing.T) {
 	t.Setenv("GROK_CONTEXTUAL_HINTS", "0")
 	if err := os.WriteFile(
 		filepath.Join(home, "requirements.toml"),
-		[]byte("[ui.contextual_hints]\nundo = true\nplan_mode = true\nimage_input = true\nsend_now = true\nsmall_screen = true\nword_select = true\n"),
+		[]byte("[ui.contextual_hints]\nundo = true\nplan_mode = true\nimage_input = true\nsend_now = true\nsmall_screen = true\nword_select = true\nssh_wrap = true\n"),
 		0o600,
 	); err != nil {
 		t.Fatal(err)
@@ -216,7 +242,8 @@ func TestContextualHintsEnvironmentOverridesRequirements(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cfg.UI.ContextualHints.Undo || cfg.UI.ContextualHints.PlanMode || cfg.UI.ContextualHints.ImageInput ||
-		cfg.UI.ContextualHints.SendNow || cfg.UI.ContextualHints.SmallScreen || cfg.UI.ContextualHints.WordSelect {
+		cfg.UI.ContextualHints.SendNow || cfg.UI.ContextualHints.SmallScreen || cfg.UI.ContextualHints.WordSelect ||
+		cfg.UI.ContextualHints.SSHWrap {
 		t.Fatalf("requirements overrode environment: %#v", cfg.UI.ContextualHints)
 	}
 }
@@ -251,6 +278,9 @@ func TestUpdateContextualUndoHintPreservesConfig(t *testing.T) {
 			if err := UpdateContextualWordSelectHint(path, false); err != nil {
 				t.Fatal(err)
 			}
+			if err := UpdateContextualSSHWrapHint(path, false); err != nil {
+				t.Fatal(err)
+			}
 			root, err := readConfigMap(path)
 			if err != nil {
 				t.Fatal(err)
@@ -258,7 +288,8 @@ func TestUpdateContextualUndoHintPreservesConfig(t *testing.T) {
 			ui := root["ui"].(map[string]any)
 			hints := ui["contextual_hints"].(map[string]any)
 			if root["model_name"] != "test" || hints["plan_mode"] != true || hints["undo"] != false || hints["image_input"] != false ||
-				hints["send_now"] != false || hints["small_screen"] != false || hints["word_select"] != false {
+				hints["send_now"] != false || hints["small_screen"] != false || hints["word_select"] != false ||
+				hints["ssh_wrap"] != false {
 				data, _ := json.Marshal(root)
 				t.Fatalf("config=%s", data)
 			}
@@ -271,7 +302,7 @@ func TestUpdateContextualUndoHintPreservesConfig(t *testing.T) {
 
 func TestRemoteSettingsDecodesContextualHints(t *testing.T) {
 	var settings RemoteSettings
-	if err := json.Unmarshal([]byte(`{"contextual_hints":{"undo":false,"plan_mode":true,"image_input":false,"send_now":true,"small_screen":false,"word_select":true}}`), &settings); err != nil {
+	if err := json.Unmarshal([]byte(`{"contextual_hints":{"undo":false,"plan_mode":true,"image_input":false,"send_now":true,"small_screen":false,"word_select":true,"ssh_wrap":false}}`), &settings); err != nil {
 		t.Fatal(err)
 	}
 	if settings.ContextualHints == nil || settings.ContextualHints.Undo == nil || *settings.ContextualHints.Undo ||
@@ -279,7 +310,8 @@ func TestRemoteSettingsDecodesContextualHints(t *testing.T) {
 		settings.ContextualHints.ImageInput == nil || *settings.ContextualHints.ImageInput ||
 		settings.ContextualHints.SendNow == nil || !*settings.ContextualHints.SendNow ||
 		settings.ContextualHints.SmallScreen == nil || *settings.ContextualHints.SmallScreen ||
-		settings.ContextualHints.WordSelect == nil || !*settings.ContextualHints.WordSelect {
+		settings.ContextualHints.WordSelect == nil || !*settings.ContextualHints.WordSelect ||
+		settings.ContextualHints.SSHWrap == nil || *settings.ContextualHints.SSHWrap {
 		t.Fatalf("settings=%#v", settings.ContextualHints)
 	}
 }

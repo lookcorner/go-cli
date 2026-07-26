@@ -24,7 +24,7 @@ type settingsNumber struct {
 	large int
 }
 
-const settingsCount = 38
+const settingsCount = 39
 
 func (m *model) openSettings() {
 	m.settings = &settingsState{}
@@ -361,6 +361,15 @@ func (m *model) applySetting(selected int) {
 			state.err = persistSetting(m.persistCombineQueue(m.combineQueued), func() { m.combineQueued = previous })
 		}
 	case 37:
+		previous := m.sshWrapHint.enabled
+		m.sshWrapHint.enabled = !previous
+		if m.sshWrapHint.persist != nil {
+			state.err = persistSetting(m.sshWrapHint.persist(m.sshWrapHint.enabled), func() { m.sshWrapHint.enabled = previous })
+		}
+		if state.err == "" && !m.sshWrapHint.enabled {
+			m.sshWrapHint.active = false
+		}
+	case 38:
 		if m.minimal {
 			return
 		}
@@ -579,6 +588,7 @@ func (m *model) settingsContent() string {
 		settingLine("Show startup tips (restart)", m.showTips),
 		settingLine("Snap prompt to top on send", m.pageFlipOnSend),
 		settingLine("Combine queued prompts", m.combineQueued),
+		settingLine("SSH wrap hint", m.sshWrapHint.enabled),
 	}
 	if !m.minimal {
 		lines = append(lines, settingLine("Match display refresh rate (restart)", m.matchRefresh))

@@ -24,6 +24,10 @@ func UpdateContextualWordSelectHint(path string, enabled bool) error {
 	return updateContextualHint(path, "word_select", enabled)
 }
 
+func UpdateContextualSSHWrapHint(path string, enabled bool) error {
+	return updateContextualHint(path, "ssh_wrap", enabled)
+}
+
 func updateContextualHint(path, name string, enabled bool) error {
 	return updateUserConfig(path, func(root map[string]any) error {
 		ui, _ := root["ui"].(map[string]any)

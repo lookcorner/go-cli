@@ -141,6 +141,7 @@ type titleTickEvent struct{}
 type smallScreenHintTickEvent struct{ nonce uint64 }
 type wordSelectHintTickEvent struct{ nonce uint64 }
 type imageInputHintTickEvent struct{ nonce uint64 }
+type sshWrapHintTickEvent struct{ nonce uint64 }
 type foreignResumeEvent struct{ session *session.RecentForeignSession }
 type welcomeChangelogEvent struct{ bullets []string }
 
@@ -768,6 +769,8 @@ type model struct {
 	sendNowHint         contextualHintState
 	smallScreenHint     smallScreenHintState
 	wordSelectHint      wordSelectHintState
+	sshWrapHint         smallScreenHintState
+	sshWrapRecommended  bool
 	multiline           bool
 	history             []string
 	historyIndex        int
@@ -1104,6 +1107,9 @@ type UIOptions struct {
 	SetContextualSmall   func(bool) error
 	ContextualWord       bool
 	SetContextualWord    func(bool) error
+	ContextualSSHWrap    bool
+	SetContextualSSHWrap func(bool) error
+	SSHWrapRecommended   bool
 	DefaultPermission    string
 	SetDefaultPermission func(string) error
 	CancelSubs           string
@@ -1336,6 +1342,11 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 			enabled: options.ContextualWord,
 			persist: options.SetContextualWord,
 		},
+		sshWrapHint: smallScreenHintState{
+			enabled: options.ContextualSSHWrap,
+			persist: options.SetContextualSSHWrap,
+		},
+		sshWrapRecommended:   options.SSHWrapRecommended,
 		defaultPermission:    options.DefaultPermission,
 		persistPermission:    options.SetDefaultPermission,
 		cancelSubagents:      options.CancelSubs,
@@ -1514,6 +1525,9 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	current, ok := updated.(*model)
 	if ok {
 		if hintCommand := current.maybeStartSmallScreenHint(); hintCommand != nil {
+			command = tea.Batch(command, hintCommand)
+		}
+		if hintCommand := current.maybeStartSSHWrapHint(); hintCommand != nil {
 			command = tea.Batch(command, hintCommand)
 		}
 		if progressCommand := current.syncTurnActivity(); progressCommand != nil {
@@ -1783,6 +1797,18 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, m.wordSelectHintTick()
+	case sshWrapHintTickEvent:
+		if !m.sshWrapHint.active || m.sshWrapHint.nonce != msg.nonce {
+			return m, nil
+		}
+		if m.sshWrapHintCanRender() {
+			m.sshWrapHint.remaining -= 100 * time.Millisecond
+			if m.sshWrapHint.remaining <= 0 {
+				m.sshWrapHint.active = false
+				return m, nil
+			}
+		}
+		return m, m.sshWrapHintTick()
 	case foreignResumeEvent:
 		if m.foreignResumeReady && !m.running && len(m.input) == 0 && len(m.promptImages) == 0 && m.transcript.Len() == 0 {
 			m.foreignResume = msg.session
@@ -5510,6 +5536,36 @@ func (m *model) maybeStartSmallScreenHint() tea.Cmd {
 	return m.smallScreenHintTick()
 }
 
+func (m *model) maybeStartSSHWrapHint() tea.Cmd {
+	if m.sshWrapHint.evaluated || m.width == 0 || m.height == 0 {
+		return nil
+	}
+	if !m.sshWrapHint.enabled || !m.sshWrapRecommended {
+		m.sshWrapHint.evaluated = true
+		return nil
+	}
+	if !m.sshWrapHintCanRender() {
+		return nil
+	}
+	m.sshWrapHint.evaluated = true
+	m.sshWrapHint.active = true
+	m.sshWrapHint.remaining = 10 * time.Second
+	m.sshWrapHint.nonce++
+	return m.sshWrapHintTick()
+}
+
+func (m *model) sshWrapHintCanRender() bool {
+	return m.sshWrapHint.enabled && m.smallScreenHintCanRender() && !m.smallScreenHint.active &&
+		!m.wordSelectHint.active && !m.imageInputHint.active
+}
+
+func (m *model) sshWrapHintTick() tea.Cmd {
+	nonce := m.sshWrapHint.nonce
+	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
+		return sshWrapHintTickEvent{nonce: nonce}
+	})
+}
+
 func (m *model) showWordSelectHint() tea.Cmd {
 	if !m.wordSelectHint.enabled || m.wordSelectHint.shown >= 3 || m.selectionMode.selectsWord() ||
 		!m.wordSelectHintCanRender() {
@@ -6510,6 +6566,8 @@ func (m *model) View() tea.View {
 		statusText = "Image in clipboard · Ctrl-V to paste"
 	} else if m.smallScreenHint.active && m.smallScreenHintCanRender() {
 		statusText = "Tight on space? Try /compact-mode"
+	} else if m.sshWrapHint.active && m.sshWrapHintCanRender() {
+		statusText = "Run /doctor for details and fixes."
 	}
 	status := ansiDim + truncate(statusText, width) + ansiReset
 	if showFollowIndicator {

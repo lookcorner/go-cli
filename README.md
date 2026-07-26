@@ -871,6 +871,12 @@ On the first measured terminal size, heights from 21 through 28 rows show
 The three-second visible lifetime pauses while a modal or announcement covers
 the status row, and submitting a prompt does not dismiss it. Set
 `small_screen = false` under `[ui.contextual_hints]` to hide this hint.
+On an ordinary SSH session without an active Gork OSC 52 sink, the first stable
+TUI view shows `Run /doctor for details and fixes.` once for ten visible
+seconds. VS Code Remote and already wrapped sessions are excluded, and the timer
+pauses behind another hint or modal. Set `ssh_wrap = false` under
+`[ui.contextual_hints]` to hide this discovery hint without disabling `/doctor`
+or `gork wrap`.
 While a turn is running, Enter queues a non-empty follow-up. The TUI then
 shows `Queued · Enter to send now`; pressing Enter again with an empty composer
 injects the oldest queued follow-up into the current turn. Set

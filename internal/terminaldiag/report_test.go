@@ -87,6 +87,28 @@ func TestBuildReportRecommendsSSHWrap(t *testing.T) {
 	}
 }
 
+func TestSSHWrapRecommendedMatchesRemoteTransportShape(t *testing.T) {
+	tests := []struct {
+		name string
+		env  map[string]string
+		want bool
+	}{
+		{name: "plain ssh", env: map[string]string{"SSH_CONNECTION": "1 2 3 4"}, want: true},
+		{name: "ssh tty", env: map[string]string{"SSH_TTY": "/dev/pts/1"}, want: true},
+		{name: "local", env: map[string]string{}},
+		{name: "wrapped sink", env: map[string]string{"SSH_CONNECTION": "1", "GROK_OSC52_SINK": "1"}},
+		{name: "forwarded sink", env: map[string]string{"SSH_CONNECTION": "1", "LC_GROK_OSC52_SINK": "1"}},
+		{name: "vscode remote", env: map[string]string{"SSH_CONNECTION": "1", "TERM_PROGRAM": "vscode"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := sshWrapRecommended(func(key string) string { return test.env[key] }); got != test.want {
+				t.Fatalf("recommended=%v want=%v env=%#v", got, test.want, test.env)
+			}
+		})
+	}
+}
+
 func TestBuildReportWarnsForByobuScreen(t *testing.T) {
 	prev := probeTmuxOption
 	probeTmuxOption = func(string, bool) (string, bool) {

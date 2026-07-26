@@ -90,6 +90,7 @@ type RemoteHints struct {
 	SendNow     *bool `json:"send_now"`
 	SmallScreen *bool `json:"small_screen"`
 	WordSelect  *bool `json:"word_select"`
+	SSHWrap     *bool `json:"ssh_wrap"`
 }
 
 type RemoteAnnouncement = announcement.Announcement
@@ -236,6 +237,9 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 	}
 	if !c.uiContextualWordConfigured {
 		c.UI.ContextualHints.WordSelect = remote.ContextualHints == nil || remote.ContextualHints.WordSelect == nil || *remote.ContextualHints.WordSelect
+	}
+	if !c.uiContextualSSHWrapConfigured {
+		c.UI.ContextualHints.SSHWrap = remote.ContextualHints == nil || remote.ContextualHints.SSHWrap == nil || *remote.ContextualHints.SSHWrap
 	}
 	applyContextualHintsEnvironment(c)
 	if remote.OfficialMarketplaceAutoRegister != nil {

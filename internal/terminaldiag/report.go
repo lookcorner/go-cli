@@ -57,6 +57,15 @@ func ReportJSON() ([]byte, error) {
 	return json.MarshalIndent(BuildSnapshot(os.Getenv, exec.LookPath, runtime.GOOS), "", "  ")
 }
 
+func SSHWrapRecommended() bool {
+	return sshWrapRecommended(os.Getenv)
+}
+
+func sshWrapRecommended(getenv func(string) string) bool {
+	ssh := getenv("SSH_CONNECTION") != "" || getenv("SSH_TTY") != ""
+	return sshWrapRecommendation(getenv, ssh) != ""
+}
+
 func BuildSnapshot(getenv func(string) string, lookPath func(string) (string, error), goos string) Snapshot {
 	term := strings.TrimSpace(getenv("TERM"))
 	brand := terminalBrand(getenv, term)

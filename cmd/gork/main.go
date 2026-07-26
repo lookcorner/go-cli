@@ -1239,6 +1239,8 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			ContextualSendNow:    cfg.UI.ContextualHints.SendNow,
 			ContextualSmall:      cfg.UI.ContextualHints.SmallScreen,
 			ContextualWord:       cfg.UI.ContextualHints.WordSelect,
+			ContextualSSHWrap:    cfg.UI.ContextualHints.SSHWrap,
+			SSHWrapRecommended:   terminaldiag.SSHWrapRecommended(),
 			DefaultPermission:    cfg.UI.DefaultSelectedPermission,
 			CancelSubs:           cfg.UI.CancelSubagents,
 			DefaultModelID:       cfg.DefaultModelID,
@@ -1335,6 +1337,9 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			},
 			SetContextualWord: func(enabled bool) error {
 				return config.UpdateContextualWordSelectHint(opts.configPath, enabled)
+			},
+			SetContextualSSHWrap: func(enabled bool) error {
+				return config.UpdateContextualSSHWrapHint(opts.configPath, enabled)
 			},
 			SetDefaultPermission: func(value string) error {
 				if err := config.UpdateDefaultSelectedPermission(opts.configPath, value); err != nil {
