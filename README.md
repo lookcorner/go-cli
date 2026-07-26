@@ -976,6 +976,8 @@ condition = "unfocused"
 # Seconds the terminal must stay unfocused before a notification fires.
 idle_threshold_secs = 3
 events = ["turn_complete", "approval_required"]
+# Show an indeterminate progress indicator in the terminal tab (OSC 9;4).
+progress_bar = true
 ```
 
 `auto` sends OSC 9 to iTerm2, WezTerm, and Warp, OSC 99 to Kitty, OSC 777 to
@@ -987,6 +989,10 @@ passthrough instead. Supported events are `turn_complete`, `approval_required`
 `agent_error`. The notification names the current workspace, or the session
 title once `/rename` sets one. An unrecognized value in the table leaves the
 inherited defaults in place rather than failing startup.
+
+`progress_bar` lights the terminal tab while a turn runs and clears it when the
+turn finishes or the session exits. Only Ghostty, WezTerm, and iTerm2 3.6 or
+later render OSC 9;4; other terminals ignore the setting.
 The hidden, release-safe `/debug` command reports diagnostic state without a
 model turn. `/debug scroll` (also `/scroll-debug`) overlays live viewport and
 wheel state, `/debug fps` overlays bounded render-rate percentiles, and

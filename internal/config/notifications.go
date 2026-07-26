@@ -20,6 +20,9 @@ func mergeNotifications(current NotificationsConfig, disk *fileNotificationsConf
 	if disk.IdleThresholdSecs != nil {
 		merged.IdleThresholdSecs = *disk.IdleThresholdSecs
 	}
+	if disk.ProgressBar != nil {
+		merged.ProgressBar = *disk.ProgressBar
+	}
 	if disk.Events != nil {
 		merged.Events = make([]string, 0, len(disk.Events))
 		for _, event := range disk.Events {

@@ -294,9 +294,14 @@ honours `condition` (`unfocused` with an `idle_threshold_secs` clock, `always`, 
 `approval_required` — one notification per queued permission batch — and
 `session_ready`; focus reporting is only requested when the condition depends on
 it. An unknown enum value discards the whole table and keeps inherited defaults,
-matching the reference decoder. `task_complete` events, `[ui.notifications.title]`
-terminal titles, `progress_bar`, `sleep_prevention`, `session_recap`, and
-`[[ui.notifications.hooks]]` remain.
+matching the reference decoder. Default-on `progress_bar` drives the OSC 9;4 tab
+indicator on Ghostty, WezTerm, and iTerm2 3.6 or later — older iTerm2 renders the
+parameters as alert text, so it is treated as incapable — re-sending the
+indeterminate sequence on the reference five-second keep-alive while a turn runs,
+clearing it when the turn ends or the session exits, and using tmux passthrough
+only for servers new enough to forward it. `task_complete` events,
+`[ui.notifications.title]` terminal titles, `sleep_prevention`, `session_recap`,
+and `[[ui.notifications.hooks]]` remain.
 
 Compatibility is verified with Go unit/integration tests and will additionally
 use captured protocol fixtures from the Rust implementation. A status is only

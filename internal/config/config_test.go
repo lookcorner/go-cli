@@ -2559,13 +2559,13 @@ func TestNotificationsDefaultsMergeAndRejectUnknownValues(t *testing.T) {
 
 	defaults := load(t, "")
 	if defaults.Method != "auto" || defaults.Condition != "unfocused" || defaults.IdleThresholdSecs != 3 ||
-		strings.Join(defaults.Events, ",") != "turn_complete,approval_required" {
+		!defaults.ProgressBar || strings.Join(defaults.Events, ",") != "turn_complete,approval_required" {
 		t.Fatalf("defaults=%+v", defaults)
 	}
 
-	merged := load(t, "[ui.notifications]\nmethod = \"OSC99\"\nidle_threshold_secs = 60\nevents = [\"agent_error\"]\n")
+	merged := load(t, "[ui.notifications]\nmethod = \"OSC99\"\nidle_threshold_secs = 60\nevents = [\"agent_error\"]\nprogress_bar = false\n")
 	if merged.Method != "osc99" || merged.Condition != "unfocused" || merged.IdleThresholdSecs != 60 ||
-		strings.Join(merged.Events, ",") != "agent_error" {
+		merged.ProgressBar || strings.Join(merged.Events, ",") != "agent_error" {
 		t.Fatalf("merged=%+v", merged)
 	}
 
@@ -2573,10 +2573,10 @@ func TestNotificationsDefaultsMergeAndRejectUnknownValues(t *testing.T) {
 	for _, body := range []string{
 		"[ui.notifications]\nmethod = \"osc-9\"\nidle_threshold_secs = 60\n",
 		"[ui.notifications]\ncondition = \"idle\"\nidle_threshold_secs = 60\n",
-		"[ui.notifications]\nevents = [\"turn_complete\", \"typo\"]\nidle_threshold_secs = 60\n",
+		"[ui.notifications]\nevents = [\"turn_complete\", \"typo\"]\nidle_threshold_secs = 60\nprogress_bar = false\n",
 	} {
 		if got := load(t, body); got.Method != "auto" || got.Condition != "unfocused" || got.IdleThresholdSecs != 3 ||
-			strings.Join(got.Events, ",") != "turn_complete,approval_required" {
+			!got.ProgressBar || strings.Join(got.Events, ",") != "turn_complete,approval_required" {
 			t.Fatalf("%q kept an invalid table: %+v", body, got)
 		}
 	}

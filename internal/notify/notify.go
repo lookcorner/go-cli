@@ -69,7 +69,33 @@ const (
 // Terminal is the host terminal identity protocol selection depends on.
 type Terminal struct {
 	Brand       string // normalized brand key, e.g. "kitty", "ghostty"
+	Version     string // TERM_PROGRAM_VERSION, when the terminal reports one
 	Multiplexer string // "tmux", "zellij", "screen", or ""
+	MuxVersion  string // multiplexer version string, e.g. "tmux 3.4"
+}
+
+// versionAtLeast compares a reported version against major.minor, tolerating a
+// leading program name such as "tmux 3.4" and trailing patch components.
+func versionAtLeast(value string, major, minor int) bool {
+	value = strings.TrimSpace(value)
+	if index := strings.LastIndex(value, " "); index >= 0 {
+		value = value[index+1:]
+	}
+	parts := strings.SplitN(strings.TrimPrefix(value, "v"), ".", 3)
+	if len(parts) < 2 {
+		return false
+	}
+	digits := func(text string) (int, bool) {
+		end := 0
+		for end < len(text) && text[end] >= '0' && text[end] <= '9' {
+			end++
+		}
+		number, err := strconv.Atoi(text[:end])
+		return number, err == nil
+	}
+	gotMajor, majorOK := digits(parts[0])
+	gotMinor, minorOK := digits(parts[1])
+	return majorOK && minorOK && (gotMajor > major || gotMajor == major && gotMinor >= minor)
 }
 
 // DetectTerminal resolves terminal identity from the environment.
@@ -88,6 +114,7 @@ func DetectTerminal(lookup func(string) (string, bool)) Terminal {
 		terminal.Multiplexer = "screen"
 	}
 	terminal.Brand = detectBrand(value)
+	terminal.Version = value("TERM_PROGRAM_VERSION")
 	return terminal
 }
 
@@ -190,9 +217,15 @@ func Sequence(protocol Protocol, title, body string, tmux bool) string {
 		return ""
 	}
 	if tmux {
-		return "\x1bPtmux;" + strings.ReplaceAll(sequence, "\x1b", "\x1b\x1b") + "\x1b\\"
+		return "\x1bPtmux;" + escapeDoubled(sequence) + "\x1b\\"
 	}
 	return sequence
+}
+
+// escapeDoubled doubles ESC bytes so the inner terminal sees them verbatim once
+// tmux strips the passthrough envelope.
+func escapeDoubled(sequence string) string {
+	return strings.ReplaceAll(sequence, "\x1b", "\x1b\x1b")
 }
 
 // Settings is the resolved [ui.notifications] policy a session runs under.

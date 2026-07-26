@@ -1259,6 +1259,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			ShowTimeline:        cfg.UI.ShowTimeline,
 			PageFlipOnSend:      cfg.UI.PageFlipOnSend,
 			Notifications:       notificationSettings(cfg.UI.Notifications),
+			ProgressBar:         cfg.UI.Notifications.ProgressBar,
 			OpenDashboard:       opts.dashboard,
 			Foreign: session.ForeignSources{
 				Claude: cfg.Compat.Claude.Sessions && skillCatalog.Has("resume-claude"),

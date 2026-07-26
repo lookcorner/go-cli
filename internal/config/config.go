@@ -269,6 +269,7 @@ type NotificationsConfig struct {
 	Condition         string   `json:"condition"`
 	IdleThresholdSecs uint64   `json:"idle_threshold_secs"`
 	Events            []string `json:"events"`
+	ProgressBar       bool     `json:"progress_bar"`
 }
 
 // valid reports whether every enum value is one the reference accepts.
@@ -596,6 +597,7 @@ type fileNotificationsConfig struct {
 	Condition         *string  `json:"condition,omitempty" toml:"condition"`
 	IdleThresholdSecs *uint64  `json:"idle_threshold_secs,omitempty" toml:"idle_threshold_secs"`
 	Events            []string `json:"events,omitempty" toml:"events"`
+	ProgressBar       *bool    `json:"progress_bar,omitempty" toml:"progress_bar"`
 }
 
 type RefreshSettings struct {
@@ -833,7 +835,7 @@ func Load(path string) (Config, error) {
 		CancelRewindEnabled:         true,
 		Toolset:                     ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}},
 		Goal:                        GoalConfig{VerifierCount: 3, ClassifierMaxRuns: 10, ReverifyAfter: 8},
-		UI:                          UIConfig{MaxThoughtsWidth: 120, Theme: "groknight", AutoDarkTheme: "groknight", AutoLightTheme: "grokday", HunkTrackerMode: "agent_only", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, PageFlipOnSend: true, ShowThinkingBlocks: true, DisplayRefresh: DisplayRefreshConfig{ProbeEnabled: true, FloorMS: 8, CeilingMS: 16, MinHz: 55, MaxHz: 165}, ScrollSpeed: 50, ScrollMode: "auto", DefaultSelectedPermission: "always_allow_all_sessions", GroupToolVerbs: true, PromptSuggestions: true, ContextualHints: Hints{Undo: true, PlanMode: true, ImageInput: true, SendNow: true, SmallScreen: true, WordSelect: true}, VoiceCaptureMode: "hold", VoiceSTTLanguage: "en", PermissionMode: "ask", Notifications: NotificationsConfig{Method: "auto", Condition: "unfocused", IdleThresholdSecs: 3, Events: []string{"turn_complete", "approval_required"}}},
+		UI:                          UIConfig{MaxThoughtsWidth: 120, Theme: "groknight", AutoDarkTheme: "groknight", AutoLightTheme: "grokday", HunkTrackerMode: "agent_only", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, PageFlipOnSend: true, ShowThinkingBlocks: true, DisplayRefresh: DisplayRefreshConfig{ProbeEnabled: true, FloorMS: 8, CeilingMS: 16, MinHz: 55, MaxHz: 165}, ScrollSpeed: 50, ScrollMode: "auto", DefaultSelectedPermission: "always_allow_all_sessions", GroupToolVerbs: true, PromptSuggestions: true, ContextualHints: Hints{Undo: true, PlanMode: true, ImageInput: true, SendNow: true, SmallScreen: true, WordSelect: true}, VoiceCaptureMode: "hold", VoiceSTTLanguage: "en", PermissionMode: "ask", Notifications: NotificationsConfig{Method: "auto", Condition: "unfocused", IdleThresholdSecs: 3, Events: []string{"turn_complete", "approval_required"}, ProgressBar: true}},
 		Dashboard:                   DashboardConfig{Enabled: true, Grouping: "state"},
 		Sandbox:                     SandboxConfig{Profile: "off"},
 		Pruning:                     PruningConfig{Enabled: true, KeepLastNTurns: 3, SoftTrimThreshold: 4000, SoftTrimHead: 1500, SoftTrimTail: 1500, HardClearAgeTurns: 10},

@@ -103,6 +103,59 @@ func TestUnconfiguredEventsAndDisabledPolicyStaySilent(t *testing.T) {
 	bare.Update(turnDoneEvent{})
 }
 
+func TestProgressBarTracksTurnLifecycle(t *testing.T) {
+	bridge := NewBridge(context.Background(), tools.PermissionAuto)
+	t.Cleanup(bridge.Close)
+	progressModel := func(enabled bool, brand string) (*model, *[]string) {
+		emitted := &[]string{}
+		return &model{
+			bridge: bridge, width: 80, height: 24,
+			progress:   notify.NewProgress(enabled, notify.Terminal{Brand: brand}),
+			notifySink: func(sequence string) { *emitted = append(*emitted, sequence) },
+		}, emitted
+	}
+
+	m, emitted := progressModel(true, "ghostty")
+	updated, command := m.Update(progressTickEvent{})
+	m = updated.(*model)
+	if len(*emitted) != 0 || command != nil || m.progressTicking {
+		t.Fatalf("idle session emitted=%q ticking=%v", *emitted, m.progressTicking)
+	}
+
+	m.running = true
+	updated, command = m.Update(progressTickEvent{})
+	m = updated.(*model)
+	if len(*emitted) != 1 || (*emitted)[0] != "\x1b]9;4;1;-1\x07" || command == nil || !m.progressTicking {
+		t.Fatalf("turn start emitted=%q command=%v ticking=%v", *emitted, command != nil, m.progressTicking)
+	}
+
+	updated, _ = m.Update(progressTickEvent{})
+	m = updated.(*model)
+	if len(*emitted) != 1 {
+		t.Fatalf("re-emitted inside keepalive: %q", *emitted)
+	}
+
+	updated, _ = m.Update(turnDoneEvent{})
+	m = updated.(*model)
+	if len(*emitted) != 2 || (*emitted)[1] != "\x1b]9;4;0;0\x07" || m.running {
+		t.Fatalf("turn end emitted=%q running=%v", *emitted, m.running)
+	}
+	m.clearProgress()
+	if len(*emitted) != 2 {
+		t.Fatalf("exit repeated the clear: %q", *emitted)
+	}
+
+	disabled, disabledEmitted := progressModel(false, "ghostty")
+	disabled.running = true
+	disabled.Update(progressTickEvent{})
+	unsupported, unsupportedEmitted := progressModel(true, "kitty")
+	unsupported.running = true
+	unsupported.Update(progressTickEvent{})
+	if len(*disabledEmitted) != 0 || len(*unsupportedEmitted) != 0 {
+		t.Fatalf("disabled=%q unsupported=%q", *disabledEmitted, *unsupportedEmitted)
+	}
+}
+
 func TestFocusReportingFollowsNotificationPolicy(t *testing.T) {
 	events := []notify.Event{notify.TurnComplete}
 	for _, test := range []struct {

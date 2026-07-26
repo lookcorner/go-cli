@@ -136,6 +136,7 @@ type imageInputHintProbeEvent struct {
 	err     error
 }
 type turnStatusTickEvent struct{}
+type progressTickEvent struct{}
 type smallScreenHintTickEvent struct{ nonce uint64 }
 type wordSelectHintTickEvent struct{ nonce uint64 }
 type imageInputHintTickEvent struct{ nonce uint64 }
@@ -813,6 +814,8 @@ type model struct {
 	notifier            *notify.Notifier
 	notifySink          func(string)
 	notifyTitle         string
+	progress            *notify.Progress
+	progressTicking     bool
 	themeName           string
 	autoDarkTheme       string
 	autoLightTheme      string
@@ -1033,6 +1036,7 @@ type UIOptions struct {
 	PageFlipOnSend       bool
 	SetPageFlipOnSend    func(bool) error
 	Notifications        notify.Settings
+	ProgressBar          bool
 	ShowThinkingBlocks   bool
 	SetShowThinking      func(bool) error
 	ShowTips             bool
@@ -1234,6 +1238,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 	previousToolObserver := runner.ToolObserver
 	runner.ToolObserver = bridge
 	defer func() { runner.ToolObserver = previousToolObserver }()
+	notifyTerminal := resolveNotifyTerminal()
 	m := &model{
 		ctx: ctx, runner: runner, bridge: bridge, workspace: workspace,
 		foreignSessions:    options.Foreign,
@@ -1250,9 +1255,10 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		showTimestamps: options.ShowTimestamps, persistTimestamps: options.SetShowTimestamps,
 		showTimeline: options.ShowTimeline, persistTimeline: options.SetShowTimeline,
 		pageFlipOnSend: options.PageFlipOnSend, persistPageFlip: options.SetPageFlipOnSend,
-		notifier:     notify.New(options.Notifications, notify.DetectTerminal(os.LookupEnv)),
+		notifier:     notify.New(options.Notifications, notifyTerminal),
 		notifySink:   func(sequence string) { fmt.Fprint(os.Stderr, sequence) },
 		notifyTitle:  filepath.Base(workspace),
+		progress:     notify.NewProgress(options.ProgressBar, notifyTerminal),
 		showThinking: options.ShowThinkingBlocks, persistThinking: options.SetShowThinking,
 		showTips: options.ShowTips, persistShowTips: options.SetShowTips, startupTip: options.StartupTip,
 		respectManualFolds: options.RespectManualFolds, persistManualFolds: options.SetManualFolds,
@@ -1382,6 +1388,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 	program := tea.NewProgram(m, tea.WithContext(ctx), tea.WithFPS(options.RendererFPS))
 	final, err := program.Run()
 	m.stopVoice()
+	m.clearProgress()
 	if errors.Is(err, tea.ErrInterrupted) || errors.Is(err, context.Canceled) {
 		return nil, nil
 	}
@@ -1469,6 +1476,9 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	if ok {
 		if hintCommand := current.maybeStartSmallScreenHint(); hintCommand != nil {
 			command = tea.Batch(command, hintCommand)
+		}
+		if progressCommand := current.maybeProgressTick(); progressCommand != nil {
+			command = tea.Batch(command, progressCommand)
 		}
 		command = tea.Batch(command, current.flushKittyUploads())
 	}
@@ -1696,6 +1706,9 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, m.imageInputHintTick()
+	case progressTickEvent:
+		m.progressTicking = false
+		return m, nil
 	case turnStatusTickEvent:
 		m.turnStatusTicking = false
 		m.refreshParkedWait(time.Now())
@@ -4598,6 +4611,42 @@ func (m *model) updateFollowAfterScroll(lines, before int) {
 	}
 	if lines < 0 && before == 0 && m.scroll == 0 && !m.disableOverscroll {
 		m.stopFollow = false
+	}
+}
+
+// resolveNotifyTerminal identifies the host terminal once per session. The tmux
+// server version needs a subprocess, so it is only probed inside tmux.
+func resolveNotifyTerminal() notify.Terminal {
+	terminal := notify.DetectTerminal(os.LookupEnv)
+	if terminal.Multiplexer == "tmux" {
+		terminal.MuxVersion = detectTmuxVersion()
+	}
+	return terminal
+}
+
+// maybeProgressTick writes the OSC 9;4 tab indicator for the current turn state
+// and keeps a keep-alive tick armed for as long as a turn runs.
+func (m *model) maybeProgressTick() tea.Cmd {
+	if m.progress == nil {
+		return nil
+	}
+	if sequence := m.progress.Tick(m.running, time.Now()); sequence != "" && m.notifySink != nil {
+		m.notifySink(sequence)
+	}
+	if !m.running || m.progressTicking {
+		return nil
+	}
+	m.progressTicking = true
+	return tea.Tick(notify.ProgressKeepalive, func(time.Time) tea.Msg { return progressTickEvent{} })
+}
+
+// clearProgress removes a lingering indicator when the session ends.
+func (m *model) clearProgress() {
+	if m.progress == nil || m.notifySink == nil {
+		return
+	}
+	if sequence := m.progress.Clear(); sequence != "" {
+		m.notifySink(sequence)
 	}
 }
 
