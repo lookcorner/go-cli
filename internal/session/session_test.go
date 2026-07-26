@@ -347,6 +347,55 @@ func TestPromptImagesPersistOutsideJSONLAndReplay(t *testing.T) {
 	}
 }
 
+func TestCombinedQueuedPromptsPersistAsOneTurnWithSeparateDisplayTexts(t *testing.T) {
+	dir := t.TempDir()
+	logger, err := NewLoggerWithID(dir, "combined")
+	if err != nil {
+		t.Fatal(err)
+	}
+	displayTexts := []string{"first follow-up", "second follow-up"}
+	joined := strings.Join(displayTexts, "\n\n")
+	if err := logger.AppendPromptDisplay(joined, nil, displayTexts); err != nil {
+		t.Fatal(err)
+	}
+	displayTexts[0] = "mutated after append"
+	if err := logger.Append("model_response", map[string]any{"response_id": "r1", "text": "done", "tool_call_count": 0}); err != nil {
+		t.Fatal(err)
+	}
+	path := logger.Path()
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	messages, err := Transcript(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 2 || messages[0].Text != joined ||
+		!reflect.DeepEqual(messages[0].DisplayTexts, []string{"first follow-up", "second follow-up"}) {
+		t.Fatalf("unexpected combined transcript: %#v", messages)
+	}
+	if formatted := FormatTranscript(messages); formatted != "You\nfirst follow-up\n\nYou\nsecond follow-up\n\nGork\ndone" {
+		t.Fatalf("combined transcript=%q", formatted)
+	}
+
+	entries, err := DisplayTimeline(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 || !reflect.DeepEqual(entries[0].DisplayTexts, []string{"first follow-up", "second follow-up"}) {
+		t.Fatalf("unexpected display timeline: %#v", entries)
+	}
+	exported, err := ExportMarkdown(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(exported, "## User\n\nfirst follow-up\n\nsecond follow-up") ||
+		strings.Contains(exported, "\nYou\nsecond follow-up") {
+		t.Fatalf("unexpected combined export:\n%s", exported)
+	}
+}
+
 func TestTranscriptRejectsEscapingImageAsset(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "unsafe.jsonl")

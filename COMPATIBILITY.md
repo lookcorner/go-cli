@@ -284,7 +284,9 @@ the default centered `follow_indicator`, its `none` opt-out, and configurable
 bottom overscroll follow restoration. Default-on `[ui].page_flip_on_send` pins a
 new prompt to the viewport top until the streamed reply fills the rows below it
 and bottom follow resumes; disabling it keeps bottom follow or an active manual
-reading position unchanged.
+reading position unchanged. Default-off `[ui].combine_queued_prompts` combines
+consecutive plain queued follow-ups into one model turn while preserving their
+individual user bubbles and stops before a later image prompt.
 
 Desktop notifications resolve `[ui.notifications] method` over reference terminal
 detection: iTerm2/WezTerm/Warp use OSC 9, Kitty OSC 99, Ghostty/VTE/Terminator/foot

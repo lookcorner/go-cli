@@ -410,18 +410,27 @@ func expandExportPath(filename, cwd string) (string, error) {
 }
 
 func (r *Runner) RunTurn(ctx context.Context, prompt, previousResponseID string) (Result, error) {
-	return r.runTurn(ctx, prompt, prompt, previousResponseID, false)
+	return r.runTurn(ctx, prompt, prompt, previousResponseID, nil, false)
 }
 
 func (r *Runner) RunSyntheticTurn(ctx context.Context, prompt, previousResponseID string) (Result, error) {
-	return r.runTurn(ctx, prompt, prompt, previousResponseID, true)
+	return r.runTurn(ctx, prompt, prompt, previousResponseID, nil, true)
 }
 
 func (r *Runner) RunTurnParts(ctx context.Context, prompt string, parts []api.ContentPart, previousResponseID string) (Result, error) {
 	if len(parts) == 0 {
 		return Result{}, errors.New("prompt content must not be empty")
 	}
-	return r.runTurn(ctx, prompt, parts, previousResponseID, false)
+	return r.runTurn(ctx, prompt, parts, previousResponseID, nil, false)
+}
+
+// RunTurnPartsDisplay preserves multiple user-facing queue bubbles while
+// sending their joined text as one model turn.
+func (r *Runner) RunTurnPartsDisplay(ctx context.Context, prompt string, parts []api.ContentPart, displayTexts []string, previousResponseID string) (Result, error) {
+	if len(parts) == 0 {
+		return Result{}, errors.New("prompt content must not be empty")
+	}
+	return r.runTurn(ctx, prompt, parts, previousResponseID, displayTexts, false)
 }
 
 func (r *Runner) QueueInterjection(text string, content []api.ContentPart) {
@@ -629,7 +638,7 @@ func cleanRecapText(value string) string {
 	return value
 }
 
-func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previousResponseID string, synthetic bool) (final Result, runErr error) {
+func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previousResponseID string, displayTexts []string, synthetic bool) (final Result, runErr error) {
 	r.turnMu.Lock()
 	defer r.turnMu.Unlock()
 	if r.Client == nil || r.Tools == nil {
@@ -699,7 +708,7 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 			r.appendPrefireTail(prefire, compactTrace.String(), final.ResponseID)
 		}()
 	}
-	if err := r.logPrompt(prompt, content, synthetic); err != nil {
+	if err := r.logPrompt(prompt, content, displayTexts, synthetic); err != nil {
 		return Result{}, fmt.Errorf("persist user prompt: %w", err)
 	}
 	defer func() {
@@ -1440,7 +1449,7 @@ func (r *Runner) log(kind string, data any) {
 	}
 }
 
-func (r *Runner) logPrompt(text string, value any, synthetic bool) error {
+func (r *Runner) logPrompt(text string, value any, displayTexts []string, synthetic bool) error {
 	if r.Logger == nil {
 		return nil
 	}
@@ -1449,6 +1458,13 @@ func (r *Runner) logPrompt(text string, value any, synthetic bool) error {
 	}
 	parts, ok := value.([]api.ContentPart)
 	if !ok {
+		if len(displayTexts) >= 2 {
+			if logger, ok := r.Logger.(interface {
+				AppendPromptDisplay(string, []session.Content, []string) error
+			}); ok {
+				return logger.AppendPromptDisplay(text, nil, displayTexts)
+			}
+		}
 		return r.Logger.AppendPrompt(text, nil)
 	}
 	content := make([]session.Content, 0, len(parts))
@@ -1460,6 +1476,13 @@ func (r *Runner) logPrompt(text string, value any, synthetic bool) error {
 			content = append(content, session.Content{Type: "image", URI: part.ImageURL})
 		default:
 			return fmt.Errorf("unsupported prompt content type %q", part.Type)
+		}
+	}
+	if len(displayTexts) >= 2 {
+		if logger, ok := r.Logger.(interface {
+			AppendPromptDisplay(string, []session.Content, []string) error
+		}); ok {
+			return logger.AppendPromptDisplay(text, content, displayTexts)
 		}
 	}
 	return r.Logger.AppendPrompt(text, content)

@@ -196,6 +196,7 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 			cancelPolicies = append(cancelPolicies, value)
 			return nil
 		},
+		persistCombineQueue: func(bool) error { booleans = append(booleans, "combine-queue"); return nil },
 	}
 	for index := 0; index < settingsCount; index++ {
 		if index == 22 || index == 23 {
@@ -214,15 +215,15 @@ func TestSettingsPanelPersistsEverySupportedSetting(t *testing.T) {
 			m = updated.(*model)
 		}
 		wantStatus := "settings updated"
-		if index == 8 || index == 9 || index == 17 || index == 34 || index == 36 {
+		if index == 8 || index == 9 || index == 17 || index == 34 || index == 37 {
 			wantStatus = "settings updated; restart to apply"
 		}
 		if command != nil || m.settings.err != "" || m.status != wantStatus {
 			t.Fatalf("index=%d command=%v err=%q status=%q", index, command != nil, m.settings.err, m.status)
 		}
 	}
-	if !m.showTimestamps || !m.showTimeline || !m.pageFlipOnSend || !m.compactMode || !m.vimMode || !m.defaultMinimal || !m.groupToolVerbs || !m.collapsedEditBlocks || !m.suggestionsEnabled || !m.rememberApprovals || !m.questionTimeout || !m.multiline || !m.invertScroll || !m.undoHint.enabled || !m.planModeHint.enabled || !m.imageInputHint.enabled || !m.sendNowHint.enabled || !m.smallScreenHint.enabled || !m.wordSelectHint.enabled || !m.respectManualFolds || !m.showTips || !m.matchRefresh ||
-		strings.Join(booleans, ",") != "timestamps,timeline,compact,vim,group,edits,suggestions,remember,question-timeout,invert-scroll,undo-hint,plan-mode-hint,image-input-hint,send-now-hint,small-screen-hint,word-select-hint,manual-folds,show-tips,page-flip,display-refresh" || strings.Join(screenModes, ",") != "minimal" {
+	if !m.showTimestamps || !m.showTimeline || !m.pageFlipOnSend || !m.combineQueued || !m.compactMode || !m.vimMode || !m.defaultMinimal || !m.groupToolVerbs || !m.collapsedEditBlocks || !m.suggestionsEnabled || !m.rememberApprovals || !m.questionTimeout || !m.multiline || !m.invertScroll || !m.undoHint.enabled || !m.planModeHint.enabled || !m.imageInputHint.enabled || !m.sendNowHint.enabled || !m.smallScreenHint.enabled || !m.wordSelectHint.enabled || !m.respectManualFolds || !m.showTips || !m.matchRefresh ||
+		strings.Join(booleans, ",") != "timestamps,timeline,compact,vim,group,edits,suggestions,remember,question-timeout,invert-scroll,undo-hint,plan-mode-hint,image-input-hint,send-now-hint,small-screen-hint,word-select-hint,manual-folds,show-tips,page-flip,combine-queue,display-refresh" || strings.Join(screenModes, ",") != "minimal" {
 		t.Fatalf("timestamps=%v timeline=%v compact=%v vim=%v persisted=%v", m.showTimestamps, m.showTimeline, m.compactMode, m.vimMode, booleans)
 	}
 	if m.themeName != "grokday" || m.theme.name != "grokday" || strings.Join(themes, ",") != "grokday" {
@@ -277,12 +278,27 @@ func TestSettingsDisplayRefreshRollsBackPersistenceFailure(t *testing.T) {
 		persistRefresh: func(bool) error {
 			return errors.New("read only")
 		},
-		settings: &settingsState{selected: 36},
+		settings: &settingsState{selected: 37},
 	}
 	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = updated.(*model)
 	if command != nil || !m.matchRefresh || m.settings.err != "read only" || m.status != "setting update failed" {
 		t.Fatalf("command=%v enabled=%v err=%q status=%q", command != nil, m.matchRefresh, m.settings.err, m.status)
+	}
+}
+
+func TestSettingsCombineQueueRollsBackPersistenceFailure(t *testing.T) {
+	m := &model{
+		combineQueued: true,
+		persistCombineQueue: func(bool) error {
+			return errors.New("read only")
+		},
+		settings: &settingsState{selected: 36},
+	}
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || !m.combineQueued || m.settings.err != "read only" || m.status != "setting update failed" {
+		t.Fatalf("command=%v enabled=%v err=%q status=%q", command != nil, m.combineQueued, m.settings.err, m.status)
 	}
 }
 

@@ -24,7 +24,7 @@ type settingsNumber struct {
 	large int
 }
 
-const settingsCount = 37
+const settingsCount = 38
 
 func (m *model) openSettings() {
 	m.settings = &settingsState{}
@@ -355,6 +355,12 @@ func (m *model) applySetting(selected int) {
 			state.err = persistSetting(m.persistPageFlip(m.pageFlipOnSend), func() { m.pageFlipOnSend = previous })
 		}
 	case 36:
+		previous := m.combineQueued
+		m.combineQueued = !previous
+		if m.persistCombineQueue != nil {
+			state.err = persistSetting(m.persistCombineQueue(m.combineQueued), func() { m.combineQueued = previous })
+		}
+	case 37:
 		if m.minimal {
 			return
 		}
@@ -572,6 +578,7 @@ func (m *model) settingsContent() string {
 		settingLine("Respect manual folds", m.respectManualFolds),
 		settingLine("Show startup tips (restart)", m.showTips),
 		settingLine("Snap prompt to top on send", m.pageFlipOnSend),
+		settingLine("Combine queued prompts", m.combineQueued),
 	}
 	if !m.minimal {
 		lines = append(lines, settingLine("Match display refresh rate (restart)", m.matchRefresh))

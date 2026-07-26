@@ -1274,6 +1274,104 @@ func TestQueuedPromptsRunFIFOBeforeScheduledWake(t *testing.T) {
 	}
 }
 
+func TestCombineQueuedPromptsSendsOneTurnAndKeepsSeparateBubbles(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, tools.PromptApprover{Mode: tools.PermissionAuto})
+	defer registry.Close()
+	logger, err := session.NewLoggerWithID(t.TempDir(), "combined-queue")
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamer := &scheduledTUIStreamer{}
+	m := &model{
+		ctx: context.Background(),
+		runner: &agent.Runner{
+			Client: streamer, Tools: registry, Model: "test", Logger: logger,
+		},
+		combineQueued:  true,
+		pendingPrompts: []string{"first follow-up", "second follow-up", "third follow-up"},
+	}
+	command := m.startNext()
+	if command == nil || !m.running || len(m.pendingPrompts) != 0 ||
+		m.inFlightPrompt == nil || m.inFlightPrompt.text != "first follow-up\n\nsecond follow-up\n\nthird follow-up" {
+		t.Fatalf("command=%v running=%v queue=%#v in-flight=%#v", command != nil, m.running, m.pendingPrompts, m.inFlightPrompt)
+	}
+	transcript := m.transcript.String()
+	if strings.Count(transcript, "You\n") != 3 || strings.Count(transcript, "Gork\n") != 1 ||
+		len(m.transcriptMessages) != 2 || m.transcriptMessages[0].prompt != m.inFlightPrompt.text {
+		t.Fatalf("unexpected combined display: messages=%#v transcript=%q", m.transcriptMessages, transcript)
+	}
+	result := command()
+	if _, ok := result.(turnDoneEvent); !ok {
+		t.Fatalf("result=%#v", result)
+	}
+	parts, ok := streamer.request.Input[0].Content.([]api.ContentPart)
+	if !ok || len(parts) != 1 || parts[0].Type != "input_text" || parts[0].Text != m.inFlightPrompt.text {
+		t.Fatalf("request=%#v", streamer.request)
+	}
+	path := logger.Path()
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	messages, err := session.Transcript(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 2 || !reflect.DeepEqual(messages[0].DisplayTexts,
+		[]string{"first follow-up", "second follow-up", "third follow-up"}) {
+		t.Fatalf("persisted transcript=%#v", messages)
+	}
+}
+
+func TestCombineQueuedPromptsHonorsImageBoundary(t *testing.T) {
+	image := api.ContentPart{Type: "input_image", ImageURL: "data:image/png;base64,cG5n"}
+	tests := []struct {
+		name      string
+		enabled   bool
+		prompts   []string
+		images    [][]api.ContentPart
+		want      []string
+		remaining []string
+		wantImage bool
+	}{
+		{name: "disabled", prompts: []string{"one", "two"}, want: []string{"one"}, remaining: []string{"two"}},
+		{name: "plain followers", enabled: true, prompts: []string{"one", "two", "three"}, want: []string{"one", "two", "three"}},
+		{name: "image follower", enabled: true, prompts: []string{"one", "two", "three"}, images: [][]api.ContentPart{nil, {image}, nil}, want: []string{"one"}, remaining: []string{"two", "three"}},
+		{name: "image front", enabled: true, prompts: []string{"one", "two"}, images: [][]api.ContentPart{{image}, nil}, want: []string{"one", "two"}, wantImage: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			m := &model{
+				combineQueued: test.enabled, pendingPrompts: append([]string(nil), test.prompts...),
+				pendingPromptImages: append([][]api.ContentPart(nil), test.images...),
+			}
+			prompts, images := m.dequeueQueuedPrompts()
+			if !slices.Equal(prompts, test.want) || !slices.Equal(m.pendingPrompts, test.remaining) ||
+				(len(images) > 0) != test.wantImage {
+				t.Fatalf("prompts=%#v remaining=%#v images=%#v", prompts, m.pendingPrompts, images)
+			}
+		})
+	}
+}
+
+func TestCancelRestoresCombinedQueuedPrompt(t *testing.T) {
+	m := &model{
+		ctx: context.Background(), runner: &agent.Runner{},
+		combineQueued: true, cancelRewindEnabled: true,
+		pendingPrompts: []string{"first follow-up", "second follow-up"},
+	}
+	if command := m.startNext(); command == nil {
+		t.Fatal("combined turn did not start")
+	}
+	if !m.rewindPristineTurn() || m.running || m.inFlightPrompt != nil ||
+		string(m.input) != "first follow-up\n\nsecond follow-up" || m.transcript.Len() != 0 {
+		t.Fatalf("running=%v in-flight=%#v input=%q transcript=%q", m.running, m.inFlightPrompt, m.input, m.transcript.String())
+	}
+}
+
 func TestQueueCommandIsInstantWhenIdle(t *testing.T) {
 	m := &model{runner: &agent.Runner{}, pendingPrompts: []string{"follow-up"}}
 	m.setInput("/queue ignored")

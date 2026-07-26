@@ -251,6 +251,7 @@ type UIConfig struct {
 	ShowTimestamps            bool                 `json:"show_timestamps"`
 	ShowTimeline              bool                 `json:"show_timeline,omitempty"`
 	PageFlipOnSend            bool                 `json:"page_flip_on_send"`
+	CombineQueuedPrompts      bool                 `json:"combine_queued_prompts,omitempty"`
 	ShowThinkingBlocks        bool                 `json:"show_thinking_blocks"`
 	DisplayRefresh            DisplayRefreshConfig `json:"display_refresh"`
 	ScrollSpeed               uint8                `json:"scroll_speed,omitempty"`
@@ -620,6 +621,7 @@ type fileUIConfig struct {
 	ShowTimestamps               *bool                    `json:"show_timestamps,omitempty" toml:"show_timestamps"`
 	ShowTimeline                 *bool                    `json:"show_timeline,omitempty" toml:"show_timeline"`
 	PageFlipOnSend               *bool                    `json:"page_flip_on_send,omitempty" toml:"page_flip_on_send"`
+	CombineQueuedPrompts         *bool                    `json:"combine_queued_prompts,omitempty" toml:"combine_queued_prompts"`
 	ShowThinkingBlocks           *bool                    `json:"show_thinking_blocks,omitempty" toml:"show_thinking_blocks"`
 	DisplayRefresh               *RefreshSettings         `json:"display_refresh,omitempty" toml:"display_refresh"`
 	ScrollSpeed                  *uint8                   `json:"scroll_speed,omitempty" toml:"scroll_speed"`
@@ -1271,6 +1273,9 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.UI.PageFlipOnSend != nil {
 		cfg.UI.PageFlipOnSend = *disk.UI.PageFlipOnSend
+	}
+	if disk.UI.CombineQueuedPrompts != nil {
+		cfg.UI.CombineQueuedPrompts = *disk.UI.CombineQueuedPrompts
 	}
 	if disk.UI.VoiceKeybindEnabled != nil {
 		cfg.UI.VoiceKeybindEnabled = *disk.UI.VoiceKeybindEnabled

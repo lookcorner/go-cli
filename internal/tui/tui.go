@@ -821,6 +821,8 @@ type model struct {
 	persistScrollLines  func(uint8) error
 	pageFlipOnSend      bool
 	persistPageFlip     func(bool) error
+	combineQueued       bool
+	persistCombineQueue func(bool) error
 	notifier            *notify.Notifier
 	notifySink          func(string)
 	notifyTitle         string
@@ -1052,6 +1054,8 @@ type UIOptions struct {
 	SetShowTimeline      func(bool) error
 	PageFlipOnSend       bool
 	SetPageFlipOnSend    func(bool) error
+	CombineQueuedPrompts bool
+	SetCombineQueued     func(bool) error
 	Notifications        notify.Settings
 	ProgressBar          bool
 	SleepPrevention      bool
@@ -1146,6 +1150,7 @@ type transcriptMessage struct {
 	offset int
 	at     time.Time
 	role   string
+	prompt string
 }
 
 func parseTextSelectionMode(value string) textSelectionMode {
@@ -1278,6 +1283,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		showTimestamps: options.ShowTimestamps, persistTimestamps: options.SetShowTimestamps,
 		showTimeline: options.ShowTimeline, persistTimeline: options.SetShowTimeline,
 		pageFlipOnSend: options.PageFlipOnSend, persistPageFlip: options.SetPageFlipOnSend,
+		combineQueued: options.CombineQueuedPrompts, persistCombineQueue: options.SetCombineQueued,
 		notifier:        notify.New(options.Notifications, notifyTerminal),
 		notifySink:      func(sequence string) { fmt.Fprint(os.Stderr, sequence) },
 		notifyTitle:     filepath.Base(workspace),
@@ -4054,6 +4060,9 @@ func (m *model) enterInlineEdit(messageIndex int) bool {
 		}
 	}
 	original := strings.TrimSpace(text[message.offset:end])
+	if message.prompt != "" {
+		original = message.prompt
+	}
 	if original == "" {
 		return false
 	}
@@ -5646,7 +5655,9 @@ func (m *model) replaceTranscript(text string, messages []session.Message) {
 		if message.Role == "user" {
 			label = "You"
 		}
-		m.transcriptMessages = append(m.transcriptMessages, transcriptMessage{start: offset, offset: offset + len(label), at: message.Time, role: message.Role})
+		m.transcriptMessages = append(m.transcriptMessages, transcriptMessage{
+			start: offset, offset: offset + len(label), at: message.Time, role: message.Role, prompt: message.Text,
+		})
 		offset += len(session.FormatTranscript([]session.Message{message}))
 	}
 }
@@ -5755,10 +5766,14 @@ func (m *model) enrichReplayImage(image *session.DisplayImage, sessionPath strin
 }
 
 func (m *model) beginTurn(prompt string) {
+	m.beginTurnDisplay(prompt, nil)
+}
+
+func (m *model) beginTurnDisplay(prompt string, displayTexts []string) {
 	m.promptSerial++
 	m.parkedWait = nil
 	m.clearPromptSuggestion()
-	m.appendPromptTranscript(prompt)
+	m.appendPromptTranscriptDisplay(prompt, displayTexts)
 	m.status = "thinking"
 	m.turnStarted = time.Now()
 }
@@ -5789,6 +5804,10 @@ func (m *model) runningStatusText(now time.Time, width int) string {
 }
 
 func (m *model) appendPromptTranscript(prompt string) {
+	m.appendPromptTranscriptDisplay(prompt, nil)
+}
+
+func (m *model) appendPromptTranscriptDisplay(prompt string, displayTexts []string) {
 	before := -1
 	if !m.pageFlipOnSend {
 		before = m.transcriptGrowthAnchor()
@@ -5806,8 +5825,14 @@ func (m *model) appendPromptTranscript(prompt string) {
 	now := time.Now()
 	messageStart := m.transcript.Len()
 	m.transcript.WriteString("You")
-	m.transcriptMessages = append(m.transcriptMessages, transcriptMessage{start: messageStart, offset: m.transcript.Len(), at: now, role: "user"})
-	m.transcript.WriteString("\n" + prompt + "\n\nGork")
+	m.transcriptMessages = append(m.transcriptMessages, transcriptMessage{
+		start: messageStart, offset: m.transcript.Len(), at: now, role: "user", prompt: prompt,
+	})
+	display := prompt
+	if len(displayTexts) >= 2 {
+		display = strings.Join(displayTexts, "\n\nYou\n")
+	}
+	m.transcript.WriteString("\n" + display + "\n\nGork")
 	m.transcriptMessages = append(m.transcriptMessages, transcriptMessage{start: m.transcript.Len() - len("Gork"), offset: m.transcript.Len(), at: now, role: "assistant"})
 	m.transcript.WriteString("\n")
 	if m.pageFlipOnSend {
@@ -5914,6 +5939,13 @@ func runTurnParts(ctx context.Context, runner *agent.Runner, display, instructio
 func runTurnContent(ctx context.Context, runner *agent.Runner, display string, parts []api.ContentPart, previousID string, serial uint64) tea.Cmd {
 	return func() tea.Msg {
 		result, err := runner.RunTurnParts(ctx, display, parts, previousID)
+		return turnDoneEvent{result: result, err: err, serial: serial}
+	}
+}
+
+func runTurnDisplay(ctx context.Context, runner *agent.Runner, prompt string, parts []api.ContentPart, displayTexts []string, previousID string, serial uint64) tea.Cmd {
+	return func() tea.Msg {
+		result, err := runner.RunTurnPartsDisplay(ctx, prompt, parts, displayTexts, previousID)
 		return turnDoneEvent{result: result, err: err, serial: serial}
 	}
 }
@@ -6111,15 +6143,18 @@ func (m *model) startNext() tea.Cmd {
 		return nil
 	}
 	if len(m.pendingPrompts) > 0 {
-		prompt := m.pendingPrompts[0]
-		m.pendingPrompts = m.pendingPrompts[1:]
-		images := m.shiftPendingPromptImages()
+		prompts, images := m.dequeueQueuedPrompts()
+		prompt := strings.Join(prompts, "\n\n")
 		m.running = true
 		turnCtx, cancel := context.WithCancel(m.ctx)
 		turnCtx, requestRewind := agent.WithCancelRewind(turnCtx)
 		m.turnCancel = cancel
 		m.stashInFlightPrompt(prompt, images, requestRewind)
-		m.beginTurn(prompt)
+		m.beginTurnDisplay(prompt, prompts)
+		if len(prompts) >= 2 {
+			parts := append([]api.ContentPart{{Type: "input_text", Text: prompt}}, images...)
+			return runTurnDisplay(turnCtx, m.runner, prompt, parts, prompts, m.previousID, m.activeTurnSerial)
+		}
 		if len(images) > 0 {
 			parts := append([]api.ContentPart{{Type: "input_text", Text: prompt}}, images...)
 			return runTurnContent(turnCtx, m.runner, prompt, parts, m.previousID, m.activeTurnSerial)
@@ -6137,6 +6172,24 @@ func (m *model) startNext() tea.Cmd {
 	m.beginTurn(event.Prompt)
 	m.status = "scheduled task " + event.TaskID
 	return runSyntheticTurn(turnCtx, m.runner, event.Prompt, m.previousID)
+}
+
+func (m *model) dequeueQueuedPrompts() ([]string, []api.ContentPart) {
+	prompts := []string{m.pendingPrompts[0]}
+	m.pendingPrompts = m.pendingPrompts[1:]
+	images := m.shiftPendingPromptImages()
+	if !m.combineQueued || prompts[0] == "" {
+		return prompts, images
+	}
+	for len(m.pendingPrompts) > 0 && m.pendingPrompts[0] != "" {
+		if len(m.pendingPromptImages) > 0 && len(m.pendingPromptImages[0]) > 0 {
+			break
+		}
+		prompts = append(prompts, m.pendingPrompts[0])
+		m.pendingPrompts = m.pendingPrompts[1:]
+		m.shiftPendingPromptImages()
+	}
+	return prompts, images
 }
 
 func runCompact(ctx context.Context, runner *agent.Runner, previousID string) tea.Cmd {

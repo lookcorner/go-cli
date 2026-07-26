@@ -514,7 +514,21 @@ func sessionDisplayTranscript(path, workspace string, collapsedEditBlocks, group
 			}
 			separate()
 			label("You", "user", entry)
-			text.WriteString(displayPromptBody(entry))
+			messages[len(messages)-1].prompt = entry.Text
+			body := displayPromptBody(entry)
+			if len(entry.DisplayTexts) >= 2 {
+				body = strings.Join(entry.DisplayTexts, "\n\nYou\n")
+				for _, part := range entry.Content {
+					if part.Type == "image" {
+						if strings.HasPrefix(part.URI, "http://") || strings.HasPrefix(part.URI, "https://") {
+							body += "\n[Image: " + part.URI + "]"
+						} else {
+							body += "\n[Image]"
+						}
+					}
+				}
+			}
+			text.WriteString(body)
 			assistantOpen = false
 			lastKind = "user"
 		case "thought":

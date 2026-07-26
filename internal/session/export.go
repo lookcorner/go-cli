@@ -58,6 +58,20 @@ func ExportMarkdown(path string) (string, error) {
 }
 
 func exportPrompt(entry DisplayEntry) string {
+	if len(entry.DisplayTexts) >= 2 {
+		body := strings.Join(entry.DisplayTexts, "\n\n")
+		for _, part := range entry.Content {
+			if part.Type != "image" {
+				continue
+			}
+			if strings.HasPrefix(part.URI, "http://") || strings.HasPrefix(part.URI, "https://") {
+				body += "\n\n[Image: " + part.URI + "]"
+			} else {
+				body += "\n\n[Image]"
+			}
+		}
+		return body
+	}
 	if len(entry.Content) == 0 {
 		return entry.Text
 	}

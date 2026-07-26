@@ -843,3 +843,21 @@ func TestThoughtWidthUsesDisplayColumnsForLiveAndRestoredText(t *testing.T) {
 		t.Fatalf("restored transcript=%q err=%v", restored, err)
 	}
 }
+
+func TestSessionDisplayRestoresCombinedQueuedPromptBubbles(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "combined.jsonl")
+	content := "" +
+		`{"kind":"user_prompt","data":{"text":"first follow-up\n\nsecond follow-up","display_texts":["first follow-up","second follow-up"]}}` + "\n" +
+		`{"kind":"model_response","data":{"response_id":"r1","text":"done","tool_call_count":0}}` + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	restored, messages, _, _, err := sessionDisplayTranscript(path, "", false, false, true, 40)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored != "You\nfirst follow-up\n\nYou\nsecond follow-up\n\nGork\ndone" ||
+		len(messages) != 2 || messages[0].prompt != "first follow-up\n\nsecond follow-up" {
+		t.Fatalf("restored=%q messages=%#v", restored, messages)
+	}
+}

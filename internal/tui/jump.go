@@ -58,7 +58,11 @@ func (m *model) jumpEntries() []jumpEntry {
 		if end < message.offset || end > len(text) {
 			continue
 		}
-		entries = append(entries, jumpEntry{message: index, preview: turnPreview(text[message.offset:end])})
+		preview := text[message.offset:end]
+		if message.prompt != "" {
+			preview = message.prompt
+		}
+		entries = append(entries, jumpEntry{message: index, preview: turnPreview(preview)})
 	}
 	return entries
 }

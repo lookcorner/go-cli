@@ -792,6 +792,10 @@ writes it to disk with `~`, spaces, relative paths, and parent creation supporte
 While a turn is running, additional prompts are queued FIFO; `/queue` prints a
 read-only snapshot and queued prompts run before scheduled wake-ups. The status
 line places the elapsed turn time before the persistent queued-message hint.
+Set `[ui] combine_queued_prompts = true` (or use `/settings`) to combine
+consecutive plain follow-ups into one model turn while keeping each follow-up as
+its own `You` bubble. An image on a later queued prompt starts the next turn;
+the default is `false`.
 Blocking background-task waits add one scrollback marker with the elapsed turn
 time and remaining work counts; live subagent completions refresh that marker
 in place without moving status below queued user input.

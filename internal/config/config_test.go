@@ -2679,6 +2679,30 @@ func TestPageFlipOnSendDefaultsAndPersists(t *testing.T) {
 	}
 }
 
+func TestCombineQueuedPromptsDefaultsAndPersists(t *testing.T) {
+	tomlPath := filepath.Join(t.TempDir(), "config.toml")
+	cfg, err := Load(tomlPath)
+	if err != nil || cfg.UI.CombineQueuedPrompts {
+		t.Fatalf("default combine queued prompts=%v err=%v", cfg.UI.CombineQueuedPrompts, err)
+	}
+	if err := UpdateCombineQueuedPrompts(tomlPath, true); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(tomlPath)
+	if err != nil || !cfg.UI.CombineQueuedPrompts {
+		t.Fatalf("TOML combine queued prompts=%v err=%v", cfg.UI.CombineQueuedPrompts, err)
+	}
+
+	jsonPath := filepath.Join(t.TempDir(), "config.json")
+	if err := UpdateCombineQueuedPrompts(jsonPath, true); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(jsonPath)
+	if err != nil || !cfg.UI.CombineQueuedPrompts {
+		t.Fatalf("JSON combine queued prompts=%v err=%v", cfg.UI.CombineQueuedPrompts, err)
+	}
+}
+
 func TestVoiceKeybindDefaultsAndPersists(t *testing.T) {
 	tomlPath := filepath.Join(t.TempDir(), "config.toml")
 	cfg, err := Load(tomlPath)

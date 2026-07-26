@@ -32,12 +32,13 @@ type Event struct {
 }
 
 type DisplayEntry struct {
-	Time      time.Time
-	Kind      string
-	Text      string
-	Content   []Content
-	Synthetic bool
-	Tool      *DisplayTool
+	Time         time.Time
+	Kind         string
+	Text         string
+	Content      []Content
+	DisplayTexts []string
+	Synthetic    bool
+	Tool         *DisplayTool
 }
 
 type DisplayTool struct {
@@ -240,10 +241,11 @@ func Fork(dir, sourceID, newID, cwd, modelID string, target *int) (chatMessages,
 }
 
 type Message struct {
-	Role    string
-	Text    string
-	Content []Content
-	Time    time.Time `json:"-"`
+	Role         string
+	Text         string
+	Content      []Content
+	DisplayTexts []string
+	Time         time.Time `json:"-"`
 }
 
 type Content struct {
@@ -768,15 +770,16 @@ func PendingPrompt(path string) (Message, bool, error) {
 		switch event.Kind {
 		case "user_prompt":
 			var data struct {
-				Text      string    `json:"text"`
-				Content   []Content `json:"content"`
-				Synthetic bool      `json:"synthetic"`
+				Text         string    `json:"text"`
+				Content      []Content `json:"content"`
+				DisplayTexts []string  `json:"display_texts"`
+				Synthetic    bool      `json:"synthetic"`
 			}
 			if err := json.Unmarshal(event.Data, &data); err != nil {
 				return Message{}, false, fmt.Errorf("parse user prompt on session line %d: %w", index+1, err)
 			}
 			if !data.Synthetic {
-				value := Message{Role: "user", Text: data.Text, Content: data.Content, Time: event.Time}
+				value := Message{Role: "user", Text: data.Text, Content: data.Content, DisplayTexts: data.DisplayTexts, Time: event.Time}
 				pending = &value
 			}
 		case "model_response":
@@ -863,15 +866,17 @@ func DisplayTimeline(path string) ([]DisplayEntry, error) {
 		switch event.Kind {
 		case "user_prompt":
 			var data struct {
-				Text      string    `json:"text"`
-				Content   []Content `json:"content"`
-				Synthetic bool      `json:"synthetic"`
+				Text         string    `json:"text"`
+				Content      []Content `json:"content"`
+				DisplayTexts []string  `json:"display_texts"`
+				Synthetic    bool      `json:"synthetic"`
 			}
 			if err := json.Unmarshal(event.Data, &data); err != nil {
 				return nil, fmt.Errorf("parse display prompt on session line %d: %w", line, err)
 			}
 			result = append(result, DisplayEntry{
-				Time: event.Time, Kind: "user", Text: data.Text, Content: data.Content, Synthetic: data.Synthetic,
+				Time: event.Time, Kind: "user", Text: data.Text, Content: data.Content,
+				DisplayTexts: data.DisplayTexts, Synthetic: data.Synthetic,
 			})
 		case "model_response":
 			var data struct {
@@ -942,9 +947,10 @@ func transcriptFromEvents(path string, events []storedEvent, allowEmpty bool) ([
 		switch event.Kind {
 		case "user_prompt":
 			var data struct {
-				Text      string    `json:"text"`
-				Content   []Content `json:"content"`
-				Synthetic bool      `json:"synthetic"`
+				Text         string    `json:"text"`
+				Content      []Content `json:"content"`
+				DisplayTexts []string  `json:"display_texts"`
+				Synthetic    bool      `json:"synthetic"`
 			}
 			if err := json.Unmarshal(event.Data, &data); err != nil {
 				return nil, fmt.Errorf("parse user prompt on session line %d: %w", line, err)
@@ -952,7 +958,10 @@ func transcriptFromEvents(path string, events []storedEvent, allowEmpty bool) ([
 			if data.Synthetic {
 				forceAssistantBoundary = true
 			} else if data.Text != "" || len(data.Content) > 0 {
-				current = append(current, Message{Role: "user", Text: data.Text, Content: data.Content, Time: event.Time})
+				current = append(current, Message{
+					Role: "user", Text: data.Text, Content: data.Content,
+					DisplayTexts: data.DisplayTexts, Time: event.Time,
+				})
 				forceAssistantBoundary = false
 			}
 		case "model_response":
@@ -1008,7 +1017,18 @@ func FormatTranscript(messages []Message) string {
 			label = "You"
 		}
 		body := message.Text
-		if len(message.Content) > 0 {
+		if message.Role == "user" && len(message.DisplayTexts) >= 2 {
+			body = strings.Join(message.DisplayTexts, "\n\nYou\n")
+			for _, part := range message.Content {
+				if part.Type == "image" {
+					if strings.HasPrefix(part.URI, "http://") || strings.HasPrefix(part.URI, "https://") {
+						body += "\n[Image: " + part.URI + "]"
+					} else {
+						body += "\n[Image]"
+					}
+				}
+			}
+		} else if len(message.Content) > 0 {
 			var content []string
 			for _, part := range message.Content {
 				switch part.Type {
@@ -1145,11 +1165,15 @@ func (l *Logger) Append(kind string, data any) error {
 }
 
 func (l *Logger) AppendPrompt(text string, content []Content) error {
-	return l.appendPrompt(text, content, false)
+	return l.appendPrompt(text, content, nil, false)
+}
+
+func (l *Logger) AppendPromptDisplay(text string, content []Content, displayTexts []string) error {
+	return l.appendPrompt(text, content, displayTexts, false)
 }
 
 func (l *Logger) AppendSyntheticPrompt(text string, content []Content) error {
-	return l.appendPrompt(text, content, true)
+	return l.appendPrompt(text, content, nil, true)
 }
 
 func (l *Logger) RewindLastPrompt() error {
@@ -1275,7 +1299,7 @@ func cancelRewindEvent(kind string) bool {
 	}
 }
 
-func (l *Logger) appendPrompt(text string, content []Content, synthetic bool) error {
+func (l *Logger) appendPrompt(text string, content []Content, displayTexts []string, synthetic bool) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.file == nil {
@@ -1305,10 +1329,11 @@ func (l *Logger) appendPrompt(text string, content []Content, synthetic bool) er
 		}
 	}
 	data := struct {
-		Text      string    `json:"text"`
-		Content   []Content `json:"content,omitempty"`
-		Synthetic bool      `json:"synthetic,omitempty"`
-	}{Text: text, Content: persisted, Synthetic: synthetic}
+		Text         string    `json:"text"`
+		Content      []Content `json:"content,omitempty"`
+		DisplayTexts []string  `json:"display_texts,omitempty"`
+		Synthetic    bool      `json:"synthetic,omitempty"`
+	}{Text: text, Content: persisted, DisplayTexts: displayTexts, Synthetic: synthetic}
 	if err := l.appendLocked("user_prompt", data); err != nil {
 		removeFiles(created)
 		return err
