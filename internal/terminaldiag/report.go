@@ -10,7 +10,12 @@ import (
 	"strings"
 
 	"github.com/lookcorner/go-cli/internal/notify"
+	"github.com/lookcorner/go-cli/internal/voice"
 )
+
+// probeVoiceInput looks up a capture device for the doctor Voice section.
+// Tests replace this to keep reports independent of host microphones.
+var probeVoiceInput = voice.ProbeInput
 
 const SchemaVersion = "1"
 
@@ -34,6 +39,8 @@ type Facts struct {
 	AllowPassthrough string `json:"tmuxAllowPassthrough,omitempty"`
 	ExtendedKeys     string `json:"tmuxExtendedKeys,omitempty"`
 	ControlMode      string `json:"tmuxControlMode,omitempty"`
+	VoiceMicrophone  string `json:"voiceMicrophone,omitempty"`
+	VoiceDetail      string `json:"voiceDetail,omitempty"`
 }
 
 type Counts struct {
@@ -91,13 +98,15 @@ func BuildSnapshot(getenv func(string) string, lookPath func(string) (string, er
 	if finding := sshWrapRecommendation(getenv, ssh); finding != "" {
 		findings = append(findings, finding)
 	}
+	voiceMic, voiceDetail, voiceFindings := voiceFindings(lookPath)
+	findings = append(findings, voiceFindings...)
 	return Snapshot{
 		SchemaVersion: SchemaVersion,
 		Facts: Facts{
 			Terminal: brand, Multiplexer: multiplexer, SSH: ssh, Color: color,
 			NativeClip: clipboard, ClipboardTool: clipboardTool, OSC52: osc52, GOOS: goos,
 			SetClipboard: tmux.SetClipboard, AllowPassthrough: tmux.AllowPassthrough, ExtendedKeys: tmux.ExtendedKeys,
-			ControlMode: tmux.ControlMode,
+			ControlMode: tmux.ControlMode, VoiceMicrophone: voiceMic, VoiceDetail: voiceDetail,
 		},
 		Findings: findings,
 		Counts:   Counts{Issues: len(findings)},
@@ -118,6 +127,16 @@ func (s Snapshot) Human() string {
 		fmt.Fprintf(&out, " (tool: %s)", s.Facts.ClipboardTool)
 	}
 	fmt.Fprintf(&out, "\n  osc 52       %s\n", activeOff(s.Facts.OSC52))
+	if s.Facts.VoiceMicrophone != "" {
+		out.WriteString("\nVoice\n")
+		if s.Facts.VoiceMicrophone == "none" {
+			out.WriteString("  microphone   none detected\n")
+		} else if s.Facts.VoiceDetail != "" {
+			fmt.Fprintf(&out, "  microphone   %s (%s)\n", s.Facts.VoiceMicrophone, s.Facts.VoiceDetail)
+		} else {
+			fmt.Fprintf(&out, "  microphone   %s\n", s.Facts.VoiceMicrophone)
+		}
+	}
 	if len(s.Findings) == 0 {
 		out.WriteString("\nNo issues found.")
 		return out.String()
@@ -418,6 +437,20 @@ func vscodeTerminalLabel(getenv func(string) string, brand string) string {
 	default:
 		return "VS Code"
 	}
+}
+
+
+func voiceFindings(lookPath func(string) (string, error)) (mic, detail string, findings []string) {
+	probe := probeVoiceInput(lookPath)
+	if !probe.Supported {
+		return "", "", nil
+	}
+	if probe.Error != "" {
+		return "none", "", []string{
+			"Voice dictation is unavailable: " + probe.Error + ".\n    Connect or select a microphone in your system sound settings. On Linux, install a supported audio recorder if none was found on PATH. Then run `/doctor` or `gork doctor` again. Doctor can't detect denied macOS microphone access when the system returns silence; follow the message shown when dictation fails.",
+		}
+	}
+	return probe.Name, probe.Detail, nil
 }
 
 // notificationFindings mirrors reference collect_notification_warnings for the

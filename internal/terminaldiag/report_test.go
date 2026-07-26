@@ -5,7 +5,16 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/lookcorner/go-cli/internal/voice"
 )
+
+func init() {
+	// Keep doctor report tests independent of the host microphone.
+	probeVoiceInput = func(func(string) (string, error)) voice.InputProbe {
+		return voice.InputProbe{}
+	}
+}
 
 func TestIsCommand(t *testing.T) {
 	for _, prompt := range []string{"/doctor", "/terminal-setup", " /terminal-check ignored ", "/terminal-info"} {
@@ -359,6 +368,57 @@ func TestBuildSnapshotWarnsForVSCodeSSHNonASCII(t *testing.T) {
 	}
 	if strings.Contains(joined, "ssh-wrap") {
 		t.Fatalf("vscode remote should not recommend ssh-wrap: %q", joined)
+	}
+}
+
+func TestBuildSnapshotWarnsForMissingVoiceInput(t *testing.T) {
+	prev := probeVoiceInput
+	probeVoiceInput = func(func(string) (string, error)) voice.InputProbe {
+		return voice.InputProbe{
+			Supported: true,
+			Error:     "no microphone recorder found; install pw-record, parec, or arecord",
+		}
+	}
+	t.Cleanup(func() { probeVoiceInput = prev })
+
+	env := map[string]string{"TERM_PROGRAM": "WezTerm", "TERM": "xterm-256color", "COLORTERM": "truecolor"}
+	snapshot := BuildSnapshot(func(key string) string { return env[key] }, func(string) (string, error) {
+		return "/bin/pbcopy", nil
+	}, "darwin")
+	if snapshot.Facts.VoiceMicrophone != "none" || snapshot.Counts.Issues != 1 {
+		t.Fatalf("snapshot=%#v", snapshot)
+	}
+	report := snapshot.Human()
+	for _, want := range []string{
+		"Voice", "microphone   none detected",
+		"Voice dictation is unavailable", "pw-record", "system sound settings",
+	} {
+		if !strings.Contains(report, want) {
+			t.Errorf("missing %q in %q", want, report)
+		}
+	}
+}
+
+func TestBuildSnapshotReportsVoiceDevice(t *testing.T) {
+	prev := probeVoiceInput
+	probeVoiceInput = func(func(string) (string, error)) voice.InputProbe {
+		return voice.InputProbe{
+			Supported: true, Name: "parec", Detail: "system recorder; uses the audio server's default input",
+		}
+	}
+	t.Cleanup(func() { probeVoiceInput = prev })
+
+	env := map[string]string{"TERM_PROGRAM": "WezTerm", "TERM": "xterm-256color", "COLORTERM": "truecolor"}
+	report := buildReport(func(key string) string { return env[key] }, func(string) (string, error) {
+		return "/bin/pbcopy", nil
+	}, "darwin")
+	for _, want := range []string{
+		"microphone   parec (system recorder; uses the audio server's default input)",
+		"No issues found.",
+	} {
+		if !strings.Contains(report, want) {
+			t.Errorf("missing %q in %q", want, report)
+		}
 	}
 }
 
