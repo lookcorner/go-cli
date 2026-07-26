@@ -1,9 +1,13 @@
 package config
 
-import "path/filepath"
+import (
+	"fmt"
+	"path/filepath"
+)
 
 type PagerScroll struct {
 	AnchorOnFold       bool
+	FollowIndicator    string
 	RespectManualFolds bool
 }
 
@@ -16,7 +20,7 @@ func PagerPath() (string, error) {
 }
 
 func LoadPagerScroll(path string) (PagerScroll, error) {
-	settings := PagerScroll{AnchorOnFold: true}
+	settings := PagerScroll{AnchorOnFold: true, FollowIndicator: "center"}
 	root, err := readConfigMap(path)
 	if err != nil {
 		return settings, err
@@ -25,6 +29,12 @@ func LoadPagerScroll(path string) (PagerScroll, error) {
 	scroll, _ := scrollback["scroll"].(map[string]any)
 	if enabled, ok := scroll["anchor_on_fold"].(bool); ok {
 		settings.AnchorOnFold = enabled
+	}
+	if indicator, ok := scroll["follow_indicator"].(string); ok {
+		if indicator != "center" && indicator != "none" {
+			return settings, fmt.Errorf("invalid scrollback.scroll.follow_indicator %q", indicator)
+		}
+		settings.FollowIndicator = indicator
 	}
 	settings.RespectManualFolds, _ = scroll["respect_manual_folds"].(bool)
 	return settings, nil

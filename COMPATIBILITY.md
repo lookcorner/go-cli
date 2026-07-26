@@ -265,7 +265,8 @@ same structured breakdown is returned by `x.ai/session/info`.
 | Telemetry/privacy hard-offs | done | No analytics, research uploads, feedback/review uploads, auto-update or retention opt-in code exists; `/privacy` reports and confirms the enforced opt-out state locally, explicit `/feedback` text and review citation events are stored only in the local session log, while review comment bodies are discarded |
 
 Pager scroll compatibility includes default-on `[scrollback.scroll].anchor_on_fold`
-with reference-style minimal visibility scrolling when explicitly disabled.
+with reference-style minimal visibility scrolling when explicitly disabled, plus
+the default centered `follow_indicator` and its `none` opt-out.
 
 Compatibility is verified with Go unit/integration tests and will additionally
 use captured protocol fixtures from the Rust implementation. A status is only

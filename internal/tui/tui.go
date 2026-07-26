@@ -786,6 +786,7 @@ type model struct {
 	respectManualFolds  bool
 	persistManualFolds  func(bool) error
 	disableFoldAnchor   bool
+	hideFollowIndicator bool
 	maxThoughtsWidth    int
 	persistThoughtWidth func(int) error
 	matchRefresh        bool
@@ -1027,6 +1028,7 @@ type UIOptions struct {
 	SetShowTips          func(bool) error
 	StartupTip           string
 	DisableFoldAnchor    bool
+	HideFollowIndicator  bool
 	RespectManualFolds   bool
 	SetManualFolds       func(bool) error
 	MaxThoughtsWidth     int
@@ -1237,7 +1239,8 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		showTimeline: options.ShowTimeline, persistTimeline: options.SetShowTimeline,
 		showThinking: options.ShowThinkingBlocks, persistThinking: options.SetShowThinking,
 		showTips: options.ShowTips, persistShowTips: options.SetShowTips, startupTip: options.StartupTip,
-		respectManualFolds: options.RespectManualFolds, persistManualFolds: options.SetManualFolds, disableFoldAnchor: options.DisableFoldAnchor,
+		respectManualFolds: options.RespectManualFolds, persistManualFolds: options.SetManualFolds,
+		disableFoldAnchor: options.DisableFoldAnchor, hideFollowIndicator: options.HideFollowIndicator,
 		maxThoughtsWidth: normalizedThoughtWidth(options.MaxThoughtsWidth), persistThoughtWidth: options.SetMaxThoughtsWidth,
 		matchRefresh: options.MatchRefresh, persistRefresh: options.SetMatchRefresh,
 		scrollLines: mouseWheelScrollLines, scrollSpeed: options.ScrollSpeed, persistScrollSpeed: options.SetScrollSpeed,
@@ -6051,6 +6054,10 @@ func (m *model) View() tea.View {
 		visible = m.renderTimeline(visible, timelineRail)
 		visible = m.debug.overlay(visible, width, m.scroll, m.maxTranscriptScroll(), m.contentHeight(), transcriptLineCount, m.scrollLines, m.invertScroll, m.scrollFocused)
 	}
+	showFollowIndicator := showingTranscript && !m.minimal && !m.hideFollowIndicator && m.scroll > 0
+	if showFollowIndicator && len(visible) > 0 {
+		visible[len(visible)-1] = ""
+	}
 	plainVisible := make([]string, len(visible))
 	for index, line := range visible {
 		plainVisible[index] = stripUIANSI(line)
@@ -6196,6 +6203,9 @@ func (m *model) View() tea.View {
 		statusText = "Tight on space? Try /compact-mode"
 	}
 	status := ansiDim + truncate(statusText, width) + ansiReset
+	if showFollowIndicator {
+		status = ansiDim + strings.Repeat(" ", max((width-1)/2, 0)) + "▼" + ansiReset
+	}
 	prefix := header + "\n"
 	if len(banner) > 0 {
 		prefix += strings.Join(banner, "\n") + "\n"

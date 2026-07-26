@@ -15,17 +15,17 @@ func TestRespectManualFoldsPagerConfig(t *testing.T) {
 		t.Fatalf("path=%q err=%v", path, err)
 	}
 	settings, err := LoadPagerScroll(path)
-	if err != nil || !settings.AnchorOnFold || settings.RespectManualFolds {
+	if err != nil || !settings.AnchorOnFold || settings.FollowIndicator != "center" || settings.RespectManualFolds {
 		t.Fatalf("defaults=%#v err=%v", settings, err)
 	}
-	if err := os.WriteFile(path, []byte("[scrollback.scroll]\nanchor_on_fold = false\n\n[other]\nvalue = 1\n"), 0o640); err != nil {
+	if err := os.WriteFile(path, []byte("[scrollback.scroll]\nanchor_on_fold = false\nfollow_indicator = \"none\"\n\n[other]\nvalue = 1\n"), 0o640); err != nil {
 		t.Fatal(err)
 	}
 	if err := UpdateRespectManualFolds(path, true); err != nil {
 		t.Fatal(err)
 	}
 	settings, err = LoadPagerScroll(path)
-	if err != nil || settings.AnchorOnFold || !settings.RespectManualFolds {
+	if err != nil || settings.AnchorOnFold || settings.FollowIndicator != "none" || !settings.RespectManualFolds {
 		t.Fatalf("settings=%#v err=%v", settings, err)
 	}
 	data, err := os.ReadFile(path)
@@ -42,5 +42,11 @@ func TestRespectManualFoldsPagerConfig(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0o640 {
 		t.Fatalf("mode=%v", info.Mode().Perm())
+	}
+	if err := os.WriteFile(path, []byte("[scrollback.scroll]\nfollow_indicator = \"side\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadPagerScroll(path); err == nil || !strings.Contains(err.Error(), "follow_indicator") {
+		t.Fatalf("invalid indicator error=%v", err)
 	}
 }

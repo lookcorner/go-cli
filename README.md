@@ -938,6 +938,8 @@ viewport as the group grows. The setting applies immediately and defaults to
 `false` for the reference legacy behavior. The same table accepts
 `anchor_on_fold = false` to use minimal scrolling that only keeps the toggled
 group visible; its default `true` keeps the group header at the same screen row.
+Set `follow_indicator = "none"` to hide the centered `▼` shown below the
+transcript when the viewport is above the latest content; the default is `center`.
 
 `[ui] cursor_blink = true` forces a blinking block cursor at TUI startup, while
 `false` forces a steady block. Leaving it unset preserves the terminal's cursor

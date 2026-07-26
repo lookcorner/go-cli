@@ -1920,6 +1920,43 @@ func TestScrollbackFocusAndNavigation(t *testing.T) {
 	}
 }
 
+func TestFollowIndicatorTracksTranscriptScroll(t *testing.T) {
+	newModel := func() *model {
+		m := &model{width: 21, height: 10, status: "ready"}
+		for line := 0; line < 30; line++ {
+			fmt.Fprintf(&m.transcript, "line %02d\n", line)
+		}
+		return m
+	}
+
+	m := newModel()
+	if view := stripUIANSI(m.View().Content); strings.Contains(view, "▼") {
+		t.Fatalf("bottom-follow view has indicator: %q", view)
+	}
+	m.scroll = 3
+	lines := strings.Split(stripUIANSI(m.View().Content), "\n")
+	indicator := lines[len(lines)-3]
+	if indicator != strings.Repeat(" ", 10)+"▼" {
+		t.Fatalf("indicator=%q lines=%#v", indicator, lines)
+	}
+	m.scroll = 0
+	if view := stripUIANSI(m.View().Content); strings.Contains(view, "▼") {
+		t.Fatalf("returning to bottom kept indicator: %q", view)
+	}
+
+	hidden := newModel()
+	hidden.scroll, hidden.hideFollowIndicator = 3, true
+	if view := stripUIANSI(hidden.View().Content); strings.Contains(view, "▼") {
+		t.Fatalf("disabled indicator rendered: %q", view)
+	}
+
+	modal := newModel()
+	modal.scroll, modal.settings = 3, &settingsState{}
+	if view := stripUIANSI(modal.View().Content); strings.Contains(view, "▼") {
+		t.Fatalf("settings view rendered transcript indicator: %q", view)
+	}
+}
+
 func TestSimpleScrollbackKeysReturnToPrompt(t *testing.T) {
 	for _, key := range []rune{'g', 'G', 'j', 'k', '/'} {
 		t.Run(string(key), func(t *testing.T) {
