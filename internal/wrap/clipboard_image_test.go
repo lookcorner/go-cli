@@ -5,6 +5,9 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"image"
+	"image/color"
+	"image/png"
 	"strings"
 	"testing"
 
@@ -69,6 +72,41 @@ func TestMaybeRequestHostImageGates(t *testing.T) {
 	if MaybeRequestHostImage(true, false, "", "", func() error { return errors.New("fail") }) {
 		t.Fatal("emit error should return false")
 	}
+}
+
+func TestFitImageForWrapRecompressesOversizedPNG(t *testing.T) {
+	pngData := noisyTestPNG(t, 256)
+	budget := len(pngData) - 1
+	if budget < 64 {
+		t.Fatal("test PNG unexpectedly tiny")
+	}
+	mime, data, ok := fitImageForWrapBudget(&appclipboard.Content{MediaType: "image/png", Data: pngData}, budget)
+	if !ok || mime != "image/jpeg" || len(data) == 0 || len(data) > budget {
+		t.Fatalf("ok=%v mime=%q len=%d budget=%d", ok, mime, len(data), budget)
+	}
+}
+
+func TestFitImageForWrapPassthroughUnderBudget(t *testing.T) {
+	png := []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3}
+	mime, data, ok := fitImageForWrap(&appclipboard.Content{MediaType: "image/png", Data: png})
+	if !ok || mime != "image/png" || !bytes.Equal(data, png) {
+		t.Fatalf("mime=%q ok=%v", mime, ok)
+	}
+}
+
+func noisyTestPNG(t *testing.T, size int) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, size, size))
+	for y := 0; y < size; y++ {
+		for x := 0; x < size; x++ {
+			img.SetRGBA(x, y, color.RGBA{R: uint8(x * 17), G: uint8(y * 31), B: uint8(x * y), A: 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
 }
 
 func TestHostClipboardImageFrame(t *testing.T) {

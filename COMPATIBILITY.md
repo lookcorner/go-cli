@@ -158,7 +158,8 @@ and tmux-wrapped OSC 52 writes into the native clipboard, observes latched DEC
 private modes and kitty keyboard pushes so dirty child exits emit matching
 restores while clean exits stay byte-transparent, answers the private host
 clipboard-image OSC with bracketed `GROK_WRAP_IMG`/`GROK_WRAP_NONE` frames for
-remote paste-miss recovery, and preserves output and exit status;
+remote paste-miss recovery (JPEG-recompressing oversized host screenshots under
+the 20 MiB wrap cap), and preserves output and exit status;
 non-interactive and unsupported-platform runs fall back to direct execution.
 Common reference run flags are supported, including cwd/model/reasoning,
 single-prompt, system-prompt/rules, turn-limit, permission-mode,

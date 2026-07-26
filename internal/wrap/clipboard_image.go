@@ -1,11 +1,17 @@
 package wrap
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
+	"image"
+	"image/jpeg"
+	_ "image/png"
 	"os"
 	"strings"
 	"time"
+
+	"golang.org/x/image/draw"
 
 	appclipboard "github.com/lookcorner/go-cli/internal/clipboard"
 )
@@ -82,22 +88,66 @@ func TryDecodeHostImagePaste(text string) *WrapImagePaste {
 }
 
 // EncodeHostImageResponse builds bracketed-paste bytes for wrap to inject into PTY stdin.
-func EncodeHostImageResponse(image *appclipboard.Content) []byte {
-	if image == nil || len(image.Data) == 0 || len(image.Data) > MaxWrapImageBytes {
+// Oversized host images are JPEG-recompressed when possible.
+func EncodeHostImageResponse(img *appclipboard.Content) []byte {
+	if img == nil || len(img.Data) == 0 {
 		return []byte("\x1b[200~" + MagicNONE + "\x1b[201~")
 	}
-	mime := image.MediaType
-	if mime == "" {
-		mime = "image/png"
+	mime, data, ok := fitImageForWrapBudget(img, MaxWrapImageBytes)
+	if !ok {
+		return []byte("\x1b[200~" + MagicNONE + "\x1b[201~")
 	}
-	b64 := base64.StdEncoding.EncodeToString(image.Data)
+	b64 := base64.StdEncoding.EncodeToString(data)
 	return []byte("\x1b[200~" + MagicIMG + "\n" + mime + "\n" + b64 + "\x1b[201~")
+}
+
+func fitImageForWrap(img *appclipboard.Content) (mime string, data []byte, ok bool) {
+	return fitImageForWrapBudget(img, MaxWrapImageBytes)
+}
+
+// fitImageForWrapBudget keeps encoded bytes under budget, JPEG-recompressing if needed.
+func fitImageForWrapBudget(img *appclipboard.Content, budget int) (mime string, data []byte, ok bool) {
+	if len(img.Data) <= budget {
+		mime = img.MediaType
+		if mime == "" {
+			mime = "image/png"
+		}
+		return mime, img.Data, true
+	}
+	decoded, _, err := image.Decode(bytes.NewReader(img.Data))
+	if err != nil {
+		return "", nil, false
+	}
+	for _, quality := range []int{85, 70, 55, 40, 25} {
+		var buf bytes.Buffer
+		if err := jpeg.Encode(&buf, decoded, &jpeg.Options{Quality: quality}); err != nil {
+			continue
+		}
+		data := buf.Bytes()
+		if len(data) > 0 && len(data) <= budget {
+			return "image/jpeg", data, true
+		}
+	}
+	bounds := decoded.Bounds()
+	width := max(bounds.Dx()/2, 1)
+	height := max(bounds.Dy()/2, 1)
+	small := image.NewRGBA(image.Rect(0, 0, width, height))
+	draw.ApproxBiLinear.Scale(small, small.Bounds(), decoded, bounds, draw.Over, nil)
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, small, &jpeg.Options{Quality: 60}); err != nil {
+		return "", nil, false
+	}
+	data = buf.Bytes()
+	if len(data) == 0 || len(data) > budget {
+		return "", nil, false
+	}
+	return "image/jpeg", data, true
 }
 
 // HostClipboardImageFrame reads the host clipboard and encodes a wrap response frame.
 func HostClipboardImageFrame(read func(context.Context) (appclipboard.Content, error)) []byte {
 	if read == nil {
-		read = appclipboard.Read
+		read = appclipboard.ReadWrapSource
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()

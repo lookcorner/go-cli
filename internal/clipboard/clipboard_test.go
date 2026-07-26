@@ -34,7 +34,7 @@ func TestReadValidatesClipboardContent(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			readPlatformFn = func(context.Context) (Content, error) { return test.content, test.err }
-			got, err := read(context.Background())
+			got, err := read(context.Background(), maxImageBytes, 100_000_000)
 			if test.wantErr == "" {
 				if err != nil || got.Text != test.content.Text || got.MediaType != test.content.MediaType {
 					t.Fatalf("content=%#v err=%v", got, err)

@@ -347,7 +347,8 @@ writes, including tmux passthrough sequences, are copied to the local native
 clipboard and removed from visible output. Latched mouse/paste/focus/alt-screen
 and kitty keyboard modes are restored when a child dies dirty; clean exits stay
 byte-transparent. When a wrapped remote session misses a local image paste, wrap
-answers the private host-image OSC with a bracketed clipboard PNG frame.
+answers the private host-image OSC with a bracketed clipboard image frame,
+JPEG-recompressing oversized host screenshots when needed.
 Non-interactive and unsupported-platform runs execute the command directly,
 preserving its output and exit status.
 
