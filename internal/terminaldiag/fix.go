@@ -82,8 +82,9 @@ const (
 type FixKind string
 
 const (
-	FixKindSSH  FixKind = "ssh"
-	FixKindTmux FixKind = "tmux"
+	FixKindSSH   FixKind = "ssh"
+	FixKindTmux  FixKind = "tmux"
+	FixKindShell FixKind = "shell"
 )
 
 type FixEnv struct {
@@ -126,6 +127,8 @@ func ResolveFixID(value string) (string, error) {
 		return TmuxExtendedKeysID, nil
 	case TmuxTruecolorHandle, TmuxTruecolorID:
 		return TmuxTruecolorID, nil
+	case ColortermHandle, ColortermID:
+		return ColortermID, nil
 	default:
 		return "", fmt.Errorf("`%s` is not an available Doctor fix. Run `gork doctor fix` to list available fixes", value)
 	}
@@ -133,8 +136,8 @@ func ResolveFixID(value string) (string, error) {
 
 func AllFixHandles() []string {
 	return []string{
-		SSHWrapHandle, TmuxClipboardHandle, DCSPassthroughHandle, TmuxExtendedKeysHandle, TmuxTruecolorHandle,
-		SSHWrapID, TmuxClipboardID, DCSPassthroughID, TmuxExtendedKeysID, TmuxTruecolorID,
+		SSHWrapHandle, TmuxClipboardHandle, DCSPassthroughHandle, TmuxExtendedKeysHandle, TmuxTruecolorHandle, ColortermHandle,
+		SSHWrapID, TmuxClipboardID, DCSPassthroughID, TmuxExtendedKeysID, TmuxTruecolorID, ColortermID,
 	}
 }
 
@@ -150,7 +153,7 @@ func ListAutomaticFixes(env FixEnv) []FixListing {
 	for _, spec := range tmuxOptionSpecs {
 		listings = append(listings, tmuxListing(env, spec))
 	}
-	listings = append(listings, tmuxTruecolorListing(env))
+	listings = append(listings, tmuxTruecolorListing(env), colortermListing(env))
 	return listings
 }
 
@@ -225,6 +228,8 @@ func PlanFix(env FixEnv, id string) (FixPlan, error) {
 		return PlanTmuxOption(env, id)
 	case TmuxTruecolorID:
 		return PlanTmuxTruecolor(env)
+	case ColortermID:
+		return PlanColorterm(env)
 	default:
 		return FixPlan{}, fmt.Errorf("unsupported fix %q", id)
 	}
@@ -237,6 +242,8 @@ func ApplyFix(plan FixPlan) (FixOutcome, error) {
 			return ApplyTmuxTruecolor(plan)
 		}
 		return ApplyTmuxOption(plan)
+	case FixKindShell:
+		return ApplyColorterm(plan)
 	default:
 		return ApplySSHWrap(plan)
 	}
@@ -322,6 +329,13 @@ func FormatFixSuccess(outcome FixOutcome) string {
 			return fmt.Sprintf("Added `%s` to %s.\nReload tmux with `tmux source-file %s`, or detach and reattach.", outcome.Line, outcome.Path, outcome.Path)
 		default:
 			return fmt.Sprintf("`%s` is already configured in %s.", outcome.Line, outcome.Path)
+		}
+	case FixKindShell:
+		switch outcome.Status {
+		case FixApplied:
+			return fmt.Sprintf("Added `%s` to %s.\nOpen a new shell or run `gork doctor` again to confirm.", outcome.Line, outcome.Path)
+		default:
+			return fmt.Sprintf("`COLORTERM=truecolor` is already configured in %s.", outcome.Path)
 		}
 	default:
 		switch outcome.Status {

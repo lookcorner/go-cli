@@ -1073,7 +1073,7 @@ live tmux option probes when inside tmux, and actionable setup warnings without 
 or `/doctor fix ssh-wrap --yes` installs a managed shell alias so interactive `ssh`
 runs through `gork wrap ssh` (Bash/zsh/fish, local non-Windows shells only). Inside
 tmux, `tmux-clipboard`, `dcs-passthrough`, `tmux-extended-keys`, and `tmux-truecolor` persist the matching
-`~/.tmux.conf` options; preview without `--yes`.
+`~/.tmux.conf` options; `colorterm` exports `COLORTERM=truecolor` in Bash/zsh/fish startup files. Preview without `--yes`.
 `/usage` (also `/usage show`, `/cost`, or `/cost show`) fetches current credit,
 reset, auto-topup, and pay-as-you-go metrics without calling the model.
 `/usage manage` and `/cost manage` open the billing management page, with the URL

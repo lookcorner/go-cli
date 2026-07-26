@@ -221,7 +221,7 @@ func terminalWarnings(term, color, multiplexer string, clipboard, osc52 bool) []
 		warnings = append(warnings, "TERM=dumb disables interactive terminal features.")
 	}
 	if color == "basic" {
-		warnings = append(warnings, "Limited color support; set COLORTERM=truecolor when your terminal supports it.")
+		warnings = append(warnings, "Limited color support; set COLORTERM=truecolor when your terminal supports it.\n    → Automatic setup: `gork doctor fix colorterm`")
 	}
 	if strings.Contains(multiplexer, "tmux") && !strings.Contains(strings.ToLower(term), "256color") {
 		warnings = append(warnings, "tmux is not advertising 256 colors; use tmux-256color as its default terminal.\n    → Automatic setup: `gork doctor fix tmux-truecolor`")

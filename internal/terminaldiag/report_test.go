@@ -181,7 +181,7 @@ func TestBuildReportWarnsForBasicTmuxColor(t *testing.T) {
 		}
 		return "", errors.New("missing")
 	}, "linux")
-	for _, want := range []string{"multiplexer  byobu (tmux)", "color        basic", "2 issue(s)", "COLORTERM=truecolor", "tmux-256color", "gork doctor fix tmux-truecolor"} {
+	for _, want := range []string{"multiplexer  byobu (tmux)", "color        basic", "2 issue(s)", "COLORTERM=truecolor", "tmux-256color", "gork doctor fix tmux-truecolor", "gork doctor fix colorterm"} {
 		if !strings.Contains(report, want) {
 			t.Errorf("missing %q in %q", want, report)
 		}

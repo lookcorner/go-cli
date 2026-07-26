@@ -13,6 +13,7 @@ func TestResolveFixID(t *testing.T) {
 		"tmux-clipboard": TmuxClipboardID, "terminal.tmux-clipboard": TmuxClipboardID,
 		"dcs-passthrough": DCSPassthroughID, "tmux-extended-keys": TmuxExtendedKeysID,
 		"tmux-truecolor": TmuxTruecolorID, "terminal.tmux-truecolor": TmuxTruecolorID,
+		"colorterm": ColortermID, "terminal.colorterm": ColortermID,
 	}
 	for value, want := range cases {
 		id, err := ResolveFixID(value)
@@ -74,7 +75,7 @@ func TestPlanSSHWrapRejectsConflictsAndRemote(t *testing.T) {
 
 func TestListAutomaticFixesAvailability(t *testing.T) {
 	local := ListAutomaticFixes(FixEnv{Home: "/tmp/home", Shell: "/bin/bash", GOOS: "linux", Tmux: true})
-	if len(local) != 5 || local[0].Availability != "here" || local[1].Availability != "here" || local[4].Handle != TmuxTruecolorHandle {
+	if len(local) != 6 || local[0].Availability != "here" || local[1].Availability != "here" || local[4].Handle != TmuxTruecolorHandle || local[5].Handle != ColortermHandle {
 		t.Fatalf("local=%#v", local)
 	}
 	remote := ListAutomaticFixes(FixEnv{Home: "/tmp/home", Shell: "/bin/bash", GOOS: "linux", SSH: true})
@@ -223,6 +224,41 @@ func TestPlanTmuxTruecolorRejectsConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := PlanTmuxTruecolor(FixEnv{Home: home, Tmux: true}); err == nil || !strings.Contains(err.Error(), "existing") {
+		t.Fatalf("conflict err=%v", err)
+	}
+}
+
+func TestPlanAndApplyColorterm(t *testing.T) {
+	home := t.TempDir()
+	env := FixEnv{Home: home, Shell: "/bin/zsh", GOOS: "darwin"}
+	plan, err := PlanColorterm(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Path != filepath.Join(home, ".zshrc") || plan.Alias != "export COLORTERM=truecolor" || plan.Kind != FixKindShell {
+		t.Fatalf("plan=%#v", plan)
+	}
+	outcome, err := ApplyColorterm(plan)
+	if err != nil || outcome.Status != FixApplied {
+		t.Fatalf("outcome=%#v err=%v", outcome, err)
+	}
+	data, err := os.ReadFile(plan.Path)
+	if err != nil || !strings.Contains(string(data), "export COLORTERM=truecolor") {
+		t.Fatalf("zshrc=%q err=%v", data, err)
+	}
+	outcome, err = ApplyColorterm(plan)
+	if err != nil || outcome.Status != FixAlreadyConfigured {
+		t.Fatalf("second=%#v err=%v", outcome, err)
+	}
+}
+
+func TestPlanColortermRejectsConflict(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".bashrc")
+	if err := os.WriteFile(path, []byte("export COLORTERM=yes\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PlanColorterm(FixEnv{Home: home, Shell: "/bin/bash", GOOS: "linux"}); err == nil || !strings.Contains(err.Error(), "existing") {
 		t.Fatalf("conflict err=%v", err)
 	}
 }
