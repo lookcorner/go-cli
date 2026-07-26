@@ -1122,7 +1122,10 @@ editor/IDE integrations:
 
 `gork agent stdio` is the reference command form and uses the same ACP runtime
 as `--acp`. It accepts model, reasoning, permission, workspace, session,
-folder-trust, memory, and capability flags before `stdio`. Shared leader use is
+folder-trust, memory, and capability flags before `stdio`. Repeatable
+`--plugin-dir DIR` arguments inject trusted process-local plugins at highest
+priority for direct stdio and WebSocket server runtimes; leader-backed sessions
+warn and ignore them. Shared leader use is
 disabled by default. Set `[cli] use_leader = true` in `config.toml` or pass
 `--leader` to connect to an existing leader and start one when needed;
 `--no-leader` always forces the local ACP runtime. `agent serve`

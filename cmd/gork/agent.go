@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -24,6 +25,18 @@ func runAgent(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	usesLeader := agentUsesLeader(*options, normalized)
+	if len(options.pluginDirs) > 0 && usesLeader {
+		fmt.Fprintln(stderr, "gork: --plugin-dir is ignored in leader mode; run with --no-leader to load per-process plugins")
+		options.pluginDirs = nil
+		normalized = removeAgentPluginDirs(normalized)
+	} else if len(options.pluginDirs) > 0 {
+		normalized = removeAgentPluginDirs(normalized)
+		options.pluginDirs = canonicalAgentPluginDirs(options.pluginDirs, stderr)
+		for _, path := range options.pluginDirs {
+			normalized = append(normalized, "--plugin-dir", path)
+		}
+	}
 	switch options.mode {
 	case "leader":
 		return runAgentLeader(normalized, *options, stdin, stdout, stderr)
@@ -36,6 +49,10 @@ func runAgent(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	return runOnce(normalized, stdin, stdout, stderr)
 }
 
+func agentUsesLeader(options agentServerOptions, args []string) bool {
+	return options.mode == "leader" || options.mode == "stdio" && (options.forceLeader || !options.noLeader && agentConfigUsesLeader(args))
+}
+
 type agentServerOptions struct {
 	bind               string
 	secret             string
@@ -43,6 +60,7 @@ type agentServerOptions struct {
 	forceLeader        bool
 	noLeader           bool
 	noExitOnDisconnect bool
+	pluginDirs         []string
 }
 
 func normalizeAgentArgs(args []string) ([]string, *agentServerOptions, error) {
@@ -66,12 +84,17 @@ func normalizeAgentArgs(args []string) ([]string, *agentServerOptions, error) {
 			}
 			mode = arg
 		case "-m", "--model", "--reasoning-effort", "--effort", "--config", "--cwd", "--workspace",
-			"--session-dir", "--allow", "--deny", "--permission-mode":
+			"--session-dir", "--allow", "--deny", "--permission-mode", "--plugin-dir":
 			value, err := next()
 			if err != nil {
 				return nil, nil, err
 			}
-			result = append(result, arg, value)
+			if arg == "--plugin-dir" {
+				server.pluginDirs = append(server.pluginDirs, value)
+				result = append(result, arg, value)
+			} else {
+				result = append(result, arg, value)
+			}
 		case "--bind", "--secret":
 			serverOptionSet = true
 			value, err := next()
@@ -96,7 +119,7 @@ func normalizeAgentArgs(args []string) ([]string, *agentServerOptions, error) {
 			return nil, nil, flag.ErrHelp
 		case "--leader":
 			server.forceLeader = true
-		case "--reauth", "--reauthenticate", "--agent-profile", "--plugin-dir",
+		case "--reauth", "--reauthenticate", "--agent-profile",
 			"--grok-ws-origin", "--grok-ws-url", "--cli-chat-proxy-base-url", "--xai-api-base-url":
 			return nil, nil, fmt.Errorf("agent option %q is not implemented", cleanCLIText(arg))
 		default:
@@ -110,6 +133,9 @@ func normalizeAgentArgs(args []string) ([]string, *agentServerOptions, error) {
 					serverOptionSet = true
 					server.secret = strings.TrimPrefix(arg, "--secret=")
 					continue
+				}
+				if value, ok := strings.CutPrefix(arg, "--plugin-dir="); ok {
+					server.pluginDirs = append(server.pluginDirs, value)
 				}
 				result = append(result, arg)
 				continue
@@ -184,12 +210,49 @@ func agentValueOption(arg string) bool {
 	for _, name := range []string{
 		"--model=", "--reasoning-effort=", "--effort=", "--config=", "--cwd=", "--workspace=",
 		"--session-dir=", "--allow=", "--deny=", "--permission-mode=", "--bind=", "--secret=",
+		"--plugin-dir=",
 	} {
 		if strings.HasPrefix(arg, name) && len(arg) > len(name) {
 			return true
 		}
 	}
 	return false
+}
+
+func canonicalAgentPluginDirs(paths []string, output io.Writer) []string {
+	result := make([]string, 0, len(paths))
+	for _, path := range paths {
+		canonical, err := filepath.Abs(path)
+		if err == nil {
+			canonical, err = filepath.EvalSymlinks(canonical)
+		}
+		if err != nil {
+			fmt.Fprintf(output, "gork: --plugin-dir %s: %v; skipping\n", path, err)
+			continue
+		}
+		info, err := os.Stat(canonical)
+		if err != nil || !info.IsDir() {
+			fmt.Fprintf(output, "gork: --plugin-dir %s: not a directory; skipping\n", path)
+			continue
+		}
+		result = append(result, canonical)
+	}
+	return result
+}
+
+func removeAgentPluginDirs(args []string) []string {
+	result := make([]string, 0, len(args))
+	for index := 0; index < len(args); index++ {
+		if args[index] == "--plugin-dir" {
+			index++
+			continue
+		}
+		if strings.HasPrefix(args[index], "--plugin-dir=") {
+			continue
+		}
+		result = append(result, args[index])
+	}
+	return result
 }
 
 const agentHelp = `Usage: gork agent [options] <stdio|serve|leader>
@@ -205,6 +268,7 @@ Supported options:
       --config PATH
       --cwd DIR, --workspace DIR
       --session-dir DIR
+      --plugin-dir DIR      load a trusted plugin for this process (repeatable)
       --trust
       --disable-web-search
       --no-plan, --no-subagents, --no-ask-user

@@ -110,6 +110,7 @@ type options struct {
 	noMemory           bool
 	hunkTrackerMode    string
 	hunkTrackerModeSet bool
+	pluginDirs         stringListFlag
 	allow              stringListFlag
 	deny               stringListFlag
 }
@@ -226,6 +227,7 @@ func parseRunOptions(args []string, stderr io.Writer) (options, *flag.FlagSet, e
 	flags.BoolVar(&opts.experimentalMemory, "experimental-memory", false, "enable cross-session workspace memory")
 	flags.BoolVar(&opts.noMemory, "no-memory", false, "disable cross-session memory")
 	flags.StringVar(&opts.hunkTrackerMode, "hunk-tracker-mode", "", "hunk tracker mode: agent_only, all_dirty, or off")
+	flags.Var(&opts.pluginDirs, "plugin-dir", "load a trusted plugin directory for this process; repeatable")
 	flags.Usage = func() {
 		fmt.Fprintf(stderr, "Usage: gork [flags] [prompt]\n       gork agent [options] <stdio|serve|leader>\n       gork leader <list|info|kill>\n       gork dashboard [flags]\n       gork login [--oauth|--device-auth]\n       gork logout\n       gork setup\n       gork doctor [--json]\n       gork doctor fix [ssh-wrap|tmux-clipboard|dcs-passthrough|tmux-extended-keys] [--yes]\n       gork inspect [--json] [--config path]\n       gork mcp <list|add|remove|doctor>\n       gork models [--config path]\n       gork share <session-id>\n       gork trace <session-id> [--local] [-o path] [--json]\n       gork update [--check] [--json]\n       gork wrap <command> [args...]\n       gork version [--json]\n       gork completions <bash|elvish|fish|powershell|zsh>\n       gork plugin <list|install|update|uninstall|enable|disable|details|validate|marketplace>\n       gork sessions <list|search|delete>\n       gork export <session-id> [output] [-c|--clipboard]\n       gork worktree <list|show|rm|gc|db>\n       gork memory clear [--workspace|--global|--all] [-y|--yes]\n\n")
 		flags.PrintDefaults()
@@ -559,7 +561,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return err
 	}
 	workspaceSource := cfg
-	cfg, skillCatalog, plugins, err := discoverWorkspace(ws.Root(), workspaceSource, projectTrusted)
+	cfg, skillCatalog, plugins, err := discoverWorkspace(ws.Root(), workspaceSource, projectTrusted, opts.pluginDirs)
 	if err != nil {
 		return err
 	}
@@ -967,7 +969,8 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			return nil, err
 		}
 		next, err := plugin.Inventory(ws.Root(), plugin.Config{
-			Paths: reloaded.Plugins.Paths, Enabled: reloaded.Plugins.Enabled, Disabled: reloaded.Plugins.Disabled,
+			CLIPaths: opts.pluginDirs,
+			Paths:    reloaded.Plugins.Paths, Enabled: reloaded.Plugins.Enabled, Disabled: reloaded.Plugins.Disabled,
 			ProjectTrusted: projectTrusted,
 		})
 		if err != nil {
@@ -3467,7 +3470,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		sessionBase.Skills = cloneSkillsConfig(dynamicSkills)
 		sessionBase.Plugins = clonePluginsConfig(dynamicPlugins)
 		extensionsMu.Unlock()
-		sessionCfg, catalog, plugins, err := discoverWorkspace(ws.Root(), sessionBase, projectTrusted)
+		sessionCfg, catalog, plugins, err := discoverWorkspace(ws.Root(), sessionBase, projectTrusted, opts.pluginDirs)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -3850,7 +3853,8 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 				mcpSource := state.mcpSource
 				extensionsMu.Unlock()
 				inventory, err := plugin.Inventory(state.root, plugin.Config{
-					Paths: settings.Paths, Enabled: settings.Enabled, Disabled: settings.Disabled,
+					CLIPaths: opts.pluginDirs,
+					Paths:    settings.Paths, Enabled: settings.Enabled, Disabled: settings.Disabled,
 					ProjectTrusted: trusted,
 				})
 				if err != nil {
@@ -4308,10 +4312,15 @@ func storedSkillSettings(source skills.Settings) config.SkillsConfig {
 	}
 }
 
-func discoverWorkspace(root string, cfg config.Config, projectTrusted bool) (config.Config, *skills.Catalog, []plugin.Plugin, error) {
+func discoverWorkspace(root string, cfg config.Config, projectTrusted bool, cliPluginDirs ...[]string) (config.Config, *skills.Catalog, []plugin.Plugin, error) {
 	_ = plugin.RefreshLocal()
+	var pluginDirs []string
+	if len(cliPluginDirs) > 0 {
+		pluginDirs = cliPluginDirs[0]
+	}
 	inventory, err := plugin.Inventory(root, plugin.Config{
-		Paths: cfg.Plugins.Paths, Enabled: cfg.Plugins.Enabled, Disabled: cfg.Plugins.Disabled,
+		CLIPaths: pluginDirs,
+		Paths:    cfg.Plugins.Paths, Enabled: cfg.Plugins.Enabled, Disabled: cfg.Plugins.Disabled,
 		ProjectTrusted: projectTrusted,
 	})
 	if err != nil {

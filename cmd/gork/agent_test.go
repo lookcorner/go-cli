@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -55,6 +57,10 @@ func TestNormalizeAgentArgs(t *testing.T) {
 	if err != nil || server == nil || !server.forceLeader || strings.Join(got, " ") != "--acp" {
 		t.Fatalf("follower normalized=%q options=%+v err=%v", got, server, err)
 	}
+	got, server, err = normalizeAgentArgs([]string{"--plugin-dir", "one", "--plugin-dir=two", "--no-leader", "stdio"})
+	if err != nil || strings.Join(got, " ") != "--acp --plugin-dir one --plugin-dir=two" || strings.Join(server.pluginDirs, "|") != "one|two" {
+		t.Fatalf("plugin dirs normalized=%q options=%+v err=%v", got, server, err)
+	}
 }
 
 func TestAgentRejectsUnimplementedModesAndOptions(t *testing.T) {
@@ -66,7 +72,7 @@ func TestAgentRejectsUnimplementedModesAndOptions(t *testing.T) {
 		{[]string{"headless"}, "headless mode"},
 		{[]string{"--leader", "--no-leader", "stdio"}, "cannot be used together"},
 		{[]string{"--leader", "leader"}, "require agent stdio"},
-		{[]string{"--plugin-dir", "/tmp/plugin", "stdio"}, "not implemented"},
+		{[]string{"--plugin-dir", "stdio"}, "headless mode"},
 		{[]string{"--bind", "127.0.0.1:0", "stdio"}, "require agent serve"},
 		{[]string{"--no-exit-on-disconnect", "stdio"}, "requires agent leader"},
 		{[]string{"--model=", "stdio"}, "unknown agent option"},
@@ -75,6 +81,44 @@ func TestAgentRejectsUnimplementedModesAndOptions(t *testing.T) {
 		if _, _, err := normalizeAgentArgs(test.args); err == nil || !strings.Contains(err.Error(), test.want) {
 			t.Fatalf("args=%v err=%v want=%q", test.args, err, test.want)
 		}
+	}
+}
+
+func TestCanonicalAgentPluginDirsSkipsInvalidPaths(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "plugin")
+	file := filepath.Join(root, "file")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	got := canonicalAgentPluginDirs([]string{dir, file, filepath.Join(root, "missing")}, &stderr)
+	canonical, _ := filepath.EvalSymlinks(dir)
+	if strings.Join(got, "|") != canonical {
+		t.Fatalf("plugin dirs=%q", got)
+	}
+	if output := stderr.String(); !strings.Contains(output, "not a directory; skipping") || !strings.Contains(output, "missing") {
+		t.Fatalf("stderr=%q", output)
+	}
+}
+
+func TestAgentUsesLeaderOnlyForLeaderAndStdioModes(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(configPath, []byte("[cli]\nuse_leader = true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"--acp", "--config", configPath}
+	if !agentUsesLeader(agentServerOptions{mode: "stdio"}, args) {
+		t.Fatal("stdio ignored configured leader")
+	}
+	if agentUsesLeader(agentServerOptions{mode: "serve"}, args) {
+		t.Fatal("serve incorrectly used configured leader")
+	}
+	if !agentUsesLeader(agentServerOptions{mode: "leader"}, args) {
+		t.Fatal("leader mode was not recognized")
 	}
 }
 

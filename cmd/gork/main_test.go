@@ -2256,6 +2256,33 @@ func TestDiscoverSkillsLoadsConfiguredPlugin(t *testing.T) {
 	}
 }
 
+func TestDiscoverWorkspaceLoadsCLIPluginDespiteDisabledConfig(t *testing.T) {
+	root := t.TempDir()
+	pluginRoot := filepath.Join(root, "plugin")
+	skillDir := filepath.Join(pluginRoot, "skills", "deploy")
+	if err := os.MkdirAll(skillDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginRoot, "plugin.json"), []byte(`{"name":"cli-tools"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: deploy\ndescription: Deploy\n---\nDeploy"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, catalog, inventory, err := discoverWorkspace(root, config.Config{
+		Compat: compat.Default(), Plugins: config.PluginsConfig{Disabled: []string{"cli-tools"}},
+	}, false, []string{pluginRoot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if names := strings.Join(catalog.Names(), "|"); names != "cli-tools:deploy" {
+		t.Fatalf("plugin skill names=%q", names)
+	}
+	if len(inventory) != 1 || inventory[0].Scope != "cli" || !inventory[0].Executable {
+		t.Fatalf("inventory=%#v", inventory)
+	}
+}
+
 func TestDiscoverWorkspaceLoadsTrustedEnvrcBelowExplicitEnvironment(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, ".envrc"), []byte("export ENVRC_ONLY=yes\nexport SHARED=envrc\n"), 0o600); err != nil {

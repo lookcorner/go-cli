@@ -13,6 +13,7 @@ import (
 )
 
 type Config struct {
+	CLIPaths       []string
 	Paths          []string
 	Enabled        []string
 	Disabled       []string
@@ -50,6 +51,7 @@ type Plugin struct {
 type scope string
 
 const (
+	cliScope     scope = "cli"
 	projectScope scope = "project"
 	userScope    scope = "user"
 	configScope  scope = "config"
@@ -150,6 +152,9 @@ func discoverInventory(workspaceRoot, home, grokHome string, cfg Config) ([]Plug
 	seenPaths := make(map[string]bool)
 	seenNames := make(map[string]bool)
 	var plugins []Plugin
+	for _, root := range cfg.CLIPaths {
+		collect(root, cliScope, true, grokHome, cfg, seenPaths, seenNames, &plugins)
+	}
 
 	collectParent := func(parent string, kind scope) error {
 		entries, err := os.ReadDir(parent)
@@ -334,6 +339,9 @@ func resolveDirs(root string, configured pathList, fallback string) []string {
 }
 
 func isEnabled(kind scope, name, id string, cfg Config) bool {
+	if kind == cliScope {
+		return true
+	}
 	if listed(cfg.Disabled, name, id) {
 		return false
 	}

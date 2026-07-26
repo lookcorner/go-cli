@@ -178,7 +178,10 @@ Responses `text.format`, Chat Completions `response_format`, and Anthropic
 Messages `output_config.format`.
 The reference `gork agent stdio` command routes its supported model, reasoning,
 permission, workspace, session, trust, memory, and capability flags through the
-same complete ACP stdio runtime as `--acp`. `gork agent serve` exposes that
+same complete ACP stdio runtime as `--acp`. Repeatable `--plugin-dir` paths
+inject always-enabled, trusted process-local plugins at highest priority for
+direct stdio and serve runtimes, while leader-backed sessions warn and ignore
+them. `gork agent serve` exposes that
 persistent runtime over an authenticated WebSocket and preserves active
 sessions across reconnects. On Unix and Windows, `gork agent leader` exposes
 the same ACP application through the reference framed local IPC protocol with

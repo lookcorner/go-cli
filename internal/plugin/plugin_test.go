@@ -46,6 +46,29 @@ func TestDiscoverConfigPlugin(t *testing.T) {
 	}
 }
 
+func TestCLIPluginIsTrustedEnabledAndHighestPriority(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	home := t.TempDir()
+	grokHome := filepath.Join(home, ".grok")
+	cliRoot := filepath.Join(workspaceRoot, "cli-plugin")
+	configRoot := filepath.Join(workspaceRoot, "config-plugin")
+	mustMkdir(t, filepath.Join(cliRoot, "skills"))
+	mustMkdir(t, filepath.Join(configRoot, "skills"))
+	mustWrite(t, filepath.Join(cliRoot, "plugin.json"), `{"name":"shared"}`)
+	mustWrite(t, filepath.Join(configRoot, "plugin.json"), `{"name":"shared"}`)
+
+	plugins, err := discover(workspaceRoot, home, grokHome, Config{
+		CLIPaths: []string{cliRoot}, Paths: []string{configRoot}, Disabled: []string{"shared"},
+	})
+	if err != nil || len(plugins) != 1 {
+		t.Fatalf("plugins=%#v err=%v", plugins, err)
+	}
+	item := plugins[0]
+	if item.Scope != "cli" || item.Root != canonicalOrClean(cliRoot) || !item.Enabled || !item.Trusted || !item.Executable {
+		t.Fatalf("plugin=%#v", item)
+	}
+}
+
 func TestAutoDiscoveredPluginsRequireEnablement(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	home := t.TempDir()

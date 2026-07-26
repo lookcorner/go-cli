@@ -187,13 +187,17 @@ func TestAgentFollowerConfigAndNoLeaderPrecedence(t *testing.T) {
 
 	request := `{"jsonrpc":"2.0","id":12,"method":"initialize","params":{"protocolVersion":1}}` + "\n"
 	var output bytes.Buffer
+	var stderr bytes.Buffer
 	if err := runAgent([]string{
-		"--config", configPath, "--model", "test-model", "stdio",
-	}, strings.NewReader(request), &output, io.Discard); err != nil {
+		"--config", configPath, "--plugin-dir", t.TempDir(), "--model", "test-model", "stdio",
+	}, strings.NewReader(request), &output, &stderr); err != nil {
 		t.Fatal(err)
 	}
 	if spawnCount != 1 || !bytes.Contains(output.Bytes(), []byte(`"id":12`)) {
 		t.Fatalf("spawn=%d output=%s", spawnCount, output.Bytes())
+	}
+	if !strings.Contains(stderr.String(), "--plugin-dir is ignored in leader mode") {
+		t.Fatalf("stderr=%q", stderr.String())
 	}
 
 	output.Reset()
