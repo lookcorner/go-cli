@@ -24,7 +24,7 @@ type settingsNumber struct {
 	large int
 }
 
-const settingsCount = 35
+const settingsCount = 36
 
 func (m *model) openSettings() {
 	m.settings = &settingsState{}
@@ -330,13 +330,19 @@ func (m *model) applySetting(selected int) {
 			m.refreshToolDisplay(m.collapsedEditBlocks, m.groupToolVerbs, previous)
 		}
 	case 33:
+		previous := m.respectManualFolds
+		m.respectManualFolds = !previous
+		if m.persistManualFolds != nil {
+			state.err = persistSetting(m.persistManualFolds(m.respectManualFolds), func() { m.respectManualFolds = previous })
+		}
+	case 34:
 		previous := m.showTips
 		m.showTips = !previous
 		if m.persistShowTips != nil {
 			state.err = persistSetting(m.persistShowTips(m.showTips), func() { m.showTips = previous })
 		}
 		restartRequired = state.err == ""
-	case 34:
+	case 35:
 		if m.minimal {
 			return
 		}
@@ -551,6 +557,7 @@ func (m *model) settingsContent() string {
 		settingLine("Word-select hint", m.wordSelectHint.enabled),
 		fmt.Sprintf("Max thoughts width: %d", m.settingNumberValue(31, normalizedThoughtWidth(m.maxThoughtsWidth))),
 		settingLine("Show thinking blocks", m.showThinking),
+		settingLine("Respect manual folds", m.respectManualFolds),
 		settingLine("Show startup tips (restart)", m.showTips),
 	}
 	if !m.minimal {

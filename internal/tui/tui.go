@@ -783,6 +783,8 @@ type model struct {
 	persistThinking     func(bool) error
 	showTips            bool
 	persistShowTips     func(bool) error
+	respectManualFolds  bool
+	persistManualFolds  func(bool) error
 	maxThoughtsWidth    int
 	persistThoughtWidth func(int) error
 	matchRefresh        bool
@@ -1023,6 +1025,8 @@ type UIOptions struct {
 	ShowTips             bool
 	SetShowTips          func(bool) error
 	StartupTip           string
+	RespectManualFolds   bool
+	SetManualFolds       func(bool) error
 	MaxThoughtsWidth     int
 	SetMaxThoughtsWidth  func(int) error
 	MatchRefresh         bool
@@ -1231,6 +1235,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		showTimeline: options.ShowTimeline, persistTimeline: options.SetShowTimeline,
 		showThinking: options.ShowThinkingBlocks, persistThinking: options.SetShowThinking,
 		showTips: options.ShowTips, persistShowTips: options.SetShowTips, startupTip: options.StartupTip,
+		respectManualFolds: options.RespectManualFolds, persistManualFolds: options.SetManualFolds,
 		maxThoughtsWidth: normalizedThoughtWidth(options.MaxThoughtsWidth), persistThoughtWidth: options.SetMaxThoughtsWidth,
 		matchRefresh: options.MatchRefresh, persistRefresh: options.SetMatchRefresh,
 		scrollLines: mouseWheelScrollLines, scrollSpeed: options.ScrollSpeed, persistScrollSpeed: options.SetScrollSpeed,

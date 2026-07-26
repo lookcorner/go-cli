@@ -1174,8 +1174,13 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			voiceClient = voice.New(voice.Config{BaseURL: cfg.BaseURL, Language: cfg.UI.VoiceSTTLanguage}, cfg.APIKey, voice.TokenProvider(tokenProvider))
 		}
 		startupTip := ""
+		respectManualFolds := false
 		if home, homeErr := config.PolicyHome(); homeErr == nil {
 			startupTip = tips.PickAndAdvance(cfg.Tips, home)
+		}
+		pagerPath, pagerPathErr := config.PagerPath()
+		if pagerPathErr == nil {
+			respectManualFolds, _ = config.LoadRespectManualFolds(pagerPath)
 		}
 		exit, err := tui.Run(ctx, runner, tuiBridge, prompt, opts.previousID, resumedTranscript, ws.Root(), cfg.Model, tui.UIOptions{
 			Minimal: minimal, RendererFPS: tui.RendererFPS(cfg.UI.DisplayRefresh), ScreenMode: cfg.UI.ScreenMode,
@@ -1214,6 +1219,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			ShowThinkingBlocks:  cfg.UI.ShowThinkingBlocks,
 			ShowTips:            cfg.ShowTips,
 			StartupTip:          startupTip,
+			RespectManualFolds:  respectManualFolds,
 			MaxThoughtsWidth:    cfg.UI.MaxThoughtsWidth,
 			MatchRefresh:        cfg.UI.DisplayRefresh.AutoCadenceEnabled,
 			ShowTimeline:        cfg.UI.ShowTimeline,
@@ -1236,6 +1242,12 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			SetShowTimestamps: func(enabled bool) error { return config.UpdateShowTimestamps(opts.configPath, enabled) },
 			SetShowThinking:   func(enabled bool) error { return config.UpdateShowThinkingBlocks(opts.configPath, enabled) },
 			SetShowTips:       func(enabled bool) error { return config.UpdateShowTips(opts.configPath, enabled) },
+			SetManualFolds: func(enabled bool) error {
+				if pagerPathErr != nil {
+					return pagerPathErr
+				}
+				return config.UpdateRespectManualFolds(pagerPath, enabled)
+			},
 			SetMaxThoughtsWidth: func(value int) error {
 				return config.UpdateMaxThoughtsWidth(opts.configPath, value)
 			},

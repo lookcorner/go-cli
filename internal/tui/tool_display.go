@@ -153,6 +153,7 @@ func (m *model) addToolVerbMember(member toolVerbMember) {
 		m.toolVerbGroup = &toolVerbGroup{prefix: m.transcript.String(), expandIndex: -1, foldIndex: -1}
 	}
 	group := m.toolVerbGroup
+	previousScroll := m.scroll
 	group.members = append(group.members, member)
 	label := toolVerbGroupLabel(group.members)
 	full := toolVerbGroupExpansion(group.members)
@@ -170,7 +171,7 @@ func (m *model) addToolVerbMember(member toolVerbMember) {
 		group.foldIndex = m.rememberToolFold(len(group.prefix), full)
 	} else if group.expandIndex < len(m.toolExpand) {
 		m.toolExpand[group.expandIndex] = full
-		m.updateToolFold(group.foldIndex, len(group.prefix), full)
+		m.updateToolFold(group.foldIndex, len(group.prefix), full, previousScroll)
 	}
 }
 
@@ -195,6 +196,7 @@ func (m *model) addCollapsedEditMember(member collapsedEditMember) {
 		m.collapsedEditGroup = &collapsedEditGroup{prefix: m.transcript.String(), expandIndex: -1, foldIndex: -1}
 	}
 	group := m.collapsedEditGroup
+	previousScroll := m.scroll
 	group.members = append(group.members, member)
 	label := collapsedEditGroupLabel(group.members)
 	full := collapsedEditGroupExpansion(group.members)
@@ -212,17 +214,33 @@ func (m *model) addCollapsedEditMember(member collapsedEditMember) {
 		group.foldIndex = m.rememberToolFold(len(group.prefix), full)
 	} else if group.expandIndex < len(m.toolExpand) {
 		m.toolExpand[group.expandIndex] = full
-		m.updateToolFold(group.foldIndex, len(group.prefix), full)
+		m.updateToolFold(group.foldIndex, len(group.prefix), full, previousScroll)
 	}
 }
 
-func (m *model) updateToolFold(index, start int, full string) {
+func (m *model) updateToolFold(index, start int, full string, previousScroll int) {
 	if index < 0 || index >= len(m.toolFolds) {
 		return
 	}
 	fold := &m.toolFolds[index]
+	oldFull := fold.full
 	fold.start, fold.end = start, m.transcript.Len()
-	fold.collapsed, fold.full, fold.expanded = m.transcript.String()[start:], full, false
+	current := m.transcript.String()[start:]
+	fold.collapsed, fold.full = current, full
+	if !m.respectManualFolds || !fold.expanded {
+		fold.expanded = false
+		return
+	}
+	replacement := toolFoldReplacement(current, full)
+	width := m.transcriptRenderWidth()
+	beforeLines := len(renderMarkdownTheme(oldFull, width, false, m.colors()))
+	afterLines := len(renderMarkdownTheme(replacement, width, false, m.colors()))
+	prefix := m.transcript.String()[:start]
+	m.transcript.Reset()
+	m.transcript.WriteString(prefix)
+	m.transcript.WriteString(replacement)
+	fold.end = m.transcript.Len()
+	m.scroll = min(max(previousScroll+afterLines-beforeLines, 0), m.maxTranscriptScroll())
 }
 
 func (m *model) finishCollapsedEditGroup() {

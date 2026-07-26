@@ -930,6 +930,13 @@ is identical for live output and resumed/rewound sessions, while transcript and
 dashboard previews retain the grouped summary. Local configuration overrides
 the remote value, while managed requirements have final precedence.
 
+Set `[scrollback.scroll].respect_manual_folds = true` in
+`$GROK_HOME/pager.toml`, or toggle `Respect manual folds` in `/settings`, to
+keep a manually expanded tool, verb, or edit group expanded while more results
+join it. Expansion also leaves bottom-follow mode and anchors the current
+viewport as the group grows. The setting applies immediately and defaults to
+`false` for the reference legacy behavior.
+
 `[ui] cursor_blink = true` forces a blinking block cursor at TUI startup, while
 `false` forces a steady block. Leaving it unset preserves the terminal's cursor
 style, and the TUI restores the terminal default after a forced style exits.

@@ -410,6 +410,64 @@ func TestFullscreenScrollbackTogglesVisibleToolFold(t *testing.T) {
 	}
 }
 
+func TestRespectManualFoldsKeepsGrowingToolGroupExpanded(t *testing.T) {
+	m := &model{width: 40, height: 8, scrollFocused: true, groupToolVerbs: true, respectManualFolds: true}
+	m.finishTool(toolFinishedEvent{
+		call:   api.ToolCall{Name: "read_file", Arguments: json.RawMessage(`{"path":"one.go"}`)},
+		result: tools.ExecutionResult{Output: "one"},
+	})
+	if !m.toggleVisibleToolFold() {
+		t.Fatal("first tool group did not expand")
+	}
+	anchored := m.scroll
+	if anchored == 0 {
+		t.Fatal("expanding the tool group did not leave bottom-follow mode")
+	}
+	m.finishTool(toolFinishedEvent{
+		call:   api.ToolCall{Name: "read_file", Arguments: json.RawMessage(`{"path":"two.go"}`)},
+		result: tools.ExecutionResult{Output: "two"},
+	})
+	if len(m.toolFolds) != 1 || !m.toolFolds[0].expanded || !strings.Contains(m.transcript.String(), "one.go") || !strings.Contains(m.transcript.String(), "two.go") || m.scroll < anchored {
+		t.Fatalf("folds=%#v scroll=%d anchored=%d transcript=%q", m.toolFolds, m.scroll, anchored, m.transcript.String())
+	}
+}
+
+func TestGrowingToolGroupCollapsesWithoutRespectManualFolds(t *testing.T) {
+	m := &model{width: 80, height: 20, scrollFocused: true, groupToolVerbs: true}
+	m.finishTool(toolFinishedEvent{
+		call:   api.ToolCall{Name: "read_file", Arguments: json.RawMessage(`{"path":"one.go"}`)},
+		result: tools.ExecutionResult{Output: "one"},
+	})
+	if !m.toggleVisibleToolFold() {
+		t.Fatal("first tool group did not expand")
+	}
+	m.finishTool(toolFinishedEvent{
+		call:   api.ToolCall{Name: "read_file", Arguments: json.RawMessage(`{"path":"two.go"}`)},
+		result: tools.ExecutionResult{Output: "two"},
+	})
+	if len(m.toolFolds) != 1 || m.toolFolds[0].expanded || !strings.Contains(m.transcript.String(), "Read 2 files") || strings.Contains(m.transcript.String(), "#### Tool:") {
+		t.Fatalf("folds=%#v transcript=%q", m.toolFolds, m.transcript.String())
+	}
+}
+
+func TestRespectManualFoldsKeepsGrowingEditGroupExpanded(t *testing.T) {
+	m := &model{width: 40, height: 8, scrollFocused: true, collapsedEditBlocks: true, respectManualFolds: true}
+	for _, old := range []string{"one", "two"} {
+		m.finishTool(toolFinishedEvent{
+			call: api.ToolCall{Name: "edit_file", Arguments: json.RawMessage(fmt.Sprintf(
+				`{"path":"same.go","old_text":%q,"new_text":%q}`, old, old+" updated",
+			))},
+			result: tools.ExecutionResult{Output: "updated same.go"},
+		})
+		if old == "one" && !m.toggleVisibleToolFold() {
+			t.Fatal("first edit group did not expand")
+		}
+	}
+	if len(m.toolFolds) != 1 || !m.toolFolds[0].expanded || !strings.Contains(m.transcript.String(), `"old_text": "one"`) || !strings.Contains(m.transcript.String(), `"old_text": "two"`) {
+		t.Fatalf("folds=%#v transcript=%q", m.toolFolds, m.transcript.String())
+	}
+}
+
 func TestFullscreenScrollbackExpandRequiresVisibleFold(t *testing.T) {
 	m := &model{width: 80, height: 5, scrollFocused: true}
 	m.transcript.WriteString("plain transcript")
