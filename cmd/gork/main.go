@@ -1260,6 +1260,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			PageFlipOnSend:      cfg.UI.PageFlipOnSend,
 			Notifications:       notificationSettings(cfg.UI.Notifications),
 			ProgressBar:         cfg.UI.Notifications.ProgressBar,
+			SleepPrevention:     cfg.UI.Notifications.SleepPrevention,
 			OpenDashboard:       opts.dashboard,
 			Foreign: session.ForeignSources{
 				Claude: cfg.Compat.Claude.Sessions && skillCatalog.Has("resume-claude"),

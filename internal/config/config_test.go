@@ -2559,13 +2559,14 @@ func TestNotificationsDefaultsMergeAndRejectUnknownValues(t *testing.T) {
 
 	defaults := load(t, "")
 	if defaults.Method != "auto" || defaults.Condition != "unfocused" || defaults.IdleThresholdSecs != 3 ||
-		!defaults.ProgressBar || strings.Join(defaults.Events, ",") != "turn_complete,approval_required" {
+		!defaults.ProgressBar || !defaults.SleepPrevention ||
+		strings.Join(defaults.Events, ",") != "turn_complete,approval_required" {
 		t.Fatalf("defaults=%+v", defaults)
 	}
 
-	merged := load(t, "[ui.notifications]\nmethod = \"OSC99\"\nidle_threshold_secs = 60\nevents = [\"agent_error\"]\nprogress_bar = false\n")
+	merged := load(t, "[ui.notifications]\nmethod = \"OSC99\"\nidle_threshold_secs = 60\nevents = [\"agent_error\"]\nprogress_bar = false\nsleep_prevention = false\n")
 	if merged.Method != "osc99" || merged.Condition != "unfocused" || merged.IdleThresholdSecs != 60 ||
-		merged.ProgressBar || strings.Join(merged.Events, ",") != "agent_error" {
+		merged.ProgressBar || merged.SleepPrevention || strings.Join(merged.Events, ",") != "agent_error" {
 		t.Fatalf("merged=%+v", merged)
 	}
 

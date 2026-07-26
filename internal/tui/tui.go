@@ -816,6 +816,7 @@ type model struct {
 	notifyTitle         string
 	progress            *notify.Progress
 	progressTicking     bool
+	sleepInhibitor      *notify.SleepInhibitor
 	themeName           string
 	autoDarkTheme       string
 	autoLightTheme      string
@@ -1037,6 +1038,7 @@ type UIOptions struct {
 	SetPageFlipOnSend    func(bool) error
 	Notifications        notify.Settings
 	ProgressBar          bool
+	SleepPrevention      bool
 	ShowThinkingBlocks   bool
 	SetShowThinking      func(bool) error
 	ShowTips             bool
@@ -1255,11 +1257,12 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		showTimestamps: options.ShowTimestamps, persistTimestamps: options.SetShowTimestamps,
 		showTimeline: options.ShowTimeline, persistTimeline: options.SetShowTimeline,
 		pageFlipOnSend: options.PageFlipOnSend, persistPageFlip: options.SetPageFlipOnSend,
-		notifier:     notify.New(options.Notifications, notifyTerminal),
-		notifySink:   func(sequence string) { fmt.Fprint(os.Stderr, sequence) },
-		notifyTitle:  filepath.Base(workspace),
-		progress:     notify.NewProgress(options.ProgressBar, notifyTerminal),
-		showThinking: options.ShowThinkingBlocks, persistThinking: options.SetShowThinking,
+		notifier:       notify.New(options.Notifications, notifyTerminal),
+		notifySink:     func(sequence string) { fmt.Fprint(os.Stderr, sequence) },
+		notifyTitle:    filepath.Base(workspace),
+		progress:       notify.NewProgress(options.ProgressBar, notifyTerminal),
+		sleepInhibitor: notify.NewSleepInhibitor(options.SleepPrevention),
+		showThinking:   options.ShowThinkingBlocks, persistThinking: options.SetShowThinking,
 		showTips: options.ShowTips, persistShowTips: options.SetShowTips, startupTip: options.StartupTip,
 		respectManualFolds: options.RespectManualFolds, persistManualFolds: options.SetManualFolds,
 		disableFoldAnchor: options.DisableFoldAnchor, hideFollowIndicator: options.HideFollowIndicator,
@@ -1389,6 +1392,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 	final, err := program.Run()
 	m.stopVoice()
 	m.clearProgress()
+	m.sleepInhibitor.Release()
 	if errors.Is(err, tea.ErrInterrupted) || errors.Is(err, context.Canceled) {
 		return nil, nil
 	}
@@ -1477,7 +1481,7 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if hintCommand := current.maybeStartSmallScreenHint(); hintCommand != nil {
 			command = tea.Batch(command, hintCommand)
 		}
-		if progressCommand := current.maybeProgressTick(); progressCommand != nil {
+		if progressCommand := current.syncTurnActivity(); progressCommand != nil {
 			command = tea.Batch(command, progressCommand)
 		}
 		command = tea.Batch(command, current.flushKittyUploads())
@@ -4624,9 +4628,15 @@ func resolveNotifyTerminal() notify.Terminal {
 	return terminal
 }
 
-// maybeProgressTick writes the OSC 9;4 tab indicator for the current turn state
-// and keeps a keep-alive tick armed for as long as a turn runs.
-func (m *model) maybeProgressTick() tea.Cmd {
+// syncTurnActivity mirrors the current turn state to the terminal: it writes the
+// OSC 9;4 tab indicator, keeps its keep-alive tick armed while a turn runs, and
+// holds an idle-sleep inhibitor for the same window.
+func (m *model) syncTurnActivity() tea.Cmd {
+	if m.running {
+		m.sleepInhibitor.Inhibit()
+	} else {
+		m.sleepInhibitor.Release()
+	}
 	if m.progress == nil {
 		return nil
 	}

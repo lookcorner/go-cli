@@ -978,6 +978,8 @@ idle_threshold_secs = 3
 events = ["turn_complete", "approval_required"]
 # Show an indeterminate progress indicator in the terminal tab (OSC 9;4).
 progress_bar = true
+# Prevent idle sleep while a turn runs (macOS/Linux).
+sleep_prevention = true
 ```
 
 `auto` sends OSC 9 to iTerm2, WezTerm, and Warp, OSC 99 to Kitty, OSC 777 to
@@ -993,6 +995,11 @@ inherited defaults in place rather than failing startup.
 `progress_bar` lights the terminal tab while a turn runs and clears it when the
 turn finishes or the session exits. Only Ghostty, WezTerm, and iTerm2 3.6 or
 later render OSC 9;4; other terminals ignore the setting.
+
+`sleep_prevention` keeps the machine awake for the same window using
+`caffeinate` on macOS and `systemd-inhibit` on Linux. The macOS helper waits on
+the Gork process, so quitting or crashing releases it. When neither command is
+available the setting has no effect and is not retried.
 The hidden, release-safe `/debug` command reports diagnostic state without a
 model turn. `/debug scroll` (also `/scroll-debug`) overlays live viewport and
 wheel state, `/debug fps` overlays bounded render-rate percentiles, and

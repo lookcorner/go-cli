@@ -23,6 +23,9 @@ func mergeNotifications(current NotificationsConfig, disk *fileNotificationsConf
 	if disk.ProgressBar != nil {
 		merged.ProgressBar = *disk.ProgressBar
 	}
+	if disk.SleepPrevention != nil {
+		merged.SleepPrevention = *disk.SleepPrevention
+	}
 	if disk.Events != nil {
 		merged.Events = make([]string, 0, len(disk.Events))
 		for _, event := range disk.Events {

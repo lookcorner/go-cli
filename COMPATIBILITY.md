@@ -299,9 +299,13 @@ indicator on Ghostty, WezTerm, and iTerm2 3.6 or later — older iTerm2 renders 
 parameters as alert text, so it is treated as incapable — re-sending the
 indeterminate sequence on the reference five-second keep-alive while a turn runs,
 clearing it when the turn ends or the session exits, and using tmux passthrough
-only for servers new enough to forward it. `task_complete` events,
-`[ui.notifications.title]` terminal titles, `sleep_prevention`, `session_recap`,
-and `[[ui.notifications.hooks]]` remain.
+only for servers new enough to forward it. Default-on `sleep_prevention` holds an
+idle-sleep inhibitor for the same window through `caffeinate` on macOS and
+`systemd-inhibit` on Linux; the macOS assertion also waits on the Gork process so
+a crash cannot leave the machine awake. Inhibit and release are idempotent, an
+unavailable platform command is probed once and then left alone, and other
+platforms are no-ops. `task_complete` events, `[ui.notifications.title]` terminal
+titles, `session_recap`, and `[[ui.notifications.hooks]]` remain.
 
 Compatibility is verified with Go unit/integration tests and will additionally
 use captured protocol fixtures from the Rust implementation. A status is only
