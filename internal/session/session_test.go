@@ -413,6 +413,32 @@ func TestNamedSessionMetadataAndList(t *testing.T) {
 	}
 }
 
+func TestListKeepsUpdatedAtAtOrAfterCreatedAt(t *testing.T) {
+	dir := t.TempDir()
+	created := time.Now().UTC().Add(time.Hour)
+	event, err := json.Marshal(Event{
+		Time: created, Kind: "session_metadata", Data: map[string]any{"cwd": "/workspace/project"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "clock-skew.jsonl")
+	if err := os.WriteFile(path, append(event, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	past := created.Add(-time.Second)
+	if err := os.Chtimes(path, past, past); err != nil {
+		t.Fatal(err)
+	}
+	items, err := List(dir, "/workspace/project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || !items[0].CreatedAt.Equal(created) || !items[0].UpdatedAt.Equal(created) {
+		t.Fatalf("unexpected normalized times: %#v", items)
+	}
+}
+
 func TestResolveTitleUsesExactCaseInsensitiveMatch(t *testing.T) {
 	dir, cwd := t.TempDir(), t.TempDir()
 	write := func(id, prompt, title string) {

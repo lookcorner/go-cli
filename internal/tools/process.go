@@ -439,15 +439,6 @@ func (m *ProcessManager) persistentShellCommand(command string) (*exec.Cmd, shel
 		return nil, capture, fmt.Errorf("create shell command file: %w", err)
 	}
 	capture.commandPath = commandFile.Name()
-	if _, err := commandFile.WriteString(command); err != nil {
-		_ = commandFile.Close()
-		capture.cleanup()
-		return nil, capture, fmt.Errorf("write shell command file: %w", err)
-	}
-	if err := commandFile.Close(); err != nil {
-		capture.cleanup()
-		return nil, capture, err
-	}
 	dumpScript := ":"
 	bootstrap := ""
 	switch filepath.Base(selectedShell()) {
@@ -459,8 +450,17 @@ func (m *ProcessManager) persistentShellCommand(command string) (*exec.Cmd, shel
 		bootstrap = "unsetopt nounset 2>/dev/null || true\nsetopt nonomatch aliases 2>/dev/null || true\n"
 	}
 	trap := "trap '__gork_status=$?; pwd > \"$GORK_GO_STATE_CWD\"; /usr/bin/env -0 > \"$GORK_GO_STATE_ENV\"; " + dumpScript + " > \"$GORK_GO_STATE_SCRIPT\"; trap - EXIT; exit \"$__gork_status\"' EXIT\n"
-	wrapped := m.shellPrelude + "\n" + bootstrap + trap + ". \"$GORK_GO_COMMAND_FILE\""
-	cmd, err := m.shellCommand(wrapped)
+	wrapped := m.shellPrelude + "\n" + bootstrap + trap + command
+	if _, err := commandFile.WriteString(wrapped); err != nil {
+		_ = commandFile.Close()
+		capture.cleanup()
+		return nil, capture, fmt.Errorf("write shell command file: %w", err)
+	}
+	if err := commandFile.Close(); err != nil {
+		capture.cleanup()
+		return nil, capture, err
+	}
+	cmd, err := m.shellCommand(`. "$GORK_GO_COMMAND_FILE"`)
 	if err != nil {
 		capture.cleanup()
 		return nil, capture, err

@@ -243,6 +243,35 @@ func TestPersistentShellDirectoryAndEnvironment(t *testing.T) {
 	}
 }
 
+func TestPersistentShellLoadsLargeStateFromFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("persistent shell fixture is Unix-specific")
+	}
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewProcessManager(ws, PromptApprover{Mode: PermissionAuto})
+	manager.shellPrelude = strings.Repeat(": # captured shell state\n", 20_000)
+	cmd, capture, err := manager.persistentShellCommand("printf state-ok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer capture.cleanup()
+	for _, arg := range cmd.Args {
+		if len(arg) > 4096 {
+			t.Fatalf("shell state leaked into process argument: %d bytes", len(arg))
+		}
+	}
+	output, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(output) != "state-ok" {
+		t.Fatalf("output=%q", output)
+	}
+}
+
 func TestPersistentBashOptionsAndNounsetReset(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell fixture is Unix-specific")

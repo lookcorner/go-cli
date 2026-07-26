@@ -454,6 +454,9 @@ func readInfo(path, id string) (Info, error) {
 	if info.CreatedAt.IsZero() && stat != nil {
 		info.CreatedAt = stat.ModTime().UTC()
 	}
+	if info.UpdatedAt.Before(info.CreatedAt) {
+		info.UpdatedAt = info.CreatedAt
+	}
 	return info, scanner.Err()
 }
 
