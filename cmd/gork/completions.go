@@ -45,6 +45,7 @@ var completionRoot = completionSpec{
 						"tmux-clipboard", "terminal.tmux-clipboard",
 						"dcs-passthrough", "terminal.dcs-passthrough",
 						"tmux-extended-keys", "terminal.tmux-extended-keys",
+						"tmux-truecolor", "terminal.tmux-truecolor",
 					),
 				},
 			},

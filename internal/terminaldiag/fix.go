@@ -124,6 +124,8 @@ func ResolveFixID(value string) (string, error) {
 		return DCSPassthroughID, nil
 	case TmuxExtendedKeysHandle, TmuxExtendedKeysID:
 		return TmuxExtendedKeysID, nil
+	case TmuxTruecolorHandle, TmuxTruecolorID:
+		return TmuxTruecolorID, nil
 	default:
 		return "", fmt.Errorf("`%s` is not an available Doctor fix. Run `gork doctor fix` to list available fixes", value)
 	}
@@ -131,8 +133,8 @@ func ResolveFixID(value string) (string, error) {
 
 func AllFixHandles() []string {
 	return []string{
-		SSHWrapHandle, TmuxClipboardHandle, DCSPassthroughHandle, TmuxExtendedKeysHandle,
-		SSHWrapID, TmuxClipboardID, DCSPassthroughID, TmuxExtendedKeysID,
+		SSHWrapHandle, TmuxClipboardHandle, DCSPassthroughHandle, TmuxExtendedKeysHandle, TmuxTruecolorHandle,
+		SSHWrapID, TmuxClipboardID, DCSPassthroughID, TmuxExtendedKeysID, TmuxTruecolorID,
 	}
 }
 
@@ -148,6 +150,7 @@ func ListAutomaticFixes(env FixEnv) []FixListing {
 	for _, spec := range tmuxOptionSpecs {
 		listings = append(listings, tmuxListing(env, spec))
 	}
+	listings = append(listings, tmuxTruecolorListing(env))
 	return listings
 }
 
@@ -220,6 +223,8 @@ func PlanFix(env FixEnv, id string) (FixPlan, error) {
 		return PlanSSHWrap(env)
 	case TmuxClipboardID, DCSPassthroughID, TmuxExtendedKeysID:
 		return PlanTmuxOption(env, id)
+	case TmuxTruecolorID:
+		return PlanTmuxTruecolor(env)
 	default:
 		return FixPlan{}, fmt.Errorf("unsupported fix %q", id)
 	}
@@ -228,6 +233,9 @@ func PlanFix(env FixEnv, id string) (FixPlan, error) {
 func ApplyFix(plan FixPlan) (FixOutcome, error) {
 	switch plan.Kind {
 	case FixKindTmux:
+		if plan.ID == TmuxTruecolorID {
+			return ApplyTmuxTruecolor(plan)
+		}
 		return ApplyTmuxOption(plan)
 	default:
 		return ApplySSHWrap(plan)

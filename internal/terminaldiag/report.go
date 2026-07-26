@@ -224,7 +224,7 @@ func terminalWarnings(term, color, multiplexer string, clipboard, osc52 bool) []
 		warnings = append(warnings, "Limited color support; set COLORTERM=truecolor when your terminal supports it.")
 	}
 	if strings.Contains(multiplexer, "tmux") && !strings.Contains(strings.ToLower(term), "256color") {
-		warnings = append(warnings, "tmux is not advertising 256 colors; use tmux-256color as its default terminal.")
+		warnings = append(warnings, "tmux is not advertising 256 colors; use tmux-256color as its default terminal.\n    → Automatic setup: `gork doctor fix tmux-truecolor`")
 	}
 	if !clipboard && !osc52 {
 		warnings = append(warnings, "No clipboard route is available; install a native clipboard tool or enable OSC 52.")

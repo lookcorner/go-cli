@@ -12,6 +12,7 @@ func TestResolveFixID(t *testing.T) {
 		"ssh-wrap": "terminal.ssh-wrap", "terminal.ssh-wrap": SSHWrapID,
 		"tmux-clipboard": TmuxClipboardID, "terminal.tmux-clipboard": TmuxClipboardID,
 		"dcs-passthrough": DCSPassthroughID, "tmux-extended-keys": TmuxExtendedKeysID,
+		"tmux-truecolor": TmuxTruecolorID, "terminal.tmux-truecolor": TmuxTruecolorID,
 	}
 	for value, want := range cases {
 		id, err := ResolveFixID(value)
@@ -73,7 +74,7 @@ func TestPlanSSHWrapRejectsConflictsAndRemote(t *testing.T) {
 
 func TestListAutomaticFixesAvailability(t *testing.T) {
 	local := ListAutomaticFixes(FixEnv{Home: "/tmp/home", Shell: "/bin/bash", GOOS: "linux", Tmux: true})
-	if len(local) != 4 || local[0].Availability != "here" || local[1].Availability != "here" {
+	if len(local) != 5 || local[0].Availability != "here" || local[1].Availability != "here" || local[4].Handle != TmuxTruecolorHandle {
 		t.Fatalf("local=%#v", local)
 	}
 	remote := ListAutomaticFixes(FixEnv{Home: "/tmp/home", Shell: "/bin/bash", GOOS: "linux", SSH: true})
@@ -182,5 +183,46 @@ func TestPlanTmuxHealthyDirectAssignmentSkipsWrite(t *testing.T) {
 	data, err := os.ReadFile(path)
 	if err != nil || strings.Contains(string(data), "gork doctor") {
 		t.Fatalf("unexpected write: %q err=%v", data, err)
+	}
+}
+
+func TestPlanAndApplyTmuxTruecolor(t *testing.T) {
+	home := t.TempDir()
+	env := FixEnv{Home: home, Tmux: true}
+	plan, err := PlanTmuxTruecolor(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Path != filepath.Join(home, ".tmux.conf") || !strings.Contains(plan.Alias, "tmux-256color") || !strings.Contains(plan.Alias, "terminal-features") {
+		t.Fatalf("plan=%#v", plan)
+	}
+	outcome, err := ApplyTmuxTruecolor(plan)
+	if err != nil || outcome.Status != FixApplied {
+		t.Fatalf("outcome=%#v err=%v", outcome, err)
+	}
+	data, err := os.ReadFile(plan.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, want := range []string{"terminal.tmux-truecolor", `set -g default-terminal "tmux-256color"`, `set -as terminal-features ",*:RGB"`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in %s", want, text)
+		}
+	}
+	outcome, err = ApplyTmuxTruecolor(plan)
+	if err != nil || outcome.Status != FixAlreadyConfigured {
+		t.Fatalf("second=%#v err=%v", outcome, err)
+	}
+}
+
+func TestPlanTmuxTruecolorRejectsConflict(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".tmux.conf")
+	if err := os.WriteFile(path, []byte("set -g default-terminal \"xterm\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PlanTmuxTruecolor(FixEnv{Home: home, Tmux: true}); err == nil || !strings.Contains(err.Error(), "existing") {
+		t.Fatalf("conflict err=%v", err)
 	}
 }

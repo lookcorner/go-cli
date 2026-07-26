@@ -4,7 +4,7 @@ import (
 	"strings"
 )
 
-const SlashUsage = "Usage: /doctor [fix [ssh-wrap|tmux-clipboard|dcs-passthrough|tmux-extended-keys] [--yes]]"
+const SlashUsage = "Usage: /doctor [fix [ssh-wrap|tmux-clipboard|dcs-passthrough|tmux-extended-keys|tmux-truecolor] [--yes]]"
 
 // HandleCommand handles /doctor and its aliases. ok is false when prompt is not a doctor command.
 func HandleCommand(prompt string) (string, bool) {
@@ -82,7 +82,7 @@ func SuggestFixArgs(argsQuery string) []string {
 			}
 		}
 		var out []string
-		for _, handle := range []string{SSHWrapHandle, TmuxClipboardHandle, DCSPassthroughHandle, TmuxExtendedKeysHandle} {
+		for _, handle := range []string{SSHWrapHandle, TmuxClipboardHandle, DCSPassthroughHandle, TmuxExtendedKeysHandle, TmuxTruecolorHandle} {
 			if value == "" || strings.Contains(handle, value) || strings.HasPrefix("terminal."+handle, value) {
 				out = append(out, "fix "+handle)
 			}
