@@ -1720,8 +1720,10 @@ isolate child process networking through bubblewrap or Seatbelt. Requesting any
 sandbox fails closed when
 its platform helper is unavailable. This boundary covers spawned shell
 processes, not the parent Gork process, MCP/LSP servers, or in-process network
-clients. Approval and the file tools' workspace/symlink checks remain
-independent safety boundaries.
+clients. On Linux with cgroup v2, model-started foreground and background shell
+children are also placed in a best-effort memory-limited cgroup
+(`memory.high` / `memory.max`); unavailable hosts skip silently. Approval and
+the file tools' workspace/symlink checks remain independent safety boundaries.
 
 `monitor` runs a background command whose stdout is delivered as real-time,
 debounced events. It applies the reference line/batch limits, token-bucket rate

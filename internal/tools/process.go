@@ -53,6 +53,9 @@ type ProcessManager struct {
 	bashMu       sync.RWMutex
 	bashTimeout  time.Duration
 	bashOutput   int
+	cgroupMu     sync.Mutex
+	cgroup       shellCgroup
+	cgroupCfg    CgroupMemoryConfig
 }
 
 // ConfigureBash sets the [toolset.bash] bounds for shell commands. Zero values
@@ -61,6 +64,45 @@ func (m *ProcessManager) ConfigureBash(timeout time.Duration, outputLimit int) {
 	m.bashMu.Lock()
 	m.bashTimeout, m.bashOutput = max(timeout, 0), max(outputLimit, 0)
 	m.bashMu.Unlock()
+}
+
+// ConfigureCgroupMemory sets Linux cgroup v2 memory.high/max for spawned shell
+// children. Zero values use DefaultCgroupMemoryConfig. Non-Linux hosts ignore this.
+func (m *ProcessManager) ConfigureCgroupMemory(cfg CgroupMemoryConfig) {
+	m.cgroupMu.Lock()
+	m.cgroupCfg = cfg
+	m.cgroupMu.Unlock()
+}
+
+func (m *ProcessManager) ensureShellCgroup() shellCgroup {
+	m.cgroupMu.Lock()
+	defer m.cgroupMu.Unlock()
+	if m.cgroup != nil {
+		return m.cgroup
+	}
+	m.cgroup = tryShellCgroup(m.cgroupCfg)
+	return m.cgroup
+}
+
+func (m *ProcessManager) adoptShellProcess(cmd *exec.Cmd) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	guard := m.ensureShellCgroup()
+	if guard == nil {
+		return
+	}
+	_ = guard.AddProcess(cmd.Process.Pid)
+}
+
+func (m *ProcessManager) closeShellCgroup() {
+	m.cgroupMu.Lock()
+	guard := m.cgroup
+	m.cgroup = nil
+	m.cgroupMu.Unlock()
+	if guard != nil {
+		_ = guard.Close()
+	}
 }
 
 // defaultShellTimeout is the configured foreground timeout, or the reference
@@ -279,6 +321,7 @@ func (m *ProcessManager) start(ctx context.Context, command, description string,
 	if err := cmd.Start(); err != nil {
 		return "", fmt.Errorf("start command: %w", err)
 	}
+	m.adoptShellProcess(cmd)
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
@@ -375,6 +418,7 @@ func (m *ProcessManager) RunForeground(ctx context.Context, command string, time
 	if err := cmd.Start(); err != nil {
 		return "", fmt.Errorf("start command: %w", err)
 	}
+	m.adoptShellProcess(cmd)
 	wait := make(chan error, 1)
 	go func() { wait <- cmd.Wait() }()
 	if timeout <= 0 {
@@ -859,6 +903,7 @@ func (m *ProcessManager) Close() error {
 			}
 		}
 	}
+	m.closeShellCgroup()
 	if len(failures) > 0 {
 		return errors.New(strings.Join(failures, "; "))
 	}
