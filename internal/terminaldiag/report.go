@@ -32,6 +32,7 @@ type Facts struct {
 	SetClipboard     string `json:"tmuxSetClipboard,omitempty"`
 	AllowPassthrough string `json:"tmuxAllowPassthrough,omitempty"`
 	ExtendedKeys     string `json:"tmuxExtendedKeys,omitempty"`
+	ControlMode      string `json:"tmuxControlMode,omitempty"`
 }
 
 type Counts struct {
@@ -94,6 +95,7 @@ func BuildSnapshot(getenv func(string) string, lookPath func(string) (string, er
 			Terminal: brand, Multiplexer: multiplexer, SSH: ssh, Color: color,
 			NativeClip: clipboard, ClipboardTool: clipboardTool, OSC52: osc52, GOOS: goos,
 			SetClipboard: tmux.SetClipboard, AllowPassthrough: tmux.AllowPassthrough, ExtendedKeys: tmux.ExtendedKeys,
+			ControlMode: tmux.ControlMode,
 		},
 		Findings: findings,
 		Counts:   Counts{Issues: len(findings)},
@@ -105,8 +107,9 @@ func (s Snapshot) Human() string {
 	fmt.Fprintf(&out, "Environment\n  terminal     %s\n  multiplexer  %s\n  ssh          %s\n  color        %s\n",
 		s.Facts.Terminal, s.Facts.Multiplexer, yesNo(s.Facts.SSH), s.Facts.Color)
 	if s.Facts.Multiplexer == "tmux" || strings.Contains(s.Facts.Multiplexer, "tmux") {
-		fmt.Fprintf(&out, "  set-clipboard %s\n  allow-passthrough %s\n  extended-keys %s\n",
-			tmuxFactOrUnknown(s.Facts.SetClipboard), tmuxFactOrUnknown(s.Facts.AllowPassthrough), tmuxFactOrUnknown(s.Facts.ExtendedKeys))
+		fmt.Fprintf(&out, "  set-clipboard %s\n  allow-passthrough %s\n  extended-keys %s\n  control-mode %s\n",
+			tmuxFactOrUnknown(s.Facts.SetClipboard), tmuxFactOrUnknown(s.Facts.AllowPassthrough), tmuxFactOrUnknown(s.Facts.ExtendedKeys),
+			tmuxFactOrUnknown(s.Facts.ControlMode))
 	}
 	fmt.Fprintf(&out, "\nClipboard routes\n  native       %s", activeOff(s.Facts.NativeClip))
 	if s.Facts.ClipboardTool != "" {

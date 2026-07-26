@@ -35,20 +35,7 @@ func TestBuildSnapshotJSONShape(t *testing.T) {
 }
 
 func TestBuildReportDescribesTerminalAndRoutes(t *testing.T) {
-	prev := probeTmuxOption
-	probeTmuxOption = func(option string, window bool) (string, bool) {
-		switch option {
-		case "set-clipboard":
-			return "external", true
-		case "allow-passthrough":
-			return "on", true
-		case "extended-keys":
-			return "on", true
-		default:
-			return "", false
-		}
-	}
-	t.Cleanup(func() { probeTmuxOption = prev })
+	stubHealthyTmuxProbes(t)
 
 	env := map[string]string{
 		"TERM_PROGRAM": "WezTerm", "TERM": "xterm-256color", "COLORTERM": "truecolor",
@@ -60,7 +47,11 @@ func TestBuildReportDescribesTerminalAndRoutes(t *testing.T) {
 		}
 		return "", errors.New("missing")
 	}, "darwin")
-	for _, want := range []string{"terminal     WezTerm", "multiplexer  tmux", "ssh          yes", "color        truecolor", "set-clipboard external", "allow-passthrough on", "extended-keys on", "native       active (tool: pbcopy)", "osc 52       active", "No issues found."} {
+	for _, want := range []string{
+		"terminal     WezTerm", "multiplexer  tmux", "ssh          yes", "color        truecolor",
+		"set-clipboard external", "allow-passthrough on", "extended-keys on", "control-mode off",
+		"native       active (tool: pbcopy)", "osc 52       active", "No issues found.",
+	} {
 		if !strings.Contains(report, want) {
 			t.Errorf("missing %q in %q", want, report)
 		}
@@ -110,12 +101,19 @@ func TestSSHWrapRecommendedMatchesRemoteTransportShape(t *testing.T) {
 }
 
 func TestBuildReportWarnsForByobuScreen(t *testing.T) {
-	prev := probeTmuxOption
+	prevOpt, prevControl := probeTmuxOption, probeTmuxControlMode
 	probeTmuxOption = func(string, bool) (string, bool) {
 		t.Fatal("tmux options should not be probed under byobu screen")
 		return "", false
 	}
-	t.Cleanup(func() { probeTmuxOption = prev })
+	probeTmuxControlMode = func() (string, bool) {
+		t.Fatal("tmux control mode should not be probed under byobu screen")
+		return "", false
+	}
+	t.Cleanup(func() {
+		probeTmuxOption = prevOpt
+		probeTmuxControlMode = prevControl
+	})
 
 	env := map[string]string{
 		"TERM_PROGRAM": "WezTerm", "TERM": "xterm-256color", "COLORTERM": "truecolor",
@@ -130,7 +128,7 @@ func TestBuildReportWarnsForByobuScreen(t *testing.T) {
 }
 
 func TestBuildReportWarnsForUnhealthyTmuxOptions(t *testing.T) {
-	prev := probeTmuxOption
+	prevOpt, prevControl := probeTmuxOption, probeTmuxControlMode
 	probeTmuxOption = func(option string, _ bool) (string, bool) {
 		switch option {
 		case "set-clipboard":
@@ -143,7 +141,11 @@ func TestBuildReportWarnsForUnhealthyTmuxOptions(t *testing.T) {
 			return "", false
 		}
 	}
-	t.Cleanup(func() { probeTmuxOption = prev })
+	probeTmuxControlMode = func() (string, bool) { return "off", true }
+	t.Cleanup(func() {
+		probeTmuxOption = prevOpt
+		probeTmuxControlMode = prevControl
+	})
 
 	env := map[string]string{
 		"TERM_PROGRAM": "WezTerm", "TERM": "xterm-256color", "COLORTERM": "truecolor", "TMUX": "yes",
@@ -158,6 +160,43 @@ func TestBuildReportWarnsForUnhealthyTmuxOptions(t *testing.T) {
 	for _, want := range []string{"gork doctor fix tmux-clipboard", "gork doctor fix dcs-passthrough", "gork doctor fix tmux-extended-keys"} {
 		if !strings.Contains(report, want) {
 			t.Errorf("missing %q in %q", want, report)
+		}
+	}
+}
+
+func TestBuildReportWarnsForTmuxControlMode(t *testing.T) {
+	prevOpt, prevControl := probeTmuxOption, probeTmuxControlMode
+	probeTmuxOption = func(option string, _ bool) (string, bool) {
+		switch option {
+		case "set-clipboard":
+			return "external", true
+		case "allow-passthrough":
+			return "on", true
+		case "extended-keys":
+			return "on", true
+		default:
+			return "", false
+		}
+	}
+	probeTmuxControlMode = func() (string, bool) { return "on", true }
+	t.Cleanup(func() {
+		probeTmuxOption = prevOpt
+		probeTmuxControlMode = prevControl
+	})
+
+	env := map[string]string{
+		"TERM_PROGRAM": "WezTerm", "TERM": "xterm-256color", "COLORTERM": "truecolor", "TMUX": "yes",
+	}
+	snapshot := BuildSnapshot(func(key string) string { return env[key] }, func(string) (string, error) {
+		return "/bin/pbcopy", nil
+	}, "darwin")
+	if snapshot.Facts.ControlMode != "on" || snapshot.Counts.Issues != 1 {
+		t.Fatalf("snapshot=%#v", snapshot)
+	}
+	joined := strings.Join(snapshot.Findings, "\n")
+	for _, want := range []string{"Display may be limited in tmux control mode", "regular tmux client"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("missing %q in %q", want, joined)
 		}
 	}
 }
@@ -178,9 +217,13 @@ func TestBuildReportExplainsDegradedEnvironment(t *testing.T) {
 }
 
 func TestBuildReportWarnsForBasicTmuxColor(t *testing.T) {
-	prev := probeTmuxOption
+	prevOpt, prevControl := probeTmuxOption, probeTmuxControlMode
 	probeTmuxOption = func(string, bool) (string, bool) { return "", false }
-	t.Cleanup(func() { probeTmuxOption = prev })
+	probeTmuxControlMode = func() (string, bool) { return "", false }
+	t.Cleanup(func() {
+		probeTmuxOption = prevOpt
+		probeTmuxControlMode = prevControl
+	})
 
 	env := map[string]string{
 		"TERM_PROGRAM": "WezTerm", "TERM": "screen", "TMUX": "yes", "BYOBU_BACKEND": "tmux",
@@ -339,6 +382,28 @@ func TestTerminalDetectionVariants(t *testing.T) {
 			t.Errorf("env=%v color=%q want=%q", test.env, color, test.color)
 		}
 	}
+}
+
+func stubHealthyTmuxProbes(t *testing.T) {
+	t.Helper()
+	prevOpt, prevControl := probeTmuxOption, probeTmuxControlMode
+	probeTmuxOption = func(option string, _ bool) (string, bool) {
+		switch option {
+		case "set-clipboard":
+			return "external", true
+		case "allow-passthrough":
+			return "on", true
+		case "extended-keys":
+			return "on", true
+		default:
+			return "", false
+		}
+	}
+	probeTmuxControlMode = func() (string, bool) { return "off", true }
+	t.Cleanup(func() {
+		probeTmuxOption = prevOpt
+		probeTmuxControlMode = prevControl
+	})
 }
 
 func TestNativeClipboardCandidates(t *testing.T) {
