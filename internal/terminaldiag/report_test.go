@@ -70,7 +70,7 @@ func TestBuildReportDescribesTerminalAndRoutes(t *testing.T) {
 func TestBuildReportRecommendsSSHWrap(t *testing.T) {
 	env := map[string]string{
 		"TERM": "xterm-256color", "COLORTERM": "truecolor",
-		"SSH_CONNECTION": "1 2 3 4", "TERM_PROGRAM": "TestTerm",
+		"SSH_CONNECTION": "1 2 3 4", "TERM_PROGRAM": "WezTerm",
 	}
 	snapshot := BuildSnapshot(func(key string) string { return env[key] }, func(string) (string, error) {
 		return "/bin/pbcopy", nil
@@ -117,7 +117,10 @@ func TestBuildReportWarnsForByobuScreen(t *testing.T) {
 	}
 	t.Cleanup(func() { probeTmuxOption = prev })
 
-	env := map[string]string{"TERM": "xterm-256color", "COLORTERM": "truecolor", "STY": "123.pts", "BYOBU_BACKEND": "screen"}
+	env := map[string]string{
+		"TERM_PROGRAM": "WezTerm", "TERM": "xterm-256color", "COLORTERM": "truecolor",
+		"STY": "123.pts", "BYOBU_BACKEND": "screen",
+	}
 	snapshot := BuildSnapshot(func(key string) string { return env[key] }, func(string) (string, error) {
 		return "/usr/bin/wl-copy", nil
 	}, "linux")
@@ -142,7 +145,9 @@ func TestBuildReportWarnsForUnhealthyTmuxOptions(t *testing.T) {
 	}
 	t.Cleanup(func() { probeTmuxOption = prev })
 
-	env := map[string]string{"TERM": "xterm-256color", "COLORTERM": "truecolor", "TMUX": "yes"}
+	env := map[string]string{
+		"TERM_PROGRAM": "WezTerm", "TERM": "xterm-256color", "COLORTERM": "truecolor", "TMUX": "yes",
+	}
 	snapshot := BuildSnapshot(func(key string) string { return env[key] }, func(string) (string, error) {
 		return "/bin/pbcopy", nil
 	}, "darwin")
@@ -162,7 +167,10 @@ func TestBuildReportExplainsDegradedEnvironment(t *testing.T) {
 	report := buildReport(func(key string) string { return env[key] }, func(string) (string, error) {
 		return "", errors.New("missing")
 	}, "linux")
-	for _, want := range []string{"terminal     dumb", "color        none", "native       off", "osc 52       off", "2 issue(s)", "TERM=dumb", "No clipboard route"} {
+	for _, want := range []string{
+		"terminal     dumb", "color        none", "native       off", "osc 52       off",
+		"4 issue(s)", "TERM=dumb", "No clipboard route", "terminal bell", "unfocused",
+	} {
 		if !strings.Contains(report, want) {
 			t.Errorf("missing %q in %q", want, report)
 		}
@@ -174,7 +182,9 @@ func TestBuildReportWarnsForBasicTmuxColor(t *testing.T) {
 	probeTmuxOption = func(string, bool) (string, bool) { return "", false }
 	t.Cleanup(func() { probeTmuxOption = prev })
 
-	env := map[string]string{"TERM": "screen", "TMUX": "yes", "BYOBU_BACKEND": "tmux"}
+	env := map[string]string{
+		"TERM_PROGRAM": "WezTerm", "TERM": "screen", "TMUX": "yes", "BYOBU_BACKEND": "tmux",
+	}
 	report := buildReport(func(key string) string { return env[key] }, func(name string) (string, error) {
 		if name == "wl-copy" {
 			return "/usr/bin/wl-copy", nil
@@ -189,7 +199,9 @@ func TestBuildReportWarnsForBasicTmuxColor(t *testing.T) {
 }
 
 func TestBuildSnapshotWarnsForNoColor(t *testing.T) {
-	env := map[string]string{"TERM": "xterm-256color", "COLORTERM": "truecolor", "NO_COLOR": "1"}
+	env := map[string]string{
+		"TERM_PROGRAM": "WezTerm", "TERM": "xterm-256color", "COLORTERM": "truecolor", "NO_COLOR": "1",
+	}
 	snapshot := BuildSnapshot(func(key string) string { return env[key] }, func(string) (string, error) {
 		return "/bin/pbcopy", nil
 	}, "darwin")
@@ -213,13 +225,44 @@ func TestBuildSnapshotWarnsForAppleTerminalLimits(t *testing.T) {
 		"Apple Terminal supports 256 colors",
 		"doesn't support OSC 52",
 		"gork wrap ssh",
+		"may not report focus changes",
+		`condition = "always"`,
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("missing %q in %q", want, joined)
 		}
 	}
-	if strings.Contains(joined, "colorterm") {
-		t.Fatalf("Apple Terminal should not recommend COLORTERM fix: %q", joined)
+	if strings.Contains(joined, "colorterm") || strings.Contains(joined, "terminal bell") {
+		t.Fatalf("Apple Terminal should not recommend COLORTERM or bell fallback: %q", joined)
+	}
+}
+
+func TestBuildSnapshotWarnsForNotificationDefaults(t *testing.T) {
+	env := map[string]string{"TERM": "xterm-256color", "COLORTERM": "truecolor"}
+	snapshot := BuildSnapshot(func(key string) string { return env[key] }, func(string) (string, error) {
+		return "/bin/pbcopy", nil
+	}, "darwin")
+	joined := strings.Join(snapshot.Findings, "\n")
+	for _, want := range []string{"terminal bell", "may not report focus changes", `condition = "always"`} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("missing %q in %q", want, joined)
+		}
+	}
+	if snapshot.Counts.Issues != 2 {
+		t.Fatalf("issues=%d findings=%v", snapshot.Counts.Issues, snapshot.Findings)
+	}
+}
+
+func TestSupportsFocusTracking(t *testing.T) {
+	for _, brand := range []string{"kitty", "ghostty", "wezterm", "iterm2", "alacritty", "vscode", "vte"} {
+		if !supportsFocusTracking(brand) {
+			t.Errorf("%q should support focus tracking", brand)
+		}
+	}
+	for _, brand := range []string{"", "appleterminal", "otty", "xterm", "testterm"} {
+		if supportsFocusTracking(brand) {
+			t.Errorf("%q should not support focus tracking", brand)
+		}
 	}
 }
 

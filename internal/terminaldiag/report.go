@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+
+	"github.com/lookcorner/go-cli/internal/notify"
 )
 
 const SchemaVersion = "1"
@@ -82,6 +84,7 @@ func BuildSnapshot(getenv func(string) string, lookPath func(string) (string, er
 		tmux = collectTmuxProbe(getenv)
 		findings = append(findings, tmuxProbeFindings(tmux)...)
 	}
+	findings = append(findings, notificationFindings(getenv)...)
 	if finding := sshWrapRecommendation(getenv, ssh); finding != "" {
 		findings = append(findings, finding)
 	}
@@ -250,6 +253,45 @@ func colorFindings(getenv func(string) string, term, brand, color, multiplexer s
 func isAppleTerminal(brand string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(brand))
 	return normalized == "apple_terminal" || normalized == "apple terminal"
+}
+
+// notificationFindings mirrors reference collect_notification_warnings for the
+// default [ui.notifications] policy (method=auto, condition=unfocused).
+func notificationFindings(getenv func(string) string) []string {
+	terminal := notify.DetectTerminal(func(name string) (string, bool) {
+		value := getenv(name)
+		return value, value != ""
+	})
+	protocol := notify.SelectProtocol(terminal)
+	var findings []string
+	if protocol == notify.ProtocolBel && !recognizedTerminalBrand(terminal.Brand) {
+		findings = append(findings, "Grok is using the terminal bell because the terminal was not recognized.\n    If the bell works for you, no change is needed. Otherwise, set `method` in `[ui.notifications]` in config.toml to a protocol your terminal supports. Set it to `none` to turn off terminal notifications.")
+	}
+	if !supportsFocusTracking(terminal.Brand) {
+		findings = append(findings, "This terminal may not report focus changes, so notifications set to `unfocused` may not appear.\n    Use `condition = \"always\"` in `[ui.notifications]` to notify whether or not the terminal is focused. Use `never` or `method = \"none\"` to turn notifications off.")
+	}
+	return findings
+}
+
+func recognizedTerminalBrand(brand string) bool {
+	switch brand {
+	case "appleterminal", "ghostty", "iterm", "iterm2", "itermapp", "warp", "warpterminal",
+		"vscode", "cursor", "windsurf", "zed", "wezterm", "kitty", "alacritty",
+		"rio", "foot", "jetbrains", "grokdesktop", "vte", "terminator",
+		"windowsterminal", "otty":
+		return true
+	default:
+		return false
+	}
+}
+
+// supportsFocusTracking matches reference CSI focus-tracking support: known
+// non-Apple brands report focus; Apple Terminal and unclassified brands do not.
+func supportsFocusTracking(brand string) bool {
+	if brand == "" || brand == "appleterminal" || brand == "otty" {
+		return false
+	}
+	return recognizedTerminalBrand(brand)
 }
 
 func yesNo(value bool) string {
