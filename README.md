@@ -1505,7 +1505,10 @@ pools are not yet available. HTTP/SSE servers attach `Authorization` from
 `$GROK_HOME/mcp_credentials.json` (Rust-compatible `name:url` keys) when no
 static header or `bearer_token_env_var` is set, refresh once on HTTP 401, and
 support interactive OAuth enrollment via RFC 8414/9728 discovery, DCR, and
-PKCE loopback. `x.ai/mcp/auth_status` lists servers that still need auth;
+PKCE loopback. `gork mcp doctor` reports an `oauth credentials` check for
+HTTP/SSE servers (static bearer, `bearer_token_env_var`, or store token;
+missing credentials fail closed with an enroll hint). `x.ai/mcp/auth_status`
+lists servers that still need auth;
 `x.ai/mcp/auth_trigger` and the TUI `/mcps` `I` key start enrollment for remote
 servers (stdio stays explicitly unsupported). Optional TOML fields
 `oauth_client_id`, `oauth_client_secret_env_var`, `oauth_scopes`, and
