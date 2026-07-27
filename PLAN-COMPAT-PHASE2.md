@@ -20,8 +20,8 @@ One-round doctor/wrap surface closed at `5c6557d`. Remaining gaps need
 | 3 | **Landlock + seccomp** | OS sandbox | Hardens existing bubblewrap/Seatbelt profiles | done |
 | 4 | **Cloud ACP / conversations** | ACP | Large protocol surface; defer until local ACP stays green | XL |
 | 5 | **Remote relay / workspace hub** | Session / workspace | Depends on product decisions | XL |
-| 6 | **Vector memory** | Memory | Research + storage + retrieval | in progress (schema+config slice) |
-| 7 | **Fullscreen media / inline video** | Markdown/media | Terminal capability + UX heavy | XL |
+| 6 | **Vector memory** | Memory | Research + storage + retrieval | done (sqlite-vec optional) |
+| 7 | **Fullscreen media / inline video** | Markdown/media | Terminal capability + UX heavy | in progress |
 
 Deferred unless explicitly requested: Cursor CLI session discovery, WezTerm SSH XTVERSION probes.
 
@@ -157,7 +157,23 @@ Remote relay / workspace hub remains planned/XL (product-blocked). See queue #5.
 
 ### Still open
 
-- [ ] Optional sqlite-vec acceleration (Go currently uses brute-force KNN)
+- [ ] Optional sqlite-vec acceleration (deferred; brute-force KNN is fine for
+      memory-scale corpora)
+
+---
+
+## Phase 7 — Fullscreen media / inline video (in progress)
+
+### Done
+
+- [x] Modal overlay escape helpers: centered placement, Kitty transmit/place
+      (+ clear), iTerm2 overlay path for non-Kitty pixel overlays.
+
+### Still open
+
+- [ ] Image preview overlay chrome wired into fullscreen TUI draw loop
+- [ ] Video viewer (ffmpeg frame extract + overlay playback)
+- [ ] Prompt-chip hover/focus image preview
 
 ---
 
