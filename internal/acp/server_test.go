@@ -765,6 +765,15 @@ func TestMCPAuthExtensionsForHTTPServers(t *testing.T) {
 	if authenticated != "remote" || trigger["status"] != "authenticated" {
 		t.Fatalf("authenticated=%q trigger=%#v", authenticated, trigger)
 	}
+	output.Reset()
+	server.handleMCP(context.Background(), message{ID: json.RawMessage("3"), Method: "x.ai/mcp/auth_submit", Params: json.RawMessage(`{"session_id":"mcp-http-auth","server_name":"remote","callback_url":"http://127.0.0.1/callback?code=a&state=b"}`)})
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	submit := response["result"].(map[string]any)["result"].(map[string]any)
+	if submit["status"] != "failed" || !strings.Contains(submit["error"].(string), "not active") {
+		t.Fatalf("expected inactive enroll submit failure: %#v", submit)
+	}
 }
 
 func TestMCPServerChangeNotifications(t *testing.T) {

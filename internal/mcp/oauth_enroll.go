@@ -33,6 +33,9 @@ type AuthenticateOpts struct {
 	OpenURL         func(string) bool
 	HTTPClient      *http.Client
 	Force           bool
+	// PastedInput, when set, reads a callback URL / "code state" line for
+	// headless clients that cannot reach the loopback redirect.
+	PastedInput io.Reader
 	// Metadata, when set, skips discovery (tests / pre-discovered AS).
 	Metadata *OAuthMetadata
 }
@@ -141,6 +144,11 @@ func authenticateMCPServerFlow(ctx context.Context, name, serverURL string, opts
 	}
 
 	callback := make(chan oauthCallback, 1)
+	unregister := registerMCPAuthSubmit(name, callback)
+	defer unregister()
+	if opts.PastedInput != nil {
+		go readPastedMCPCallback(opts.PastedInput, callback)
+	}
 	server := &http.Server{ReadHeaderTimeout: 5 * time.Second, Handler: mcpOAuthCallbackHandler(callback)}
 	serveDone := make(chan struct{})
 	go func() {

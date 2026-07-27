@@ -198,6 +198,9 @@ func (s *Server) handleMCP(ctx context.Context, incoming message) {
 		Env             map[string]string `json:"env"`
 		URL             string            `json:"url"`
 		Headers         map[string]string `json:"headers"`
+		Code            string            `json:"code"`
+		CallbackURL     string            `json:"callback_url"`
+		CallbackURLCamel string           `json:"callbackUrl"`
 	}
 	if json.Unmarshal(incoming.Params, &req) != nil {
 		s.respondError(incoming.ID, -32602, "invalid MCP parameters")
@@ -301,6 +304,33 @@ func (s *Server) handleMCP(ctx context.Context, incoming message) {
 		}
 		s.respond(incoming.ID, map[string]any{"result": map[string]any{
 			"status": "authenticated", "error": nil,
+		}, "error": nil})
+		return
+	}
+	if incoming.Method == "x.ai/mcp/auth_submit" {
+		if req.ServerName == "" {
+			s.respondError(incoming.ID, -32602, "server_name is required")
+			return
+		}
+		value := strings.TrimSpace(req.CallbackURL)
+		if value == "" {
+			value = strings.TrimSpace(req.CallbackURLCamel)
+		}
+		if value == "" {
+			value = strings.TrimSpace(req.Code)
+		}
+		if value == "" {
+			s.respondError(incoming.ID, -32602, "callback_url or code is required")
+			return
+		}
+		if err := mcppkg.SubmitMCPAuthCallback(req.ServerName, value); err != nil {
+			s.respond(incoming.ID, map[string]any{"result": map[string]any{
+				"status": "failed", "error": err.Error(),
+			}, "error": nil})
+			return
+		}
+		s.respond(incoming.ID, map[string]any{"result": map[string]any{
+			"status": "submitted", "error": nil,
 		}, "error": nil})
 		return
 	}

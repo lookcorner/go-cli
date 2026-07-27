@@ -15,7 +15,7 @@ One-round doctor/wrap surface closed at `5c6557d`. Remaining gaps need
 
 | # | Theme | COMPAT area | Why now | Rough size |
 |---|--------|-------------|---------|------------|
-| 1 | **MCP OAuth enrollment** | MCP | Unlocks authenticated remote MCP servers; user-visible | L (multi-PR) |
+| 1 | **MCP OAuth enrollment** | MCP | Unlocks authenticated remote MCP servers; user-visible | done |
 | 2 | **Linux cgroups for shell** | Shell execution | Completes shell isolation story after wrap | L |
 | 3 | **Landlock + seccomp** | OS sandbox | Hardens existing bubblewrap/Seatbelt profiles | XL |
 | 4 | **Cloud ACP / conversations** | ACP | Large protocol surface; defer until local ACP stays green | XL |
@@ -44,12 +44,14 @@ OAuth enrollment for HTTP/SSE servers, with durable tokens and ACP/TUI status.
 3. **Enrollment flow** — done: discovery + DCR + PKCE loopback
    (`AuthenticateMCPServer`) plus in-process single-flight and Unix
    `mcp_auth_*.lock` cross-process dedup with credential-store poll while
-   waiting on the loopback callback. Pasted-callback UX still open.
+   waiting on the loopback callback, plus pasted-callback UX
+   (`SubmitMCPAuthCallback`, `PastedInput`, ACP `x.ai/mcp/auth_submit`).
 
 4. **Runtime use** — done for attach + 401 refresh (TokenURL or rediscovery).
    Doctor auth-state cell done (`gork mcp doctor` `oauth credentials` check).
 
-5. **ACP / TUI** — done for `auth_status` / `auth_trigger` / TUI `I`.
+5. **ACP / TUI** — done for `auth_status` / `auth_trigger` / `auth_submit` /
+   TUI `I`.
 
 ### Done when
 
@@ -63,6 +65,8 @@ OAuth enrollment for HTTP/SSE servers, with durable tokens and ACP/TUI status.
       plus env-var names only (never tokens/headers/secrets).
 - [x] Concurrent enrollments share one browser flow (in-process + Unix flock
       + store poll).
+- [x] Headless clients can paste a callback URL via `SubmitMCPAuthCallback` /
+      ACP `x.ai/mcp/auth_submit`.
 
 ### Phase 1 notes
 
@@ -70,8 +74,8 @@ OAuth enrollment for HTTP/SSE servers, with durable tokens and ACP/TUI status.
   map of `StoredCredentials` (`client_id`, `token_response`, `granted_scopes`,
   `token_received_at`). Loopback+PKCE+DCR enrollment; no device-code for MCP.
 - Go now mirrors the on-disk shape and attaches/refreshes tokens in
-  `internal/mcp` (`credentials.go`, `http_auth.go`). Optional pasted-callback
-  UX for headless enroll remains.
+  `internal/mcp` (`credentials.go`, `http_auth.go`), with enroll dedup and
+  pasted-callback completion for unreachable loopbacks.
 
 ### Out of scope for Phase 1
 
