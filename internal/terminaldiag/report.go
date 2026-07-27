@@ -59,6 +59,7 @@ type Facts struct {
 	ControlMode      string `json:"tmuxControlMode,omitempty"`
 	VoiceMicrophone  string `json:"voiceMicrophone,omitempty"`
 	VoiceDetail      string `json:"voiceDetail,omitempty"`
+	DataControl      string `json:"dataControl,omitempty"`
 }
 
 type Counts struct {
@@ -121,6 +122,18 @@ func BuildSnapshot(getenv func(string) string, lookPath func(string) (string, er
 	if finding := probeSandboxConflict(); finding != "" {
 		findings = append(findings, finding)
 	}
+	dataControl, _ := probeWaylandDataControl(getenv, lookPath)
+	wlCopy := false
+	if _, err := lookPath("wl-copy"); err == nil {
+		wlCopy = true
+	}
+	if finding := waylandDataControlFinding(dataControl, wlCopy); finding != "" {
+		findings = append(findings, finding)
+	}
+	dataControlFact := ""
+	if dataControl != DataControlNotApplicable {
+		dataControlFact = string(dataControl)
+	}
 	return Snapshot{
 		SchemaVersion: SchemaVersion,
 		Facts: Facts{
@@ -128,6 +141,7 @@ func BuildSnapshot(getenv func(string) string, lookPath func(string) (string, er
 			NativeClip: clipboard, ClipboardTool: clipboardTool, OSC52: osc52, GOOS: goos,
 			SetClipboard: tmux.SetClipboard, AllowPassthrough: tmux.AllowPassthrough, ExtendedKeys: tmux.ExtendedKeys,
 			ControlMode: tmux.ControlMode, VoiceMicrophone: voiceMic, VoiceDetail: voiceDetail,
+			DataControl: dataControlFact,
 		},
 		Findings: findings,
 		Counts:   Counts{Issues: len(findings)},
@@ -148,6 +162,16 @@ func (s Snapshot) Human() string {
 		fmt.Fprintf(&out, " (tool: %s)", s.Facts.ClipboardTool)
 	}
 	fmt.Fprintf(&out, "\n  osc 52       %s\n", activeOff(s.Facts.OSC52))
+	if s.Facts.DataControl != "" {
+		label := s.Facts.DataControl
+		switch DataControlFact(s.Facts.DataControl) {
+		case DataControlAvailable:
+			label = "on"
+		case DataControlMissing:
+			label = "off"
+		}
+		fmt.Fprintf(&out, "  data-control %s\n", label)
+	}
 	if s.Facts.VoiceMicrophone != "" {
 		out.WriteString("\nVoice\n")
 		if s.Facts.VoiceMicrophone == "none" {

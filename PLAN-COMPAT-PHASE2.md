@@ -23,7 +23,7 @@ One-round doctor/wrap surface closed at `5c6557d`. Remaining gaps need
 | 6 | **Vector memory** | Memory | Research + storage + retrieval | XL |
 | 7 | **Fullscreen media / inline video** | Markdown/media | Terminal capability + UX heavy | XL |
 
-Deferred unless explicitly requested: Cursor CLI session discovery, WezTerm SSH XTVERSION probes, Wayland data-control.
+Deferred unless explicitly requested: Cursor CLI session discovery, WezTerm SSH XTVERSION probes.
 
 ---
 
