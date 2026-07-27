@@ -79,7 +79,7 @@ func sandboxInvocation(profile SandboxProfile, workspace, executable string, arg
 		return path, append([]string{"-p", policy, executable}, args...), nil
 	case "linux":
 		path, _ := exec.LookPath("bwrap")
-		wrapped := wrapBubblewrapWithSeccomp(bubblewrapArgs(profile, workspace, executable))
+		wrapped := wrapBubblewrapWithSeccomp(bubblewrapArgs(profile, workspace, executable), sandboxRestrictsNetwork(profile))
 		return path, append(wrapped, args...), nil
 	default:
 		return "", nil, fmt.Errorf("sandbox profiles are not supported on %s", runtime.GOOS)

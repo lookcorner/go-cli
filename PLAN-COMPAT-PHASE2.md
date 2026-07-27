@@ -17,7 +17,7 @@ One-round doctor/wrap surface closed at `5c6557d`. Remaining gaps need
 |---|--------|-------------|---------|------------|
 | 1 | **MCP OAuth enrollment** | MCP | Unlocks authenticated remote MCP servers; user-visible | L (multi-PR) |
 | 2 | **Linux cgroups for shell** | Shell execution | Completes shell isolation story after wrap | L |
-| 3 | **Landlock + seccomp** | OS sandbox | Hardens existing bubblewrap/Seatbelt profiles | XL (ns lockdown landed) |
+| 3 | **Landlock + seccomp** | OS sandbox | Hardens existing bubblewrap/Seatbelt profiles | XL (ns+net seccomp landed) |
 | 4 | **Cloud ACP / conversations** | ACP | Large protocol surface; defer until local ACP stays green | XL |
 | 5 | **Remote relay / workspace hub** | Session / workspace | Depends on product decisions | XL |
 | 6 | **Vector memory** | Memory | Research + storage + retrieval | XL |
@@ -98,10 +98,11 @@ clear no-op on unsupported hosts.
 
 - [x] Per-child seccomp namespace lockdown inside Linux bwrap
       (`__GROK_SECCOMP_NS__` helper; BPF unit-tested).
+- [x] Child network seccomp for read-only/strict (`__GROK_SECCOMP_NS_NET__`,
+      stacked with namespace lockdown alongside `--unshare-net`).
 
 ### Still open
 
-- [ ] Child network seccomp (defense-in-depth alongside `--unshare-net`)
 - [ ] Parent-process Landlock (architecture change; careful with MCP/API)
 
 ## Phase 4+ — cloud / memory

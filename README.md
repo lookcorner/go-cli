@@ -1725,6 +1725,8 @@ children are also placed in a best-effort memory-limited cgroup
 (`memory.high` / `memory.max`); unavailable hosts skip silently. Sandboxed
 Linux shells additionally install a seccomp namespace lockdown inside the
 bubblewrap child so nested `unshare`/`setns`/namespace `clone` attempts fail.
+Read-only and strict profiles also stack a child network seccomp deny
+(`connect`/`bind`/`send*`/`listen`/`accept*`) on top of `--unshare-net`.
 Approval and the file tools' workspace/symlink checks remain independent
 safety boundaries.
 
