@@ -102,7 +102,59 @@ func (s *Store) Search(query string, index IndexConfig, search SearchConfig) ([]
 		}
 		chunks = append(chunks, splitMarkdown(path, file.Source, string(data), created, index)...)
 	}
+	if narrowed, ok := s.narrowChunksWithFTS(query, files, chunks, index, search.MaxResults); ok {
+		chunks = narrowed
+	}
 	return rankChunks(chunks, terms, search), nil
+}
+
+// narrowChunksWithFTS reindexes into index.sqlite and keeps BM25 hits as the
+// candidate set. Scoring still goes through rankChunks so decay/weights/MMR
+// stay identical. Fail open (ok=false) on ephemeral stores or any index error.
+func (s *Store) narrowChunksWithFTS(query string, files []FileInfo, chunks []chunk, index IndexConfig, limit int) ([]chunk, bool) {
+	if s.ephemeral || strings.TrimSpace(s.workspaceDir) == "" || len(chunks) == 0 {
+		return nil, false
+	}
+	idx, err := OpenIndex(s.workspaceDir, DefaultConfig().Embedding, index)
+	if err != nil {
+		return nil, false
+	}
+	defer idx.Close()
+
+	for _, file := range files {
+		path, pathErr := s.allowedPath(file.Path)
+		if pathErr != nil {
+			continue
+		}
+		data, readErr := readMemoryFile(path)
+		if readErr != nil {
+			continue
+		}
+		if _, err := idx.ReindexFile(path, file.Source, string(data)); err != nil {
+			return nil, false
+		}
+	}
+	if limit < 1 {
+		limit = 10
+	}
+	hits, err := idx.SearchFTS(query, limit*3)
+	if err != nil || len(hits) == 0 {
+		return nil, false
+	}
+	wanted := map[string]bool{}
+	for _, hit := range hits {
+		wanted[chunkID(hit.Path, hit.StartLine, hit.EndLine)] = true
+	}
+	var narrowed []chunk
+	for _, item := range chunks {
+		if wanted[chunkID(item.path, item.start, item.end)] {
+			narrowed = append(narrowed, item)
+		}
+	}
+	if len(narrowed) == 0 {
+		return nil, false
+	}
+	return narrowed, true
 }
 
 func (s *Store) Get(path string, from int, limit *int) (string, error) {

@@ -20,7 +20,7 @@ One-round doctor/wrap surface closed at `5c6557d`. Remaining gaps need
 | 3 | **Landlock + seccomp** | OS sandbox | Hardens existing bubblewrap/Seatbelt profiles | done (profile-conflict doctor deferred) |
 | 4 | **Cloud ACP / conversations** | ACP | Large protocol surface; defer until local ACP stays green | XL |
 | 5 | **Remote relay / workspace hub** | Session / workspace | Depends on product decisions | XL |
-| 6 | **Vector memory** | Memory | Research + storage + retrieval | in progress (schema+FTS APIs) |
+| 6 | **Vector memory** | Memory | Research + storage + retrieval | in progress (FTS wired into Search) |
 | 7 | **Fullscreen media / inline video** | Markdown/media | Terminal capability + UX heavy | XL |
 
 Deferred unless explicitly requested: Cursor CLI session discovery, WezTerm kitty XTVERSION probes, Wayland data-control, sandbox.toml profile-conflict doctor.
@@ -257,12 +257,13 @@ an explicit request.
 - [x] Durable workspace `index.sqlite` schema (`meta`/`chunks`/`chunks_fts`, no
       `chunks_vec` yet); `OpenIndex` / meta helpers on `compat/vector-memory-schema`.
 - [x] FTS5 BM25 + Markdown reindex APIs (`ReindexFile` / `SearchFTS` on
-      `IndexDB`); `Store.Search` stays on in-process ranking until decay/source
-      weights and hybrid merge land together on `compat/vector-memory-fts`.
+      `IndexDB`); on `compat/vector-memory-fts`.
+- [x] Wire FTS into `Store.Search` as candidate narrowing (rankChunks keeps
+      decay/weights/MMR; ephemeral and index errors fail open) on
+      `compat/vector-memory-fts-search`.
 
 ### Still open
 
-- [ ] Wire FTS into `Store.Search` with ranking parity + fail-open
 - [ ] sqlite-vec + embedding API + hybrid merge
 - [ ] Semantic flush dedup
 

@@ -75,6 +75,9 @@ func TestStoreSearchRanksFiltersAndDecaysSessions(t *testing.T) {
 	if empty, err := store.Search("not-present", DefaultConfig().Index, DefaultConfig().Search); err != nil || len(empty) != 0 {
 		t.Fatalf("empty=%#v err=%v", empty, err)
 	}
+	if _, err := os.Stat(filepath.Join(store.workspaceDir, "index.sqlite")); err != nil {
+		t.Fatalf("expected FTS index after search: %v", err)
+	}
 }
 
 func TestRankChunksUsesTemporalDecaySourceWeightsAndMMR(t *testing.T) {
