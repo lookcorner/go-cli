@@ -178,6 +178,7 @@ type Runner struct {
 	TwoPassCompaction       bool
 	Memory                  *memory.Store
 	MemoryConfig            memory.Config
+	MemoryEmbedder          memory.EmbeddingProvider
 	OpenMemory              func() (*memory.Store, error)
 	ReloadMCPBase           func(context.Context) error
 	UpdateMCPServers        func(context.Context, []mcp.ServerConfig) error

@@ -1,12 +1,14 @@
 package memory
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -17,12 +19,14 @@ import (
 // SchemaVersion matches Rust xai-grok-memory SCHEMA_VERSION.
 const SchemaVersion = 1
 
-// IndexDB is the durable SQLite memory index (meta + chunks + FTS5).
-// Vector table creation is deferred until sqlite-vec is wired.
+// IndexDB is the durable SQLite memory index (meta + chunks + FTS5 +
+// chunks_embedding). Go stores embeddings as BLOBs and runs brute-force L2
+// KNN (Rust uses sqlite-vec when available).
 type IndexDB struct {
 	db    *sql.DB
 	path  string
 	chunk IndexConfig
+	dims  int
 }
 
 // FtsHit is one BM25 hit from chunks_fts.
@@ -44,7 +48,7 @@ type ReindexResult struct {
 	Deleted int
 }
 
-// SchemaSQL returns the Rust-compatible schema without chunks_vec.
+// SchemaSQL returns the schema with FTS5 plus a portable embedding table.
 func SchemaSQL() string {
 	return `
 CREATE TABLE IF NOT EXISTS meta (
@@ -71,6 +75,12 @@ CREATE INDEX IF NOT EXISTS idx_chunks_path ON chunks(path);
 CREATE INDEX IF NOT EXISTS idx_chunks_hash ON chunks(hash);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(text, content='');
+
+CREATE TABLE IF NOT EXISTS chunks_embedding (
+    chunk_id TEXT PRIMARY KEY NOT NULL,
+    embedding BLOB NOT NULL,
+    FOREIGN KEY(chunk_id) REFERENCES chunks(id) ON DELETE CASCADE
+);
 
 INSERT OR IGNORE INTO meta(key, value) VALUES ('reindex_claim', '');
 `
@@ -115,11 +125,17 @@ func OpenIndex(workspaceMemoryDir string, embedding EmbeddingConfig, index Index
 		_ = db.Close()
 		return nil, err
 	}
+	idx.dims = dims
 	model := ""
 	if embedding.Model != nil {
 		model = *embedding.Model
 	}
 	if err := idx.SetMeta("embedding_model", model); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	// Foreign keys for chunks_embedding cascading deletes.
+	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -225,6 +241,9 @@ func (i *IndexDB) ReindexFile(path, source, content string) (ReindexResult, erro
 			if _, err := tx.Exec(`INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES('delete', ?, ?)`, old.rowid, old.text); err != nil {
 				return ReindexResult{}, err
 			}
+			if _, err := tx.Exec(`DELETE FROM chunks_embedding WHERE chunk_id = ?`, chunkID); err != nil {
+				return ReindexResult{}, err
+			}
 			var rowid int64
 			if err := tx.QueryRow(`SELECT rowid FROM chunks WHERE id = ?`, chunkID).Scan(&rowid); err != nil {
 				return ReindexResult{}, err
@@ -257,6 +276,9 @@ func (i *IndexDB) ReindexFile(path, source, content string) (ReindexResult, erro
 			continue
 		}
 		if _, err := tx.Exec(`INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES('delete', ?, ?)`, old.rowid, old.text); err != nil {
+			return ReindexResult{}, err
+		}
+		if _, err := tx.Exec(`DELETE FROM chunks_embedding WHERE chunk_id = ?`, id); err != nil {
 			return ReindexResult{}, err
 		}
 		if _, err := tx.Exec(`DELETE FROM chunks WHERE id = ?`, id); err != nil {
@@ -316,8 +338,132 @@ func quoteFTSTerm(term string) string {
 	return `"` + term + `"`
 }
 
+// UpsertEmbedding stores a chunk vector as a little-endian float32 BLOB.
+func (i *IndexDB) UpsertEmbedding(chunkID string, embedding []float32) error {
+	if i == nil {
+		return fmt.Errorf("nil index")
+	}
+	if i.dims > 0 && len(embedding) != i.dims {
+		return fmt.Errorf("embedding dims %d != index dims %d", len(embedding), i.dims)
+	}
+	_, err := i.db.Exec(
+		`INSERT INTO chunks_embedding(chunk_id, embedding) VALUES (?, ?)
+		 ON CONFLICT(chunk_id) DO UPDATE SET embedding = excluded.embedding`,
+		chunkID, PackEmbedding(embedding),
+	)
+	return err
+}
+
+// ChunksWithoutEmbeddings returns chunk id/text pairs missing vectors.
+func (i *IndexDB) ChunksWithoutEmbeddings() ([]struct{ ID, Text string }, error) {
+	if i == nil {
+		return nil, fmt.Errorf("nil index")
+	}
+	rows, err := i.db.Query(
+		`SELECT c.id, c.text FROM chunks c
+		 LEFT JOIN chunks_embedding e ON e.chunk_id = c.id
+		 WHERE e.chunk_id IS NULL`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []struct{ ID, Text string }
+	for rows.Next() {
+		var item struct{ ID, Text string }
+		if err := rows.Scan(&item.ID, &item.Text); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+// VectorSearch returns the k nearest chunks by L2 distance (brute-force).
+func (i *IndexDB) VectorSearch(query []float32, k int) ([]VecNeighbor, error) {
+	if i == nil {
+		return nil, fmt.Errorf("nil index")
+	}
+	if k < 1 {
+		k = 1
+	}
+	rows, err := i.db.Query(`SELECT chunk_id, embedding FROM chunks_embedding`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var all []VecNeighbor
+	for rows.Next() {
+		var id string
+		var blob []byte
+		if err := rows.Scan(&id, &blob); err != nil {
+			return nil, err
+		}
+		vec, err := UnpackEmbedding(blob)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, VecNeighbor{ChunkID: id, Distance: l2Distance(query, vec)})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.Slice(all, func(a, b int) bool {
+		if all[a].Distance != all[b].Distance {
+			return all[a].Distance < all[b].Distance
+		}
+		return all[a].ChunkID < all[b].ChunkID
+	})
+	if len(all) > k {
+		all = all[:k]
+	}
+	return all, nil
+}
+
+// EmbedMissing uses provider to fill chunks_embedding for unembedded chunks.
+func (i *IndexDB) EmbedMissing(ctx context.Context, provider EmbeddingProvider) (int, error) {
+	if i == nil || provider == nil {
+		return 0, nil
+	}
+	missing, err := i.ChunksWithoutEmbeddings()
+	if err != nil {
+		return 0, err
+	}
+	if len(missing) == 0 {
+		return 0, nil
+	}
+	texts := make([]string, len(missing))
+	for j, item := range missing {
+		texts[j] = item.Text
+	}
+	vectors, err := provider.Embed(ctx, texts)
+	if err != nil {
+		return 0, err
+	}
+	if len(vectors) != len(missing) {
+		return 0, fmt.Errorf("embed returned %d vectors for %d texts", len(vectors), len(missing))
+	}
+	n := 0
+	for j, item := range missing {
+		if err := i.UpsertEmbedding(item.ID, vectors[j]); err != nil {
+			return n, err
+		}
+		n++
+	}
+	return n, nil
+}
+
+// HasEmbeddings reports whether any chunk vectors are stored.
+func (i *IndexDB) HasEmbeddings() (bool, error) {
+	if i == nil {
+		return false, nil
+	}
+	var count int
+	err := i.db.QueryRow(`SELECT COUNT(*) FROM chunks_embedding`).Scan(&count)
+	return count > 0, err
+}
+
 // VectorSearchEnabled reports whether an embedding model is configured.
-// Live KNN remains pending; callers should fail open to text search.
 func VectorSearchEnabled(cfg Config) bool {
 	return cfg.Embedding.Model != nil && strings.TrimSpace(*cfg.Embedding.Model) != ""
 }

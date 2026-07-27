@@ -308,6 +308,36 @@ func TestRunnerManualMemoryFlushUsesSharedLifecycle(t *testing.T) {
 	}
 }
 
+func TestRunnerFlushSemanticDedupWithEmbedder(t *testing.T) {
+	root, workspaceRoot := t.TempDir(), t.TempDir()
+	store, err := memory.Open(root, workspaceRoot, "semantic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	note := "## Decision\n\nPrefer explicit flush boundaries."
+	if _, _, err := store.Write("manual", note); err != nil {
+		t.Fatal(err)
+	}
+	model := "hash-embedding"
+	config := memory.DefaultConfig()
+	config.Enabled = true
+	config.Embedding.Model = &model
+	config.Embedding.Dimensions = 32
+	threshold := 0.5
+	config.Flush.SemanticDedupThreshold = &threshold
+	streamer := &fakeStreamer{results: []api.StreamResult{
+		{ResponseID: "flush-semantic", Text: note},
+	}}
+	runner := Runner{
+		Client: streamer, Model: "test", Memory: store, MemoryConfig: config,
+		MemoryEmbedder: memory.HashEmbeddingProvider{Model: model, Dims: 32},
+	}
+	result, err := runner.FlushMemory(context.Background(), "current")
+	if err != nil || result.Outcome != "duplicate" {
+		t.Fatalf("expected semantic duplicate, got %#v err=%v", result, err)
+	}
+}
+
 func TestRunnerRewritesMemoryNoteWithIsolatedBoundedRequest(t *testing.T) {
 	streamer := &memoryRewriteStreamer{result: api.StreamResult{Text: "## Deployment\n\n- Run the release checks."}}
 	runner := Runner{Client: streamer, Model: "session-model"}

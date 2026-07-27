@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -29,8 +30,49 @@ func TestOpenIndexCreatesSchema(t *testing.T) {
 		t.Fatalf("model=%q ok=%v err=%v", model, ok, err)
 	}
 	sql := SchemaSQL()
-	if !strings.Contains(sql, "chunks_fts") || strings.Contains(sql, "chunks_vec") {
-		t.Fatal("schema should include FTS and omit vec")
+	if !strings.Contains(sql, "chunks_fts") || !strings.Contains(sql, "chunks_embedding") || strings.Contains(sql, "chunks_vec") {
+		t.Fatal("schema should include FTS + embedding table and omit sqlite-vec")
+	}
+}
+
+func TestVectorSearchAndSemanticDedup(t *testing.T) {
+	dir := t.TempDir()
+	idx, err := OpenIndex(dir, EmbeddingConfig{Provider: "api", Dimensions: 8}, IndexConfig{MaxChunkChars: 1600, ChunkOverlapChars: 320})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+	path := filepath.Join(dir, "MEMORY.md")
+	if _, err := idx.ReindexFile(path, "workspace", "# Notes\n\nRust ownership rules.\n\n## Other\n\nPasta recipes.\n"); err != nil {
+		t.Fatal(err)
+	}
+	provider := HashEmbeddingProvider{Dims: 8}
+	n, err := idx.EmbedMissing(context.Background(), provider)
+	if err != nil || n < 1 {
+		t.Fatalf("embedded=%d err=%v", n, err)
+	}
+	query, err := provider.Embed(context.Background(), []string{"Rust ownership rules."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	neighbors, err := idx.VectorSearch(query[0], 3)
+	if err != nil || len(neighbors) == 0 {
+		t.Fatalf("neighbors=%v err=%v", neighbors, err)
+	}
+	if !IsSemanticallyDuplicate(neighbors, 0.5) {
+		t.Fatalf("expected semantic duplicate for identical text: %+v", neighbors)
+	}
+	other, err := provider.Embed(context.Background(), []string{"completely unrelated astronomy facts"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	far, err := idx.VectorSearch(other[0], 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Hash embeddings are not semantic; just ensure search returns something ordered.
+	if len(far) != 1 {
+		t.Fatalf("far=%+v", far)
 	}
 }
 

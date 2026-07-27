@@ -20,7 +20,7 @@ One-round doctor/wrap surface closed at `5c6557d`. Remaining gaps need
 | 3 | **Landlock + seccomp** | OS sandbox | Hardens existing bubblewrap/Seatbelt profiles | done (profile-conflict doctor deferred) |
 | 4 | **Cloud ACP / conversations** | ACP | Large protocol surface; defer until local ACP stays green | XL |
 | 5 | **Remote relay / workspace hub** | Session / workspace | Depends on product decisions | XL |
-| 6 | **Vector memory** | Memory | Research + storage + retrieval | in progress (hybrid scores+dedup cfg) |
+| 6 | **Vector memory** | Memory | Research + storage + retrieval | in progress (KNN+flush dedup) |
 | 7 | **Fullscreen media / inline video** | Markdown/media | Terminal capability + UX heavy | XL |
 
 Deferred unless explicitly requested: Cursor CLI session discovery, WezTerm kitty XTVERSION probes, Wayland data-control, sandbox.toml profile-conflict doctor.
@@ -264,11 +264,15 @@ an explicit request.
 - [x] Hybrid score merge helpers + flush `semantic_dedup_threshold` config /
       fail-open hook (live KNN still needs sqlite-vec + embedder) on
       `compat/vector-memory-hybrid-dedup`.
+- [x] Portable `chunks_embedding` BLOB store + brute-force L2 KNN,
+      `EmbeddingProvider` / `HashEmbeddingProvider`, `EmbedMissing`, and live
+      semantic flush dedup when `Runner.MemoryEmbedder` is set on
+      `compat/vector-memory-knn`.
 
 ### Still open
 
-- [ ] sqlite-vec + embedding API + live hybrid/KNN search
-- [ ] Semantic flush dedup against live vector neighbors
+- [ ] OpenAI-compatible embedding API client + hybrid merge in `Store.Search`
+- [ ] Optional sqlite-vec acceleration (Go currently uses brute-force KNN)
 
 ---
 
