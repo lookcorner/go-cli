@@ -384,7 +384,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleYoloModeChanged(incoming.Params)
 		case "x.ai/permissions/reset":
 			s.handlePermissionReset()
-		case "x.ai/debug/arm_auto_compact", "x.ai/debug/trigger_feedback":
+		case "x.ai/debug/arm_auto_compact", "x.ai/debug/trigger_feedback", "x.ai/debug/agent":
 			s.handleDebug(incoming)
 		case "session/cancel":
 			s.handleCancel(incoming.Params)

@@ -107,6 +107,7 @@ responses with UUIDv7 identities while persisting only local citation/create
 and deletion-tombstone events; cloud review uploads are intentionally absent.
 `x.ai/debug/trigger_feedback` emits the reference feedback-request notification
 and response shapes locally for client integration testing.
+`x.ai/debug/agent` returns process-local registry counts for client engineers.
 The TUI also implements the reference hidden `/debug [scroll|fps|log]`
 diagnostics: live scroll and FPS overlays, the `/scroll-debug` alias, bare
 toggle-state reporting, environment startup switches, and an event-exact JSONL

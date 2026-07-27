@@ -167,6 +167,14 @@ to empty + `_meta["x.ai/partial"]` when OAuth is unavailable.
 1. **`x.ai/session/usage`** — done on `compat/acp-session-usage`: cumulative
    in-process PromptUsage ledger with partial-cost scrubbing.
 
+
+## Phase 4e — ACP debug agent
+
+### Slice
+
+1. **`x.ai/debug/agent`** — done on `compat/acp-debug-agent`: process-local
+   registry counts for client integration testing.
+
 ## Phase 3+ — sandbox / memory / relay
 
 Separate kickoff docs when prior themes land. Do not start in parallel without
