@@ -81,7 +81,17 @@ func printInspectReport(output io.Writer, report inspectapp.Report) {
 	})
 	printInspectSection(output, "MCP servers", len(report.MCPServers), func() {
 		for _, item := range report.MCPServers {
-			fmt.Fprintf(output, "  %s [%s]%s\n", cleanCLIText(item.Name), cleanCLIText(item.Transport), inspectDisabled(!item.Enabled))
+			extra := ""
+			if item.Auth != "" {
+				extra = " auth=" + cleanCLIText(item.Auth)
+			}
+			if item.AuthEnv != "" {
+				extra += " env=" + cleanCLIText(item.AuthEnv)
+			}
+			if item.OAuth != nil && item.OAuth.SecretEnv != "" {
+				extra += " oauth_secret_env=" + cleanCLIText(item.OAuth.SecretEnv)
+			}
+			fmt.Fprintf(output, "  %s [%s]%s%s\n", cleanCLIText(item.Name), cleanCLIText(item.Transport), extra, inspectDisabled(!item.Enabled))
 		}
 	})
 	printInspectSection(output, "LSP servers", len(report.LSPServers), func() {

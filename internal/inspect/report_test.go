@@ -130,6 +130,81 @@ func TestBuildGatesUntrustedProjectExecution(t *testing.T) {
 	}
 }
 
+func TestInspectMCPAuthPresenceWithoutSecrets(t *testing.T) {
+	root := t.TempDir()
+	if err := exec.Command("git", "init", "-q", root).Run(); err != nil {
+		t.Skipf("git unavailable: %v", err)
+	}
+	home := t.TempDir()
+	grokHome := filepath.Join(home, ".grok")
+	t.Setenv("HOME", home)
+	t.Setenv("GROK_HOME", grokHome)
+	t.Setenv("XAI_API_KEY", "")
+	configPath := filepath.Join(grokHome, "config.toml")
+	writeInspectFile(t, configPath, `
+[mcp_servers.static]
+url = "https://user:SECRET@mcp.example/static?token=SECRET"
+type = "http"
+headers = { Authorization = "Bearer SECRET_TOKEN" }
+
+[mcp_servers.envtok]
+url = "https://mcp.example/env"
+type = "http"
+bearer_token_env_var = "MCP_INSPECT_TOKEN"
+
+[mcp_servers.byo]
+url = "https://mcp.example/byo"
+type = "http"
+oauth_client_id = "public-client"
+oauth_client_secret_env_var = "MCP_OAUTH_SECRET"
+oauth_scopes = ["mcp"]
+oauth_callback_port = 8765
+
+[mcp_servers.stored]
+url = "https://mcp.example/stored"
+type = "http"
+
+[mcp_servers.local]
+command = "local-server"
+`)
+	key := "stored:https://mcp.example/stored"
+	writeInspectFile(t, filepath.Join(grokHome, "mcp_credentials.json"), `{"`+key+`":{"client_id":"c","token_response":{"access_token":"tok"}}}`)
+
+	report, err := Build(root, configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]MCPServer{}
+	for _, item := range report.MCPServers {
+		byName[item.Name] = item
+	}
+	if byName["static"].Auth != "static" || strings.Contains(byName["static"].Target, "SECRET") || strings.Contains(byName["static"].Target, "user:") {
+		t.Fatalf("static=%#v", byName["static"])
+	}
+	if byName["envtok"].Auth != "env" || byName["envtok"].AuthEnv != "MCP_INSPECT_TOKEN" {
+		t.Fatalf("env=%#v", byName["envtok"])
+	}
+	if byName["byo"].Auth != "oauth_byo" || byName["byo"].OAuth == nil || !byName["byo"].OAuth.ClientIDConfigured ||
+		byName["byo"].OAuth.SecretEnv != "MCP_OAUTH_SECRET" || byName["byo"].OAuth.CallbackPort == nil || *byName["byo"].OAuth.CallbackPort != 8765 {
+		t.Fatalf("byo=%#v", byName["byo"])
+	}
+	if byName["stored"].Auth != "stored" {
+		t.Fatalf("stored=%#v", byName["stored"])
+	}
+	if byName["local"].Auth != "" || byName["local"].Target != "stdio" {
+		t.Fatalf("local=%#v", byName["local"])
+	}
+	data, err := json.Marshal(report.MCPServers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, leak := range []string{"SECRET_TOKEN", "Bearer SECRET", "user:SECRET", "token=SECRET", "\"tok\""} {
+		if strings.Contains(string(data), leak) {
+			t.Fatalf("leaked %q in %s", leak, data)
+		}
+	}
+}
+
 func writeInspectFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {

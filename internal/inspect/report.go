@@ -11,6 +11,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/config"
 	"github.com/lookcorner/go-cli/internal/hooks"
 	"github.com/lookcorner/go-cli/internal/marketplace"
+	"github.com/lookcorner/go-cli/internal/mcp"
 	"github.com/lookcorner/go-cli/internal/plugin"
 	"github.com/lookcorner/go-cli/internal/skills"
 	"github.com/lookcorner/go-cli/internal/version"
@@ -105,9 +106,21 @@ type Marketplace struct {
 }
 
 type MCPServer struct {
-	Name      string `json:"name"`
-	Transport string `json:"transport"`
-	Enabled   bool   `json:"enabled"`
+	Name      string         `json:"name"`
+	Transport string         `json:"transport"`
+	Enabled   bool           `json:"enabled"`
+	Target    string         `json:"target,omitempty"`
+	Auth      string         `json:"auth,omitempty"`
+	AuthEnv   string         `json:"authEnv,omitempty"`
+	OAuth     *MCPServerOAuth `json:"oauth,omitempty"`
+}
+
+// MCPServerOAuth exposes BYO OAuth config presence without secrets.
+type MCPServerOAuth struct {
+	ClientIDConfigured bool    `json:"clientIdConfigured,omitempty"`
+	SecretEnv          string  `json:"secretEnv,omitempty"`
+	ScopesConfigured   bool    `json:"scopesConfigured,omitempty"`
+	CallbackPort       *uint16 `json:"callbackPort,omitempty"`
 }
 
 type LSPServer struct {
@@ -304,10 +317,78 @@ func inspectMCPServers(values map[string]config.MCPServerConfig) []MCPServer {
 				transport = "stdio"
 			}
 		}
-		result = append(result, MCPServer{Name: name, Transport: transport, Enabled: item.IsEnabled()})
+		entry := MCPServer{
+			Name: name, Transport: transport, Enabled: item.IsEnabled(),
+			Target: inspectMCPTarget(item),
+		}
+		if transport == "http" || transport == "sse" || strings.TrimSpace(item.URL) != "" {
+			entry.Auth, entry.AuthEnv, entry.OAuth = inspectMCPAuth(name, item)
+		}
+		result = append(result, entry)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
 	return result
+}
+
+func inspectMCPTarget(item config.MCPServerConfig) string {
+	if strings.TrimSpace(item.URL) != "" {
+		return redactURLCredentials(item.URL)
+	}
+	if item.Command != "" {
+		return filepath.Base(item.Command)
+	}
+	return ""
+}
+
+func inspectMCPAuth(name string, item config.MCPServerConfig) (auth, authEnv string, oauth *MCPServerOAuth) {
+	if env := strings.TrimSpace(item.BearerTokenEnvVar); env != "" {
+		authEnv = env
+	}
+	if hasInspectAuthorization(item.Headers) {
+		auth = "static"
+	} else if authEnv != "" {
+		auth = "env"
+	} else if mcp.NeedsMCPAuth(mcp.ServerConfig{Name: name, Type: item.Type, URL: item.URL}, "") {
+		auth = "none"
+	} else {
+		auth = "stored"
+	}
+	if byo := inspectMCPOAuth(item); byo != nil {
+		oauth = byo
+		if auth == "none" {
+			auth = "oauth_byo"
+		}
+	}
+	return auth, authEnv, oauth
+}
+
+func inspectMCPOAuth(item config.MCPServerConfig) *MCPServerOAuth {
+	hasClient := strings.TrimSpace(item.OAuthClientID) != ""
+	secretEnv := strings.TrimSpace(item.OAuthClientSecretEnvVar)
+	hasScopes := len(item.OAuthScopes) > 0
+	hasPort := item.OAuthCallbackPort != nil
+	if !hasClient && secretEnv == "" && !hasScopes && !hasPort {
+		return nil
+	}
+	oauth := &MCPServerOAuth{
+		ClientIDConfigured: hasClient,
+		SecretEnv:          secretEnv,
+		ScopesConfigured:   hasScopes,
+	}
+	if hasPort {
+		port := *item.OAuthCallbackPort
+		oauth.CallbackPort = &port
+	}
+	return oauth
+}
+
+func hasInspectAuthorization(headers map[string]string) bool {
+	for key, value := range headers {
+		if strings.EqualFold(key, "Authorization") && strings.TrimSpace(value) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func inspectLSPServers(values map[string]config.LSPServerConfig) []LSPServer {

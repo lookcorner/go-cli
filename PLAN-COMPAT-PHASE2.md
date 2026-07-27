@@ -51,7 +51,7 @@ OAuth enrollment for HTTP/SSE servers, with durable tokens and ACP/TUI status.
 1. **Discovery / inventory** — done (see Phase 1 notes below).
 
 2. **Token store + config** — done (store + atomic 0600 writes; TOML oauth_*
-   fields parsed; inspect/doctor redaction cells still open).
+   fields parsed; `gork inspect` MCP auth presence cells done — no secrets).
 
 3. **Enrollment flow** — done: discovery + DCR + PKCE loopback
    (`AuthenticateMCPServer`) plus in-process single-flight and Unix
@@ -77,6 +77,8 @@ OAuth enrollment for HTTP/SSE servers, with durable tokens and ACP/TUI status.
       + store poll) on `compat/mcp-oauth-enroll-dedup`.
 - [x] Headless clients can paste a callback URL via `SubmitMCPAuthCallback` /
       ACP `x.ai/mcp/auth_submit` on `compat/mcp-oauth-pasted-callback`.
+- [x] `gork inspect` MCP cells expose auth=static|env|stored|oauth_byo|none
+      plus env-var names only (never tokens/headers/secrets).
 
 ### Phase 1 notes
 
@@ -84,9 +86,9 @@ OAuth enrollment for HTTP/SSE servers, with durable tokens and ACP/TUI status.
   map of `StoredCredentials` (`client_id`, `token_response`, `granted_scopes`,
   `token_received_at`). Loopback+PKCE+DCR enrollment; no device-code for MCP.
 - Go now mirrors the on-disk shape and attaches/refreshes tokens in
-  `internal/mcp` (`credentials.go`, `http_auth.go`), with enroll dedup and
-  pasted-callback completion for unreachable loopbacks. Inspect oauth_*
-  presence cells remain.
+  `internal/mcp` (`credentials.go`, `http_auth.go`), with enroll dedup,
+  pasted-callback completion for unreachable loopbacks, and `gork inspect`
+  auth/oauth_* presence cells (no secrets).
 
 ### Out of scope for Phase 1
 
