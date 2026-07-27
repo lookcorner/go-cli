@@ -159,6 +159,7 @@ func (m *model) inlineImagesFor(attachments []tools.ImageAttachment) []session.D
 	for _, image := range attachments {
 		display := session.DisplayImage{MediaType: image.MediaType, Width: image.Width, Height: image.Height, Bytes: len(image.Data)}
 		if len(image.Data) > 0 {
+			m.rememberOverlayImage(image)
 			switch m.inlineProtocol() {
 			case imageProtocolKitty:
 				m.nextKittyID++

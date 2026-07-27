@@ -953,6 +953,8 @@ type model struct {
 	imageProtocol        imageProtocol
 	protocolChecked      bool
 	pendingImages        []tools.ImageAttachment
+	overlayImages        []tools.ImageAttachment
+	imageOverlay         *imageOverlayState
 	nextKittyID          int
 	kittyUploads         [][]byte
 	gboom                *gboomState
@@ -1559,7 +1561,7 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if progressCommand := current.syncTurnActivity(); progressCommand != nil {
 			command = tea.Batch(command, progressCommand)
 		}
-		command = tea.Batch(command, current.flushKittyUploads())
+		command = tea.Batch(command, current.flushKittyUploads(), current.flushImageOverlay())
 	}
 	if !ok || !current.minimal {
 		return updated, command
@@ -2763,6 +2765,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.remember != nil {
 		return m.handleRememberReviewKey(msg)
 	}
+	if m.imageOverlay != nil {
+		return m.handleImageOverlayKey(msg)
+	}
 	if m.viewer != nil {
 		if stroke == "ctrl+q" {
 			return m, tea.Quit
@@ -3114,6 +3119,15 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.screenMode = &ScreenModeError{Path: sessionPath, Workspace: m.workspace}
 			m.status = "switching to fullscreen mode"
 			return m, tea.Quit
+		case "/preview-image", "/image-preview":
+			if m.minimal {
+				m.status = "image overlay is fullscreen-only"
+				return m, nil
+			}
+			if !m.openLatestImageOverlay() {
+				m.status = "no image to preview"
+			}
+			return m, nil
 		case "/login", "/logout":
 			if m.runner == nil {
 				m.status = "authentication unavailable"
@@ -6506,6 +6520,9 @@ func (m *model) View() tea.View {
 		}
 		if m.jump != nil {
 			visible = m.jumpOverlay(visible, width)
+		}
+		if m.imageOverlay != nil {
+			visible = m.imageOverlayChrome(visible, width, m.contentHeight())
 		}
 		visible = m.renderTimeline(visible, timelineRail)
 		visible = m.debug.overlay(visible, width, m.scroll, m.maxTranscriptScroll(), m.contentHeight(), transcriptLineCount, m.scrollLines, m.invertScroll, m.scrollFocused)
