@@ -31,6 +31,7 @@ type terminalManager struct {
 	cgroupMu  sync.Mutex
 	cgroup    tools.ShellCgroup
 	newCgroup func() tools.ShellCgroup
+	oomStop   chan struct{}
 }
 
 type commandTerminal struct {
@@ -49,6 +50,8 @@ type commandTerminal struct {
 	exitCode     *int
 	signal       string
 	backgrounded bool
+	oom          bool
+	started      time.Time
 }
 
 type ptyTerminal struct {
@@ -59,6 +62,7 @@ type ptyTerminal struct {
 	cwd     string
 	name    string
 	created int64
+	started time.Time
 	done    chan struct{}
 
 	mu           sync.Mutex
@@ -69,6 +73,7 @@ type ptyTerminal struct {
 	exited       bool
 	exitCode     *int
 	busy         bool
+	oom          bool
 }
 
 type terminalInfo struct {
@@ -135,7 +140,7 @@ func (m *terminalManager) create(shell, cwd string, env map[string]string, rows,
 	}
 	terminal := &ptyTerminal{
 		id: id, file: file, fd: int(file.Fd()), cmd: cmd, cwd: cwd, name: name, created: time.Now().Unix(),
-		rows: rows, cols: cols, done: make(chan struct{}),
+		started: time.Now(), rows: rows, cols: cols, done: make(chan struct{}),
 	}
 	m.mu.Lock()
 	m.terminals[id] = terminal
@@ -194,7 +199,12 @@ func (m *terminalManager) readOutput(terminal *ptyTerminal) {
 	}
 	_ = terminal.cmd.Wait()
 	code := -1
-	if terminal.cmd.ProcessState != nil {
+	terminal.mu.Lock()
+	oom := terminal.oom
+	terminal.mu.Unlock()
+	if oom {
+		code = tools.ProcessOOMExitCode
+	} else if terminal.cmd.ProcessState != nil {
 		code = terminal.cmd.ProcessState.ExitCode()
 	}
 	terminal.mu.Lock()
@@ -209,9 +219,11 @@ func (m *terminalManager) readOutput(terminal *ptyTerminal) {
 		m.sendActivity(terminal.id, false)
 	}
 	close(terminal.done)
-	m.send("x.ai/terminal/pty/notification", map[string]any{
-		"terminalId": terminal.id, "type": "exit", "exitCode": code,
-	})
+	notification := map[string]any{"terminalId": terminal.id, "type": "exit", "exitCode": code}
+	if oom {
+		notification["signal"] = "oom"
+	}
+	m.send("x.ai/terminal/pty/notification", notification)
 }
 
 func (m *terminalManager) monitorActivity(terminal *ptyTerminal) {
@@ -443,7 +455,7 @@ func (m *terminalManager) createCommand(sessionID, command string, args []string
 	}
 	terminal := &commandTerminal{
 		id: id, sessionID: sessionID, cmd: cmd, cwd: cwd, created: time.Now().Unix(), limit: limit,
-		done: make(chan struct{}), background: make(chan struct{}),
+		started: time.Now(), done: make(chan struct{}), background: make(chan struct{}),
 	}
 	m.mu.Lock()
 	m.commands[id] = terminal
@@ -455,9 +467,14 @@ func (m *terminalManager) createCommand(sessionID, command string, args []string
 
 func (t *commandTerminal) wait(writer *io.PipeWriter) {
 	_ = t.cmd.Wait()
-	exitCode, signal := terminalProcessStatus(t.cmd.ProcessState)
 	t.mu.Lock()
-	t.exitCode, t.signal = exitCode, signal
+	oom := t.oom
+	if oom {
+		code := tools.ProcessOOMExitCode
+		t.exitCode, t.signal = &code, "oom"
+	} else {
+		t.exitCode, t.signal = terminalProcessStatus(t.cmd.ProcessState)
+	}
 	t.mu.Unlock()
 	_ = writer.Close()
 }
@@ -737,6 +754,10 @@ func (m *terminalManager) ensureTerminalCgroup() tools.ShellCgroup {
 		}
 	}
 	m.cgroup = factory()
+	if m.cgroup != nil && m.oomStop == nil {
+		m.oomStop = make(chan struct{})
+		go m.pollTerminalMemoryHigh(m.oomStop)
+	}
 	return m.cgroup
 }
 
@@ -744,8 +765,91 @@ func (m *terminalManager) releaseTerminalCgroup() {
 	m.cgroupMu.Lock()
 	guard := m.cgroup
 	m.cgroup = nil
+	stop := m.oomStop
+	m.oomStop = nil
 	m.cgroupMu.Unlock()
+	if stop != nil {
+		close(stop)
+	}
 	if guard != nil {
 		_ = guard.Close()
+	}
+}
+
+func (m *terminalManager) pollTerminalMemoryHigh(stop <-chan struct{}) {
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			m.handleTerminalMemoryHigh()
+		}
+	}
+}
+
+func (m *terminalManager) handleTerminalMemoryHigh() {
+	m.cgroupMu.Lock()
+	guard := m.cgroup
+	m.cgroupMu.Unlock()
+	if guard == nil || guard.TryRecvMemoryHigh() == nil {
+		return
+	}
+	m.killNewestTerminalForOOM()
+}
+
+func (m *terminalManager) killNewestTerminalForOOM() {
+	type candidate struct {
+		started time.Time
+		kill    func()
+	}
+	var best *candidate
+
+	m.mu.Lock()
+	for _, terminal := range m.terminals {
+		terminal.mu.Lock()
+		exited, oom := terminal.exited, terminal.oom
+		started := terminal.started
+		cmd := terminal.cmd
+		terminal.mu.Unlock()
+		if exited || oom || cmd == nil || cmd.Process == nil {
+			continue
+		}
+		if best != nil && !started.After(best.started) {
+			continue
+		}
+		term := terminal
+		best = &candidate{started: started, kill: func() {
+			term.mu.Lock()
+			term.oom = true
+			term.mu.Unlock()
+			_ = killTerminalProcess(cmd)
+		}}
+	}
+	for _, command := range m.commands {
+		command.mu.Lock()
+		exited := command.exitCode != nil || command.signal != "" || command.oom
+		started := command.started
+		cmd := command.cmd
+		command.mu.Unlock()
+		if exited || cmd == nil || cmd.Process == nil {
+			continue
+		}
+		if best != nil && !started.After(best.started) {
+			continue
+		}
+		term := command
+		best = &candidate{started: started, kill: func() {
+			term.mu.Lock()
+			term.oom = true
+			term.mu.Unlock()
+			_ = killTerminalProcess(cmd)
+		}}
+	}
+	m.mu.Unlock()
+
+	if best != nil {
+		best.kill()
 	}
 }

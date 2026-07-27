@@ -48,11 +48,7 @@ type ShellCgroup interface {
 	AddProcess(pid int) error
 	Close() error
 	Path() string
-}
-
-// memoryHighPoller is optionally implemented by Linux ShellCgroup guards that
-// watch memory.events for memory.high breaches (OOM signaling).
-type memoryHighPoller interface {
+	// TryRecvMemoryHigh returns a pending memory.high event, or nil.
 	TryRecvMemoryHigh() *MemoryHighEvent
 }
 

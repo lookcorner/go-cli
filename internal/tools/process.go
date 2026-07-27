@@ -140,11 +140,7 @@ func (m *ProcessManager) handleMemoryHigh() {
 	m.cgroupMu.Lock()
 	guard := m.cgroup
 	m.cgroupMu.Unlock()
-	poller, ok := guard.(memoryHighPoller)
-	if !ok || poller == nil {
-		return
-	}
-	if poller.TryRecvMemoryHigh() == nil {
+	if guard == nil || guard.TryRecvMemoryHigh() == nil {
 		return
 	}
 	m.killNewestForOOM()

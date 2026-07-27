@@ -83,15 +83,16 @@ clear no-op on unsupported hosts.
 
 - [x] Detect cgroup v2; skip/warn otherwise.
 - [x] Foreground + background shell paths covered by tests (or integration with fake fs).
-- [x] COMPAT Shell row drops “cgroups remain” (shell + ACP terminals + OOM-137 for shell; ACP terminal OOM remain).
+- [x] COMPAT Shell row drops “cgroups remain” (shell + ACP terminals + OOM-137;
+  cpu.max still deferred to match reference).
 
 ### Notes
 
 - Shared ProcessManager cgroup for FG/BG/monitor; legacy `shell` tool uses a
   per-invocation guard. ACP PTY/piped terminals share a best-effort
   `tools.NewShellCgroup` guard. inotify `memory.events` OOM signaling kills the
-  newest FG/BG shell child as exit 137 / signal `oom` (`compat/cgroup-oom-signaling`;
-  cpu.max and ACP terminal OOM still deferred).
+  newest FG/BG shell child or ACP terminal as exit 137 / signal `oom`
+  (`compat/acp-terminal-oom`). cpu.max still deferred.
 
 ---
 
