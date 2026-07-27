@@ -71,7 +71,7 @@ Managed connectors, agent-level ACP MCP pools, plugin marketplace OAuth.
 
 ---
 
-## Phase 2 — Linux cgroups (next)
+## Phase 2 — Linux cgroups
 
 ### Goal
 
@@ -86,9 +86,39 @@ Apply cgroup v2 limits to model-started shell / background tasks on Linux
 
 ---
 
-## Phase 3+ — sandbox / cloud / memory
+## Phase 4 — Cloud conversations (active)
 
-Separate kickoff docs when Phase 1–2 land. Do not start in parallel without
+### Goal
+
+Merge grok.com cloud chat conversations into ACP `x.ai/session/list`.
+
+### Slice plan
+
+1. **Read-only list + partial status** — done on `compat/cloud-conversations-list`:
+   `internal/remote` ConversationsClient, opt-in lane
+   (`GROK_SESSION_LIST_CONVERSATIONS` / `GROK_CHAT_MODE`), merge into session
+   list, `no_oauth`/`timeout`/`error` partial meta.
+
+2. **Resume / rename / delete** — open.
+
+3. **ACP client mode / `--chat`** — open.
+
+### Done when
+
+- [x] Opt-in list merges `kind=chat` rows with httptest coverage.
+- [x] Degraded lane reports `_meta["x.ai/partial"]` reasons.
+- [ ] Resume/rename/delete parity (follow-up).
+- [ ] ACP client mode (follow-up).
+
+### Out of scope for slice 1
+
+Loading a cloud conversation into a local runner, full `--chat` UX.
+
+---
+
+## Phase 3+ — sandbox / memory / relay
+
+Separate kickoff docs when prior themes land. Do not start in parallel without
 an explicit request.
 
 ---

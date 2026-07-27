@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +20,7 @@ import (
 
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/api"
+	"github.com/lookcorner/go-cli/internal/auth"
 	"github.com/lookcorner/go-cli/internal/hooks"
 	"github.com/lookcorner/go-cli/internal/marketplace"
 	mcppkg "github.com/lookcorner/go-cli/internal/mcp"
@@ -566,6 +569,8 @@ func TestSessionRosterChangedLifecycle(t *testing.T) {
 }
 
 func TestUnifiedSessionListWireContract(t *testing.T) {
+	t.Setenv("GROK_SESSION_LIST_CONVERSATIONS", "")
+	t.Setenv("GROK_CHAT_MODE", "")
 	dir, cwd := t.TempDir(), t.TempDir()
 	for _, id := range []string{"list-one", "list-two", "list-three"} {
 		logger, err := sessionlog.NewLoggerWithID(dir, id)
@@ -613,6 +618,112 @@ func TestUnifiedSessionListWireContract(t *testing.T) {
 	filtered := call(3, map[string]any{"cwd": cwd, "_meta": map[string]any{"x.ai/facetFilters": map[string]any{"kind": []any{"chat"}}}})
 	if rows := filtered["result"].(map[string]any)["result"].(map[string]any)["sessions"].([]any); len(rows) != 0 {
 		t.Fatalf("kind filter retained build rows: %#v", filtered)
+	}
+}
+
+func TestUnifiedSessionListConversationsLane(t *testing.T) {
+	t.Setenv("GROK_SESSION_LIST_CONVERSATIONS", "1")
+	t.Setenv("GROK_CHAT_MODE", "")
+	dir, cwd := t.TempDir(), t.TempDir()
+	logger, err := sessionlog.NewLoggerWithID(dir, "build-local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = logger.Append("session_metadata", map[string]any{"cwd": cwd, "modelId": "test-model"})
+	_ = logger.Append("user_prompt", map[string]any{"text": "local build"})
+	_ = logger.Close()
+
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	if err := auth.Save(authPath, "list-scope", auth.Credential{
+		Key: "oauth-token", UserID: "user-1", AuthMode: "oidc", Issuer: "https://auth.x.ai",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/rest/app-chat/conversations" {
+			t.Fatalf("path=%s", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"conversations": []map[string]any{{
+				"conversationId": "conv-chat",
+				"title":          "cloud chat",
+				"createTime":     "2026-06-18T17:30:00Z",
+				"modifyTime":     "2099-01-01T00:00:00Z",
+			}},
+		})
+	}))
+	defer upstream.Close()
+	t.Setenv("GROK_CONVERSATIONS_BASE_URL", upstream.URL)
+
+	var output bytes.Buffer
+	server := &Server{
+		SessionDir: dir, output: &output,
+		Auth: AuthConfig{Path: authPath, Scope: "list-scope", HTTP: upstream.Client()},
+	}
+	data, err := json.Marshal(map[string]any{"cwd": cwd, "limit": 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.handleUnifiedSessionList(message{ID: json.RawMessage("1"), Method: "x.ai/session/list", Params: data})
+	var response map[string]any
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	result := response["result"].(map[string]any)["result"].(map[string]any)
+	rows := result["sessions"].([]any)
+	if len(rows) != 2 {
+		t.Fatalf("expected build+chat rows: %#v", result)
+	}
+	first := rows[0].(map[string]any)
+	if first["sessionId"] != "conv-chat" || first["source"] != "conversation" {
+		t.Fatalf("expected chat first: %#v", first)
+	}
+	meta := first["_meta"].(map[string]any)["x.ai/session"].(map[string]any)
+	if meta["kind"] != "chat" {
+		t.Fatalf("chat meta=%#v", meta)
+	}
+	partial := result["_meta"].(map[string]any)["x.ai/partial"].(map[string]any)
+	if partial["conversations"] != false {
+		t.Fatalf("partial=%#v", partial)
+	}
+
+	output.Reset()
+	chatOnly, err := json.Marshal(map[string]any{
+		"cwd": cwd, "_meta": map[string]any{"x.ai/facetFilters": map[string]any{"kind": []any{"chat"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.handleUnifiedSessionList(message{ID: json.RawMessage("2"), Method: "x.ai/session/list", Params: chatOnly})
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	chatRows := response["result"].(map[string]any)["result"].(map[string]any)["sessions"].([]any)
+	if len(chatRows) != 1 || chatRows[0].(map[string]any)["sessionId"] != "conv-chat" {
+		t.Fatalf("chat-only=%#v", response)
+	}
+}
+
+func TestUnifiedSessionListConversationsNoOAuthPartial(t *testing.T) {
+	t.Setenv("GROK_SESSION_LIST_CONVERSATIONS", "1")
+	t.Setenv("GROK_CHAT_MODE", "")
+	t.Setenv("GROK_CONVERSATIONS_BASE_URL", "http://127.0.0.1:1")
+	var output bytes.Buffer
+	server := &Server{
+		SessionDir: t.TempDir(), output: &output,
+		Auth: AuthConfig{Path: filepath.Join(t.TempDir(), "missing.json"), Scope: "scope"},
+	}
+	server.handleUnifiedSessionList(message{
+		ID: json.RawMessage("1"), Method: "x.ai/session/list",
+		Params: json.RawMessage(`{"cwd":"/tmp"}`),
+	})
+	var response map[string]any
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	partial := response["result"].(map[string]any)["result"].(map[string]any)["_meta"].(map[string]any)["x.ai/partial"].(map[string]any)
+	if partial["conversations"] != true || partial["reason"] != "no_oauth" {
+		t.Fatalf("partial=%#v", partial)
 	}
 }
 

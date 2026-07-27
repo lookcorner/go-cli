@@ -1428,8 +1428,11 @@ include the active model, reasoning effort, permission mode, and worktree state.
 
 `x.ai/session/list` provides the local build-session lane with reference cursor
 encoding, title/ID search, page limits, `kind`/`cwd` facet filters, and window
-facet counts. Its conversations partial flag remains false because this build
-has no cloud conversations backend.
+facet counts. Opt-in cloud conversations (`GROK_SESSION_LIST_CONVERSATIONS=1` or
+`GROK_CHAT_MODE=1`) merge `kind=chat` rows from grok.com
+`/rest/app-chat/conversations` when OAuth is available, and set
+`_meta["x.ai/partial"].conversations` with `no_oauth` / `timeout` / `error`
+reasons when the lane degrades.
 
 `x.ai/session/close` performs idempotent live-session shutdown using the same
 runtime and cancellation cleanup as the standard ACP close method.
