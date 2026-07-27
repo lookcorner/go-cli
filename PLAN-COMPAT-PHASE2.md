@@ -102,7 +102,10 @@ Merge grok.com cloud chat conversations into ACP `x.ai/session/list`.
 2. **Rename / soft-delete** — done: `kind: "chat"` on
    `x.ai/session/rename` / `x.ai/session/delete` maps to PUT + soft DELETE.
 
-3. **Resume cloud chats** — open.
+3. **Thin chat load/resume + modes catalog** — done: `_meta.x.ai/session.kind=chat`
+   on `session/load`/`resume` opens a resident chat session without local JSONL;
+   `POST /rest/modes` supplies the model picker when available. Cloud transcript
+   replay remains deferred (reference release also hard-offs full chat kind).
 
 4. **ACP client mode / `--chat`** — open.
 
@@ -111,12 +114,14 @@ Merge grok.com cloud chat conversations into ACP `x.ai/session/list`.
 - [x] Opt-in list merges `kind=chat` rows with httptest coverage.
 - [x] Degraded lane reports `_meta["x.ai/partial"]` reasons.
 - [x] Rename/soft-delete parity for chat kind.
-- [ ] Resume parity (follow-up).
-- [ ] ACP client mode (follow-up).
+- [x] Thin chat load/resume + `/rest/modes` picker.
+- [ ] Full cloud transcript replay (follow-up).
+- [ ] ACP client mode / `--chat` (follow-up).
 
-### Out of scope for slices 1–2
+### Out of scope for slices 1–3
 
-Loading a cloud conversation into a local runner, full `--chat` UX.
+Fetching and replaying grok.com message history into the local runner; full
+`--chat` UX / process chat-mode hard-on.
 
 ---
 

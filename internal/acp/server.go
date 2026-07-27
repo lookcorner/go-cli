@@ -171,6 +171,7 @@ type session struct {
 	cwd                 string
 	displayCWD          string
 	title               string
+	kind                string
 	updated             time.Time
 	runner              *agent.Runner
 	close               func()
@@ -2535,6 +2536,10 @@ func (s *Server) handleRestoreSession(ctx context.Context, incoming message, rep
 	}
 	if json.Unmarshal(incoming.Params, &params) != nil || params.SessionID == "" || params.CWD == "" {
 		s.respondError(incoming.ID, -32602, "sessionId and cwd are required")
+		return
+	}
+	if sessionKindFromMeta(params.Meta) == "chat" {
+		s.handleRestoreChatSession(ctx, incoming, params.SessionID, params.CWD, params.Meta)
 		return
 	}
 	path, err := sessionlog.PathForID(s.SessionDir, params.SessionID)

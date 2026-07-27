@@ -24,9 +24,12 @@ type sessionDetail struct {
 
 func sessionStartResponse(current *session, mode string) map[string]any {
 	current.mu.Lock()
-	id, cwd, title, runner := current.id, current.cwd, current.title, current.runner
+	id, cwd, title, kind, runner := current.id, current.cwd, current.title, current.kind, current.runner
 	if current.displayCWD != "" {
 		cwd = current.displayCWD
+	}
+	if kind == "" {
+		kind = "build"
 	}
 	state := modelState(runner)
 	options := sessionConfigOptions(runner, state)
@@ -37,7 +40,7 @@ func sessionStartResponse(current *session, mode string) map[string]any {
 		"_meta": map[string]any{
 			"x.ai/sessionConfig": map[string]any{"options": options},
 			"x.ai/sessionDetail": sessionDetail{
-				SessionID: id, Kind: "build", CWD: cwd, CurrentModelID: state.CurrentModelID, Title: title,
+				SessionID: id, Kind: kind, CWD: cwd, CurrentModelID: state.CurrentModelID, Title: title,
 			},
 		},
 	}
