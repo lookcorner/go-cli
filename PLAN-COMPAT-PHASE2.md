@@ -162,7 +162,7 @@ Remote relay / workspace hub remains planned/XL (product-blocked). See queue #5.
 
 ---
 
-## Phase 7 — Fullscreen media / inline video (in progress)
+## Phase 7 — Fullscreen media / inline video (done)
 
 ### Done
 
@@ -175,10 +175,12 @@ Remote relay / workspace hub remains planned/XL (product-blocked). See queue #5.
 - [x] Click Kitty placeholder rows to open the image overlay.
 - [x] Prompt-chip hover/focus image preview (`[Image #N]` chips; hover opens
       overlay, click pins until Esc).
+- [x] Session-asset video discovery: list `artifacts/<session>/videos/*`,
+      `/videos`, `/play-video` defaults to latest / resolves `videos/N.mp4`.
 
 ### Still open
 
-- [ ] Session-asset video discovery (auto list generated clips)
+_(Phase 7 complete for planned slices.)_
 
 ---
 

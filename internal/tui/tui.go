@@ -3169,14 +3169,19 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if len(fields) > 1 {
 				path = strings.TrimSpace(strings.Join(fields[1:], " "))
 			}
-			if path == "" {
-				m.status = "usage: /play-video <path>"
+			resolved, err := m.resolvePlayVideoPath(path)
+			if err != nil {
+				m.status = err.Error()
 				return m, nil
 			}
-			if !m.openVideoOverlayPath(path) {
+			if !m.openVideoOverlayPath(resolved) {
 				return m, nil
 			}
 			return m, m.videoOverlayTickCmd()
+		case "/videos", "/list-videos":
+			m.appendSystem(m.listSessionVideos())
+			m.status = "session videos"
+			return m, nil
 		case "/login", "/logout":
 			if m.runner == nil {
 				m.status = "authentication unavailable"

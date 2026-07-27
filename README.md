@@ -625,9 +625,9 @@ Unicode placeholders (both fullscreen and minimal mode), and in minimal mode
 on terminals that speak the iTerm2 or sixel graphics protocols (detected from
 the environment); other terminals keep the metadata-only rendering. Modal fullscreen overlay escape helpers (Kitty transmit/place and iTerm2) plus
 `/preview-image`, click-to-open on Kitty placeholders, footer `[Image #N]`
-prompt-chip hover/click preview, and `/play-video <path>`
-(ffmpeg frame extract) bordered popup chrome are ready; session-asset video
-discovery remains. Image
+prompt-chip hover/click preview, `/videos` session-clip listing, and
+`/play-video [path]` (latest artifact clip when omitted; ffmpeg frame extract)
+bordered popup chrome are ready. Image
 bytes persist to the session's asset store, so resumed sessions render the
 same images again.
 On directly supported terminals, Markdown links, bare HTTP(S)/FTP/email URLs, and quoted
