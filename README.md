@@ -1432,7 +1432,9 @@ facet counts. Opt-in cloud conversations (`GROK_SESSION_LIST_CONVERSATIONS=1` or
 `GROK_CHAT_MODE=1`) merge `kind=chat` rows from grok.com
 `/rest/app-chat/conversations` when OAuth is available, and set
 `_meta["x.ai/partial"].conversations` with `no_oauth` / `timeout` / `error`
-reasons when the lane degrades.
+reasons when the lane degrades. With the same gate, `x.ai/session/rename` and
+`x.ai/session/delete` accept `kind: "chat"` to PUT-rename or soft-delete the
+cloud conversation (404 soft-delete is idempotent).
 
 `x.ai/session/close` performs idempotent live-session shutdown using the same
 runtime and cancellation cleanup as the standard ACP close method.

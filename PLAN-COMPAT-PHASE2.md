@@ -99,18 +99,22 @@ Merge grok.com cloud chat conversations into ACP `x.ai/session/list`.
    (`GROK_SESSION_LIST_CONVERSATIONS` / `GROK_CHAT_MODE`), merge into session
    list, `no_oauth`/`timeout`/`error` partial meta.
 
-2. **Resume / rename / delete** — open.
+2. **Rename / soft-delete** — done: `kind: "chat"` on
+   `x.ai/session/rename` / `x.ai/session/delete` maps to PUT + soft DELETE.
 
-3. **ACP client mode / `--chat`** — open.
+3. **Resume cloud chats** — open.
+
+4. **ACP client mode / `--chat`** — open.
 
 ### Done when
 
 - [x] Opt-in list merges `kind=chat` rows with httptest coverage.
 - [x] Degraded lane reports `_meta["x.ai/partial"]` reasons.
-- [ ] Resume/rename/delete parity (follow-up).
+- [x] Rename/soft-delete parity for chat kind.
+- [ ] Resume parity (follow-up).
 - [ ] ACP client mode (follow-up).
 
-### Out of scope for slice 1
+### Out of scope for slices 1–2
 
 Loading a cloud conversation into a local runner, full `--chat` UX.
 

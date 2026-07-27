@@ -727,6 +727,95 @@ func TestUnifiedSessionListConversationsNoOAuthPartial(t *testing.T) {
 	}
 }
 
+func TestSessionAdminChatRenameAndDelete(t *testing.T) {
+	t.Setenv("GROK_SESSION_LIST_CONVERSATIONS", "1")
+	t.Setenv("GROK_CHAT_MODE", "")
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	if err := auth.Save(authPath, "chat-scope", auth.Credential{
+		Key: "oauth-token", UserID: "user-1", AuthMode: "oidc", Issuer: "https://auth.x.ai",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var putPath, deletePath, putBody string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPut:
+			putPath = r.URL.Path
+			data, _ := io.ReadAll(r.Body)
+			putBody = string(data)
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodDelete:
+			deletePath = r.URL.Path
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer upstream.Close()
+	t.Setenv("GROK_CONVERSATIONS_BASE_URL", upstream.URL)
+
+	var output bytes.Buffer
+	closed := 0
+	server := &Server{
+		output: &output, sessions: map[string]*session{
+			"conv-live": {id: "conv-live", close: func() { closed++ }},
+		},
+		Auth: AuthConfig{Path: authPath, Scope: "chat-scope", HTTP: upstream.Client()},
+	}
+
+	server.handleSessionAdmin(message{
+		ID: json.RawMessage("1"), Method: "x.ai/session/rename",
+		Params: json.RawMessage(`{"sessionId":"conv-1","title":"  Renamed chat  ","kind":"chat"}`),
+	})
+	var response map[string]any
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response["result"].(map[string]any)["success"] != true {
+		t.Fatalf("rename=%#v", response)
+	}
+	if putPath != "/rest/app-chat/conversations/conv-1" || putBody != `{"title":"Renamed chat"}` {
+		t.Fatalf("put path=%q body=%q", putPath, putBody)
+	}
+
+	output.Reset()
+	server.handleSessionAdmin(message{
+		ID: json.RawMessage("2"), Method: "x.ai/session/delete",
+		Params: json.RawMessage(`{"sessionId":"conv-live","kind":"chat"}`),
+	})
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response["result"].(map[string]any)["success"] != true {
+		t.Fatalf("delete=%#v", response)
+	}
+	if deletePath != "/rest/app-chat/conversations/soft/conv-live" {
+		t.Fatalf("delete path=%q", deletePath)
+	}
+	if closed != 1 {
+		t.Fatalf("closed=%d", closed)
+	}
+}
+
+func TestSessionAdminChatRequiresLane(t *testing.T) {
+	t.Setenv("GROK_SESSION_LIST_CONVERSATIONS", "")
+	t.Setenv("GROK_CHAT_MODE", "")
+	var output bytes.Buffer
+	server := &Server{output: &output}
+	server.handleSessionAdmin(message{
+		ID: json.RawMessage("1"), Method: "x.ai/session/rename",
+		Params: json.RawMessage(`{"sessionId":"conv-1","title":"x","kind":"chat"}`),
+	})
+	var response map[string]any
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	errObj := response["error"].(map[string]any)
+	if errObj["code"].(float64) != -32602 {
+		t.Fatalf("response=%#v", response)
+	}
+}
+
 func TestExtensionSessionCloseIsIdempotent(t *testing.T) {
 	var output bytes.Buffer
 	closed := 0

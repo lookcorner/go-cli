@@ -495,6 +495,7 @@ func (s *Server) handleSessionAdmin(incoming message) {
 		SessionID            string `json:"sessionId"`
 		Title                string `json:"title"`
 		CWD                  string `json:"cwd"`
+		Kind                 string `json:"kind"`
 		Query                string `json:"query"`
 		Limit                int    `json:"limit"`
 		Offset               int    `json:"offset"`
@@ -564,17 +565,26 @@ func (s *Server) handleSessionAdmin(incoming message) {
 			s.respondError(incoming.ID, -32602, "sessionId is required")
 			return
 		}
-		if err := sessionlog.Rename(s.SessionDir, req.SessionID, req.Title); err != nil {
+		title := strings.TrimSpace(req.Title)
+		if title == "" {
+			s.respondError(incoming.ID, -32602, "title must not be blank")
+			return
+		}
+		if strings.EqualFold(strings.TrimSpace(req.Kind), "chat") {
+			s.renameChatConversation(incoming, req.SessionID, title)
+			return
+		}
+		if err := sessionlog.Rename(s.SessionDir, req.SessionID, title); err != nil {
 			s.respondError(incoming.ID, -32000, err.Error())
 			return
 		}
 		if current := s.lookupSession(req.SessionID); current != nil {
 			current.mu.Lock()
-			current.title = strings.TrimSpace(req.Title)
+			current.title = title
 			current.updated = time.Now().UTC()
 			current.mu.Unlock()
 			s.notify(req.SessionID, map[string]any{
-				"sessionUpdate": "session_info_update", "title": strings.TrimSpace(req.Title),
+				"sessionUpdate": "session_info_update", "title": title,
 				"updatedAt": time.Now().UTC().Format(time.RFC3339),
 			})
 		}
@@ -582,6 +592,10 @@ func (s *Server) handleSessionAdmin(incoming message) {
 	case "x.ai/session/delete":
 		if req.SessionID == "" {
 			s.respondError(incoming.ID, -32602, "sessionId is required")
+			return
+		}
+		if strings.EqualFold(strings.TrimSpace(req.Kind), "chat") {
+			s.deleteChatConversation(incoming, req.SessionID)
 			return
 		}
 		s.closeSession(req.SessionID)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -109,6 +110,46 @@ func TestParseConversationTime(t *testing.T) {
 	when := ParseConversationTime(Conversation{ModifyTime: "2026-06-18T18:02:00Z"})
 	if !when.Equal(time.Date(2026, 6, 18, 18, 2, 0, 0, time.UTC)) {
 		t.Fatalf("when=%v", when)
+	}
+}
+
+func TestUpdateAndSoftDeleteConversation(t *testing.T) {
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	if err := auth.Save(authPath, "scope", auth.Credential{
+		Key: "oauth-token", UserID: "user-1", AuthMode: "oidc", Issuer: "https://auth.x.ai",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var putPath, deletePath, putBody string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPut:
+			putPath = r.URL.Path
+			data, _ := io.ReadAll(r.Body)
+			putBody = string(data)
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodDelete:
+			deletePath = r.URL.Path
+			w.WriteHeader(http.StatusNotFound) // idempotent soft-delete
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer upstream.Close()
+
+	client := &ConversationsClient{HTTP: upstream.Client(), BaseURL: upstream.URL, AuthPath: authPath, AuthScope: "scope"}
+	title := "New title"
+	if err := client.UpdateConversation(context.Background(), "conv/1", UpdateConversationBody{Title: &title}); err != nil {
+		t.Fatal(err)
+	}
+	if putPath != "/rest/app-chat/conversations/conv/1" || putBody != `{"title":"New title"}` {
+		t.Fatalf("put path=%q body=%q", putPath, putBody)
+	}
+	if err := client.SoftDeleteConversation(context.Background(), "conv/1"); err != nil {
+		t.Fatal(err)
+	}
+	if deletePath != "/rest/app-chat/conversations/soft/conv/1" {
+		t.Fatalf("delete path=%q", deletePath)
 	}
 }
 
