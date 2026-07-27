@@ -1730,6 +1730,10 @@ Read-only and strict profiles also stack a child network seccomp deny
 On Linux, enabling a sandbox profile also applies a best-effort parent-process
 Landlock FS allowlist (workspace/read-only/strict path sets); unsupported
 kernels warn and continue, and parent TCP stays open for model/MCP HTTP.
+Linux also re-execs the parent under bubblewrap so global hook sources under
+`$GROK_HOME` (`hooks/`, `hooks-paths`, and listed files) are mounted
+read-only (fail-closed when `bwrap` is missing or the remount cannot be
+verified).
 Approval and the file tools' workspace/symlink checks remain independent
 safety boundaries.
 

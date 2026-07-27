@@ -713,6 +713,10 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		_ = registry.Close()
 		return err
 	}
+	if err := tools.EnsureParentBwrapHookWriteDeny(cfg.Sandbox.Profile, ws.Root(), args, stderr); err != nil {
+		_ = registry.Close()
+		return err
+	}
 	if err := tools.ApplyParentLandlock(cfg.Sandbox.Profile, ws.Root(), stderr); err != nil {
 		_ = registry.Close()
 		return err
@@ -3242,6 +3246,10 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 	if err != nil {
 		return err
 	}
+	// Re-exec under parent bwrap before ACP stdio handshake when sandbox requires hook write-deny.
+	if err := tools.EnsureParentBwrapHookWriteDeny(cfg.Sandbox.Profile, opts.workspace, os.Args[1:], stderr); err != nil {
+		return err
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	authPath, _ := auth.DefaultPath()
@@ -3591,6 +3599,10 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			registry.SetToolFilter(allowed, opts.agentProfile.DisallowedTools)
 		}
 		if err := registry.ConfigureSandbox(sessionCfg.Sandbox.Profile); err != nil {
+			_ = registry.Close()
+			return nil, nil, err
+		}
+		if err := tools.EnsureParentBwrapHookWriteDeny(sessionCfg.Sandbox.Profile, ws.Root(), os.Args[1:], statusOutput); err != nil {
 			_ = registry.Close()
 			return nil, nil, err
 		}
