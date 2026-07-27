@@ -1727,6 +1727,9 @@ Linux shells additionally install a seccomp namespace lockdown inside the
 bubblewrap child so nested `unshare`/`setns`/namespace `clone` attempts fail.
 Read-only and strict profiles also stack a child network seccomp deny
 (`connect`/`bind`/`send*`/`listen`/`accept*`) on top of `--unshare-net`.
+On Linux, enabling a sandbox profile also applies a best-effort parent-process
+Landlock FS allowlist (workspace/read-only/strict path sets); unsupported
+kernels warn and continue, and parent TCP stays open for model/MCP HTTP.
 Approval and the file tools' workspace/symlink checks remain independent
 safety boundaries.
 

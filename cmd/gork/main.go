@@ -713,6 +713,10 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		_ = registry.Close()
 		return err
 	}
+	if err := tools.ApplyParentLandlock(cfg.Sandbox.Profile, ws.Root(), stderr); err != nil {
+		_ = registry.Close()
+		return err
+	}
 	registry.ConfigureEnvironment(cfg.Env)
 	registry.ConfigureBash(bashTimeout(cfg.Toolset.Bash.TimeoutSeconds), bashOutputLimit(cfg.Toolset.Bash.OutputByteLimit))
 	if err := registry.ConfigureFileToolset(cfg.Toolset.FileToolset, cfg.Toolset.Hashline.Scheme, cfg.Toolset.Hashline.HashLen, cfg.Toolset.Hashline.ChunkSize); err != nil {
@@ -3587,6 +3591,10 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			registry.SetToolFilter(allowed, opts.agentProfile.DisallowedTools)
 		}
 		if err := registry.ConfigureSandbox(sessionCfg.Sandbox.Profile); err != nil {
+			_ = registry.Close()
+			return nil, nil, err
+		}
+		if err := tools.ApplyParentLandlock(sessionCfg.Sandbox.Profile, ws.Root(), statusOutput); err != nil {
 			_ = registry.Close()
 			return nil, nil, err
 		}
