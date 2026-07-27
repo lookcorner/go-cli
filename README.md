@@ -1522,7 +1522,9 @@ lists servers that still need auth;
 `x.ai/mcp/auth_trigger` and the TUI `/mcps` `I` key start enrollment for remote
 servers (stdio stays explicitly unsupported). Concurrent enrollments share one
 browser flow via in-process single-flight, a Unix `$GROK_HOME/mcp_auth_*.lock`,
-and credential-store polling while waiting on the loopback callback. Optional TOML fields
+and credential-store polling while waiting on the loopback callback. When the
+loopback redirect is unreachable, paste the callback URL through
+`x.ai/mcp/auth_submit` (or `SubmitMCPAuthCallback` / `PastedInput`). Optional TOML fields
 `oauth_client_id`, `oauth_client_secret_env_var`, `oauth_scopes`, and
 `oauth_callback_port` select BYO clients. Servers that declare a `setup`
 select schema complete configuration through `x.ai/mcp/setup`, which stores
