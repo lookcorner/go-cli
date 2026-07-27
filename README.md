@@ -471,7 +471,7 @@ It uses durable workspace `index.sqlite` FTS5 BM25 to narrow search candidates
 decay/source weights/MMR (ephemeral and index failures fail open). When an
 embedder is configured (`APIEmbeddingProvider` or tests' hash provider), search
 merges FTS with L2 KNN scores and flush can semantic-dedup near-duplicates.
-Session startup wiring of the API embedder from the active base URL/key remains.
+REPL, TUI, and ACP session startup attach `APIEmbeddingProvider` from `[memory.embedding]` using the active inference base URL and API key when both a model and key are set.
 Session startup also removes, in the background, empty orphan memory
 workspaces older than `[memory.gc].max_age_days` (30 by default); temporary
 `tmp*` workspaces use a 7-day limit when they contain sessions and are removed

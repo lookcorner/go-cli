@@ -155,7 +155,8 @@ Remote relay / workspace hub remains planned/XL (product-blocked). See queue #5.
 
 ### Still open
 
-- [ ] Wire `APIEmbeddingProvider` from session base URL/API key at startup
+- [x] Wire `APIEmbeddingProvider` from session base URL/API key at startup
+      (`compat/memory-embedder-startup`: REPL/TUI/ACP runners + store attach).
 - [ ] Optional sqlite-vec acceleration (Go currently uses brute-force KNN)
 
 ---

@@ -654,6 +654,8 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	memoryEmbedder := memoryEmbedderFromSession(cfg.Memory, cfg.BaseURL, cfg.APIKey, &http.Client{Timeout: cfg.HTTPTimeout})
+	attachMemoryEmbedder(memoryStore, memoryEmbedder)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -1127,7 +1129,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		TextOutput:           stdout, StatusOutput: stderr,
 		ContextWindow: cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,
 		TwoPassCompaction: cfg.TwoPassCompaction,
-		Memory:            memoryStore, MemoryConfig: cfg.Memory,
+		Memory:            memoryStore, MemoryConfig: cfg.Memory, MemoryEmbedder: memoryEmbedder,
 		OpenMemory:    memoryStoreOpener(cfg.Memory, ws.Root(), logger.ID()),
 		ReloadMCPBase: reloadMCPBase, UpdateMCPServers: mcpRuntime.Update,
 		MCPServers: mcpRuntime.Configs, MCPServerCatalog: mcpRuntime.Catalog,
@@ -2839,6 +2841,26 @@ func newMemoryStore(workspaceRoot, sessionID string, gcMaxAgeDays uint64) (*memo
 	return store, nil
 }
 
+// memoryEmbedderFromSession mirrors Rust ApiEmbeddingProvider::from_session:
+// build an OpenAI-compatible embedder when [memory.embedding].model and a
+// session API key are present; otherwise leave search/dedup text-only.
+func memoryEmbedderFromSession(cfg memory.Config, baseURL, apiKey string, httpClient *http.Client) memory.EmbeddingProvider {
+	if strings.TrimSpace(apiKey) == "" {
+		return nil
+	}
+	provider, ok := memory.NewAPIEmbeddingProvider(cfg.Embedding, baseURL, apiKey, httpClient)
+	if !ok {
+		return nil
+	}
+	return provider
+}
+
+func attachMemoryEmbedder(store *memory.Store, embedder memory.EmbeddingProvider) {
+	if store != nil && embedder != nil {
+		store.SetEmbedder(embedder)
+	}
+}
+
 func memoryStoreOpener(cfg memory.Config, workspaceRoot, sessionID string) func() (*memory.Store, error) {
 	if !cfg.Enabled {
 		return nil
@@ -3652,6 +3674,8 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			_ = registry.Close()
 			return nil, nil, err
 		}
+		memoryEmbedder := memoryEmbedderFromSession(sessionCfg.Memory, sessionCfg.BaseURL, sessionCfg.APIKey, &http.Client{Timeout: sessionCfg.HTTPTimeout})
+		attachMemoryEmbedder(memoryStore, memoryEmbedder)
 		if err := tools.RegisterMemoryTools(registry, memoryStore, sessionCfg.Memory); err != nil {
 			_ = logger.Close()
 			_ = registry.Close()
@@ -4124,7 +4148,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			TextOutput:           textOutput, StatusOutput: statusOutput,
 			ContextWindow: sessionCfg.ContextWindow, CompactThresholdPercent: sessionCfg.AutoCompactThresholdPercent,
 			TwoPassCompaction: sessionCfg.TwoPassCompaction,
-			Memory:            memoryStore, MemoryConfig: sessionCfg.Memory,
+			Memory:            memoryStore, MemoryConfig: sessionCfg.Memory, MemoryEmbedder: memoryEmbedder,
 			OpenMemory:    memoryStoreOpener(sessionCfg.Memory, ws.Root(), logger.ID()),
 			ReloadMCPBase: reloadMCPBase, UpdateMCPServers: mcpRuntime.Update,
 			MCPServers: mcpRuntime.Configs, MCPServerCatalog: mcpRuntime.Catalog,

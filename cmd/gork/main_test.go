@@ -1625,6 +1625,35 @@ func TestOpenMemoryStoreRunsConfiguredGC(t *testing.T) {
 	}
 }
 
+func TestMemoryEmbedderFromSessionRequiresModelAndKey(t *testing.T) {
+	model := "text-embedding-3-small"
+	cfg := memory.DefaultConfig()
+	cfg.Embedding.Model = &model
+	cfg.Embedding.Dimensions = 8
+
+	if got := memoryEmbedderFromSession(cfg, "https://api.example/v1", "", nil); got != nil {
+		t.Fatalf("expected nil without API key, got %#v", got)
+	}
+	cfg.Embedding.Model = nil
+	if got := memoryEmbedderFromSession(cfg, "https://api.example/v1", "key", nil); got != nil {
+		t.Fatalf("expected nil without model, got %#v", got)
+	}
+	cfg.Embedding.Model = &model
+	got := memoryEmbedderFromSession(cfg, "https://api.example/v1", "key", http.DefaultClient)
+	provider, ok := got.(*memory.APIEmbeddingProvider)
+	if !ok || provider.Model != model || provider.BaseURL != "https://api.example/v1" || provider.APIKey != "key" {
+		t.Fatalf("provider=%#v", got)
+	}
+
+	store, err := memory.Open(t.TempDir(), t.TempDir(), "embed-attach")
+	if err != nil {
+		t.Fatal(err)
+	}
+	attachMemoryEmbedder(store, provider)
+	attachMemoryEmbedder(nil, provider)
+	attachMemoryEmbedder(store, nil)
+}
+
 func TestInteractiveMemoryListDoesNotRunNormalTurn(t *testing.T) {
 	store, err := memory.Open(t.TempDir(), t.TempDir(), "interactive-list")
 	if err != nil {
