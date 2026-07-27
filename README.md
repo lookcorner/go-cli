@@ -1486,7 +1486,9 @@ static header or `bearer_token_env_var` is set, refresh once on HTTP 401, and
 support interactive OAuth enrollment via RFC 8414/9728 discovery, DCR, and
 PKCE loopback. `gork mcp doctor` reports an `oauth credentials` check for
 HTTP/SSE servers (static bearer, `bearer_token_env_var`, or store token;
-missing credentials fail closed with an enroll hint). `gork inspect` MCP
+missing credentials fail closed with an enroll hint) and an `oauth discovery`
+check that prints the discovery-derived token endpoint (query/fragment
+stripped). `gork inspect` MCP
 entries add redacted targets plus `auth=` presence (`static`/`env`/`stored`/
 `oauth_byo`/`none`) and env-var names only—never tokens or secrets. `x.ai/mcp/auth_status`
 lists servers that still need auth;

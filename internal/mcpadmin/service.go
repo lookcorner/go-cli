@@ -255,11 +255,16 @@ func Doctor(ctx context.Context, cwd, userConfigPath, name string, probe ProbeFu
 		}
 		if check, ok := oauthCredentialsCheck(entry.Name, entry.Config); ok {
 			item.Checks = append(item.Checks, check)
+			if disc, ok := oauthDiscoveryCheck(ctx, entry.Config); ok {
+				item.Checks = append(item.Checks, disc)
+			}
 			if !check.Passed {
 				report.FailingCount++
 				report.Servers = append(report.Servers, item)
 				continue
 			}
+		} else if disc, ok := oauthDiscoveryCheck(ctx, entry.Config); ok {
+			item.Checks = append(item.Checks, disc)
 		}
 		probeCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
 		result, probeErr := probe(probeCtx, entry.Name, entry.Config, cwd)
@@ -579,6 +584,45 @@ func oauthCredentialsCheck(name string, server config.MCPServerConfig) (Check, b
 		}, true
 	}
 	return Check{Label: "oauth credentials", Passed: true, Detail: "stored credentials"}, true
+}
+
+// oauthDiscoveryClient is overridden in tests.
+var oauthDiscoveryClient = http.DefaultClient
+
+// oauthDiscoveryCheck reports the discovery-derived OAuth token endpoint for
+// HTTP/SSE servers (RFC 9728/8414). Failures are diagnostic; credentials remain
+// the fail-closed gate for probing.
+func oauthDiscoveryCheck(ctx context.Context, server config.MCPServerConfig) (Check, bool) {
+	switch transport(server) {
+	case "http", "sse":
+	default:
+		return Check{}, false
+	}
+	if strings.TrimSpace(server.URL) == "" {
+		return Check{}, false
+	}
+	meta, err := mcp.DiscoverOAuthMetadata(ctx, server.URL, oauthDiscoveryClient)
+	if err != nil {
+		return Check{
+			Label:  "oauth discovery",
+			Detail: sanitizeError(err.Error()),
+			Hint:   "publish RFC 9728 protected-resource and RFC 8414 AS metadata",
+		}, true
+	}
+	return Check{
+		Label:  "oauth discovery",
+		Passed: true,
+		Detail: "token endpoint " + redactEndpoint(meta.TokenEndpoint),
+	}, true
+}
+
+func redactEndpoint(raw string) string {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "(invalid)"
+	}
+	parsed.User, parsed.RawQuery, parsed.Fragment = nil, "", ""
+	return parsed.String()
 }
 
 func headerHasAuthorization(headers map[string]string) bool {

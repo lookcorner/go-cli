@@ -61,6 +61,8 @@ OAuth enrollment for HTTP/SSE servers, with durable tokens and ACP/TUI status.
 - [x] README documents MCP auth UX briefly.
 - [x] `gork mcp doctor` reports an `oauth credentials` check for HTTP/SSE
       (static bearer / env / store; fail-closed with enroll hint).
+- [x] `gork mcp doctor` reports discovery-derived token endpoint hosts via
+      `oauth discovery` (RFC 9728/8414; advisory beside credentials).
 - [x] `gork inspect` MCP cells expose auth=static|env|stored|oauth_byo|none
       plus env-var names only (never tokens/headers/secrets).
 - [x] Concurrent enrollments share one browser flow (in-process + Unix flock
@@ -75,7 +77,8 @@ OAuth enrollment for HTTP/SSE servers, with durable tokens and ACP/TUI status.
   `token_received_at`). Loopback+PKCE+DCR enrollment; no device-code for MCP.
 - Go now mirrors the on-disk shape and attaches/refreshes tokens in
   `internal/mcp` (`credentials.go`, `http_auth.go`), with enroll dedup and
-  pasted-callback completion for unreachable loopbacks.
+  pasted-callback completion for unreachable loopbacks. Doctor surfaces
+  discovery-derived token endpoints without secrets.
 
 ### Out of scope for Phase 1
 

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -201,6 +203,12 @@ command = "local-server"
 		t.Fatal(err)
 	}
 
+	oldClient := oauthDiscoveryClient
+	oauthDiscoveryClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("discovery disabled in credentials test")
+	})}
+	t.Cleanup(func() { oauthDiscoveryClient = oldClient })
+
 	probed := map[string]bool{}
 	report, err := Doctor(context.Background(), root, userPath, "", func(_ context.Context, name string, _ config.MCPServerConfig, _ string) (ProbeResult, error) {
 		probed[name] = true
@@ -214,8 +222,11 @@ command = "local-server"
 		byName[item.Name] = item
 	}
 	needs := byName["needs"]
-	if needs.Healthy || probed["needs"] || len(needs.Checks) != 1 || needs.Checks[0].Label != "oauth credentials" || needs.Checks[0].Passed {
+	if needs.Healthy || probed["needs"] || len(needs.Checks) < 2 || needs.Checks[0].Label != "oauth credentials" || needs.Checks[0].Passed {
 		t.Fatalf("needs=%#v probed=%v", needs, probed["needs"])
+	}
+	if needs.Checks[1].Label != "oauth discovery" || needs.Checks[1].Passed {
+		t.Fatalf("expected failed oauth discovery, got %#v", needs.Checks[1])
 	}
 	if !strings.Contains(needs.Checks[0].Hint, "auth_trigger") {
 		t.Fatalf("hint=%q", needs.Checks[0].Hint)
@@ -234,6 +245,44 @@ command = "local-server"
 		t.Fatalf("stdio should skip oauth check: %#v", byName["local"].Checks)
 	}
 }
+
+func TestOAuthDiscoveryCheckReportsTokenEndpoint(t *testing.T) {
+	var serverURL string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/.well-known/oauth-protected-resource"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"authorization_servers": []string{serverURL},
+			})
+		case strings.Contains(r.URL.Path, "oauth-authorization-server") || strings.HasSuffix(r.URL.Path, "/.well-known/openid-configuration"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"issuer":                 serverURL,
+				"authorization_endpoint": serverURL + "/authorize",
+				"token_endpoint":         serverURL + "/token?secret=1",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	serverURL = server.URL
+
+	oldClient := oauthDiscoveryClient
+	oauthDiscoveryClient = server.Client()
+	t.Cleanup(func() { oauthDiscoveryClient = oldClient })
+
+	check, ok := oauthDiscoveryCheck(context.Background(), config.MCPServerConfig{URL: server.URL + "/mcp", Type: "http"})
+	if !ok || !check.Passed {
+		t.Fatalf("check=%#v ok=%v", check, ok)
+	}
+	if check.Label != "oauth discovery" || check.Detail != "token endpoint "+server.URL+"/token" {
+		t.Fatalf("detail=%q", check.Detail)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func testRepo(t *testing.T) string {
 	t.Helper()
