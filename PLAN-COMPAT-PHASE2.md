@@ -142,12 +142,12 @@ Remote relay / workspace hub remains planned/XL (product-blocked). See queue #5.
 - [x] Durable workspace `index.sqlite` schema (`meta`/`chunks`/`chunks_fts`, no
       `chunks_vec` yet); `OpenIndex` / meta helpers.
 - [x] FTS5 BM25 + Markdown reindex APIs (`ReindexFile` / `SearchFTS` on
-      `IndexDB`); `Store.Search` stays on in-process ranking until decay/source
-      weights and hybrid merge land together.
+      `IndexDB`).
+- [x] Wire FTS into `Store.Search` as candidate narrowing (rankChunks keeps
+      decay/weights/MMR; ephemeral and index errors fail open).
 
 ### Still open
 
-- [ ] Wire FTS into `Store.Search` with ranking parity + fail-open
 - [ ] sqlite-vec + embedding API + hybrid merge
 - [ ] Semantic flush dedup
 
