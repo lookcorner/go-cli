@@ -17,7 +17,7 @@ One-round doctor/wrap surface closed at `5c6557d`. Remaining gaps need
 |---|--------|-------------|---------|------------|
 | 1 | **MCP OAuth enrollment** | MCP | Unlocks authenticated remote MCP servers; user-visible | L (multi-PR) |
 | 2 | **Linux cgroups for shell** | Shell execution | Completes shell isolation story after wrap | L |
-| 3 | **Landlock + seccomp** | OS sandbox | Hardens existing bubblewrap/Seatbelt profiles | XL |
+| 3 | **Landlock + seccomp** | OS sandbox | Hardens existing bubblewrap/Seatbelt profiles | L (Landlock done; seccomp remain) |
 | 4 | **Cloud ACP / conversations** | ACP | Large protocol surface; defer until local ACP stays green | XL |
 | 5 | **Remote relay / workspace hub** | Session / workspace | Depends on product decisions | XL |
 | 6 | **Vector memory** | Memory | Research + storage + retrieval | XL |
@@ -95,6 +95,23 @@ clear no-op on unsupported hosts.
   `tools.NewShellCgroup` guard. inotify `memory.events` OOM signaling kills the
   newest FG/BG shell child or ACP terminal as exit 137 / signal `oom`
   (`compat/acp-terminal-oom`). cpu.max still deferred.
+
+---
+
+## Phase 3 — Landlock + seccomp (active)
+
+### Done
+
+- [x] Parent-process Landlock FS allowlists on Linux for built-in profiles
+      (`ApplyParentLandlock`, BestEffort warn+continue; no parent net restrict)
+      on `compat/linux-landlock`.
+
+### Still open
+
+- [ ] Per-child seccomp namespace lockdown inside Linux bwrap
+- [ ] Child network seccomp for read-only/strict
+- [ ] Parent bwrap re-exec / hook write-deny (Rust-only edge paths)
+- [ ] Custom sandbox.toml profile Landlock parity
 
 ---
 

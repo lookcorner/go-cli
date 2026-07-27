@@ -1760,7 +1760,10 @@ children and ACP PTY/piped terminals are also placed in a best-effort
 memory-limited cgroup (`memory.high` / `memory.max`); unavailable hosts skip
 silently. When `memory.events` reports sustained high pressure, Gork kills the
 newest running shell or ACP terminal child and reports exit `137` with signal
-`oom`. Approval and
+`oom`. On Linux, enabling a sandbox profile also applies a best-effort
+parent-process Landlock FS allowlist (workspace/read-only/strict path sets);
+unsupported kernels warn and continue, and parent TCP stays open for model/MCP
+HTTP. Approval and
 the file tools' workspace/symlink checks remain independent safety boundaries.
 
 `monitor` runs a background command whose stdout is delivered as real-time,
