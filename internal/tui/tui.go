@@ -955,6 +955,8 @@ type model struct {
 	pendingImages        []tools.ImageAttachment
 	overlayImages        []tools.ImageAttachment
 	imageOverlay         *imageOverlayState
+	videoOverlay         *VideoViewer
+	videoOverlayEpoch    uint64
 	nextKittyID          int
 	kittyUploads         [][]byte
 	gboom                *gboomState
@@ -1561,7 +1563,7 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if progressCommand := current.syncTurnActivity(); progressCommand != nil {
 			command = tea.Batch(command, progressCommand)
 		}
-		command = tea.Batch(command, current.flushKittyUploads(), current.flushImageOverlay())
+		command = tea.Batch(command, current.flushKittyUploads(), current.flushImageOverlay(), current.flushVideoOverlay())
 	}
 	if !ok || !current.minimal {
 		return updated, command
@@ -2499,6 +2501,12 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.finishDashboardPoll(msg)
 	case gboomTickEvent:
 		return m, m.handleGboomTick(msg)
+	case videoOverlayTickEvent:
+		if m.videoOverlay == nil || msg.epoch != m.videoOverlayEpoch {
+			return m, nil
+		}
+		m.videoOverlay.Tick()
+		return m, m.videoOverlayTickCmd()
 	case gboomMouseEvent:
 		if m.gboom != nil {
 			m.gboom.handleMouse(msg)
@@ -2764,6 +2772,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.remember != nil {
 		return m.handleRememberReviewKey(msg)
+	}
+	if m.videoOverlay != nil {
+		return m.handleVideoOverlayKey(msg)
 	}
 	if m.imageOverlay != nil {
 		return m.handleImageOverlayKey(msg)
@@ -3128,6 +3139,23 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.status = "no image to preview"
 			}
 			return m, nil
+		case "/play-video", "/video-play":
+			if m.minimal {
+				m.status = "video overlay is fullscreen-only"
+				return m, nil
+			}
+			path := ""
+			if len(fields) > 1 {
+				path = strings.TrimSpace(strings.Join(fields[1:], " "))
+			}
+			if path == "" {
+				m.status = "usage: /play-video <path>"
+				return m, nil
+			}
+			if !m.openVideoOverlayPath(path) {
+				return m, nil
+			}
+			return m, m.videoOverlayTickCmd()
 		case "/login", "/logout":
 			if m.runner == nil {
 				m.status = "authentication unavailable"
@@ -6523,6 +6551,9 @@ func (m *model) View() tea.View {
 		}
 		if m.imageOverlay != nil {
 			visible = m.imageOverlayChrome(visible, width, m.contentHeight())
+		}
+		if m.videoOverlay != nil {
+			visible = m.videoOverlayChrome(visible, width, m.contentHeight())
 		}
 		visible = m.renderTimeline(visible, timelineRail)
 		visible = m.debug.overlay(visible, width, m.scroll, m.maxTranscriptScroll(), m.contentHeight(), transcriptLineCount, m.scrollLines, m.invertScroll, m.scrollFocused)

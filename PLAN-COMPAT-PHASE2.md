@@ -170,11 +170,13 @@ Remote relay / workspace hub remains planned/XL (product-blocked). See queue #5.
       (+ clear), iTerm2 overlay path for non-Kitty pixel overlays.
 - [x] Fullscreen image preview chrome: `/preview-image`, bordered popup, Esc
       close, post-frame pixel flush via `BuildOverlayImageEscapes`.
+- [x] Video overlay viewer: ffmpeg frame extract, `/play-video <path>`, play/
+      pause/seek chrome, tick playback + pixel flush (fails open without ffmpeg).
 
 ### Still open
 
-- [ ] Video viewer (ffmpeg frame extract + overlay playback)
 - [ ] Prompt-chip hover/focus image preview / click-to-open
+- [ ] Session-asset video discovery (auto list generated clips)
 
 ---
 
