@@ -1377,7 +1377,8 @@ inclusive `targetPromptIndex` truncation; later load/resume uses the stored
 model override.
 
 Persisted and live sessions also expose `x.ai/session/info`, `rename`,
-`delete`, and `search`. Rename appends an explicit title event, delete removes
+`delete`, and `search`. `x.ai/session/usage` returns cumulative in-process token
+and cost totals (`PromptUsage` wire shape; costs scrub when partial). Rename appends an explicit title event, delete removes
 only the validated JSONL log and its exact artifact directory, and search
 supports workspace filtering, pagination, ranked title/content matches, and
 optional snippets without a separate index service.

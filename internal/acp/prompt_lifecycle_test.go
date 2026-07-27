@@ -52,6 +52,20 @@ func TestPromptLifecyclePublishesCompletionAndResponseMeta(t *testing.T) {
 	if completeIndex < 0 || responseIndex <= completeIndex {
 		t.Fatalf("messages=%#v", messages)
 	}
+
+	output.Reset()
+	server.handleSessionUsage(message{ID: json.RawMessage("8"), Method: "x.ai/session/usage", Params: json.RawMessage(`{"sessionId":"lifecycle"}`)})
+	usageResponse := decodeACP(t, json.NewDecoder(output))
+	usage := usageResponse["result"].(map[string]any)["usage"].(map[string]any)
+	if usage["inputTokens"] != float64(9) || usage["outputTokens"] != float64(3) || usage["numTurns"] != float64(1) {
+		t.Fatalf("usage=%#v", usage)
+	}
+	output.Reset()
+	server.handleSessionUsage(message{ID: json.RawMessage("9"), Method: "x.ai/session/usage", Params: json.RawMessage(`{"sessionId":"missing"}`)})
+	missing := decodeACP(t, json.NewDecoder(output))
+	if missing["error"].(map[string]any)["message"] != "session not found: missing" {
+		t.Fatalf("missing=%#v", missing)
+	}
 }
 
 func TestPromptLifecyclePublishesErrorsAndSlashValidation(t *testing.T) {

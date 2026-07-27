@@ -198,6 +198,7 @@ type session struct {
 	promptIndex         int
 	activePrompt        int
 	inputTokens         int
+	usage               sessionUsageLedger
 	rewind              *workspace.RewindStore
 	logPath             string
 	mode                string
@@ -417,6 +418,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleSessionUpdates(incoming)
 		case "x.ai/session/info", "x.ai/session/rename", "x.ai/session/delete", "x.ai/session/search", "x.ai/prompt_history":
 			s.handleSessionAdmin(incoming)
+		case "x.ai/session/usage":
+			s.handleSessionUsage(incoming)
 		case "x.ai/session/update_mcp_servers":
 			s.handleUpdateMCPServers(ctx, incoming)
 		case "x.ai/internal/reload_all_mcp_servers", "x.ai/internal/reload_project_mcp_servers":
@@ -503,6 +506,25 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			}
 		}
 	}
+}
+
+func (s *Server) handleSessionUsage(incoming message) {
+	var req struct {
+		SessionID string `json:"sessionId"`
+	}
+	if json.Unmarshal(incoming.Params, &req) != nil || strings.TrimSpace(req.SessionID) == "" {
+		s.respondError(incoming.ID, -32602, "sessionId is required")
+		return
+	}
+	current := s.lookupSession(req.SessionID)
+	if current == nil {
+		s.respondError(incoming.ID, -32602, "session not found: "+req.SessionID)
+		return
+	}
+	current.mu.Lock()
+	usage := current.usage.wire()
+	current.mu.Unlock()
+	s.respond(incoming.ID, map[string]any{"usage": usage})
 }
 
 func (s *Server) handleSessionAdmin(incoming message) {

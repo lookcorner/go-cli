@@ -159,6 +159,14 @@ to empty + `_meta["x.ai/partial"]` when OAuth is unavailable.
 1. **`x.ai/auth/cancel`** — done on `compat/acp-auth-cancel`: idempotent cancel
    of in-flight interactive login with optional `request_seq` scoping.
 
+
+## Phase 4d — ACP session usage
+
+### Slice
+
+1. **`x.ai/session/usage`** — done on `compat/acp-session-usage`: cumulative
+   in-process PromptUsage ledger with partial-cost scrubbing.
+
 ## Phase 3+ — sandbox / memory / relay
 
 Separate kickoff docs when prior themes land. Do not start in parallel without
