@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/lookcorner/go-cli/internal/notify"
+	"github.com/lookcorner/go-cli/internal/tools"
 	"github.com/lookcorner/go-cli/internal/voice"
 )
 
@@ -22,6 +23,16 @@ var probeVoiceInput = voice.ProbeInput
 var pathExists = func(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// probeSandboxConflict returns a sandbox.toml profile-conflict finding for the
+// current workspace. Tests replace this to keep reports cwd-independent.
+var probeSandboxConflict = func() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = "."
+	}
+	return tools.SandboxProfileConflictFinding(cwd)
 }
 
 const SchemaVersion = "1"
@@ -107,6 +118,9 @@ func BuildSnapshot(getenv func(string) string, lookPath func(string) (string, er
 	}
 	voiceMic, voiceDetail, voiceFindings := voiceFindings(lookPath)
 	findings = append(findings, voiceFindings...)
+	if finding := probeSandboxConflict(); finding != "" {
+		findings = append(findings, finding)
+	}
 	return Snapshot{
 		SchemaVersion: SchemaVersion,
 		Facts: Facts{
@@ -403,7 +417,6 @@ func isAppleTerminal(brand string) bool {
 	return normalized == "apple_terminal" || normalized == "apple terminal"
 }
 
-
 // newlineFindings mirrors reference terminal.newline-fallback for env-detectable
 // hosts where Shift+Enter cannot be distinguished from Enter (VTE < 0.82 and
 // VS Code-family xterm.js). Kitty-protocol-unavailable unknowns stay deferred.
@@ -473,7 +486,6 @@ func vscodeTerminalLabel(getenv func(string) string, brand string) string {
 		return "VS Code"
 	}
 }
-
 
 func voiceFindings(lookPath func(string) (string, error)) (mic, detail string, findings []string) {
 	probe := probeVoiceInput(lookPath)

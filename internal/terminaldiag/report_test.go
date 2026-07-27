@@ -15,6 +15,7 @@ func init() {
 		return voice.InputProbe{}
 	}
 	pathExists = func(string) bool { return false }
+	probeSandboxConflict = func() string { return "" }
 }
 
 func TestIsCommand(t *testing.T) {

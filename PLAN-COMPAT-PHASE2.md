@@ -17,13 +17,22 @@ One-round doctor/wrap surface closed at `5c6557d`. Remaining gaps need
 |---|--------|-------------|---------|------------|
 | 1 | **MCP OAuth enrollment** | MCP | Unlocks authenticated remote MCP servers; user-visible | L (multi-PR) |
 | 2 | **Linux cgroups for shell** | Shell execution | Completes shell isolation story after wrap | L |
-| 3 | **Landlock + seccomp** | OS sandbox | Hardens existing bubblewrap/Seatbelt profiles | done (profile-conflict doctor deferred) |
+| 3 | **Landlock + seccomp** | OS sandbox | Hardens existing bubblewrap/Seatbelt profiles | done |
 | 4 | **Cloud ACP / conversations** | ACP | Large protocol surface; defer until local ACP stays green | XL |
 | 5 | **Remote relay / workspace hub** | Session / workspace | Depends on product decisions | XL |
 | 6 | **Vector memory** | Memory | Research + storage + retrieval | done (sqlite-vec optional) |
 | 7 | **Fullscreen media / inline video** | Markdown/media | Terminal capability + UX heavy | done |
 
-Deferred unless explicitly requested: Cursor CLI session discovery, WezTerm kitty XTVERSION probes, Wayland data-control, sandbox.toml profile-conflict doctor.
+Deferred unless explicitly requested: Cursor CLI session discovery, WezTerm kitty XTVERSION probes, Wayland data-control.
+
+---
+
+## Phase 5 — Remote relay / workspace hub (blocked)
+
+Product-coupled (`computer-hub.grok.com`, OIDC hub auth, preview supervisor).
+Go keeps fail-closed headless + `workspace_exposure: false`. Do not dial hub
+without an explicit product unlock. Next actionable S item from the deferred
+list: **sandbox.toml profile-conflict doctor** (in progress on this stream).
 
 ---
 
@@ -123,7 +132,9 @@ clear no-op on unsupported hosts.
 
 ### Still open
 
-- [ ] sandbox.toml profile-conflict doctor (deferred unless requested)
+- [x] sandbox.toml profile-conflict doctor (`SandboxProfileConflicts` →
+      `gork doctor` / `/doctor` finding; global wins, project cannot redefine)
+      on `compat/sandbox-profile-conflict-doctor`.
 
 ---
 
@@ -308,6 +319,10 @@ an explicit request.
 ### Still open
 
 - (none for Phase 7)
+
+## Phase 5 note
+
+Remote relay / workspace hub remains planned/XL (product-blocked). See queue #5.
 
 ---
 

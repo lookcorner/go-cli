@@ -92,6 +92,34 @@ func TestProjectSandboxTOMLIsAdditiveOnly(t *testing.T) {
 	if err != nil || local.ChildBase != SandboxWorkspace {
 		t.Fatalf("local=%+v err=%v", local, err)
 	}
+	conflicts := SandboxProfileConflicts(workspace)
+	if len(conflicts) != 1 || conflicts[0] != "shared" {
+		t.Fatalf("conflicts=%v", conflicts)
+	}
+	finding := SandboxProfileConflictFinding(workspace)
+	if !strings.Contains(finding, "'shared'") || !strings.Contains(finding, "using the user profile") {
+		t.Fatalf("finding=%q", finding)
+	}
+}
+
+func TestSandboxProfileConflictsIgnoresIdenticalAndBuiltins(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	body := "[profiles.same]\nextends = \"workspace\"\n"
+	if err := os.WriteFile(filepath.Join(home, "sandbox.toml"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(workspace, ".grok"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, ".grok", "sandbox.toml"), []byte(body+
+		"[profiles.workspace]\nextends = \"strict\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if conflicts := SandboxProfileConflicts(workspace); len(conflicts) != 0 {
+		t.Fatalf("conflicts=%v", conflicts)
+	}
 }
 
 func TestCustomLandlockFailClosedOnLinuxWithoutApply(t *testing.T) {
