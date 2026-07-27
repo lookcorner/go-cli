@@ -910,11 +910,12 @@ type fileMemorySessionConfig struct {
 }
 
 type fileMemoryFlushConfig struct {
-	Enabled             *bool   `json:"enabled,omitempty" toml:"enabled"`
-	SoftThresholdTokens *int    `json:"soft_threshold_tokens,omitempty" toml:"soft_threshold_tokens"`
-	FlushModel          *string `json:"flush_model,omitempty" toml:"flush_model"`
-	MaxFlushWriteChars  *int    `json:"max_flush_write_chars,omitempty" toml:"max_flush_write_chars"`
-	IdleTimeoutSeconds  *uint64 `json:"idle_timeout_secs,omitempty" toml:"idle_timeout_secs"`
+	Enabled                *bool    `json:"enabled,omitempty" toml:"enabled"`
+	SoftThresholdTokens    *int     `json:"soft_threshold_tokens,omitempty" toml:"soft_threshold_tokens"`
+	FlushModel             *string  `json:"flush_model,omitempty" toml:"flush_model"`
+	MaxFlushWriteChars     *int     `json:"max_flush_write_chars,omitempty" toml:"max_flush_write_chars"`
+	IdleTimeoutSeconds     *uint64  `json:"idle_timeout_secs,omitempty" toml:"idle_timeout_secs"`
+	SemanticDedupThreshold *float64 `json:"semantic_dedup_threshold,omitempty" toml:"semantic_dedup_threshold"`
 }
 
 type filePruningConfig struct {
@@ -2035,6 +2036,10 @@ func applyMemoryConfig(cfg *Config, source *fileMemoryConfig, flush *fileMemoryF
 		if flush.IdleTimeoutSeconds != nil {
 			value := *flush.IdleTimeoutSeconds
 			cfg.Memory.Flush.IdleTimeoutSeconds = &value
+		}
+		if flush.SemanticDedupThreshold != nil {
+			value := min(1, max(0, *flush.SemanticDedupThreshold))
+			cfg.Memory.Flush.SemanticDedupThreshold = &value
 		}
 	}
 }

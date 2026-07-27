@@ -61,11 +61,14 @@ type DreamConfig struct {
 }
 
 type FlushConfig struct {
-	Enabled             bool    `json:"enabled"`
-	SoftThresholdTokens int     `json:"soft_threshold_tokens"`
-	Model               string  `json:"flush_model,omitempty"`
-	MaxWriteChars       int     `json:"max_flush_write_chars"`
-	IdleTimeoutSeconds  *uint64 `json:"idle_timeout_secs,omitempty"`
+	Enabled             bool     `json:"enabled"`
+	SoftThresholdTokens int      `json:"soft_threshold_tokens"`
+	Model               string   `json:"flush_model,omitempty"`
+	MaxWriteChars       int      `json:"max_flush_write_chars"`
+	IdleTimeoutSeconds  *uint64  `json:"idle_timeout_secs,omitempty"`
+	// SemanticDedupThreshold is cosine similarity for flush near-dup rejection.
+	// Nil uses DefaultSemanticDedupThreshold (0.92). Requires embeddings+vec.
+	SemanticDedupThreshold *float64 `json:"semantic_dedup_threshold,omitempty"`
 }
 
 func DefaultConfig() Config {

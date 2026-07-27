@@ -20,7 +20,7 @@ One-round doctor/wrap surface closed at `5c6557d`. Remaining gaps need
 | 3 | **Landlock + seccomp** | OS sandbox | Hardens existing bubblewrap/Seatbelt profiles | done (profile-conflict doctor deferred) |
 | 4 | **Cloud ACP / conversations** | ACP | Large protocol surface; defer until local ACP stays green | XL |
 | 5 | **Remote relay / workspace hub** | Session / workspace | Depends on product decisions | XL |
-| 6 | **Vector memory** | Memory | Research + storage + retrieval | in progress (FTS wired into Search) |
+| 6 | **Vector memory** | Memory | Research + storage + retrieval | in progress (hybrid scores+dedup cfg) |
 | 7 | **Fullscreen media / inline video** | Markdown/media | Terminal capability + UX heavy | XL |
 
 Deferred unless explicitly requested: Cursor CLI session discovery, WezTerm kitty XTVERSION probes, Wayland data-control, sandbox.toml profile-conflict doctor.
@@ -261,11 +261,14 @@ an explicit request.
 - [x] Wire FTS into `Store.Search` as candidate narrowing (rankChunks keeps
       decay/weights/MMR; ephemeral and index errors fail open) on
       `compat/vector-memory-fts-search`.
+- [x] Hybrid score merge helpers + flush `semantic_dedup_threshold` config /
+      fail-open hook (live KNN still needs sqlite-vec + embedder) on
+      `compat/vector-memory-hybrid-dedup`.
 
 ### Still open
 
-- [ ] sqlite-vec + embedding API + hybrid merge
-- [ ] Semantic flush dedup
+- [ ] sqlite-vec + embedding API + live hybrid/KNN search
+- [ ] Semantic flush dedup against live vector neighbors
 
 ---
 
