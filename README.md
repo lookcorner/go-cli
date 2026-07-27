@@ -467,8 +467,10 @@ preserves trailing blank-line numbering on full-file reads. `memory_edit`
 replaces or deletes a 0-based line range with write approval, reusing the same
 path allowlist and atomic persistence; an empty `new_text` forgets the range,
 and identical content is a no-op.
-It is a deterministic text-only backend; semantic/vector retrieval remains
-pending. Session startup also removes, in the background, empty orphan memory
+It is a deterministic text-only search backend today, with durable workspace
+`index.sqlite` FTS5 reindex/BM25 APIs ready (`[memory.embedding]` config);
+`Store.Search` still uses in-process ranking until hybrid embed+KNN and ranking
+parity ship. Session startup also removes, in the background, empty orphan memory
 workspaces older than `[memory.gc].max_age_days` (30 by default); temporary
 `tmp*` workspaces use a 7-day limit when they contain sessions and are removed
 immediately when empty.
