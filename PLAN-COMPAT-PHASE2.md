@@ -39,13 +39,13 @@ OAuth enrollment for HTTP/SSE servers, with durable tokens and ACP/TUI status.
 1. **Discovery / inventory** — done (see Phase 1 notes below).
 
 2. **Token store + config** — done (store + atomic 0600 writes; TOML oauth_*
-   fields and inspect/doctor redaction cells still open).
+   fields parsed; inspect/doctor redaction cells still open).
 
 3. **Enrollment flow** — done: discovery + DCR + PKCE loopback
    (`AuthenticateMCPServer`). Pasted-callback / cross-process dedup still open.
 
 4. **Runtime use** — done for attach + 401 refresh (TokenURL or rediscovery).
-   Doctor auth-state cell still open.
+   Doctor auth-state cell done (`gork mcp doctor` `oauth credentials` check).
 
 5. **ACP / TUI** — done for `auth_status` / `auth_trigger` / TUI `I`.
 
@@ -55,6 +55,8 @@ OAuth enrollment for HTTP/SSE servers, with durable tokens and ACP/TUI status.
 - [x] Token refresh covered by unit/integration tests.
 - [x] COMPAT MCP row mentions OAuth enrollment (no longer “remain”).
 - [x] README documents MCP auth UX briefly.
+- [x] `gork mcp doctor` reports an `oauth credentials` check for HTTP/SSE
+      (static bearer / env / store; fail-closed with enroll hint).
 
 ### Phase 1 notes
 
@@ -62,8 +64,8 @@ OAuth enrollment for HTTP/SSE servers, with durable tokens and ACP/TUI status.
   map of `StoredCredentials` (`client_id`, `token_response`, `granted_scopes`,
   `token_received_at`). Loopback+PKCE+DCR enrollment; no device-code for MCP.
 - Go now mirrors the on-disk shape and attaches/refreshes tokens in
-  `internal/mcp` (`credentials.go`, `http_auth.go`). Enrollment, ACP/TUI
-  trigger, discovery-derived token URLs, and doctor auth cells remain.
+  `internal/mcp` (`credentials.go`, `http_auth.go`). Pasted-callback /
+  cross-process enroll dedup and inspect oauth_* presence cells remain.
 
 ### Out of scope for Phase 1
 
