@@ -16,7 +16,7 @@ import (
 // project TOML replacing global entries.
 func DiscoverMCPServers(workspaceRoot string, cfg Config, plugins []plugin.Plugin, projectTrusted bool) map[string]MCPServerConfig {
 	home, _ := os.UserHomeDir()
-	return discoverMCPServers(workspaceRoot, home, cfg, plugins, projectTrusted)
+	return ApplyMCPSetupPreferences(discoverMCPServers(workspaceRoot, home, cfg, plugins, projectTrusted))
 }
 
 func discoverMCPServers(workspaceRoot, home string, cfg Config, plugins []plugin.Plugin, projectTrusted bool) map[string]MCPServerConfig {
@@ -107,13 +107,40 @@ func discoverMCPServers(workspaceRoot, home string, cfg Config, plugins []plugin
 
 	for name, server := range servers {
 		server = expandMCPServer(server, "", "")
-		if strings.TrimSpace(server.Command) == "" && strings.TrimSpace(server.URL) == "" {
+		if strings.TrimSpace(server.Command) == "" && strings.TrimSpace(server.URL) == "" && server.Setup == nil {
 			disabled := false
 			server.Enabled = &disabled
 		}
 		servers[name] = server
 	}
 	return servers
+}
+
+// MCPSetupServerEntry is a config row that declares a setup schema.
+type MCPSetupServerEntry struct {
+	Name   string
+	Config MCPServerConfig
+	Source MCPPreferenceSource
+}
+
+// CollectMCPSetupConfigs returns enabled servers that declare setup schemas
+// (before preference resolution). Used by x.ai/mcp/setup.
+func CollectMCPSetupConfigs(workspaceRoot string, cfg Config, plugins []plugin.Plugin, projectTrusted bool) map[string]MCPSetupServerEntry {
+	home, _ := os.UserHomeDir()
+	raw := discoverMCPServers(workspaceRoot, home, cfg, plugins, projectTrusted)
+	out := map[string]MCPSetupServerEntry{}
+	for name, server := range raw {
+		if !server.IsEnabled() || server.Setup == nil {
+			continue
+		}
+		scope := "user"
+		out[name] = MCPSetupServerEntry{
+			Name:   name,
+			Config: server,
+			Source: MCPPreferenceSource{Kind: "config", Scope: &scope},
+		}
+	}
+	return out
 }
 
 func projectMCPNames(workspaceRoot, home string) map[string]bool {

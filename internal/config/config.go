@@ -511,6 +511,35 @@ type MCPServerConfig struct {
 	OAuthScopes             []string          `json:"oauth_scopes,omitempty" toml:"oauth_scopes"`
 	OAuthCallbackPort       *uint16           `json:"oauth_callback_port,omitempty" toml:"oauth_callback_port"`
 	Enabled                 *bool             `json:"enabled,omitempty" toml:"enabled"`
+	Setup                   *MCPSetupConfig   `json:"setup,omitempty" toml:"setup"`
+}
+
+// MCPSetupConfig is the interactive select schema for setup-required MCP servers.
+type MCPSetupConfig struct {
+	Fields    []MCPSetupField                  `json:"fields" toml:"fields"`
+	Variables map[string]MCPSetupDerivedValue  `json:"variables,omitempty" toml:"variables"`
+}
+
+// MCPSetupField is one select prompt shown before connecting a server.
+type MCPSetupField struct {
+	ID       string           `json:"id" toml:"id"`
+	Label    string           `json:"label" toml:"label"`
+	Type     string           `json:"type" toml:"type"`
+	Required bool             `json:"required,omitempty" toml:"required"`
+	Default  *string          `json:"default,omitempty" toml:"default"`
+	Options  []MCPSetupOption `json:"options,omitempty" toml:"options"`
+}
+
+// MCPSetupOption is one selectable value for an MCPSetupField.
+type MCPSetupOption struct {
+	Label string `json:"label" toml:"label"`
+	Value string `json:"value" toml:"value"`
+}
+
+// MCPSetupDerivedValue maps a selected field value into a template variable.
+type MCPSetupDerivedValue struct {
+	From string            `json:"from" toml:"from"`
+	Map  map[string]string `json:"map" toml:"map"`
 }
 
 type LSPServerConfig struct {

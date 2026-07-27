@@ -39,6 +39,8 @@ Skill catalogs support all-session `x.ai/skills/refresh-baseline` and
 `x.ai/internal/reload_skills` / `x.ai/internal/reload_workflows` disk refreshes.
 `x.ai/workflows/list` discovers builtin/project/user `.rhai` workflow meta
 (lightweight map parse; Rhai execution remains).
+`x.ai/mcp/setup` persists select-field answers in `$GROK_HOME/mcp_preferences.json`,
+resolves `setup` templates (v0 one-select), reloads MCP, and enables the server.
 ACP command discovery always exposes plugin skills by `plugin:name`, adds the
 bare name only when unambiguous, and preserves native or built-in bare commands.
 Plugin extensions also support sessionless forced `x.ai/plugins/reload` with

@@ -1509,7 +1509,10 @@ PKCE loopback. `x.ai/mcp/auth_status` lists servers that still need auth;
 `x.ai/mcp/auth_trigger` and the TUI `/mcps` `I` key start enrollment for remote
 servers (stdio stays explicitly unsupported). Optional TOML fields
 `oauth_client_id`, `oauth_client_secret_env_var`, `oauth_scopes`, and
-`oauth_callback_port` select BYO clients. Local MCP configuration files reload
+`oauth_callback_port` select BYO clients. Servers that declare a `setup`
+select schema complete configuration through `x.ai/mcp/setup`, which stores
+answers in `$GROK_HOME/mcp_preferences.json`, renders `{{variable}}` templates,
+reloads the live MCP base, and enables the server. Local MCP configuration files reload
 automatically without dropping client-provided session servers.
 The internal global and project-scoped MCP reload endpoints refresh matching
 live sessions from disk while preserving those client-provided overrides.

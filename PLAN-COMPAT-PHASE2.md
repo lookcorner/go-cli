@@ -191,6 +191,14 @@ to empty + `_meta["x.ai/partial"]` when OAuth is unavailable.
    discovery-only catalog (builtin + project + user `.rhai` meta). Rhai
    execution remains XL.
 
+## Phase 4h — ACP MCP setup
+
+### Slice
+
+1. **`x.ai/mcp/setup`** — done on `compat/acp-mcp-setup`:
+   `mcp_preferences.json`, v0 one-select resolve/templates, ACP setup + enable.
+   List `setupRequired` placeholders and plugin-scoped collect remain follow-ups.
+
 ## Phase 3+ — sandbox / memory / relay
 
 Separate kickoff docs when prior themes land. Do not start in parallel without

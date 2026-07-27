@@ -219,6 +219,10 @@ func (s *Server) handleMCP(ctx context.Context, incoming message) {
 		})
 		return
 	}
+	if incoming.Method == "x.ai/mcp/setup" {
+		s.handleMCPSetup(ctx, incoming)
+		return
+	}
 	if incoming.Method == "x.ai/mcp/auth_status" {
 		current := s.lookupSession(req.SessionID)
 		if current == nil {

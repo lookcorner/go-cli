@@ -5785,7 +5785,7 @@ func (r *sessionMCPRuntime) mergedConfig(requested []mcp.ServerConfig) (config.C
 			DisabledTools: append([]string(nil), cfg.DisabledMCPTools[name]...),
 		}
 		catalog = append(catalog, entry)
-		if !entry.Disabled {
+		if !entry.Disabled && !server.NeedsSetup() {
 			effective = append(effective, entry)
 		}
 	}
@@ -5830,6 +5830,22 @@ func cloneMCPConfigMap(source map[string]config.MCPServerConfig) map[string]conf
 		server.Args = append([]string(nil), server.Args...)
 		server.Env = cloneStringsMap(server.Env)
 		server.Headers = cloneStringsMap(server.Headers)
+		if server.Setup != nil {
+			setup := *server.Setup
+			setup.Fields = append([]config.MCPSetupField(nil), setup.Fields...)
+			for i := range setup.Fields {
+				setup.Fields[i].Options = append([]config.MCPSetupOption(nil), setup.Fields[i].Options...)
+			}
+			if setup.Variables != nil {
+				vars := make(map[string]config.MCPSetupDerivedValue, len(setup.Variables))
+				for key, value := range setup.Variables {
+					value.Map = cloneStringsMap(value.Map)
+					vars[key] = value
+				}
+				setup.Variables = vars
+			}
+			server.Setup = &setup
+		}
 		cloned[name] = server
 	}
 	return cloned
