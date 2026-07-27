@@ -145,11 +145,13 @@ Remote relay / workspace hub remains planned/XL (product-blocked). See queue #5.
       `IndexDB`).
 - [x] Wire FTS into `Store.Search` as candidate narrowing (rankChunks keeps
       decay/weights/MMR; ephemeral and index errors fail open).
+- [x] Hybrid score merge helpers + flush `semantic_dedup_threshold` config /
+      fail-open hook (live KNN still needs sqlite-vec + embedder).
 
 ### Still open
 
-- [ ] sqlite-vec + embedding API + hybrid merge
-- [ ] Semantic flush dedup
+- [ ] sqlite-vec + embedding API + live hybrid/KNN search
+- [ ] Semantic flush dedup against live vector neighbors
 
 ---
 

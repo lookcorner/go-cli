@@ -468,8 +468,9 @@ path allowlist and atomic persistence; an empty `new_text` forgets the range,
 and identical content is a no-op.
 It uses durable workspace `index.sqlite` FTS5 BM25 to narrow search candidates
 (`[memory.embedding]` + Markdown reindex), then the same in-process ranker for
-decay/source weights/MMR (ephemeral and index failures fail open). Semantic
-vector retrieval remains pending until hybrid embed+KNN ships. Session startup also removes, in the background, empty orphan memory
+decay/source weights/MMR (ephemeral and index failures fail open). Hybrid FTS+
+vector score merge and flush `semantic_dedup_threshold` (default 0.92) are ready;
+live embed/KNN remains pending. Session startup also removes, in the background, empty orphan memory
 workspaces older than `[memory.gc].max_age_days` (30 by default); temporary
 `tmp*` workspaces use a 7-day limit when they contain sessions and are removed
 immediately when empty.

@@ -513,15 +513,19 @@ func (r *Runner) runMemoryFlush(ctx context.Context, streamer ResponseStreamer, 
 	if err == nil {
 		accepted, outcome = processMemoryFlushResponse(result.Text, memoryConfig.Flush.MaxWriteChars)
 		if outcome == "accepted" {
-			var written bool
-			path, written, err = store.Write(trigger, accepted)
-			switch {
-			case err != nil:
-				outcome = "error"
-			case written:
-				outcome = "written"
-			default:
+			if semanticFlushDuplicate(accepted, memoryConfig) {
 				outcome = "duplicate"
+			} else {
+				var written bool
+				path, written, err = store.Write(trigger, accepted)
+				switch {
+				case err != nil:
+					outcome = "error"
+				case written:
+					outcome = "written"
+				default:
+					outcome = "duplicate"
+				}
 			}
 		}
 	}
@@ -698,6 +702,18 @@ func processMemoryFlushResponse(value string, maxChars int) (string, string) {
 		}
 	}
 	return "", "rejected"
+}
+
+// semanticFlushDuplicate mirrors Rust is_semantically_duplicate: fail open when
+// embeddings/sqlite-vec neighbors are unavailable (current Go build).
+func semanticFlushDuplicate(content string, cfg memory.Config) bool {
+	_ = content
+	if !memory.VectorSearchEnabled(cfg) {
+		return false
+	}
+	threshold := memory.EffectiveSemanticDedupThreshold(cfg.Flush.SemanticDedupThreshold)
+	// Vector KNN neighbors land with sqlite-vec; empty set fails open.
+	return memory.IsSemanticallyDuplicate(nil, threshold)
 }
 
 func isNoReply(value string) bool {
