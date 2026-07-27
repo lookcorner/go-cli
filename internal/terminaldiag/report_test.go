@@ -16,6 +16,9 @@ func init() {
 	}
 	pathExists = func(string) bool { return false }
 	probeSandboxConflict = func() string { return "" }
+	probeWaylandDataControl = func(func(string) string, func(string) (string, error)) (DataControlFact, string) {
+		return DataControlNotApplicable, ""
+	}
 }
 
 func TestIsCommand(t *testing.T) {

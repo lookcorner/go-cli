@@ -23,7 +23,9 @@ One-round doctor/wrap surface closed at `5c6557d`. Remaining gaps need
 | 6 | **Vector memory** | Memory | Research + storage + retrieval | done (sqlite-vec optional) |
 | 7 | **Fullscreen media / inline video** | Markdown/media | Terminal capability + UX heavy | done |
 
-Deferred unless explicitly requested: Cursor CLI session discovery, WezTerm kitty XTVERSION probes, Wayland data-control.
+Deferred unless explicitly requested: Cursor CLI session discovery, WezTerm kitty XTVERSION probes.
+
+Shipped deferred doctor probes: sandbox.toml profile-conflict, Wayland data-control (`compat/wayland-data-control-doctor`).
 
 ---
 
@@ -31,8 +33,7 @@ Deferred unless explicitly requested: Cursor CLI session discovery, WezTerm kitt
 
 Product-coupled (`computer-hub.grok.com`, OIDC hub auth, preview supervisor).
 Go keeps fail-closed headless + `workspace_exposure: false`. Do not dial hub
-without an explicit product unlock. Next actionable S item from the deferred
-list: **sandbox.toml profile-conflict doctor** (in progress on this stream).
+without an explicit product unlock. Deferred doctor probes: Wayland data-control shipped; WezTerm / Cursor CLI session discovery remain optional.
 
 ---
 
