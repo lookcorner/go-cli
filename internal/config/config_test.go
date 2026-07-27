@@ -39,10 +39,14 @@ func TestValidateRejectsUnknownSandboxProfile(t *testing.T) {
 	cfg := Config{
 		APIKey: "key", Model: "model", Backend: "responses", BaseURL: "https://api.example",
 		MaxSteps: 1, ContextWindow: 1, Toolset: ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}},
-		Sandbox: SandboxConfig{Profile: "unknown"},
+		Sandbox: SandboxConfig{Profile: "bad name"},
 	}
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "sandbox profile") {
 		t.Fatalf("err=%v", err)
+	}
+	cfg.Sandbox.Profile = "project"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("custom name should validate: %v", err)
 	}
 }
 

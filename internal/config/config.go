@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/lookcorner/go-cli/internal/compat"
 	"github.com/lookcorner/go-cli/internal/memory"
@@ -2895,6 +2896,24 @@ func firstConfiguredEnv(value any) string {
 	return ""
 }
 
+func validSandboxProfileName(profile string) bool {
+	switch strings.ToLower(strings.TrimSpace(profile)) {
+	case "", "off", "none", "workspace", "read-only", "readonly", "strict":
+		return true
+	}
+	name := strings.ToLower(strings.TrimSpace(profile))
+	if name == "" {
+		return false
+	}
+	for _, r := range name {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 func (c Config) Validate() error {
 	if err := c.ValidateAuthPolicy(); err != nil {
 		return err
@@ -2908,8 +2927,8 @@ func (c Config) Validate() error {
 	if c.Backend != "responses" && c.Backend != "chat_completions" && c.Backend != "anthropic_messages" {
 		return fmt.Errorf("unsupported backend %q: use responses, chat_completions, or anthropic_messages", c.Backend)
 	}
-	if c.Sandbox.Profile != "" && c.Sandbox.Profile != "off" && c.Sandbox.Profile != "workspace" && c.Sandbox.Profile != "read-only" && c.Sandbox.Profile != "strict" {
-		return errors.New("sandbox profile must be off, workspace, read-only, or strict")
+	if c.Sandbox.Profile != "" && !validSandboxProfileName(c.Sandbox.Profile) {
+		return errors.New("sandbox profile must be off, workspace, read-only, strict, or a custom sandbox.toml name")
 	}
 	if c.BaseURL == "" {
 		return errors.New("missing API base URL")

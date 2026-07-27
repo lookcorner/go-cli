@@ -23,17 +23,27 @@ const (
 
 func ParseSandboxProfile(value string) (SandboxProfile, error) {
 	switch profile := SandboxProfile(strings.ToLower(strings.TrimSpace(value))); profile {
-	case "", SandboxOff:
+	case "", SandboxOff, "none":
 		return SandboxOff, nil
 	case SandboxWorkspace, SandboxReadOnly, SandboxStrict:
 		return profile, nil
+	case "readonly":
+		return SandboxReadOnly, nil
 	default:
-		return "", fmt.Errorf("unsupported sandbox profile %q: use off, workspace, read-only, or strict", value)
+		name := string(profile)
+		if !validCustomSandboxName(name) {
+			return "", fmt.Errorf("unsupported sandbox profile %q: use off, workspace, read-only, strict, or a custom name from sandbox.toml", value)
+		}
+		return SandboxProfile(name), nil
 	}
 }
 
 func validateSandboxRuntime(profile SandboxProfile) error {
 	if profile == "" || profile == SandboxOff {
+		return nil
+	}
+	// Custom names resolve to a built-in child base before runtime checks.
+	if !IsBuiltinSandboxProfile(profile) {
 		return nil
 	}
 	switch runtime.GOOS {
@@ -51,8 +61,8 @@ func validateSandboxRuntime(profile SandboxProfile) error {
 	return nil
 }
 
-func sandboxCommand(ctx context.Context, profile SandboxProfile, workspace, executable string, args ...string) (*exec.Cmd, error) {
-	path, wrapped, err := sandboxInvocation(profile, workspace, executable, args)
+func sandboxCommand(ctx context.Context, profile SandboxProfile, restrictNetwork bool, workspace, executable string, args ...string) (*exec.Cmd, error) {
+	path, wrapped, err := sandboxInvocation(profile, restrictNetwork, workspace, executable, args)
 	if err != nil {
 		return nil, err
 	}
@@ -62,9 +72,12 @@ func sandboxCommand(ctx context.Context, profile SandboxProfile, workspace, exec
 	return exec.Command(path, wrapped...), nil
 }
 
-func sandboxInvocation(profile SandboxProfile, workspace, executable string, args []string) (string, []string, error) {
+func sandboxInvocation(profile SandboxProfile, restrictNetwork bool, workspace, executable string, args []string) (string, []string, error) {
 	if profile == "" || profile == SandboxOff {
 		return executable, args, nil
+	}
+	if !IsBuiltinSandboxProfile(profile) {
+		return "", nil, fmt.Errorf("sandbox child wrap requires a built-in base profile, got %q", profile)
 	}
 	if err := validateSandboxRuntime(profile); err != nil {
 		return "", nil, err
@@ -79,14 +92,14 @@ func sandboxInvocation(profile SandboxProfile, workspace, executable string, arg
 		return path, append([]string{"-p", policy, executable}, args...), nil
 	case "linux":
 		path, _ := exec.LookPath("bwrap")
-		wrapped := wrapBubblewrapWithSeccomp(bubblewrapArgs(profile, workspace, executable), sandboxRestrictsNetwork(profile))
+		wrapped := wrapBubblewrapWithSeccomp(bubblewrapArgs(profile, restrictNetwork, workspace, executable), restrictNetwork)
 		return path, append(wrapped, args...), nil
 	default:
 		return "", nil, fmt.Errorf("sandbox profiles are not supported on %s", runtime.GOOS)
 	}
 }
 
-func bubblewrapArgs(profile SandboxProfile, workspace, executable string) []string {
+func bubblewrapArgs(profile SandboxProfile, restrictNetwork bool, workspace, executable string) []string {
 	wrapped := []string{"--die-with-parent", "--new-session"}
 	readable, writable := sandboxReadablePaths(profile, workspace), sandboxWritableMountPaths(profile, workspace)
 	if profile == SandboxStrict {
@@ -103,7 +116,7 @@ func bubblewrapArgs(profile SandboxProfile, workspace, executable string) []stri
 	} else {
 		wrapped = append(wrapped, "--ro-bind", "/", "/", "--dev-bind", "/dev", "/dev", "--proc", "/proc")
 	}
-	if sandboxRestrictsNetwork(profile) {
+	if restrictNetwork {
 		wrapped = append(wrapped, "--unshare-net")
 	}
 	for _, allowed := range writable {

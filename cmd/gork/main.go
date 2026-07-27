@@ -191,7 +191,7 @@ func parseRunOptions(args []string, stderr io.Writer) (options, *flag.FlagSet, e
 	flags.BoolVar(&opts.alwaysApprove, "always-approve", false, "auto-approve all tool executions")
 	flags.BoolVar(&opts.alwaysApprove, "yolo", false, "auto-approve all tool executions")
 	flags.BoolVar(&opts.alwaysApprove, "dangerously-skip-permissions", false, "auto-approve all tool executions")
-	flags.StringVar(&opts.sandbox, "sandbox", "", "shell sandbox: off, workspace, read-only, or strict")
+	flags.StringVar(&opts.sandbox, "sandbox", "", "shell sandbox: off, workspace, read-only, strict, or a custom sandbox.toml profile")
 	flags.Var(&opts.allow, "allow", "allow matching Tool(pattern) permission rule; repeatable")
 	flags.Var(&opts.deny, "deny", "deny matching Tool(pattern) permission rule; repeatable")
 	flags.StringVar(&opts.sessionDir, "session-dir", "", "session JSONL directory")

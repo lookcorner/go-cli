@@ -1,9 +1,11 @@
 package tools
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -22,7 +24,17 @@ var parentLandlockDeviceDirs = []string{"/dev/pts", "/dev/fd"}
 
 // ParentLandlockPathsFor builds RO/RW path sets matching Rust built-in profiles.
 func ParentLandlockPathsFor(profile SandboxProfile, workspace string) parentLandlockPaths {
-	if profile == "" || profile == SandboxOff {
+	resolved, err := resolveBuiltinSandboxProfile(profile, workspace)
+	if err != nil {
+		return parentLandlockPaths{}
+	}
+	return ParentLandlockPathsFromResolved(resolved, workspace)
+}
+
+// ParentLandlockPathsFromResolved builds Landlock allowlists from a resolved profile
+// (built-in or custom sandbox.toml extras).
+func ParentLandlockPathsFromResolved(resolved ResolvedSandboxProfile, workspace string) parentLandlockPaths {
+	if resolved.ChildBase == "" || resolved.ChildBase == SandboxOff {
 		return parentLandlockPaths{}
 	}
 	workspace = strings.TrimSpace(workspace)
@@ -34,18 +46,22 @@ func ParentLandlockPathsFor(profile SandboxProfile, workspace string) parentLand
 	}
 
 	var paths parentLandlockPaths
-	writable := existingDirs(sandboxWritableMountPaths(profile, workspace))
+	writable := append([]string(nil), resolved.ReadWrite...)
 	for _, path := range writable {
 		_ = os.MkdirAll(path, 0o700)
 	}
 	paths.RWDirs = existingDirs(writable)
 
-	switch profile {
-	case SandboxStrict:
-		paths.RODirs = existingDirs(sandboxReadablePaths(profile, workspace))
-	default:
-		// workspace and read-only: default_read = /
+	if resolved.DefaultRead {
 		paths.RODirs = []string{"/"}
+	} else {
+		paths.RODirs = existingDirs(resolved.ReadOnly)
+	}
+	// Custom / explicit read_only extras are always granted as RO dirs when present.
+	for _, path := range resolved.ReadOnly {
+		if info, err := os.Stat(path); err == nil && info.IsDir() {
+			paths.RODirs = appendUnique(paths.RODirs, filepath.Clean(path))
+		}
 	}
 
 	for _, path := range parentLandlockDeviceDirs {
@@ -62,17 +78,26 @@ func ParentLandlockPathsFor(profile SandboxProfile, workspace string) parentLand
 }
 
 // ApplyParentLandlock confines the current process with Linux Landlock when
-// profile is non-off. Unsupported kernels warn and continue (Rust parity).
-// Non-Linux hosts are no-ops. Never fail-closed for built-in profiles.
+// profile is non-off. Unsupported kernels warn and continue for built-ins
+// (Rust parity). Custom sandbox.toml profiles fail closed when Landlock cannot
+// be applied and the process is not already inside parent bwrap.
+// Non-Linux hosts are no-ops.
 func ApplyParentLandlock(profile string, workspace string, warn io.Writer) error {
-	parsed, err := ParseSandboxProfile(profile)
+	resolved, err := ResolveSandboxProfile(profile, workspace)
 	if err != nil {
 		return err
 	}
-	if parsed == SandboxOff {
+	if resolved.ChildBase == SandboxOff {
 		return nil
 	}
-	return applyParentLandlock(parsed, workspace, warn)
+	applied, err := applyParentLandlockResolved(resolved, workspace, warn)
+	if err != nil {
+		return err
+	}
+	if resolved.Custom && !applied && !IsInsideBwrap() && runtime.GOOS == "linux" {
+		return fmt.Errorf("custom sandbox profile %q requires parent Landlock (or bwrap); refuse to start unprotected", resolved.Name)
+	}
+	return nil
 }
 
 func existingDirs(paths []string) []string {

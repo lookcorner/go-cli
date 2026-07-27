@@ -17,7 +17,7 @@ One-round doctor/wrap surface closed at `5c6557d`. Remaining gaps need
 |---|--------|-------------|---------|------------|
 | 1 | **MCP OAuth enrollment** | MCP | Unlocks authenticated remote MCP servers; user-visible | L (multi-PR) |
 | 2 | **Linux cgroups for shell** | Shell execution | Completes shell isolation story after wrap | L |
-| 3 | **Landlock + seccomp** | OS sandbox | Hardens existing bubblewrap/Seatbelt profiles | in progress (seccomp + Landlock + parent bwrap) |
+| 3 | **Landlock + seccomp** | OS sandbox | Hardens existing bubblewrap/Seatbelt profiles | done |
 | 4 | **Cloud ACP / conversations** | ACP | Large protocol surface; defer until local ACP stays green | XL |
 | 5 | **Remote relay / workspace hub** | Session / workspace | Depends on product decisions | XL |
 | 6 | **Vector memory** | Memory | Research + storage + retrieval | XL |
@@ -92,7 +92,7 @@ clear no-op on unsupported hosts.
 
 ---
 
-## Phase 3 — Landlock + seccomp (in progress)
+## Phase 3 — Landlock + seccomp (done)
 
 ### Done
 
@@ -104,10 +104,15 @@ clear no-op on unsupported hosts.
       (`ApplyParentLandlock`, BestEffort warn+continue; no parent net restrict).
 - [x] Parent bwrap re-exec / hook write-deny for built-in profiles
       (`EnsureParentBwrapHookWriteDeny`, fail-closed; `__GROK_INSIDE_BWRAP=1`).
+- [x] Custom `sandbox.toml` profile Landlock parity (`LoadSandboxTOML` /
+      `ResolveSandboxProfile`; parent Landlock from base + extras; Linux
+      fail-closed for custom when Landlock cannot apply; child wrap uses
+      extends base + `restrict_network`).
 
 ### Still open
 
-- [ ] Custom sandbox.toml profile Landlock parity
+- (none for Phase 3; `deny`→parent bwrap bind-over and profile-conflict
+  doctor remain deferred follow-ups)
 
 ## Phase 4+ — cloud / memory
 
