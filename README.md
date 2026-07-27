@@ -1480,6 +1480,8 @@ Live ACP sessions expose their resolved skill catalog through
 plugin metadata, configured paths, ignore paths, and enabled state.
 `x.ai/skills/refresh-baseline` and the internal skills reload endpoint
 re-discover every live session's catalog from disk.
+`x.ai/internal/reload_workflows` also refreshes those catalogs and pushes an
+`available_commands_update` to every live session.
 
 Live session MCP servers are exposed through `x.ai/mcp/list`, and
 `x.ai/mcp/call` invokes a named server tool through the same client and

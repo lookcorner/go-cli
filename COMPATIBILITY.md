@@ -36,7 +36,7 @@ Release ACP clients can also negotiate `x.ai/folderTrust.interactive`; gated
 sessions request a fail-closed trust decision once per workspace and hot-reload
 their executable project components after an explicit grant.
 Skill catalogs support all-session `x.ai/skills/refresh-baseline` and
-`x.ai/internal/reload_skills` disk refreshes.
+`x.ai/internal/reload_skills` / `x.ai/internal/reload_workflows` disk refreshes.
 ACP command discovery always exposes plugin skills by `plugin:name`, adds the
 bare name only when unambiguous, and preserves native or built-in bare commands.
 Plugin extensions also support sessionless forced `x.ai/plugins/reload` with
