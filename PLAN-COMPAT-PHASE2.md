@@ -137,6 +137,20 @@ Fetching and replaying grok.com message history into the local runner.
 
 ---
 
+
+## Phase 4b — ACP workspaces list
+
+### Goal
+
+Fetch grok.com workspaces for ACP clients via `x.ai/workspaces/list`, degrading
+to empty + `_meta["x.ai/partial"]` when OAuth is unavailable.
+
+### Slice plan
+
+1. **WorkspacesClient + ACP wiring** — done on `compat/acp-workspaces-list`:
+   `GET /rest/workspaces` with page/query/kind, success rows, and
+   `no_oauth`/`error` partial responses.
+
 ## Phase 3+ — sandbox / memory / relay
 
 Separate kickoff docs when prior themes land. Do not start in parallel without

@@ -1651,6 +1651,68 @@ func TestStaticExtensionsAndCompactCommand(t *testing.T) {
 	}
 }
 
+func TestWorkspacesListFetchesWithOAuth(t *testing.T) {
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	if err := auth.Save(authPath, "ws-scope", auth.Credential{
+		Key: "oauth-token", UserID: "user-1", AuthMode: "oidc", Issuer: "https://auth.x.ai",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var seenQuery string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/rest/workspaces" {
+			t.Fatalf("path=%s", r.URL.Path)
+		}
+		seenQuery = r.URL.RawQuery
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"workspaces": []map[string]any{{
+				"workspaceId": "ws_1",
+				"name":        "Research",
+				"createTime":  "2026-06-18T17:30:00Z",
+				"kind":        "WORKSPACE_KIND_IMAGINE",
+			}},
+			"nextPageToken": "next",
+		})
+	}))
+	defer upstream.Close()
+	t.Setenv("GROK_WORKSPACES_BASE_URL", upstream.URL)
+
+	var output bytes.Buffer
+	server := &Server{
+		output: &output,
+		Auth:   AuthConfig{Path: authPath, Scope: "ws-scope", HTTP: upstream.Client()},
+	}
+	payload, err := json.Marshal(map[string]any{
+		"pageSize": 10, "pageToken": "tok", "query": "gpu", "kind": "WORKSPACE_KIND_IMAGINE",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.handleStaticExtension(message{ID: json.RawMessage("1"), Method: "x.ai/workspaces/list", Params: payload})
+	var response map[string]any
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	result := response["result"].(map[string]any)["result"].(map[string]any)
+	rows := result["workspaces"].([]any)
+	if len(rows) != 1 {
+		t.Fatalf("result=%#v", result)
+	}
+	row := rows[0].(map[string]any)
+	if row["id"] != "ws_1" || row["name"] != "Research" || row["kind"] != "WORKSPACE_KIND_IMAGINE" || row["createTime"] != "2026-06-18T17:30:00Z" {
+		t.Fatalf("row=%#v", row)
+	}
+	if result["nextPageToken"] != "next" {
+		t.Fatalf("result=%#v", result)
+	}
+	if result["_meta"] != nil {
+		t.Fatalf("unexpected partial meta: %#v", result["_meta"])
+	}
+	if !strings.Contains(seenQuery, "pageSize=10") || !strings.Contains(seenQuery, "query=gpu") {
+		t.Fatalf("query=%q", seenQuery)
+	}
+}
+
 func TestCompactConversationExtensionUsesContextWithoutPromptCompletion(t *testing.T) {
 	var output bytes.Buffer
 	streamer := &fixtureStreamer{results: []api.StreamResult{{Text: "focused summary"}}}

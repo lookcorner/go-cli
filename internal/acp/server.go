@@ -764,10 +764,47 @@ func (s *Server) handleStaticExtension(incoming message) {
 			s.respondError(incoming.ID, -32602, "invalid workspace list parameters")
 			return
 		}
-		s.respond(incoming.ID, map[string]any{"result": map[string]any{
-			"workspaces": []any{},
-			"_meta":      map[string]any{"x.ai/partial": map[string]any{"workspaces": true, "reason": "no_oauth"}},
-		}})
+		pageSize := 50
+		if req.PageSize != nil && *req.PageSize > 0 {
+			pageSize = *req.PageSize
+		}
+		config := s.authSnapshot()
+		client := &remote.WorkspacesClient{
+			HTTP: config.HTTP, BaseURL: remote.ResolveWorkspacesBaseURL(),
+			AuthPath: config.Path, AuthScope: config.Scope, TokenProvider: config.TokenProvider,
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), conversationsListTimeout)
+		defer cancel()
+		page, err := client.ListWorkspaces(ctx, remote.WorkspacesListQuery{
+			PageSize: pageSize, PageToken: req.PageToken, Query: req.Query, Kind: req.Kind,
+		})
+		if err != nil {
+			reason := "error"
+			if errors.Is(err, remote.ErrNoOAuth) {
+				reason = "no_oauth"
+			}
+			s.respond(incoming.ID, map[string]any{"result": map[string]any{
+				"workspaces": []any{},
+				"_meta":      map[string]any{"x.ai/partial": map[string]any{"workspaces": true, "reason": reason}},
+			}})
+			return
+		}
+		rows := make([]map[string]any, 0, len(page.Workspaces))
+		for _, workspace := range page.Workspaces {
+			row := map[string]any{"id": workspace.WorkspaceID, "name": workspace.Name}
+			if workspace.Kind != "" {
+				row["kind"] = workspace.Kind
+			}
+			if workspace.CreateTime != "" {
+				row["createTime"] = workspace.CreateTime
+			}
+			rows = append(rows, row)
+		}
+		result := map[string]any{"workspaces": rows}
+		if page.NextPageToken != "" {
+			result["nextPageToken"] = page.NextPageToken
+		}
+		s.respond(incoming.ID, map[string]any{"result": result})
 	}
 }
 

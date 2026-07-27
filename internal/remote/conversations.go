@@ -43,9 +43,12 @@ type Conversation struct {
 	Workspaces     []Workspace `json:"workspaces"`
 }
 
-// Workspace is a grok.com workspace linked to a conversation.
+// Workspace is a grok.com workspace (list rows and conversation links).
 type Workspace struct {
 	WorkspaceID string `json:"workspaceId"`
+	Name        string `json:"name,omitempty"`
+	CreateTime  string `json:"createTime,omitempty"`
+	Kind        string `json:"kind,omitempty"`
 }
 
 // ListQuery selects a page of conversations.

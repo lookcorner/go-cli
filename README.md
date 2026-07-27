@@ -1469,8 +1469,9 @@ requests fail silently and run only after three turns, three idle minutes, and
 a new turn since the last successful recap. Closing the session cancels and
 waits for recap generation without changing the main response chain or history.
 
-`x.ai/workspaces/list` returns the reference-compatible partial `no_oauth`
-response because this local build has no cloud workspace backend.
+`x.ai/workspaces/list` fetches grok.com `/rest/workspaces` when xAI OAuth is
+available (page/query/kind filters, `nextPageToken`), and otherwise returns the
+reference-compatible empty partial with `no_oauth` or `error`.
 
 Live ACP sessions expose their resolved skill catalog through
 `x.ai/skills/list` and `x.ai/skills/config`, including scope, invocation gates,
