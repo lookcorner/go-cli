@@ -23,7 +23,16 @@ One-round doctor/wrap surface closed at `5c6557d`. Remaining gaps need
 | 6 | **Vector memory** | Memory | Research + storage + retrieval | XL |
 | 7 | **Fullscreen media / inline video** | Markdown/media | Terminal capability + UX heavy | XL |
 
-Deferred unless explicitly requested: Cursor CLI session discovery, WezTerm kitty XTVERSION probes, Wayland data-control, sandbox.toml profile-conflict doctor.
+Deferred unless explicitly requested: Cursor CLI session discovery, WezTerm kitty XTVERSION probes, Wayland data-control.
+
+---
+
+## Phase 5 — Remote relay / workspace hub (blocked)
+
+Product-coupled (`computer-hub.grok.com`, OIDC hub auth, preview supervisor).
+Go keeps fail-closed headless + `workspace_exposure: false`. Do not dial hub
+without an explicit product unlock. Next actionable S item from the deferred
+list: **sandbox.toml profile-conflict doctor** (in progress on this stream).
 
 ---
 
@@ -113,11 +122,16 @@ clear no-op on unsupported hosts.
 
 ### Still open
 
-- (none for Phase 3; profile-conflict doctor remains deferred)
+- [x] sandbox.toml profile-conflict doctor (`SandboxProfileConflicts` →
+      `gork doctor` / `/doctor` finding; global wins, project cannot redefine)
 
 ## Phase 4+ — cloud / memory
 
 Separate kickoff docs. Do not start in parallel without an explicit request.
+
+## Phase 5 note
+
+Remote relay / workspace hub remains planned/XL (product-blocked). See queue #5.
 
 ---
 

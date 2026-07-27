@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"unicode"
 
@@ -96,6 +98,98 @@ func mergeProjectSandboxProfiles(dst *SandboxTOMLConfig, project SandboxTOMLConf
 		}
 		dst.Profiles[name] = profile
 	}
+}
+
+// SandboxProfileConflicts returns custom profile names that exist in both the
+// global and project sandbox.toml with different definitions. Matches Rust
+// sandbox_profile_conflicts (global wins; project cannot redefine).
+func SandboxProfileConflicts(workspace string) []string {
+	home, err := resolveGrokHome()
+	if err != nil {
+		home = ""
+	}
+	var global SandboxTOMLConfig
+	if home != "" {
+		if loaded := loadSandboxTOMLFile(filepath.Join(home, "sandbox.toml")); loaded != nil {
+			global = *loaded
+		}
+	}
+	if global.Profiles == nil {
+		global.Profiles = map[string]SandboxTOMLProfile{}
+	}
+
+	workspace = strings.TrimSpace(workspace)
+	if workspace == "" {
+		workspace = "."
+	}
+	if abs, err := filepath.Abs(workspace); err == nil {
+		workspace = abs
+	}
+	var project SandboxTOMLConfig
+	if loaded := loadSandboxTOMLFile(filepath.Join(workspace, ".grok", "sandbox.toml")); loaded != nil {
+		project = *loaded
+	}
+	if project.Profiles == nil {
+		project.Profiles = map[string]SandboxTOMLProfile{}
+	}
+	return mismatchedSandboxProfileNames(global, project)
+}
+
+func mismatchedSandboxProfileNames(global, project SandboxTOMLConfig) []string {
+	var names []string
+	for name, projectProfile := range project.Profiles {
+		parsed, err := ParseSandboxProfile(name)
+		if err != nil || IsBuiltinSandboxProfile(parsed) {
+			continue
+		}
+		globalProfile, ok := global.Profiles[name]
+		if !ok || sandboxTOMLProfilesEqual(globalProfile, projectProfile) {
+			continue
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func sandboxTOMLProfilesEqual(a, b SandboxTOMLProfile) bool {
+	return reflect.DeepEqual(a, b)
+}
+
+// FormatSandboxProfileConflictFinding builds the doctor finding text for
+// conflicting custom sandbox.toml profiles (Rust sandbox.profile-conflict).
+func FormatSandboxProfileConflictFinding(conflicts []string, userSandboxPath string) string {
+	if len(conflicts) == 0 {
+		return ""
+	}
+	quoted := make([]string, 0, len(conflicts))
+	for _, name := range conflicts {
+		quoted = append(quoted, "'"+name+"'")
+	}
+	if strings.TrimSpace(userSandboxPath) == "" {
+		userSandboxPath = "$GROK_HOME/sandbox.toml"
+	}
+	return fmt.Sprintf(
+		"Project and user sandbox settings define these profiles differently: %s\n"+
+			"    Gork is using the user profile. Compare `.grok/sandbox.toml` with %s, then rename "+
+			"or remove the conflicting project profile. Project settings can add profile names "+
+			"but can't redefine a user profile.",
+		strings.Join(quoted, ", "),
+		userSandboxPath,
+	)
+}
+
+// SandboxProfileConflictFinding reports a doctor finding for the workspace, or "".
+func SandboxProfileConflictFinding(workspace string) string {
+	conflicts := SandboxProfileConflicts(workspace)
+	if len(conflicts) == 0 {
+		return ""
+	}
+	path := "$GROK_HOME/sandbox.toml"
+	if home, err := resolveGrokHome(); err == nil {
+		path = filepath.Join(home, "sandbox.toml")
+	}
+	return FormatSandboxProfileConflictFinding(conflicts, path)
 }
 
 // ResolveSandboxProfile expands a built-in or custom profile name for workspace.

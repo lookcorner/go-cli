@@ -1741,7 +1741,9 @@ child shells wrap with the extends base. Project TOML is additive only
 (cannot replace a globally defined profile name). On Linux, custom `deny`
 paths are bind-over blocked during the same parent bwrap re-exec using
 mode-000 placeholders (exact paths and launch-time glob expansion;
-later-created glob matches are not covered).
+later-created glob matches are not covered). `gork doctor` / `/doctor`
+reports when a project `.grok/sandbox.toml` tries to redefine a user
+custom profile (global definition wins).
 Approval and the file tools' workspace/symlink checks remain independent
 safety boundaries.
 
