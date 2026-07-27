@@ -818,8 +818,15 @@ type fileMemoryConfig struct {
 	Session          *fileMemorySessionConfig          `json:"session,omitempty" toml:"session"`
 	Index            *fileMemoryIndexConfig            `json:"index,omitempty" toml:"index"`
 	Search           *fileMemorySearchConfig           `json:"search,omitempty" toml:"search"`
+	Embedding        *fileMemoryEmbeddingConfig        `json:"embedding,omitempty" toml:"embedding"`
 	GC               *fileMemoryGCConfig               `json:"gc,omitempty" toml:"gc"`
 	Dream            *fileMemoryDreamConfig            `json:"dream,omitempty" toml:"dream"`
+}
+
+type fileMemoryEmbeddingConfig struct {
+	Provider   *string `json:"provider,omitempty" toml:"provider"`
+	Model      *string `json:"model,omitempty" toml:"model"`
+	Dimensions *int    `json:"dimensions,omitempty" toml:"dimensions"`
 }
 
 type fileMemoryIndexConfig struct {
@@ -831,6 +838,8 @@ type fileMemorySearchConfig struct {
 	MaxResults    *int                           `json:"max_results,omitempty" toml:"max_results"`
 	MinScore      *float64                       `json:"min_score,omitempty" toml:"min_score"`
 	RecencyDecay  *float64                       `json:"recency_decay,omitempty" toml:"recency_decay"`
+	VectorWeight  *float64                       `json:"vector_weight,omitempty" toml:"vector_weight"`
+	TextWeight    *float64                       `json:"text_weight,omitempty" toml:"text_weight"`
 	TemporalDecay *fileMemoryTemporalDecayConfig `json:"temporal_decay,omitempty" toml:"temporal_decay"`
 	MMR           *fileMemoryMMRConfig           `json:"mmr,omitempty" toml:"mmr"`
 	SourceWeights map[string]float64             `json:"source_weights,omitempty" toml:"source_weights"`
@@ -1911,6 +1920,12 @@ func applyMemoryConfig(cfg *Config, source *fileMemoryConfig, flush *fileMemoryF
 			if source.Search.RecencyDecay != nil {
 				cfg.Memory.Search.RecencyDecay = *source.Search.RecencyDecay
 			}
+			if source.Search.VectorWeight != nil {
+				cfg.Memory.Search.VectorWeight = min(1, max(0, *source.Search.VectorWeight))
+			}
+			if source.Search.TextWeight != nil {
+				cfg.Memory.Search.TextWeight = min(1, max(0, *source.Search.TextWeight))
+			}
 			if source.Search.TemporalDecay != nil {
 				if source.Search.TemporalDecay.Enabled != nil {
 					cfg.Memory.Search.TemporalDecay.Enabled = *source.Search.TemporalDecay.Enabled
@@ -1929,6 +1944,22 @@ func applyMemoryConfig(cfg *Config, source *fileMemoryConfig, flush *fileMemoryF
 			}
 			if source.Search.SourceWeights != nil {
 				cfg.Memory.Search.SourceWeights = source.Search.SourceWeights
+			}
+		}
+		if source.Embedding != nil {
+			if source.Embedding.Provider != nil {
+				cfg.Memory.Embedding.Provider = strings.TrimSpace(*source.Embedding.Provider)
+			}
+			if source.Embedding.Model != nil {
+				model := strings.TrimSpace(*source.Embedding.Model)
+				if model == "" {
+					cfg.Memory.Embedding.Model = nil
+				} else {
+					cfg.Memory.Embedding.Model = &model
+				}
+			}
+			if source.Embedding.Dimensions != nil && *source.Embedding.Dimensions > 0 {
+				cfg.Memory.Embedding.Dimensions = *source.Embedding.Dimensions
 			}
 		}
 		if source.GC != nil && source.GC.MaxAgeDays != nil {

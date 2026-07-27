@@ -20,7 +20,7 @@ One-round doctor/wrap surface closed at `5c6557d`. Remaining gaps need
 | 3 | **Landlock + seccomp** | OS sandbox | Hardens existing bubblewrap/Seatbelt profiles | done |
 | 4 | **Cloud ACP / conversations** | ACP | Large protocol surface; defer until local ACP stays green | XL |
 | 5 | **Remote relay / workspace hub** | Session / workspace | Depends on product decisions | XL |
-| 6 | **Vector memory** | Memory | Research + storage + retrieval | XL |
+| 6 | **Vector memory** | Memory | Research + storage + retrieval | in progress (schema+config slice) |
 | 7 | **Fullscreen media / inline video** | Markdown/media | Terminal capability + UX heavy | XL |
 
 Deferred unless explicitly requested: Cursor CLI session discovery, WezTerm SSH XTVERSION probes.
@@ -132,6 +132,21 @@ Separate kickoff docs. Do not start in parallel without an explicit request.
 ## Phase 5 note
 
 Remote relay / workspace hub remains planned/XL (product-blocked). See queue #5.
+
+## Phase 6 — Vector memory (in progress)
+
+### Done
+
+- [x] `[memory.embedding]` + search `vector_weight`/`text_weight` config (Rust defaults;
+      unset `model` keeps text-only).
+- [x] Durable workspace `index.sqlite` schema (`meta`/`chunks`/`chunks_fts`, no
+      `chunks_vec` yet); `OpenIndex` / meta helpers.
+
+### Still open
+
+- [ ] FTS5 BM25 search path / reindex from Markdown chunker
+- [ ] sqlite-vec + embedding API + hybrid merge
+- [ ] Semantic flush dedup
 
 ---
 
