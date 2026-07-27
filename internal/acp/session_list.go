@@ -42,6 +42,7 @@ type sessionListRow struct {
 	Meta         map[string]any `json:"_meta"`
 	kind         string
 	starred      bool
+	workspaces   []string
 	updatedAt    time.Time
 }
 
@@ -107,13 +108,21 @@ func (s *Server) handleUnifiedSessionList(incoming message) {
 	}
 
 	partial := conversationsPartialOff()
+	workspaceFilter := facetStringValues(filters["workspace"])
+	workspacePushdown := ""
+	if len(workspaceFilter) == 1 {
+		workspacePushdown = workspaceFilter[0]
+	}
 	if lane && includeChat && !cursor.ConvPageDrained {
-		chatRows, nextToken, reason, err := s.fetchConversationRows(rawQuery, cursor.ConvPageToken)
+		chatRows, nextToken, reason, err := s.fetchConversationRows(rawQuery, cursor.ConvPageToken, workspacePushdown)
 		if err != nil {
 			partial = conversationsPartialReason(reason)
 		} else {
 			for _, row := range chatRows {
 				if !facetBoolAllows(filters["starred"], row.starred) {
+					continue
+				}
+				if len(workspaceFilter) > 0 && !facetAnyAllows(workspaceFilter, row.workspaces) {
 					continue
 				}
 				if !afterSessionBoundary(row.updatedAt, row.kind, row.SessionID, cursor.Boundary) {
@@ -152,7 +161,7 @@ func (s *Server) handleUnifiedSessionList(incoming message) {
 	s.respondUnifiedSessionList(incoming, rows, next, partial)
 }
 
-func (s *Server) fetchConversationRows(query, pageToken string) ([]sessionListRow, string, string, error) {
+func (s *Server) fetchConversationRows(query, pageToken, workspaceID string) ([]sessionListRow, string, string, error) {
 	config := s.authSnapshot()
 	client := &remote.ConversationsClient{
 		HTTP: config.HTTP, BaseURL: remote.ResolveConversationsBaseURL(),
@@ -161,7 +170,7 @@ func (s *Server) fetchConversationRows(query, pageToken string) ([]sessionListRo
 	ctx, cancel := context.WithTimeout(context.Background(), conversationsListTimeout)
 	defer cancel()
 	page, err := client.ListConversations(ctx, remote.ListQuery{
-		PageSize: conversationsListPageSize, PageToken: pageToken, SearchQuery: query,
+		PageSize: conversationsListPageSize, PageToken: pageToken, SearchQuery: query, WorkspaceID: workspaceID,
 	})
 	if err != nil {
 		if errors.Is(err, remote.ErrNoOAuth) {
@@ -244,9 +253,19 @@ func newConversationListRow(conversation remote.Conversation) sessionListRow {
 		lastActive = &value
 	}
 	title := conversation.Title
+	workspaces := conversationWorkspaceIDs(conversation)
 	facets := map[string]any{"kind": "chat"}
 	if conversation.Starred {
 		facets["starred"] = true
+	}
+	if len(workspaces) == 1 {
+		facets["workspace"] = workspaces[0]
+	} else if len(workspaces) > 1 {
+		values := make([]any, 0, len(workspaces))
+		for _, id := range workspaces {
+			values = append(values, id)
+		}
+		facets["workspace"] = values
 	}
 	return sessionListRow{
 		SessionID: conversation.ConversationID, Summary: title, UpdatedAt: updated, CreatedAt: created,
@@ -254,13 +273,31 @@ func newConversationListRow(conversation remote.Conversation) sessionListRow {
 		Meta: map[string]any{"x.ai/session": map[string]any{
 			"kind": "chat", "facets": facets,
 		}},
-		kind: "chat", starred: conversation.Starred, updatedAt: when,
+		kind: "chat", starred: conversation.Starred, workspaces: workspaces, updatedAt: when,
 	}
+}
+
+func conversationWorkspaceIDs(conversation remote.Conversation) []string {
+	ids := make([]string, 0, len(conversation.Workspaces))
+	seen := map[string]struct{}{}
+	for _, workspace := range conversation.Workspaces {
+		id := strings.TrimSpace(workspace.WorkspaceID)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	return ids
 }
 
 func sessionListFacets(rows []sessionListRow) map[string]any {
 	kindCounts := map[string]int{}
 	cwdCounts := make(map[string]int)
+	workspaceCounts := make(map[string]int)
 	starredCount := 0
 	for _, row := range rows {
 		kindCounts[row.kind]++
@@ -269,6 +306,9 @@ func sessionListFacets(rows []sessionListRow) map[string]any {
 		}
 		if row.starred {
 			starredCount++
+		}
+		for _, workspace := range row.workspaces {
+			workspaceCounts[workspace]++
 		}
 	}
 	cwds := make([]string, 0, len(cwdCounts))
@@ -298,6 +338,18 @@ func sessionListFacets(rows []sessionListRow) map[string]any {
 			"key": "starred", "values": []map[string]any{{"value": true, "count": starredCount}},
 		})
 	}
+	workspaces := make([]string, 0, len(workspaceCounts))
+	for workspace := range workspaceCounts {
+		workspaces = append(workspaces, workspace)
+	}
+	sort.Strings(workspaces)
+	if len(workspaces) > 0 {
+		values := make([]map[string]any, 0, len(workspaces))
+		for _, workspace := range workspaces {
+			values = append(values, map[string]any{"value": workspace, "count": workspaceCounts[workspace]})
+		}
+		keys = append(keys, map[string]any{"key": "workspace", "values": values})
+	}
 	return map[string]any{"scope": "window", "keys": keys}
 }
 
@@ -316,6 +368,48 @@ func facetAllows(raw any, value string) bool {
 			if text, ok := item.(string); ok && text == value {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+func facetStringValues(raw any) []string {
+	if raw == nil {
+		return nil
+	}
+	switch value := raw.(type) {
+	case string:
+		if text := strings.TrimSpace(value); text != "" {
+			return []string{text}
+		}
+	case []any:
+		out := make([]string, 0, len(value))
+		for _, item := range value {
+			if text, ok := item.(string); ok {
+				if text = strings.TrimSpace(text); text != "" {
+					out = append(out, text)
+				}
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+func facetAnyAllows(allowed, values []string) bool {
+	if len(allowed) == 0 {
+		return true
+	}
+	if len(values) == 0 {
+		return false
+	}
+	set := map[string]struct{}{}
+	for _, value := range values {
+		set[value] = struct{}{}
+	}
+	for _, want := range allowed {
+		if _, ok := set[want]; ok {
+			return true
 		}
 	}
 	return false

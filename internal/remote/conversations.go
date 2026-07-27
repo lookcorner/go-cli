@@ -35,11 +35,17 @@ func (e HTTPError) Error() string {
 
 // Conversation is one grok.com app-chat conversation row.
 type Conversation struct {
-	ConversationID string `json:"conversationId"`
-	Title          string `json:"title"`
-	Starred        bool   `json:"starred"`
-	CreateTime     string `json:"createTime"`
-	ModifyTime     string `json:"modifyTime"`
+	ConversationID string      `json:"conversationId"`
+	Title          string      `json:"title"`
+	Starred        bool        `json:"starred"`
+	CreateTime     string      `json:"createTime"`
+	ModifyTime     string      `json:"modifyTime"`
+	Workspaces     []Workspace `json:"workspaces"`
+}
+
+// Workspace is a grok.com workspace linked to a conversation.
+type Workspace struct {
+	WorkspaceID string `json:"workspaceId"`
 }
 
 // ListQuery selects a page of conversations.

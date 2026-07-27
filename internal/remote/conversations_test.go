@@ -36,8 +36,10 @@ func TestListConversationsWireContract(t *testing.T) {
 			"conversations": []map[string]any{{
 				"conversationId": "conv-1",
 				"title":          "GPU vendors",
+				"starred":        true,
 				"createTime":     "2026-06-18T17:30:00Z",
 				"modifyTime":     "2026-06-18T18:02:00Z",
+				"workspaces":     []map[string]any{{"workspaceId": "ws_9f3a"}},
 			}},
 			"nextPageToken": "page-2",
 		})
@@ -49,7 +51,7 @@ func TestListConversationsWireContract(t *testing.T) {
 		AuthPath: authPath, AuthScope: "scope",
 	}
 	page, err := client.ListConversations(context.Background(), ListQuery{
-		PageSize: 10, PageToken: "tok",
+		PageSize: 10, PageToken: "tok", WorkspaceID: "ws_9f3a",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -57,7 +59,10 @@ func TestListConversationsWireContract(t *testing.T) {
 	if len(page.Conversations) != 1 || page.Conversations[0].ConversationID != "conv-1" || page.NextPageToken != "page-2" {
 		t.Fatalf("page=%#v", page)
 	}
-	if !strings.Contains(seenQuery, "pageSize=10") || !strings.Contains(seenQuery, "pageToken=tok") {
+	if !page.Conversations[0].Starred || len(page.Conversations[0].Workspaces) != 1 || page.Conversations[0].Workspaces[0].WorkspaceID != "ws_9f3a" {
+		t.Fatalf("conversation=%#v", page.Conversations[0])
+	}
+	if !strings.Contains(seenQuery, "pageSize=10") || !strings.Contains(seenQuery, "pageToken=tok") || !strings.Contains(seenQuery, "workspaceId=ws_9f3a") {
 		t.Fatalf("query=%q", seenQuery)
 	}
 }

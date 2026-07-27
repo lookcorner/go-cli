@@ -640,10 +640,12 @@ func TestUnifiedSessionListConversationsLane(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	var seenQuery string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/rest/app-chat/conversations" {
 			t.Fatalf("path=%s", r.URL.Path)
 		}
+		seenQuery = r.URL.RawQuery
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"conversations": []map[string]any{{
 				"conversationId": "conv-chat",
@@ -651,12 +653,14 @@ func TestUnifiedSessionListConversationsLane(t *testing.T) {
 				"starred":        true,
 				"createTime":     "2026-06-18T17:30:00Z",
 				"modifyTime":     "2099-01-01T00:00:00Z",
+				"workspaces":     []map[string]any{{"workspaceId": "ws_alpha"}},
 			}, {
 				"conversationId": "conv-plain",
 				"title":          "plain chat",
 				"starred":        false,
 				"createTime":     "2026-06-18T16:30:00Z",
 				"modifyTime":     "2098-01-01T00:00:00Z",
+				"workspaces":     []map[string]any{{"workspaceId": "ws_beta"}},
 			}},
 		})
 	}))
@@ -688,11 +692,11 @@ func TestUnifiedSessionListConversationsLane(t *testing.T) {
 	}
 	meta := first["_meta"].(map[string]any)["x.ai/session"].(map[string]any)
 	facets := meta["facets"].(map[string]any)
-	if meta["kind"] != "chat" || facets["starred"] != true {
+	if meta["kind"] != "chat" || facets["starred"] != true || facets["workspace"] != "ws_alpha" {
 		t.Fatalf("chat meta=%#v", meta)
 	}
 	facetMeta := result["_meta"].(map[string]any)["x.ai/facets"].(map[string]any)
-	if !sessionListFacetHas(facetMeta, "starred", true) {
+	if !sessionListFacetHas(facetMeta, "starred", true) || !sessionListFacetHas(facetMeta, "workspace", "ws_alpha") {
 		t.Fatalf("facets=%#v", facetMeta)
 	}
 	partial := result["_meta"].(map[string]any)["x.ai/partial"].(map[string]any)
@@ -733,6 +737,29 @@ func TestUnifiedSessionListConversationsLane(t *testing.T) {
 	starredRows := response["result"].(map[string]any)["result"].(map[string]any)["sessions"].([]any)
 	if len(starredRows) != 1 || starredRows[0].(map[string]any)["sessionId"] != "conv-chat" {
 		t.Fatalf("starred-only=%#v", response)
+	}
+
+	output.Reset()
+	seenQuery = ""
+	workspaceOnly, err := json.Marshal(map[string]any{
+		"cwd": cwd,
+		"_meta": map[string]any{"x.ai/facetFilters": map[string]any{
+			"kind": []any{"chat"}, "workspace": []any{"ws_beta"},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.handleUnifiedSessionList(message{ID: json.RawMessage("4"), Method: "x.ai/session/list", Params: workspaceOnly})
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	workspaceRows := response["result"].(map[string]any)["result"].(map[string]any)["sessions"].([]any)
+	if len(workspaceRows) != 1 || workspaceRows[0].(map[string]any)["sessionId"] != "conv-plain" {
+		t.Fatalf("workspace-only=%#v", response)
+	}
+	if !strings.Contains(seenQuery, "workspaceId=ws_beta") {
+		t.Fatalf("expected workspace pushdown, query=%q", seenQuery)
 	}
 }
 

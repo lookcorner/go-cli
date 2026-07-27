@@ -107,6 +107,11 @@ Merge grok.com cloud chat conversations into ACP `x.ai/session/list`.
     facets, list honors `x.ai/facetFilters.starred`, and rename accepts an
     optional `starred` bool for PUT updates.
 
+2c. **Workspace facet + pushdown** — done on
+    `compat/cloud-conversations-workspace-facet`: parse conversation
+    `workspaces`, expose `workspace` facets/filters, and push a single
+    workspace filter to `workspaceId` on the list API.
+
 3. **Thin chat load/resume + modes catalog** — done: `_meta.x.ai/session.kind=chat`
    on `session/load`/`resume` opens a resident chat session without local JSONL;
    `POST /rest/modes` supplies the model picker when available. Cloud transcript
