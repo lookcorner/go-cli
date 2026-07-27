@@ -273,7 +273,45 @@ func TestACPPipedTerminalLifecycle(t *testing.T) {
 	}
 }
 
-func TestACPPipedTerminalBackgroundUnblocksWait(t *testing.T) {
+func TestPipedTerminalAdoptsSharedCgroup(t *testing.T) {
+	fake := &recordingShellCgroup{}
+	manager := newTerminalManager(nil)
+	manager.newCgroup = func() tools.ShellCgroup { return fake }
+
+	id, err := manager.createCommand("session", "sleep 2", nil, t.TempDir(), nil, terminalOutputBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.pids) != 1 || fake.pids[0] <= 0 {
+		t.Fatalf("expected one adopted pid, got %#v", fake.pids)
+	}
+	if outcome, err := manager.killCommand("session", id); err != nil || outcome != "killed" {
+		t.Fatalf("kill outcome=%q err=%v", outcome, err)
+	}
+	manager.closeAll()
+	if !fake.closed {
+		t.Fatal("expected shared cgroup release on closeAll")
+	}
+}
+
+type recordingShellCgroup struct {
+	pids   []int
+	closed bool
+}
+
+func (r *recordingShellCgroup) AddProcess(pid int) error {
+	r.pids = append(r.pids, pid)
+	return nil
+}
+
+func (r *recordingShellCgroup) Close() error {
+	r.closed = true
+	return nil
+}
+
+func (r *recordingShellCgroup) Path() string { return "fake-cgroup" }
+
+func TestPipedTerminalBackgroundUnblocksWait(t *testing.T) {
 	manager := newTerminalManager(nil)
 	defer manager.closeAll()
 	id, err := manager.createCommand("session", "sleep 5", nil, t.TempDir(), nil, terminalOutputBytes)

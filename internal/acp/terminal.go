@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/lookcorner/go-cli/internal/tools"
 )
 
 const terminalOutputBytes = 256 << 10
@@ -25,6 +27,10 @@ type terminalManager struct {
 	terminals map[string]*ptyTerminal
 	commands  map[string]*commandTerminal
 	notify    func(string, any)
+
+	cgroupMu  sync.Mutex
+	cgroup    tools.ShellCgroup
+	newCgroup func() tools.ShellCgroup
 }
 
 type commandTerminal struct {
@@ -113,6 +119,7 @@ func (m *terminalManager) create(shell, cwd string, env map[string]string, rows,
 	if err != nil {
 		return "", fmt.Errorf("start PTY shell: %w", err)
 	}
+	m.adoptTerminalProcess(cmd)
 	id, err := newTerminalID()
 	if err != nil {
 		_ = killTerminalProcess(cmd)
@@ -425,6 +432,7 @@ func (m *terminalManager) createCommand(sessionID, command string, args []string
 		_ = writer.Close()
 		return "", fmt.Errorf("start terminal command: %w", err)
 	}
+	m.adoptTerminalProcess(cmd)
 	id, err := newTerminalID()
 	if err != nil {
 		_ = killTerminalProcess(cmd)
@@ -701,5 +709,43 @@ func (m *terminalManager) closeAll() {
 			case <-time.After(3 * time.Second):
 			}
 		}
+	}
+	m.releaseTerminalCgroup()
+}
+
+func (m *terminalManager) adoptTerminalProcess(cmd *exec.Cmd) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	guard := m.ensureTerminalCgroup()
+	if guard == nil {
+		return
+	}
+	_ = guard.AddProcess(cmd.Process.Pid)
+}
+
+func (m *terminalManager) ensureTerminalCgroup() tools.ShellCgroup {
+	m.cgroupMu.Lock()
+	defer m.cgroupMu.Unlock()
+	if m.cgroup != nil {
+		return m.cgroup
+	}
+	factory := m.newCgroup
+	if factory == nil {
+		factory = func() tools.ShellCgroup {
+			return tools.NewShellCgroup(tools.DefaultCgroupMemoryConfig())
+		}
+	}
+	m.cgroup = factory()
+	return m.cgroup
+}
+
+func (m *terminalManager) releaseTerminalCgroup() {
+	m.cgroupMu.Lock()
+	guard := m.cgroup
+	m.cgroup = nil
+	m.cgroupMu.Unlock()
+	if guard != nil {
+		_ = guard.Close()
 	}
 }

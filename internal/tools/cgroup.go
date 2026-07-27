@@ -41,15 +41,24 @@ func (c CgroupMemoryConfig) normalized() CgroupMemoryConfig {
 	return c
 }
 
-// shellCgroup confines spawned shell PIDs. Implementations are best-effort.
-type shellCgroup interface {
+// ShellCgroup confines spawned shell/terminal PIDs. Implementations are best-effort.
+type ShellCgroup interface {
 	AddProcess(pid int) error
 	Close() error
 	Path() string
 }
 
+// shellCgroup is the historical unexported alias used inside ProcessManager.
+type shellCgroup = ShellCgroup
+
 var cgroupSeq atomic.Uint64
 
 func nextCgroupName() string {
 	return fmt.Sprintf("gork-shell-%d", cgroupSeq.Add(1))
+}
+
+// NewShellCgroup creates a best-effort Linux cgroup v2 memory guard for
+// model-started children. Non-Linux hosts and unsupported setups return nil.
+func NewShellCgroup(cfg CgroupMemoryConfig) ShellCgroup {
+	return tryShellCgroup(cfg)
 }
