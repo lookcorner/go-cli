@@ -1491,7 +1491,9 @@ entries add redacted targets plus `auth=` presence (`static`/`env`/`stored`/
 `oauth_byo`/`none`) and env-var names only—never tokens or secrets. `x.ai/mcp/auth_status`
 lists servers that still need auth;
 `x.ai/mcp/auth_trigger` and the TUI `/mcps` `I` key start enrollment for remote
-servers (stdio stays explicitly unsupported). Optional TOML fields
+servers (stdio stays explicitly unsupported). Concurrent enrollments share one
+browser flow via in-process single-flight, a Unix `$GROK_HOME/mcp_auth_*.lock`,
+and credential-store polling while waiting on the loopback callback. Optional TOML fields
 `oauth_client_id`, `oauth_client_secret_env_var`, `oauth_scopes`, and
 `oauth_callback_port` select BYO clients. Local MCP configuration files reload
 automatically without dropping client-provided session servers.
