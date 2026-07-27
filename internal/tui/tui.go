@@ -895,8 +895,12 @@ type model struct {
 	activeTurnSerial    uint64
 	initial             string
 	pendingPrompts      []string
-	pendingPromptImages [][]api.ContentPart
 	promptImages        []api.ContentPart
+	promptChipHits      []promptChipHit
+	promptChipHover     int
+	promptChipRow       int
+	promptChipPartIndex int
+	pendingPromptImages [][]api.ContentPart
 	clipboardRead       func(context.Context) (appclipboard.Content, error)
 	primaryRead         func(context.Context) (string, error)
 	scheduled           []tools.ScheduledTaskFired
@@ -1303,7 +1307,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		modelName:          modelName, defaultModelID: options.DefaultModelID, previousID: previousID, width: 80, height: 24,
 		minimal:       options.Minimal,
 		contextWindow: runner.ContextWindow,
-		status:        "ready", initial: strings.TrimSpace(initialPrompt), historyIndex: -1,
+		status: "ready", initial: strings.TrimSpace(initialPrompt), historyIndex: -1, promptChipHover: -1,
 		history: loadPromptHistory(runner, workspace), selectionMode: parseTextSelectionMode(options.Mode), persistSelection: options.SetSelectionMode,
 		wordSeparators: defaultWordSeparators, mouseToggle: options.MouseReportingToggle, vimMode: options.VimMode, persistVimMode: options.SetVimMode,
 		compactMode: options.CompactMode, persistCompactMode: options.SetCompactMode,
@@ -2513,6 +2517,12 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "image preview"
 		}
 		return m, nil
+	case promptChipHoverEvent:
+		if !msg.active {
+			return m, m.clearPromptChipHover()
+		}
+		m.setPromptChipHover(msg.index, msg.sticky)
+		return m, nil
 	case gboomMouseEvent:
 		if m.gboom != nil {
 			m.gboom.handleMouse(msg)
@@ -2914,7 +2924,12 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		if key.Code == tea.KeyEsc && len(m.input) == 0 && len(m.promptImages) > 0 {
 			m.promptImages = nil
+			m.promptChipHits = nil
+			m.promptChipHover = -1
 			m.status = "image attachments cleared"
+			if m.imageOverlay != nil && (m.imageOverlay.source == promptChipHoverSource || m.imageOverlay.source == promptChipClickSource) {
+				return m, m.closeImageOverlay()
+			}
 			return m, nil
 		}
 		if key.Code == tea.KeyEsc && len(m.input) == 0 {
@@ -6187,6 +6202,8 @@ func readPrimarySelection(ctx context.Context, goos string, mouse tea.Mouse, rea
 func (m *model) takePromptImages() []api.ContentPart {
 	images := m.promptImages
 	m.promptImages = nil
+	m.promptChipHits = nil
+	m.promptChipHover = -1
 	return images
 }
 
@@ -6693,7 +6710,18 @@ func (m *model) View() tea.View {
 		}
 		parts := m.slashMenuLines(width)
 		if len(m.promptImages) > 0 {
-			parts = append(parts, ansiDim+fmt.Sprintf("[Image x%d]", len(m.promptImages))+ansiReset)
+			chipLine, hits := promptImageChipLine(m.promptImages, width)
+			m.promptChipHits = hits
+			if chipLine != "" {
+				m.promptChipPartIndex = len(parts)
+				parts = append(parts, ansiDim+chipLine+ansiReset)
+			} else {
+				m.promptChipPartIndex = -1
+			}
+		} else {
+			m.promptChipHits = nil
+			m.promptChipPartIndex = -1
+			m.promptChipRow = -1
 		}
 		if m.voiceInterim != "" {
 			parts = append(parts, ansiDim+"🎙 "+truncate(m.voiceInterim, max(width-3, 1))+ansiReset)
@@ -6747,6 +6775,10 @@ func (m *model) View() tea.View {
 	contentHeight := m.contentHeight()
 	bannerHeight := len(banner)
 	bodyEnd := bannerHeight + contentHeight
+	if m.promptChipPartIndex >= 0 && len(m.promptChipHits) > 0 {
+		// header + banner + body + status, then footer part index.
+		m.promptChipRow = 1 + bannerHeight + contentHeight + 1 + m.promptChipPartIndex
+	}
 	view.OnMouse = func(message tea.MouseMsg) tea.Cmd {
 		mouse := message.Mouse()
 		if m.gboom != nil {
@@ -6801,6 +6833,11 @@ func (m *model) View() tea.View {
 					return func() tea.Msg { return imageOverlayClickEvent{id: id} }
 				}
 			}
+			if !m.minimal && m.videoOverlay == nil && m.promptChipRow >= 0 && mouse.Y == m.promptChipRow {
+				if index, ok := m.promptChipAt(mouse.X); ok {
+					return func() tea.Msg { return promptChipHoverEvent{index: index, active: true, sticky: true} }
+				}
+			}
 			if mouse.Y >= bannerHeight+1 && mouse.Y <= bodyEnd {
 				adjusted := mouse
 				adjusted.Y -= bannerHeight
@@ -6824,6 +6861,14 @@ func (m *model) View() tea.View {
 				adjusted.Y -= bannerHeight
 				event := mouseSelectionEvent{phase: selectionMove, point: selectionPointForMouse(adjusted, m.selection.lines)}
 				return func() tea.Msg { return event }
+			}
+			if !m.minimal && m.videoOverlay == nil && m.promptChipRow >= 0 && mouse.Y == m.promptChipRow {
+				if index, ok := m.promptChipAt(mouse.X); ok {
+					return func() tea.Msg { return promptChipHoverEvent{index: index, active: true} }
+				}
+			}
+			if m.promptChipHover >= 0 && m.imageOverlay != nil && m.imageOverlay.source == promptChipHoverSource {
+				return func() tea.Msg { return promptChipHoverEvent{active: false} }
 			}
 			if m.jump == nil && timelineRail != nil {
 				hit := timelineRail.hit(mouse.X, bodyRow)

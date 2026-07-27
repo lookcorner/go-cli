@@ -21,7 +21,7 @@ One-round doctor/wrap surface closed at `5c6557d`. Remaining gaps need
 | 4 | **Cloud ACP / conversations** | ACP | Large protocol surface; defer until local ACP stays green | XL |
 | 5 | **Remote relay / workspace hub** | Session / workspace | Depends on product decisions | XL |
 | 6 | **Vector memory** | Memory | Research + storage + retrieval | done (sqlite-vec optional) |
-| 7 | **Fullscreen media / inline video** | Markdown/media | Terminal capability + UX heavy | in progress (video overlay) |
+| 7 | **Fullscreen media / inline video** | Markdown/media | Terminal capability + UX heavy | done (session-asset video discovery remain) |
 
 Deferred unless explicitly requested: Cursor CLI session discovery, WezTerm kitty XTVERSION probes, Wayland data-control, sandbox.toml profile-conflict doctor.
 
@@ -284,7 +284,7 @@ an explicit request.
 
 ---
 
-## Phase 7 — Fullscreen media / inline video (in progress)
+## Phase 7 — Fullscreen media / inline video (done)
 
 ### Done
 
@@ -299,10 +299,12 @@ an explicit request.
 - [x] Video overlay viewer: ffmpeg frame extract, `/play-video <path>`, play/
       pause/seek chrome, tick playback + pixel flush (fails open without ffmpeg)
       on `compat/fullscreen-video-overlay`.
+- [x] Prompt-chip hover/focus image preview (`[Image #N]` chips; hover opens
+      overlay, click pins until Esc) on `compat/fullscreen-prompt-chip-preview`.
 
 ### Still open
 
-- [ ] Prompt-chip hover/focus image preview
+- [ ] Session-asset video discovery (auto list generated clips)
 
 ---
 

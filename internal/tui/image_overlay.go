@@ -18,6 +18,7 @@ type imageOverlayState struct {
 	bytes      int
 	data       []byte
 	retransmit bool
+	source     string
 	placement  OverlayPlacement
 	rect       OverlayRect
 }
@@ -72,6 +73,7 @@ func (m *model) closeImageOverlay() tea.Cmd {
 		return nil
 	}
 	m.imageOverlay = nil
+	m.promptChipHover = -1
 	if m.running {
 		m.status = "thinking"
 	} else {
