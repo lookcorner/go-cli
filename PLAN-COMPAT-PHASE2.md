@@ -54,7 +54,9 @@ OAuth enrollment for HTTP/SSE servers, with durable tokens and ACP/TUI status.
    fields parsed; inspect/doctor redaction cells still open).
 
 3. **Enrollment flow** — done: discovery + DCR + PKCE loopback
-   (`AuthenticateMCPServer`). Pasted-callback / cross-process dedup still open.
+   (`AuthenticateMCPServer`) plus in-process single-flight and Unix
+   `mcp_auth_*.lock` cross-process dedup with credential-store poll while
+   waiting on the loopback callback. Pasted-callback UX still open.
 
 4. **Runtime use** — done for attach + 401 refresh (TokenURL or rediscovery).
    Doctor auth-state cell done (`gork mcp doctor` `oauth credentials` check).
@@ -69,6 +71,8 @@ OAuth enrollment for HTTP/SSE servers, with durable tokens and ACP/TUI status.
 - [x] README documents MCP auth UX briefly.
 - [x] `gork mcp doctor` reports an `oauth credentials` check for HTTP/SSE
       (static bearer / env / store; fail-closed with enroll hint).
+- [x] Concurrent enrollments share one browser flow (in-process + Unix flock
+      + store poll) on `compat/mcp-oauth-enroll-dedup`.
 
 ### Phase 1 notes
 
@@ -76,8 +80,8 @@ OAuth enrollment for HTTP/SSE servers, with durable tokens and ACP/TUI status.
   map of `StoredCredentials` (`client_id`, `token_response`, `granted_scopes`,
   `token_received_at`). Loopback+PKCE+DCR enrollment; no device-code for MCP.
 - Go now mirrors the on-disk shape and attaches/refreshes tokens in
-  `internal/mcp` (`credentials.go`, `http_auth.go`). Pasted-callback /
-  cross-process enroll dedup and inspect oauth_* presence cells remain.
+  `internal/mcp` (`credentials.go`, `http_auth.go`). Optional pasted-callback
+  UX for headless enroll and inspect oauth_* presence cells remain.
 
 ### Out of scope for Phase 1
 
