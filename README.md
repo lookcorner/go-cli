@@ -1765,8 +1765,10 @@ parent-process Landlock FS allowlist (workspace/read-only/strict path sets);
 unsupported kernels warn and continue, and parent TCP stays open for model/MCP
 HTTP. Sandboxed Linux shells additionally install a seccomp namespace lockdown
 inside the bubblewrap child so nested `unshare`/`setns`/namespace `clone`
-attempts fail. Approval and
-the file tools' workspace/symlink checks remain independent safety boundaries.
+attempts fail. Read-only and strict profiles also stack a child network seccomp
+deny (`connect`/`bind`/`send*`/`listen`/`accept*`) on top of `--unshare-net`.
+Approval and the file tools' workspace/symlink checks remain independent safety
+boundaries.
 
 `monitor` runs a background command whose stdout is delivered as real-time,
 debounced events. It applies the reference line/batch limits, token-bucket rate

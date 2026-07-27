@@ -49,11 +49,32 @@ func TestNamespaceLockdownFilterSemantics(t *testing.T) {
 
 func TestWrapBubblewrapWithSeccompInsertsHelper(t *testing.T) {
 	args := []string{"--die-with-parent", "--", "/bin/sh"}
-	wrapped := wrapBubblewrapWithSeccomp(args)
+	wrapped := wrapBubblewrapWithSeccomp(args, false)
 	if len(wrapped) < 4 || wrapped[len(wrapped)-2] != SeccompNamespaceMarker || wrapped[len(wrapped)-1] != "/bin/sh" {
 		t.Fatalf("wrapped=%q", wrapped)
 	}
 	if wrapped[len(wrapped)-3] == "/bin/sh" {
 		t.Fatal("helper path missing")
+	}
+	netWrapped := wrapBubblewrapWithSeccomp(args, true)
+	if netWrapped[len(netWrapped)-2] != SeccompNamespaceNetMarker {
+		t.Fatalf("net marker missing: %q", netWrapped)
+	}
+}
+
+func TestChildNetworkFilterSemantics(t *testing.T) {
+	filter := buildChildNetworkFilter()
+	allow := uint32(seccompRetAllow)
+	eperm := uint32(seccompRetErrno) | uint32(unix.EPERM)
+	if got := evaluateSeccompFilter(filter, uint32(unix.SYS_WRITE)); got != allow {
+		t.Fatalf("write allow got=%#x", got)
+	}
+	for _, sys := range []uint32{
+		uint32(unix.SYS_CONNECT), uint32(unix.SYS_BIND), uint32(unix.SYS_SENDTO),
+		uint32(unix.SYS_SENDMSG), uint32(unix.SYS_LISTEN), uint32(unix.SYS_ACCEPT), uint32(unix.SYS_ACCEPT4),
+	} {
+		if got := evaluateSeccompFilter(filter, sys); got != eperm {
+			t.Fatalf("sys %d got=%#x want eperm", sys, got)
+		}
 	}
 }

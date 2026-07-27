@@ -1,5 +1,9 @@
 package tools
 
-// SeccompNamespaceMarker is argv[1] when gork re-execs itself inside bwrap to
-// install the namespace lockdown filter before the real command.
-const SeccompNamespaceMarker = "__GROK_SECCOMP_NS__"
+// Seccomp helper argv markers used when gork re-execs itself inside bwrap.
+const (
+	// SeccompNamespaceMarker installs namespace lockdown only.
+	SeccompNamespaceMarker = "__GROK_SECCOMP_NS__"
+	// SeccompNamespaceNetMarker installs namespace lockdown plus child network deny.
+	SeccompNamespaceNetMarker = "__GROK_SECCOMP_NS_NET__"
+)
