@@ -146,12 +146,15 @@ Remote relay / workspace hub remains planned/XL (product-blocked). See queue #5.
 - [x] Wire FTS into `Store.Search` as candidate narrowing (rankChunks keeps
       decay/weights/MMR; ephemeral and index errors fail open).
 - [x] Hybrid score merge helpers + flush `semantic_dedup_threshold` config /
-      fail-open hook (live KNN still needs sqlite-vec + embedder).
+      fail-open hook.
+- [x] Portable `chunks_embedding` BLOB store + brute-force L2 KNN,
+      `EmbeddingProvider` / `HashEmbeddingProvider`, `EmbedMissing`, and live
+      semantic flush dedup when `Runner.MemoryEmbedder` is set.
 
 ### Still open
 
-- [ ] sqlite-vec + embedding API + live hybrid/KNN search
-- [ ] Semantic flush dedup against live vector neighbors
+- [ ] OpenAI-compatible embedding API client + hybrid merge in `Store.Search`
+- [ ] Optional sqlite-vec acceleration (Go currently uses brute-force KNN)
 
 ---
 

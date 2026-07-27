@@ -513,7 +513,7 @@ func (r *Runner) runMemoryFlush(ctx context.Context, streamer ResponseStreamer, 
 	if err == nil {
 		accepted, outcome = processMemoryFlushResponse(result.Text, memoryConfig.Flush.MaxWriteChars)
 		if outcome == "accepted" {
-			if semanticFlushDuplicate(accepted, memoryConfig) {
+			if r.semanticFlushDuplicate(store, accepted, memoryConfig) {
 				outcome = "duplicate"
 			} else {
 				var written bool
@@ -704,16 +704,47 @@ func processMemoryFlushResponse(value string, maxChars int) (string, string) {
 	return "", "rejected"
 }
 
-// semanticFlushDuplicate mirrors Rust is_semantically_duplicate: fail open when
-// embeddings/sqlite-vec neighbors are unavailable (current Go build).
-func semanticFlushDuplicate(content string, cfg memory.Config) bool {
-	_ = content
-	if !memory.VectorSearchEnabled(cfg) {
+// semanticFlushDuplicate mirrors Rust is_semantically_duplicate.
+// Fail open when no embedder, ephemeral store, or index/KNN errors.
+func (r *Runner) semanticFlushDuplicate(store *memory.Store, content string, cfg memory.Config) bool {
+	if r == nil || r.MemoryEmbedder == nil || store == nil || store.IsEphemeral() || !memory.VectorSearchEnabled(cfg) {
+		return false
+	}
+	idx, err := memory.OpenIndex(store.WorkspaceDir(), cfg.Embedding, cfg.Index)
+	if err != nil {
+		return false
+	}
+	defer idx.Close()
+	files, err := store.List()
+	if err != nil {
+		return false
+	}
+	for _, file := range files {
+		data, readErr := store.Get(file.Path, 0, nil)
+		if readErr != nil {
+			continue
+		}
+		if _, err := idx.ReindexFile(file.Path, file.Source, data); err != nil {
+			return false
+		}
+	}
+	if _, err := idx.EmbedMissing(context.Background(), r.MemoryEmbedder); err != nil {
+		return false
+	}
+	has, err := idx.HasEmbeddings()
+	if err != nil || !has {
+		return false
+	}
+	vectors, err := r.MemoryEmbedder.Embed(context.Background(), []string{content})
+	if err != nil || len(vectors) == 0 {
+		return false
+	}
+	neighbors, err := idx.VectorSearch(vectors[0], memory.SemanticDedupKNNLimit)
+	if err != nil {
 		return false
 	}
 	threshold := memory.EffectiveSemanticDedupThreshold(cfg.Flush.SemanticDedupThreshold)
-	// Vector KNN neighbors land with sqlite-vec; empty set fails open.
-	return memory.IsSemanticallyDuplicate(nil, threshold)
+	return memory.IsSemanticallyDuplicate(neighbors, threshold)
 }
 
 func isNoReply(value string) bool {
