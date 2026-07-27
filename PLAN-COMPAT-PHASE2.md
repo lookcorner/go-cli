@@ -211,7 +211,8 @@ to empty + `_meta["x.ai/partial"]` when OAuth is unavailable.
    `mcp_preferences.json`, v0 one-select resolve/templates, ACP setup + enable.
 2. **`x.ai/mcp/list` setup placeholders** — done on `compat/acp-mcp-setup-list`:
    unresolved schemas appear as `setuprequired` rows with `setup`/`setupValues`.
-   Plugin-scoped collect remains a follow-up.
+3. **Plugin-scoped setup collect** — done on `compat/mcp-setup-plugin-collect`:
+   executable plugin MCP schemas participate in list/setup with `sourceLabel`.
 
 ## Phase 3+ — sandbox / memory / relay
 

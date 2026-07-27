@@ -11,6 +11,7 @@ import (
 
 	"github.com/lookcorner/go-cli/internal/config"
 	mcppkg "github.com/lookcorner/go-cli/internal/mcp"
+	"github.com/lookcorner/go-cli/internal/plugin"
 	"github.com/lookcorner/go-cli/internal/workspace"
 )
 
@@ -545,12 +546,26 @@ func mcpServerCatalog(current *session) []map[string]any {
 		entry["session"] = session
 		servers = append(servers, entry)
 	}
-	servers = append(servers, mcpSetupRequiredPlaceholders(cwd, seen)...)
+	servers = append(servers, mcpSetupRequiredPlaceholders(cwd, sessionMCPSetupPlugins(current), seen)...)
 	sort.Slice(servers, func(i, j int) bool { return servers[i]["name"].(string) < servers[j]["name"].(string) })
 	return servers
 }
 
-func mcpSetupRequiredPlaceholders(cwd string, seen map[string]bool) []map[string]any {
+func sessionMCPSetupPlugins(current *session) []plugin.Plugin {
+	if current == nil || current.runner == nil || current.runner.PluginInventory == nil {
+		return nil
+	}
+	inventory := current.runner.PluginInventory()
+	out := make([]plugin.Plugin, 0, len(inventory))
+	for _, item := range inventory {
+		if item.Executable {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func mcpSetupRequiredPlaceholders(cwd string, plugins []plugin.Plugin, seen map[string]bool) []map[string]any {
 	path, err := config.DefaultPath()
 	if err != nil {
 		return nil
@@ -560,7 +575,7 @@ func mcpSetupRequiredPlaceholders(cwd string, seen map[string]bool) []map[string
 		return nil
 	}
 	trusted := workspace.ResolveFolderTrust(cwd, cfg.FolderTrustEnabled, false) == workspace.TrustTrusted
-	entries := config.CollectMCPSetupConfigs(cwd, cfg, nil, trusted)
+	entries := config.CollectMCPSetupConfigs(cwd, cfg, plugins, trusted)
 	prefs := config.LoadMCPPreferences().File
 	out := make([]map[string]any, 0)
 	names := make([]string, 0, len(entries))

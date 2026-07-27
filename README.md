@@ -1517,7 +1517,7 @@ select schema complete configuration through `x.ai/mcp/setup`, which stores
 answers in `$GROK_HOME/mcp_preferences.json`, renders `{{variable}}` templates,
 reloads the live MCP base, and enables the server. `x.ai/mcp/list` includes
 unresolved setup schemas as `setuprequired` placeholders with `setup` and
-`setupValues`. Local MCP configuration files reload
+`setupValues`, including executable plugin MCP sources. Local MCP configuration files reload
 automatically without dropping client-provided session servers.
 The internal global and project-scoped MCP reload endpoints refresh matching
 live sessions from disk while preserving those client-provided overrides.

@@ -56,7 +56,7 @@ func (s *Server) handleMCPSetup(ctx context.Context, incoming message) {
 		return
 	}
 	trusted := workspace.ResolveFolderTrust(cwd, cfg.FolderTrustEnabled, false) == workspace.TrustTrusted
-	entries := config.CollectMCPSetupConfigs(cwd, cfg, nil, trusted)
+	entries := config.CollectMCPSetupConfigs(cwd, cfg, sessionMCPSetupPlugins(current), trusted)
 	entry, ok := entries[req.ServerName]
 	if !ok || entry.Config.Setup == nil {
 		s.respondError(incoming.ID, -32602, "server setup not found")
