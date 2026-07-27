@@ -150,10 +150,12 @@ Remote relay / workspace hub remains planned/XL (product-blocked). See queue #5.
 - [x] Portable `chunks_embedding` BLOB store + brute-force L2 KNN,
       `EmbeddingProvider` / `HashEmbeddingProvider`, `EmbedMissing`, and live
       semantic flush dedup when `Runner.MemoryEmbedder` is set.
+- [x] OpenAI-compatible `APIEmbeddingProvider` + hybrid FTS/KNN merge in
+      `Store.Search` when an embedder is configured (fail open otherwise).
 
 ### Still open
 
-- [ ] OpenAI-compatible embedding API client + hybrid merge in `Store.Search`
+- [ ] Wire `APIEmbeddingProvider` from session base URL/API key at startup
 - [ ] Optional sqlite-vec acceleration (Go currently uses brute-force KNN)
 
 ---

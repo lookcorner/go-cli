@@ -168,6 +168,9 @@ func (r *Runner) SetMemoryEnabled(ctx context.Context, enabled bool) (string, er
 			return "", err
 		}
 		cfg.Enabled = true
+		if r.MemoryEmbedder != nil {
+			store.SetEmbedder(r.MemoryEmbedder)
+		}
 		if err := tools.SetMemoryTools(r.Tools, store, cfg, true); err != nil {
 			return "", err
 		}
@@ -196,8 +199,12 @@ func (r *Runner) ListMemory() ([]memory.FileInfo, error) {
 
 func (r *Runner) memoryState() (*memory.Store, memory.Config) {
 	r.memoryMu.Lock()
-	defer r.memoryMu.Unlock()
-	return r.Memory, r.MemoryConfig
+	store, cfg, embedder := r.Memory, r.MemoryConfig, r.MemoryEmbedder
+	r.memoryMu.Unlock()
+	if store != nil && embedder != nil {
+		store.SetEmbedder(embedder)
+	}
+	return store, cfg
 }
 
 func (r *Runner) MemoryAvailability() (configured, enabled bool) {
