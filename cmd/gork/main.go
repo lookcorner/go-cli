@@ -44,6 +44,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/notify"
 	"github.com/lookcorner/go-cli/internal/personas"
 	"github.com/lookcorner/go-cli/internal/plugin"
+	"github.com/lookcorner/go-cli/internal/remote"
 	"github.com/lookcorner/go-cli/internal/session"
 	sessionshare "github.com/lookcorner/go-cli/internal/share"
 	"github.com/lookcorner/go-cli/internal/skills"
@@ -108,6 +109,7 @@ type options struct {
 	goal               bool
 	goalRuns           int
 	acp                bool
+	chat               bool
 	trust              bool
 	experimentalMemory bool
 	noMemory           bool
@@ -229,6 +231,7 @@ func parseRunOptions(args []string, stderr io.Writer) (options, *flag.FlagSet, e
 	flags.BoolVar(&opts.goal, "goal", false, "keep running turns until update_goal completes or blocks the goal")
 	flags.IntVar(&opts.goalRuns, "goal-runs", 10, "maximum turns in --goal mode")
 	flags.BoolVar(&opts.acp, "acp", false, "serve Agent Client Protocol v1 over stdio")
+	flags.BoolVar(&opts.chat, "chat", false, "gateway chat mode: cloud conversations lane and chat session defaults")
 	flags.BoolVar(&opts.trust, "trust", false, "trust this workspace's executable project configuration")
 	flags.BoolVar(&opts.experimentalMemory, "experimental-memory", false, "enable cross-session workspace memory")
 	flags.BoolVar(&opts.noMemory, "no-memory", false, "disable cross-session memory")
@@ -431,6 +434,14 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if opts.acp && (opts.tui || opts.interactive || opts.goal) {
 		return errors.New("--acp cannot be combined with --tui, --interactive, or --goal")
 	}
+	if opts.chat {
+		if conflict := remote.ChatModeFlagConflict(true, opts.forkSession); conflict != "" {
+			return errors.New(conflict)
+		}
+		if err := remote.EnableProcessChatMode(); err != nil {
+			return err
+		}
+	}
 	if opts.goalRuns < 1 {
 		return errors.New("--goal-runs must be greater than zero")
 	}
@@ -438,6 +449,9 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	cfg, err := config.Load(opts.configPath)
 	if err != nil {
 		return err
+	}
+	if opts.chat && remote.ChatModeConflictsWithLeader(true, cfg.UseLeader) {
+		return errors.New(remote.ChatModeLeaderConflict)
 	}
 	if err := prepareManagedPolicy(&cfg, opts.configPath, stderr); err != nil {
 		return err

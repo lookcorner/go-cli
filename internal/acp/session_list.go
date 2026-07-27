@@ -71,6 +71,9 @@ func (s *Server) handleUnifiedSessionList(incoming message) {
 	} else if value, ok := numberAsInt(req.Meta["x.ai/limit"]); ok && value > 0 {
 		limit = value
 	}
+	if remote.ProcessChatModeEnabled() {
+		req.Meta = forceKindChatMeta(req.Meta)
+	}
 	filters, _ := req.Meta["x.ai/facetFilters"].(map[string]any)
 	includeBuild := facetAllows(filters["kind"], "build")
 	includeChat := facetAllows(filters["kind"], "chat")
@@ -299,6 +302,19 @@ func facetAllows(raw any, value string) bool {
 		}
 	}
 	return false
+}
+
+func forceKindChatMeta(meta map[string]any) map[string]any {
+	if meta == nil {
+		meta = map[string]any{}
+	}
+	filters, _ := meta["x.ai/facetFilters"].(map[string]any)
+	if filters == nil {
+		filters = map[string]any{}
+	}
+	filters["kind"] = []any{"chat"}
+	meta["x.ai/facetFilters"] = filters
+	return meta
 }
 
 func numberAsInt(value any) (int, bool) {

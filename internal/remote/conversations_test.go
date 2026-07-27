@@ -156,7 +156,7 @@ func TestUpdateAndSoftDeleteConversation(t *testing.T) {
 func TestConversationsLaneActive(t *testing.T) {
 	t.Setenv("GROK_SESSION_LIST_CONVERSATIONS", "")
 	t.Setenv("GROK_CHAT_MODE", "")
-	if ConversationsLaneActive() {
+	if ConversationsLaneActive() || ProcessChatModeEnabled() {
 		t.Fatal("expected inactive")
 	}
 	t.Setenv("GROK_SESSION_LIST_CONVERSATIONS", "1")
@@ -165,7 +165,19 @@ func TestConversationsLaneActive(t *testing.T) {
 	}
 	t.Setenv("GROK_SESSION_LIST_CONVERSATIONS", "")
 	t.Setenv("GROK_CHAT_MODE", "true")
-	if !ConversationsLaneActive() {
+	if !ConversationsLaneActive() || !ProcessChatModeEnabled() {
 		t.Fatal("expected chat mode gate")
+	}
+}
+
+func TestChatModeFlagConflict(t *testing.T) {
+	if got := ChatModeFlagConflict(true, true); got != ChatModeForkConflict {
+		t.Fatalf("got=%q", got)
+	}
+	if got := ChatModeFlagConflict(true, false); got != "" {
+		t.Fatalf("got=%q", got)
+	}
+	if !ChatModeConflictsWithLeader(true, true) || ChatModeConflictsWithLeader(true, false) {
+		t.Fatal("leader conflict matrix")
 	}
 }

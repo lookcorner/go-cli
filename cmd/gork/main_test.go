@@ -31,6 +31,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/mcp"
 	"github.com/lookcorner/go-cli/internal/memory"
 	"github.com/lookcorner/go-cli/internal/plugin"
+	"github.com/lookcorner/go-cli/internal/remote"
 	"github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/subagent"
 	"github.com/lookcorner/go-cli/internal/tools"
@@ -366,6 +367,13 @@ func TestWriteExitResumeHint(t *testing.T) {
 func TestScreenModeFlagsAreMutuallyExclusive(t *testing.T) {
 	err := runOnce([]string{"--minimal", "--fullscreen"}, strings.NewReader(""), io.Discard, io.Discard)
 	if err == nil || err.Error() != "--minimal and --fullscreen are mutually exclusive" {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestChatModeRejectsForkSession(t *testing.T) {
+	err := runOnce([]string{"--chat", "--fork-session", "--acp"}, strings.NewReader(""), io.Discard, io.Discard)
+	if err == nil || err.Error() != remote.ChatModeForkConflict {
 		t.Fatalf("err=%v", err)
 	}
 }

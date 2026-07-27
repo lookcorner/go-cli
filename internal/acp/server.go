@@ -26,6 +26,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/hooks"
 	"github.com/lookcorner/go-cli/internal/imagine"
 	mcppkg "github.com/lookcorner/go-cli/internal/mcp"
+	"github.com/lookcorner/go-cli/internal/remote"
 	sessionlog "github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/terminaldiag"
 	"github.com/lookcorner/go-cli/internal/tools"
@@ -321,6 +322,19 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				meta["defaultAuthMethodId"] = authConfig.DefaultMethodID
 			}
 			meta["x.ai/mcp/sdk"] = true
+			if remote.ProcessChatModeEnabled() {
+				meta["chatMode"] = true
+				modes := s.fetchChatModesState(ctx)
+				if len(modes.Available) > 0 {
+					available := make([]modelInfo, 0, len(modes.Available))
+					for _, item := range modes.Available {
+						available = append(available, modelInfo{
+							ModelID: item.ModelID, Name: item.Name, Description: item.Description, Meta: item.Meta,
+						})
+					}
+					meta["modelState"] = sessionModelState{CurrentModelID: modes.CurrentModelID, Available: available}
+				}
+			}
 			s.respond(incoming.ID, map[string]any{
 				"protocolVersion": ProtocolVersion,
 				"agentCapabilities": map[string]any{
@@ -1611,6 +1625,10 @@ func (s *Server) handleNewSession(ctx context.Context, incoming message) {
 		s.respondError(incoming.ID, -32602, "cwd is required")
 		return
 	}
+	if remote.ProcessChatModeEnabled() || sessionKindFromMeta(params.Meta) == "chat" {
+		s.handleNewChatSession(ctx, incoming, params.CWD, params.Meta)
+		return
+	}
 	id, model, err := sessionStartupOverrides(params.Meta)
 	if err != nil {
 		s.respondError(incoming.ID, -32602, err.Error())
@@ -2539,6 +2557,14 @@ func (s *Server) handleRestoreSession(ctx context.Context, incoming message, rep
 		return
 	}
 	if sessionKindFromMeta(params.Meta) == "chat" {
+		s.handleRestoreChatSession(ctx, incoming, params.SessionID, params.CWD, params.Meta)
+		return
+	}
+	if remote.ProcessChatModeEnabled() {
+		if localBuildSessionExists(s.SessionDir, params.SessionID, params.CWD) {
+			s.respondError(incoming.ID, -32602, remote.ChatModeLocalBuildRefusal)
+			return
+		}
 		s.handleRestoreChatSession(ctx, incoming, params.SessionID, params.CWD, params.Meta)
 		return
 	}

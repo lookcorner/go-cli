@@ -81,22 +81,6 @@ func ResolveConversationsBaseURL() string {
 	return defaultConversationsBaseURL
 }
 
-// ConversationsLaneActive mirrors Rust conversations_lane_active for Go builds:
-// opt-in via GROK_SESSION_LIST_CONVERSATIONS or process-wide GROK_CHAT_MODE.
-func ConversationsLaneActive() bool {
-	return envTruthy("GROK_SESSION_LIST_CONVERSATIONS") || envTruthy("GROK_CHAT_MODE")
-}
-
-func envTruthy(key string) bool {
-	value := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
-	switch value {
-	case "1", "true", "yes", "on":
-		return true
-	default:
-		return false
-	}
-}
-
 // ListConversations calls GET /rest/app-chat/conversations.
 func (c *ConversationsClient) ListConversations(ctx context.Context, query ListQuery) (ListPage, error) {
 	pageSize := query.PageSize

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/lookcorner/go-cli/internal/remote"
+	sessionlog "github.com/lookcorner/go-cli/internal/session"
 )
 
 func (s *Server) conversationsClient() (*remote.ConversationsClient, error) {
@@ -131,6 +132,66 @@ func (s *Server) handleRestoreChatSession(ctx context.Context, incoming message,
 	created.mu.Unlock()
 	s.respond(incoming.ID, s.chatSessionStartResponse(created, mode, modes))
 	s.startFolderTrustPrompt(created)
+}
+
+func (s *Server) handleNewChatSession(ctx context.Context, incoming message, cwd string, meta map[string]any) {
+	if !remote.ConversationsLaneActive() {
+		s.respondError(incoming.ID, -32602, "chat session new requires the conversations lane (OIDC + chat feature)")
+		return
+	}
+	id, model, err := sessionStartupOverrides(meta)
+	if err != nil {
+		s.respondError(incoming.ID, -32602, err.Error())
+		return
+	}
+	if id == "" {
+		id = fmt.Sprintf("gork-chat-%s-%d", time.Now().UTC().Format("20060102T150405.000000000Z"), s.nextSession.Add(1))
+	}
+	modes := s.fetchChatModesState(ctx)
+	if model == "" {
+		model = modes.CurrentModelID
+	}
+	yoloMode, autoMode := sessionPermissionModeOverrides(meta)
+	config := SessionConfig{
+		CWD: cwd, Model: model, SessionID: id,
+		DisplayCWD: stringMeta(meta, "x.ai/display_cwd"),
+		YoloMode:   yoloMode, AutoMode: autoMode,
+		ClientHooks: parseClientHooks(meta), HunkTrackerMode: s.clientHunkMode,
+	}
+	created, err := s.startSession(ctx, id, config, "")
+	if err != nil {
+		s.respondError(incoming.ID, -32000, err.Error())
+		return
+	}
+	created.mu.Lock()
+	created.kind = "chat"
+	mode := created.mode
+	created.mu.Unlock()
+	response := s.chatSessionStartResponse(created, mode, modes)
+	responseMeta := response["_meta"].(map[string]any)
+	clientCWD := cwd
+	if created.displayCWD != "" {
+		clientCWD = created.displayCWD
+	}
+	responseMeta["currentWorkingDirectory"] = clientCWD
+	s.respond(incoming.ID, response)
+	if s.initialized.Load() {
+		s.ForceAnnouncements()
+	}
+	s.startFolderTrustPrompt(created)
+}
+
+func localBuildSessionExists(sessionDir, sessionID, cwd string) bool {
+	items, err := sessionlog.List(sessionDir, "")
+	if err != nil {
+		return false
+	}
+	for _, item := range items {
+		if item.SessionID == sessionID {
+			return cwd == "" || item.CWD == cwd
+		}
+	}
+	return false
 }
 
 func (s *Server) fetchChatModesState(ctx context.Context) remote.ModesModelState {

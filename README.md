@@ -1438,6 +1438,9 @@ cloud conversation (404 soft-delete is idempotent). `session/load` and
 `session/resume` with `_meta["x.ai/session"].kind=chat` open a thin resident
 chat session without local JSONL (no transcript replay yet), preferring the
 grok.com `/rest/modes` catalog for the returned model picker.
+Process-wide `--chat` (or `GROK_CHAT_MODE=1`) forces the session list to chat
+rows, opens `session/new` as chat, refuses local Build loads, and advertises
+`chatMode` plus modes `modelState` on `initialize`.
 
 `x.ai/session/close` performs idempotent live-session shutdown using the same
 runtime and cancellation cleanup as the standard ACP close method.

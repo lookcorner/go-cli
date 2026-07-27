@@ -26,6 +26,7 @@ import (
 	mcppkg "github.com/lookcorner/go-cli/internal/mcp"
 	"github.com/lookcorner/go-cli/internal/memory"
 	"github.com/lookcorner/go-cli/internal/plugin"
+	"github.com/lookcorner/go-cli/internal/remote"
 	sessionlog "github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/skills"
 	"github.com/lookcorner/go-cli/internal/subagent"
@@ -917,6 +918,156 @@ func TestRestoreChatSessionRequiresLane(t *testing.T) {
 	}
 	if response["error"].(map[string]any)["code"].(float64) != -32602 {
 		t.Fatalf("response=%#v", response)
+	}
+}
+
+func TestProcessChatModeForcesListAndRefusesLocalBuild(t *testing.T) {
+	t.Setenv("GROK_SESSION_LIST_CONVERSATIONS", "")
+	t.Setenv("GROK_CHAT_MODE", "1")
+	dir, cwd := t.TempDir(), t.TempDir()
+	logger, err := sessionlog.NewLoggerWithID(dir, "build-local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = logger.Append("session_metadata", map[string]any{"cwd": cwd, "modelId": "test-model"})
+	_ = logger.Append("user_prompt", map[string]any{"text": "local build"})
+	_ = logger.Close()
+
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	if err := auth.Save(authPath, "chat-scope", auth.Credential{
+		Key: "oauth-token", UserID: "user-1", AuthMode: "oidc", Issuer: "https://auth.x.ai",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/rest/app-chat/conversations":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"conversations": []map[string]any{{
+					"conversationId": "conv-only", "title": "chat",
+					"modifyTime": "2099-01-01T00:00:00Z",
+				}},
+			})
+		case "/rest/modes":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"modes": []map[string]any{{
+					"id": "auto", "title": "Auto",
+					"availability": map[string]any{"available": map[string]any{}},
+				}},
+				"defaultModeId": "auto",
+			})
+		default:
+			t.Fatalf("path=%s", r.URL.Path)
+		}
+	}))
+	defer upstream.Close()
+	t.Setenv("GROK_CONVERSATIONS_BASE_URL", upstream.URL)
+	t.Setenv("GROK_MODES_BASE_URL", upstream.URL)
+
+	var output bytes.Buffer
+	server := &Server{
+		SessionDir: dir, output: &output, sessions: make(map[string]*session),
+		Auth: AuthConfig{Path: authPath, Scope: "chat-scope", HTTP: upstream.Client()},
+		Factory: func(_ context.Context, cfg SessionConfig, approver tools.Approver, _, _ io.Writer) (*agent.Runner, func(), error) {
+			ws, err := workspace.Open(cfg.CWD)
+			if err != nil {
+				return nil, nil, err
+			}
+			registry := tools.NewRegistry(ws, approver)
+			return &agent.Runner{Tools: registry, ModelID: cfg.Model}, func() { _ = registry.Close() }, nil
+		},
+	}
+
+	server.handleUnifiedSessionList(message{
+		ID: json.RawMessage("1"), Method: "x.ai/session/list",
+		Params: mustJSON(t, map[string]any{"cwd": cwd, "limit": 10}),
+	})
+	list := decodeACP(t, json.NewDecoder(&output))
+	rows := list["result"].(map[string]any)["result"].(map[string]any)["sessions"].([]any)
+	if len(rows) != 1 || rows[0].(map[string]any)["sessionId"] != "conv-only" {
+		t.Fatalf("chat-mode list=%#v", list)
+	}
+
+	output.Reset()
+	server.handleRestoreSession(context.Background(), message{
+		ID: json.RawMessage("2"), Method: "session/load",
+		Params: mustJSON(t, map[string]any{"sessionId": "build-local", "cwd": cwd}),
+	}, true)
+	refuse := decodeACP(t, json.NewDecoder(&output))
+	if refuse["error"].(map[string]any)["message"] != remote.ChatModeLocalBuildRefusal {
+		t.Fatalf("refuse=%#v", refuse)
+	}
+
+	output.Reset()
+	server.handleNewSession(context.Background(), message{
+		ID: json.RawMessage("3"), Method: "session/new",
+		Params: mustJSON(t, map[string]any{"cwd": cwd, "mcpServers": []any{}}),
+	})
+	var created map[string]any
+	for _, msg := range decodeACPOutput(t, output.Bytes()) {
+		if msg["id"] == nil {
+			continue
+		}
+		if id, ok := msg["id"].(float64); ok && int(id) == 3 {
+			created, _ = msg["result"].(map[string]any)
+			break
+		}
+	}
+	if created == nil {
+		t.Fatalf("missing new response in %q", output.String())
+	}
+	detail := created["_meta"].(map[string]any)["x.ai/sessionDetail"].(map[string]any)
+	if detail["kind"] != "chat" {
+		t.Fatalf("new chat detail=%#v", detail)
+	}
+	_ = server.closeSession(created["sessionId"].(string))
+}
+
+func TestInitializeAdvertisesChatModeModelState(t *testing.T) {
+	t.Setenv("GROK_CHAT_MODE", "1")
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	if err := auth.Save(authPath, "scope", auth.Credential{Key: "tok", UserID: "u1"}); err != nil {
+		t.Fatal(err)
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"modes": []map[string]any{{
+				"id": "auto", "title": "Auto",
+				"availability": map[string]any{"available": map[string]any{}},
+			}},
+			"defaultModeId": "auto",
+		})
+	}))
+	defer upstream.Close()
+	t.Setenv("GROK_MODES_BASE_URL", upstream.URL)
+	var output bytes.Buffer
+	server := &Server{
+		output: &output, Factory: func(context.Context, SessionConfig, tools.Approver, io.Writer, io.Writer) (*agent.Runner, func(), error) {
+			return nil, nil, errors.New("unused")
+		},
+		Auth: AuthConfig{Path: authPath, Scope: "scope", HTTP: upstream.Client()},
+	}
+	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1}}` + "\n")
+	done := make(chan error, 1)
+	go func() {
+		done <- server.Serve(context.Background(), input, &output)
+	}()
+	select {
+	case <-time.After(2 * time.Second):
+		t.Fatal("serve hung")
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	response := decodeACP(t, json.NewDecoder(&output))
+	meta := response["result"].(map[string]any)["_meta"].(map[string]any)
+	if meta["chatMode"] != true {
+		t.Fatalf("meta=%#v", meta)
+	}
+	state := meta["modelState"].(map[string]any)
+	if state["currentModelId"] != "auto" {
+		t.Fatalf("modelState=%#v", state)
 	}
 }
 
