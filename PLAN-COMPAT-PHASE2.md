@@ -20,8 +20,8 @@ One-round doctor/wrap surface closed at `5c6557d`. Remaining gaps need
 | 3 | **Landlock + seccomp** | OS sandbox | Hardens existing bubblewrap/Seatbelt profiles | done (profile-conflict doctor deferred) |
 | 4 | **Cloud ACP / conversations** | ACP | Large protocol surface; defer until local ACP stays green | XL |
 | 5 | **Remote relay / workspace hub** | Session / workspace | Depends on product decisions | XL |
-| 6 | **Vector memory** | Memory | Research + storage + retrieval | in progress (warm embeddings) |
-| 7 | **Fullscreen media / inline video** | Markdown/media | Terminal capability + UX heavy | XL |
+| 6 | **Vector memory** | Memory | Research + storage + retrieval | done (sqlite-vec optional) |
+| 7 | **Fullscreen media / inline video** | Markdown/media | Terminal capability + UX heavy | in progress (overlay helpers) |
 
 Deferred unless explicitly requested: Cursor CLI session discovery, WezTerm kitty XTVERSION probes, Wayland data-control, sandbox.toml profile-conflict doctor.
 
@@ -248,7 +248,7 @@ to empty + `_meta["x.ai/partial"]` when OAuth is unavailable.
 Separate kickoff docs when prior themes land. Do not start in parallel without
 an explicit request.
 
-## Phase 6 — Vector memory (in progress)
+## Phase 6 — Vector memory (done)
 
 ### Done
 
@@ -279,7 +279,24 @@ an explicit request.
 
 ### Still open
 
-- [ ] Optional sqlite-vec acceleration (Go currently uses brute-force KNN)
+- [ ] Optional sqlite-vec acceleration (deferred; brute-force KNN is fine for
+      memory-scale corpora)
+
+---
+
+## Phase 7 — Fullscreen media / inline video (in progress)
+
+### Done
+
+- [x] Modal overlay escape helpers: centered placement, Kitty transmit/place
+      (+ clear), iTerm2 overlay path for non-Kitty pixel overlays on
+      `compat/fullscreen-media-overlay`.
+
+### Still open
+
+- [ ] Image preview overlay chrome wired into fullscreen TUI draw loop
+- [ ] Video viewer (ffmpeg frame extract + overlay playback)
+- [ ] Prompt-chip hover/focus image preview
 
 ---
 
