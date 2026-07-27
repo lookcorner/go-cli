@@ -670,6 +670,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 	memoryEmbedder := memoryEmbedderFor(cfg.Memory, cfg.BaseURL, cfg.APIKey, cfg.HTTPTimeout)
 	attachMemoryEmbedder(memoryStore, memoryEmbedder)
+	scheduleMemoryEmbeddingWarmup(memoryStore, cfg.Memory)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -2875,6 +2876,15 @@ func attachMemoryEmbedder(store *memory.Store, embedder memory.EmbeddingProvider
 	store.SetEmbedder(embedder)
 }
 
+func scheduleMemoryEmbeddingWarmup(store *memory.Store, cfg memory.Config) {
+	if store == nil || store.IsEphemeral() || !memory.VectorSearchEnabled(cfg) {
+		return
+	}
+	go func() {
+		_, _ = store.WarmEmbeddings(context.Background(), cfg.Index)
+	}()
+}
+
 func memoryStoreOpener(cfg memory.Config, workspaceRoot, sessionID string, embedder memory.EmbeddingProvider) func() (*memory.Store, error) {
 	if !cfg.Enabled {
 		return nil
@@ -2885,6 +2895,7 @@ func memoryStoreOpener(cfg memory.Config, workspaceRoot, sessionID string, embed
 			return nil, err
 		}
 		attachMemoryEmbedder(store, embedder)
+		scheduleMemoryEmbeddingWarmup(store, cfg)
 		return store, nil
 	}
 }
@@ -3698,6 +3709,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		}
 		memoryEmbedder := memoryEmbedderFor(sessionCfg.Memory, sessionCfg.BaseURL, sessionCfg.APIKey, sessionCfg.HTTPTimeout)
 		attachMemoryEmbedder(memoryStore, memoryEmbedder)
+		scheduleMemoryEmbeddingWarmup(memoryStore, sessionCfg.Memory)
 		if err := tools.RegisterMemoryTools(registry, memoryStore, sessionCfg.Memory); err != nil {
 			_ = logger.Close()
 			_ = registry.Close()

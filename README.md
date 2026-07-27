@@ -469,9 +469,12 @@ path allowlist and atomic persistence; an empty `new_text` forgets the range,
 and identical content is a no-op.
 It uses durable workspace `index.sqlite` FTS5 BM25 to narrow search candidates
 (`[memory.embedding]` + Markdown reindex), then the same in-process ranker for
-decay/source weights/MMR (ephemeral and index failures fail open). When `[memory.embedding].model` is set, session startup attaches an
+decay/source weights/MMR (ephemeral and index failures fail open). When
+`[memory.embedding].model` is set, session startup attaches an
 `APIEmbeddingProvider` (base URL/API key) so search merges FTS with L2 KNN and
-flush can semantic-dedup near-duplicates.
+flush can semantic-dedup near-duplicates. After attach, a background
+`WarmEmbeddings` pass reindexes memory Markdown and fills missing chunk vectors
+(fail-open).
 Session startup also removes, in the background, empty orphan memory
 workspaces older than `[memory.gc].max_age_days` (30 by default); temporary
 `tmp*` workspaces use a 7-day limit when they contain sessions and are removed

@@ -112,6 +112,50 @@ func (s *Store) Search(query string, index IndexConfig, search SearchConfig) ([]
 	return rankChunks(chunks, terms, search), nil
 }
 
+// WarmEmbeddings reindexes workspace memory Markdown into index.sqlite and
+// fills missing chunk embeddings. Mirrors Rust session-init MEMORY_REINDEX +
+// embed_missing. Fail-open for ephemeral stores, missing embedders, or errors.
+func (s *Store) WarmEmbeddings(ctx context.Context, index IndexConfig) (int, error) {
+	if s == nil {
+		return 0, nil
+	}
+	s.mu.Lock()
+	ephemeral, embedder, workspaceDir := s.ephemeral, s.embedder, s.workspaceDir
+	s.mu.Unlock()
+	if ephemeral || embedder == nil || workspaceDir == "" {
+		return 0, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	files, err := s.List()
+	if err != nil {
+		return 0, err
+	}
+	embedding := EmbeddingConfig{Provider: "api", Dimensions: embedder.Dimensions()}
+	model := embedder.ModelName()
+	embedding.Model = &model
+	idx, err := OpenIndex(workspaceDir, embedding, index)
+	if err != nil {
+		return 0, err
+	}
+	defer idx.Close()
+	for _, file := range files {
+		path, pathErr := s.allowedPath(file.Path)
+		if pathErr != nil {
+			continue
+		}
+		data, readErr := readMemoryFile(path)
+		if readErr != nil {
+			continue
+		}
+		if _, err := idx.ReindexFile(path, file.Source, string(data)); err != nil {
+			return 0, err
+		}
+	}
+	return idx.EmbedMissing(ctx, embedder)
+}
+
 // searchHybridLocked merges FTS BM25 + embedding KNN scores, then applies the
 // same decay/source-weight/MMR path as text ranking. Fail open without embedder.
 func (s *Store) searchHybridLocked(query string, files []FileInfo, chunks []chunk, index IndexConfig, search SearchConfig) ([]Result, bool) {

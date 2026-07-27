@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"math"
 	"os"
 	"path/filepath"
@@ -77,6 +78,30 @@ func TestStoreSearchRanksFiltersAndDecaysSessions(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(store.workspaceDir, "index.sqlite")); err != nil {
 		t.Fatalf("expected FTS index after search: %v", err)
+	}
+}
+
+func TestStoreWarmEmbeddingsReindexesAndEmbeds(t *testing.T) {
+	root, workspace := t.TempDir(), t.TempDir()
+	store, err := Open(root, workspace, "warm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(store.workspaceDir, "MEMORY.md")
+	if err := os.WriteFile(path, []byte("## Warm\n\nvector warmup chunk content\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := store.WarmEmbeddings(context.Background(), DefaultConfig().Index); err != nil || n != 0 {
+		t.Fatalf("without embedder embedded=%d err=%v", n, err)
+	}
+	store.SetEmbedder(HashEmbeddingProvider{Dims: 8, Model: "hash"})
+	n, err := store.WarmEmbeddings(context.Background(), DefaultConfig().Index)
+	if err != nil || n < 1 {
+		t.Fatalf("embedded=%d err=%v", n, err)
+	}
+	again, err := store.WarmEmbeddings(context.Background(), DefaultConfig().Index)
+	if err != nil || again != 0 {
+		t.Fatalf("second warm embedded=%d err=%v", again, err)
 	}
 }
 
