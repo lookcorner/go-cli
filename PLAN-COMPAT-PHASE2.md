@@ -141,10 +141,13 @@ Remote relay / workspace hub remains planned/XL (product-blocked). See queue #5.
       unset `model` keeps text-only).
 - [x] Durable workspace `index.sqlite` schema (`meta`/`chunks`/`chunks_fts`, no
       `chunks_vec` yet); `OpenIndex` / meta helpers.
+- [x] FTS5 BM25 + Markdown reindex APIs (`ReindexFile` / `SearchFTS` on
+      `IndexDB`); `Store.Search` stays on in-process ranking until decay/source
+      weights and hybrid merge land together.
 
 ### Still open
 
-- [ ] FTS5 BM25 search path / reindex from Markdown chunker
+- [ ] Wire FTS into `Store.Search` with ranking parity + fail-open
 - [ ] sqlite-vec + embedding API + hybrid merge
 - [ ] Semantic flush dedup
 

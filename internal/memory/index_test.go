@@ -8,7 +8,7 @@ import (
 
 func TestOpenIndexCreatesSchema(t *testing.T) {
 	dir := t.TempDir()
-	idx, err := OpenIndex(dir, EmbeddingConfig{Provider: "api", Dimensions: 1024})
+	idx, err := OpenIndex(dir, EmbeddingConfig{Provider: "api", Dimensions: 1024}, DefaultConfig().Index)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,6 +31,54 @@ func TestOpenIndexCreatesSchema(t *testing.T) {
 	sql := SchemaSQL()
 	if !strings.Contains(sql, "chunks_fts") || strings.Contains(sql, "chunks_vec") {
 		t.Fatal("schema should include FTS and omit vec")
+	}
+}
+
+func TestReindexFileAndSearchFTS(t *testing.T) {
+	dir := t.TempDir()
+	idx, err := OpenIndex(dir, EmbeddingConfig{Provider: "api", Dimensions: 1024}, IndexConfig{MaxChunkChars: 1600, ChunkOverlapChars: 320})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	path := filepath.Join(dir, "MEMORY.md")
+	content := "# Notes\n\nRust ownership and borrowing rules live here.\n\n## Other\n\nUnrelated pasta recipes.\n"
+	got, err := idx.ReindexFile(path, "workspace", content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Added < 1 {
+		t.Fatalf("expected added chunks, got %+v", got)
+	}
+
+	hits, err := idx.SearchFTS("ownership borrowing", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) == 0 {
+		t.Fatal("expected FTS hits for ownership")
+	}
+	if !strings.Contains(strings.ToLower(hits[0].Text), "ownership") {
+		t.Fatalf("unexpected hit text: %q", hits[0].Text)
+	}
+
+	// Unchanged content should skip updates.
+	again, err := idx.ReindexFile(path, "workspace", content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Added != 0 || again.Updated != 0 || again.Deleted != 0 {
+		t.Fatalf("unchanged reindex should be no-op: %+v", again)
+	}
+
+	// Shrinking file deletes stale chunks.
+	shrunk, err := idx.ReindexFile(path, "workspace", "# Empty\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shrunk.Deleted < 1 && shrunk.Updated < 1 && shrunk.Added < 1 {
+		t.Fatalf("expected mutations on shrink: %+v", shrunk)
 	}
 }
 
