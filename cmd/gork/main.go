@@ -1140,7 +1140,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		ToggleMCPServer: toggleMCPServer, ToggleMCPTool: toggleMCPTool,
 		UpsertMCPServer: upsertMCPServer, DeleteMCPServer: deleteMCPServer,
 		AuthenticateMCPServer: authenticateMCPServer,
-		UpdateSkills: updateSkills, UpdatePlugins: updatePlugins,
+		UpdateSkills:          updateSkills, UpdatePlugins: updatePlugins,
 		MarketplaceList: func() ([]marketplace.ScanResult, error) { return marketplace.List(opts.configPath, ws.Root()) }, MarketplaceAction: marketplaceAction,
 	}
 	if subagents != nil {
@@ -3474,6 +3474,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 	server.Auth.Authenticate = loginCoordinator.Authenticate
 	server.Auth.GetURL = loginCoordinator.GetURL
 	server.Auth.SubmitCode = loginCoordinator.SubmitCode
+	server.Auth.Cancel = loginCoordinator.Cancel
 	server.Initialized = func() {
 		go refreshBundle(ctx)
 		go watchACPAnnouncements(ctx, acpAnnouncementsRefreshInterval(), func(pollCtx context.Context) *config.RemoteSettings {
@@ -4129,12 +4130,12 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			ToggleMCPServer: toggleMCPServer, ToggleMCPTool: toggleMCPTool,
 			UpsertMCPServer: upsertMCPServer, DeleteMCPServer: deleteMCPServer,
 			AuthenticateMCPServer: authenticateMCPServer,
-			HandleMCPSDKMessage:  mcpRuntime.HandleSDKMessage,
-			UpdateSkills:        updateSkills,
-			UpdatePlugins:       updatePlugins,
-			MarketplaceList:     func() ([]marketplace.ScanResult, error) { return marketplace.List(opts.configPath, ws.Root()) },
-			MarketplaceAction:   marketplaceAction,
-			SessionID:           logger.ID(), SessionPath: logger.Path(), Workspace: ws.Root(), PromptWorkspace: sessionConfig.DisplayCWD,
+			HandleMCPSDKMessage:   mcpRuntime.HandleSDKMessage,
+			UpdateSkills:          updateSkills,
+			UpdatePlugins:         updatePlugins,
+			MarketplaceList:       func() ([]marketplace.ScanResult, error) { return marketplace.List(opts.configPath, ws.Root()) },
+			MarketplaceAction:     marketplaceAction,
+			SessionID:             logger.ID(), SessionPath: logger.Path(), Workspace: ws.Root(), PromptWorkspace: sessionConfig.DisplayCWD,
 		}
 		if subagentManager != nil {
 			runner.AgentDefinitions = subagentManager.Definitions

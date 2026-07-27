@@ -1287,7 +1287,7 @@ cached-session, and interactive authentication methods plus the preferred defaul
 The standard `authenticate` request supports API keys, cached credentials, browser
 OIDC, headless device login, and configured external providers. Interactive clients
 receive the mode and URL through `x.ai/auth/get_url` and may return a pasted callback
-URL or authorization code through `x.ai/auth/submit_code`. Completed login updates
+URL or authorization code through `x.ai/auth/submit_code`. `x.ai/auth/cancel` stops an in-flight interactive login (idempotent; optional `request_seq` scopes the cancel). Completed login updates
 credentials, remote settings, model-cache identity, and subsequent sessions without
 restarting the server. Clients can clear the current or a named OAuth scope through
 `x.ai/auth/logout`; `x.ai/internal/auth_cleared` applies the same runtime cleanup when

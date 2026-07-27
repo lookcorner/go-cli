@@ -62,6 +62,30 @@ func TestACPLoginCoordinatorFallsBackFromCachedToken(t *testing.T) {
 	}
 }
 
+func TestACPLoginCoordinatorCancelScopesByRequestSeq(t *testing.T) {
+	coordinator := newACPLoginCoordinator(nil, auth.DefaultConfig(), filepath.Join(t.TempDir(), "auth.json"))
+	seq := uint64(3)
+	if !coordinator.beginInteractive(&seq) {
+		t.Fatal("begin failed")
+	}
+	cancelled := false
+	coordinator.mu.Lock()
+	coordinator.loginCancel = func() { cancelled = true }
+	coordinator.mu.Unlock()
+
+	other := uint64(9)
+	coordinator.Cancel(&other)
+	if cancelled {
+		t.Fatal("cancel tore down a different request_seq")
+	}
+	coordinator.Cancel(&seq)
+	if !cancelled {
+		t.Fatal("matching request_seq did not cancel")
+	}
+	coordinator.endInteractive()
+	coordinator.Cancel(nil) // idempotent no-op
+}
+
 func TestACPAuthRuntimeProviderSelection(t *testing.T) {
 	provider := func(context.Context, string) (string, error) { return "token", nil }
 	runtime := &acpAuthRuntime{provider: provider}

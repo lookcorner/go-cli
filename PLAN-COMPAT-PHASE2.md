@@ -151,6 +151,14 @@ to empty + `_meta["x.ai/partial"]` when OAuth is unavailable.
    `GET /rest/workspaces` with page/query/kind, success rows, and
    `no_oauth`/`error` partial responses.
 
+
+## Phase 4c — ACP auth cancel
+
+### Slice
+
+1. **`x.ai/auth/cancel`** — done on `compat/acp-auth-cancel`: idempotent cancel
+   of in-flight interactive login with optional `request_seq` scoping.
+
 ## Phase 3+ — sandbox / memory / relay
 
 Separate kickoff docs when prior themes land. Do not start in parallel without
