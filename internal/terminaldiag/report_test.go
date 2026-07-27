@@ -35,11 +35,11 @@ func TestIsCommand(t *testing.T) {
 }
 
 func TestBuildSnapshotJSONShape(t *testing.T) {
-	env := map[string]string{"TERM_PROGRAM": "WezTerm", "TERM": "xterm-256color", "COLORTERM": "truecolor"}
+	env := map[string]string{"TERM_PROGRAM": "kitty", "TERM": "xterm-kitty", "COLORTERM": "truecolor"}
 	snapshot := BuildSnapshot(func(key string) string { return env[key] }, func(string) (string, error) {
 		return "", errors.New("missing")
 	}, "linux")
-	if snapshot.SchemaVersion != SchemaVersion || snapshot.Facts.Terminal != "WezTerm" || snapshot.Counts.Issues != 0 || !snapshot.Facts.OSC52 {
+	if snapshot.SchemaVersion != SchemaVersion || snapshot.Facts.Terminal != "kitty" || snapshot.Counts.Issues != 0 || !snapshot.Facts.OSC52 {
 		t.Fatalf("snapshot=%#v", snapshot)
 	}
 	payload, err := json.Marshal(snapshot)
@@ -75,7 +75,7 @@ func TestBuildReportDescribesTerminalAndRoutes(t *testing.T) {
 func TestBuildReportRecommendsSSHWrap(t *testing.T) {
 	env := map[string]string{
 		"TERM": "xterm-256color", "COLORTERM": "truecolor",
-		"SSH_CONNECTION": "1 2 3 4", "TERM_PROGRAM": "WezTerm",
+		"SSH_CONNECTION": "1 2 3 4", "TERM_PROGRAM": "kitty",
 	}
 	snapshot := BuildSnapshot(func(key string) string { return env[key] }, func(string) (string, error) {
 		return "/bin/pbcopy", nil
@@ -302,7 +302,7 @@ func TestBuildReportWarnsForBasicTmuxColor(t *testing.T) {
 
 func TestBuildSnapshotWarnsForNoColor(t *testing.T) {
 	env := map[string]string{
-		"TERM_PROGRAM": "WezTerm", "TERM": "xterm-256color", "COLORTERM": "truecolor", "NO_COLOR": "1",
+		"TERM_PROGRAM": "kitty", "TERM": "xterm-kitty", "COLORTERM": "truecolor", "NO_COLOR": "1",
 	}
 	snapshot := BuildSnapshot(func(key string) string { return env[key] }, func(string) (string, error) {
 		return "/bin/pbcopy", nil
@@ -431,7 +431,7 @@ func TestBuildSnapshotWarnsForMissingVoiceInput(t *testing.T) {
 	}
 	t.Cleanup(func() { probeVoiceInput = prev })
 
-	env := map[string]string{"TERM_PROGRAM": "WezTerm", "TERM": "xterm-256color", "COLORTERM": "truecolor"}
+	env := map[string]string{"TERM_PROGRAM": "kitty", "TERM": "xterm-kitty", "COLORTERM": "truecolor"}
 	snapshot := BuildSnapshot(func(key string) string { return env[key] }, func(string) (string, error) {
 		return "/bin/pbcopy", nil
 	}, "darwin")
@@ -458,7 +458,7 @@ func TestBuildSnapshotReportsVoiceDevice(t *testing.T) {
 	}
 	t.Cleanup(func() { probeVoiceInput = prev })
 
-	env := map[string]string{"TERM_PROGRAM": "WezTerm", "TERM": "xterm-256color", "COLORTERM": "truecolor"}
+	env := map[string]string{"TERM_PROGRAM": "kitty", "TERM": "xterm-kitty", "COLORTERM": "truecolor"}
 	report := buildReport(func(key string) string { return env[key] }, func(string) (string, error) {
 		return "/bin/pbcopy", nil
 	}, "darwin")
@@ -531,6 +531,31 @@ func TestBuildSnapshotWarnsForLegacyVTENewline(t *testing.T) {
 	}, "linux")
 	if strings.Contains(strings.Join(snapshot.Findings, "\n"), "Shift+Enter") {
 		t.Fatalf("modern VTE should not warn: %#v", snapshot.Findings)
+	}
+}
+
+func TestBuildSnapshotWarnsForWezTermKittyOff(t *testing.T) {
+	env := map[string]string{"TERM_PROGRAM": "WezTerm", "TERM": "xterm-256color", "COLORTERM": "truecolor"}
+	snapshot := BuildSnapshot(func(key string) string { return env[key] }, func(string) (string, error) {
+		return "/bin/pbcopy", nil
+	}, "darwin")
+	joined := strings.Join(snapshot.Findings, "\n")
+	for _, want := range []string{
+		"WezTerm's Kitty keyboard protocol is off",
+		"enable_kitty_keyboard = true",
+		"~/.config/wezterm/wezterm.lua",
+		`\`,
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("missing %q in %q", want, joined)
+		}
+	}
+	env["TMUX"] = "1"
+	snapshot = BuildSnapshot(func(key string) string { return env[key] }, func(string) (string, error) {
+		return "/bin/pbcopy", nil
+	}, "darwin")
+	if strings.Contains(strings.Join(snapshot.Findings, "\n"), "Kitty keyboard protocol") {
+		t.Fatalf("tmux should suppress wezterm-kitty finding: %#v", snapshot.Findings)
 	}
 }
 
