@@ -168,12 +168,13 @@ Remote relay / workspace hub remains planned/XL (product-blocked). See queue #5.
 
 - [x] Modal overlay escape helpers: centered placement, Kitty transmit/place
       (+ clear), iTerm2 overlay path for non-Kitty pixel overlays.
+- [x] Fullscreen image preview chrome: `/preview-image`, bordered popup, Esc
+      close, post-frame pixel flush via `BuildOverlayImageEscapes`.
 
 ### Still open
 
-- [ ] Image preview overlay chrome wired into fullscreen TUI draw loop
 - [ ] Video viewer (ffmpeg frame extract + overlay playback)
-- [ ] Prompt-chip hover/focus image preview
+- [ ] Prompt-chip hover/focus image preview / click-to-open
 
 ---
 
