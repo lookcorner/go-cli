@@ -1767,8 +1767,11 @@ HTTP. Sandboxed Linux shells additionally install a seccomp namespace lockdown
 inside the bubblewrap child so nested `unshare`/`setns`/namespace `clone`
 attempts fail. Read-only and strict profiles also stack a child network seccomp
 deny (`connect`/`bind`/`send*`/`listen`/`accept*`) on top of `--unshare-net`.
-Approval and the file tools' workspace/symlink checks remain independent safety
-boundaries.
+Linux also re-execs the parent under bubblewrap so global hook sources under
+`$GROK_HOME` (`hooks/`, `hooks-paths`, and listed files) are mounted
+read-only (fail-closed when `bwrap` is missing or the remount cannot be
+verified). Approval and the file tools' workspace/symlink checks remain
+independent safety boundaries.
 
 `monitor` runs a background command whose stdout is delivered as real-time,
 debounced events. It applies the reference line/batch limits, token-bucket rate
