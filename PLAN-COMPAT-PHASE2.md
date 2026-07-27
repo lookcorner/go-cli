@@ -172,10 +172,11 @@ Remote relay / workspace hub remains planned/XL (product-blocked). See queue #5.
       close, post-frame pixel flush via `BuildOverlayImageEscapes`.
 - [x] Video overlay viewer: ffmpeg frame extract, `/play-video <path>`, play/
       pause/seek chrome, tick playback + pixel flush (fails open without ffmpeg).
+- [x] Click Kitty placeholder rows to open the image overlay.
 
 ### Still open
 
-- [ ] Prompt-chip hover/focus image preview / click-to-open
+- [ ] Prompt-chip hover/focus image preview
 - [ ] Session-asset video discovery (auto list generated clips)
 
 ---

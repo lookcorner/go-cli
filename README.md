@@ -624,8 +624,9 @@ Image attachments in tool results are rendered inline on kitty terminals via
 Unicode placeholders (both fullscreen and minimal mode), and in minimal mode
 on terminals that speak the iTerm2 or sixel graphics protocols (detected from
 the environment); other terminals keep the metadata-only rendering. Modal fullscreen overlay escape helpers (Kitty transmit/place and iTerm2) plus
-`/preview-image` and `/play-video <path>` (ffmpeg frame extract) bordered popup
-chrome are ready; click-to-open remains. Image
+`/preview-image`, click-to-open on Kitty placeholders, and `/play-video <path>`
+(ffmpeg frame extract) bordered popup chrome are ready; prompt-chip hover
+preview remains. Image
 bytes persist to the session's asset store, so resumed sessions render the
 same images again.
 On directly supported terminals, Markdown links, bare HTTP(S)/FTP/email URLs, and quoted

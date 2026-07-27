@@ -167,6 +167,7 @@ func (m *model) inlineImagesFor(attachments []tools.ImageAttachment) []session.D
 				display.Data = image.Data
 				cols, rows := inlineImageCells(image.Width, image.Height, 12)
 				m.kittyUploads = append(m.kittyUploads, kittyTransmitVirtual(display.KittyID, image.Data, cols, rows))
+				m.rememberOverlayImageID(display.KittyID, image)
 			case imageProtocolITerm2, imageProtocolSixel:
 				if m.minimal {
 					m.pendingImages = append(m.pendingImages, image)
