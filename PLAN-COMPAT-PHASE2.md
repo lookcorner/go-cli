@@ -152,10 +152,11 @@ Remote relay / workspace hub remains planned/XL (product-blocked). See queue #5.
       semantic flush dedup when `Runner.MemoryEmbedder` is set.
 - [x] OpenAI-compatible `APIEmbeddingProvider` + hybrid FTS/KNN merge in
       `Store.Search` when an embedder is configured (fail open otherwise).
+- [x] Session startup wiring: CLI/ACP runners attach `APIEmbeddingProvider`
+      from base URL/API key when `[memory.embedding].model` is set.
 
 ### Still open
 
-- [ ] Wire `APIEmbeddingProvider` from session base URL/API key at startup
 - [ ] Optional sqlite-vec acceleration (Go currently uses brute-force KNN)
 
 ---
