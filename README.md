@@ -1738,8 +1738,10 @@ verified). Custom profiles in `$GROK_HOME/sandbox.toml` or
 `read_only` / `read_write` / `restrict_network`; parent Landlock applies the
 merged allowlist (fail-closed on Linux when Landlock cannot apply), and
 child shells wrap with the extends base. Project TOML is additive only
-(cannot replace a globally defined profile name). TOML `deny` path
-bind-over remains a follow-up.
+(cannot replace a globally defined profile name). On Linux, custom `deny`
+paths are bind-over blocked during the same parent bwrap re-exec using
+mode-000 placeholders (exact paths and launch-time glob expansion;
+later-created glob matches are not covered).
 Approval and the file tools' workspace/symlink checks remain independent
 safety boundaries.
 

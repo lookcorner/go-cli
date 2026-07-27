@@ -16,8 +16,8 @@ func IsInsideBwrap() bool {
 	return os.Getenv(InsideBwrapEnv) == "1"
 }
 
-// RequiresHookWriteDeny is true for built-in enforcing profiles (not off).
-// Matches Rust profile_enforces_hook_write_deny for Go's profile set.
+// RequiresHookWriteDeny is true for built-in enforcing profiles and custom
+// profiles (not off). Matches Rust profile_enforces_hook_write_deny for Go's set.
 func RequiresHookWriteDeny(profile string) bool {
 	parsed, err := ParseSandboxProfile(profile)
 	if err != nil || parsed == SandboxOff {
@@ -26,28 +26,50 @@ func RequiresHookWriteDeny(profile string) bool {
 	return true
 }
 
+// RequiresParentBwrap is true when hook write-deny and/or custom read-deny need
+// a Linux parent bubblewrap re-exec.
+func RequiresParentBwrap(profile, workspace string) bool {
+	return RequiresHookWriteDeny(profile) || RequiresReadDeny(profile, workspace)
+}
+
 // HookWriteDenyPlan is the bwrap bind plan for protecting hook sources.
 type HookWriteDenyPlan struct {
 	AncestorRW []string
 	Leaves     []string
 }
 
-// EnsureParentBwrapHookWriteDeny applies Linux parent bwrap re-exec so global
-// hook sources are mounted read-only. On success of re-exec this never returns.
-// Non-Linux hosts only ensure hook slots exist. Fail-closed when the profile
-// requires protection and bwrap cannot be applied/verified.
+// ParentBwrapPlan is the combined Linux parent bwrap re-exec plan.
+type ParentBwrapPlan struct {
+	Hooks    HookWriteDenyPlan
+	DenyRead []string // targets bound over with mode-000 placeholders
+}
+
+// EnsureParentBwrapHookWriteDeny applies Linux parent bwrap re-exec for hook
+// write-deny and custom sandbox.toml deny bind-over. On success of re-exec this
+// never returns. Non-Linux hosts only ensure hook slots when hooks are required.
 func EnsureParentBwrapHookWriteDeny(profile, workspace string, args []string, warn io.Writer) error {
-	if !RequiresHookWriteDeny(profile) {
+	return EnsureParentBwrap(profile, workspace, args, warn)
+}
+
+// EnsureParentBwrap applies Linux parent bwrap re-exec so hook sources stay
+// read-only and custom deny paths are bind-over blocked. Fail-closed when
+// required protection cannot be applied or verified.
+func EnsureParentBwrap(profile, workspace string, args []string, warn io.Writer) error {
+	needsHooks := RequiresHookWriteDeny(profile)
+	needsDeny := RequiresReadDeny(profile, workspace)
+	if !needsHooks && !needsDeny {
 		return nil
 	}
 	home, err := resolveGrokHome()
 	if err != nil {
-		return fmt.Errorf("hook write-deny: %w", err)
+		return fmt.Errorf("parent bwrap: %w", err)
 	}
-	if err := ensureGrokHookSlots(home); err != nil {
-		return fmt.Errorf("hook write-deny: %w", err)
+	if needsHooks {
+		if err := ensureGrokHookSlots(home); err != nil {
+			return fmt.Errorf("hook write-deny: %w", err)
+		}
 	}
-	return ensureParentBwrapHookWriteDeny(profile, workspace, home, args, warn)
+	return ensureParentBwrap(profile, workspace, home, needsHooks, needsDeny, args, warn)
 }
 
 func resolveGrokHome() (string, error) {
@@ -74,6 +96,26 @@ func ensureGrokHookSlots(home string) error {
 		}
 	}
 	return nil
+}
+
+// BuildParentBwrapPlan builds hook and deny-read plans for profile/workspace.
+func BuildParentBwrapPlan(profile, workspace, home string, needsHooks, needsDeny bool) (ParentBwrapPlan, error) {
+	var plan ParentBwrapPlan
+	if needsHooks {
+		hooks, err := BuildHookWriteDenyPlan(home)
+		if err != nil {
+			return ParentBwrapPlan{}, err
+		}
+		plan.Hooks = hooks
+	}
+	if needsDeny {
+		targets, err := BuildReadDenyTargets(profile, workspace)
+		if err != nil {
+			return ParentBwrapPlan{}, err
+		}
+		plan.DenyRead = targets
+	}
+	return plan, nil
 }
 
 // BuildHookWriteDenyPlan resolves global hook leaves under GROK_HOME.

@@ -108,11 +108,12 @@ clear no-op on unsupported hosts.
       `ResolveSandboxProfile`; parent Landlock from base + extras; Linux
       fail-closed for custom when Landlock cannot apply; child wrap uses
       extends base + `restrict_network`).
+- [x] Custom `sandbox.toml` `deny` → Linux parent bwrap bind-over
+      (mode-000 placeholders; exact + launch-time glob expand; fail-closed).
 
 ### Still open
 
-- (none for Phase 3; `deny`→parent bwrap bind-over and profile-conflict
-  doctor remain deferred follow-ups)
+- (none for Phase 3; profile-conflict doctor remains deferred)
 
 ## Phase 4+ — cloud / memory
 
