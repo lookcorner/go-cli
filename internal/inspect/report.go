@@ -335,7 +335,8 @@ func inspectMCPTarget(item config.MCPServerConfig) string {
 		return redactURLCredentials(item.URL)
 	}
 	if item.Command != "" {
-		return filepath.Base(item.Command)
+		// Never echo command/env payloads; basename alone can still be a secret token.
+		return "stdio"
 	}
 	return ""
 }
