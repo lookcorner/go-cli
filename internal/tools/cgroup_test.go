@@ -15,3 +15,19 @@ func TestDefaultCgroupMemoryConfig(t *testing.T) {
 		t.Fatalf("normalized zero=%#v", zero)
 	}
 }
+
+func TestParseMemoryEventsHigh(t *testing.T) {
+	n, ok := parseMemoryEventsHigh("low 1\nhigh 42\nmax 3\n")
+	if !ok || n != 42 {
+		t.Fatalf("got %d ok=%v", n, ok)
+	}
+	if _, ok := parseMemoryEventsHigh("low 1\n"); ok {
+		t.Fatal("expected missing high")
+	}
+}
+
+func TestMemoryHighBufferNinetyPercent(t *testing.T) {
+	if memoryHighBuffer(1000) != 900 {
+		t.Fatalf("buffer=%d", memoryHighBuffer(1000))
+	}
+}

@@ -22,6 +22,7 @@ var (
 
 type linuxShellCgroup struct {
 	path string
+	mon  *memoryHighMonitor
 }
 
 func tryShellCgroup(cfg CgroupMemoryConfig) shellCgroup {
@@ -55,7 +56,9 @@ func createShellCgroup(sysfsRoot, selfProc string, cfg CgroupMemoryConfig) (*lin
 		_ = os.Remove(path)
 		return nil, fmt.Errorf("write memory.max: %w", err)
 	}
-	return &linuxShellCgroup{path: path}, nil
+	guard := &linuxShellCgroup{path: path}
+	guard.mon = startMemoryHighMonitor(path, cfg.MemoryHighBytes)
+	return guard, nil
 }
 
 func (g *linuxShellCgroup) AddProcess(pid int) error {
@@ -69,6 +72,10 @@ func (g *linuxShellCgroup) Close() error {
 	if g == nil || g.path == "" {
 		return nil
 	}
+	if g.mon != nil {
+		g.mon.Close()
+		g.mon = nil
+	}
 	_ = os.WriteFile(filepath.Join(g.path, "cgroup.kill"), []byte("1"), 0o644)
 	err := os.Remove(g.path)
 	g.path = ""
@@ -80,6 +87,13 @@ func (g *linuxShellCgroup) Path() string {
 		return ""
 	}
 	return g.path
+}
+
+func (g *linuxShellCgroup) TryRecvMemoryHigh() *MemoryHighEvent {
+	if g == nil || g.mon == nil {
+		return nil
+	}
+	return g.mon.TryRecv()
 }
 
 func readSelfCgroupV2(procFile string) (string, error) {

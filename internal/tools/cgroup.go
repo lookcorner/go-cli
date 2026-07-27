@@ -2,6 +2,8 @@ package tools
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 	"sync/atomic"
 )
 
@@ -48,6 +50,23 @@ type ShellCgroup interface {
 	Path() string
 }
 
+// memoryHighPoller is optionally implemented by Linux ShellCgroup guards that
+// watch memory.events for memory.high breaches (OOM signaling).
+type memoryHighPoller interface {
+	TryRecvMemoryHigh() *MemoryHighEvent
+}
+
+// ProcessOOMExitCode matches the Rust LocalTerminalBackend PROCESS_OOM_EXIT_CODE
+// (128 + SIGKILL) reported when memory.high pressure kills a child.
+const ProcessOOMExitCode = 137
+
+// MemoryHighEvent is emitted when memory.events high increments while RSS stays
+// above 90% of memory.high (same filter as the Rust MemoryHighMonitor).
+type MemoryHighEvent struct {
+	MemoryCurrent   uint64
+	MemoryHighBytes uint64
+}
+
 // shellCgroup is the historical unexported alias used inside ProcessManager.
 type shellCgroup = ShellCgroup
 
@@ -61,4 +80,24 @@ func nextCgroupName() string {
 // model-started children. Non-Linux hosts and unsupported setups return nil.
 func NewShellCgroup(cfg CgroupMemoryConfig) ShellCgroup {
 	return tryShellCgroup(cfg)
+}
+
+// parseMemoryEventsHigh reads the `high <N>` counter from memory.events.
+func parseMemoryEventsHigh(contents string) (uint64, bool) {
+	for _, line := range strings.Split(contents, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 || fields[0] != "high" {
+			continue
+		}
+		n, err := strconv.ParseUint(fields[1], 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		return n, true
+	}
+	return 0, false
+}
+
+func memoryHighBuffer(threshold uint64) uint64 {
+	return threshold * 9 / 10
 }

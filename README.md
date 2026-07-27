@@ -1755,7 +1755,8 @@ processes, not the parent Gork process, MCP/LSP servers, or in-process network
 clients. On Linux with cgroup v2, model-started foreground and background shell
 children and ACP PTY/piped terminals are also placed in a best-effort
 memory-limited cgroup (`memory.high` / `memory.max`); unavailable hosts skip
-silently. Approval and
+silently. When `memory.events` reports sustained high pressure, Gork kills the
+newest running shell child and reports exit `137` with signal `oom`. Approval and
 the file tools' workspace/symlink checks remain independent safety boundaries.
 
 `monitor` runs a background command whose stdout is delivered as real-time,

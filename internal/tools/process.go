@@ -56,6 +56,15 @@ type ProcessManager struct {
 	cgroupMu     sync.Mutex
 	cgroup       shellCgroup
 	cgroupCfg    CgroupMemoryConfig
+	oomStop      chan struct{}
+	fgMu         sync.Mutex
+	foreground   *foregroundSlot
+}
+
+type foregroundSlot struct {
+	cmd     *exec.Cmd
+	started time.Time
+	oom     atomic.Bool
 }
 
 // ConfigureBash sets the [toolset.bash] bounds for shell commands. Zero values
@@ -81,6 +90,10 @@ func (m *ProcessManager) ensureShellCgroup() shellCgroup {
 		return m.cgroup
 	}
 	m.cgroup = tryShellCgroup(m.cgroupCfg)
+	if m.cgroup != nil && m.oomStop == nil {
+		m.oomStop = make(chan struct{})
+		go m.pollMemoryHigh(m.oomStop)
+	}
 	return m.cgroup
 }
 
@@ -99,10 +112,110 @@ func (m *ProcessManager) closeShellCgroup() {
 	m.cgroupMu.Lock()
 	guard := m.cgroup
 	m.cgroup = nil
+	stop := m.oomStop
+	m.oomStop = nil
 	m.cgroupMu.Unlock()
+	if stop != nil {
+		close(stop)
+	}
 	if guard != nil {
 		_ = guard.Close()
 	}
+}
+
+func (m *ProcessManager) pollMemoryHigh(stop <-chan struct{}) {
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			m.handleMemoryHigh()
+		}
+	}
+}
+
+func (m *ProcessManager) handleMemoryHigh() {
+	m.cgroupMu.Lock()
+	guard := m.cgroup
+	m.cgroupMu.Unlock()
+	poller, ok := guard.(memoryHighPoller)
+	if !ok || poller == nil {
+		return
+	}
+	if poller.TryRecvMemoryHigh() == nil {
+		return
+	}
+	m.killNewestForOOM()
+}
+
+func (m *ProcessManager) killNewestForOOM() {
+	type candidate struct {
+		started time.Time
+		kill    func()
+	}
+	var best *candidate
+
+	m.fgMu.Lock()
+	if slot := m.foreground; slot != nil && slot.cmd != nil && slot.cmd.Process != nil && !slot.oom.Load() {
+		started := slot.started
+		cmd := slot.cmd
+		best = &candidate{started: started, kill: func() {
+			slot.oom.Store(true)
+			_ = forceKillProcess(cmd)
+		}}
+	}
+	m.fgMu.Unlock()
+
+	m.mu.Lock()
+	for _, process := range m.processes {
+		select {
+		case <-process.done:
+			continue
+		default:
+		}
+		process.mu.Lock()
+		ended := !process.ended.IsZero() || process.oom
+		started := process.started
+		cmd := process.cmd
+		process.mu.Unlock()
+		if ended || cmd == nil || cmd.Process == nil {
+			continue
+		}
+		if best != nil && !started.After(best.started) {
+			continue
+		}
+		proc := process
+		best = &candidate{started: started, kill: func() {
+			proc.mu.Lock()
+			proc.oom = true
+			proc.killed = true
+			proc.mu.Unlock()
+			_ = forceKillProcess(cmd)
+		}}
+	}
+	m.mu.Unlock()
+
+	if best != nil {
+		best.kill()
+	}
+}
+
+func (m *ProcessManager) beginForeground(cmd *exec.Cmd) *foregroundSlot {
+	slot := &foregroundSlot{cmd: cmd, started: time.Now()}
+	m.fgMu.Lock()
+	m.foreground = slot
+	m.fgMu.Unlock()
+	return slot
+}
+
+func (m *ProcessManager) endForeground(slot *foregroundSlot) {
+	m.fgMu.Lock()
+	if m.foreground == slot {
+		m.foreground = nil
+	}
+	m.fgMu.Unlock()
 }
 
 // defaultShellTimeout is the configured foreground timeout, or the reference
@@ -167,6 +280,7 @@ type backgroundProcess struct {
 	err         error
 	ended       time.Time
 	killed      bool
+	oom         bool
 	terminal    bool
 	blockWaited bool
 	consumed    bool
@@ -419,6 +533,8 @@ func (m *ProcessManager) RunForeground(ctx context.Context, command string, time
 		return "", fmt.Errorf("start command: %w", err)
 	}
 	m.adoptShellProcess(cmd)
+	fg := m.beginForeground(cmd)
+	defer m.endForeground(fg)
 	wait := make(chan error, 1)
 	go func() { wait <- cmd.Wait() }()
 	if timeout <= 0 {
@@ -430,7 +546,9 @@ func (m *ProcessManager) RunForeground(ctx context.Context, command string, time
 	status := "0"
 	select {
 	case waitErr = <-wait:
-		if waitErr != nil {
+		if fg.oom.Load() {
+			status = fmt.Sprintf("%d", ProcessOOMExitCode)
+		} else if waitErr != nil {
 			status = exitStatus(waitErr)
 		}
 	case <-timer.C:
@@ -839,7 +957,7 @@ func (m *ProcessManager) Snapshots() []ProcessSnapshot {
 
 func snapshotProcess(process *backgroundProcess, completed bool) ProcessSnapshot {
 	process.mu.Lock()
-	ended, killed, blockWaited := process.ended, process.killed, process.blockWaited
+	ended, killed, blockWaited, oom := process.ended, process.killed, process.blockWaited, process.oom
 	process.mu.Unlock()
 	output, truncated := process.output.Snapshot()
 	item := ProcessSnapshot{
@@ -850,7 +968,12 @@ func snapshotProcess(process *backgroundProcess, completed bool) ProcessSnapshot
 	if completed {
 		end := processTime(ended)
 		item.EndTime = &end
-		if process.cmd.ProcessState != nil && process.cmd.ProcessState.ExitCode() >= 0 {
+		if oom {
+			code := ProcessOOMExitCode
+			sig := "oom"
+			item.ExitCode = &code
+			item.Signal = &sig
+		} else if process.cmd.ProcessState != nil && process.cmd.ProcessState.ExitCode() >= 0 {
 			code := process.cmd.ProcessState.ExitCode()
 			item.ExitCode = &code
 		}
