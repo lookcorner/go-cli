@@ -31,8 +31,8 @@ Deferred unless explicitly requested: Cursor CLI session discovery, WezTerm kitt
 
 Product-coupled (`computer-hub.grok.com`, OIDC hub auth, preview supervisor).
 Go keeps fail-closed headless + `workspace_exposure: false`. Do not dial hub
-without an explicit product unlock. Next actionable S item from the deferred
-list: **sandbox.toml profile-conflict doctor** (in progress on this stream).
+without an explicit product unlock. Shipped adjacent S item: sandbox.toml
+profile-conflict doctor.
 
 ---
 
