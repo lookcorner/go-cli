@@ -1633,6 +1633,34 @@ func TestOpenMemoryStoreRunsConfiguredGC(t *testing.T) {
 	}
 }
 
+func TestMemoryEmbedderForUsesConfiguredModel(t *testing.T) {
+	cfg := memory.DefaultConfig()
+	cfg.Enabled = true
+	if got := memoryEmbedderFor(cfg, "https://api.example", "key", time.Second); got != nil {
+		t.Fatal("unset model should skip embedder")
+	}
+	model := "text-embedding-3-small"
+	cfg.Embedding.Model = &model
+	cfg.Embedding.Dimensions = 8
+	provider := memoryEmbedderFor(cfg, "https://api.example/v1", "key", time.Second)
+	if provider == nil || provider.ModelName() != model || provider.Dimensions() != 8 {
+		t.Fatalf("provider=%#v", provider)
+	}
+	store, err := memory.Open(t.TempDir(), t.TempDir(), "embed-wire")
+	if err != nil {
+		t.Fatal(err)
+	}
+	attachMemoryEmbedder(store, provider)
+	opener := memoryStoreOpener(cfg, t.TempDir(), "embed-open", provider)
+	if opener == nil {
+		t.Fatal("expected opener")
+	}
+	reopened, err := opener()
+	if err != nil || reopened == nil {
+		t.Fatalf("reopened=%#v err=%v", reopened, err)
+	}
+}
+
 func TestInteractiveMemoryListDoesNotRunNormalTurn(t *testing.T) {
 	store, err := memory.Open(t.TempDir(), t.TempDir(), "interactive-list")
 	if err != nil {

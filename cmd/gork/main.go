@@ -668,6 +668,8 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	memoryEmbedder := memoryEmbedderFor(cfg.Memory, cfg.BaseURL, cfg.APIKey, cfg.HTTPTimeout)
+	attachMemoryEmbedder(memoryStore, memoryEmbedder)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -1144,8 +1146,8 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		TextOutput:           stdout, StatusOutput: stderr,
 		ContextWindow: cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,
 		TwoPassCompaction: cfg.TwoPassCompaction,
-		Memory:            memoryStore, MemoryConfig: cfg.Memory,
-		OpenMemory:    memoryStoreOpener(cfg.Memory, ws.Root(), logger.ID()),
+		Memory:            memoryStore, MemoryConfig: cfg.Memory, MemoryEmbedder: memoryEmbedder,
+		OpenMemory:    memoryStoreOpener(cfg.Memory, ws.Root(), logger.ID(), memoryEmbedder),
 		ReloadMCPBase: reloadMCPBase, UpdateMCPServers: mcpRuntime.Update,
 		MCPServers: mcpRuntime.Configs, MCPServerCatalog: mcpRuntime.Catalog,
 		ToggleMCPServer: toggleMCPServer, ToggleMCPTool: toggleMCPTool,
@@ -2857,11 +2859,34 @@ func newMemoryStore(workspaceRoot, sessionID string, gcMaxAgeDays uint64) (*memo
 	return store, nil
 }
 
-func memoryStoreOpener(cfg memory.Config, workspaceRoot, sessionID string) func() (*memory.Store, error) {
+// memoryEmbedderFor builds an OpenAI-compatible embedder when [memory.embedding].model is set.
+func memoryEmbedderFor(cfg memory.Config, baseURL, apiKey string, timeout time.Duration) memory.EmbeddingProvider {
+	provider, ok := memory.NewAPIEmbeddingProvider(cfg.Embedding, baseURL, apiKey, &http.Client{Timeout: timeout})
+	if !ok {
+		return nil
+	}
+	return provider
+}
+
+func attachMemoryEmbedder(store *memory.Store, embedder memory.EmbeddingProvider) {
+	if store == nil || embedder == nil {
+		return
+	}
+	store.SetEmbedder(embedder)
+}
+
+func memoryStoreOpener(cfg memory.Config, workspaceRoot, sessionID string, embedder memory.EmbeddingProvider) func() (*memory.Store, error) {
 	if !cfg.Enabled {
 		return nil
 	}
-	return func() (*memory.Store, error) { return newMemoryStore(workspaceRoot, sessionID, cfg.GC.MaxAgeDays) }
+	return func() (*memory.Store, error) {
+		store, err := newMemoryStore(workspaceRoot, sessionID, cfg.GC.MaxAgeDays)
+		if err != nil {
+			return nil, err
+		}
+		attachMemoryEmbedder(store, embedder)
+		return store, nil
+	}
 }
 
 func waitRunnerMemory(runner *agent.Runner) {
@@ -3671,6 +3696,8 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			_ = registry.Close()
 			return nil, nil, err
 		}
+		memoryEmbedder := memoryEmbedderFor(sessionCfg.Memory, sessionCfg.BaseURL, sessionCfg.APIKey, sessionCfg.HTTPTimeout)
+		attachMemoryEmbedder(memoryStore, memoryEmbedder)
 		if err := tools.RegisterMemoryTools(registry, memoryStore, sessionCfg.Memory); err != nil {
 			_ = logger.Close()
 			_ = registry.Close()
@@ -4146,8 +4173,8 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			TextOutput:           textOutput, StatusOutput: statusOutput,
 			ContextWindow: sessionCfg.ContextWindow, CompactThresholdPercent: sessionCfg.AutoCompactThresholdPercent,
 			TwoPassCompaction: sessionCfg.TwoPassCompaction,
-			Memory:            memoryStore, MemoryConfig: sessionCfg.Memory,
-			OpenMemory:    memoryStoreOpener(sessionCfg.Memory, ws.Root(), logger.ID()),
+			Memory:            memoryStore, MemoryConfig: sessionCfg.Memory, MemoryEmbedder: memoryEmbedder,
+			OpenMemory:    memoryStoreOpener(sessionCfg.Memory, ws.Root(), logger.ID(), memoryEmbedder),
 			ReloadMCPBase: reloadMCPBase, UpdateMCPServers: mcpRuntime.Update,
 			MCPServers: mcpRuntime.Configs, MCPServerCatalog: mcpRuntime.Catalog,
 			ToggleMCPServer: toggleMCPServer, ToggleMCPTool: toggleMCPTool,

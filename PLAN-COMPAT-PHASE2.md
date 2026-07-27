@@ -20,7 +20,7 @@ One-round doctor/wrap surface closed at `5c6557d`. Remaining gaps need
 | 3 | **Landlock + seccomp** | OS sandbox | Hardens existing bubblewrap/Seatbelt profiles | done (profile-conflict doctor deferred) |
 | 4 | **Cloud ACP / conversations** | ACP | Large protocol surface; defer until local ACP stays green | XL |
 | 5 | **Remote relay / workspace hub** | Session / workspace | Depends on product decisions | XL |
-| 6 | **Vector memory** | Memory | Research + storage + retrieval | in progress (embed API+hybrid search) |
+| 6 | **Vector memory** | Memory | Research + storage + retrieval | in progress (session embedder wired) |
 | 7 | **Fullscreen media / inline video** | Markdown/media | Terminal capability + UX heavy | XL |
 
 Deferred unless explicitly requested: Cursor CLI session discovery, WezTerm kitty XTVERSION probes, Wayland data-control, sandbox.toml profile-conflict doctor.
@@ -271,10 +271,12 @@ an explicit request.
 - [x] OpenAI-compatible `APIEmbeddingProvider` + hybrid FTS/KNN merge in
       `Store.Search` when an embedder is configured (fail open otherwise) on
       `compat/vector-memory-embed-api`.
+- [x] Session startup wiring: CLI/ACP runners attach `APIEmbeddingProvider`
+      from base URL/API key when `[memory.embedding].model` is set on
+      `compat/vector-memory-embed-wire`.
 
 ### Still open
 
-- [ ] Wire `APIEmbeddingProvider` from session base URL/API key at startup
 - [ ] Optional sqlite-vec acceleration (Go currently uses brute-force KNN)
 
 ---
