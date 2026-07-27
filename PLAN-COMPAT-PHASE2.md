@@ -183,6 +183,14 @@ to empty + `_meta["x.ai/partial"]` when OAuth is unavailable.
 1. **`x.ai/internal/reload_workflows`** — done on `compat/acp-reload-workflows`:
    refresh skills and push `available_commands_update` to all live sessions.
 
+## Phase 4g — ACP workflows list
+
+### Slice
+
+1. **`x.ai/workflows/list`** — done on `compat/acp-workflows-list`:
+   discovery-only catalog (builtin + project + user `.rhai` meta). Rhai
+   execution remains XL.
+
 ## Phase 3+ — sandbox / memory / relay
 
 Separate kickoff docs when prior themes land. Do not start in parallel without
