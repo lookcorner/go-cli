@@ -102,6 +102,11 @@ Merge grok.com cloud chat conversations into ACP `x.ai/session/list`.
 2. **Rename / soft-delete** — done: `kind: "chat"` on
    `x.ai/session/rename` / `x.ai/session/delete` maps to PUT + soft DELETE.
 
+2b. **Starred facet + star update** — done on
+    `compat/cloud-conversations-starred-facet`: chat rows expose `starred`
+    facets, list honors `x.ai/facetFilters.starred`, and rename accepts an
+    optional `starred` bool for PUT updates.
+
 3. **Thin chat load/resume + modes catalog** — done: `_meta.x.ai/session.kind=chat`
    on `session/load`/`resume` opens a resident chat session without local JSONL;
    `POST /rest/modes` supplies the model picker when available. Cloud transcript

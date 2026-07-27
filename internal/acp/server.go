@@ -518,6 +518,7 @@ func (s *Server) handleSessionAdmin(incoming message) {
 		PromptSessionID      string `json:"session_id"`
 		FilterSessionID      string `json:"filter_session_id"`
 		FilterSessionIDCamel string `json:"filterSessionId"`
+		Starred              *bool  `json:"starred"`
 	}
 	if json.Unmarshal(incoming.Params, &req) != nil {
 		s.respondError(incoming.ID, -32602, "invalid session parameters")
@@ -581,12 +582,24 @@ func (s *Server) handleSessionAdmin(incoming message) {
 			return
 		}
 		title := strings.TrimSpace(req.Title)
-		if title == "" {
-			s.respondError(incoming.ID, -32602, "title must not be blank")
+		if strings.EqualFold(strings.TrimSpace(req.Kind), "chat") {
+			if title == "" && req.Starred == nil {
+				s.respondError(incoming.ID, -32602, "chat rename requires title or starred")
+				return
+			}
+			if title != "" && req.Starred != nil {
+				s.updateChatConversation(incoming, req.SessionID, &title, req.Starred)
+				return
+			}
+			if req.Starred != nil {
+				s.starChatConversation(incoming, req.SessionID, *req.Starred)
+				return
+			}
+			s.renameChatConversation(incoming, req.SessionID, title)
 			return
 		}
-		if strings.EqualFold(strings.TrimSpace(req.Kind), "chat") {
-			s.renameChatConversation(incoming, req.SessionID, title)
+		if title == "" {
+			s.respondError(incoming.ID, -32602, "title must not be blank")
 			return
 		}
 		if err := sessionlog.Rename(s.SessionDir, req.SessionID, title); err != nil {

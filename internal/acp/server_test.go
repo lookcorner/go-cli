@@ -648,8 +648,15 @@ func TestUnifiedSessionListConversationsLane(t *testing.T) {
 			"conversations": []map[string]any{{
 				"conversationId": "conv-chat",
 				"title":          "cloud chat",
+				"starred":        true,
 				"createTime":     "2026-06-18T17:30:00Z",
 				"modifyTime":     "2099-01-01T00:00:00Z",
+			}, {
+				"conversationId": "conv-plain",
+				"title":          "plain chat",
+				"starred":        false,
+				"createTime":     "2026-06-18T16:30:00Z",
+				"modifyTime":     "2098-01-01T00:00:00Z",
 			}},
 		})
 	}))
@@ -672,16 +679,21 @@ func TestUnifiedSessionListConversationsLane(t *testing.T) {
 	}
 	result := response["result"].(map[string]any)["result"].(map[string]any)
 	rows := result["sessions"].([]any)
-	if len(rows) != 2 {
-		t.Fatalf("expected build+chat rows: %#v", result)
+	if len(rows) != 3 {
+		t.Fatalf("expected build+2 chat rows: %#v", result)
 	}
 	first := rows[0].(map[string]any)
 	if first["sessionId"] != "conv-chat" || first["source"] != "conversation" {
-		t.Fatalf("expected chat first: %#v", first)
+		t.Fatalf("expected starred chat first: %#v", first)
 	}
 	meta := first["_meta"].(map[string]any)["x.ai/session"].(map[string]any)
-	if meta["kind"] != "chat" {
+	facets := meta["facets"].(map[string]any)
+	if meta["kind"] != "chat" || facets["starred"] != true {
 		t.Fatalf("chat meta=%#v", meta)
+	}
+	facetMeta := result["_meta"].(map[string]any)["x.ai/facets"].(map[string]any)
+	if !sessionListFacetHas(facetMeta, "starred", true) {
+		t.Fatalf("facets=%#v", facetMeta)
 	}
 	partial := result["_meta"].(map[string]any)["x.ai/partial"].(map[string]any)
 	if partial["conversations"] != false {
@@ -700,8 +712,92 @@ func TestUnifiedSessionListConversationsLane(t *testing.T) {
 		t.Fatal(err)
 	}
 	chatRows := response["result"].(map[string]any)["result"].(map[string]any)["sessions"].([]any)
-	if len(chatRows) != 1 || chatRows[0].(map[string]any)["sessionId"] != "conv-chat" {
+	if len(chatRows) != 2 {
 		t.Fatalf("chat-only=%#v", response)
+	}
+
+	output.Reset()
+	starredOnly, err := json.Marshal(map[string]any{
+		"cwd": cwd,
+		"_meta": map[string]any{"x.ai/facetFilters": map[string]any{
+			"kind": []any{"chat"}, "starred": []any{true},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.handleUnifiedSessionList(message{ID: json.RawMessage("3"), Method: "x.ai/session/list", Params: starredOnly})
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	starredRows := response["result"].(map[string]any)["result"].(map[string]any)["sessions"].([]any)
+	if len(starredRows) != 1 || starredRows[0].(map[string]any)["sessionId"] != "conv-chat" {
+		t.Fatalf("starred-only=%#v", response)
+	}
+}
+
+func sessionListFacetHas(facets map[string]any, key string, value any) bool {
+	keys, _ := facets["keys"].([]any)
+	for _, raw := range keys {
+		entry, _ := raw.(map[string]any)
+		if entry["key"] != key {
+			continue
+		}
+		values, _ := entry["values"].([]any)
+		for _, item := range values {
+			row, _ := item.(map[string]any)
+			if row["value"] == value {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func TestChatConversationStarRename(t *testing.T) {
+	t.Setenv("GROK_SESSION_LIST_CONVERSATIONS", "1")
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	if err := auth.Save(authPath, "star-scope", auth.Credential{
+		Key: "oauth-token", UserID: "user-1", AuthMode: "oidc", Issuer: "https://auth.x.ai",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var gotBody map[string]any
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || r.URL.Path != "/rest/app-chat/conversations/conv-star" {
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatal(err)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer upstream.Close()
+	t.Setenv("GROK_CONVERSATIONS_BASE_URL", upstream.URL)
+
+	var output bytes.Buffer
+	server := &Server{
+		SessionDir: t.TempDir(), output: &output,
+		Auth: AuthConfig{Path: authPath, Scope: "star-scope", HTTP: upstream.Client()},
+	}
+	starred := true
+	payload, err := json.Marshal(map[string]any{
+		"sessionId": "conv-star", "kind": "chat", "starred": starred,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.handleSessionAdmin(message{ID: json.RawMessage("1"), Method: "x.ai/session/rename", Params: payload})
+	var response map[string]any
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response["result"].(map[string]any)["success"] != true {
+		t.Fatalf("response=%#v", response)
+	}
+	if gotBody["starred"] != true || gotBody["title"] != nil {
+		t.Fatalf("body=%#v", gotBody)
 	}
 }
 

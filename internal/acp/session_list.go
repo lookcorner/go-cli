@@ -41,6 +41,7 @@ type sessionListRow struct {
 	Title        string         `json:"title"`
 	Meta         map[string]any `json:"_meta"`
 	kind         string
+	starred      bool
 	updatedAt    time.Time
 }
 
@@ -112,6 +113,9 @@ func (s *Server) handleUnifiedSessionList(incoming message) {
 			partial = conversationsPartialReason(reason)
 		} else {
 			for _, row := range chatRows {
+				if !facetBoolAllows(filters["starred"], row.starred) {
+					continue
+				}
 				if !afterSessionBoundary(row.updatedAt, row.kind, row.SessionID, cursor.Boundary) {
 					continue
 				}
@@ -240,23 +244,31 @@ func newConversationListRow(conversation remote.Conversation) sessionListRow {
 		lastActive = &value
 	}
 	title := conversation.Title
+	facets := map[string]any{"kind": "chat"}
+	if conversation.Starred {
+		facets["starred"] = true
+	}
 	return sessionListRow{
 		SessionID: conversation.ConversationID, Summary: title, UpdatedAt: updated, CreatedAt: created,
 		CWD: "", Source: "conversation", NumMessages: 0, LastActiveAt: lastActive, Title: title,
 		Meta: map[string]any{"x.ai/session": map[string]any{
-			"kind": "chat", "facets": map[string]any{"kind": "chat"},
+			"kind": "chat", "facets": facets,
 		}},
-		kind: "chat", updatedAt: when,
+		kind: "chat", starred: conversation.Starred, updatedAt: when,
 	}
 }
 
 func sessionListFacets(rows []sessionListRow) map[string]any {
 	kindCounts := map[string]int{}
 	cwdCounts := make(map[string]int)
+	starredCount := 0
 	for _, row := range rows {
 		kindCounts[row.kind]++
 		if row.CWD != "" {
 			cwdCounts[row.CWD]++
+		}
+		if row.starred {
+			starredCount++
 		}
 	}
 	cwds := make([]string, 0, len(cwdCounts))
@@ -281,6 +293,11 @@ func sessionListFacets(rows []sessionListRow) map[string]any {
 	if len(kindValues) > 0 {
 		keys = append(keys, map[string]any{"key": "kind", "values": kindValues})
 	}
+	if starredCount > 0 {
+		keys = append(keys, map[string]any{
+			"key": "starred", "values": []map[string]any{{"value": true, "count": starredCount}},
+		})
+	}
 	return map[string]any{"scope": "window", "keys": keys}
 }
 
@@ -302,6 +319,46 @@ func facetAllows(raw any, value string) bool {
 		}
 	}
 	return false
+}
+
+// facetBoolAllows matches Rust starred facet filtering. Build/local rows are
+// partition-aware and skip this filter; only chat rows pass a bool value.
+func facetBoolAllows(raw any, value bool) bool {
+	if raw == nil {
+		return true
+	}
+	wanted, ok := coerceFacetBool(raw)
+	if !ok {
+		return true
+	}
+	return wanted == value
+}
+
+func coerceFacetBool(raw any) (bool, bool) {
+	switch value := raw.(type) {
+	case bool:
+		return value, true
+	case string:
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "true", "1":
+			return true, true
+		case "false", "0":
+			return false, true
+		}
+	case float64:
+		if value == 1 {
+			return true, true
+		}
+		if value == 0 {
+			return false, true
+		}
+	case []any:
+		if len(value) == 0 {
+			return false, false
+		}
+		return coerceFacetBool(value[0])
+	}
+	return false, false
 }
 
 func forceKindChatMeta(meta map[string]any) map[string]any {

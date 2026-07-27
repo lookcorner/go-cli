@@ -1430,10 +1430,12 @@ include the active model, reasoning effort, permission mode, and worktree state.
 encoding, title/ID search, page limits, `kind`/`cwd` facet filters, and window
 facet counts. Opt-in cloud conversations (`GROK_SESSION_LIST_CONVERSATIONS=1` or
 `GROK_CHAT_MODE=1`) merge `kind=chat` rows from grok.com
-`/rest/app-chat/conversations` when OAuth is available, and set
+`/rest/app-chat/conversations` when OAuth is available (including `starred`
+facets and `x.ai/facetFilters.starred`), and set
 `_meta["x.ai/partial"].conversations` with `no_oauth` / `timeout` / `error`
 reasons when the lane degrades. With the same gate, `x.ai/session/rename` and
-`x.ai/session/delete` accept `kind: "chat"` to PUT-rename or soft-delete the
+`x.ai/session/delete` accept `kind: "chat"` to PUT-rename, optional `starred`
+bool, or soft-delete the
 cloud conversation (404 soft-delete is idempotent). `session/load` and
 `session/resume` with `_meta["x.ai/session"].kind=chat` open a thin resident
 chat session without local JSONL (no transcript replay yet), preferring the

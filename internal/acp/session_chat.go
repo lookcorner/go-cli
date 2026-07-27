@@ -35,6 +35,14 @@ func sessionKindFromMeta(meta map[string]any) string {
 }
 
 func (s *Server) renameChatConversation(incoming message, conversationID, title string) {
+	s.updateChatConversation(incoming, conversationID, &title, nil)
+}
+
+func (s *Server) starChatConversation(incoming message, conversationID string, starred bool) {
+	s.updateChatConversation(incoming, conversationID, nil, &starred)
+}
+
+func (s *Server) updateChatConversation(incoming message, conversationID string, title *string, starred *bool) {
 	client, err := s.conversationsClient()
 	if err != nil {
 		s.respondError(incoming.ID, -32602, err.Error())
@@ -42,20 +50,28 @@ func (s *Server) renameChatConversation(incoming message, conversationID, title 
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), conversationsListTimeout)
 	defer cancel()
-	err = client.UpdateConversation(ctx, conversationID, remote.UpdateConversationBody{Title: &title})
+	err = client.UpdateConversation(ctx, conversationID, remote.UpdateConversationBody{Title: title, Starred: starred})
 	if err != nil {
-		s.respondChatConversationError(incoming, "rename", conversationID, err)
+		action := "update"
+		if title != nil && starred == nil {
+			action = "rename"
+		} else if starred != nil && title == nil {
+			action = "star"
+		}
+		s.respondChatConversationError(incoming, action, conversationID, err)
 		return
 	}
-	if current := s.lookupSession(conversationID); current != nil {
-		current.mu.Lock()
-		current.title = title
-		current.updated = time.Now().UTC()
-		current.mu.Unlock()
-		s.notify(conversationID, map[string]any{
-			"sessionUpdate": "session_info_update", "title": title,
-			"updatedAt": time.Now().UTC().Format(time.RFC3339),
-		})
+	if title != nil {
+		if current := s.lookupSession(conversationID); current != nil {
+			current.mu.Lock()
+			current.title = *title
+			current.updated = time.Now().UTC()
+			current.mu.Unlock()
+			s.notify(conversationID, map[string]any{
+				"sessionUpdate": "session_info_update", "title": *title,
+				"updatedAt": time.Now().UTC().Format(time.RFC3339),
+			})
+		}
 	}
 	s.respond(incoming.ID, map[string]any{"success": true})
 }
