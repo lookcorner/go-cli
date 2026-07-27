@@ -5779,13 +5779,16 @@ func (r *sessionMCPRuntime) mergedConfig(requested []mcp.ServerConfig) (config.C
 	catalog := make([]mcp.ServerConfig, 0, len(names))
 	for _, name := range names {
 		server := cfg.MCPServers[name]
+		if server.NeedsSetup() {
+			continue
+		}
 		entry := mcp.ServerConfig{
 			Type: server.Type, Name: name, Command: server.Command, Args: append([]string(nil), server.Args...),
 			Env: cloneStringsMap(server.Env), URL: server.URL, Headers: cloneStringsMap(server.Headers), Disabled: !server.IsEnabled(),
 			DisabledTools: append([]string(nil), cfg.DisabledMCPTools[name]...),
 		}
 		catalog = append(catalog, entry)
-		if !entry.Disabled && !server.NeedsSetup() {
+		if !entry.Disabled {
 			effective = append(effective, entry)
 		}
 	}

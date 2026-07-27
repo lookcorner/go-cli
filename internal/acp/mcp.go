@@ -9,7 +9,9 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/lookcorner/go-cli/internal/config"
 	mcppkg "github.com/lookcorner/go-cli/internal/mcp"
+	"github.com/lookcorner/go-cli/internal/workspace"
 )
 
 type callableMCPTool interface {
@@ -461,7 +463,7 @@ func (s *Server) handleMCPList(incoming message, sessionID string) {
 }
 
 func mcpServerCatalog(current *session) []map[string]any {
-	if current == nil || current.runner == nil || current.runner.Tools == nil {
+	if current == nil || current.runner == nil {
 		return []map[string]any{}
 	}
 	current.mu.Lock()
@@ -470,31 +472,36 @@ func mcpServerCatalog(current *session) []map[string]any {
 	if provider == nil {
 		provider = current.runner.MCPServers
 	}
+	cwd := current.cwd
 	current.mu.Unlock()
 	if provider != nil {
 		configs = provider()
 	}
 	toolsByServer := make(map[string][]map[string]any)
-	for _, registered := range current.runner.Tools.SnapshotTools() {
-		tool, ok := registered.(callableMCPTool)
-		if !ok {
-			continue
+	if current.runner.Tools != nil {
+		for _, registered := range current.runner.Tools.SnapshotTools() {
+			tool, ok := registered.(callableMCPTool)
+			if !ok {
+				continue
+			}
+			server, name, info := tool.MCPIdentity()
+			entry := map[string]any{"name": name, "enabled": true}
+			if info.Title != "" {
+				entry["displayName"] = info.Title
+			}
+			if info.Description != "" {
+				entry["description"] = info.Description
+			}
+			if len(info.Annotations) > 0 {
+				entry["_meta"] = info.Annotations
+			}
+			toolsByServer[server] = append(toolsByServer[server], entry)
 		}
-		server, name, info := tool.MCPIdentity()
-		entry := map[string]any{"name": name, "enabled": true}
-		if info.Title != "" {
-			entry["displayName"] = info.Title
-		}
-		if info.Description != "" {
-			entry["description"] = info.Description
-		}
-		if len(info.Annotations) > 0 {
-			entry["_meta"] = info.Annotations
-		}
-		toolsByServer[server] = append(toolsByServer[server], entry)
 	}
 	servers := make([]map[string]any, 0, len(configs))
+	seen := map[string]bool{}
 	for _, config := range configs {
+		seen[config.Name] = true
 		entry := map[string]any{"name": config.Name, "source": "local"}
 		if config.URL != "" {
 			entry["type"], entry["url"] = "http", config.URL
@@ -538,8 +545,97 @@ func mcpServerCatalog(current *session) []map[string]any {
 		entry["session"] = session
 		servers = append(servers, entry)
 	}
+	servers = append(servers, mcpSetupRequiredPlaceholders(cwd, seen)...)
 	sort.Slice(servers, func(i, j int) bool { return servers[i]["name"].(string) < servers[j]["name"].(string) })
 	return servers
+}
+
+func mcpSetupRequiredPlaceholders(cwd string, seen map[string]bool) []map[string]any {
+	path, err := config.DefaultPath()
+	if err != nil {
+		return nil
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		return nil
+	}
+	trusted := workspace.ResolveFolderTrust(cwd, cfg.FolderTrustEnabled, false) == workspace.TrustTrusted
+	entries := config.CollectMCPSetupConfigs(cwd, cfg, nil, trusted)
+	prefs := config.LoadMCPPreferences().File
+	out := make([]map[string]any, 0)
+	names := make([]string, 0, len(entries))
+	for name := range entries {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if seen[name] {
+			continue
+		}
+		entry := entries[name]
+		var pref *config.MCPServerPreferences
+		if stored, ok := prefs.Servers[name]; ok {
+			copy := stored
+			pref = &copy
+		}
+		resolution := entry.Config.ResolveSetup(pref)
+		if resolution.Kind == config.MCPSetupResolved {
+			continue
+		}
+		setup := entry.Config.Setup
+		if resolution.Kind == config.MCPSetupRequired || resolution.Kind == config.MCPSetupInvalid {
+			setupCopy := resolution.Setup
+			if setupCopy.Fields == nil && setup != nil {
+				setupCopy = *setup
+			}
+			setup = &setupCopy
+		}
+		row := map[string]any{
+			"name":   name,
+			"source": "local",
+			"type":   "http",
+			"url":    "",
+			"session": map[string]any{
+				"enabled":       entry.Config.IsEnabled(),
+				"status":        "setuprequired",
+				"tools":         []map[string]any{},
+				"setupRequired": true,
+			},
+		}
+		if setup != nil {
+			row["setup"] = mcpSetupWire(*setup)
+		}
+		if pref != nil && len(pref.Values) > 0 {
+			row["setupValues"] = pref.Values
+		}
+		if entry.Source.Plugin != nil {
+			row["sourceLabel"] = "plugin: " + *entry.Source.Plugin
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
+func mcpSetupWire(setup config.MCPSetupConfig) map[string]any {
+	fields := make([]map[string]any, 0, len(setup.Fields))
+	for _, field := range setup.Fields {
+		item := map[string]any{
+			"id":       field.ID,
+			"label":    field.Label,
+			"type":     field.Type,
+			"required": field.Required,
+			"options":  field.Options,
+		}
+		if field.Default != nil {
+			item["default"] = *field.Default
+		}
+		fields = append(fields, item)
+	}
+	out := map[string]any{"fields": fields}
+	if len(setup.Variables) > 0 {
+		out["variables"] = setup.Variables
+	}
+	return out
 }
 
 func (s *Server) handleMCPConfig(ctx context.Context, incoming message, sessionID, name, toolName string, enabled *bool, server mcppkg.ServerConfig) {
