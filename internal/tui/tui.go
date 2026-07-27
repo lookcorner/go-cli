@@ -954,6 +954,7 @@ type model struct {
 	protocolChecked      bool
 	pendingImages        []tools.ImageAttachment
 	overlayImages        []tools.ImageAttachment
+	overlayByKittyID     map[int]tools.ImageAttachment
 	imageOverlay         *imageOverlayState
 	nextKittyID          int
 	kittyUploads         [][]byte
@@ -2499,6 +2500,11 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.finishDashboardPoll(msg)
 	case gboomTickEvent:
 		return m, m.handleGboomTick(msg)
+	case imageOverlayClickEvent:
+		if m.openImageOverlayByKittyID(msg.id) {
+			m.status = "image preview"
+		}
+		return m, nil
 	case gboomMouseEvent:
 		if m.gboom != nil {
 			m.gboom.handleMouse(msg)
@@ -5929,6 +5935,9 @@ func (m *model) enrichReplayImage(image *session.DisplayImage, sessionPath strin
 	image.Data = data
 	cols, rows := inlineImageCells(image.Width, image.Height, 12)
 	m.kittyUploads = append(m.kittyUploads, kittyTransmitVirtual(image.KittyID, data, cols, rows))
+	m.rememberOverlayImageID(image.KittyID, tools.ImageAttachment{
+		MediaType: image.MediaType, Width: image.Width, Height: image.Height, Data: data,
+	})
 }
 
 func (m *model) beginTurn(prompt string) {
@@ -6535,6 +6544,7 @@ func (m *model) View() tea.View {
 	for index, line := range visible {
 		plainVisible[index] = stripUIANSI(line)
 	}
+	styledVisible := append([]string(nil), visible...)
 	if m.selection != nil {
 		visible = m.selection.highlightedLines(visible)
 	}
@@ -6753,6 +6763,11 @@ func (m *model) View() tea.View {
 						return func() tea.Msg { return timelineJumpEvent{turn: hit.turn} }
 					}
 					return nil
+				}
+			}
+			if !m.minimal && m.imageOverlay == nil && bodyRow >= 0 && bodyRow < len(styledVisible) {
+				if id, ok := kittyIDFromStyledLine(styledVisible[bodyRow]); ok {
+					return func() tea.Msg { return imageOverlayClickEvent{id: id} }
 				}
 			}
 			if mouse.Y >= bannerHeight+1 && mouse.Y <= bodyEnd {
