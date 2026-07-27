@@ -463,6 +463,17 @@ func (i *IndexDB) HasEmbeddings() (bool, error) {
 	return count > 0, err
 }
 
+// ChunkKey returns the display chunk id (path + line range) for a DB chunk id.
+func (i *IndexDB) ChunkKey(chunkID string) (path string, start, end int, ok bool) {
+	if i == nil {
+		return "", 0, 0, false
+	}
+	err := i.db.QueryRow(
+		`SELECT path, start_line, end_line FROM chunks WHERE id = ?`, chunkID,
+	).Scan(&path, &start, &end)
+	return path, start, end, err == nil
+}
+
 // VectorSearchEnabled reports whether an embedding model is configured.
 func VectorSearchEnabled(cfg Config) bool {
 	return cfg.Embedding.Model != nil && strings.TrimSpace(*cfg.Embedding.Model) != ""

@@ -29,6 +29,7 @@ type Store struct {
 	sessionsDir  string
 	sessionID    string
 	ephemeral    bool
+	embedder     EmbeddingProvider
 }
 
 type FileInfo struct {
@@ -197,6 +198,16 @@ func (s *Store) WorkspaceDir() string {
 		return ""
 	}
 	return s.workspaceDir
+}
+
+// SetEmbedder configures optional vector search / semantic dedup embeddings.
+func (s *Store) SetEmbedder(provider EmbeddingProvider) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.embedder = provider
+	s.mu.Unlock()
 }
 
 func ephemeralWorkspace(workspace string) bool {

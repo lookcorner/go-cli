@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -102,10 +103,99 @@ func (s *Store) Search(query string, index IndexConfig, search SearchConfig) ([]
 		}
 		chunks = append(chunks, splitMarkdown(path, file.Source, string(data), created, index)...)
 	}
+	if results, ok := s.searchHybridLocked(query, files, chunks, index, search); ok {
+		return results, nil
+	}
 	if narrowed, ok := s.narrowChunksWithFTS(query, files, chunks, index, search.MaxResults); ok {
 		chunks = narrowed
 	}
 	return rankChunks(chunks, terms, search), nil
+}
+
+// searchHybridLocked merges FTS BM25 + embedding KNN scores, then applies the
+// same decay/source-weight/MMR path as text ranking. Fail open without embedder.
+func (s *Store) searchHybridLocked(query string, files []FileInfo, chunks []chunk, index IndexConfig, search SearchConfig) ([]Result, bool) {
+	if s.embedder == nil || s.ephemeral || len(chunks) == 0 {
+		return nil, false
+	}
+	embedding := EmbeddingConfig{Provider: "api", Dimensions: s.embedder.Dimensions()}
+	model := s.embedder.ModelName()
+	embedding.Model = &model
+	idx, err := OpenIndex(s.workspaceDir, embedding, index)
+	if err != nil {
+		return nil, false
+	}
+	defer idx.Close()
+
+	for _, file := range files {
+		path, pathErr := s.allowedPath(file.Path)
+		if pathErr != nil {
+			continue
+		}
+		data, readErr := readMemoryFile(path)
+		if readErr != nil {
+			continue
+		}
+		if _, err := idx.ReindexFile(path, file.Source, string(data)); err != nil {
+			return nil, false
+		}
+	}
+	limit := search.MaxResults
+	if limit < 1 {
+		limit = 10
+	}
+	ftsHits, err := idx.SearchFTS(query, limit*3)
+	if err != nil {
+		return nil, false
+	}
+	if _, err := idx.EmbedMissing(context.Background(), s.embedder); err != nil {
+		return nil, false
+	}
+	has, err := idx.HasEmbeddings()
+	if err != nil || !has {
+		return nil, false
+	}
+	queryVecs, err := s.embedder.Embed(context.Background(), []string{query})
+	if err != nil || len(queryVecs) == 0 {
+		return nil, false
+	}
+	neighbors, err := idx.VectorSearch(queryVecs[0], limit*3)
+	if err != nil {
+		return nil, false
+	}
+
+	ftsRanks := map[string]float64{}
+	for _, hit := range ftsHits {
+		ftsRanks[chunkID(hit.Path, hit.StartLine, hit.EndLine)] = hit.Rank
+	}
+	vecScores := map[string]float64{}
+	for _, neighbor := range neighbors {
+		path, start, end, ok := idx.ChunkKey(neighbor.ChunkID)
+		if !ok {
+			continue
+		}
+		vecScores[chunkID(path, start, end)] = DistanceToSimilarity(neighbor.Distance)
+	}
+	if len(ftsRanks) == 0 && len(vecScores) == 0 {
+		return nil, false
+	}
+	merged := MergeHybridScores(NormalizeFTSRanks(ftsRanks), vecScores, search.TextWeight, search.VectorWeight)
+	byKey := map[string]chunk{}
+	for _, item := range chunks {
+		byKey[chunkID(item.path, item.start, item.end)] = item
+	}
+	var matches []scoredChunk
+	for key, score := range merged {
+		item, ok := byKey[key]
+		if !ok || score <= 0 {
+			continue
+		}
+		matches = append(matches, scoredChunk{chunk: item, raw: score})
+	}
+	if len(matches) == 0 {
+		return nil, false
+	}
+	return finalizeRanked(matches, search), true
 }
 
 // narrowChunksWithFTS reindexes into index.sqlite and keeps BM25 hits as the
@@ -387,11 +477,7 @@ func rankChunks(chunks []chunk, query []string, cfg SearchConfig) []Result {
 			}
 		}
 	}
-	type scored struct {
-		chunk chunk
-		raw   float64
-	}
-	var matches []scored
+	var matches []scoredChunk
 	best := 0.0
 	for i, item := range chunks {
 		raw := 0.0
@@ -404,15 +490,29 @@ func rankChunks(chunks []chunk, query []string, cfg SearchConfig) []Result {
 			raw += idf * float64(tf) / (float64(tf) + 1.2)
 		}
 		if raw > 0 {
-			matches = append(matches, scored{item, raw})
+			matches = append(matches, scoredChunk{item, raw})
 			best = math.Max(best, raw)
 		}
 	}
+	if best > 0 {
+		for i := range matches {
+			matches[i].raw /= best
+		}
+	}
+	return finalizeRanked(matches, cfg)
+}
+
+type scoredChunk struct {
+	chunk chunk
+	raw   float64
+}
+
+func finalizeRanked(matches []scoredChunk, cfg SearchConfig) []Result {
 	now := time.Now().Unix()
 	halfLife := effectiveHalfLife(cfg)
 	ranked := make([]rankedResult, 0, len(matches))
 	for _, match := range matches {
-		rawScore := match.raw / best
+		rawScore := match.raw
 		if match.chunk.source == "session" && halfLife > 0 {
 			created := max(int64(0), match.chunk.created)
 			ageDays := math.Max(0, float64(now-created)/86400)

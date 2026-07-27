@@ -469,10 +469,11 @@ path allowlist and atomic persistence; an empty `new_text` forgets the range,
 and identical content is a no-op.
 It uses durable workspace `index.sqlite` FTS5 BM25 to narrow search candidates
 (`[memory.embedding]` + Markdown reindex), then the same in-process ranker for
-decay/source weights/MMR (ephemeral and index failures fail open). Hybrid score
-merge helpers, portable `chunks_embedding` L2 KNN, and flush semantic dedup
-(when a `MemoryEmbedder` is configured) are ready; the OpenAI-compatible
-embedding HTTP client and hybrid `Store.Search` merge remain pending. Session startup also removes, in the background, empty orphan memory
+decay/source weights/MMR (ephemeral and index failures fail open). When an
+embedder is configured (`APIEmbeddingProvider` or tests' hash provider), search
+merges FTS with L2 KNN scores and flush can semantic-dedup near-duplicates.
+Session startup wiring of the API embedder from the active base URL/key remains.
+Session startup also removes, in the background, empty orphan memory
 workspaces older than `[memory.gc].max_age_days` (30 by default); temporary
 `tmp*` workspaces use a 7-day limit when they contain sessions and are removed
 immediately when empty.

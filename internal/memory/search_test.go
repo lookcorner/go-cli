@@ -80,6 +80,28 @@ func TestStoreSearchRanksFiltersAndDecaysSessions(t *testing.T) {
 	}
 }
 
+func TestStoreSearchHybridMergesVectorCandidates(t *testing.T) {
+	root, workspace := t.TempDir(), t.TempDir()
+	store, err := Open(root, workspace, "hybrid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.SetEmbedder(HashEmbeddingProvider{Dims: 32, Model: "hash"})
+	path := filepath.Join(store.workspaceDir, "MEMORY.md")
+	if err := os.WriteFile(path, []byte("## Alpha\n\nunique zebra constellation notes\n\n## Beta\n\ndeployment rollback procedure\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	search := DefaultConfig().Search
+	search.MinScore = 0
+	results, err := store.Search("unique zebra constellation", DefaultConfig().Index, search)
+	if err != nil || len(results) == 0 {
+		t.Fatalf("results=%#v err=%v", results, err)
+	}
+	if !strings.Contains(strings.ToLower(results[0].Snippet), "zebra") {
+		t.Fatalf("expected zebra hit via hybrid path: %#v", results)
+	}
+}
+
 func TestRankChunksUsesTemporalDecaySourceWeightsAndMMR(t *testing.T) {
 	now := time.Now().Unix()
 	chunks := []chunk{
