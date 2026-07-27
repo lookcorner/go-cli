@@ -9,8 +9,8 @@ import (
 	ll "github.com/landlock-lsm/go-landlock/landlock"
 )
 
-func applyParentLandlock(profile SandboxProfile, workspace string, warn io.Writer) error {
-	paths := ParentLandlockPathsFor(profile, workspace)
+func applyParentLandlockResolved(resolved ResolvedSandboxProfile, workspace string, warn io.Writer) (bool, error) {
+	paths := ParentLandlockPathsFromResolved(resolved, workspace)
 	rules := make([]ll.Rule, 0, 3)
 	if len(paths.RODirs) > 0 {
 		rules = append(rules, ll.RODirs(paths.RODirs...))
@@ -23,17 +23,21 @@ func applyParentLandlock(profile SandboxProfile, workspace string, warn io.Write
 	}
 	if len(rules) == 0 {
 		if warn != nil {
-			fmt.Fprintf(warn, "gork: parent Landlock skipped: no usable paths for profile %q\n", profile)
+			fmt.Fprintf(warn, "gork: parent Landlock skipped: no usable paths for profile %q\n", resolved.Name)
 		}
-		return nil
+		return false, nil
 	}
-	// BestEffort: succeed without confinement when Landlock ABI is unavailable.
+	cfg := ll.V5
+	if !resolved.Custom {
+		// Built-ins: BestEffort succeeds even when Landlock is unavailable.
+		cfg = cfg.BestEffort()
+	}
 	// RestrictPaths only — do not RestrictNet (LLM/MCP HTTP must keep working).
-	if err := ll.V5.BestEffort().RestrictPaths(rules...); err != nil {
+	if err := cfg.RestrictPaths(rules...); err != nil {
 		if warn != nil {
 			fmt.Fprintf(warn, "gork: parent Landlock unavailable: %v\n", err)
 		}
-		return nil
+		return false, nil
 	}
-	return nil
+	return true, nil
 }

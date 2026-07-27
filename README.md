@@ -1770,8 +1770,14 @@ deny (`connect`/`bind`/`send*`/`listen`/`accept*`) on top of `--unshare-net`.
 Linux also re-execs the parent under bubblewrap so global hook sources under
 `$GROK_HOME` (`hooks/`, `hooks-paths`, and listed files) are mounted
 read-only (fail-closed when `bwrap` is missing or the remount cannot be
-verified). Approval and the file tools' workspace/symlink checks remain
-independent safety boundaries.
+verified). Custom profiles in `$GROK_HOME/sandbox.toml` or
+`<workspace>/.grok/sandbox.toml` may `extends` a built-in and add
+`read_only` / `read_write` / `restrict_network`; parent Landlock applies the
+merged allowlist (fail-closed on Linux when Landlock cannot apply), and
+child shells wrap with the extends base. Project TOML is additive only
+(cannot replace a globally defined profile name). TOML `deny` path
+bind-over remains a follow-up. Approval and the file tools' workspace/symlink
+checks remain independent safety boundaries.
 
 `monitor` runs a background command whose stdout is delivered as real-time,
 debounced events. It applies the reference line/batch limits, token-bucket rate

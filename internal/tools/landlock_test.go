@@ -46,10 +46,10 @@ func TestApplyParentLandlockOffAndInvalid(t *testing.T) {
 	if err := ApplyParentLandlock("off", t.TempDir(), nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := ApplyParentLandlock("nope", t.TempDir(), nil); err == nil || !strings.Contains(err.Error(), "unsupported") {
+	if err := ApplyParentLandlock("missing-custom", t.TempDir(), nil); err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("err=%v", err)
 	}
-	// Non-off should not fail-closed even without Landlock (darwin / old kernel).
+	// Non-off built-ins should not fail-closed even without Landlock (darwin / old kernel).
 	var buf strings.Builder
 	if err := ApplyParentLandlock("workspace", t.TempDir(), &buf); err != nil {
 		t.Fatal(err)

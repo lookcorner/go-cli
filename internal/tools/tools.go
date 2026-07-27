@@ -146,6 +146,7 @@ type Registry struct {
 	hashline      hashlineConfig
 	environment   map[string]string
 	sandbox       SandboxProfile
+	restrictNet   bool
 	pathHints     *atomic.Bool
 	allowedTools  map[string]bool
 	deniedTools   map[string]bool
@@ -296,12 +297,12 @@ func (r *Registry) ForWorkspace(ws *workspace.Workspace) *Registry {
 		return nil
 	}
 	r.mu.RLock()
-	fileToolset, hashline, environment, sandbox := r.fileToolset, r.hashline, cloneEnvironment(r.environment), r.sandbox
+	fileToolset, hashline, environment, sandbox, restrictNet := r.fileToolset, r.hashline, cloneEnvironment(r.environment), r.sandbox, r.restrictNet
 	pathHints := r.pathHints != nil && r.pathHints.Load()
 	r.mu.RUnlock()
 	child := NewRegistry(ws, r.approver)
 	child.ConfigureEnvironment(environment)
-	child.setSandbox(sandbox)
+	child.setSandbox(sandbox, restrictNet)
 	if fileToolset == "hashline" {
 		_ = child.ConfigureFileToolset(fileToolset, hashline.scheme, hashline.hashLen, hashline.chunkSize)
 	}
@@ -352,14 +353,14 @@ func (r *Registry) ConfigureSandbox(value string) error {
 	if r == nil {
 		return nil
 	}
-	profile, err := ParseSandboxProfile(value)
+	resolved, err := ResolveSandboxProfile(value, r.processes.ws.Root())
 	if err != nil {
 		return err
 	}
-	if err := validateSandboxRuntime(profile); err != nil {
+	if err := validateSandboxRuntime(resolved.ChildBase); err != nil {
 		return err
 	}
-	r.setSandbox(profile)
+	r.setSandbox(resolved.ChildBase, resolved.RestrictNetwork)
 	return nil
 }
 
@@ -369,14 +370,15 @@ func (r *Registry) SetPathNotFoundHints(enabled bool) {
 	}
 }
 
-func (r *Registry) setSandbox(profile SandboxProfile) {
+func (r *Registry) setSandbox(profile SandboxProfile, restrictNetwork bool) {
 	r.mu.Lock()
 	r.sandbox = profile
+	r.restrictNet = restrictNetwork
 	if shell, ok := r.tools["shell"].(*shellTool); ok {
-		shell.setSandbox(profile)
+		shell.setSandbox(profile, restrictNetwork)
 	}
 	r.mu.Unlock()
-	r.processes.setSandbox(profile)
+	r.processes.setSandbox(profile, restrictNetwork)
 }
 
 // ConfigureEnvironment overlays variables for commands started by this registry.
@@ -1719,18 +1721,20 @@ func atomicWrite(path string, data []byte, mode os.FileMode) error {
 }
 
 type shellTool struct {
-	ws          *workspace.Workspace
-	approver    Approver
-	timeout     time.Duration
-	rewind      *mutationCheckpoint
-	environment map[string]string
-	sandbox     SandboxProfile
-	envMu       sync.RWMutex
+	ws              *workspace.Workspace
+	approver        Approver
+	timeout         time.Duration
+	rewind          *mutationCheckpoint
+	environment     map[string]string
+	sandbox         SandboxProfile
+	restrictNetwork bool
+	envMu           sync.RWMutex
 }
 
-func (t *shellTool) setSandbox(profile SandboxProfile) {
+func (t *shellTool) setSandbox(profile SandboxProfile, restrictNetwork bool) {
 	t.envMu.Lock()
 	t.sandbox = profile
+	t.restrictNetwork = restrictNetwork
 	t.envMu.Unlock()
 }
 
@@ -1740,10 +1744,10 @@ func (t *shellTool) setEnvironment(values map[string]string) {
 	t.envMu.Unlock()
 }
 
-func (t *shellTool) environmentSnapshot() (map[string]string, SandboxProfile) {
+func (t *shellTool) environmentSnapshot() (map[string]string, SandboxProfile, bool) {
 	t.envMu.RLock()
 	defer t.envMu.RUnlock()
-	return cloneEnvironment(t.environment), t.sandbox
+	return cloneEnvironment(t.environment), t.sandbox, t.restrictNetwork
 }
 
 func (t *shellTool) Definition() api.ToolDefinition {
@@ -1779,8 +1783,8 @@ func (t *shellTool) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	if runtime.GOOS == "windows" {
 		executable, commandArgs = "cmd.exe", []string{"/C", args.Command}
 	}
-	environment, sandbox := t.environmentSnapshot()
-	command, err := sandboxCommand(commandCtx, sandbox, t.ws.Root(), executable, commandArgs...)
+	environment, sandbox, restrictNetwork := t.environmentSnapshot()
+	command, err := sandboxCommand(commandCtx, sandbox, restrictNetwork, t.ws.Root(), executable, commandArgs...)
 	if err != nil {
 		return "", err
 	}

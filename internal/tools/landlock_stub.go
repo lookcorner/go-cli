@@ -4,4 +4,6 @@ package tools
 
 import "io"
 
-func applyParentLandlock(SandboxProfile, string, io.Writer) error { return nil }
+func applyParentLandlockResolved(ResolvedSandboxProfile, string, io.Writer) (bool, error) {
+	return false, nil
+}

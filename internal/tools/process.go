@@ -35,30 +35,31 @@ const (
 )
 
 type ProcessManager struct {
-	ws           *workspace.Workspace
-	approver     Approver
-	nextID       atomic.Uint64
-	mu           sync.Mutex
-	processes    map[string]*backgroundProcess
-	closed       bool
-	stateMu      sync.Mutex
-	currentDir   string
-	environment  []string
-	shellPrelude string
-	sandboxMu    sync.RWMutex
-	sandbox      SandboxProfile
-	rewind       *mutationCheckpoint
-	observerMu   sync.RWMutex
-	observer     ProcessObserver
-	bashMu       sync.RWMutex
-	bashTimeout  time.Duration
-	bashOutput   int
-	cgroupMu     sync.Mutex
-	cgroup       shellCgroup
-	cgroupCfg    CgroupMemoryConfig
-	oomStop      chan struct{}
-	fgMu         sync.Mutex
-	foreground   *foregroundSlot
+	ws              *workspace.Workspace
+	approver        Approver
+	nextID          atomic.Uint64
+	mu              sync.Mutex
+	processes       map[string]*backgroundProcess
+	closed          bool
+	stateMu         sync.Mutex
+	currentDir      string
+	environment     []string
+	shellPrelude    string
+	sandboxMu       sync.RWMutex
+	sandbox         SandboxProfile
+	restrictNetwork bool
+	rewind          *mutationCheckpoint
+	observerMu      sync.RWMutex
+	observer        ProcessObserver
+	bashMu          sync.RWMutex
+	bashTimeout     time.Duration
+	bashOutput      int
+	cgroupMu        sync.Mutex
+	cgroup          shellCgroup
+	cgroupCfg       CgroupMemoryConfig
+	oomStop         chan struct{}
+	fgMu            sync.Mutex
+	foreground      *foregroundSlot
 }
 
 type foregroundSlot struct {
@@ -352,9 +353,10 @@ func (m *ProcessManager) ConfigureEnvironment(values map[string]string) {
 	m.stateMu.Unlock()
 }
 
-func (m *ProcessManager) setSandbox(profile SandboxProfile) {
+func (m *ProcessManager) setSandbox(profile SandboxProfile, restrictNetwork bool) {
 	m.sandboxMu.Lock()
 	m.sandbox = profile
+	m.restrictNetwork = restrictNetwork
 	m.sandboxMu.Unlock()
 }
 
@@ -1033,8 +1035,9 @@ func (m *ProcessManager) shellCommand(command string) (*exec.Cmd, error) {
 	executable, args := shellCommandParts(command)
 	m.sandboxMu.RLock()
 	profile := m.sandbox
+	restrictNetwork := m.restrictNetwork
 	m.sandboxMu.RUnlock()
-	return sandboxCommand(nil, profile, m.ws.Root(), executable, args...)
+	return sandboxCommand(nil, profile, restrictNetwork, m.ws.Root(), executable, args...)
 }
 
 func shellCommandParts(command string) (string, []string) {
