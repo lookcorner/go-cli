@@ -21,7 +21,7 @@ One-round doctor/wrap surface closed at `5c6557d`. Remaining gaps need
 | 4 | **Cloud ACP / conversations** | ACP | Large protocol surface; defer until local ACP stays green | XL |
 | 5 | **Remote relay / workspace hub** | Session / workspace | Depends on product decisions | XL |
 | 6 | **Vector memory** | Memory | Research + storage + retrieval | done (sqlite-vec optional) |
-| 7 | **Fullscreen media / inline video** | Markdown/media | Terminal capability + UX heavy | in progress |
+| 7 | **Fullscreen media / inline video** | Markdown/media | Terminal capability + UX heavy | done |
 
 Deferred unless explicitly requested: Cursor CLI session discovery, WezTerm SSH XTVERSION probes.
 
