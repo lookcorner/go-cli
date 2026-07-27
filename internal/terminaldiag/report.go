@@ -418,8 +418,9 @@ func isAppleTerminal(brand string) bool {
 }
 
 // newlineFindings mirrors reference terminal.newline-fallback for env-detectable
-// hosts where Shift+Enter cannot be distinguished from Enter (VTE < 0.82 and
-// VS Code-family xterm.js). Kitty-protocol-unavailable unknowns stay deferred.
+// hosts where Shift+Enter cannot be distinguished from Enter (VTE < 0.82,
+// VS Code-family xterm.js, and local WezTerm without Kitty keyboard protocol).
+// Async XTVERSION probes for SSH WezTerm remain deferred.
 func newlineFindings(getenv func(string) string, brand string) []string {
 	if finding := vteNewlineFinding(getenv, brand); finding != "" {
 		return []string{finding}
@@ -428,7 +429,24 @@ func newlineFindings(getenv func(string) string, brand string) []string {
 		terminal := vscodeTerminalLabel(getenv, brand)
 		return []string{"Shift+Enter can't insert a newline in this xterm.js terminal.\n    Use Alt+Enter to insert a newline in " + terminal + ". xterm.js sends Shift+Enter as Enter in this setup."}
 	}
+	if finding := weztermKittyFinding(getenv, brand); finding != "" {
+		return []string{finding}
+	}
 	return nil
+}
+
+// weztermKittyFinding mirrors Rust wezterm_kitty_keyboard_warning Environment shape.
+// Suppressed under tmux/zellij/screen (wezterm.lua alone would not help).
+func weztermKittyFinding(getenv func(string) string, brand string) string {
+	if normalizeBrandKey(brand) != "wezterm" {
+		return ""
+	}
+	if mux := terminalMultiplexer(getenv); mux != "none" {
+		return ""
+	}
+	return "Shift+Enter can't insert a newline because WezTerm's Kitty keyboard protocol is off\n" +
+		"    → Set `config.enable_kitty_keyboard = true` in ~/.config/wezterm/wezterm.lua\n" +
+		"    Restart WezTerm after changing this setting. Until then, type `\\` and then press Enter to insert a newline."
 }
 
 func vteNewlineFinding(getenv func(string) string, brand string) string {
