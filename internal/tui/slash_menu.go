@@ -51,6 +51,7 @@ var slashCommandCatalog = []slashCommandItem{
 	{name: "minimal", description: "Switch to native scrollback"},
 	{name: "fullscreen", aliases: []string{"full"}, description: "Switch to full-screen mode"},
 	{name: "preview-image", aliases: []string{"image-preview"}, description: "Open the latest image overlay"},
+	{name: "images", aliases: []string{"list-images"}, description: "List session web_fetch images"},
 	{name: "play-video", aliases: []string{"video-play"}, placeholder: "[path|name]", description: "Play a video overlay (latest session clip if omitted; ffmpeg)"},
 	{name: "videos", aliases: []string{"list-videos"}, description: "List session-generated video clips"},
 	{name: "downloads", aliases: []string{"list-downloads"}, description: "List session web_fetch downloads"},
@@ -251,7 +252,7 @@ func (m *model) slashCommandAvailable(name string) bool {
 		return !m.minimal
 	case "fullscreen":
 		return m.minimal
-	case "preview-image", "image-preview":
+	case "preview-image", "image-preview", "images", "list-images":
 		return !m.minimal
 	case "play-video", "video-play", "videos", "list-videos", "downloads", "list-downloads":
 		return !m.minimal

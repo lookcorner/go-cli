@@ -3170,6 +3170,14 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.status = "no image to preview"
 			}
 			return m, nil
+		case "/images", "/list-images":
+			if m.minimal {
+				m.status = "session images are fullscreen-only"
+				return m, nil
+			}
+			m.appendSystem(m.listSessionImages())
+			m.status = "session images"
+			return m, nil
 		case "/play-video", "/video-play":
 			if m.minimal {
 				m.status = "video overlay is fullscreen-only"

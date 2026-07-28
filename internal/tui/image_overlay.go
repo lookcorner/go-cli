@@ -3,10 +3,12 @@ package tui
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/tools"
 )
 
@@ -52,7 +54,52 @@ func (m *model) openLatestImageOverlay() bool {
 			return true
 		}
 	}
-	return false
+	return m.openLatestSessionImageOverlay()
+}
+
+func (m *model) openLatestSessionImageOverlay() bool {
+	sessionPath := ""
+	if m.runner != nil {
+		sessionPath = strings.TrimSpace(m.runner.SessionPath)
+	}
+	if sessionPath == "" {
+		return false
+	}
+	asset, ok, err := session.LatestImageAsset(sessionPath)
+	if err != nil || !ok {
+		return false
+	}
+	data, err := os.ReadFile(asset.Path)
+	if err != nil {
+		m.status = err.Error()
+		return false
+	}
+	mediaType := sessionImageMediaType(asset.Name)
+	if mediaType == "" {
+		m.status = "unsupported session image type"
+		return false
+	}
+	attachment, err := tools.NewImageAttachment(mediaType, data)
+	if err != nil {
+		m.status = err.Error()
+		return false
+	}
+	return m.openImageOverlay(attachment, asset.URI)
+}
+
+func sessionImageMediaType(name string) string {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".gif":
+		return "image/gif"
+	case ".webp":
+		return "image/webp"
+	default:
+		return ""
+	}
 }
 
 func (m *model) rememberOverlayImage(image tools.ImageAttachment) {

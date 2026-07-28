@@ -336,6 +336,9 @@ an explicit request.
       `/videos` listing on `compat/fullscreen-session-video-artifacts`.
 - [x] Session download discovery: `ListDownloadAssets` / `/downloads` for
       `artifacts/<session>/downloads` on `compat/session-download-discovery`.
+- [x] Session image discovery: `ListImageAssets` / `/images`, with
+      `/preview-image` falling back to newest artifact image on
+      `compat/session-image-discovery`.
 
 ### Still open
 
