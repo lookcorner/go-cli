@@ -268,7 +268,8 @@ The same Bash section's optional `cmd_prefix` is chained before foreground and
 background Bash commands while leaving monitor commands untouched.
 Its default-on `allow_background_operator` can reject foreground POSIX `&` jobs
 while preserving logical operators, redirects, quoted text, heredocs, and
-explicit structured background tasks.
+explicit structured background tasks; local configuration takes precedence
+over its authenticated remote fallback.
 
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |

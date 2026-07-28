@@ -154,6 +154,7 @@ type Config struct {
 	allowedModelsConfigured         bool
 	hiddenModelsConfigured          bool
 	disabledModelsConfigured        bool
+	bashAllowBackgroundConfigured   bool
 }
 
 type AutoModeConfig struct {
@@ -1273,6 +1274,7 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.Toolset.Bash.AllowBackgroundOperator != nil {
 		cfg.Toolset.Bash.AllowBackgroundOperator = *disk.Toolset.Bash.AllowBackgroundOperator
+		cfg.bashAllowBackgroundConfigured = true
 	}
 	if disk.Toolset.Bash.LoginShellCapture != nil {
 		cfg.Toolset.Bash.LoginShellCapture = *disk.Toolset.Bash.LoginShellCapture

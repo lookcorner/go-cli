@@ -95,6 +95,36 @@ func TestApplyRemoteSettingsCancelRewindDefaultsOn(t *testing.T) {
 	}
 }
 
+func TestApplyRemoteSettingsBashBackgroundOperatorPrecedence(t *testing.T) {
+	defaultConfig, err := Load(filepath.Join(t.TempDir(), "missing.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaultConfig.ApplyRemoteSettings(&RemoteSettings{AllowBackgroundOperator: boolPointer(false)})
+	if defaultConfig.Toolset.Bash.AllowBackgroundOperator {
+		t.Fatal("remote setting did not disable background operators")
+	}
+	defaultConfig.ApplyRemoteSettings(&RemoteSettings{})
+	if !defaultConfig.Toolset.Bash.AllowBackgroundOperator {
+		t.Fatal("missing remote setting did not restore the default")
+	}
+
+	for _, local := range []bool{false, true} {
+		path := filepath.Join(t.TempDir(), "config.toml")
+		if err := os.WriteFile(path, []byte(fmt.Sprintf("[toolset.bash]\nallow_background_operator = %t\n", local)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := Load(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg.ApplyRemoteSettings(&RemoteSettings{AllowBackgroundOperator: boolPointer(!local)})
+		if cfg.Toolset.Bash.AllowBackgroundOperator != local {
+			t.Fatalf("local=%v remote override produced %v", local, cfg.Toolset.Bash.AllowBackgroundOperator)
+		}
+	}
+}
+
 func TestFetchRemoteSettingsIncludesSessionIdentity(t *testing.T) {
 	requireLoopback(t)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

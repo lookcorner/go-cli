@@ -39,6 +39,7 @@ type RemoteSettings struct {
 	WebFetchEnabled                  *bool                `json:"web_fetch_enabled"`
 	PathNotFoundHints                *bool                `json:"path_not_found_hints"`
 	CancelRewindEnabled              *bool                `json:"cancel_rewind_enabled"`
+	AllowBackgroundOperator          *bool                `json:"allow_background_operator"`
 	AutoWakeEnabled                  *bool                `json:"auto_wake_enabled"`
 	FeedbackEnabled                  *bool                `json:"feedback_enabled"`
 	SessionRecap                     *bool                `json:"session_recap"`
@@ -248,6 +249,9 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 	}
 	c.PathNotFoundHints = remote.PathNotFoundHints != nil && *remote.PathNotFoundHints
 	c.CancelRewindEnabled = remote.CancelRewindEnabled == nil || *remote.CancelRewindEnabled
+	if !c.bashAllowBackgroundConfigured {
+		c.Toolset.Bash.AllowBackgroundOperator = remote.AllowBackgroundOperator == nil || *remote.AllowBackgroundOperator
+	}
 	value := AutoModeConfig{}
 	if remote.AutoMode != nil {
 		value, _ = normalizeAutoModeConfig(*remote.AutoMode)

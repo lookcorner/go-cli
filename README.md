@@ -1803,6 +1803,8 @@ background Bash command using `&&`; monitor commands are unchanged.
 directs the model to use `is_background = true`; it still permits quoted or
 escaped ampersands, redirects, `&&`, heredocs, and parallel work followed by
 `wait`. The setting defaults to `true`.
+When the local key is absent, authenticated remote settings may supply the
+default; an explicit local value always wins.
 `[toolset.bash] login_shell_capture`
 (default on; `GROK_LOGIN_ENV`) sources the user shell rc once at session start and
 merges that environment into agent shells. Top-level `[shell_environment_policy]`
