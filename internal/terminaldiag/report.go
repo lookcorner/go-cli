@@ -60,6 +60,7 @@ type Facts struct {
 	VoiceMicrophone  string `json:"voiceMicrophone,omitempty"`
 	VoiceDetail      string `json:"voiceDetail,omitempty"`
 	DataControl      string `json:"dataControl,omitempty"`
+	XTVERSION        string `json:"xtversion,omitempty"`
 }
 
 type Counts struct {
@@ -134,6 +135,7 @@ func BuildSnapshot(getenv func(string) string, lookPath func(string) (string, er
 	if dataControl != DataControlNotApplicable {
 		dataControlFact = string(dataControl)
 	}
+	xtversion, _ := XTVERSION()
 	return Snapshot{
 		SchemaVersion: SchemaVersion,
 		Facts: Facts{
@@ -141,7 +143,7 @@ func BuildSnapshot(getenv func(string) string, lookPath func(string) (string, er
 			NativeClip: clipboard, ClipboardTool: clipboardTool, OSC52: osc52, GOOS: goos,
 			SetClipboard: tmux.SetClipboard, AllowPassthrough: tmux.AllowPassthrough, ExtendedKeys: tmux.ExtendedKeys,
 			ControlMode: tmux.ControlMode, VoiceMicrophone: voiceMic, VoiceDetail: voiceDetail,
-			DataControl: dataControlFact,
+			DataControl: dataControlFact, XTVERSION: xtversion,
 		},
 		Findings: findings,
 		Counts:   Counts{Issues: len(findings)},
@@ -152,6 +154,9 @@ func (s Snapshot) Human() string {
 	var out strings.Builder
 	fmt.Fprintf(&out, "Environment\n  terminal     %s\n  multiplexer  %s\n  ssh          %s\n  color        %s\n",
 		s.Facts.Terminal, s.Facts.Multiplexer, yesNo(s.Facts.SSH), s.Facts.Color)
+	if s.Facts.XTVERSION != "" {
+		fmt.Fprintf(&out, "  xtversion    %s\n", s.Facts.XTVERSION)
+	}
 	if s.Facts.Multiplexer == "tmux" || strings.Contains(s.Facts.Multiplexer, "tmux") {
 		fmt.Fprintf(&out, "  set-clipboard %s\n  allow-passthrough %s\n  extended-keys %s\n  control-mode %s\n",
 			tmuxFactOrUnknown(s.Facts.SetClipboard), tmuxFactOrUnknown(s.Facts.AllowPassthrough), tmuxFactOrUnknown(s.Facts.ExtendedKeys),

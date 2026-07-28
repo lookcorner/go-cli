@@ -29,7 +29,7 @@ Cursor CLI session discovery (`compat/cursor-cli-session-discovery`).
 Shipped deferred doctor probes: sandbox.toml profile-conflict, Wayland data-control
 (`compat/wayland-data-control-doctor`), local WezTerm Kitty keyboard warning
 (`compat/wezterm-kitty-keyboard-doctor`), SSH WezTerm XTVERSION recovery
-(`compat/wezterm-ssh-xtversion`).
+(`compat/wezterm-ssh-xtversion`), doctor Facts/Human `xtversion` (`compat/doctor-xtversion-fact`).
 
 ---
 

@@ -87,6 +87,13 @@ func TestBuildSnapshotWarnsForSSHWezTermXTVERSION(t *testing.T) {
 	if strings.Contains(joined, "wezterm.lua") {
 		t.Fatalf("SSH finding should not recommend local lua: %q", joined)
 	}
+	if snapshot.Facts.XTVERSION != "WezTerm 20240203-120000-abcdef" {
+		t.Fatalf("xtversion fact=%q", snapshot.Facts.XTVERSION)
+	}
+	human := snapshot.Human()
+	if !strings.Contains(human, "xtversion    WezTerm 20240203-120000-abcdef") {
+		t.Fatalf("human missing xtversion:\n%s", human)
+	}
 	env["TMUX"] = "1"
 	snapshot = BuildSnapshot(func(key string) string { return env[key] }, func(string) (string, error) {
 		return "/bin/pbcopy", nil
