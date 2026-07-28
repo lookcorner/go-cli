@@ -155,6 +155,20 @@ func TestStreamableHTTPLifecycleJSONAndSSE(t *testing.T) {
 	}
 }
 
+func TestHTTPStartupTimeout(t *testing.T) {
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		<-request.Context().Done()
+		return nil, request.Context().Err()
+	})
+	_, _, err := StartHTTP(context.Background(), HTTPConfig{
+		Name: "slow", URL: "https://mcp.example/rpc",
+		Client: &http.Client{Transport: transport}, StartupTimeout: 10 * time.Millisecond,
+	})
+	if err == nil || !strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Fatalf("startup timeout error=%v", err)
+	}
+}
+
 func httpResponse(status int, contentType string, body string) *http.Response {
 	response := &http.Response{
 		StatusCode: status, Status: http.StatusText(status), Header: make(http.Header),

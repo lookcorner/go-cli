@@ -67,6 +67,7 @@ func TestStandaloneSSELifecycle(t *testing.T) {
 	client, initialized, err := StartSSE(context.Background(), HTTPConfig{
 		Name: "fixture", URL: "https://mcp.example/sse",
 		Headers: map[string]string{"Authorization": "Bearer fixture"}, Client: &http.Client{Transport: transport},
+		StartupTimeout: 100 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -74,6 +75,7 @@ func TestStandaloneSSELifecycle(t *testing.T) {
 	if initialized.ServerInfo.Name != "sse-fixture" {
 		t.Fatalf("unexpected initialize result: %#v", initialized)
 	}
+	time.Sleep(150 * time.Millisecond)
 	notified := make(chan string, 1)
 	client.SetNotificationHandler(func(method string) { notified <- method })
 	remoteTools, err := client.ListTools(context.Background())
@@ -127,5 +129,20 @@ func TestStandaloneSSERejectsCrossOriginPostEndpoint(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "configured origin") {
 		t.Fatalf("cross-origin endpoint was not rejected: %v", err)
+	}
+}
+
+func TestSSEStartupTimeout(t *testing.T) {
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		<-request.Context().Done()
+		return nil, request.Context().Err()
+	})
+	started := time.Now()
+	_, _, err := StartSSE(context.Background(), HTTPConfig{
+		Name: "slow", URL: "https://mcp.example/sse",
+		Client: &http.Client{Transport: transport}, StartupTimeout: 10 * time.Millisecond,
+	})
+	if err == nil || time.Since(started) > time.Second {
+		t.Fatalf("startup timeout error=%v elapsed=%s", err, time.Since(started))
 	}
 }

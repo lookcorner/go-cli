@@ -25,16 +25,29 @@ func StartSSE(ctx context.Context, cfg HTTPConfig) (*Client, InitializeResult, e
 	}
 	headers := prepareHTTPHeaders(cfg)
 	authState := newHTTPAuthState(cfg)
-	streamResponse, err := openSSEStream(ctx, httpClient, endpoint.String(), headers)
+	startCtx, startCancel := context.WithCancel(ctx)
+	timedOut := make(chan struct{})
+	timer := time.AfterFunc(effectiveStartupTimeout(cfg.StartupTimeout), func() {
+		startCancel()
+		close(timedOut)
+	})
+	failed := true
+	defer func() {
+		if failed {
+			timer.Stop()
+			startCancel()
+		}
+	}()
+	streamResponse, err := openSSEStream(startCtx, httpClient, endpoint.String(), headers)
 	if err != nil {
 		return nil, InitializeResult{}, err
 	}
 	if streamResponse.StatusCode == http.StatusUnauthorized && authState != nil && !authState.staticAuth {
 		streamResponse.Body.Close()
 		tmp := &Client{name: cfg.Name, httpClient: httpClient, auth: authState, headers: headers}
-		if refreshErr := tmp.refreshAuthorization(ctx); refreshErr == nil {
+		if refreshErr := tmp.refreshAuthorization(startCtx); refreshErr == nil {
 			headers = cloneHeaders(tmp.headers)
-			streamResponse, err = openSSEStream(ctx, httpClient, endpoint.String(), headers)
+			streamResponse, err = openSSEStream(startCtx, httpClient, endpoint.String(), headers)
 			if err != nil {
 				return nil, InitializeResult{}, err
 			}
@@ -80,10 +93,8 @@ func StartSSE(ctx context.Context, cfg HTTPConfig) (*Client, InitializeResult, e
 		pending:  make(map[string]chan response), done: make(chan struct{}),
 	}
 	go client.sseReadLoop(reader)
-	initCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
 	var initialized InitializeResult
-	if err := client.call(initCtx, "initialize", map[string]any{
+	if err := client.call(startCtx, "initialize", map[string]any{
 		"protocolVersion": protocolVersion,
 		"capabilities":    clientCapabilities(cfg.Sampling),
 		"clientInfo":      map[string]any{"name": "gork-go", "title": "Gork Go", "version": "0.1.0"},
@@ -97,15 +108,26 @@ func StartSSE(ctx context.Context, cfg HTTPConfig) (*Client, InitializeResult, e
 	}
 	client.selectedProtocol = initialized.ProtocolVersion
 	client.resourceSubscribe = initialized.Capabilities.Resources != nil && initialized.Capabilities.Resources.Subscribe
-	if err := client.notify("notifications/initialized", nil); err != nil {
+	if err := client.notifyContext(startCtx, "notifications/initialized", nil); err != nil {
 		_ = client.Close()
 		return nil, InitializeResult{}, err
 	}
+	if !timer.Stop() {
+		<-timedOut
+		_ = client.Close()
+		return nil, InitializeResult{}, fmt.Errorf("initialize MCP SSE server %q: %w", cfg.Name, context.DeadlineExceeded)
+	}
+	if err := startCtx.Err(); err != nil {
+		_ = client.Close()
+		return nil, InitializeResult{}, fmt.Errorf("initialize MCP SSE server %q: %w", cfg.Name, err)
+	}
+	client.transportCancel = startCancel
+	failed = false
 	return client, initialized, nil
 }
 
-func (c *Client) postSSE(data []byte) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+func (c *Client) postSSE(parent context.Context, data []byte) error {
+	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 	defer cancel()
 	retried := false
 	for {

@@ -159,16 +159,17 @@ type Config struct {
 	bashAllowBackgroundConfigured   bool
 	bashAutoBackgroundConfigured    bool
 	bashLoginShellConfigured        bool
+	mcpStartupTimeoutConfigured     bool
 	mcpMaxOutputConfigured          bool
 	fileToolsetRemote               bool
 	askTimeoutEnabledConfigured     bool
 	askTimeoutSecondsConfigured     bool
 }
 
-// MCPConfig bounds the amount of one MCP tool result placed inline in model
-// context. Oversized results remain recoverable from the session artifacts.
+// MCPConfig contains global MCP connection and output limits.
 type MCPConfig struct {
-	MaxOutputBytes uint64 `json:"max_output_bytes"`
+	StartupTimeoutSeconds uint64 `json:"startup_timeout_sec"`
+	MaxOutputBytes        uint64 `json:"max_output_bytes"`
 }
 
 type AutoModeConfig struct {
@@ -534,6 +535,7 @@ type MCPServerConfig struct {
 	OAuthClientSecretEnvVar string            `json:"oauth_client_secret_env_var,omitempty" toml:"oauth_client_secret_env_var"`
 	OAuthScopes             []string          `json:"oauth_scopes,omitempty" toml:"oauth_scopes"`
 	OAuthCallbackPort       *uint16           `json:"oauth_callback_port,omitempty" toml:"oauth_callback_port"`
+	StartupTimeoutSeconds   *uint64           `json:"startup_timeout_sec,omitempty" toml:"startup_timeout_sec"`
 	Enabled                 *bool             `json:"enabled,omitempty" toml:"enabled"`
 	Setup                   *MCPSetupConfig   `json:"setup,omitempty" toml:"setup"`
 }
@@ -611,7 +613,8 @@ type fileConfig struct {
 	HTTPTimeout            string                      `json:"http_timeout,omitempty" toml:"http_timeout"`
 	MCPServers             map[string]MCPServerConfig  `json:"mcp_servers,omitempty" toml:"mcp_servers"`
 	MCP                    struct {
-		MaxOutputBytes *uint64 `json:"max_output_bytes,omitempty" toml:"max_output_bytes"`
+		StartupTimeoutSeconds *uint64 `json:"startup_timeout_sec,omitempty" toml:"startup_timeout_sec"`
+		MaxOutputBytes        *uint64 `json:"max_output_bytes,omitempty" toml:"max_output_bytes"`
 	} `json:"mcp,omitempty" toml:"mcp"`
 	DisabledMCPServers []string                   `json:"disabled_mcp_servers,omitempty" toml:"disabled_mcp_servers"`
 	DisabledMCPTools   map[string][]string        `json:"disabled_mcp_tools,omitempty" toml:"disabled_mcp_tools"`
@@ -812,7 +815,8 @@ type requirementsFile struct {
 		Bash            *fileBashConfig            `toml:"bash"`
 	} `toml:"toolset"`
 	MCP *struct {
-		MaxOutputBytes *uint64 `toml:"max_output_bytes"`
+		StartupTimeoutSeconds *uint64 `toml:"startup_timeout_sec"`
+		MaxOutputBytes        *uint64 `toml:"max_output_bytes"`
 	} `toml:"mcp"`
 	UI struct {
 		DisableBypassPermissionsMode any              `toml:"disable_bypass_permissions_mode"`
@@ -1006,7 +1010,7 @@ func Load(path string) (Config, error) {
 		Backend:                     "responses",
 		MaxSteps:                    20,
 		HTTPTimeout:                 10 * time.Minute,
-		MCP:                         MCPConfig{MaxOutputBytes: 20_000},
+		MCP:                         MCPConfig{StartupTimeoutSeconds: 30, MaxOutputBytes: 20_000},
 		ContextWindow:               131072,
 		AutoCompactThresholdPercent: 85,
 		LoadEnvrc:                   true,
@@ -1234,6 +1238,10 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 			cfg.MCP.MaxOutputBytes = *disk.MCP.MaxOutputBytes
 			cfg.mcpMaxOutputConfigured = true
 		}
+	}
+	if disk.MCP.StartupTimeoutSeconds != nil && validDurationSeconds(*disk.MCP.StartupTimeoutSeconds) {
+		cfg.MCP.StartupTimeoutSeconds = *disk.MCP.StartupTimeoutSeconds
+		cfg.mcpStartupTimeoutConfigured = true
 	}
 	if disk.DisabledMCPServers != nil {
 		cfg.DisabledMCPServers = append([]string(nil), disk.DisabledMCPServers...)
@@ -2297,6 +2305,27 @@ func applyEnv(cfg *Config) {
 			cfg.mcpMaxOutputConfigured = true
 		}
 	}
+	startupTimeoutFromEnv := false
+	if raw := strings.TrimSpace(os.Getenv("MCP_TIMEOUT")); raw != "" {
+		if milliseconds, err := strconv.ParseUint(raw, 10, 64); err == nil && milliseconds > 0 {
+			seconds := milliseconds / 1000
+			if milliseconds%1000 != 0 {
+				seconds++
+			}
+			if validDurationSeconds(seconds) {
+				cfg.MCP.StartupTimeoutSeconds = seconds
+				cfg.mcpStartupTimeoutConfigured = true
+				startupTimeoutFromEnv = true
+			}
+		}
+	}
+	if !startupTimeoutFromEnv {
+		raw := strings.TrimSpace(os.Getenv("GROK_MCP_STARTUP_TIMEOUT_SECS"))
+		if seconds, err := strconv.ParseUint(raw, 10, 64); err == nil && validDurationSeconds(seconds) {
+			cfg.MCP.StartupTimeoutSeconds = seconds
+			cfg.mcpStartupTimeoutConfigured = true
+		}
+	}
 	if value := firstEnv("GORK_API_KEY", "XAI_API_KEY", "OPENAI_API_KEY"); value != "" {
 		cfg.APIKey = value
 	}
@@ -2868,6 +2897,10 @@ func applyRequirementsData(cfg *Config, data []byte, source string, envFailClose
 		cfg.MCP.MaxOutputBytes = *requirement.MCP.MaxOutputBytes
 		cfg.mcpMaxOutputConfigured = true
 	}
+	if requirement.MCP != nil && requirement.MCP.StartupTimeoutSeconds != nil && validDurationSeconds(*requirement.MCP.StartupTimeoutSeconds) {
+		cfg.MCP.StartupTimeoutSeconds = *requirement.MCP.StartupTimeoutSeconds
+		cfg.mcpStartupTimeoutConfigured = true
+	}
 	if disabled, ok := requirement.UI.DisableBypassPermissionsMode.(bool); ok && disabled {
 		cfg.DisableBypassPermissionsMode = true
 	}
@@ -2951,6 +2984,10 @@ func applyRequirementsData(cfg *Config, data []byte, source string, envFailClose
 		cfg.DisableAPIKeyAuth = *managed.DisableAPIKeyAuth
 	}
 	return nil
+}
+
+func validDurationSeconds(seconds uint64) bool {
+	return seconds > 0 && seconds <= uint64((1<<63-1)/int64(time.Second))
 }
 
 func forceLoginTeams(value any) ([]string, bool, error) {

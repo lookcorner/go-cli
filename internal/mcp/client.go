@@ -27,13 +27,14 @@ var supportedProtocolVersions = map[string]bool{
 }
 
 type ProcessConfig struct {
-	Name     string
-	Command  string
-	Args     []string
-	Env      map[string]string
-	Dir      string
-	Stderr   io.Writer
-	Sampling SamplingHandler
+	Name           string
+	Command        string
+	Args           []string
+	Env            map[string]string
+	Dir            string
+	Stderr         io.Writer
+	Sampling       SamplingHandler
+	StartupTimeout time.Duration
 }
 
 type SamplingHandler func(context.Context, SamplingRequest) (SamplingResult, error)
@@ -100,6 +101,7 @@ type Client struct {
 	httpURL           string
 	ssePostURL        string
 	sseStream         io.ReadCloser
+	transportCancel   context.CancelFunc
 	httpClient        *http.Client
 	reverse           ReverseCall
 	headers           map[string]string
@@ -231,7 +233,7 @@ func Start(ctx context.Context, cfg ProcessConfig) (*Client, InitializeResult, e
 	}
 	go client.readLoop(stdout)
 
-	initCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	initCtx, cancel := context.WithTimeout(ctx, effectiveStartupTimeout(cfg.StartupTimeout))
 	defer cancel()
 	var initialized InitializeResult
 	err = client.call(initCtx, "initialize", map[string]any{
@@ -250,7 +252,7 @@ func Start(ctx context.Context, cfg ProcessConfig) (*Client, InitializeResult, e
 		return nil, InitializeResult{}, fmt.Errorf("MCP server %q selected unsupported protocol %q", cfg.Name, initialized.ProtocolVersion)
 	}
 	client.resourceSubscribe = initialized.Capabilities.Resources != nil && initialized.Capabilities.Resources.Subscribe
-	if err := client.notify("notifications/initialized", nil); err != nil {
+	if err := client.notifyContext(initCtx, "notifications/initialized", nil); err != nil {
 		_ = client.Close()
 		return nil, InitializeResult{}, err
 	}
@@ -258,12 +260,12 @@ func Start(ctx context.Context, cfg ProcessConfig) (*Client, InitializeResult, e
 }
 
 // StartACP connects to an in-process SDK MCP server over the ACP reverse channel.
-func StartACP(ctx context.Context, name string, reverse ReverseCall, sampling SamplingHandler) (*Client, InitializeResult, error) {
+func StartACP(ctx context.Context, name string, reverse ReverseCall, sampling SamplingHandler, startupTimeout time.Duration) (*Client, InitializeResult, error) {
 	if strings.TrimSpace(name) == "" || reverse == nil {
 		return nil, InitializeResult{}, errors.New("ACP MCP server name and reverse call are required")
 	}
 	client := &Client{name: name, reverse: reverse, pending: make(map[string]chan response), done: make(chan struct{}), sampling: sampling}
-	initCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	initCtx, cancel := context.WithTimeout(ctx, effectiveStartupTimeout(startupTimeout))
 	defer cancel()
 	var initialized InitializeResult
 	if err := client.call(initCtx, "initialize", map[string]any{
@@ -514,7 +516,7 @@ func (c *Client) call(ctx context.Context, method string, params any, out any) e
 		delete(c.pending, idKey)
 		c.mu.Unlock()
 	}()
-	if err := c.writeJSON(map[string]any{
+	if err := c.writeJSONContext(ctx, map[string]any{
 		"jsonrpc": "2.0", "id": id, "method": method, "params": params,
 	}); err != nil {
 		return err
@@ -532,7 +534,7 @@ func (c *Client) call(ctx context.Context, method string, params any, out any) e
 		}
 		return nil
 	case <-ctx.Done():
-		_ = c.notify("notifications/cancelled", map[string]any{"requestId": id, "reason": ctx.Err().Error()})
+		_ = c.notifyContext(ctx, "notifications/cancelled", map[string]any{"requestId": id, "reason": ctx.Err().Error()})
 		return ctx.Err()
 	case <-c.done:
 		return fmt.Errorf("MCP server %q stopped", c.name)
@@ -540,6 +542,10 @@ func (c *Client) call(ctx context.Context, method string, params any, out any) e
 }
 
 func (c *Client) notify(method string, params any) error {
+	return c.notifyContext(context.Background(), method, params)
+}
+
+func (c *Client) notifyContext(ctx context.Context, method string, params any) error {
 	if c.reverse != nil {
 		return nil
 	}
@@ -547,18 +553,26 @@ func (c *Client) notify(method string, params any) error {
 	if params != nil {
 		message["params"] = params
 	}
-	return c.sendJSON(message)
+	return c.sendJSONContext(ctx, message)
 }
 
 func (c *Client) sendJSON(message any) error {
+	return c.sendJSONContext(context.Background(), message)
+}
+
+func (c *Client) sendJSONContext(ctx context.Context, message any) error {
 	if c.httpURL != "" {
-		_, err := c.httpRequest(context.Background(), message, false)
+		_, err := c.httpRequest(ctx, message, false)
 		return err
 	}
-	return c.writeJSON(message)
+	return c.writeJSONContext(ctx, message)
 }
 
 func (c *Client) writeJSON(value any) error {
+	return c.writeJSONContext(context.Background(), value)
+}
+
+func (c *Client) writeJSONContext(ctx context.Context, value any) error {
 	encoded, err := json.Marshal(value)
 	if err != nil {
 		return fmt.Errorf("encode MCP message: %w", err)
@@ -567,7 +581,7 @@ func (c *Client) writeJSON(value any) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 	if c.ssePostURL != "" {
-		return c.postSSE(encoded)
+		return c.postSSE(ctx, encoded)
 	}
 	if _, err := c.stdin.Write(encoded); err != nil {
 		return fmt.Errorf("write MCP message: %w", err)
@@ -697,6 +711,9 @@ func (c *Client) Close() error {
 		return nil
 	}
 	if c.ssePostURL != "" {
+		if c.transportCancel != nil {
+			c.transportCancel()
+		}
 		if c.sseStream != nil {
 			_ = c.sseStream.Close()
 		}
@@ -719,6 +736,13 @@ func (c *Client) Close() error {
 		c.failPending(io.EOF)
 		return err
 	}
+}
+
+func effectiveStartupTimeout(timeout time.Duration) time.Duration {
+	if timeout <= 0 {
+		return 30 * time.Second
+	}
+	return timeout
 }
 
 func mergeEnv(base []string, overlay map[string]string) []string {

@@ -5428,12 +5428,17 @@ func startMCPServers(
 	}
 	for _, name := range names {
 		server := cfg.MCPServers[name]
+		startupTimeout := cfg.MCP.StartupTimeoutSeconds
+		if server.StartupTimeoutSeconds != nil && *server.StartupTimeoutSeconds > 0 && *server.StartupTimeoutSeconds <= uint64((1<<63-1)/int64(time.Second)) {
+			startupTimeout = *server.StartupTimeoutSeconds
+		}
+		startupDuration := time.Duration(startupTimeout) * time.Second
 		sampling := newMCPSamplingHandler(cfg, approver, tokenProvider, name)
 		fmt.Fprintf(stderr, "[gork] starting MCP server: %s\n", name)
 		var client *mcp.Client
 		var initialized mcp.InitializeResult
 		if server.URL != "" {
-			httpConfig := mcp.HTTPConfig{Name: name, URL: server.URL, Headers: mcpHTTPHeaders(server)}
+			httpConfig := mcp.HTTPConfig{Name: name, URL: server.URL, Headers: mcpHTTPHeaders(server), StartupTimeout: startupDuration}
 			transport := strings.ToLower(strings.TrimSpace(server.Type))
 			if transport != "" && transport != "sse" && transport != "http" && transport != "streamable-http" {
 				err = fmt.Errorf("MCP server %q has unsupported transport type %q", name, server.Type)
@@ -5447,7 +5452,7 @@ func startMCPServers(
 		} else {
 			client, initialized, err = mcp.Start(ctx, mcp.ProcessConfig{
 				Name: name, Command: server.Command, Args: server.Args,
-				Env: server.Env, Dir: workspaceRoot, Stderr: stderr, Sampling: sampling,
+				Env: server.Env, Dir: workspaceRoot, Stderr: stderr, Sampling: sampling, StartupTimeout: startupDuration,
 			})
 		}
 		if err != nil {
@@ -5576,7 +5581,7 @@ func startACPMCPServers(
 		sampling := newMCPSamplingHandler(cfg, approver, tokenProvider, server.Name)
 		client, initialized, err := mcp.StartACP(ctx, server.Name, func(ctx context.Context, payload json.RawMessage) (json.RawMessage, error) {
 			return reverse(ctx, server.ServerID, payload)
-		}, sampling)
+		}, sampling, time.Duration(cfg.MCP.StartupTimeoutSeconds)*time.Second)
 		if err != nil {
 			for _, client := range clients {
 				_ = client.Close()

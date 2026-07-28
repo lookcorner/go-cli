@@ -100,6 +100,30 @@ func TestStdioLifecycleAndToolCall(t *testing.T) {
 	}
 }
 
+func TestStdioStartupTimeout(t *testing.T) {
+	_, _, err := Start(context.Background(), ProcessConfig{
+		Name: "slow", Command: os.Args[0],
+		Args:           []string{"-test.run=TestMCPHelperProcess"},
+		Env:            map[string]string{"GORK_GO_MCP_HELPER": "1", "GORK_GO_MCP_INIT_DELAY": "100ms"},
+		Stderr:         io.Discard,
+		StartupTimeout: 10 * time.Millisecond,
+	})
+	if err == nil || !strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Fatalf("startup timeout error=%v", err)
+	}
+}
+
+func TestACPStartupTimeout(t *testing.T) {
+	reverse := func(ctx context.Context, _ json.RawMessage) (json.RawMessage, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	_, _, err := StartACP(context.Background(), "slow", reverse, nil, 10*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Fatalf("startup timeout error=%v", err)
+	}
+}
+
 func TestACPClientLifecycleAndErrors(t *testing.T) {
 	var methods []string
 	reverse := func(_ context.Context, payload json.RawMessage) (json.RawMessage, error) {
@@ -138,7 +162,7 @@ func TestACPClientLifecycleAndErrors(t *testing.T) {
 		}
 		return json.Marshal(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": result})
 	}
-	client, initialized, err := StartACP(context.Background(), "sdk-tools", reverse, nil)
+	client, initialized, err := StartACP(context.Background(), "sdk-tools", reverse, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,6 +249,9 @@ func TestMCPHelperProcess(t *testing.T) {
 		var result any
 		switch request.Method {
 		case "initialize":
+			if delay, err := time.ParseDuration(os.Getenv("GORK_GO_MCP_INIT_DELAY")); err == nil {
+				time.Sleep(delay)
+			}
 			capabilities, _ := request.Params["capabilities"].(map[string]any)
 			if os.Getenv("GORK_GO_MCP_SAMPLE") == "1" {
 				if _, ok := capabilities["sampling"]; !ok {

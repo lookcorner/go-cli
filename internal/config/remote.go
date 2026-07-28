@@ -47,6 +47,7 @@ type RemoteSettings struct {
 	AskUserQuestionTimeoutEnabled    *bool                `json:"ask_user_question_timeout_enabled"`
 	AskUserQuestionTimeoutSeconds    *uint64              `json:"ask_user_question_timeout_secs"`
 	MaxMCPOutputBytes                *uint64              `json:"max_mcp_output_bytes"`
+	MCPStartupTimeoutSeconds         *uint64              `json:"mcp_startup_timeout_secs"`
 	AutoWakeEnabled                  *bool                `json:"auto_wake_enabled"`
 	FeedbackEnabled                  *bool                `json:"feedback_enabled"`
 	SessionRecap                     *bool                `json:"session_recap"`
@@ -215,6 +216,12 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 		c.MCP.MaxOutputBytes = 20_000
 		if remote.MaxMCPOutputBytes != nil && *remote.MaxMCPOutputBytes > 0 {
 			c.MCP.MaxOutputBytes = *remote.MaxMCPOutputBytes
+		}
+	}
+	if !c.mcpStartupTimeoutConfigured {
+		c.MCP.StartupTimeoutSeconds = 30
+		if remote.MCPStartupTimeoutSeconds != nil && validDurationSeconds(*remote.MCPStartupTimeoutSeconds) {
+			c.MCP.StartupTimeoutSeconds = *remote.MCPStartupTimeoutSeconds
 		}
 	}
 	if !c.bashLoginShellConfigured {

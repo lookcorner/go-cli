@@ -16,11 +16,12 @@ import (
 )
 
 type HTTPConfig struct {
-	Name     string
-	URL      string
-	Headers  map[string]string
-	Client   *http.Client
-	Sampling SamplingHandler
+	Name           string
+	URL            string
+	Headers        map[string]string
+	Client         *http.Client
+	Sampling       SamplingHandler
+	StartupTimeout time.Duration
 	// Auth enables store-backed Bearer attach and optional 401 refresh.
 	// Enrollment (browser/DCR) is separate; Auth.TokenURL is required to refresh.
 	Auth *HTTPAuth
@@ -52,7 +53,7 @@ func StartHTTP(ctx context.Context, cfg HTTPConfig) (*Client, InitializeResult, 
 		pending: make(map[string]chan response), done: make(chan struct{}),
 		sampling: cfg.Sampling,
 	}
-	initCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	initCtx, cancel := context.WithTimeout(ctx, effectiveStartupTimeout(cfg.StartupTimeout))
 	defer cancel()
 	var initialized InitializeResult
 	err = client.call(initCtx, "initialize", map[string]any{
@@ -73,7 +74,7 @@ func StartHTTP(ctx context.Context, cfg HTTPConfig) (*Client, InitializeResult, 
 	client.selectedProtocol = initialized.ProtocolVersion
 	client.resourceSubscribe = initialized.Capabilities.Resources != nil && initialized.Capabilities.Resources.Subscribe
 	client.mu.Unlock()
-	if err := client.notify("notifications/initialized", nil); err != nil {
+	if err := client.notifyContext(initCtx, "notifications/initialized", nil); err != nil {
 		_ = client.Close()
 		return nil, InitializeResult{}, err
 	}
