@@ -600,6 +600,11 @@ default is fullscreen; `[ui].screen_mode` accepts `fullscreen` or `minimal`.
 Within a session, `/minimal` reopens the same session in minimal mode and
 `/fullscreen` (or `/full`) switches back without changing its conversation.
 `--fullscreen` explicitly overrides a configured minimal default.
+In minimal mode, Ctrl-G opens the current attachment-free draft in `$VISUAL`,
+then `$EDITOR`, falling back to `vi`; `/edit-prompt` provides the same action
+for terminals that reserve Ctrl-G. Successful edits replace the composer
+without sending it. Failed, stale, invalid-UTF-8, or larger-than-4-MiB results
+leave the original draft unchanged, and temporary files are removed.
 On exit, the TUI prints a pasteable resume command after restoring the terminal;
 minimal sessions keep `--minimal` in that command.
 

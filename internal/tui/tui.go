@@ -910,6 +910,7 @@ type model struct {
 	newSessionPrompt    string
 	resumeSession       *ResumeSessionError
 	screenMode          *ScreenModeError
+	externalEditorPath  string
 	forkResult          *ForkSessionError
 	forkSession         func(context.Context, bool, string, *int) (ForkResult, error)
 	forkInGit           bool
@@ -1859,6 +1860,9 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if m.welcomeReady && !m.running && m.transcript.Len() == 0 {
 			m.welcomeChangelog = append([]string(nil), msg.bullets...)
 		}
+	case externalEditorDoneEvent:
+		m.finishExternalPromptEditor(msg)
+		return m, nil
 	case mouseClickEvent:
 		switch msg.action {
 		case "approval_option":
@@ -2844,6 +2848,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	}
+	if stroke == "ctrl+g" && m.minimal {
+		return m, m.openExternalPromptEditor()
+	}
 	if m.scrollFocused && m.handleScrollbackKey(msg) {
 		return m, nil
 	}
@@ -3133,6 +3140,8 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "/expand":
 			m.expandLastTool()
 			return m, nil
+		case "/edit-prompt":
+			return m, m.openExternalPromptEditor()
 		case "/new", "/clear", "/home", "/welcome":
 			m.newSession = true
 			m.status = "starting new session"

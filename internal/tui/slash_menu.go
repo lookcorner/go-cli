@@ -46,6 +46,7 @@ var slashCommandCatalog = []slashCommandItem{
 	{name: "voice", description: "Toggle voice dictation"},
 	{name: "export", placeholder: "[filename]", description: "Export the conversation"},
 	{name: "transcript", aliases: []string{"log"}, description: "View the stored transcript"},
+	{name: "edit-prompt", description: "Edit the prompt in an external editor"},
 	{name: "expand", description: "Re-print the last folded tool output"},
 	{name: "context", description: "Show context usage"},
 	{name: "minimal", description: "Switch to native scrollback"},
@@ -260,6 +261,8 @@ func (m *model) slashCommandAvailable(name string) bool {
 	case "play-video", "video-play", "videos", "list-videos", "downloads", "list-downloads", "fetched", "list-fetched", "web-fetch-artifacts", "workflows", "list-workflows", "workflow":
 		return !m.minimal || name == "downloads" || name == "list-downloads" || name == "fetched" || name == "list-fetched" || name == "web-fetch-artifacts" || name == "workflows" || name == "list-workflows" || name == "workflow"
 	case "expand":
+		return m.minimal
+	case "edit-prompt":
 		return m.minimal
 	case "always-approve":
 		return m.bridge != nil
