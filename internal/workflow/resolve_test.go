@@ -3,6 +3,7 @@ package workflow
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -41,7 +42,7 @@ fn main() {
 		t.Fatal("missing accepted")
 	}
 	builtin, err := ResolveByName(dir, "deep-research")
-	if err != nil || builtin.Source != "builtin" {
+	if err != nil || builtin.Source != "builtin" || !strings.Contains(builtin.Script, `name: "deep-research"`) || !strings.Contains(builtin.Script, `phase("Verify")`) {
 		t.Fatalf("builtin=%#v err=%v", builtin, err)
 	}
 	if err := ValidateResolved(builtin); err != nil {

@@ -1514,6 +1514,7 @@ re-discover every live session's catalog from disk.
 `x.ai/workflows/list` returns session-scoped workflow listings (builtin
 `deep-research`, project `.grok/workflows`, and `$GROK_HOME/workflows`) by
 scanning `.rhai` files and parsing `let meta = #{...}` without executing Rhai.
+The builtin includes the embedded reference `deep-research` script.
 The TUI mirrors that catalog with `/workflows`, and `/workflow validate
 <name|path>` runs the same lightweight validation as the `workflow` tool's
 `validate_only` mode, or full execution when `GORK_WORKFLOW_RUNNER` (or `gork-workflow-runner` on PATH) speaks the NDJSON host protocol and `agent()` maps to local subagents.

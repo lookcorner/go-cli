@@ -33,8 +33,8 @@ func (s *Server) handleWorkflowsList(incoming message) {
 		})
 		return
 	}
-	// Discovery-only: Go does not execute Rhai workflows yet, but ACP clients still
-	// need the catalog. Always list when the session exists (Rust gates on launches).
+	// Catalog discovery is independent from execution through the workflow tool.
+	// Always list when the session exists (Rust gates on launches).
 	listings := workflow.List(cwd)
 	items := make([]map[string]any, 0, len(listings))
 	for _, item := range listings {

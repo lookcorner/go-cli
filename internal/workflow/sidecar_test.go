@@ -109,6 +109,19 @@ func TestExecuteRequiresRunner(t *testing.T) {
 	}
 }
 
+func TestExecuteEmbeddedDeepResearch(t *testing.T) {
+	runner := buildFakeRunner(t)
+	t.Setenv(envWorkflowRunner, runner)
+	resolved, err := ResolveByName(t.TempDir(), "deep-research")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := Execute(context.Background(), resolved, map[string]string{"query": "verify this"}, &Host{Spawner: &stubSpawner{}})
+	if err != nil || !strings.Contains(result, "workflow completed") {
+		t.Fatalf("result=%q err=%v", result, err)
+	}
+}
+
 func TestResolveRunnerBinaryEnv(t *testing.T) {
 	runner := buildFakeRunner(t)
 	t.Setenv(envWorkflowRunner, runner)

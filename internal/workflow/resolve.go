@@ -13,7 +13,7 @@ type Resolved struct {
 	Name        string
 	Description string
 	Source      string
-	Path        string // empty for builtin until script is embedded
+	Path        string // empty for embedded builtins
 	Script      string // source text when available
 }
 
@@ -42,6 +42,8 @@ func ResolveByName(cwd, name string) (Resolved, error) {
 				return Resolved{}, errors.New("workflow script exceeds size limit")
 			}
 			resolved.Script = string(data)
+		} else if item.Name == "deep-research" {
+			resolved.Script = deepResearchScript
 		}
 		return resolved, nil
 	}
