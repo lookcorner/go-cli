@@ -669,6 +669,8 @@ saved as `[ui].permission_mode` (`ask`, `auto`, or `always-approve`) and restore
 on the next run; a write failure leaves the active mode unchanged.
 `/vim-mode` toggles Vim-style scrollback navigation immediately and atomically
 saves `[ui].vim_mode`; a write failure restores the previous navigation mode.
+`[ui].simple_mode` defaults to on; setting it to `false` when `vim_mode` is unset
+also enables Vim navigation (reference prompt-editor pairing).
 `/compact-mode` reduces blank rows between message blocks and atomically saves
 `[ui].compact_mode`. Terminals at 20 rows or fewer use compact rendering
 automatically without changing the saved user preference.
@@ -1762,7 +1764,9 @@ foreground session when they finish. The earlier aliases
 `kill_background_command` remain available. Output is captured in a bounded
 tail buffer. `[toolset.bash] timeout_secs` changes the default foreground
 timeout and `output_byte_limit` changes the captured tail limit; unset values
-default to 120 seconds and 20,000 bytes. Top-level `[shell_environment_policy]`
+default to 120 seconds and 20,000 bytes. `[toolset.bash] login_shell_capture`
+(default on; `GROK_LOGIN_ENV`) sources the user shell rc once at session start and
+merges that environment into agent shells. Top-level `[shell_environment_policy]`
 can reshape the inherited agent shell environment (`inherit = all|core|none`,
 `exclude`/`include_only` globs, `set`, and optional default `*KEY*`/`*SECRET*`/
 `*TOKEN*` excludes when `ignore_default_excludes = false`). Process groups are terminated on

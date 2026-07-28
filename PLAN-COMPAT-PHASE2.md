@@ -362,6 +362,19 @@ Remote relay / workspace hub remains planned/XL (product-blocked). See queue #5.
 - [x] Top-level `[shell_environment_policy]` (inherit/exclude/set/include_only
       + default secret excludes) applied to shell + ProcessManager spawn env on
       `compat/shell-environment-policy`.
+- [x] `[ui].simple_mode` (default on; `false` mirrors unset `vim_mode` → on) and
+      `[toolset.bash].login_shell_capture` / `GROK_LOGIN_ENV` (default on) on
+      `compat/simple-mode-login-shell`.
+
+## Remaining XL / blocked (do not start without explicit kickoff)
+
+- Full cloud transcript replay: thin chat load already ships; reference hard-offs
+  chat kind / `load_history`; neither tree has a messages API. Next slice needs
+  a remote fetch contract first.
+- Rhai workflow **execution**: list-only today; match Rust tool/slash launch +
+  host `agent()` (needs Rhai runner FFI/sidecar). Journal/parallel/UI deferred.
+- Remote relay / workspace hub: product-blocked (COMPAT `Workspace server`
+  planned).
 
 ---
 

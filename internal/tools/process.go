@@ -355,6 +355,28 @@ func (m *ProcessManager) ConfigureShellEnvironmentPolicy(policy ShellEnvironment
 	m.stateMu.Unlock()
 }
 
+// MergeLoginShellEnvironment overlays login-shell-captured KEY=value pairs onto
+// the current process-manager environment (after policy filtering).
+func (m *ProcessManager) MergeLoginShellEnvironment(entries []string) {
+	if m == nil || len(entries) == 0 {
+		return
+	}
+	m.stateMu.Lock()
+	defer m.stateMu.Unlock()
+	values := make(map[string]string, len(entries))
+	for _, entry := range entries {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok || key == "" {
+			continue
+		}
+		values[key] = value
+	}
+	if len(values) == 0 {
+		return
+	}
+	m.environment = setEnvironment(m.environment, values)
+}
+
 func (m *ProcessManager) ConfigureEnvironment(values map[string]string) {
 	m.stateMu.Lock()
 	base := ApplyShellEnvironmentPolicy(os.Environ(), m.shellEnvPolicy)
