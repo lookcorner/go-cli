@@ -1764,7 +1764,9 @@ foreground session when they finish. The earlier aliases
 `kill_background_command` remain available. Output is captured in a bounded
 tail buffer. `[toolset.bash] timeout_secs` changes the default foreground
 timeout and `output_byte_limit` changes the captured tail limit; unset values
-default to 120 seconds and 20,000 bytes. Top-level `[shell_environment_policy]`
+default to 120 seconds and 20,000 bytes. `[toolset.bash] login_shell_capture`
+(default on; `GROK_LOGIN_ENV`) sources the user shell rc once at session start and
+merges that environment into agent shells. Top-level `[shell_environment_policy]`
 can reshape the inherited agent shell environment (`inherit = all|core|none`,
 `exclude`/`include_only` globs, `set`, and optional default `*KEY*`/`*SECRET*`/
 `*TOKEN*` excludes when `ignore_default_excludes = false`). Process groups are terminated on
