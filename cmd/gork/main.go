@@ -2773,17 +2773,20 @@ func newModelClient(cfg config.Config, tokenProvider api.TokenProvider) (agent.R
 		client := api.NewClient(cfg.BaseURL, cfg.APIKey, httpClient)
 		client.SetTokenProvider(tokenProvider)
 		client.SetErrorMapper(mapper)
+		client.SetExtraHeaders(cfg.EffectiveExtraHeaders())
 		return client, nil
 	case "chat_completions":
 		client := api.NewChatClient(cfg.BaseURL, cfg.APIKey, httpClient)
 		client.SetTokenProvider(tokenProvider)
 		client.SetErrorMapper(mapper)
+		client.SetExtraHeaders(cfg.EffectiveExtraHeaders())
 		client.SetPruning(modelPruningConfig(cfg))
 		return client, nil
 	case "anthropic_messages":
 		client := api.NewMessagesClient(cfg.BaseURL, cfg.APIKey, httpClient)
 		client.SetTokenProvider(tokenProvider)
 		client.SetErrorMapper(mapper)
+		client.SetExtraHeaders(cfg.EffectiveExtraHeaders())
 		client.SetPruning(modelPruningConfig(cfg))
 		return client, nil
 	default:

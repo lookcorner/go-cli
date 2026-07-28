@@ -397,6 +397,9 @@ func TestUserModelErrorUsesActiveAuthRateLimitMessage(t *testing.T) {
 
 func TestModelClientsMapRateLimitsForActiveAuth(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("X-Trace") != "model-client" {
+			t.Errorf("extra header=%q", request.Header.Get("X-Trace"))
+		}
 		writer.WriteHeader(http.StatusTooManyRequests)
 		_, _ = io.WriteString(writer, `{"error":"limited"}`)
 	}))
@@ -409,6 +412,7 @@ func TestModelClientsMapRateLimitsForActiveAuth(t *testing.T) {
 			}
 			client, err := newModelClient(config.Config{
 				Backend: backend, BaseURL: server.URL, APIKey: "api-key", HTTPTimeout: time.Second,
+				ExtraHeaders: map[string]string{"X-Trace": "model-client"},
 			}, provider)
 			if err != nil {
 				t.Fatal(err)

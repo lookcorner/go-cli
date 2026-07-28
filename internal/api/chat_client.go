@@ -21,6 +21,7 @@ type ChatClient struct {
 	apiKey        string
 	tokenProvider TokenProvider
 	errorMapper   ErrorMapper
+	extraHeaders  map[string]string
 	http          *http.Client
 	mu            sync.Mutex
 	history       []chatMessage
@@ -30,6 +31,9 @@ type ChatClient struct {
 
 func (c *ChatClient) SetTokenProvider(provider TokenProvider) { c.tokenProvider = provider }
 func (c *ChatClient) SetErrorMapper(mapper ErrorMapper)       { c.errorMapper = mapper }
+func (c *ChatClient) SetExtraHeaders(headers map[string]string) {
+	c.extraHeaders = cloneHeaders(headers)
+}
 
 type chatMessage struct {
 	Role       string         `json:"role"`
@@ -77,7 +81,8 @@ func (c *ChatClient) CloneForCompaction(includeHistory bool) Streamer {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	clone := &ChatClient{
-		baseURL: c.baseURL, apiKey: c.apiKey, tokenProvider: c.tokenProvider, errorMapper: c.errorMapper, http: c.http, pruning: c.pruning,
+		baseURL: c.baseURL, apiKey: c.apiKey, tokenProvider: c.tokenProvider, errorMapper: c.errorMapper,
+		extraHeaders: cloneHeaders(c.extraHeaders), http: c.http, pruning: c.pruning,
 	}
 	if includeHistory {
 		clone.history = append([]chatMessage(nil), c.history...)
@@ -204,6 +209,10 @@ func (c *ChatClient) StreamResponseEvents(ctx context.Context, request ResponseR
 		httpRequest.Header.Set("Content-Type", "application/json")
 		httpRequest.Header.Set("Accept", "text/event-stream")
 		httpRequest.Header.Set("User-Agent", "gork-go/0.1")
+		applyHeaders(httpRequest.Header, c.extraHeaders)
+		if c.tokenProvider != nil {
+			httpRequest.Header.Set("Authorization", "Bearer "+token)
+		}
 		return httpRequest, nil
 	})
 	if err != nil {

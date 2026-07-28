@@ -58,6 +58,7 @@ type modelCacheInfo struct {
 	ReasoningEffort             string                  `json:"reasoning_effort"`
 	SupportsReasoningEffort     bool                    `json:"supports_reasoning_effort"`
 	ReasoningEfforts            []ReasoningEffortOption `json:"reasoning_efforts"`
+	ExtraHeaders                map[string]string       `json:"extra_headers,omitempty"`
 }
 
 type ModelFetchRequest struct {
@@ -136,6 +137,7 @@ func modelCacheProfiles(cached modelCacheFile, authMethod string) (map[string]Mo
 			AutoCompactThresholdPercent: entry.Info.AutoCompactThresholdPercent, Hidden: hidden,
 			ReasoningEffort: entry.Info.ReasoningEffort, SupportsReasoningEffort: entry.Info.SupportsReasoningEffort,
 			ReasoningEfforts: append([]ReasoningEffortOption(nil), entry.Info.ReasoningEfforts...),
+			ExtraHeaders:     mergeExtraHeaders(nil, entry.Info.ExtraHeaders),
 		})
 		if err != nil {
 			return nil, false
@@ -286,7 +288,7 @@ func parseRemoteModel(raw map[string]any, defaultBaseURL, authMethod string) (st
 		Description: firstModelString(raw, "description"), Backend: backend, ContextWindow: contextWindow,
 		Hidden: firstModelBool(raw, meta, "hidden"), SupportedInAPI: firstModelBoolPointer(raw, meta, "supportedInApi", "supported_in_api"),
 		ReasoningEffort: reasoningEffort, SupportsReasoningEffort: firstModelBool(raw, meta, "supportsReasoningEffort", "supports_reasoning_effort"),
-		ReasoningEfforts: options,
+		ReasoningEfforts: options, ExtraHeaders: firstModelStringMap(raw, "extraHeaders", "extra_headers"),
 	}
 	if info.Name == "" {
 		info.Name = model
@@ -349,6 +351,23 @@ func firstModelSlice(values map[string]any, names ...string) []any {
 		if value, ok := values[name].([]any); ok {
 			return value
 		}
+	}
+	return nil
+}
+
+func firstModelStringMap(values map[string]any, names ...string) map[string]string {
+	for _, name := range names {
+		raw, ok := values[name].(map[string]any)
+		if !ok {
+			continue
+		}
+		result := make(map[string]string, len(raw))
+		for key, value := range raw {
+			if text, ok := value.(string); ok {
+				result[key] = text
+			}
+		}
+		return result
 	}
 	return nil
 }
@@ -471,5 +490,8 @@ func mergeModelProfile(target *ModelProfile, source ModelProfile) {
 	}
 	if source.ReasoningEfforts != nil {
 		target.ReasoningEfforts = append([]ReasoningEffortOption(nil), source.ReasoningEfforts...)
+	}
+	if source.ExtraHeaders != nil {
+		target.ExtraHeaders = mergeExtraHeaders(target.ExtraHeaders, source.ExtraHeaders)
 	}
 }

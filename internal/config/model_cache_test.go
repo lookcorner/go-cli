@@ -27,6 +27,7 @@ func TestLoadModelCacheValidatesAndAppliesConfiguredOverrides(t *testing.T) {
 			"fast": {Info: modelCacheInfo{
 				Model: "fast-api", BaseURL: "https://session.example/v1", Name: "Fast", Backend: "responses", ContextWindow: 1000,
 				SupportedInAPI: boolPointer(false), ReasoningEfforts: []ReasoningEffortOption{{ID: "high", Value: "high", Default: true}},
+				ExtraHeaders: map[string]string{"X-Remote": "remote", "X-Shared": "remote"},
 			}, APIBaseURL: "https://api-key.example/v1"},
 			"messages": {Info: modelCacheInfo{Model: "claude", BaseURL: "https://messages.example/v1", Backend: "messages", ContextWindow: 2000}},
 		},
@@ -38,7 +39,7 @@ func TestLoadModelCacheValidatesAndAppliesConfiguredOverrides(t *testing.T) {
 	}
 	contextWindow := 3000
 	cfg := Config{ModelProfiles: map[string]ModelProfile{
-		"fast":  {Name: "Configured Fast", Hidden: false, hiddenConfigured: true, ContextWindow: contextWindow},
+		"fast":  {Name: "Configured Fast", Hidden: false, hiddenConfigured: true, ContextWindow: contextWindow, ExtraHeaders: map[string]string{"x-shared": "local"}},
 		"local": {Model: "local-api", BaseURL: "https://local.example/v1", Backend: "responses", ContextWindow: 4000},
 	}}
 	cfg.ApplyModelCache(cache)
@@ -46,6 +47,9 @@ func TestLoadModelCacheValidatesAndAppliesConfiguredOverrides(t *testing.T) {
 	fast := cfg.ModelProfiles["fast"]
 	if fast.Model != "fast-api" || fast.Name != "Configured Fast" || fast.Hidden || fast.BaseURL != "https://api-key.example/v1" || fast.ContextWindow != 3000 || fast.ReasoningEffort != "high" || !fast.SupportsReasoningEffort {
 		t.Fatalf("merged fast profile=%#v", fast)
+	}
+	if len(fast.ExtraHeaders) != 2 || fast.ExtraHeaders["X-Remote"] != "remote" || fast.ExtraHeaders["x-shared"] != "local" {
+		t.Fatalf("merged fast headers=%#v", fast.ExtraHeaders)
 	}
 	if messages := cfg.ModelProfiles["messages"]; messages.Backend != "anthropic_messages" || messages.Hidden {
 		t.Fatalf("messages profile=%#v", messages)
@@ -124,7 +128,7 @@ func TestFetchModelCacheSessionCatalog(t *testing.T) {
 			}
 		}
 		writer.Header().Set("ETag", `"catalog-1"`)
-		fmt.Fprint(writer, `{"data":[null,7,{"id":"grok-fast","model":"grok-fast-api","name":"Fast","baseUrl":"https://inference.example/v1","apiBackend":"responses","contextWindow":131072,"autoCompactThresholdPercent":80,"reasoningEffort":"MAX","reasoningEfforts":["low",{"id":"deep","value":"high","default":true},7],"supportedInApi":false},{"api_backend":"messages","_meta":{"model":"grok-meta","totalContextTokens":64000,"supportsReasoningEffort":true}},{"model":"dual-context","contextWindow":1.5,"context_window":4096}]}`)
+		fmt.Fprint(writer, `{"data":[null,7,{"id":"grok-fast","model":"grok-fast-api","name":"Fast","baseUrl":"https://inference.example/v1","apiBackend":"responses","contextWindow":131072,"autoCompactThresholdPercent":80,"reasoningEffort":"MAX","reasoningEfforts":["low",{"id":"deep","value":"high","default":true},7],"extraHeaders":{"X-Remote":"yes"},"supportedInApi":false},{"api_backend":"messages","_meta":{"model":"grok-meta","totalContextTokens":64000,"supportsReasoningEffort":true}},{"model":"dual-context","contextWindow":1.5,"context_window":4096}]}`)
 	}))
 	defer server.Close()
 
@@ -136,7 +140,7 @@ func TestFetchModelCacheSessionCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	fast := cache.profiles["grok-fast"]
-	if fast.Model != "grok-fast-api" || fast.Backend != "responses" || fast.ContextWindow != 131072 || fast.ReasoningEffort != "xhigh" || !fast.SupportsReasoningEffort || len(fast.ReasoningEfforts) != 2 {
+	if fast.Model != "grok-fast-api" || fast.Backend != "responses" || fast.ContextWindow != 131072 || fast.ReasoningEffort != "xhigh" || !fast.SupportsReasoningEffort || len(fast.ReasoningEfforts) != 2 || fast.ExtraHeaders["X-Remote"] != "yes" {
 		t.Fatalf("fast profile=%#v", fast)
 	}
 	meta := cache.profiles["grok-meta"]

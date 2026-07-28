@@ -300,6 +300,8 @@ Per-server `expose_image_base64` and ACP `exposeImageBase64` optionally retain
 the raw image block alongside native vision content, with ACP metadata winning.
 Folder trust defaults on and follows environment over local/managed config over
 remote `folder_trust_enabled` precedence.
+Global `[models].extra_headers`, per-model `extra_headers`, and remote catalog
+headers merge case-insensitively and apply only to inference requests.
 
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |

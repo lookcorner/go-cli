@@ -2218,6 +2218,39 @@ func TestFolderTrustConfigAndEnvironmentPrecedence(t *testing.T) {
 	}
 }
 
+func TestModelExtraHeadersMergeCaseInsensitively(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	data := []byte(`
+[models]
+default = "primary"
+extra_headers = { X-Global = "global", X-Shared = "global" }
+
+[model.primary]
+model = "primary-api"
+base_url = "https://example.invalid/v1"
+context_window = 1000
+extra_headers = { x-shared = "model", X-Model = "primary" }
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	headers := cfg.EffectiveExtraHeaders()
+	if len(headers) != 3 || headers["X-Global"] != "global" || headers["x-shared"] != "model" || headers["X-Model"] != "primary" {
+		t.Fatalf("effective headers=%#v", headers)
+	}
+	if _, exists := headers["X-Shared"]; exists {
+		t.Fatalf("case-insensitive model override retained global key: %#v", headers)
+	}
+	headers["X-Global"] = "mutated"
+	if cfg.ExtraHeaders["X-Global"] != "global" {
+		t.Fatal("effective headers alias configuration")
+	}
+}
+
 func TestUpdateSkillsPreservesOtherConfiguration(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte("[models]\ndefault = \"local\"\n\n[skills]\npaths = [\"old\"]\nignore = [\"ignored\"]\n"), 0o640); err != nil {

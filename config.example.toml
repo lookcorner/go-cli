@@ -1,6 +1,7 @@
 [models]
 default = "gork-default"
 web_search = "gork-default"
+# extra_headers = { X-Request-Tags = "team=example,env=dev" }
 
 [model.gork-default]
 model = "YOUR_RESPONSES_API_MODEL"
@@ -9,6 +10,8 @@ backend = "responses"
 env_key = ["GORK_API_KEY", "XAI_API_KEY"]
 context_window = 131072
 auto_compact_threshold_percent = 85
+# Per-model keys override [models].extra_headers case-insensitively.
+# extra_headers = { X-Provider-Version = "2026-01-01" }
 
 [auto_mode]
 enabled = true

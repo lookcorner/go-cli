@@ -40,6 +40,7 @@ type Config struct {
 	DefaultModelID                  string                     `json:"-"`
 	Backend                         string                     `json:"backend,omitempty"`
 	SystemPrompt                    string                     `json:"system_prompt,omitempty"`
+	ExtraHeaders                    map[string]string          `json:"extra_headers,omitempty"`
 	MaxSteps                        int                        `json:"max_steps,omitempty"`
 	Env                             map[string]string          `json:"env,omitempty"`
 	ShellEnvironmentPolicy          ShellEnvironmentPolicy     `json:"shell_environment_policy,omitempty"`
@@ -228,6 +229,7 @@ type ModelProfile struct {
 	ReasoningEffort             string
 	SupportsReasoningEffort     bool
 	ReasoningEfforts            []ReasoningEffortOption
+	ExtraHeaders                map[string]string
 	hiddenConfigured            bool
 	supportsReasoningConfigured bool
 }
@@ -654,11 +656,12 @@ type fileConfig struct {
 	GrokComConfig       fileGrokComConfig `json:"grok_com_config,omitempty" toml:"grok_com_config"`
 	Auth                fileAuthConfig    `json:"auth,omitempty" toml:"auth"`
 	Models              struct {
-		Default        string   `toml:"default"`
-		WebSearch      string   `toml:"web_search"`
-		AllowedModels  []string `toml:"allowed_models"`
-		HiddenModels   []string `toml:"hidden_models"`
-		DisabledModels []string `toml:"disabled_models"`
+		Default        string            `toml:"default"`
+		WebSearch      string            `toml:"web_search"`
+		AllowedModels  []string          `toml:"allowed_models"`
+		HiddenModels   []string          `toml:"hidden_models"`
+		DisabledModels []string          `toml:"disabled_models"`
+		ExtraHeaders   map[string]string `toml:"extra_headers"`
 	} `json:"-" toml:"models"`
 	ModelEntries map[string]modelConfig `json:"-" toml:"model"`
 	Toolset      struct {
@@ -889,19 +892,20 @@ type fileGoalConfig struct {
 }
 
 type modelConfig struct {
-	Model                       string `toml:"model"`
-	Name                        string `toml:"name"`
-	Description                 string `toml:"description"`
-	Hidden                      *bool  `toml:"hidden"`
-	BaseURL                     string `toml:"base_url"`
-	APIKey                      string `toml:"api_key"`
-	Backend                     string `toml:"backend"`
-	EnvKey                      any    `toml:"env_key"`
-	ContextWindow               int    `toml:"context_window"`
-	AutoCompactThresholdPercent *int   `toml:"auto_compact_threshold_percent"`
-	ReasoningEffort             string `toml:"reasoning_effort"`
-	SupportsReasoningEffort     *bool  `toml:"supports_reasoning_effort"`
-	ReasoningEfforts            []any  `toml:"reasoning_efforts"`
+	Model                       string            `toml:"model"`
+	Name                        string            `toml:"name"`
+	Description                 string            `toml:"description"`
+	Hidden                      *bool             `toml:"hidden"`
+	BaseURL                     string            `toml:"base_url"`
+	APIKey                      string            `toml:"api_key"`
+	Backend                     string            `toml:"backend"`
+	EnvKey                      any               `toml:"env_key"`
+	ContextWindow               int               `toml:"context_window"`
+	AutoCompactThresholdPercent *int              `toml:"auto_compact_threshold_percent"`
+	ReasoningEffort             string            `toml:"reasoning_effort"`
+	SupportsReasoningEffort     *bool             `toml:"supports_reasoning_effort"`
+	ReasoningEfforts            []any             `toml:"reasoning_efforts"`
+	ExtraHeaders                map[string]string `toml:"extra_headers"`
 }
 
 type sessionConfig struct {
@@ -1211,6 +1215,7 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	if disk.Backend != "" {
 		cfg.Backend = disk.Backend
 	}
+	cfg.ExtraHeaders = mergeExtraHeaders(cfg.ExtraHeaders, disk.Models.ExtraHeaders)
 	if profile, ok := cfg.ModelProfiles[cfg.DefaultModelID]; ok {
 		cfg.ReasoningEffort = profile.ReasoningEffort
 		cfg.ModelSupportsReasoningEffort = profile.SupportsReasoningEffort
@@ -1747,6 +1752,9 @@ func mergeModelProfiles(cfg *Config, entries map[string]modelConfig) error {
 			}
 			profile.ReasoningEfforts = options
 		}
+		if entry.ExtraHeaders != nil {
+			profile.ExtraHeaders = mergeExtraHeaders(profile.ExtraHeaders, entry.ExtraHeaders)
+		}
 		normalized, err := normalizeModelProfile(name, profile)
 		if err != nil {
 			return err
@@ -1810,6 +1818,19 @@ func (c Config) ResolveModelEntry(slug string) (string, Config, bool) {
 	return name, result, true
 }
 
+// EffectiveExtraHeaders returns global model headers with current model
+// overrides applied case-insensitively.
+func (c Config) EffectiveExtraHeaders() map[string]string {
+	_, profile, ok := c.modelProfileWithDefault(c.DefaultModelID)
+	if !ok {
+		_, profile, ok = c.modelProfileWithDefault(c.Model)
+	}
+	if !ok {
+		return mergeExtraHeaders(nil, c.ExtraHeaders)
+	}
+	return mergeExtraHeaders(c.ExtraHeaders, profile.ExtraHeaders)
+}
+
 func (c Config) ModelSlugs() []string {
 	names := make([]string, 0, len(c.ModelProfiles))
 	for name := range c.ModelProfiles {
@@ -1827,6 +1848,7 @@ func (c Config) ModelSlugs() []string {
 // unless the local config explicitly owns that field.
 func (c *Config) ReloadModelCatalog(next Config) {
 	c.ModelProfiles = cloneModelProfiles(next.ModelProfiles)
+	c.ExtraHeaders = mergeExtraHeaders(nil, next.ExtraHeaders)
 	c.Model = next.Model
 	if next.defaultModelConfigured || c.defaultModelConfigured {
 		c.DefaultModelID = next.DefaultModelID
@@ -1861,9 +1883,29 @@ func cloneModelProfiles(source map[string]ModelProfile) map[string]ModelProfile 
 	cloned := make(map[string]ModelProfile, len(source))
 	for id, profile := range source {
 		profile.ReasoningEfforts = append([]ReasoningEffortOption(nil), profile.ReasoningEfforts...)
+		profile.ExtraHeaders = mergeExtraHeaders(nil, profile.ExtraHeaders)
 		cloned[id] = profile
 	}
 	return cloned
+}
+
+func mergeExtraHeaders(base, override map[string]string) map[string]string {
+	if len(base) == 0 && len(override) == 0 {
+		return nil
+	}
+	merged := make(map[string]string, len(base)+len(override))
+	for key, value := range base {
+		merged[key] = value
+	}
+	for key, value := range override {
+		for existing := range merged {
+			if strings.EqualFold(existing, key) {
+				delete(merged, existing)
+			}
+		}
+		merged[key] = value
+	}
+	return merged
 }
 
 func (c Config) modelProfileWithDefault(slug string) (string, ModelProfile, bool) {

@@ -17,11 +17,15 @@ type Client struct {
 	apiKey        string
 	tokenProvider TokenProvider
 	errorMapper   ErrorMapper
+	extraHeaders  map[string]string
 	http          *http.Client
 }
 
 func (c *Client) SetTokenProvider(provider TokenProvider) { c.tokenProvider = provider }
 func (c *Client) SetErrorMapper(mapper ErrorMapper)       { c.errorMapper = mapper }
+func (c *Client) SetExtraHeaders(headers map[string]string) {
+	c.extraHeaders = cloneHeaders(headers)
+}
 
 func NewClient(baseURL, apiKey string, httpClient *http.Client) *Client {
 	return &Client{
@@ -49,6 +53,10 @@ func (c *Client) StreamResponseEvents(ctx context.Context, request ResponseReque
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Accept", "text/event-stream")
 		req.Header.Set("User-Agent", "gork-go/0.1")
+		applyHeaders(req.Header, c.extraHeaders)
+		if c.tokenProvider != nil {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
 		return req, nil
 	})
 	if err != nil {
@@ -64,6 +72,23 @@ func (c *Client) StreamResponseEvents(ctx context.Context, request ResponseReque
 		return parseSSEEvents(resp.Body, onEvent)
 	}
 	return parseJSONEvents(resp.Body, onEvent)
+}
+
+func cloneHeaders(source map[string]string) map[string]string {
+	if len(source) == 0 {
+		return nil
+	}
+	cloned := make(map[string]string, len(source))
+	for key, value := range source {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func applyHeaders(target http.Header, headers map[string]string) {
+	for key, value := range headers {
+		target.Set(key, value)
+	}
 }
 
 type wireEvent struct {
