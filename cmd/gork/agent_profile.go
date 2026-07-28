@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -97,7 +98,9 @@ func applyProfileMCP(profile *agents.Definition, cfg *config.Config) ([]mcp.Serv
 		inherited = append(inherited, mcp.ServerConfig{
 			Name: name, Type: server.Type, Command: server.Command, Args: append([]string(nil), server.Args...),
 			Env: cloneStringsMap(server.Env), URL: server.URL, Headers: cloneStringsMap(server.Headers), Disabled: !server.IsEnabled(),
-			StartupTimeoutMS: server.StartupTimeoutMS,
+			StartupTimeoutSeconds: server.StartupTimeoutSeconds, StartupTimeoutMS: server.StartupTimeoutMS,
+			ToolTimeoutSeconds: server.ToolTimeoutSeconds, ToolTimeouts: maps.Clone(server.ToolTimeouts),
+			ToolTimeoutMS: server.ToolTimeoutMS, ToolTimeoutsMS: maps.Clone(server.ToolTimeoutsMS),
 		})
 	}
 	for name, server := range cfg.MCPServers {

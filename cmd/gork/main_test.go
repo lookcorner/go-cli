@@ -464,8 +464,9 @@ func TestAgentProfileExplicitOverridesKeepPrecedence(t *testing.T) {
 
 func TestAgentProfileExplicitMCPServerOverridesInheritance(t *testing.T) {
 	enabled := true
+	startup, tool := uint64(9), uint64(12)
 	cfg := config.Config{MCPServers: map[string]config.MCPServerConfig{
-		"kept": {Command: "fixture", Enabled: &enabled},
+		"kept": {Command: "fixture", Enabled: &enabled, StartupTimeoutSeconds: &startup, ToolTimeoutSeconds: &tool, ToolTimeouts: map[string]uint64{"search": 3}},
 		"drop": {Command: "other", Enabled: &enabled},
 	}}
 	profile := &agents.Definition{
@@ -476,7 +477,7 @@ func TestAgentProfileExplicitMCPServerOverridesInheritance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(owned) != 1 || owned[0].Name != "kept" || owned[0].Disabled || cfg.MCPServers["kept"].IsEnabled() || cfg.MCPServers["drop"].IsEnabled() {
+	if len(owned) != 1 || owned[0].Name != "kept" || owned[0].Disabled || owned[0].StartupTimeoutSeconds == nil || *owned[0].StartupTimeoutSeconds != 9 || owned[0].ToolTimeoutSeconds == nil || *owned[0].ToolTimeoutSeconds != 12 || owned[0].ToolTimeouts["search"] != 3 || cfg.MCPServers["kept"].IsEnabled() || cfg.MCPServers["drop"].IsEnabled() {
 		t.Fatalf("owned=%#v config=%#v", owned, cfg.MCPServers)
 	}
 }
@@ -2822,6 +2823,22 @@ func TestMCPStartupTimeoutPrecedence(t *testing.T) {
 	zero := uint64(0)
 	if got := mcpStartupTimeout(30, &zero, nil); got != 0 {
 		t.Fatalf("zero server timeout=%s", got)
+	}
+}
+
+func TestMCPToolTimeoutPrecedence(t *testing.T) {
+	defaultSeconds := uint64(7)
+	defaultMilliseconds := uint64(1250)
+	timeout, overrides := mcpToolTimeouts(
+		&defaultSeconds, map[string]uint64{"search": 3, "read": 4},
+		&defaultMilliseconds, map[string]uint64{"search": 2500},
+	)
+	if timeout != 2*time.Second || overrides["search"] != 3*time.Second || overrides["read"] != 4*time.Second {
+		t.Fatalf("tool timeout=%s overrides=%#v", timeout, overrides)
+	}
+	timeout, overrides = mcpToolTimeouts(nil, nil, nil, nil)
+	if timeout != 6000*time.Second || len(overrides) != 0 {
+		t.Fatalf("default tool timeout=%s overrides=%#v", timeout, overrides)
 	}
 }
 

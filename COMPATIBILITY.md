@@ -293,6 +293,9 @@ MCP startup handshakes default to 30 seconds and honor requirements, the
 managed config, remote settings, and per-server `startup_timeout_sec` overrides.
 ACP session `_meta.mcpConfig.<server>.startupTimeoutMs` overrides that stack
 for both regular and SDK-backed MCP servers.
+MCP tools use the reference 6,000-second fallback plus per-server
+`tool_timeout_sec`/`tool_timeouts`; ACP `toolTimeoutMs`/`toolTimeoutsMs`
+overrides are rounded up to seconds and apply to regular and SDK servers.
 
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |

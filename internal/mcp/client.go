@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"os/exec"
@@ -112,6 +113,9 @@ type Client struct {
 	notification      func(string)
 	resourceUpdate    func(ResourceUpdate)
 	sampling          SamplingHandler
+	toolTimeout       time.Duration
+	toolTimeoutSet    bool
+	toolTimeouts      map[string]time.Duration
 	pending           map[string]chan response
 	nextID            atomic.Uint64
 	mu                sync.Mutex
@@ -312,9 +316,27 @@ func (c *Client) ListTools(ctx context.Context) ([]ToolInfo, error) {
 }
 
 func (c *Client) CallTool(ctx context.Context, name string, arguments map[string]any) (ToolResult, error) {
+	c.mu.Lock()
+	timeout, configured := c.toolTimeouts[name]
+	if !configured {
+		timeout, configured = c.toolTimeout, c.toolTimeoutSet
+	}
+	c.mu.Unlock()
+	if !configured {
+		timeout = 6000 * time.Second
+	}
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	var result ToolResult
-	err := c.call(ctx, "tools/call", map[string]any{"name": name, "arguments": arguments}, &result)
+	err := c.call(callCtx, "tools/call", map[string]any{"name": name, "arguments": arguments}, &result)
 	return result, err
+}
+
+func (c *Client) SetToolTimeouts(defaultTimeout time.Duration, overrides map[string]time.Duration) {
+	c.mu.Lock()
+	c.toolTimeout, c.toolTimeoutSet = defaultTimeout, true
+	c.toolTimeouts = maps.Clone(overrides)
+	c.mu.Unlock()
 }
 
 func (c *Client) SetNotificationHandler(handler func(method string)) {

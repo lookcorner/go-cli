@@ -3529,8 +3529,8 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 				map[string]any{"name": "broken"},
 			},
 			"mcpConfig": map[string]any{
-				"client-tools": map[string]any{"startupTimeoutMs": 1500},
-				"sdk-tools":    map[string]any{"startupTimeoutMs": 2500},
+				"client-tools": map[string]any{"startupTimeoutMs": 1500, "toolTimeoutMs": 3500, "toolTimeoutsMs": map[string]any{"search": 4500}},
+				"sdk-tools":    map[string]any{"startupTimeoutMs": 2500, "toolTimeoutMs": 5500},
 			},
 		},
 		"cwd": root, "mcpServers": []any{map[string]any{
@@ -3552,11 +3552,12 @@ func TestACPStdioLifecycleStreamingAndPermission(t *testing.T) {
 		t.Fatalf("session permission metadata was not forwarded: %#v", receivedConfig)
 	}
 	if len(receivedConfig.MCPServers) != 3 || receivedConfig.MCPServers[0].Env["TOKEN"] != "secret" || receivedConfig.MCPServers[0].StartupTimeoutMS == nil || *receivedConfig.MCPServers[0].StartupTimeoutMS != 1500 ||
+		receivedConfig.MCPServers[0].ToolTimeoutMS == nil || *receivedConfig.MCPServers[0].ToolTimeoutMS != 3500 || receivedConfig.MCPServers[0].ToolTimeoutsMS["search"] != 4500 ||
 		receivedConfig.MCPServers[1].Type != "http" || receivedConfig.MCPServers[1].Headers["Authorization"] != "Bearer token" ||
 		receivedConfig.MCPServers[2].Type != "sse" {
 		t.Fatalf("client MCP config was not forwarded: %#v", receivedConfig)
 	}
-	if len(receivedConfig.MCPSDKServers) != 1 || receivedConfig.MCPSDKServers[0].Name != "sdk-tools" || receivedConfig.MCPSDKServers[0].ServerID != "srv-0" || receivedConfig.MCPSDKServers[0].StartupTimeoutMS == nil || *receivedConfig.MCPSDKServers[0].StartupTimeoutMS != 2500 || receivedConfig.MCPReverseCall == nil {
+	if len(receivedConfig.MCPSDKServers) != 1 || receivedConfig.MCPSDKServers[0].Name != "sdk-tools" || receivedConfig.MCPSDKServers[0].ServerID != "srv-0" || receivedConfig.MCPSDKServers[0].StartupTimeoutMS == nil || *receivedConfig.MCPSDKServers[0].StartupTimeoutMS != 2500 || receivedConfig.MCPSDKServers[0].ToolTimeoutMS == nil || *receivedConfig.MCPSDKServers[0].ToolTimeoutMS != 5500 || receivedConfig.MCPReverseCall == nil {
 		t.Fatalf("SDK MCP config was not forwarded: %#v", receivedConfig.MCPSDKServers)
 	}
 	sessionID := created["result"].(map[string]any)["sessionId"].(string)
@@ -3884,9 +3885,9 @@ func TestParseMCPSDKServers(t *testing.T) {
 			map[string]any{"name": 1, "serverId": "wrong-type"},
 			"wrong-shape",
 		},
-		"mcpConfig": map[string]any{"sdk-tools": map[string]any{"startupTimeoutMs": float64(1250)}},
+		"mcpConfig": map[string]any{"sdk-tools": map[string]any{"startupTimeoutMs": float64(1250), "toolTimeoutMs": float64(2250), "toolTimeoutsMs": map[string]any{"search": float64(3250)}}},
 	})
-	if len(servers) != 1 || servers[0].Type != "acp" || servers[0].Name != "sdk-tools" || servers[0].ServerID != "srv-0" || servers[0].StartupTimeoutMS == nil || *servers[0].StartupTimeoutMS != 1250 {
+	if len(servers) != 1 || servers[0].Type != "acp" || servers[0].Name != "sdk-tools" || servers[0].ServerID != "srv-0" || servers[0].StartupTimeoutMS == nil || *servers[0].StartupTimeoutMS != 1250 || servers[0].ToolTimeoutMS == nil || *servers[0].ToolTimeoutMS != 2250 || servers[0].ToolTimeoutsMS["search"] != 3250 {
 		t.Fatalf("SDK MCP servers=%#v", servers)
 	}
 	if servers := parseMCPSDKServers(nil); len(servers) != 0 {

@@ -124,6 +124,21 @@ func TestACPStartupTimeout(t *testing.T) {
 	}
 }
 
+func TestToolTimeoutOverride(t *testing.T) {
+	client := &Client{
+		name: "slow", done: make(chan struct{}), pending: make(map[string]chan response),
+		reverse: func(ctx context.Context, _ json.RawMessage) (json.RawMessage, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	}
+	client.SetToolTimeouts(time.Second, map[string]time.Duration{"search": 10 * time.Millisecond})
+	_, err := client.CallTool(context.Background(), "search", nil)
+	if err == nil || !strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Fatalf("tool timeout error=%v", err)
+	}
+}
+
 func TestACPClientLifecycleAndErrors(t *testing.T) {
 	var methods []string
 	reverse := func(_ context.Context, payload json.RawMessage) (json.RawMessage, error) {

@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"net/http"
 	"net/url"
@@ -5455,6 +5456,8 @@ func startMCPServers(
 			closeClients()
 			return nil, err
 		}
+		toolTimeout, toolTimeouts := mcpToolTimeouts(server.ToolTimeoutSeconds, server.ToolTimeouts, server.ToolTimeoutMS, server.ToolTimeoutsMS)
+		client.SetToolTimeouts(toolTimeout, toolTimeouts)
 		clients = append(clients, client)
 		if err = registerMCPClient(ctx, name, client, initialized, cfg.DisabledMCPTools[name], registry, approver, stderr, toolsChanged, mcp.OutputConfig{MaxBytes: cfg.MCP.MaxOutputBytes, ArtifactDir: artifactDir}); err != nil {
 			closeClients()
@@ -5475,13 +5478,47 @@ func mcpStartupTimeout(globalSeconds uint64, serverSeconds, metadataMilliseconds
 	if serverSeconds != nil && *serverSeconds <= uint64((1<<63-1)/int64(time.Second)) {
 		seconds = *serverSeconds
 	}
-	if metadataMilliseconds != nil && *metadataMilliseconds <= uint64((1<<63-1)/int64(time.Second))*1000 {
-		seconds = *metadataMilliseconds / 1000
-		if *metadataMilliseconds%1000 != 0 {
-			seconds++
+	if metadataMilliseconds != nil {
+		if duration, ok := mcpMillisecondsTimeout(*metadataMilliseconds); ok {
+			return duration
 		}
 	}
 	return time.Duration(seconds) * time.Second
+}
+
+func mcpToolTimeouts(defaultSeconds *uint64, secondsByTool map[string]uint64, defaultMilliseconds *uint64, millisecondsByTool map[string]uint64) (time.Duration, map[string]time.Duration) {
+	timeout := 6000 * time.Second
+	if defaultSeconds != nil && *defaultSeconds <= uint64((1<<63-1)/int64(time.Second)) {
+		timeout = time.Duration(*defaultSeconds) * time.Second
+	}
+	if defaultMilliseconds != nil {
+		if duration, ok := mcpMillisecondsTimeout(*defaultMilliseconds); ok {
+			timeout = duration
+		}
+	}
+	overrides := make(map[string]time.Duration, len(secondsByTool)+len(millisecondsByTool))
+	for name, seconds := range secondsByTool {
+		if seconds <= uint64((1<<63-1)/int64(time.Second)) {
+			overrides[name] = time.Duration(seconds) * time.Second
+		}
+	}
+	for name, milliseconds := range millisecondsByTool {
+		if duration, ok := mcpMillisecondsTimeout(milliseconds); ok {
+			overrides[name] = duration
+		}
+	}
+	return timeout, overrides
+}
+
+func mcpMillisecondsTimeout(milliseconds uint64) (time.Duration, bool) {
+	if milliseconds > uint64((1<<63-1)/int64(time.Second))*1000 {
+		return 0, false
+	}
+	seconds := milliseconds / 1000
+	if milliseconds%1000 != 0 {
+		seconds++
+	}
+	return time.Duration(seconds) * time.Second, true
 }
 
 func registerMCPClient(
@@ -5602,6 +5639,8 @@ func startACPMCPServers(
 			}
 			return nil, err
 		}
+		toolTimeout, toolTimeouts := mcpToolTimeouts(nil, nil, server.ToolTimeoutMS, server.ToolTimeoutsMS)
+		client.SetToolTimeouts(toolTimeout, toolTimeouts)
 		clients = append(clients, client)
 		if err := registerMCPClient(ctx, server.Name, client, initialized, disabledTools[server.Name], registry, approver, stderr, toolsChanged, mcp.OutputConfig{MaxBytes: cfg.MCP.MaxOutputBytes, ArtifactDir: artifactDir}); err != nil {
 			for _, client := range clients {
@@ -5632,7 +5671,9 @@ func startSubagentMCPServers(
 		cfg.MCPServers[server.Name] = config.MCPServerConfig{
 			Type: server.Type, Command: server.Command, Args: append([]string(nil), server.Args...),
 			Env: cloneStringsMap(server.Env), URL: server.URL, Headers: cloneStringsMap(server.Headers),
-			StartupTimeoutMS: server.StartupTimeoutMS,
+			StartupTimeoutSeconds: server.StartupTimeoutSeconds, StartupTimeoutMS: server.StartupTimeoutMS,
+			ToolTimeoutSeconds: server.ToolTimeoutSeconds, ToolTimeouts: maps.Clone(server.ToolTimeouts),
+			ToolTimeoutMS: server.ToolTimeoutMS, ToolTimeoutsMS: maps.Clone(server.ToolTimeoutsMS),
 		}
 	}
 	clients, err := startMCPServers(ctx, cfg, workspaceRoot, registry, approver, tokenProvider, stderr, nil, nil, artifactDir)
@@ -5886,7 +5927,9 @@ func (r *sessionMCPRuntime) mergedConfig(requested []mcp.ServerConfig) (config.C
 		cfg.MCPServers[server.Name] = config.MCPServerConfig{
 			Type: server.Type, Command: server.Command, Args: append([]string(nil), server.Args...),
 			Env: cloneStringsMap(server.Env), URL: server.URL, Headers: cloneStringsMap(server.Headers),
-			StartupTimeoutMS: server.StartupTimeoutMS,
+			StartupTimeoutSeconds: server.StartupTimeoutSeconds, StartupTimeoutMS: server.StartupTimeoutMS,
+			ToolTimeoutSeconds: server.ToolTimeoutSeconds, ToolTimeouts: maps.Clone(server.ToolTimeouts),
+			ToolTimeoutMS: server.ToolTimeoutMS, ToolTimeoutsMS: maps.Clone(server.ToolTimeoutsMS),
 		}
 	}
 	for _, name := range cfg.DisabledMCPServers {
@@ -5911,8 +5954,10 @@ func (r *sessionMCPRuntime) mergedConfig(requested []mcp.ServerConfig) (config.C
 		entry := mcp.ServerConfig{
 			Type: server.Type, Name: name, Command: server.Command, Args: append([]string(nil), server.Args...),
 			Env: cloneStringsMap(server.Env), URL: server.URL, Headers: cloneStringsMap(server.Headers), Disabled: !server.IsEnabled(),
-			DisabledTools:    append([]string(nil), cfg.DisabledMCPTools[name]...),
-			StartupTimeoutMS: server.StartupTimeoutMS,
+			DisabledTools:         append([]string(nil), cfg.DisabledMCPTools[name]...),
+			StartupTimeoutSeconds: server.StartupTimeoutSeconds, StartupTimeoutMS: server.StartupTimeoutMS,
+			ToolTimeoutSeconds: server.ToolTimeoutSeconds, ToolTimeouts: maps.Clone(server.ToolTimeouts),
+			ToolTimeoutMS: server.ToolTimeoutMS, ToolTimeoutsMS: maps.Clone(server.ToolTimeoutsMS),
 		}
 		catalog = append(catalog, entry)
 		if !entry.Disabled {
@@ -5960,6 +6005,8 @@ func cloneMCPConfigMap(source map[string]config.MCPServerConfig) map[string]conf
 		server.Args = append([]string(nil), server.Args...)
 		server.Env = cloneStringsMap(server.Env)
 		server.Headers = cloneStringsMap(server.Headers)
+		server.ToolTimeouts = maps.Clone(server.ToolTimeouts)
+		server.ToolTimeoutsMS = maps.Clone(server.ToolTimeoutsMS)
 		if server.Setup != nil {
 			setup := *server.Setup
 			setup.Fields = append([]config.MCPSetupField(nil), setup.Fields...)
