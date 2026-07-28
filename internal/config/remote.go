@@ -44,6 +44,7 @@ type RemoteSettings struct {
 	AutoBackgroundOnTimeout          *bool                `json:"auto_background_on_timeout"`
 	LoginShellCapture                *bool                `json:"login_shell_capture"`
 	FileToolset                      *string              `json:"file_toolset"`
+	FolderTrustEnabled               *bool                `json:"folder_trust_enabled"`
 	AskUserQuestionTimeoutEnabled    *bool                `json:"ask_user_question_timeout_enabled"`
 	AskUserQuestionTimeoutSeconds    *uint64              `json:"ask_user_question_timeout_secs"`
 	MaxMCPOutputBytes                *uint64              `json:"max_mcp_output_bytes"`
@@ -234,6 +235,9 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 	if c.Toolset.FileToolset == "standard" && remote.FileToolset != nil && strings.TrimSpace(*remote.FileToolset) == "hashline" {
 		c.Toolset.FileToolset = "hashline"
 		c.fileToolsetRemote = true
+	}
+	if !c.folderTrustConfigured {
+		c.FolderTrustEnabled = remote.FolderTrustEnabled == nil || *remote.FolderTrustEnabled
 	}
 	if !c.askTimeoutEnabledConfigured {
 		c.AskUserQuestion.TimeoutEnabled = remote.AskUserQuestionTimeoutEnabled == nil || *remote.AskUserQuestionTimeoutEnabled

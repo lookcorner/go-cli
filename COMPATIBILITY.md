@@ -298,6 +298,8 @@ MCP tools use the reference 6,000-second fallback plus per-server
 overrides are rounded up to seconds and apply to regular and SDK servers.
 Per-server `expose_image_base64` and ACP `exposeImageBase64` optionally retain
 the raw image block alongside native vision content, with ACP metadata winning.
+Folder trust defaults on and follows environment over local/managed config over
+remote `folder_trust_enabled` precedence.
 
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |

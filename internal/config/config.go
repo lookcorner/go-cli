@@ -156,6 +156,7 @@ type Config struct {
 	allowedModelsConfigured         bool
 	hiddenModelsConfigured          bool
 	disabledModelsConfigured        bool
+	folderTrustConfigured           bool
 	bashAllowBackgroundConfigured   bool
 	bashAutoBackgroundConfigured    bool
 	bashLoginShellConfigured        bool
@@ -1636,6 +1637,7 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.FolderTrust.Enabled != nil {
 		cfg.FolderTrustEnabled = *disk.FolderTrust.Enabled
+		cfg.folderTrustConfigured = true
 	}
 	if disk.CLI.UseLeader != nil {
 		cfg.UseLeader = *disk.CLI.UseLeader
@@ -2532,6 +2534,7 @@ func applyEnv(cfg *Config) {
 	applyCompatEnv(&cfg.Compat.Codex, "CODEX")
 	if value, ok := envBool("GROK_FOLDER_TRUST"); ok {
 		cfg.FolderTrustEnabled = value
+		cfg.folderTrustConfigured = true
 	}
 	if value, ok := envBool("GROK_WEB_FETCH"); ok {
 		cfg.WebFetch.Enabled, cfg.WebFetch.EnabledConfigured = value, true

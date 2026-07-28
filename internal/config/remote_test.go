@@ -187,6 +187,45 @@ func TestApplyRemoteSettingsFileToolsetFallback(t *testing.T) {
 	}
 }
 
+func TestApplyRemoteSettingsFolderTrustFallback(t *testing.T) {
+	off, on := false, true
+	cfg, err := Load(filepath.Join(t.TempDir(), "missing.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{FolderTrustEnabled: &off})
+	if cfg.FolderTrustEnabled {
+		t.Fatal("remote folder trust policy was ignored")
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{})
+	if !cfg.FolderTrustEnabled {
+		t.Fatal("folder trust did not return to its default")
+	}
+
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[folder_trust]\nenabled = false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{FolderTrustEnabled: &on})
+	if cfg.FolderTrustEnabled {
+		t.Fatal("remote policy overrode local folder trust policy")
+	}
+
+	t.Setenv("GROK_FOLDER_TRUST", "true")
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{FolderTrustEnabled: &off})
+	if !cfg.FolderTrustEnabled {
+		t.Fatal("remote policy overrode folder trust environment policy")
+	}
+}
+
 func TestApplyRemoteSettingsQuestionTimeoutFallback(t *testing.T) {
 	off, seconds := false, uint64(45)
 	cfg, err := Load(filepath.Join(t.TempDir(), "missing.toml"))
