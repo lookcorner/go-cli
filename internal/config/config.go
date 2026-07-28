@@ -174,6 +174,7 @@ type BashConfig struct {
 	TimeoutSeconds    float64 `json:"timeout_secs"`
 	MaxTimeoutSeconds float64 `json:"max_timeout_secs"`
 	OutputByteLimit   uint64  `json:"output_byte_limit"`
+	CommandPrefix     string  `json:"cmd_prefix,omitempty"`
 	LoginShellCapture bool    `json:"login_shell_capture"`
 }
 
@@ -659,6 +660,7 @@ type fileBashConfig struct {
 	TimeoutSeconds    *float64 `json:"timeout_secs,omitempty" toml:"timeout_secs"`
 	MaxTimeoutSeconds *float64 `json:"max_timeout_secs,omitempty" toml:"max_timeout_secs"`
 	OutputByteLimit   *uint64  `json:"output_byte_limit,omitempty" toml:"output_byte_limit"`
+	CommandPrefix     *string  `json:"cmd_prefix,omitempty" toml:"cmd_prefix"`
 	LoginShellCapture *bool    `json:"login_shell_capture,omitempty" toml:"login_shell_capture"`
 }
 
@@ -1263,6 +1265,9 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.Toolset.Bash.OutputByteLimit != nil {
 		cfg.Toolset.Bash.OutputByteLimit = *disk.Toolset.Bash.OutputByteLimit
+	}
+	if disk.Toolset.Bash.CommandPrefix != nil {
+		cfg.Toolset.Bash.CommandPrefix = *disk.Toolset.Bash.CommandPrefix
 	}
 	if disk.Toolset.Bash.LoginShellCapture != nil {
 		cfg.Toolset.Bash.LoginShellCapture = *disk.Toolset.Bash.LoginShellCapture

@@ -55,6 +55,7 @@ type ProcessManager struct {
 	bashTimeout     time.Duration
 	bashMaxTimeout  time.Duration
 	bashOutput      int
+	bashPrefix      string
 	shellEnvPolicy  ShellEnvironmentPolicy
 	cgroupMu        sync.Mutex
 	cgroup          shellCgroup
@@ -72,9 +73,10 @@ type foregroundSlot struct {
 
 // ConfigureBash sets the [toolset.bash] bounds for shell commands. Zero values
 // keep the built-in defaults.
-func (m *ProcessManager) ConfigureBash(timeout, maxTimeout time.Duration, outputLimit int) {
+func (m *ProcessManager) ConfigureBash(timeout, maxTimeout time.Duration, outputLimit int, prefix string) {
 	m.bashMu.Lock()
 	m.bashTimeout, m.bashMaxTimeout, m.bashOutput = max(timeout, 0), max(maxTimeout, 0), max(outputLimit, 0)
+	m.bashPrefix = prefix
 	m.bashMu.Unlock()
 }
 
@@ -239,6 +241,16 @@ func (m *ProcessManager) maxShellTimeout() time.Duration {
 		return m.bashMaxTimeout
 	}
 	return 5 * time.Minute
+}
+
+func (m *ProcessManager) prefixedShellCommand(command string) string {
+	m.bashMu.RLock()
+	prefix := m.bashPrefix
+	m.bashMu.RUnlock()
+	if prefix == "" {
+		return command
+	}
+	return prefix + " && " + command
 }
 
 // outputByteLimit is the configured capture ceiling, or the reference default.
@@ -428,6 +440,9 @@ func (m *ProcessManager) start(ctx context.Context, command, description string,
 	if err := m.approver.Approve(ctx, "start background command", command); err != nil {
 		return "", err
 	}
+	if kind == "bash" {
+		command = m.prefixedShellCommand(command)
+	}
 	checkpoint, err := m.rewind.beforeWorkspace()
 	if err != nil {
 		return "", fmt.Errorf("checkpoint before background command: %w", err)
@@ -557,6 +572,7 @@ func (m *ProcessManager) RunForeground(ctx context.Context, command string, time
 	if err := m.approver.Approve(ctx, "run terminal command", command); err != nil {
 		return "", err
 	}
+	command = m.prefixedShellCommand(command)
 	checkpoint, err := m.rewind.beforeWorkspace()
 	if err != nil {
 		return "", fmt.Errorf("checkpoint before terminal command: %w", err)

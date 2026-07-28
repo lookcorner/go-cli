@@ -1797,7 +1797,9 @@ timeout, `max_timeout_secs` bounds model-selected foreground timeouts, and
 `output_byte_limit` changes the captured tail limit; unset values default to
 120 seconds, 10 hours, and 20,000 bytes respectively. The maximum does not
 shorten a positive timeout chosen for a background task, and background timeout
-`0` remains unbounded. `[toolset.bash] login_shell_capture`
+`0` remains unbounded. Optional `cmd_prefix` runs before each foreground or
+background Bash command using `&&`; monitor commands are unchanged.
+`[toolset.bash] login_shell_capture`
 (default on; `GROK_LOGIN_ENV`) sources the user shell rc once at session start and
 merges that environment into agent shells. Top-level `[shell_environment_policy]`
 can reshape the inherited agent shell environment (`inherit = all|core|none`,

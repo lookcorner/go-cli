@@ -264,6 +264,8 @@ Shell configuration includes the reference `[toolset.bash].max_timeout_secs`
 foreground ceiling (10-hour production default, 5-minute fallback when set to
 zero), with the same ceiling reflected in the model-visible tool schema; positive
 background timeouts remain exempt from that foreground-only limit.
+The same Bash section's optional `cmd_prefix` is chained before foreground and
+background Bash commands while leaving monitor commands untouched.
 
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |

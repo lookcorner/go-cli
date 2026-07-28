@@ -540,12 +540,12 @@ func TestConfigureBashBoundsForegroundTimeoutAndOutput(t *testing.T) {
 		t.Fatalf("default output limit=%d want %d", got, defaultBashOutputBytes)
 	}
 
-	manager.ConfigureBash(0, 0, 0)
+	manager.ConfigureBash(0, 0, 0, "")
 	if manager.defaultShellTimeout() != defaultBashTimeout || manager.outputByteLimit() != defaultBashOutputBytes {
 		t.Fatal("zero configuration overrode the built-in defaults")
 	}
 
-	manager.ConfigureBash(30*time.Second, time.Minute, 64)
+	manager.ConfigureBash(30*time.Second, time.Minute, 64, "")
 	if got := manager.defaultShellTimeout(); got != 30*time.Second {
 		t.Fatalf("configured timeout=%s", got)
 	}
@@ -582,7 +582,7 @@ func TestConfigureBashBoundsForegroundTimeoutAndOutput(t *testing.T) {
 		t.Fatalf("background output=%q err=%v", background, err)
 	}
 
-	manager.ConfigureBash(50*time.Millisecond, time.Minute, 0)
+	manager.ConfigureBash(50*time.Millisecond, time.Minute, 0, "")
 	if got := manager.defaultShellTimeout(); got != 50*time.Millisecond {
 		t.Fatalf("timeout not configured: got %s", got)
 	}
@@ -609,7 +609,7 @@ func TestRunTerminalCommandUsesConfiguredForegroundCeiling(t *testing.T) {
 	}
 	manager := NewProcessManager(ws, PromptApprover{Mode: PermissionAuto})
 	defer manager.Close()
-	manager.ConfigureBash(time.Second, 40*time.Millisecond, 0)
+	manager.ConfigureBash(time.Second, 40*time.Millisecond, 0, "")
 	tool := &runTerminalCommandTool{manager: manager}
 
 	timeoutSchema := tool.Definition().Parameters["properties"].(map[string]any)["timeout"].(map[string]any)
@@ -630,6 +630,40 @@ func TestRunTerminalCommandUsesConfiguredForegroundCeiling(t *testing.T) {
 	result, err := manager.WaitOutput(context.Background(), id, time.Second)
 	if err != nil || !strings.Contains(result, "done") {
 		t.Fatalf("background result=%q err=%v", result, err)
+	}
+}
+
+func TestConfiguredBashPrefixAppliesOnlyToBashCommands(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture is Unix-specific")
+	}
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewProcessManager(ws, PromptApprover{Mode: PermissionAuto})
+	defer manager.Close()
+	manager.ConfigureBash(0, 0, 0, "printf prefix")
+
+	foreground, err := manager.RunForeground(context.Background(), "printf command", 0)
+	if err != nil || !strings.Contains(foreground, "prefixcommand") {
+		t.Fatalf("foreground=%q err=%v", foreground, err)
+	}
+	backgroundID, err := manager.StartDescribed(context.Background(), "printf command", "prefix test", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	background, err := manager.WaitOutput(context.Background(), backgroundID, time.Second)
+	if err != nil || !strings.Contains(background, "prefixcommand") {
+		t.Fatalf("background=%q err=%v", background, err)
+	}
+	monitorID, err := manager.StartMonitor(context.Background(), "printf monitor", "monitor test", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	monitor, err := manager.WaitOutput(context.Background(), monitorID, time.Second)
+	if err != nil || !strings.Contains(monitor, "monitor") || strings.Contains(monitor, "prefix") {
+		t.Fatalf("monitor=%q err=%v", monitor, err)
 	}
 }
 
