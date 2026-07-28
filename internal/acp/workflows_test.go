@@ -13,6 +13,7 @@ import (
 
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/tools"
+	"github.com/lookcorner/go-cli/internal/workflow"
 	"github.com/lookcorner/go-cli/internal/workspace"
 )
 
@@ -74,6 +75,29 @@ func TestWorkflowsListReturnsCatalog(t *testing.T) {
 	result, _ = messages[0]["result"].(map[string]any)
 	if result["result"] != nil || result["error"] == nil {
 		t.Fatalf("unknown session response=%#v", messages[0])
+	}
+}
+
+func TestNotifyWorkflowRunUsesReferenceUpdateShape(t *testing.T) {
+	var output bytes.Buffer
+	server := &Server{output: &output}
+	server.NotifyWorkflowRun("session-1", workflow.RunSnapshot{
+		ID: "workflow-1", Revision: 3, Name: "research", Objective: "verify claims",
+		Status: "completed", Phase: "Synthesize", Result: "cited report",
+		StartedAt: time.Now().Add(-time.Second),
+	})
+	messages := decodeACPOutput(t, output.Bytes())
+	if len(messages) != 1 || messages[0]["method"] != "x.ai/session_notification" {
+		t.Fatalf("messages=%#v", messages)
+	}
+	params := messages[0]["params"].(map[string]any)
+	update := params["update"].(map[string]any)
+	if params["sessionId"] != "session-1" || update["sessionUpdate"] != "workflow_updated" || update["run_id"] != "workflow-1" || update["status"] != "complete" || update["current_phase"] != "Synthesize" || update["result_summary"] != "cited report" {
+		t.Fatalf("params=%#v", params)
+	}
+	phases := update["phases"].([]any)
+	if len(phases) != 1 || phases[0].(map[string]any)["state"] != "done" {
+		t.Fatalf("phases=%#v", phases)
 	}
 }
 

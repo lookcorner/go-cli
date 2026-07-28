@@ -2,7 +2,9 @@ package workflow
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -13,8 +15,10 @@ const maxRetainedRuns = 64
 type RunSnapshot struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`
+	Objective string    `json:"objective"`
 	Source    string    `json:"source"`
 	Status    string    `json:"status"`
+	Revision  uint64    `json:"revision"`
 	Phase     string    `json:"phase,omitempty"`
 	Result    string    `json:"result,omitempty"`
 	Error     string    `json:"error,omitempty"`
@@ -27,16 +31,21 @@ type managedRun struct {
 	cancel   context.CancelFunc
 }
 
+type RunObserver interface {
+	WorkflowRunUpdated(RunSnapshot)
+}
+
 // Manager owns session-scoped background workflow runs.
 type Manager struct {
-	ctx     context.Context
-	cancel  context.CancelFunc
-	mu      sync.RWMutex
-	runs    map[string]*managedRun
-	order   []string
-	next    atomic.Uint64
-	wg      sync.WaitGroup
-	execute func(context.Context, Resolved, []byte, *Host) (string, error)
+	ctx      context.Context
+	cancel   context.CancelFunc
+	mu       sync.RWMutex
+	runs     map[string]*managedRun
+	order    []string
+	next     atomic.Uint64
+	wg       sync.WaitGroup
+	observer RunObserver
+	execute  func(context.Context, Resolved, []byte, *Host) (string, error)
 }
 
 func NewManager() *Manager {
@@ -51,7 +60,7 @@ func (m *Manager) Launch(resolved Resolved, args []byte, host *Host) RunSnapshot
 	now := time.Now().UTC()
 	id := fmt.Sprintf("workflow-%d-%d", now.UnixMilli(), m.next.Add(1))
 	ctx, cancel := context.WithCancel(m.ctx)
-	run := &managedRun{snapshot: RunSnapshot{ID: id, Name: resolved.Name, Source: resolved.Source, Status: "running", StartedAt: now, UpdatedAt: now}, cancel: cancel}
+	run := &managedRun{snapshot: RunSnapshot{ID: id, Name: resolved.Name, Objective: runObjective(resolved.Name, args), Source: resolved.Source, Status: "running", Revision: 1, StartedAt: now, UpdatedAt: now}, cancel: cancel}
 	if host == nil {
 		host = &Host{}
 	}
@@ -90,6 +99,15 @@ func (m *Manager) Launch(resolved Resolved, args []byte, host *Host) RunSnapshot
 		})
 	}()
 	return started
+}
+
+func (m *Manager) SetObserver(observer RunObserver) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.observer = observer
+	m.mu.Unlock()
 }
 
 func (m *Manager) Snapshots() []RunSnapshot {
@@ -133,12 +151,39 @@ func (m *Manager) Close() {
 
 func (m *Manager) update(id string, change func(*RunSnapshot)) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	var snapshot RunSnapshot
 	if run := m.runs[id]; run != nil {
 		change(&run.snapshot)
+		run.snapshot.Revision++
 		run.snapshot.UpdatedAt = time.Now().UTC()
+		snapshot = run.snapshot
 	}
 	m.trimLocked()
+	m.mu.Unlock()
+	if snapshot.ID != "" {
+		m.notify(snapshot)
+	}
+}
+
+func runObjective(name string, args []byte) string {
+	var values map[string]any
+	if json.Unmarshal(args, &values) == nil {
+		for _, key := range []string{"objective", "query"} {
+			if value, ok := values[key].(string); ok && strings.TrimSpace(value) != "" {
+				return strings.TrimSpace(value)
+			}
+		}
+	}
+	return name
+}
+
+func (m *Manager) notify(snapshot RunSnapshot) {
+	m.mu.RLock()
+	observer := m.observer
+	m.mu.RUnlock()
+	if observer != nil {
+		observer.WorkflowRunUpdated(snapshot)
+	}
 }
 
 func (m *Manager) trimLocked() {

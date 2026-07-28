@@ -20,6 +20,8 @@ type workflowDoneEvent struct {
 	err    error
 }
 
+type workflowRunEvent struct{ run workflow.RunSnapshot }
+
 func runWorkflow(ctx context.Context, registry *tools.Registry, name string, args json.RawMessage) tea.Cmd {
 	return func() tea.Msg {
 		if registry == nil || !registry.HasTool("workflow") {

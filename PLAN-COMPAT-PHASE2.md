@@ -385,8 +385,9 @@ Remote relay / workspace hub remains planned/XL (product-blocked). See queue #5.
       embedded and executable through that path with typed JSON arguments.
       Launches now return immediately into a bounded session-owned manager;
       TUI and ACP `/workflows` list active/recent runs and `/workflow <run-id>
-      stop` cancels one. Journal, pause/resume/save, automatic completion
-      notices, and the rich run dashboard remain follow-ups. TUI
+      stop` cancels one, while phase and terminal updates are delivered
+      automatically. Journal, pause/resume/save, and the rich run dashboard
+      remain follow-ups. TUI
       `/workflow <name> [args]` launches saved workflows with the reference
       JSON-object, text-fallback, and null argument mapping; in the TUI and ACP,
       unique names that do not collide with builtins or invocable skills also

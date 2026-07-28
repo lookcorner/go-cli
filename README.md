@@ -1528,8 +1528,9 @@ does the same for saved workflows: a JSON object
 is preserved as-is, plain text becomes both `query` and `objective`, and omitted
 input is sent as JSON `null`. In both TUI and ACP sessions, `/workflows` shows
 active and recent runs, and `/workflow <run-id> stop` cancels an active run.
-Journal, pause/resume/save, automatic completion notices, and the rich dashboard
-remain deferred. In the TUI and ACP command catalog, unique saved workflow names
+Phase and completion/failure/cancellation updates are reported automatically to
+both surfaces. Journal, pause/resume/save, and the rich dashboard remain
+deferred. In the TUI and ACP command catalog, unique saved workflow names
 that do not collide with a builtin command or user-invocable skill also appear
 directly, so `/review-changes ...` is equivalent to `/workflow review-changes
 ...`. ACP executes these commands asynchronously through the same workflow tool.

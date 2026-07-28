@@ -6,6 +6,10 @@ import (
 	"time"
 )
 
+type recordingRunObserver chan RunSnapshot
+
+func (o recordingRunObserver) WorkflowRunUpdated(run RunSnapshot) { o <- run }
+
 func TestManagerLaunchTracksBackgroundRun(t *testing.T) {
 	manager := NewManager()
 	defer manager.Close()
@@ -46,6 +50,25 @@ func TestManagerStopsRunningWorkflow(t *testing.T) {
 	wantRun(t, manager, run.ID, func(snapshot RunSnapshot) bool {
 		return snapshot.Status == "cancelled" && snapshot.Error == ""
 	})
+}
+
+func TestManagerNotifiesTerminalRun(t *testing.T) {
+	manager := NewManager()
+	defer manager.Close()
+	events := make(recordingRunObserver, 1)
+	manager.SetObserver(events)
+	manager.execute = func(context.Context, Resolved, []byte, *Host) (string, error) {
+		return "done", nil
+	}
+	manager.Launch(Resolved{Name: "notify", Source: "project"}, []byte(`{"objective":"ship it"}`), nil)
+	select {
+	case run := <-events:
+		if run.Status != "completed" || run.Result != "done" || run.Objective != "ship it" || run.Revision < 2 {
+			t.Fatalf("run=%+v", run)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("workflow observer was not notified")
+	}
 }
 
 func wantRun(t *testing.T, manager *Manager, id string, ready func(RunSnapshot) bool) RunSnapshot {

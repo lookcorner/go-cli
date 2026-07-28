@@ -55,6 +55,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/tui"
 	"github.com/lookcorner/go-cli/internal/version"
 	"github.com/lookcorner/go-cli/internal/voice"
+	"github.com/lookcorner/go-cli/internal/workflow"
 	"github.com/lookcorner/go-cli/internal/workspace"
 	worktrees "github.com/lookcorner/go-cli/internal/worktree"
 )
@@ -2973,6 +2974,21 @@ type sessionGoalObserver struct {
 	logger    *session.Logger
 }
 
+type sessionWorkflowObserver struct {
+	server    *acp.Server
+	sessionID string
+	logger    *session.Logger
+}
+
+func (o *sessionWorkflowObserver) WorkflowRunUpdated(run workflow.RunSnapshot) {
+	if o != nil && o.logger != nil {
+		_ = o.logger.Append("workflow_updated", run)
+	}
+	if o != nil && o.server != nil {
+		o.server.NotifyWorkflowRun(o.sessionID, run)
+	}
+}
+
 func (o *sessionGoalObserver) GoalEvent(event tools.GoalEvent) {
 	if o != nil && o.logger != nil {
 		_ = o.logger.Append(event.Kind, event.Data)
@@ -3763,6 +3779,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			return nil, nil, err
 		}
 		registry.SetGoalObserver(&sessionGoalObserver{server: server, sessionID: logger.ID(), logger: logger})
+		registry.SetWorkflowObserver(&sessionWorkflowObserver{server: server, sessionID: logger.ID(), logger: logger})
 		registry.SetWebFetchEnabled(cfg.WebFetch.Enabled && !opts.disableWebSearch)
 		if sessionConfig.ResumePath == "" {
 			metadata := sessionMetadataWithDisplay(ctx, ws.Root(), modelID, reasoningEffort, sessionConfig.DisplayCWD)

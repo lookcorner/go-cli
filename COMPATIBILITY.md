@@ -47,8 +47,8 @@ session-owned background manager; TUI `/deep-research <query>` launches the buil
 JSON/text/null argument mapping; the TUI and ACP command catalog also advertise
 and dispatch non-conflicting saved workflows as dynamic `/name <args>` commands;
 TUI and ACP `/workflows` list active/recent runs and `/workflow <run-id> stop`
-cancels one; journal, pause/resume/save, automatic completion notices, and the
-rich run dashboard remain deferred).
+cancels one; phase and terminal updates are delivered automatically to both
+surfaces; journal, pause/resume/save, and the rich run dashboard remain deferred).
 `x.ai/mcp/setup` persists select-field answers in `$GROK_HOME/mcp_preferences.json`,
 resolves `setup` templates (v0 one-select), reloads MCP, and enables the server.
 `x.ai/mcp/list` also surfaces unresolved setup schemas as `setuprequired`

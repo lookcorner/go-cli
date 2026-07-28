@@ -46,6 +46,42 @@ func workflowManagementMessage(runner *agent.Runner, prompt string) (string, boo
 	return "", false
 }
 
+func (s *Server) NotifyWorkflowRun(sessionID string, run workflow.RunSnapshot) {
+	if s == nil {
+		return
+	}
+	status := run.Status
+	if status == "completed" {
+		status = "complete"
+	}
+	update := map[string]any{
+		"sessionUpdate": "workflow_updated",
+		"run_id":        run.ID, "revision": run.Revision, "name": run.Name,
+		"objective": run.Objective, "status": status, "foreground": false,
+		"elapsed_ms":    max(int64(0), time.Since(run.StartedAt).Milliseconds()),
+		"active_agents": 0,
+	}
+	if run.Phase != "" {
+		state := "active"
+		if run.Status != "running" {
+			state = "done"
+		}
+		update["current_phase"] = run.Phase
+		update["phases"] = []map[string]any{{"title": run.Phase, "state": state}}
+	}
+	if run.Result != "" {
+		update["result_summary"] = run.Result
+	}
+	if run.Error != "" {
+		update["last_event"] = "failed"
+		update["last_event_detail"] = run.Error
+	}
+	s.write(map[string]any{
+		"jsonrpc": "2.0", "method": "x.ai/session_notification",
+		"params": map[string]any{"sessionId": sessionID, "update": update},
+	})
+}
+
 func appendWorkflowCommands(commands []map[string]any, runner *agent.Runner, cwd string, workspaceSkills bool) []map[string]any {
 	if runner == nil || runner.Tools == nil || !runner.Tools.HasTool("workflow") {
 		return commands

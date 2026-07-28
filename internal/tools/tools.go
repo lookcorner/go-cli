@@ -802,6 +802,12 @@ func (r *Registry) StopWorkflow(id string) bool {
 	return r != nil && r.workflows != nil && r.workflows.Stop(strings.TrimSpace(id))
 }
 
+func (r *Registry) SetWorkflowObserver(observer workflow.RunObserver) {
+	if r != nil && r.workflows != nil {
+		r.workflows.SetObserver(observer)
+	}
+}
+
 func (r *Registry) SetProcessObserver(observer ProcessObserver) {
 	if r != nil && r.processes != nil {
 		r.processes.SetObserver(observer)

@@ -14,6 +14,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/skills"
 	"github.com/lookcorner/go-cli/internal/tools"
+	"github.com/lookcorner/go-cli/internal/workflow"
 	"github.com/lookcorner/go-cli/internal/workspace"
 )
 
@@ -71,7 +72,7 @@ func TestDeepResearchSlashUsesWorkflowTool(t *testing.T) {
 	}
 	updated, followup := m.Update(command())
 	m = updated.(*model)
-	if followup != nil || m.status != "deep research started" || !strings.Contains(m.transcript.String(), "started in the background") {
+	if followup != nil || m.status != "deep research started" && m.status != "deep research completed" || !strings.Contains(m.transcript.String(), "started in the background") {
 		t.Fatalf("status=%q followup=%v transcript=%q", m.status, followup != nil, m.transcript.String())
 	}
 	wantTUIWorkflowRun(t, registry, "deep-research", "completed")
@@ -113,7 +114,7 @@ fn main() { complete("ok"); }
 		}
 		updated, followup := m.Update(command())
 		m = updated.(*model)
-		if followup != nil || m.status != "workflow started" || !strings.Contains(m.transcript.String(), "started in the background") {
+		if followup != nil || m.status != "workflow started" && m.status != "workflow completed" || !strings.Contains(m.transcript.String(), "started in the background") {
 			t.Fatalf("input=%q status=%q followup=%v transcript=%q", input, m.status, followup != nil, m.transcript.String())
 		}
 		wantTUIWorkflowRun(t, registry, "demo-flow", "completed")
@@ -213,6 +214,15 @@ func TestWorkflowRunListAndStop(t *testing.T) {
 		t.Fatalf("stop=%q", message)
 	}
 	wantTUIWorkflowRun(t, registry, "blocking-flow", "cancelled")
+}
+
+func TestWorkflowRunEventReportsCompletion(t *testing.T) {
+	m := &model{}
+	updated, command := m.update(workflowRunEvent{run: workflow.RunSnapshot{Name: "review", Status: "completed", Result: "all checks passed"}})
+	m = updated.(*model)
+	if command == nil || m.status != "workflow completed" || !strings.Contains(m.transcript.String(), "all checks passed") {
+		t.Fatalf("command=%v status=%q transcript=%q", command != nil, m.status, m.transcript.String())
+	}
 }
 
 func TestWorkflowLaunchArgsKeepManagementFormsSeparate(t *testing.T) {

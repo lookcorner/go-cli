@@ -396,6 +396,7 @@ func (b *Bridge) Close() { b.once.Do(b.cancel) }
 
 func (b *Bridge) ScheduledTaskCreated(tools.ScheduledTaskCreated) {}
 func (b *Bridge) ScheduledTaskRemoved(string)                     {}
+func (b *Bridge) WorkflowRunUpdated(run workflow.RunSnapshot)     { b.send(workflowRunEvent{run: run}) }
 func (b *Bridge) ScheduledTaskFired(event tools.ScheduledTaskFired) {
 	select {
 	case b.events <- scheduledFiredEvent{event: event}:
@@ -1301,6 +1302,10 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 	previousToolObserver := runner.ToolObserver
 	runner.ToolObserver = bridge
 	defer func() { runner.ToolObserver = previousToolObserver }()
+	if runner.Tools != nil {
+		runner.Tools.SetWorkflowObserver(bridge)
+		defer runner.Tools.SetWorkflowObserver(nil)
+	}
 	notifyTerminal := resolveNotifyTerminal()
 	m := &model{
 		ctx: ctx, runner: runner, bridge: bridge, workspace: workspace,
@@ -2390,8 +2395,40 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.appendSystem(fmt.Sprintf("Workflow `%s` failed: %v", msg.name, msg.err))
 		} else {
 			m.status = label + " started"
+			if m.runner != nil && m.runner.Tools != nil {
+				for _, run := range m.runner.Tools.WorkflowRuns() {
+					if run.Name == msg.name {
+						if run.Status != "running" {
+							m.status = label + " " + run.Status
+						}
+						break
+					}
+				}
+			}
 			m.appendSystem(msg.result)
 		}
+	case workflowRunEvent:
+		label := "Workflow `" + msg.run.Name + "`"
+		switch msg.run.Status {
+		case "running":
+			if msg.run.Phase != "" {
+				m.status = "workflow " + msg.run.Name + ": " + msg.run.Phase
+			}
+		case "completed":
+			m.status = "workflow completed"
+			message := label + " completed."
+			if strings.TrimSpace(msg.run.Result) != "" {
+				message += "\n\n" + msg.run.Result
+			}
+			m.appendSystem(message)
+		case "cancelled":
+			m.status = "workflow cancelled"
+			m.appendSystem(label + " was cancelled.")
+		case "failed":
+			m.status = "workflow failed"
+			m.appendSystem(label + " failed: " + msg.run.Error)
+		}
+		return m, waitForBridge(m.bridge)
 	case mcpDoneEvent:
 		if m.mcp != nil {
 			m.mcp.busy = false
