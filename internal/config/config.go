@@ -2327,6 +2327,14 @@ func applyEnv(cfg *Config) {
 		cfg.UI.ShowThinkingBlocks = value
 		cfg.uiShowThinkingConfigured = true
 	}
+	if value, ok := envBool("GROK_GROUP_TOOL_VERBS"); ok {
+		cfg.UI.GroupToolVerbs = value
+		cfg.uiGroupToolVerbsConfigured = true
+	}
+	if value, ok := envBool("GROK_COLLAPSED_EDIT_BLOCKS"); ok {
+		cfg.UI.CollapsedEditBlocks = value
+		cfg.uiCollapsedEditsConfigured = true
+	}
 	if value, ok := envBool("GROK_DISPLAY_REFRESH_PROBE_ENABLED"); ok {
 		cfg.UI.DisplayRefresh.ProbeEnabled = value
 		cfg.uiRefreshConfigured.probe = true

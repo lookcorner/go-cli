@@ -286,6 +286,8 @@ Question timeouts resolve enabled/seconds independently through requirements,
 environment, local/managed config, remote settings, then the 30-minute default.
 Thinking-block visibility defaults on and follows requirements, environment,
 local/managed config, then the remote fallback.
+Grouped tool verbs and collapsed edit blocks follow the same requirements over
+environment over local/managed config over remote precedence as the reference.
 
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |
