@@ -341,6 +341,9 @@ an explicit request.
       `compat/session-image-discovery`.
 - [x] `/preview-image [path|name]` resolves `images/` like `/play-video` on
       `compat/session-image-preview-path`.
+- [x] Session web_fetch text discovery: `ListWebFetchAssets` / `/fetched`
+      (`/list-fetched`, `/web-fetch-artifacts`) for truncated overflow under
+      `artifacts/<session>/web_fetch/` on `compat/session-webfetch-discovery`.
 
 ### Still open
 

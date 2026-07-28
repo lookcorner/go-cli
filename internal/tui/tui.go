@@ -3209,6 +3209,10 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.appendSystem(m.listSessionDownloads())
 			m.status = "session downloads"
 			return m, nil
+		case "/fetched", "/list-fetched", "/web-fetch-artifacts":
+			m.appendSystem(m.listSessionWebFetch())
+			m.status = "session web_fetch artifacts"
+			return m, nil
 		case "/login", "/logout":
 			if m.runner == nil {
 				m.status = "authentication unavailable"
