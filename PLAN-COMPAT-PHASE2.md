@@ -344,6 +344,8 @@ an explicit request.
 - [x] Session web_fetch text discovery: `ListWebFetchAssets` / `/fetched`
       (`/list-fetched`, `/web-fetch-artifacts`) for truncated overflow under
       `artifacts/<session>/web_fetch/` on `compat/session-webfetch-discovery`.
+- [x] `/fetched [path|name]` shows capped artifact text (empty lists) on
+      `compat/session-webfetch-show`.
 
 ### Still open
 

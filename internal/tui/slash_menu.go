@@ -55,7 +55,7 @@ var slashCommandCatalog = []slashCommandItem{
 	{name: "play-video", aliases: []string{"video-play"}, placeholder: "[path|name]", description: "Play a video overlay (latest session clip if omitted; ffmpeg)"},
 	{name: "videos", aliases: []string{"list-videos"}, description: "List session-generated video clips"},
 	{name: "downloads", aliases: []string{"list-downloads"}, description: "List session web_fetch downloads"},
-	{name: "fetched", aliases: []string{"list-fetched", "web-fetch-artifacts"}, description: "List truncated web_fetch text artifacts"},
+	{name: "fetched", aliases: []string{"list-fetched", "web-fetch-artifacts"}, placeholder: "[path|name]", description: "List or show truncated web_fetch text artifacts"},
 	{name: "model", aliases: []string{"m"}, placeholder: "<name> [effort]", description: "Switch model"},
 	{name: "effort", placeholder: "<level>", description: "Set reasoning effort"},
 	{name: "always-approve", description: "Toggle always-approve mode"},

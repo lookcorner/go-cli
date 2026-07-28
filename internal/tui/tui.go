@@ -3210,8 +3210,16 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.status = "session downloads"
 			return m, nil
 		case "/fetched", "/list-fetched", "/web-fetch-artifacts":
-			m.appendSystem(m.listSessionWebFetch())
-			m.status = "session web_fetch artifacts"
+			arg := ""
+			if len(fields) > 1 {
+				arg = strings.TrimSpace(strings.Join(fields[1:], " "))
+			}
+			m.appendSystem(m.sessionWebFetch(arg))
+			if arg == "" {
+				m.status = "session web_fetch artifacts"
+			} else {
+				m.status = "web_fetch artifact"
+			}
 			return m, nil
 		case "/login", "/logout":
 			if m.runner == nil {
