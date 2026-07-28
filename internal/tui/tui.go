@@ -3191,6 +3191,10 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.appendSystem(m.listSessionVideos())
 			m.status = "session videos"
 			return m, nil
+		case "/downloads", "/list-downloads":
+			m.appendSystem(m.listSessionDownloads())
+			m.status = "session downloads"
+			return m, nil
 		case "/login", "/logout":
 			if m.runner == nil {
 				m.status = "authentication unavailable"

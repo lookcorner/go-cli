@@ -634,8 +634,8 @@ the environment); other terminals keep the metadata-only rendering. Modal fullsc
 a `/preview-image` bordered popup chrome, Kitty placeholder click-to-open, footer
 `[Image #N]` prompt-chip hover/click preview, and `/play-video <path>` (ffmpeg
 frame extract) are ready; `/play-video` with no args or a bare name opens the
-newest clip under `artifacts/<session>/videos/`, and `/videos` lists those
-clips. Image
+newest clip under `artifacts/<session>/videos/`, `/videos` lists those clips,
+and `/downloads` lists `artifacts/<session>/downloads` (web_fetch PDFs). Image
 bytes persist to the session's asset store, so resumed sessions render the
 same images again.
 On directly supported terminals, Markdown links, bare HTTP(S)/FTP/email URLs, and quoted

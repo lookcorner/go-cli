@@ -53,6 +53,7 @@ var slashCommandCatalog = []slashCommandItem{
 	{name: "preview-image", aliases: []string{"image-preview"}, description: "Open the latest image overlay"},
 	{name: "play-video", aliases: []string{"video-play"}, placeholder: "[path|name]", description: "Play a video overlay (latest session clip if omitted; ffmpeg)"},
 	{name: "videos", aliases: []string{"list-videos"}, description: "List session-generated video clips"},
+	{name: "downloads", aliases: []string{"list-downloads"}, description: "List session web_fetch downloads"},
 	{name: "model", aliases: []string{"m"}, placeholder: "<name> [effort]", description: "Switch model"},
 	{name: "effort", placeholder: "<level>", description: "Set reasoning effort"},
 	{name: "always-approve", description: "Toggle always-approve mode"},
@@ -252,7 +253,7 @@ func (m *model) slashCommandAvailable(name string) bool {
 		return m.minimal
 	case "preview-image", "image-preview":
 		return !m.minimal
-	case "play-video", "video-play", "videos", "list-videos":
+	case "play-video", "video-play", "videos", "list-videos", "downloads", "list-downloads":
 		return !m.minimal
 	case "expand":
 		return m.minimal
