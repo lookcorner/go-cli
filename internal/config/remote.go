@@ -41,6 +41,7 @@ type RemoteSettings struct {
 	CancelRewindEnabled              *bool                `json:"cancel_rewind_enabled"`
 	AllowBackgroundOperator          *bool                `json:"allow_background_operator"`
 	AutoBackgroundOnTimeout          *bool                `json:"auto_background_on_timeout"`
+	LoginShellCapture                *bool                `json:"login_shell_capture"`
 	MaxMCPOutputBytes                *uint64              `json:"max_mcp_output_bytes"`
 	AutoWakeEnabled                  *bool                `json:"auto_wake_enabled"`
 	FeedbackEnabled                  *bool                `json:"feedback_enabled"`
@@ -211,6 +212,9 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 		if remote.MaxMCPOutputBytes != nil && *remote.MaxMCPOutputBytes > 0 {
 			c.MCP.MaxOutputBytes = *remote.MaxMCPOutputBytes
 		}
+	}
+	if !c.bashLoginShellConfigured {
+		c.Toolset.Bash.LoginShellCapture = remote.LoginShellCapture == nil || *remote.LoginShellCapture
 	}
 	if !c.uiPermissionModeConfigured {
 		c.UI.PermissionMode = "ask"

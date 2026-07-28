@@ -278,6 +278,8 @@ killable background-task lifecycle without applying their eventual shell state
 to later foreground commands; local policy beats its remote fallback.
 When automatic backgrounding is disabled, the reference five-minute maximum
 foreground block prevents model-selected multi-hour waits from wedging a turn.
+Default-on login-shell environment capture now follows the full requirements
+over environment over local/managed config over remote precedence chain.
 
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |

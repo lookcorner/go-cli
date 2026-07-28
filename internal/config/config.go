@@ -157,6 +157,7 @@ type Config struct {
 	disabledModelsConfigured        bool
 	bashAllowBackgroundConfigured   bool
 	bashAutoBackgroundConfigured    bool
+	bashLoginShellConfigured        bool
 	mcpMaxOutputConfigured          bool
 }
 
@@ -804,6 +805,7 @@ type requirementsFile struct {
 	Auth          *requirementsAuthConfig `toml:"auth"`
 	Toolset       struct {
 		AskUserQuestion *fileAskUserQuestionConfig `toml:"ask_user_question"`
+		Bash            *fileBashConfig            `toml:"bash"`
 	} `toml:"toolset"`
 	MCP *struct {
 		MaxOutputBytes *uint64 `toml:"max_output_bytes"`
@@ -1312,6 +1314,7 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.Toolset.Bash.LoginShellCapture != nil {
 		cfg.Toolset.Bash.LoginShellCapture = *disk.Toolset.Bash.LoginShellCapture
+		cfg.bashLoginShellConfigured = true
 	}
 	if disk.Toolset.Hashline.Scheme != nil {
 		cfg.Toolset.Hashline.Scheme = strings.TrimSpace(*disk.Toolset.Hashline.Scheme)
@@ -2278,6 +2281,7 @@ func applyEnv(cfg *Config) {
 	}
 	if value, ok := envBool("GROK_LOGIN_ENV"); ok {
 		cfg.Toolset.Bash.LoginShellCapture = value
+		cfg.bashLoginShellConfigured = true
 	}
 	if raw := firstEnv("GROK_MAX_MCP_OUTPUT_BYTES", "MAX_MCP_OUTPUT_BYTES"); raw != "" {
 		if value, err := strconv.ParseUint(strings.TrimSpace(raw), 10, 64); err == nil && value > 0 {
@@ -2832,6 +2836,10 @@ func applyRequirementsData(cfg *Config, data []byte, source string, envFailClose
 	}
 	if requirement.Toolset.AskUserQuestion != nil {
 		applyAskUserQuestionConfig(&cfg.AskUserQuestion, *requirement.Toolset.AskUserQuestion)
+	}
+	if requirement.Toolset.Bash != nil && requirement.Toolset.Bash.LoginShellCapture != nil {
+		cfg.Toolset.Bash.LoginShellCapture = *requirement.Toolset.Bash.LoginShellCapture
+		cfg.bashLoginShellConfigured = true
 	}
 	if requirement.MCP != nil && requirement.MCP.MaxOutputBytes != nil && *requirement.MCP.MaxOutputBytes > 0 {
 		cfg.MCP.MaxOutputBytes = *requirement.MCP.MaxOutputBytes

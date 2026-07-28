@@ -64,3 +64,36 @@ func TestLoginShellCaptureConfigAndEnv(t *testing.T) {
 		t.Fatalf("default on: %#v err=%v", cfg.Toolset.Bash, err)
 	}
 }
+
+func TestLoginShellCaptureRequirementsAndRemotePrecedence(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GROK_HOME", home)
+	path := filepath.Join(home, "config.toml")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	cfg.ApplyRemoteSettings(&RemoteSettings{LoginShellCapture: &off})
+	if cfg.Toolset.Bash.LoginShellCapture {
+		t.Fatal("remote false did not disable login shell capture")
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{})
+	if !cfg.Toolset.Bash.LoginShellCapture {
+		t.Fatal("missing remote value did not restore the default")
+	}
+
+	t.Setenv("GROK_LOGIN_ENV", "true")
+	if err := os.WriteFile(filepath.Join(home, "requirements.toml"), []byte("[toolset.bash]\nlogin_shell_capture = false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(path)
+	if err != nil || cfg.Toolset.Bash.LoginShellCapture {
+		t.Fatalf("requirements should override environment: %#v err=%v", cfg.Toolset.Bash, err)
+	}
+	on := true
+	cfg.ApplyRemoteSettings(&RemoteSettings{LoginShellCapture: &on})
+	if cfg.Toolset.Bash.LoginShellCapture {
+		t.Fatal("remote value overrode requirements")
+	}
+}
