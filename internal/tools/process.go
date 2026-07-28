@@ -1429,6 +1429,9 @@ func (t *runTerminalCommandTool) Execute(ctx context.Context, raw json.RawMessag
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return "", fmt.Errorf("decode run_terminal_cmd arguments: %w", err)
 	}
+	if hit, found := findSelfMatchingProcessKill(args.Command); found {
+		return "", fmt.Errorf("self-matching %s -f pattern %q would also match the shell wrapper; use an exact process name, PID file, or a separate PID lookup", hit.command, hit.pattern)
+	}
 	if runtime.GOOS != "windows" && !args.IsBackground && !t.manager.backgroundOperatorAllowed() && containsUnwaitedBackgroundOperator(args.Command) {
 		return "", errors.New("remove the background '&' from your command and set is_background=true instead")
 	}

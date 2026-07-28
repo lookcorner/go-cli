@@ -1805,6 +1805,8 @@ escaped ampersands, redirects, `&&`, heredocs, and parallel work followed by
 `wait`. The setting defaults to `true`.
 When the local key is absent, authenticated remote settings may supply the
 default; an explicit local value always wins.
+The Bash tool also rejects literal self-matching `pkill/pgrep -f` restart
+patterns that could terminate their own shell wrapper, with safer remediation.
 `[toolset.bash] login_shell_capture`
 (default on; `GROK_LOGIN_ENV`) sources the user shell rc once at session start and
 merges that environment into agent shells. Top-level `[shell_environment_policy]`

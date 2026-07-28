@@ -270,6 +270,8 @@ Its default-on `allow_background_operator` can reject foreground POSIX `&` jobs
 while preserving logical operators, redirects, quoted text, heredocs, and
 explicit structured background tasks; local configuration takes precedence
 over its authenticated remote fallback.
+Literal self-matching `pkill/pgrep -f` restart patterns are rejected before
+execution so they cannot terminate the command's own shell wrapper.
 
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |

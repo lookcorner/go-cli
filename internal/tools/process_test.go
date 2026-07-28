@@ -680,6 +680,9 @@ func TestRunTerminalCommandCanRejectBackgroundOperator(t *testing.T) {
 	manager.ConfigureBash(0, 0, 0, "", false)
 	tool := &runTerminalCommandTool{manager: manager}
 
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"pkill -f ./worker && ./worker","description":"restart worker"}`)); err == nil || !strings.Contains(err.Error(), "self-matching pkill") {
+		t.Fatalf("self-matching process-kill error=%v", err)
+	}
 	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"printf first & printf second","description":"background operator"}`)); err == nil || !strings.Contains(err.Error(), "is_background=true") {
 		t.Fatalf("background operator error=%v", err)
 	}
