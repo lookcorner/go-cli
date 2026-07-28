@@ -747,7 +747,9 @@ when no browser is available.
 `rosepine-moon`, `oscura-midnight`, and `auto`; aliases such as `dark`, `light`,
 `tokyo`, `rose-pine`, and `oscura` are accepted. With no name, the command cycles
 through the concrete themes. `auto` follows the terminal background hint, and a
-write failure restores the previous palette. `[ui].auto_dark_theme` and
+write failure restores the previous palette. Configs that only set `[ui].ui_theme`
+(reference alias) apply the same palette when `theme` is unset; an explicit
+`theme` always wins. `[ui].auto_dark_theme` and
 `[ui].auto_light_theme` choose the concrete palettes used by `auto`, defaulting
 to `groknight` and `grokday`; `auto` or unknown mapping values fall back to those
 defaults instead of preventing startup.

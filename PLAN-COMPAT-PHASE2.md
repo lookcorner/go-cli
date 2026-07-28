@@ -355,6 +355,11 @@ an explicit request.
 
 Remote relay / workspace hub remains planned/XL (product-blocked). See queue #5.
 
+## Config alias slices
+
+- [x] `[ui].ui_theme` fills canonical `theme` when `theme` is unset (`theme`
+      wins if both set) on `compat/ui-theme-alias`.
+
 ---
 
 ## How to run this plan

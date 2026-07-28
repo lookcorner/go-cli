@@ -1348,6 +1348,32 @@ func TestThemeConfigCanonicalizationAndUpdate(t *testing.T) {
 	}
 }
 
+func TestUIThemeAliasFillsThemeWhenUnset(t *testing.T) {
+	aliasPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(aliasPath, []byte("[ui]\nui_theme = \"tokyo\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(aliasPath)
+	if err != nil || cfg.UI.Theme != "tokyonight" {
+		t.Fatalf("ui_theme alias theme=%q err=%v", cfg.UI.Theme, err)
+	}
+	bothPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(bothPath, []byte("[ui]\ntheme = \"grokday\"\nui_theme = \"tokyo\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(bothPath)
+	if err != nil || cfg.UI.Theme != "grokday" {
+		t.Fatalf("theme should win over ui_theme: theme=%q err=%v", cfg.UI.Theme, err)
+	}
+	badAlias := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(badAlias, []byte("[ui]\nui_theme = \"missing\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(badAlias); err == nil || !strings.Contains(err.Error(), "ui theme") {
+		t.Fatalf("invalid ui_theme error=%v", err)
+	}
+}
+
 func TestAutomaticThemeMappingsCanonicalizeAndFallback(t *testing.T) {
 	for _, test := range []struct {
 		name, filename, content, wantDark, wantLight string

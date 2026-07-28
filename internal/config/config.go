@@ -649,6 +649,7 @@ type fileBashConfig struct {
 type fileUIConfig struct {
 	MaxThoughtsWidth             *int                     `json:"max_thoughts_width,omitempty" toml:"max_thoughts_width"`
 	Theme                        *string                  `json:"theme,omitempty" toml:"theme"`
+	UITheme                      *string                  `json:"ui_theme,omitempty" toml:"ui_theme"`
 	AutoDarkTheme                *string                  `json:"auto_dark_theme,omitempty" toml:"auto_dark_theme"`
 	AutoLightTheme               *string                  `json:"auto_light_theme,omitempty" toml:"auto_light_theme"`
 	HunkTrackerMode              *string                  `json:"hunk_tracker_mode,omitempty" toml:"hunk_tracker_mode"`
@@ -1257,6 +1258,13 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.UI.Theme != nil {
 		canonical, ok := theme.Canonical(*disk.UI.Theme)
+		if !ok {
+			return errors.New("ui theme must be auto, groknight, grokday, tokyonight, rosepine-moon, or oscura-midnight")
+		}
+		cfg.UI.Theme = canonical
+	} else if disk.UI.UITheme != nil {
+		// Reference alias: [ui].ui_theme fills theme when theme is unset.
+		canonical, ok := theme.Canonical(*disk.UI.UITheme)
 		if !ok {
 			return errors.New("ui theme must be auto, groknight, grokday, tokyonight, rosepine-moon, or oscura-midnight")
 		}
