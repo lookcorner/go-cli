@@ -10,7 +10,7 @@ import (
 func TestListAndResolveVideoAssets(t *testing.T) {
 	dir := t.TempDir()
 	sessionPath := filepath.Join(dir, "s.jsonl")
-	videos := filepath.Join(dir, "videos")
+	videos := filepath.Join(dir, "artifacts", "s", "videos")
 	if err := os.MkdirAll(videos, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -24,6 +24,9 @@ func TestListAndResolveVideoAssets(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = os.WriteFile(filepath.Join(videos, "notes.txt"), []byte("skip"), 0o600)
+	// Sibling videos/ next to the session file must not be discovered.
+	_ = os.MkdirAll(filepath.Join(dir, "videos"), 0o700)
+	_ = os.WriteFile(filepath.Join(dir, "videos", "sibling.mp4"), []byte("nope"), 0o600)
 
 	assets, err := ListVideoAssets(sessionPath)
 	if err != nil || len(assets) != 2 {
@@ -32,8 +35,8 @@ func TestListAndResolveVideoAssets(t *testing.T) {
 	if assets[0].Name != "2.mp4" || assets[1].Name != "1.mp4" {
 		t.Fatalf("order=%v %v", assets[0].Name, assets[1].Name)
 	}
-	if assets[0].URI != "videos/2.mp4" {
-		t.Fatalf("uri=%q", assets[0].URI)
+	if assets[0].URI != "videos/2.mp4" || assets[0].Path != newer {
+		t.Fatalf("uri/path=%q %q", assets[0].URI, assets[0].Path)
 	}
 
 	latest, ok, err := LatestVideoAsset(sessionPath)
@@ -66,7 +69,11 @@ func TestListVideoAssetsEmptyAndSymlinkReject(t *testing.T) {
 	}
 
 	outside := t.TempDir()
-	if err := os.Symlink(outside, filepath.Join(dir, "videos")); err != nil {
+	videos := filepath.Join(dir, "artifacts", "s", "videos")
+	if err := os.MkdirAll(filepath.Dir(videos), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, videos); err != nil {
 		t.Skip("symlink unsupported:", err)
 	}
 	if _, err := ListVideoAssets(sessionPath); err == nil {

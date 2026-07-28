@@ -75,7 +75,7 @@ func TestOpenVideoFromPathRequiresFFmpegOrGraphics(t *testing.T) {
 func TestResolvePlayVideoPathSessionAssets(t *testing.T) {
 	dir := t.TempDir()
 	sessionPath := filepath.Join(dir, "s.jsonl")
-	videos := filepath.Join(dir, "videos")
+	videos := filepath.Join(dir, "artifacts", "s", "videos")
 	if err := os.MkdirAll(videos, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -98,5 +98,9 @@ func TestResolvePlayVideoPathSessionAssets(t *testing.T) {
 	}
 	if _, err := m.resolvePlayVideoPath("missing.mp4"); err == nil {
 		t.Fatal("missing accepted")
+	}
+	list := m.listSessionVideos()
+	if !strings.Contains(list, "videos/3.mp4") || !strings.Contains(list, "Session videos (1)") {
+		t.Fatalf("list=%q", list)
 	}
 }

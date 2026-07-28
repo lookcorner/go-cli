@@ -3173,6 +3173,14 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			return m, m.videoOverlayTickCmd()
+		case "/videos", "/list-videos":
+			if m.minimal {
+				m.status = "session videos are fullscreen-only"
+				return m, nil
+			}
+			m.appendSystem(m.listSessionVideos())
+			m.status = "session videos"
+			return m, nil
 		case "/login", "/logout":
 			if m.runner == nil {
 				m.status = "authentication unavailable"

@@ -52,14 +52,14 @@ func (m *model) resolvePlayVideoPath(arg string) (string, error) {
 	}
 	if arg == "" {
 		if sessionPath == "" {
-			return "", fmt.Errorf("usage: /play-video <path>")
+			return "", fmt.Errorf("no session videos found")
 		}
 		asset, ok, err := session.LatestVideoAsset(sessionPath)
 		if err != nil {
 			return "", err
 		}
 		if !ok {
-			return "", fmt.Errorf("no session videos under videos/")
+			return "", fmt.Errorf("no session videos found")
 		}
 		return asset.Path, nil
 	}
@@ -81,6 +81,30 @@ func (m *model) resolvePlayVideoPath(arg string) (string, error) {
 		return "", fmt.Errorf("session video %q not found", arg)
 	}
 	return "", fmt.Errorf("video path not found: %s", arg)
+}
+
+func (m *model) listSessionVideos() string {
+	sessionPath := ""
+	if m != nil && m.runner != nil {
+		sessionPath = strings.TrimSpace(m.runner.SessionPath)
+	}
+	if sessionPath == "" {
+		return "No session path available for video discovery."
+	}
+	assets, err := session.ListVideoAssets(sessionPath)
+	if err != nil {
+		return "Couldn't list session videos: " + err.Error()
+	}
+	if len(assets) == 0 {
+		return "No session videos yet. Generated clips land in artifacts/<session>/videos/."
+	}
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Session videos (%d):\n", len(assets)))
+	for index, asset := range assets {
+		b.WriteString(fmt.Sprintf("%d. `%s` (%d bytes)\n", index+1, asset.URI, asset.Size))
+	}
+	b.WriteString("\nPlay with `/play-video` (latest) or `/play-video videos/N.mp4`.")
+	return strings.TrimSpace(b.String())
 }
 
 func (m *model) closeVideoOverlay() tea.Cmd {

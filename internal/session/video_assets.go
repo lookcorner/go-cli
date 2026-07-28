@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-// VideoAsset is one confined clip under the session videos/ directory.
+// VideoAsset is one confined clip under the session artifact videos/ directory.
 type VideoAsset struct {
 	Name    string // basename, e.g. "1.mp4"
 	URI     string // confined videos/<name>
@@ -25,16 +25,15 @@ var videoAssetExts = map[string]bool{
 	".mkv":  true,
 }
 
-// ListVideoAssets returns session-folder videos/*.mp4 (and a few common
+// ListVideoAssets returns artifacts/<session>/videos clips (and a few common
 // containers), newest first. Missing videos/ is an empty list, not an error.
 // Symlinked videos/ directories are rejected.
 func ListVideoAssets(sessionPath string) ([]VideoAsset, error) {
-	sessionPath = strings.TrimSpace(sessionPath)
-	if sessionPath == "" {
-		return nil, errors.New("session path required")
+	root, err := videoAssetRoot(sessionPath)
+	if err != nil {
+		return nil, err
 	}
-	dir := filepath.Join(filepath.Dir(sessionPath), "videos")
-	info, err := os.Lstat(dir)
+	info, err := os.Lstat(root)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
@@ -44,7 +43,7 @@ func ListVideoAssets(sessionPath string) ([]VideoAsset, error) {
 	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return nil, errors.New("session videos must be a non-symlink directory")
 	}
-	entries, err := os.ReadDir(dir)
+	entries, err := os.ReadDir(root)
 	if err != nil {
 		return nil, err
 	}
@@ -58,7 +57,7 @@ func ListVideoAssets(sessionPath string) ([]VideoAsset, error) {
 		if !videoAssetExts[ext] {
 			continue
 		}
-		path := filepath.Join(dir, name)
+		path := filepath.Join(root, name)
 		st, err := os.Lstat(path)
 		if err != nil || st.Mode()&os.ModeSymlink != 0 || !st.Mode().IsRegular() {
 			continue
@@ -117,4 +116,12 @@ func LatestVideoAsset(sessionPath string) (VideoAsset, bool, error) {
 		return VideoAsset{}, false, nil
 	}
 	return assets[0], true, nil
+}
+
+func videoAssetRoot(sessionPath string) (string, error) {
+	artifact, err := ArtifactDir(sessionPath)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(artifact, "videos"), nil
 }

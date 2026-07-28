@@ -330,6 +330,8 @@ an explicit request.
 - [x] Session-asset video discovery: `ListVideoAssets` / `LatestVideoAsset`,
       `/play-video` with bare name or empty arg opens newest `videos/*.mp4`
       on `compat/fullscreen-session-video-discovery`.
+- [x] Discovery roots at `artifacts/<session>/videos` (web_fetch save path) plus
+      `/videos` listing on `compat/fullscreen-session-video-artifacts`.
 
 ### Still open
 
