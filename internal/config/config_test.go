@@ -814,6 +814,7 @@ func TestLoadAndValidateBashConfig(t *testing.T) {
 func TestAskUserQuestionConfigPrecedence(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("GROK_HOME", home)
+	t.Setenv("GROK_ASK_USER_QUESTION_TIMEOUT_ENABLED", "false")
 	t.Setenv("GROK_ASK_USER_QUESTION_TIMEOUT_SECS", "7")
 	if err := os.WriteFile(filepath.Join(home, "managed_config.toml"), []byte("[toolset.ask_user_question]\ntimeout_enabled = false\ntimeout_secs = 20\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -841,6 +842,11 @@ func TestAskUserQuestionConfigPrecedence(t *testing.T) {
 	}
 	if cfg.AskUserQuestion.TimeoutEnabled || cfg.AskUserQuestion.TimeoutSeconds != 7 {
 		t.Fatalf("environment precedence=%#v", cfg.AskUserQuestion)
+	}
+	t.Setenv("GROK_ASK_USER_QUESTION_TIMEOUT_ENABLED", "true")
+	cfg, err = Load(path)
+	if err != nil || !cfg.AskUserQuestion.TimeoutEnabled {
+		t.Fatalf("enabled environment precedence=%#v err=%v", cfg.AskUserQuestion, err)
 	}
 	t.Setenv("GROK_ASK_USER_QUESTION_TIMEOUT_SECS", "0")
 	cfg, err = Load(path)

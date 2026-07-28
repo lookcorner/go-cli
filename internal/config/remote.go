@@ -43,6 +43,8 @@ type RemoteSettings struct {
 	AutoBackgroundOnTimeout          *bool                `json:"auto_background_on_timeout"`
 	LoginShellCapture                *bool                `json:"login_shell_capture"`
 	FileToolset                      *string              `json:"file_toolset"`
+	AskUserQuestionTimeoutEnabled    *bool                `json:"ask_user_question_timeout_enabled"`
+	AskUserQuestionTimeoutSeconds    *uint64              `json:"ask_user_question_timeout_secs"`
 	MaxMCPOutputBytes                *uint64              `json:"max_mcp_output_bytes"`
 	AutoWakeEnabled                  *bool                `json:"auto_wake_enabled"`
 	FeedbackEnabled                  *bool                `json:"feedback_enabled"`
@@ -224,6 +226,15 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 	if c.Toolset.FileToolset == "standard" && remote.FileToolset != nil && strings.TrimSpace(*remote.FileToolset) == "hashline" {
 		c.Toolset.FileToolset = "hashline"
 		c.fileToolsetRemote = true
+	}
+	if !c.askTimeoutEnabledConfigured {
+		c.AskUserQuestion.TimeoutEnabled = remote.AskUserQuestionTimeoutEnabled == nil || *remote.AskUserQuestionTimeoutEnabled
+	}
+	if !c.askTimeoutSecondsConfigured {
+		c.AskUserQuestion.TimeoutSeconds = 30 * 60
+		if remote.AskUserQuestionTimeoutSeconds != nil && *remote.AskUserQuestionTimeoutSeconds > 0 && *remote.AskUserQuestionTimeoutSeconds <= uint64((1<<63-1)/int64(time.Second)) {
+			c.AskUserQuestion.TimeoutSeconds = *remote.AskUserQuestionTimeoutSeconds
+		}
 	}
 	if !c.uiPermissionModeConfigured {
 		c.UI.PermissionMode = "ask"

@@ -282,6 +282,8 @@ Default-on login-shell environment capture now follows the full requirements
 over environment over local/managed config over remote precedence chain.
 Remote `file_toolset = "hashline"` is used only as the reference fallback when
 the effective local toolset remains `standard`; local hashline stays authoritative.
+Question timeouts resolve enabled/seconds independently through requirements,
+environment, local/managed config, remote settings, then the 30-minute default.
 
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |

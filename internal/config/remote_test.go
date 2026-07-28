@@ -187,6 +187,53 @@ func TestApplyRemoteSettingsFileToolsetFallback(t *testing.T) {
 	}
 }
 
+func TestApplyRemoteSettingsQuestionTimeoutFallback(t *testing.T) {
+	off, seconds := false, uint64(45)
+	cfg, err := Load(filepath.Join(t.TempDir(), "missing.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{
+		AskUserQuestionTimeoutEnabled: &off,
+		AskUserQuestionTimeoutSeconds: &seconds,
+	})
+	if cfg.AskUserQuestion.TimeoutEnabled || cfg.AskUserQuestion.TimeoutSeconds != 45 {
+		t.Fatalf("remote timeout=%#v", cfg.AskUserQuestion)
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{})
+	if !cfg.AskUserQuestion.TimeoutEnabled || cfg.AskUserQuestion.TimeoutSeconds != 30*60 {
+		t.Fatalf("cleared remote timeout=%#v", cfg.AskUserQuestion)
+	}
+
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[toolset.ask_user_question]\ntimeout_enabled = true\ntimeout_secs = 12\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{
+		AskUserQuestionTimeoutEnabled: &off,
+		AskUserQuestionTimeoutSeconds: &seconds,
+	})
+	if !cfg.AskUserQuestion.TimeoutEnabled || cfg.AskUserQuestion.TimeoutSeconds != 12 {
+		t.Fatalf("remote overrode local timeout=%#v", cfg.AskUserQuestion)
+	}
+
+	if err := os.WriteFile(path, []byte("[toolset.ask_user_question]\ntimeout_secs = 0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{AskUserQuestionTimeoutSeconds: &seconds})
+	if cfg.AskUserQuestion.TimeoutSeconds != 45 {
+		t.Fatalf("invalid local timeout blocked remote fallback: %#v", cfg.AskUserQuestion)
+	}
+}
+
 func TestFetchRemoteSettingsIncludesSessionIdentity(t *testing.T) {
 	requireLoopback(t)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

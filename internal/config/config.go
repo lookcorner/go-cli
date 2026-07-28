@@ -160,6 +160,8 @@ type Config struct {
 	bashLoginShellConfigured        bool
 	mcpMaxOutputConfigured          bool
 	fileToolsetRemote               bool
+	askTimeoutEnabledConfigured     bool
+	askTimeoutSecondsConfigured     bool
 }
 
 // MCPConfig bounds the amount of one MCP tool result placed inline in model
@@ -1285,7 +1287,9 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 		cfg.WebFetch.AllowLocal = *disk.Toolset.WebFetch.AllowLocal
 		cfg.WebFetch.LocalConfigured = true
 	}
-	applyAskUserQuestionConfig(&cfg.AskUserQuestion, disk.Toolset.AskUserQuestion)
+	enabledConfigured, secondsConfigured := applyAskUserQuestionConfig(&cfg.AskUserQuestion, disk.Toolset.AskUserQuestion)
+	cfg.askTimeoutEnabledConfigured = cfg.askTimeoutEnabledConfigured || enabledConfigured
+	cfg.askTimeoutSecondsConfigured = cfg.askTimeoutSecondsConfigured || secondsConfigured
 	if disk.Toolset.FileToolset != "" {
 		cfg.Toolset.FileToolset = strings.TrimSpace(disk.Toolset.FileToolset)
 	}
@@ -2145,13 +2149,16 @@ func applyMemoryConfig(cfg *Config, source *fileMemoryConfig, flush *fileMemoryF
 	}
 }
 
-func applyAskUserQuestionConfig(target *AskUserQuestionConfig, source fileAskUserQuestionConfig) {
+func applyAskUserQuestionConfig(target *AskUserQuestionConfig, source fileAskUserQuestionConfig) (enabled, seconds bool) {
 	if source.TimeoutEnabled != nil {
 		target.TimeoutEnabled = *source.TimeoutEnabled
+		enabled = true
 	}
-	if source.TimeoutSeconds != nil {
-		target.TimeoutSeconds = normalizedQuestionTimeout(*source.TimeoutSeconds)
+	if source.TimeoutSeconds != nil && *source.TimeoutSeconds > 0 && *source.TimeoutSeconds <= uint64((1<<63-1)/int64(time.Second)) {
+		target.TimeoutSeconds = *source.TimeoutSeconds
+		seconds = true
 	}
+	return enabled, seconds
 }
 
 func applyShellEnvironmentPolicy(target *ShellEnvironmentPolicy, source fileShellEnvironmentPolicy) {
@@ -2179,13 +2186,6 @@ func applyShellEnvironmentPolicy(target *ShellEnvironmentPolicy, source fileShel
 	if source.IncludeOnly != nil {
 		target.IncludeOnly = append([]string(nil), source.IncludeOnly...)
 	}
-}
-
-func normalizedQuestionTimeout(seconds uint64) uint64 {
-	if seconds == 0 || seconds > uint64((1<<63-1)/int64(time.Second)) {
-		return 30 * 60
-	}
-	return seconds
 }
 
 func normalizedGoalVerifierCount(count int) int {
@@ -2284,6 +2284,10 @@ func applyEnv(cfg *Config) {
 		cfg.Toolset.Bash.LoginShellCapture = value
 		cfg.bashLoginShellConfigured = true
 	}
+	if value, ok := envBool("GROK_ASK_USER_QUESTION_TIMEOUT_ENABLED"); ok {
+		cfg.AskUserQuestion.TimeoutEnabled = value
+		cfg.askTimeoutEnabledConfigured = true
+	}
 	if raw := firstEnv("GROK_MAX_MCP_OUTPUT_BYTES", "MAX_MCP_OUTPUT_BYTES"); raw != "" {
 		if value, err := strconv.ParseUint(strings.TrimSpace(raw), 10, 64); err == nil && value > 0 {
 			cfg.MCP.MaxOutputBytes = value
@@ -2371,6 +2375,7 @@ func applyEnv(cfg *Config) {
 	if value := strings.TrimSpace(os.Getenv("GROK_ASK_USER_QUESTION_TIMEOUT_SECS")); value != "" {
 		if seconds, err := strconv.ParseUint(value, 10, 64); err == nil && seconds > 0 && seconds <= uint64((1<<63-1)/int64(time.Second)) {
 			cfg.AskUserQuestion.TimeoutSeconds = seconds
+			cfg.askTimeoutSecondsConfigured = true
 		}
 	}
 	if value := strings.TrimSpace(os.Getenv("GROK_GOAL_VERIFIER_N")); value != "" {
@@ -2836,7 +2841,9 @@ func applyRequirementsData(cfg *Config, data []byte, source string, envFailClose
 		cfg.PreferredAuthMethod = strings.ToLower(strings.TrimSpace(*requirement.Auth.PreferredMethod))
 	}
 	if requirement.Toolset.AskUserQuestion != nil {
-		applyAskUserQuestionConfig(&cfg.AskUserQuestion, *requirement.Toolset.AskUserQuestion)
+		enabled, seconds := applyAskUserQuestionConfig(&cfg.AskUserQuestion, *requirement.Toolset.AskUserQuestion)
+		cfg.askTimeoutEnabledConfigured = cfg.askTimeoutEnabledConfigured || enabled
+		cfg.askTimeoutSecondsConfigured = cfg.askTimeoutSecondsConfigured || seconds
 	}
 	if requirement.Toolset.Bash != nil && requirement.Toolset.Bash.LoginShellCapture != nil {
 		cfg.Toolset.Bash.LoginShellCapture = *requirement.Toolset.Bash.LoginShellCapture
