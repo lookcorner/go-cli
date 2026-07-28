@@ -324,6 +324,7 @@ type Info struct {
 	Source          string    `json:"source,omitempty"`
 	CWD             string    `json:"cwd"`
 	DisplayCWD      string    `json:"displayCwd,omitempty"`
+	WorktreeLabel   string    `json:"worktreeLabel,omitempty"`
 	HeadCommit      string    `json:"headCommit,omitempty"`
 	HeadBranch      string    `json:"headBranch,omitempty"`
 	ModelID         string    `json:"modelId,omitempty"`
@@ -407,6 +408,7 @@ func readInfo(path, id string) (Info, error) {
 			var data struct {
 				CWD             string `json:"cwd"`
 				DisplayCWD      string `json:"displayCwd"`
+				WorktreeLabel   string `json:"worktreeLabel"`
 				HeadCommit      string `json:"headCommit"`
 				HeadBranch      string `json:"headBranch"`
 				ModelID         string `json:"modelId"`
@@ -416,6 +418,7 @@ func readInfo(path, id string) (Info, error) {
 			if json.Unmarshal(event.Data, &data) == nil && data.CWD != "" {
 				info.CWD = data.CWD
 				info.DisplayCWD = data.DisplayCWD
+				info.WorktreeLabel = data.WorktreeLabel
 				if data.HeadCommit != "" {
 					info.HeadCommit = data.HeadCommit
 				}

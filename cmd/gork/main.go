@@ -659,6 +659,16 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if !resuming {
 		metadata := sessionMetadata(context.Background(), ws.Root(), cfg.Model, cfg.ReasoningEffort)
 		metadata["sandboxProfile"] = cfg.Sandbox.Profile
+		if startup.worktreeLabel != "" {
+			metadata["worktreeLabel"] = startup.worktreeLabel
+		}
+		if err := logger.Append("session_metadata", metadata); err != nil {
+			return err
+		}
+	} else if startup.worktreeLabel != "" {
+		metadata := sessionMetadata(context.Background(), ws.Root(), cfg.Model, cfg.ReasoningEffort)
+		metadata["sandboxProfile"] = cfg.Sandbox.Profile
+		metadata["worktreeLabel"] = startup.worktreeLabel
 		if err := logger.Append("session_metadata", metadata); err != nil {
 			return err
 		}
@@ -1646,6 +1656,7 @@ func createStartupWorktree(
 	if err != nil {
 		return nil, sessionStartup{}, nil, err
 	}
+	startup.worktreeLabel = record.Label
 	var childPath string
 	cleanup := func() {
 		if childPath != "" {

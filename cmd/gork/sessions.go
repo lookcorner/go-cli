@@ -5,11 +5,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	sessionlog "github.com/lookcorner/go-cli/internal/session"
+	worktrees "github.com/lookcorner/go-cli/internal/worktree"
 )
 
 func runSessions(args []string, stdout, stderr io.Writer) error {
@@ -34,7 +37,7 @@ func runSessionsCommand(dir, cwd string, args []string, stdout, stderr io.Writer
 		if query != "" {
 			return fmt.Errorf("unexpected sessions list argument %q", cleanCLIText(query))
 		}
-		items, err := sessionlog.List(dir, cwd)
+		items, err := listWorkspaceSessions(dir, cwd)
 		if err != nil {
 			return err
 		}
@@ -55,9 +58,7 @@ func runSessionsCommand(dir, cwd string, args []string, stdout, stderr io.Writer
 			fmt.Fprintln(stdout, "\nTotal: 0")
 			return nil
 		}
-		result, err := sessionlog.Search(dir, sessionlog.SearchRequest{
-			Query: query, CWD: cwd, Limit: limit, IncludeContent: true,
-		})
+		result, err := searchWorkspaceSessions(dir, cwd, query, limit)
 		if err != nil {
 			return err
 		}
@@ -143,20 +144,148 @@ func printSessions(output io.Writer, items []sessionlog.Info) {
 		fmt.Fprintln(output, "No sessions found.")
 		return
 	}
-	fmt.Fprintf(output, "%-36s  %-10s  %-10s  %-10s  %s\n", "SESSION ID", "CREATED", "UPDATED", "STATUS", "SUMMARY")
+	groups := make(map[string][]sessionlog.Info)
 	for _, item := range items {
-		title := sessionLine(item.Title)
-		if title == "" {
-			title = "(no summary)"
-		}
-		fmt.Fprintf(output, "%-36s  %-10s  %-10s  %-10s  %s\n",
-			cleanCLIText(item.SessionID),
-			sessionDate(item.CreatedAt),
-			sessionDate(item.UpdatedAt),
-			"local",
-			truncateCLIText(title, 50),
-		)
+		groups[item.WorktreeLabel] = append(groups[item.WorktreeLabel], item)
 	}
+	labels := make([]string, 0, len(groups))
+	for label := range groups {
+		if label != "" {
+			labels = append(labels, label)
+		}
+	}
+	sort.Strings(labels)
+	if _, ok := groups[""]; ok {
+		labels = append(labels, "")
+	}
+	for _, label := range labels {
+		if label == "" {
+			fmt.Fprintln(output, "\n(no label)")
+		} else {
+			fmt.Fprintf(output, "\nLabel: %s\n", cleanCLIText(label))
+		}
+		fmt.Fprintf(output, "%-36s  %-10s  %-10s  %-10s  %s\n", "SESSION ID", "CREATED", "UPDATED", "STATUS", "SUMMARY")
+		for _, item := range groups[label] {
+			title := sessionLine(item.Title)
+			if title == "" {
+				title = "(no summary)"
+			}
+			status := item.Source
+			if status == "" {
+				status = "local"
+			}
+			fmt.Fprintf(output, "%-36s  %-10s  %-10s  %-10s  %s\n",
+				cleanCLIText(item.SessionID),
+				sessionDate(item.CreatedAt),
+				sessionDate(item.UpdatedAt),
+				cleanCLIText(status),
+				truncateCLIText(title, 50),
+			)
+		}
+	}
+}
+
+func listWorkspaceSessions(dir, cwd string) ([]sessionlog.Info, error) {
+	all, err := sessionlog.List(dir, "")
+	if err != nil {
+		return nil, err
+	}
+	paths, labels := workspaceSessionScope(dir, cwd)
+	items := all[:0]
+	for _, item := range all {
+		path := cleanSessionPath(item.CWD)
+		if !paths[path] {
+			continue
+		}
+		if item.WorktreeLabel == "" {
+			item.WorktreeLabel = labels[path]
+		}
+		items = append(items, item)
+	}
+	return items, nil
+}
+
+func searchWorkspaceSessions(dir, cwd, query string, limit int) (sessionlog.SearchResult, error) {
+	paths, _ := workspaceSessionScope(dir, cwd)
+	cwds := make([]string, 0, len(paths))
+	for path := range paths {
+		cwds = append(cwds, path)
+	}
+	sort.Strings(cwds)
+	byID := make(map[string]sessionlog.SearchHit)
+	for _, path := range cwds {
+		result, err := sessionlog.Search(dir, sessionlog.SearchRequest{
+			Query: query, CWD: path, Limit: 100, IncludeContent: true,
+		})
+		if err != nil {
+			return sessionlog.SearchResult{}, err
+		}
+		for _, hit := range result.Results {
+			byID[hit.SessionID] = hit
+		}
+	}
+	hits := make([]sessionlog.SearchHit, 0, len(byID))
+	for _, hit := range byID {
+		hits = append(hits, hit)
+	}
+	sort.SliceStable(hits, func(i, j int) bool {
+		if hits[i].Score != hits[j].Score {
+			return hits[i].Score > hits[j].Score
+		}
+		if hits[i].UpdatedAt != hits[j].UpdatedAt {
+			return hits[i].UpdatedAt > hits[j].UpdatedAt
+		}
+		return hits[i].SessionID < hits[j].SessionID
+	})
+	total := len(hits)
+	if total > limit {
+		hits = hits[:limit]
+	}
+	return sessionlog.SearchResult{Results: hits, TotalEstimate: &total}, nil
+}
+
+func workspaceSessionScope(dir, cwd string) (map[string]bool, map[string]string) {
+	current := cleanSessionPath(cwd)
+	paths := map[string]bool{current: true}
+	labels := make(map[string]string)
+	manager, err := worktrees.NewManager(dir)
+	if err != nil {
+		return paths, labels
+	}
+	records := manager.List("", nil, false)
+	repo := ""
+	for _, record := range records {
+		path := cleanSessionPath(record.Path)
+		source := cleanSessionPath(record.SourceRepo)
+		if current == path || current == source {
+			repo = source
+			break
+		}
+	}
+	if repo == "" {
+		return paths, labels
+	}
+	paths[repo] = true
+	for _, record := range records {
+		if cleanSessionPath(record.SourceRepo) != repo {
+			continue
+		}
+		path := cleanSessionPath(record.Path)
+		paths[path] = true
+		labels[path] = strings.TrimSpace(record.Label)
+	}
+	return paths, labels
+}
+
+func cleanSessionPath(path string) string {
+	cleaned, err := filepath.Abs(path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	if resolved, resolveErr := filepath.EvalSymlinks(cleaned); resolveErr == nil {
+		cleaned = resolved
+	}
+	return filepath.Clean(cleaned)
 }
 
 func printSessionSearch(output io.Writer, hits []sessionlog.SearchHit) {

@@ -2,12 +2,14 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	sessionlog "github.com/lookcorner/go-cli/internal/session"
+	worktrees "github.com/lookcorner/go-cli/internal/worktree"
 )
 
 func TestSessionsCLIListSearchAndDelete(t *testing.T) {
@@ -51,6 +53,49 @@ func TestSessionsCLIListSearchAndDelete(t *testing.T) {
 	stdout.Reset()
 	if err := runSessionsCommand(dir, cwd, []string{"delete", "session-one"}, &stdout, &stderr); err != nil || !strings.Contains(stdout.String(), "No session found") {
 		t.Fatalf("missing delete output=%q err=%v", stdout.String(), err)
+	}
+}
+
+func TestSessionsCLIIncludesAndGroupsSiblingWorktrees(t *testing.T) {
+	dir := t.TempDir()
+	repo := t.TempDir()
+	feature := t.TempDir()
+	other := t.TempDir()
+	writeCLISession(t, dir, "main-session", repo, "Main work", "main response")
+	writeCLISession(t, dir, "feature-session", feature, "Feature work", "sibling needle")
+	writeCLISession(t, dir, "outside-session", other, "Outside work", "sibling needle")
+	records := []worktrees.Record{{
+		ID: "wt-feature", Path: feature, SourceRepo: repo, Kind: "session",
+		Status: "alive", Label: "Feature One", SessionID: "feature-session",
+	}}
+	data, err := json.Marshal(records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "worktrees.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if err := runSessionsCommand(dir, repo, []string{"list"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	text := stdout.String()
+	for _, expected := range []string{"Label: Feature One", "feature-session", "(no label)", "main-session"} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("list output missing %q:\n%s", expected, text)
+		}
+	}
+	if strings.Contains(text, "outside-session") {
+		t.Fatalf("list crossed repository boundary:\n%s", text)
+	}
+
+	stdout.Reset()
+	if err := runSessionsCommand(dir, repo, []string{"search", "sibling", "--limit", "5"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if text := stdout.String(); !strings.Contains(text, "feature-session") || strings.Contains(text, "outside-session") || !strings.Contains(text, "Total: 1") {
+		t.Fatalf("search output:\n%s", text)
 	}
 }
 

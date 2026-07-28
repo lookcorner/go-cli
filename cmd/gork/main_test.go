@@ -844,7 +844,7 @@ func TestStartupWorktreeCreatesIsolatedSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.CWD == root || filepath.Base(info.CWD) != "startup-test" {
+	if info.CWD == root || filepath.Base(info.CWD) != "startup-test" || info.WorktreeLabel != "startup-test" {
 		t.Fatalf("session cwd=%q root=%q", info.CWD, root)
 	}
 	if _, err := os.Stat(filepath.Join(info.CWD, "tracked.txt")); err != nil {
@@ -925,7 +925,7 @@ func TestStartupWorktreeResumeContinuesChildResponseChain(t *testing.T) {
 		t.Fatal(err)
 	}
 	childInfo, err := session.InfoForPath(childPath)
-	if err != nil || childInfo.CWD == root {
+	if err != nil || childInfo.CWD == root || childInfo.WorktreeLabel != "resume-child" {
 		t.Fatalf("child info=%#v err=%v", childInfo, err)
 	}
 }

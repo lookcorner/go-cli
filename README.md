@@ -779,8 +779,10 @@ Ctrl-D while searching arms deletion, which requires `y` confirmation and cannot
 delete the active session.
 Outside the TUI, `gork sessions list`, `search <query>`, and
 `delete <session-id>` provide the reference local session-management commands.
-List and search are scoped to the current workspace and accept `-n`/`--limit`;
-delete resolves an exact validated session ID.
+List and search include the current workspace plus registered sibling worktrees
+from the same repository and accept `-n`/`--limit`; list groups rows by persisted
+worktree label, with unlabeled sessions last. Delete resolves an exact validated
+session ID.
 `gork export <session-id> [output]` exports completed conversation history as
 Markdown, including compact tool summaries. Without an output path it writes to
 stdout; `-c`/`--clipboard` copies through the platform's native clipboard tool.

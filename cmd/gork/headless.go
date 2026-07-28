@@ -24,9 +24,10 @@ type headlessPrompt struct {
 }
 
 type sessionStartup struct {
-	resumePath string
-	newID      string
-	fork       bool
+	resumePath    string
+	newID         string
+	fork          bool
+	worktreeLabel string
 }
 
 func normalizeOptionalValueArgs(args []string) []string {
