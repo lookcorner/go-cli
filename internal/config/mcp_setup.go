@@ -28,8 +28,8 @@ type MCPServerPreferences struct {
 
 // MCPPreferencesFile is $GROK_HOME/mcp_preferences.json.
 type MCPPreferencesFile struct {
-	Version uint32                           `json:"version"`
-	Servers map[string]MCPServerPreferences  `json:"servers"`
+	Version uint32                          `json:"version"`
+	Servers map[string]MCPServerPreferences `json:"servers"`
 }
 
 // MCPPreferencesLoad distinguishes missing vs corrupt preference files.

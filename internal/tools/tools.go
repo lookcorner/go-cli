@@ -125,32 +125,32 @@ func ToolCallFromContext(ctx context.Context) (ToolCallContext, bool) {
 }
 
 type Registry struct {
-	mu            sync.RWMutex
-	tools         map[string]Tool
-	approver      Approver
-	processes     *ProcessManager
-	goal          *GoalStore
-	scheduler     *Scheduler
-	ownsScheduler bool
-	plan          *PlanMode
-	questions     *UserQuestions
-	todos         *todoStore
-	readPolicy    Approver
-	hunks         *HunkTracker
-	rewind        *mutationCheckpoint
-	readFile      *readFileTool
-	webFetch      *webFetchTool
-	subagents     *subagentHolder
-	goalRoles     GoalRoleConfig
-	fileToolset   string
-	hashline      hashlineConfig
-	environment   map[string]string
+	mu             sync.RWMutex
+	tools          map[string]Tool
+	approver       Approver
+	processes      *ProcessManager
+	goal           *GoalStore
+	scheduler      *Scheduler
+	ownsScheduler  bool
+	plan           *PlanMode
+	questions      *UserQuestions
+	todos          *todoStore
+	readPolicy     Approver
+	hunks          *HunkTracker
+	rewind         *mutationCheckpoint
+	readFile       *readFileTool
+	webFetch       *webFetchTool
+	subagents      *subagentHolder
+	goalRoles      GoalRoleConfig
+	fileToolset    string
+	hashline       hashlineConfig
+	environment    map[string]string
 	shellEnvPolicy ShellEnvironmentPolicy
-	sandbox       SandboxProfile
-	restrictNet   bool
-	pathHints     *atomic.Bool
-	allowedTools  map[string]bool
-	deniedTools   map[string]bool
+	sandbox        SandboxProfile
+	restrictNet    bool
+	pathHints      *atomic.Bool
+	allowedTools   map[string]bool
+	deniedTools    map[string]bool
 }
 
 type mutationCheckpoint struct {

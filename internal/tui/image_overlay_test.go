@@ -1,10 +1,10 @@
 package tui
 
 import (
+	"bytes"
 	"image"
 	"image/color"
 	"image/png"
-	"bytes"
 	"strings"
 	"testing"
 

@@ -181,29 +181,29 @@ func mcpServerTransportEqual(left, right MCPServer) bool {
 
 func (s *Server) handleMCP(ctx context.Context, incoming message) {
 	var req struct {
-		SessionID       string            `json:"sessionId"`
-		LegacySessionID string            `json:"session_id"`
-		Server          string            `json:"server"`
-		ServerName      string            `json:"server_name"`
-		ServerNameCamel string            `json:"serverName"`
-		ToolName        string            `json:"tool_name"`
-		ToolNameCamel   string            `json:"toolName"`
-		ServerURL       string            `json:"serverUrl"`
-		ServerID        string            `json:"serverId"`
-		Message         json.RawMessage   `json:"message"`
-		Tool            string            `json:"tool"`
-		URI             string            `json:"uri"`
-		Arguments       json.RawMessage   `json:"arguments"`
-		Enabled         *bool             `json:"enabled"`
-		Type            string            `json:"type"`
-		Command         string            `json:"command"`
-		Args            []string          `json:"args"`
-		Env             map[string]string `json:"env"`
-		URL             string            `json:"url"`
-		Headers         map[string]string `json:"headers"`
-		Code            string            `json:"code"`
-		CallbackURL     string            `json:"callback_url"`
-		CallbackURLCamel string           `json:"callbackUrl"`
+		SessionID        string            `json:"sessionId"`
+		LegacySessionID  string            `json:"session_id"`
+		Server           string            `json:"server"`
+		ServerName       string            `json:"server_name"`
+		ServerNameCamel  string            `json:"serverName"`
+		ToolName         string            `json:"tool_name"`
+		ToolNameCamel    string            `json:"toolName"`
+		ServerURL        string            `json:"serverUrl"`
+		ServerID         string            `json:"serverId"`
+		Message          json.RawMessage   `json:"message"`
+		Tool             string            `json:"tool"`
+		URI              string            `json:"uri"`
+		Arguments        json.RawMessage   `json:"arguments"`
+		Enabled          *bool             `json:"enabled"`
+		Type             string            `json:"type"`
+		Command          string            `json:"command"`
+		Args             []string          `json:"args"`
+		Env              map[string]string `json:"env"`
+		URL              string            `json:"url"`
+		Headers          map[string]string `json:"headers"`
+		Code             string            `json:"code"`
+		CallbackURL      string            `json:"callback_url"`
+		CallbackURLCamel string            `json:"callbackUrl"`
 	}
 	if json.Unmarshal(incoming.Params, &req) != nil {
 		s.respondError(incoming.ID, -32602, "invalid MCP parameters")

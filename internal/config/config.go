@@ -518,8 +518,8 @@ type MCPServerConfig struct {
 
 // MCPSetupConfig is the interactive select schema for setup-required MCP servers.
 type MCPSetupConfig struct {
-	Fields    []MCPSetupField                  `json:"fields" toml:"fields"`
-	Variables map[string]MCPSetupDerivedValue  `json:"variables,omitempty" toml:"variables"`
+	Fields    []MCPSetupField                 `json:"fields" toml:"fields"`
+	Variables map[string]MCPSetupDerivedValue `json:"variables,omitempty" toml:"variables"`
 }
 
 // MCPSetupField is one select prompt shown before connecting a server.
@@ -578,31 +578,31 @@ type ShellEnvironmentPolicy struct {
 }
 
 type fileConfig struct {
-	APIKey             string                     `json:"api_key,omitempty" toml:"api_key"`
-	BaseURL            string                     `json:"base_url,omitempty" toml:"base_url"`
-	Model              string                     `json:"model,omitempty" toml:"model_name"`
-	Backend            string                     `json:"backend,omitempty" toml:"backend"`
-	SystemPrompt       string                     `json:"system_prompt,omitempty" toml:"system_prompt"`
-	MaxSteps           int                        `json:"max_steps,omitempty" toml:"max_steps"`
-	Env                map[string]string          `json:"env,omitempty" toml:"env"`
+	APIKey                 string                      `json:"api_key,omitempty" toml:"api_key"`
+	BaseURL                string                      `json:"base_url,omitempty" toml:"base_url"`
+	Model                  string                      `json:"model,omitempty" toml:"model_name"`
+	Backend                string                      `json:"backend,omitempty" toml:"backend"`
+	SystemPrompt           string                      `json:"system_prompt,omitempty" toml:"system_prompt"`
+	MaxSteps               int                         `json:"max_steps,omitempty" toml:"max_steps"`
+	Env                    map[string]string           `json:"env,omitempty" toml:"env"`
 	ShellEnvironmentPolicy *fileShellEnvironmentPolicy `json:"shell_environment_policy,omitempty" toml:"shell_environment_policy"`
-	HTTPTimeout        string                     `json:"http_timeout,omitempty" toml:"http_timeout"`
-	MCPServers         map[string]MCPServerConfig `json:"mcp_servers,omitempty" toml:"mcp_servers"`
-	DisabledMCPServers []string                   `json:"disabled_mcp_servers,omitempty" toml:"disabled_mcp_servers"`
-	DisabledMCPTools   map[string][]string        `json:"disabled_mcp_tools,omitempty" toml:"disabled_mcp_tools"`
-	LSPServers         map[string]LSPServerConfig `json:"lsp_servers,omitempty" toml:"lsp_servers"`
-	Permission         PermissionConfig           `json:"permission,omitempty" toml:"permission"`
-	Sandbox            SandboxConfig              `json:"sandbox,omitempty" toml:"sandbox"`
-	AutoMode           AutoModeConfig             `json:"auto_mode,omitempty" toml:"auto_mode"`
-	Session            sessionConfig              `json:"session,omitempty" toml:"session"`
-	ContextWindow      int                        `json:"context_window,omitempty" toml:"context_window"`
-	Compaction         fileCompactionConfig       `json:"compaction,omitempty" toml:"compaction"`
-	Memory             *fileMemoryConfig          `json:"memory,omitempty" toml:"memory"`
-	Compat             fileCompatConfig           `json:"compat,omitempty" toml:"compat"`
-	Skills             SkillsConfig               `json:"skills,omitempty" toml:"skills"`
-	Plugins            PluginsConfig              `json:"plugins,omitempty" toml:"plugins"`
-	Marketplace        MarketplaceConfig          `json:"marketplace,omitempty" toml:"marketplace"`
-	CLI                struct {
+	HTTPTimeout            string                      `json:"http_timeout,omitempty" toml:"http_timeout"`
+	MCPServers             map[string]MCPServerConfig  `json:"mcp_servers,omitempty" toml:"mcp_servers"`
+	DisabledMCPServers     []string                    `json:"disabled_mcp_servers,omitempty" toml:"disabled_mcp_servers"`
+	DisabledMCPTools       map[string][]string         `json:"disabled_mcp_tools,omitempty" toml:"disabled_mcp_tools"`
+	LSPServers             map[string]LSPServerConfig  `json:"lsp_servers,omitempty" toml:"lsp_servers"`
+	Permission             PermissionConfig            `json:"permission,omitempty" toml:"permission"`
+	Sandbox                SandboxConfig               `json:"sandbox,omitempty" toml:"sandbox"`
+	AutoMode               AutoModeConfig              `json:"auto_mode,omitempty" toml:"auto_mode"`
+	Session                sessionConfig               `json:"session,omitempty" toml:"session"`
+	ContextWindow          int                         `json:"context_window,omitempty" toml:"context_window"`
+	Compaction             fileCompactionConfig        `json:"compaction,omitempty" toml:"compaction"`
+	Memory                 *fileMemoryConfig           `json:"memory,omitempty" toml:"memory"`
+	Compat                 fileCompatConfig            `json:"compat,omitempty" toml:"compat"`
+	Skills                 SkillsConfig                `json:"skills,omitempty" toml:"skills"`
+	Plugins                PluginsConfig               `json:"plugins,omitempty" toml:"plugins"`
+	Marketplace            MarketplaceConfig           `json:"marketplace,omitempty" toml:"marketplace"`
+	CLI                    struct {
 		UseLeader *bool `json:"use_leader,omitempty" toml:"use_leader"`
 	} `json:"cli,omitempty" toml:"cli"`
 	Features struct {

@@ -32,10 +32,10 @@ type Mode struct {
 
 // ModeAvailability is the proto3-JSON oneof for mode availability.
 type ModeAvailability struct {
-	Available        json.RawMessage `json:"available"`
-	Unavailable      json.RawMessage `json:"unavailable"`
-	RequiresUpgrade  json.RawMessage `json:"requiresUpgrade"`
-	ComingSoon       json.RawMessage `json:"comingSoon"`
+	Available       json.RawMessage `json:"available"`
+	Unavailable     json.RawMessage `json:"unavailable"`
+	RequiresUpgrade json.RawMessage `json:"requiresUpgrade"`
+	ComingSoon      json.RawMessage `json:"comingSoon"`
 }
 
 // IsAvailable reports whether the mode is selectable.

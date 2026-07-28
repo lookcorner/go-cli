@@ -1307,7 +1307,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		modelName:          modelName, defaultModelID: options.DefaultModelID, previousID: previousID, width: 80, height: 24,
 		minimal:       options.Minimal,
 		contextWindow: runner.ContextWindow,
-		status: "ready", initial: strings.TrimSpace(initialPrompt), historyIndex: -1, promptChipHover: -1,
+		status:        "ready", initial: strings.TrimSpace(initialPrompt), historyIndex: -1, promptChipHover: -1,
 		history: loadPromptHistory(runner, workspace), selectionMode: parseTextSelectionMode(options.Mode), persistSelection: options.SetSelectionMode,
 		wordSeparators: defaultWordSeparators, mouseToggle: options.MouseReportingToggle, vimMode: options.VimMode, persistVimMode: options.SetVimMode,
 		compactMode: options.CompactMode, persistCompactMode: options.SetCompactMode,

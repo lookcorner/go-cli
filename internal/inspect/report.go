@@ -106,12 +106,12 @@ type Marketplace struct {
 }
 
 type MCPServer struct {
-	Name      string         `json:"name"`
-	Transport string         `json:"transport"`
-	Enabled   bool           `json:"enabled"`
-	Target    string         `json:"target,omitempty"`
-	Auth      string         `json:"auth,omitempty"`
-	AuthEnv   string         `json:"authEnv,omitempty"`
+	Name      string          `json:"name"`
+	Transport string          `json:"transport"`
+	Enabled   bool            `json:"enabled"`
+	Target    string          `json:"target,omitempty"`
+	Auth      string          `json:"auth,omitempty"`
+	AuthEnv   string          `json:"authEnv,omitempty"`
 	OAuth     *MCPServerOAuth `json:"oauth,omitempty"`
 }
 

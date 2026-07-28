@@ -11,22 +11,22 @@ import (
 )
 
 const (
-	videoOverlayFPS     = 10.0
+	videoOverlayFPS      = 10.0
 	videoOverlayMaxWidth = 640
 )
 
 // VideoViewer holds pre-extracted frames for modal terminal playback.
 type VideoViewer struct {
-	Frames       [][]byte
-	Current      int
-	Playing      bool
-	FPS          float64
-	Width        int
-	Height       int
-	DurationSecs float64
-	Title        string
-	lastFrame    time.Time
-	retransmit   bool
+	Frames         [][]byte
+	Current        int
+	Playing        bool
+	FPS            float64
+	Width          int
+	Height         int
+	DurationSecs   float64
+	Title          string
+	lastFrame      time.Time
+	retransmit     bool
 	placementCache OverlayPlacement
 	rectCache      OverlayRect
 }
@@ -46,7 +46,7 @@ func NewVideoViewerStub(frames [][]byte, width, height int, title string) *Video
 		Frames: frames, Playing: true, FPS: videoOverlayFPS,
 		Width: width, Height: height,
 		DurationSecs: float64(len(frames)) / videoOverlayFPS,
-		Title: title, lastFrame: time.Now(), retransmit: true,
+		Title:        title, lastFrame: time.Now(), retransmit: true,
 	}
 }
 
