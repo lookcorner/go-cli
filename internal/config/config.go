@@ -171,8 +171,9 @@ type ToolsetConfig struct {
 
 // BashConfig is the [toolset.bash] table bounding shell commands.
 type BashConfig struct {
-	TimeoutSeconds  float64 `json:"timeout_secs"`
-	OutputByteLimit uint64  `json:"output_byte_limit"`
+	TimeoutSeconds    float64 `json:"timeout_secs"`
+	OutputByteLimit   uint64  `json:"output_byte_limit"`
+	LoginShellCapture bool    `json:"login_shell_capture"`
 }
 
 type HashlineConfig struct {
@@ -252,6 +253,7 @@ type UIConfig struct {
 	WordSeparators            *string              `json:"word_separators,omitempty"`
 	MouseReportingToggle      bool                 `json:"mouse_reporting_toggle,omitempty"`
 	VimMode                   bool                 `json:"vim_mode,omitempty"`
+	SimpleMode                bool                 `json:"simple_mode"`
 	CompactMode               bool                 `json:"compact_mode,omitempty"`
 	ShowTimestamps            bool                 `json:"show_timestamps"`
 	ShowTimeline              bool                 `json:"show_timeline,omitempty"`
@@ -653,8 +655,9 @@ type fileHashlineConfig struct {
 }
 
 type fileBashConfig struct {
-	TimeoutSeconds  *float64 `json:"timeout_secs,omitempty" toml:"timeout_secs"`
-	OutputByteLimit *uint64  `json:"output_byte_limit,omitempty" toml:"output_byte_limit"`
+	TimeoutSeconds    *float64 `json:"timeout_secs,omitempty" toml:"timeout_secs"`
+	OutputByteLimit   *uint64  `json:"output_byte_limit,omitempty" toml:"output_byte_limit"`
+	LoginShellCapture *bool    `json:"login_shell_capture,omitempty" toml:"login_shell_capture"`
 }
 
 type fileShellEnvironmentPolicy struct {
@@ -678,6 +681,7 @@ type fileUIConfig struct {
 	WordSeparators               *string                  `json:"word_separators,omitempty" toml:"word_separators"`
 	MouseReportingToggle         *bool                    `json:"mouse_reporting_toggle,omitempty" toml:"mouse_reporting_toggle"`
 	VimMode                      *bool                    `json:"vim_mode,omitempty" toml:"vim_mode"`
+	SimpleMode                   *bool                    `json:"simple_mode,omitempty" toml:"simple_mode"`
 	CompactMode                  *bool                    `json:"compact_mode,omitempty" toml:"compact_mode"`
 	ShowTimestamps               *bool                    `json:"show_timestamps,omitempty" toml:"show_timestamps"`
 	ShowTimeline                 *bool                    `json:"show_timeline,omitempty" toml:"show_timeline"`
@@ -981,9 +985,9 @@ func Load(path string) (Config, error) {
 		AskUserQuestion:             AskUserQuestionConfig{TimeoutEnabled: true, TimeoutSeconds: 30 * 60},
 		CancelRewindEnabled:         true,
 		ShellEnvironmentPolicy:      ShellEnvironmentPolicy{Inherit: "all", IgnoreDefaultExcludes: true},
-		Toolset:                     ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}, Bash: BashConfig{TimeoutSeconds: 120, OutputByteLimit: 20000}},
+		Toolset:                     ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}, Bash: BashConfig{TimeoutSeconds: 120, OutputByteLimit: 20000, LoginShellCapture: true}},
 		Goal:                        GoalConfig{VerifierCount: 3, ClassifierMaxRuns: 10, ReverifyAfter: 8},
-		UI:                          UIConfig{MaxThoughtsWidth: 120, Theme: "groknight", AutoDarkTheme: "groknight", AutoLightTheme: "grokday", HunkTrackerMode: "agent_only", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, PageFlipOnSend: true, ShowThinkingBlocks: true, DisplayRefresh: DisplayRefreshConfig{ProbeEnabled: true, FloorMS: 8, CeilingMS: 16, MinHz: 55, MaxHz: 165}, ScrollSpeed: 50, ScrollMode: "auto", DefaultSelectedPermission: "always_allow_all_sessions", GroupToolVerbs: true, PromptSuggestions: true, ContextualHints: Hints{Undo: true, PlanMode: true, ImageInput: true, SendNow: true, SmallScreen: true, WordSelect: true, SSHWrap: true}, VoiceCaptureMode: "hold", VoiceSTTLanguage: "en", VoiceKeybindEnabled: true, PermissionMode: "ask", Notifications: NotificationsConfig{Method: "auto", Condition: "unfocused", IdleThresholdSecs: 3, Events: []string{"turn_complete", "approval_required"}, ProgressBar: true, SleepPrevention: true, SessionRecap: true, RecapThresholdSecs: 30, Title: NotificationTitleConfig{Enabled: true, Items: []string{"action-required", "spinner", "activity", "session-name", "grok"}}}},
+		UI:                          UIConfig{MaxThoughtsWidth: 120, Theme: "groknight", AutoDarkTheme: "groknight", AutoLightTheme: "grokday", HunkTrackerMode: "agent_only", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, PageFlipOnSend: true, ShowThinkingBlocks: true, DisplayRefresh: DisplayRefreshConfig{ProbeEnabled: true, FloorMS: 8, CeilingMS: 16, MinHz: 55, MaxHz: 165}, ScrollSpeed: 50, ScrollMode: "auto", DefaultSelectedPermission: "always_allow_all_sessions", GroupToolVerbs: true, PromptSuggestions: true, ContextualHints: Hints{Undo: true, PlanMode: true, ImageInput: true, SendNow: true, SmallScreen: true, WordSelect: true, SSHWrap: true}, VoiceCaptureMode: "hold", VoiceSTTLanguage: "en", VoiceKeybindEnabled: true, PermissionMode: "ask", SimpleMode: true, Notifications: NotificationsConfig{Method: "auto", Condition: "unfocused", IdleThresholdSecs: 3, Events: []string{"turn_complete", "approval_required"}, ProgressBar: true, SleepPrevention: true, SessionRecap: true, RecapThresholdSecs: 30, Title: NotificationTitleConfig{Enabled: true, Items: []string{"action-required", "spinner", "activity", "session-name", "grok"}}}},
 		Dashboard:                   DashboardConfig{Enabled: true, Grouping: "state"},
 		Sandbox:                     SandboxConfig{Profile: "off"},
 		Pruning:                     PruningConfig{Enabled: true, KeepLastNTurns: 3, SoftTrimThreshold: 4000, SoftTrimHead: 1500, SoftTrimTail: 1500, HardClearAgeTurns: 10},
@@ -1255,6 +1259,9 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	if disk.Toolset.Bash.OutputByteLimit != nil {
 		cfg.Toolset.Bash.OutputByteLimit = *disk.Toolset.Bash.OutputByteLimit
 	}
+	if disk.Toolset.Bash.LoginShellCapture != nil {
+		cfg.Toolset.Bash.LoginShellCapture = *disk.Toolset.Bash.LoginShellCapture
+	}
 	if disk.Toolset.Hashline.Scheme != nil {
 		cfg.Toolset.Hashline.Scheme = strings.TrimSpace(*disk.Toolset.Hashline.Scheme)
 	}
@@ -1350,6 +1357,14 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.UI.VimMode != nil {
 		cfg.UI.VimMode = *disk.UI.VimMode
+	}
+	if disk.UI.SimpleMode != nil {
+		cfg.UI.SimpleMode = *disk.UI.SimpleMode
+		// Reference: simple_mode=false selects vim prompt editing. When vim_mode
+		// is unset, mirror that into VimMode so TUI navigation stays consistent.
+		if !*disk.UI.SimpleMode && disk.UI.VimMode == nil {
+			cfg.UI.VimMode = true
+		}
 	}
 	if disk.UI.CompactMode != nil {
 		cfg.UI.CompactMode = *disk.UI.CompactMode
@@ -2209,6 +2224,9 @@ func normalizeAutoModeConfig(value AutoModeConfig) (AutoModeConfig, error) {
 func applyEnv(cfg *Config) {
 	if value := strings.TrimSpace(os.Getenv("GROK_SANDBOX")); value != "" {
 		cfg.Sandbox.Profile = strings.ToLower(value)
+	}
+	if value, ok := envBool("GROK_LOGIN_ENV"); ok {
+		cfg.Toolset.Bash.LoginShellCapture = value
 	}
 	if value := firstEnv("GORK_API_KEY", "XAI_API_KEY", "OPENAI_API_KEY"); value != "" {
 		cfg.APIKey = value
