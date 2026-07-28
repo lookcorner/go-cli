@@ -276,6 +276,8 @@ Default-on `auto_background_on_timeout` and its optional
 `foreground_block_budget_ms` move long foreground commands into the queryable,
 killable background-task lifecycle without applying their eventual shell state
 to later foreground commands; local policy beats its remote fallback.
+When automatic backgrounding is disabled, the reference five-minute maximum
+foreground block prevents model-selected multi-hour waits from wedging a turn.
 
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |

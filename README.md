@@ -1813,6 +1813,9 @@ independent `foreground_block_budget_ms` defaults to 15 seconds; `0` disables
 that short budget so only the command timeout triggers the move. Local policy
 overrides the authenticated remote fallback. When the TOML budget is unset,
 `GROK_FOREGROUND_BLOCK_BUDGET_MS` may override the 15-second runtime default.
+When automatic backgrounding is disabled, oversized foreground waits are
+instead killed after at most five minutes or the configured default timeout,
+whichever is larger; `GROK_MAX_FOREGROUND_BLOCK_MS` overrides that safety cap.
 `[toolset.bash] login_shell_capture`
 (default on; `GROK_LOGIN_ENV`) sources the user shell rc once at session start and
 merges that environment into agent shells. Top-level `[shell_environment_policy]`

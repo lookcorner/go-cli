@@ -764,6 +764,11 @@ func TestForegroundWaitBudgetResolution(t *testing.T) {
 	if wait, auto := manager.foregroundWait(time.Minute); auto || wait != time.Minute {
 		t.Fatalf("disabled wait=%s auto=%v", wait, auto)
 	}
+	t.Setenv("GROK_MAX_FOREGROUND_BLOCK_MS", "40")
+	manager.ConfigureBash(20*time.Millisecond, time.Minute, 0, "", true, false, nil)
+	if wait, auto := manager.foregroundWait(time.Second); auto || wait != 40*time.Millisecond {
+		t.Fatalf("bounded foreground wait=%s auto=%v", wait, auto)
+	}
 }
 
 type injectableMemoryCgroup struct {

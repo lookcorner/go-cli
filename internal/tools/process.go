@@ -279,7 +279,13 @@ func (m *ProcessManager) foregroundWait(timeout time.Duration) (time.Duration, b
 	autoBackground, budgetMS := m.autoBackground, cloneUint64(m.bashBudgetMS)
 	m.bashMu.RUnlock()
 	if !autoBackground {
-		return timeout, false
+		maxBlock := 5 * time.Minute
+		if raw := os.Getenv("GROK_MAX_FOREGROUND_BLOCK_MS"); raw != "" {
+			if value, err := strconv.ParseUint(raw, 10, 64); err == nil && value <= uint64((time.Duration(1<<63-1))/time.Millisecond) {
+				maxBlock = time.Duration(value) * time.Millisecond
+			}
+		}
+		return min(timeout, max(maxBlock, m.defaultShellTimeout())), false
 	}
 	if budgetMS == nil {
 		value := uint64(15_000)
