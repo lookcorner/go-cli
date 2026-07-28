@@ -7,8 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/tools"
@@ -25,9 +28,24 @@ type ToolAdapter struct {
 	remoteInfo ToolInfo
 	definition api.ToolDefinition
 	approver   tools.Approver
+	output     OutputConfig
 }
 
-func NewToolAdapters(client *Client, serverName string, remoteTools []ToolInfo, approver tools.Approver) []*ToolAdapter {
+// OutputConfig keeps oversized MCP results recoverable without placing the
+// complete payload in model context.
+type OutputConfig struct {
+	MaxBytes    uint64
+	ArtifactDir string
+}
+
+func NewToolAdapters(client *Client, serverName string, remoteTools []ToolInfo, approver tools.Approver, output ...OutputConfig) []*ToolAdapter {
+	policy := OutputConfig{MaxBytes: 20_000}
+	if len(output) > 0 {
+		policy = output[0]
+		if policy.MaxBytes == 0 {
+			policy.MaxBytes = 20_000
+		}
+	}
 	result := make([]*ToolAdapter, 0, len(remoteTools))
 	for _, remote := range remoteTools {
 		schema := remote.InputSchema
@@ -35,7 +53,7 @@ func NewToolAdapters(client *Client, serverName string, remoteTools []ToolInfo, 
 			schema = map[string]any{"type": "object", "properties": map[string]any{}}
 		}
 		result = append(result, &ToolAdapter{
-			client: client, serverName: serverName, remoteName: remote.Name, remoteInfo: remote, approver: approver,
+			client: client, serverName: serverName, remoteName: remote.Name, remoteInfo: remote, approver: approver, output: policy,
 			definition: api.ToolDefinition{
 				Type: "function", Name: modelToolName(serverName, remote.Name),
 				Description: fmt.Sprintf("MCP server %s: %s", serverName, remote.Description),
@@ -87,6 +105,7 @@ func (t *ToolAdapter) ExecuteResult(ctx context.Context, raw json.RawMessage) (t
 		parts = append(parts, string(encoded))
 	}
 	output := strings.Join(parts, "\n")
+	output = t.boundOutput(ctx, output)
 	if result.IsError {
 		if output == "" {
 			output = "MCP tool returned an error"
@@ -97,6 +116,78 @@ func (t *ToolAdapter) ExecuteResult(ctx context.Context, raw json.RawMessage) (t
 		output = "MCP tool completed with no content"
 	}
 	return tools.ExecutionResult{Output: output, Images: images}, nil
+}
+
+func (t *ToolAdapter) boundOutput(ctx context.Context, output string) string {
+	limit := int(min(t.output.MaxBytes, uint64(^uint(0)>>1)))
+	if len(output) <= limit {
+		return output
+	}
+	full := output
+	preview := output[:limit]
+	for !utf8.ValidString(preview) {
+		preview = preview[:len(preview)-1]
+	}
+	hint := ""
+	if path := t.writeFullOutput(ctx, full); path != "" {
+		hint = " Full output written to: " + path + "."
+		trimmed := strings.TrimSpace(full)
+		longLine := longestLineBytes(full) > 2_000
+		if json.Valid([]byte(trimmed)) {
+			hint += " Use the shell with jq or Python to query the saved JSON."
+		} else if longLine {
+			hint += " Use the shell to slice or search the saved long-line text."
+		}
+	}
+	return fmt.Sprintf("%s\n\n[MCP output truncated: showing first %d bytes of %d bytes.%s]", preview, limit, len(full), hint)
+}
+
+func (t *ToolAdapter) writeFullOutput(ctx context.Context, output string) string {
+	artifactDir := tools.ToolArtifactDirFromContext(ctx)
+	if artifactDir == "" {
+		artifactDir = t.output.ArtifactDir
+	}
+	if artifactDir == "" {
+		return ""
+	}
+	call, _ := tools.ToolCallFromContext(ctx)
+	stem := sanitizeArtifactStem(call.ID)
+	if stem == "" {
+		stem = sanitizeArtifactStem(t.serverName + "-" + t.remoteName)
+	}
+	ext := ".txt"
+	if json.Valid([]byte(strings.TrimSpace(output))) {
+		ext = ".json"
+	}
+	dir := filepath.Join(artifactDir, "mcp")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return ""
+	}
+	path := filepath.Join(dir, stem+ext)
+	if err := os.WriteFile(path, []byte(output), 0o600); err != nil {
+		return ""
+	}
+	return path
+}
+
+func sanitizeArtifactStem(value string) string {
+	var b strings.Builder
+	for _, r := range value {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('_')
+		}
+	}
+	return strings.Trim(b.String(), "_")
+}
+
+func longestLineBytes(value string) int {
+	longest := 0
+	for _, line := range strings.Split(value, "\n") {
+		longest = max(longest, len(line))
+	}
+	return longest
 }
 
 func (t *ToolAdapter) CallMCP(ctx context.Context, raw json.RawMessage) (ToolResult, error) {

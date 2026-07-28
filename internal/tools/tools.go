@@ -115,6 +115,7 @@ type ToolCallContext struct {
 }
 
 type toolCallContextKey struct{}
+type toolArtifactDirKey struct{}
 
 func WithToolCall(ctx context.Context, id, name string) context.Context {
 	return context.WithValue(ctx, toolCallContextKey{}, ToolCallContext{ID: id, Name: name})
@@ -123,6 +124,15 @@ func WithToolCall(ctx context.Context, id, name string) context.Context {
 func ToolCallFromContext(ctx context.Context) (ToolCallContext, bool) {
 	value, ok := ctx.Value(toolCallContextKey{}).(ToolCallContext)
 	return value, ok
+}
+
+func WithToolArtifactDir(ctx context.Context, path string) context.Context {
+	return context.WithValue(ctx, toolArtifactDirKey{}, path)
+}
+
+func ToolArtifactDirFromContext(ctx context.Context) string {
+	value, _ := ctx.Value(toolArtifactDirKey{}).(string)
+	return value
 }
 
 type Registry struct {

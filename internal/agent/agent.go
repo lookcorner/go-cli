@@ -933,6 +933,9 @@ func (r *Runner) runTurn(ctx context.Context, prompt string, content any, previo
 				r.ToolObserver.ToolStarted(call)
 			}
 			toolCtx := tools.WithToolCall(ctx, call.CallID, call.Name)
+			if artifactDir, err := session.ArtifactDir(r.SessionPath); err == nil {
+				toolCtx = tools.WithToolArtifactDir(toolCtx, artifactDir)
+			}
 			toolCtx = r.permissionContext(toolCtx, call.Name, string(call.Arguments))
 			var toolResult tools.ExecutionResult
 			var toolErr error

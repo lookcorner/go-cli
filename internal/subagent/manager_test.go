@@ -457,7 +457,7 @@ Use the owned tools.`
 		Context: context.Background(), Catalog: catalog, Tools: registry, WorkspaceRoot: root,
 		NewClient:        func(ModelRuntime) (agent.ResponseStreamer, error) { return client, nil },
 		ParentMCPServers: []mcp.ServerConfig{{Name: "parent", Command: "parent-mcp"}},
-		StartMCPServers: func(ctx context.Context, gotRoot string, child *tools.Registry, servers []mcp.ServerConfig) (func(), error) {
+		StartMCPServers: func(ctx context.Context, gotRoot string, child *tools.Registry, servers []mcp.ServerConfig, artifactDir string) (func(), error) {
 			resourceCtx = ctx
 			if gotRoot != root {
 				t.Fatalf("root=%q want=%q", gotRoot, root)

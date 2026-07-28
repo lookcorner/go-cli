@@ -41,6 +41,7 @@ type RemoteSettings struct {
 	CancelRewindEnabled              *bool                `json:"cancel_rewind_enabled"`
 	AllowBackgroundOperator          *bool                `json:"allow_background_operator"`
 	AutoBackgroundOnTimeout          *bool                `json:"auto_background_on_timeout"`
+	MaxMCPOutputBytes                *uint64              `json:"max_mcp_output_bytes"`
 	AutoWakeEnabled                  *bool                `json:"auto_wake_enabled"`
 	FeedbackEnabled                  *bool                `json:"feedback_enabled"`
 	SessionRecap                     *bool                `json:"session_recap"`
@@ -205,6 +206,12 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 	c.GateURL = remote.GateURL
 	c.GateLabel = remote.GateLabel
 	c.ShowResolvedModel = remote.ShowResolvedModel
+	if !c.mcpMaxOutputConfigured {
+		c.MCP.MaxOutputBytes = 20_000
+		if remote.MaxMCPOutputBytes != nil && *remote.MaxMCPOutputBytes > 0 {
+			c.MCP.MaxOutputBytes = *remote.MaxMCPOutputBytes
+		}
+	}
 	if !c.uiPermissionModeConfigured {
 		c.UI.PermissionMode = "ask"
 		if remote.PermissionMode != nil {

@@ -70,7 +70,7 @@ type Config struct {
 	Worktrees               *worktree.Manager
 	ProgressInterval        time.Duration
 	ParentMCPServers        []mcp.ServerConfig
-	StartMCPServers         func(context.Context, string, *tools.Registry, []mcp.ServerConfig) (func(), error)
+	StartMCPServers         func(context.Context, string, *tools.Registry, []mcp.ServerConfig, string) (func(), error)
 	SessionDir              string
 	ParentSessionID         string
 	AutoWake                func(tools.SubagentResult) bool
@@ -100,7 +100,7 @@ type Manager struct {
 	worktrees               *worktree.Manager
 	progressInterval        time.Duration
 	parentMCPServers        []mcp.ServerConfig
-	startMCPServers         func(context.Context, string, *tools.Registry, []mcp.ServerConfig) (func(), error)
+	startMCPServers         func(context.Context, string, *tools.Registry, []mcp.ServerConfig, string) (func(), error)
 	sessionDir              string
 	parentSessionID         string
 	defaultType             string
@@ -447,7 +447,11 @@ func (m *Manager) buildRuntime(root string, childRegistry *tools.Registry, defin
 		if m.startMCPServers == nil {
 			return nil, nil, nil, errors.New("subagent-owned MCP servers are not available")
 		}
-		closeMCP, err := m.startMCPServers(m.ctx, root, view, ownedMCP)
+		artifactDir := ""
+		if m.sessionDir != "" {
+			artifactDir = filepath.Join(m.sessionDir, "artifacts", id)
+		}
+		closeMCP, err := m.startMCPServers(m.ctx, root, view, ownedMCP, artifactDir)
 		if err != nil {
 			return nil, nil, nil, err
 		}

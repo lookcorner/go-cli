@@ -816,7 +816,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		}
 		fmt.Fprintf(statusOutput, "[gork] discovered %d skill(s)\n", skillCatalog.Count())
 	}
-	mcpRuntime := newSessionMCPRuntime(ctx, cfg, ws.Root(), registry, approver, tokenProvider, statusOutput)
+	mcpRuntime := newSessionMCPRuntime(ctx, cfg, ws.Root(), artifactDir, registry, approver, tokenProvider, statusOutput)
 	if err := mcpRuntime.Update(ctx, nil); err != nil {
 		return err
 	}
@@ -928,8 +928,8 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			},
 			DisablePermissionBypass: cfg.DisableBypassPermissionsMode,
 			ParentMCPServers:        mcpRuntime.Configs(),
-			StartMCPServers: func(childCtx context.Context, root string, childTools *tools.Registry, servers []mcp.ServerConfig) (func(), error) {
-				return startSubagentMCPServers(childCtx, cfg, root, childTools, approver, tokenProvider, statusOutput, servers)
+			StartMCPServers: func(childCtx context.Context, root string, childTools *tools.Registry, servers []mcp.ServerConfig, childArtifacts string) (func(), error) {
+				return startSubagentMCPServers(childCtx, cfg, root, childTools, approver, tokenProvider, statusOutput, servers, childArtifacts)
 			},
 			NewClient: func(model subagent.ModelRuntime) (agent.ResponseStreamer, error) {
 				child := cfg
@@ -3818,7 +3818,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			cleanup()
 			return nil, nil, err
 		}
-		mcpRuntime = newSessionMCPRuntime(sessionCtx, sessionCfg, ws.Root(), registry, approver, sessionTokenProvider, statusOutput)
+		mcpRuntime = newSessionMCPRuntime(sessionCtx, sessionCfg, ws.Root(), artifactDir, registry, approver, sessionTokenProvider, statusOutput)
 		mcpRuntime.SetSDKServers(sessionConfig.MCPSDKServers, sessionConfig.MCPReverseCall)
 		mcpRuntime.SetProgress(sessionConfig.MCPInitProgress)
 		mcpRuntime.SetToolsChanged(func(name string, tools []mcp.ToolInfo) {
@@ -3915,8 +3915,8 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 				CancelWake:              func(id string) { server.CancelSubagentWake(logger.ID(), id) },
 				DisablePermissionBypass: sessionCfg.DisableBypassPermissionsMode,
 				ParentMCPServers:        mcpRuntime.Configs(),
-				StartMCPServers: func(childCtx context.Context, root string, childTools *tools.Registry, servers []mcp.ServerConfig) (func(), error) {
-					return startSubagentMCPServers(childCtx, sessionCfg, root, childTools, approver, sessionTokenProvider, statusOutput, servers)
+				StartMCPServers: func(childCtx context.Context, root string, childTools *tools.Registry, servers []mcp.ServerConfig, childArtifacts string) (func(), error) {
+					return startSubagentMCPServers(childCtx, sessionCfg, root, childTools, approver, sessionTokenProvider, statusOutput, servers, childArtifacts)
 				},
 				NewClient: func(model subagent.ModelRuntime) (agent.ResponseStreamer, error) {
 					modelCatalogMu.RLock()
@@ -5403,6 +5403,7 @@ func startMCPServers(
 	stderr io.Writer,
 	toolsChanged func(string, []mcp.ToolInfo),
 	progress func(total, connected int),
+	artifactDir string,
 ) (clients []*mcp.Client, err error) {
 	names := make([]string, 0, len(cfg.MCPServers))
 	for name, server := range cfg.MCPServers {
@@ -5454,7 +5455,7 @@ func startMCPServers(
 			return nil, err
 		}
 		clients = append(clients, client)
-		if err = registerMCPClient(ctx, name, client, initialized, cfg.DisabledMCPTools[name], registry, approver, stderr, toolsChanged); err != nil {
+		if err = registerMCPClient(ctx, name, client, initialized, cfg.DisabledMCPTools[name], registry, approver, stderr, toolsChanged, mcp.OutputConfig{MaxBytes: cfg.MCP.MaxOutputBytes, ArtifactDir: artifactDir}); err != nil {
 			closeClients()
 			return nil, err
 		}
@@ -5475,6 +5476,7 @@ func registerMCPClient(
 	approver tools.Approver,
 	stderr io.Writer,
 	toolsChanged func(string, []mcp.ToolInfo),
+	output mcp.OutputConfig,
 ) error {
 	var remoteTools []mcp.ToolInfo
 	if initialized.Capabilities.Tools != nil {
@@ -5491,7 +5493,7 @@ func registerMCPClient(
 		disabledTools[toolName] = true
 	}
 	remoteTools = slices.DeleteFunc(remoteTools, func(tool mcp.ToolInfo) bool { return disabledTools[tool.Name] })
-	toolAdapters := mcp.NewToolAdapters(client, name, remoteTools, approver)
+	toolAdapters := mcp.NewToolAdapters(client, name, remoteTools, approver, output)
 	remoteNames := make([]string, 0, len(toolAdapters))
 	for _, adapter := range toolAdapters {
 		if err := registry.Register(adapter); err != nil {
@@ -5515,7 +5517,7 @@ func registerMCPClient(
 				return
 			}
 			updated = slices.DeleteFunc(updated, func(tool mcp.ToolInfo) bool { return disabledTools[tool.Name] })
-			updatedAdapters := mcp.NewToolAdapters(client, name, updated, approver)
+			updatedAdapters := mcp.NewToolAdapters(client, name, updated, approver, output)
 			replacements := make([]tools.Tool, 0, len(updatedAdapters))
 			for _, adapter := range updatedAdapters {
 				replacements = append(replacements, adapter)
@@ -5566,6 +5568,7 @@ func startACPMCPServers(
 	stderr io.Writer,
 	toolsChanged func(string, []mcp.ToolInfo),
 	progress func(connected int),
+	artifactDir string,
 ) ([]*mcp.Client, error) {
 	clients := make([]*mcp.Client, 0, len(servers))
 	for _, server := range servers {
@@ -5581,7 +5584,7 @@ func startACPMCPServers(
 			return nil, err
 		}
 		clients = append(clients, client)
-		if err := registerMCPClient(ctx, server.Name, client, initialized, disabledTools[server.Name], registry, approver, stderr, toolsChanged); err != nil {
+		if err := registerMCPClient(ctx, server.Name, client, initialized, disabledTools[server.Name], registry, approver, stderr, toolsChanged, mcp.OutputConfig{MaxBytes: cfg.MCP.MaxOutputBytes, ArtifactDir: artifactDir}); err != nil {
 			for _, client := range clients {
 				_ = client.Close()
 			}
@@ -5603,6 +5606,7 @@ func startSubagentMCPServers(
 	tokenProvider api.TokenProvider,
 	stderr io.Writer,
 	servers []mcp.ServerConfig,
+	artifactDir string,
 ) (func(), error) {
 	cfg.MCPServers = make(map[string]config.MCPServerConfig, len(servers))
 	for _, server := range servers {
@@ -5611,7 +5615,7 @@ func startSubagentMCPServers(
 			Env: cloneStringsMap(server.Env), URL: server.URL, Headers: cloneStringsMap(server.Headers),
 		}
 	}
-	clients, err := startMCPServers(ctx, cfg, workspaceRoot, registry, approver, tokenProvider, stderr, nil, nil)
+	clients, err := startMCPServers(ctx, cfg, workspaceRoot, registry, approver, tokenProvider, stderr, nil, nil, artifactDir)
 	if err != nil {
 		return nil, err
 	}
@@ -5627,6 +5631,7 @@ type sessionMCPRuntime struct {
 	ctx           context.Context
 	base          config.Config
 	workspaceRoot string
+	artifactDir   string
 	registry      *tools.Registry
 	approver      tools.Approver
 	tokenProvider api.TokenProvider
@@ -5649,6 +5654,7 @@ func newSessionMCPRuntime(
 	ctx context.Context,
 	base config.Config,
 	workspaceRoot string,
+	artifactDir string,
 	registry *tools.Registry,
 	approver tools.Approver,
 	tokenProvider api.TokenProvider,
@@ -5656,7 +5662,7 @@ func newSessionMCPRuntime(
 ) *sessionMCPRuntime {
 	base.MCPServers = cloneMCPConfigMap(base.MCPServers)
 	return &sessionMCPRuntime{
-		ctx: ctx, base: base, workspaceRoot: workspaceRoot, registry: registry,
+		ctx: ctx, base: base, workspaceRoot: workspaceRoot, artifactDir: artifactDir, registry: registry,
 		approver: approver, tokenProvider: tokenProvider, stderr: stderr,
 	}
 }
@@ -5781,7 +5787,7 @@ func (r *sessionMCPRuntime) startLocked(requested []mcp.ServerConfig, progress f
 	if progress != nil {
 		regularProgress = func(_ int, connected int) { progress(total, connected) }
 	}
-	clients, err := startMCPServers(r.ctx, cfg, r.workspaceRoot, r.registry, r.approver, r.tokenProvider, r.stderr, r.toolsChanged, regularProgress)
+	clients, err := startMCPServers(r.ctx, cfg, r.workspaceRoot, r.registry, r.approver, r.tokenProvider, r.stderr, r.toolsChanged, regularProgress, r.artifactDir)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -5799,7 +5805,7 @@ func (r *sessionMCPRuntime) startLocked(requested []mcp.ServerConfig, progress f
 		if progress != nil {
 			progress(total, offset+connected)
 		}
-	})
+	}, r.artifactDir)
 	if err != nil {
 		for _, client := range clients {
 			_ = client.Close()

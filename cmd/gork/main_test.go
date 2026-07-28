@@ -2012,7 +2012,7 @@ func TestSessionMCPRuntimeMergesAndRestoresConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	registry := tools.NewRegistry(ws, nil)
-	live := newSessionMCPRuntime(context.Background(), config.Config{}, root, registry, nil, nil, io.Discard)
+	live := newSessionMCPRuntime(context.Background(), config.Config{}, root, "", registry, nil, nil, io.Discard)
 	var changes [][2][]mcp.ServerConfig
 	live.SetNotify(func(before, after []mcp.ServerConfig) {
 		changes = append(changes, [2][]mcp.ServerConfig{before, after})
@@ -2168,7 +2168,7 @@ func TestSessionMCPRuntimeKeepsSDKServersAcrossUpdates(t *testing.T) {
 		}
 		return json.Marshal(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": result})
 	}
-	runtime := newSessionMCPRuntime(context.Background(), config.Config{}, root, registry, nil, nil, io.Discard)
+	runtime := newSessionMCPRuntime(context.Background(), config.Config{}, root, "", registry, nil, nil, io.Discard)
 	runtime.SetSDKServers([]mcp.ServerConfig{{Type: "acp", Name: "sdk-tools", ServerID: "srv-0"}}, reverse)
 	var progress [][2]int
 	runtime.SetProgress(func(total, connected int) { progress = append(progress, [2]int{total, connected}) })

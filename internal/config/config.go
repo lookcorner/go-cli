@@ -44,6 +44,7 @@ type Config struct {
 	Env                             map[string]string          `json:"env,omitempty"`
 	ShellEnvironmentPolicy          ShellEnvironmentPolicy     `json:"shell_environment_policy,omitempty"`
 	MCPServers                      map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
+	MCP                             MCPConfig                  `json:"mcp"`
 	DisabledMCPServers              []string                   `json:"disabled_mcp_servers,omitempty"`
 	DisabledMCPTools                map[string][]string        `json:"disabled_mcp_tools,omitempty"`
 	LSPServers                      map[string]LSPServerConfig `json:"lsp_servers,omitempty"`
@@ -156,6 +157,13 @@ type Config struct {
 	disabledModelsConfigured        bool
 	bashAllowBackgroundConfigured   bool
 	bashAutoBackgroundConfigured    bool
+	mcpMaxOutputConfigured          bool
+}
+
+// MCPConfig bounds the amount of one MCP tool result placed inline in model
+// context. Oversized results remain recoverable from the session artifacts.
+type MCPConfig struct {
+	MaxOutputBytes uint64 `json:"max_output_bytes"`
 }
 
 type AutoModeConfig struct {
@@ -597,21 +605,24 @@ type fileConfig struct {
 	ShellEnvironmentPolicy *fileShellEnvironmentPolicy `json:"shell_environment_policy,omitempty" toml:"shell_environment_policy"`
 	HTTPTimeout            string                      `json:"http_timeout,omitempty" toml:"http_timeout"`
 	MCPServers             map[string]MCPServerConfig  `json:"mcp_servers,omitempty" toml:"mcp_servers"`
-	DisabledMCPServers     []string                    `json:"disabled_mcp_servers,omitempty" toml:"disabled_mcp_servers"`
-	DisabledMCPTools       map[string][]string         `json:"disabled_mcp_tools,omitempty" toml:"disabled_mcp_tools"`
-	LSPServers             map[string]LSPServerConfig  `json:"lsp_servers,omitempty" toml:"lsp_servers"`
-	Permission             PermissionConfig            `json:"permission,omitempty" toml:"permission"`
-	Sandbox                SandboxConfig               `json:"sandbox,omitempty" toml:"sandbox"`
-	AutoMode               AutoModeConfig              `json:"auto_mode,omitempty" toml:"auto_mode"`
-	Session                sessionConfig               `json:"session,omitempty" toml:"session"`
-	ContextWindow          int                         `json:"context_window,omitempty" toml:"context_window"`
-	Compaction             fileCompactionConfig        `json:"compaction,omitempty" toml:"compaction"`
-	Memory                 *fileMemoryConfig           `json:"memory,omitempty" toml:"memory"`
-	Compat                 fileCompatConfig            `json:"compat,omitempty" toml:"compat"`
-	Skills                 SkillsConfig                `json:"skills,omitempty" toml:"skills"`
-	Plugins                PluginsConfig               `json:"plugins,omitempty" toml:"plugins"`
-	Marketplace            MarketplaceConfig           `json:"marketplace,omitempty" toml:"marketplace"`
-	CLI                    struct {
+	MCP                    struct {
+		MaxOutputBytes *uint64 `json:"max_output_bytes,omitempty" toml:"max_output_bytes"`
+	} `json:"mcp,omitempty" toml:"mcp"`
+	DisabledMCPServers []string                   `json:"disabled_mcp_servers,omitempty" toml:"disabled_mcp_servers"`
+	DisabledMCPTools   map[string][]string        `json:"disabled_mcp_tools,omitempty" toml:"disabled_mcp_tools"`
+	LSPServers         map[string]LSPServerConfig `json:"lsp_servers,omitempty" toml:"lsp_servers"`
+	Permission         PermissionConfig           `json:"permission,omitempty" toml:"permission"`
+	Sandbox            SandboxConfig              `json:"sandbox,omitempty" toml:"sandbox"`
+	AutoMode           AutoModeConfig             `json:"auto_mode,omitempty" toml:"auto_mode"`
+	Session            sessionConfig              `json:"session,omitempty" toml:"session"`
+	ContextWindow      int                        `json:"context_window,omitempty" toml:"context_window"`
+	Compaction         fileCompactionConfig       `json:"compaction,omitempty" toml:"compaction"`
+	Memory             *fileMemoryConfig          `json:"memory,omitempty" toml:"memory"`
+	Compat             fileCompatConfig           `json:"compat,omitempty" toml:"compat"`
+	Skills             SkillsConfig               `json:"skills,omitempty" toml:"skills"`
+	Plugins            PluginsConfig              `json:"plugins,omitempty" toml:"plugins"`
+	Marketplace        MarketplaceConfig          `json:"marketplace,omitempty" toml:"marketplace"`
+	CLI                struct {
 		UseLeader *bool `json:"use_leader,omitempty" toml:"use_leader"`
 	} `json:"cli,omitempty" toml:"cli"`
 	Features struct {
@@ -794,6 +805,9 @@ type requirementsFile struct {
 	Toolset       struct {
 		AskUserQuestion *fileAskUserQuestionConfig `toml:"ask_user_question"`
 	} `toml:"toolset"`
+	MCP *struct {
+		MaxOutputBytes *uint64 `toml:"max_output_bytes"`
+	} `toml:"mcp"`
 	UI struct {
 		DisableBypassPermissionsMode any              `toml:"disable_bypass_permissions_mode"`
 		Yolo                         any              `toml:"yolo"`
@@ -985,6 +999,7 @@ func Load(path string) (Config, error) {
 		Backend:                     "responses",
 		MaxSteps:                    20,
 		HTTPTimeout:                 10 * time.Minute,
+		MCP:                         MCPConfig{MaxOutputBytes: 20_000},
 		ContextWindow:               131072,
 		AutoCompactThresholdPercent: 85,
 		LoadEnvrc:                   true,
@@ -1205,6 +1220,12 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 		}
 		for name, server := range disk.MCPServers {
 			cfg.MCPServers[name] = server
+		}
+	}
+	if disk.MCP.MaxOutputBytes != nil {
+		if *disk.MCP.MaxOutputBytes > 0 {
+			cfg.MCP.MaxOutputBytes = *disk.MCP.MaxOutputBytes
+			cfg.mcpMaxOutputConfigured = true
 		}
 	}
 	if disk.DisabledMCPServers != nil {
@@ -2258,6 +2279,12 @@ func applyEnv(cfg *Config) {
 	if value, ok := envBool("GROK_LOGIN_ENV"); ok {
 		cfg.Toolset.Bash.LoginShellCapture = value
 	}
+	if raw := firstEnv("GROK_MAX_MCP_OUTPUT_BYTES", "MAX_MCP_OUTPUT_BYTES"); raw != "" {
+		if value, err := strconv.ParseUint(strings.TrimSpace(raw), 10, 64); err == nil && value > 0 {
+			cfg.MCP.MaxOutputBytes = value
+			cfg.mcpMaxOutputConfigured = true
+		}
+	}
 	if value := firstEnv("GORK_API_KEY", "XAI_API_KEY", "OPENAI_API_KEY"); value != "" {
 		cfg.APIKey = value
 	}
@@ -2805,6 +2832,10 @@ func applyRequirementsData(cfg *Config, data []byte, source string, envFailClose
 	}
 	if requirement.Toolset.AskUserQuestion != nil {
 		applyAskUserQuestionConfig(&cfg.AskUserQuestion, *requirement.Toolset.AskUserQuestion)
+	}
+	if requirement.MCP != nil && requirement.MCP.MaxOutputBytes != nil && *requirement.MCP.MaxOutputBytes > 0 {
+		cfg.MCP.MaxOutputBytes = *requirement.MCP.MaxOutputBytes
+		cfg.mcpMaxOutputConfigured = true
 	}
 	if disabled, ok := requirement.UI.DisableBypassPermissionsMode.(bool); ok && disabled {
 		cfg.DisableBypassPermissionsMode = true
