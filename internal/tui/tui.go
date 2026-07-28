@@ -2378,12 +2378,16 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.viewer = &readOnlyViewer{title: "Side question", content: content, at: time.Now()}
 		m.scroll = 0
-	case deepResearchDoneEvent:
+	case workflowDoneEvent:
+		label := "workflow"
+		if msg.name == "deep-research" {
+			label = "deep research"
+		}
 		if msg.err != nil {
-			m.status = "deep research failed"
-			m.appendSystem("Deep research failed: " + msg.err.Error())
+			m.status = label + " failed"
+			m.appendSystem(fmt.Sprintf("Workflow `%s` failed: %v", msg.name, msg.err))
 		} else {
-			m.status = "deep research complete"
+			m.status = label + " complete"
 			m.appendSystem(msg.result)
 		}
 	case mcpDoneEvent:
@@ -3243,6 +3247,11 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.status = "workflows"
 			return m, nil
 		case "/workflow":
+			if name, input, launch := workflowLaunchArgs(fields[1:]); launch {
+				message, command := m.startNamedWorkflow(name, input)
+				m.appendSystem(message)
+				return m, command
+			}
 			m.appendSystem(m.handleWorkflowSlash(fields[1:]))
 			m.status = "workflow"
 			return m, nil

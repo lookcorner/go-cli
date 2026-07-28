@@ -108,11 +108,11 @@ func (s workflowAgentSpawner) SpawnAgent(ctx context.Context, opts workflow.Agen
 
 func (t *workflowTool) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
 	var args struct {
-		Name         string         `json:"name"`
-		ScriptPath   string         `json:"script_path"`
-		Script       string         `json:"script"`
-		ValidateOnly bool           `json:"validate_only"`
-		Args         map[string]any `json:"args"`
+		Name         string          `json:"name"`
+		ScriptPath   string          `json:"script_path"`
+		Script       string          `json:"script"`
+		ValidateOnly bool            `json:"validate_only"`
+		Args         json.RawMessage `json:"args"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return "", fmt.Errorf("invalid workflow arguments: %w", err)

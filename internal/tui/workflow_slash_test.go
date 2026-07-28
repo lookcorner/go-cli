@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -74,6 +75,68 @@ func TestDeepResearchSlashUsesWorkflowTool(t *testing.T) {
 	}
 }
 
+func TestNamedWorkflowSlashPreservesJSONObjectArgs(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, ".grok", "workflows")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	script := `let meta = #{
+  name: "demo-flow",
+  description: "demo workflow",
+};
+fn main() { complete("ok"); }
+`
+	if err := os.WriteFile(filepath.Join(dir, "demo-flow.rhai"), []byte(script), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, nil)
+	defer registry.Close()
+	t.Setenv("GORK_WORKFLOW_RUNNER", buildTUIWorkflowRunner(t))
+
+	m := &model{ctx: context.Background(), workspace: root, runner: &agent.Runner{Tools: registry}}
+	m.setInput(`/workflow demo-flow {"target":"origin/main...HEAD","depth":3}`)
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command == nil || m.status != "workflow running" || !strings.Contains(m.transcript.String(), "demo-flow") {
+		t.Fatalf("status=%q command=%v transcript=%q", m.status, command != nil, m.transcript.String())
+	}
+	updated, followup := m.Update(command())
+	m = updated.(*model)
+	if followup != nil || m.status != "workflow complete" || !strings.Contains(m.transcript.String(), "verified report") {
+		t.Fatalf("status=%q followup=%v transcript=%q", m.status, followup != nil, m.transcript.String())
+	}
+}
+
+func TestNamedWorkflowArgsMatchReferenceFallback(t *testing.T) {
+	if namedWorkflowArgs("") != nil {
+		t.Fatal("empty input did not preserve null args")
+	}
+	var args map[string]any
+	if err := json.Unmarshal(namedWorkflowArgs("review release"), &args); err != nil || args["query"] != "review release" || args["objective"] != "review release" {
+		t.Fatalf("args=%#v err=%v", args, err)
+	}
+	if err := json.Unmarshal(namedWorkflowArgs(`{"depth":3}`), &args); err != nil || args["depth"] != float64(3) {
+		t.Fatalf("typed args=%#v err=%v", args, err)
+	}
+}
+
+func TestWorkflowLaunchArgsKeepManagementFormsSeparate(t *testing.T) {
+	for _, fields := range [][]string{nil, {"validate", "demo"}, {"pause", "demo"}, {"demo", "stop"}} {
+		if name, input, ok := workflowLaunchArgs(fields); ok {
+			t.Fatalf("fields=%v launched name=%q input=%q", fields, name, input)
+		}
+	}
+	name, input, ok := workflowLaunchArgs([]string{"demo", `{"depth":3}`})
+	if !ok || name != "demo" || input != `{"depth":3}` {
+		t.Fatalf("name=%q input=%q ok=%v", name, input, ok)
+	}
+}
+
 func buildTUIWorkflowRunner(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -93,7 +156,11 @@ func main() {
   if json.Unmarshal(scanner.Bytes(), &start) != nil || start["type"] != "start" { os.Exit(3) }
   script, _ := start["script"].(string)
   args, _ := start["args"].(map[string]any)
-  if !strings.Contains(script, "name: \"deep-research\"") || args["query"] != "verify widgets" { os.Exit(4) }
+	if strings.Contains(script, "name: \"deep-research\"") {
+		if args["query"] != "verify widgets" { os.Exit(4) }
+	} else if strings.Contains(script, "name: \"demo-flow\"") {
+		if args["target"] != "origin/main...HEAD" || args["depth"] != float64(3) { os.Exit(4) }
+	} else { os.Exit(4) }
   _ = json.NewEncoder(os.Stdout).Encode(map[string]any{
     "type":"outcome", "outcome":"completed", "result":map[string]any{"report":"verified report"},
   })
@@ -111,7 +178,7 @@ func main() {
 
 func TestDeepResearchRunnerUnavailable(t *testing.T) {
 	message := runDeepResearch(context.Background(), nil, "query")()
-	done, ok := message.(deepResearchDoneEvent)
+	done, ok := message.(workflowDoneEvent)
 	if !ok || done.err == nil || !strings.Contains(done.err.Error(), "unavailable") {
 		t.Fatalf("message=%#v", message)
 	}

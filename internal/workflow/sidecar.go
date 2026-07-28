@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -19,7 +20,7 @@ var lookPath = exec.LookPath
 var commandContext = exec.CommandContext
 
 // RunWithSidecar starts an external Rhai runner and serves host requests until outcome.
-func RunWithSidecar(ctx context.Context, runnerPath string, script string, args map[string]any, host *Host) (OutcomeMessage, error) {
+func RunWithSidecar(ctx context.Context, runnerPath string, script string, args json.RawMessage, host *Host) (OutcomeMessage, error) {
 	if strings.TrimSpace(runnerPath) == "" {
 		return OutcomeMessage{}, ErrRunnerUnavailable
 	}
@@ -28,6 +29,13 @@ func RunWithSidecar(ctx context.Context, runnerPath string, script string, args 
 	}
 	if host == nil {
 		host = &Host{}
+	}
+	argsRaw := json.RawMessage(`null`)
+	if len(bytes.TrimSpace(args)) > 0 {
+		if !json.Valid(args) {
+			return OutcomeMessage{}, errors.New("workflow args are not valid JSON")
+		}
+		argsRaw = args
 	}
 
 	cmd := commandContext(ctx, runnerPath)
@@ -45,17 +53,6 @@ func RunWithSidecar(ctx context.Context, runnerPath string, script string, args 
 		return OutcomeMessage{}, fmt.Errorf("start workflow runner: %w", err)
 	}
 
-	argsRaw := json.RawMessage(`{}`)
-	if len(args) > 0 {
-		encoded, marshalErr := json.Marshal(args)
-		if marshalErr != nil {
-			_ = stdin.Close()
-			_ = cmd.Process.Kill()
-			_ = cmd.Wait()
-			return OutcomeMessage{}, marshalErr
-		}
-		argsRaw = encoded
-	}
 	start := StartMessage{
 		Type:        MsgStart,
 		Script:      script,
@@ -141,7 +138,7 @@ func writeJSONLine(w io.Writer, value any) error {
 }
 
 // Execute runs a resolved workflow via the external Rhai sidecar + host agent().
-func Execute(ctx context.Context, resolved Resolved, args map[string]any, host *Host) (string, error) {
+func Execute(ctx context.Context, resolved Resolved, args json.RawMessage, host *Host) (string, error) {
 	if resolved.Source == "builtin" && strings.TrimSpace(resolved.Script) == "" {
 		return "", ErrBuiltinScriptMissing
 	}

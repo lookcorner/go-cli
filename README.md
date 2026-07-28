@@ -1523,7 +1523,10 @@ mapped to local subagents.
 Workflow `args` retain their JSON types, including the numeric `breadth` accepted
 by the builtin `deep-research` workflow. `/deep-research <query>` launches that
 builtin asynchronously through the same tool and writes its result back to the
-TUI; generic run-management UI remains deferred.
+TUI. `/workflow <name> [args]` does the same for saved workflows: a JSON object
+is preserved as-is, plain text becomes both `query` and `objective`, and omitted
+input is sent as JSON `null`. Pause/resume/stop/save and the live run dashboard
+remain deferred.
 
 Live session MCP servers are exposed through `x.ai/mcp/list`, and
 `x.ai/mcp/call` invokes a named server tool through the same client and

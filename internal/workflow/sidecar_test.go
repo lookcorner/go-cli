@@ -74,7 +74,7 @@ func TestRunWithSidecarFakeRunner(t *testing.T) {
 			OnPhase: func(title string, _ bool) { phases = append(phases, title) },
 		},
 	}
-	outcome, err := RunWithSidecar(context.Background(), runner, "let meta = #{ name: \"x\", description: \"d\" };", map[string]any{"q": "1"}, host)
+	outcome, err := RunWithSidecar(context.Background(), runner, "let meta = #{ name: \"x\", description: \"d\" };", json.RawMessage(`{"q":"1"}`), host)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,11 +98,36 @@ func TestRunWithSidecarPreservesTypedArgs(t *testing.T) {
 	outcome, err := RunWithSidecar(
 		context.Background(), runner,
 		"let meta = #{ name: \"x\", description: \"d\" };",
-		map[string]any{"breadth": 3, "strict": true},
+		json.RawMessage(`{"breadth":3,"strict":true}`),
 		&Host{Spawner: &stubSpawner{}},
 	)
 	if err != nil || outcome.Outcome != "completed" {
 		t.Fatalf("outcome=%+v err=%v", outcome, err)
+	}
+}
+
+func TestRunWithSidecarPreservesNullArgs(t *testing.T) {
+	runner := buildFakeRunner(t)
+	outcome, err := RunWithSidecar(
+		context.Background(), runner,
+		"let meta = #{ name: \"no-args\", description: \"d\" };",
+		nil,
+		&Host{Spawner: &stubSpawner{}},
+	)
+	if err != nil || outcome.Outcome != "completed" {
+		t.Fatalf("outcome=%+v err=%v", outcome, err)
+	}
+}
+
+func TestRunWithSidecarRejectsInvalidArgsBeforeStart(t *testing.T) {
+	_, err := RunWithSidecar(
+		context.Background(), "unused-runner",
+		"let meta = #{ name: \"x\", description: \"d\" };",
+		json.RawMessage(`{"broken"`),
+		nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "not valid JSON") {
+		t.Fatalf("err=%v", err)
 	}
 }
 
@@ -129,7 +154,7 @@ func TestExecuteEmbeddedDeepResearch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := Execute(context.Background(), resolved, map[string]any{"query": "verify this"}, &Host{Spawner: &stubSpawner{}})
+	result, err := Execute(context.Background(), resolved, json.RawMessage(`{"query":"verify this"}`), &Host{Spawner: &stubSpawner{}})
 	if err != nil || !strings.Contains(result, "workflow completed") {
 		t.Fatalf("result=%q err=%v", result, err)
 	}
@@ -154,16 +179,19 @@ import (
   "bufio"
   "encoding/json"
   "os"
+	"strings"
 )
 func main() {
   in := bufio.NewScanner(os.Stdin)
   if !in.Scan() { os.Exit(2) }
   var start map[string]any
   if json.Unmarshal(in.Bytes(), &start) != nil || start["type"] != "start" { os.Exit(3) }
-	args, ok := start["args"].(map[string]any)
-	if !ok { os.Exit(7) }
-	if args["breadth"] != nil {
-		if args["breadth"] != float64(3) || args["strict"] != true { os.Exit(7) }
+	if strings.Contains(start["script"].(string), "name: \"no-args\"") {
+		if start["args"] != nil { os.Exit(7) }
+	} else {
+		args, ok := start["args"].(map[string]any)
+		if !ok { os.Exit(7) }
+		if args["breadth"] != nil && (args["breadth"] != float64(3) || args["strict"] != true) { os.Exit(7) }
 	}
   enc := json.NewEncoder(os.Stdout)
   _ = enc.Encode(map[string]any{"type":"host_notify","kind":"phase","title":"Demo"})

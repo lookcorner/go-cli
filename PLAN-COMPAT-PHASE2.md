@@ -384,7 +384,9 @@ Remote relay / workspace hub remains planned/XL (product-blocked). See queue #5.
       `agent()` → SubagentBackend). The reference `deep-research` script is
       embedded and executable through that path with typed JSON arguments;
       TUI `/deep-research <query>` launches it asynchronously. Journal and
-      generic run-management UI remain follow-ups.
+      pause/resume/stop/save run management remain follow-ups. TUI
+      `/workflow <name> [args]` launches saved workflows with the reference
+      JSON-object, text-fallback, and null argument mapping.
 
 ## Remaining XL / blocked (do not start without explicit kickoff)
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -13,26 +14,77 @@ import (
 	"github.com/lookcorner/go-cli/internal/workflow"
 )
 
-type deepResearchDoneEvent struct {
+type workflowDoneEvent struct {
+	name   string
 	result string
 	err    error
 }
 
-func runDeepResearch(ctx context.Context, registry *tools.Registry, query string) tea.Cmd {
+func runWorkflow(ctx context.Context, registry *tools.Registry, name string, args json.RawMessage) tea.Cmd {
 	return func() tea.Msg {
 		if registry == nil || !registry.HasTool("workflow") {
-			return deepResearchDoneEvent{err: fmt.Errorf("workflow tool is unavailable")}
+			return workflowDoneEvent{name: name, err: fmt.Errorf("workflow tool is unavailable")}
 		}
-		arguments, err := json.Marshal(map[string]any{
-			"name": "deep-research",
-			"args": map[string]any{"query": query},
-		})
+		request := map[string]any{"name": name}
+		if len(args) > 0 {
+			request["args"] = args
+		}
+		arguments, err := json.Marshal(request)
 		if err != nil {
-			return deepResearchDoneEvent{err: err}
+			return workflowDoneEvent{name: name, err: err}
 		}
 		result, err := registry.Execute(ctx, "workflow", arguments)
-		return deepResearchDoneEvent{result: result, err: err}
+		return workflowDoneEvent{name: name, result: result, err: err}
 	}
+}
+
+func runDeepResearch(ctx context.Context, registry *tools.Registry, query string) tea.Cmd {
+	args, _ := json.Marshal(map[string]string{"query": query})
+	return runWorkflow(ctx, registry, "deep-research", args)
+}
+
+func namedWorkflowArgs(input string) json.RawMessage {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return nil
+	}
+	var object map[string]any
+	if json.Unmarshal([]byte(input), &object) == nil && object != nil {
+		return json.RawMessage(input)
+	}
+	args, _ := json.Marshal(map[string]string{"query": input, "objective": input})
+	return args
+}
+
+func workflowLaunchArgs(fields []string) (name, input string, ok bool) {
+	if len(fields) == 0 {
+		return "", "", false
+	}
+	operations := []string{"list", "validate", "pause", "resume", "stop", "save"}
+	first := strings.ToLower(fields[0])
+	if slices.Contains(operations, first) || len(fields) == 2 && slices.Contains(operations[2:], strings.ToLower(fields[1])) {
+		return "", "", false
+	}
+	return fields[0], strings.Join(fields[1:], " "), true
+}
+
+func (m *model) startNamedWorkflow(name, input string) (string, tea.Cmd) {
+	if m.runner == nil || m.runner.Tools == nil || !m.runner.Tools.HasTool("workflow") {
+		m.status = "workflow unavailable"
+		return "Workflow launch is unavailable because the workflow tool is disabled.", nil
+	}
+	cwd := strings.TrimSpace(m.workspace)
+	resolved, err := workflow.ResolveByName(cwd, name)
+	if err != nil {
+		m.status = "workflow unavailable"
+		return fmt.Sprintf("Workflow `%s` unavailable: %v", name, err), nil
+	}
+	if err := workflow.ValidateResolved(resolved); err != nil {
+		m.status = "workflow invalid"
+		return fmt.Sprintf("Workflow `%s` invalid: %v", name, err), nil
+	}
+	m.status = "workflow running"
+	return fmt.Sprintf("Workflow `%s` started. Its result will appear here when it finishes.", name), runWorkflow(m.ctx, m.runner.Tools, name, namedWorkflowArgs(input))
 }
 
 func (m *model) listWorkflowsCatalog() string {
@@ -53,7 +105,7 @@ func (m *model) listWorkflowsCatalog() string {
 		}
 		b.WriteString(fmt.Sprintf("%d. `%s` (%s)%s\n   %s\n", index+1, item.Name, item.Source, path, item.Description))
 	}
-	b.WriteString("\nValidate with `/workflow validate <name|path>`. Run deep research with `/deep-research <query>` when GORK_WORKFLOW_RUNNER is set.")
+	b.WriteString("\nLaunch with `/workflow <name> [JSON args or text]`, or validate with `/workflow validate <name|path>`. Deep research also has `/deep-research <query>`.")
 	return strings.TrimSpace(b.String())
 }
 
@@ -96,6 +148,6 @@ func (m *model) handleWorkflowSlash(fields []string) string {
 	case "list":
 		return m.listWorkflowsCatalog()
 	default:
-		return "Usage: /workflows | /workflow validate <name|path> | /deep-research <query>\nGeneric workflow run/stop/resume UI is deferred."
+		return "Usage: /workflow <name> [JSON args or text] | /workflow validate <name|path> | /deep-research <query>\nWorkflow pause/resume/stop/save and the run dashboard are deferred."
 	}
 }
