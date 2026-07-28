@@ -40,7 +40,8 @@ Skill catalogs support all-session `x.ai/skills/refresh-baseline` and
 `x.ai/workflows/list` discovers builtin/project/user `.rhai` workflow meta
 (lightweight map parse; TUI `/workflows` + `/workflow validate`; the embedded
 reference `deep-research` workflow and file workflows run via the
-`GORK_WORKFLOW_RUNNER` NDJSON sidecar + host `agent()` → subagents; journal/UI deferred).
+`GORK_WORKFLOW_RUNNER` NDJSON sidecar with typed JSON arguments + host `agent()`
+→ subagents; journal/UI deferred).
 `x.ai/mcp/setup` persists select-field answers in `$GROK_HOME/mcp_preferences.json`,
 resolves `setup` templates (v0 one-select), reloads MCP, and enables the server.
 `x.ai/mcp/list` also surfaces unresolved setup schemas as `setuprequired`

@@ -74,7 +74,7 @@ func TestRunWithSidecarFakeRunner(t *testing.T) {
 			OnPhase: func(title string, _ bool) { phases = append(phases, title) },
 		},
 	}
-	outcome, err := RunWithSidecar(context.Background(), runner, "let meta = #{ name: \"x\", description: \"d\" };", map[string]string{"q": "1"}, host)
+	outcome, err := RunWithSidecar(context.Background(), runner, "let meta = #{ name: \"x\", description: \"d\" };", map[string]any{"q": "1"}, host)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,6 +90,19 @@ func TestRunWithSidecarFakeRunner(t *testing.T) {
 	text, err := FormatOutcome(outcome)
 	if err != nil || !strings.Contains(text, "workflow completed") {
 		t.Fatalf("format=%q err=%v", text, err)
+	}
+}
+
+func TestRunWithSidecarPreservesTypedArgs(t *testing.T) {
+	runner := buildFakeRunner(t)
+	outcome, err := RunWithSidecar(
+		context.Background(), runner,
+		"let meta = #{ name: \"x\", description: \"d\" };",
+		map[string]any{"breadth": 3, "strict": true},
+		&Host{Spawner: &stubSpawner{}},
+	)
+	if err != nil || outcome.Outcome != "completed" {
+		t.Fatalf("outcome=%+v err=%v", outcome, err)
 	}
 }
 
@@ -116,7 +129,7 @@ func TestExecuteEmbeddedDeepResearch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := Execute(context.Background(), resolved, map[string]string{"query": "verify this"}, &Host{Spawner: &stubSpawner{}})
+	result, err := Execute(context.Background(), resolved, map[string]any{"query": "verify this"}, &Host{Spawner: &stubSpawner{}})
 	if err != nil || !strings.Contains(result, "workflow completed") {
 		t.Fatalf("result=%q err=%v", result, err)
 	}
@@ -147,6 +160,11 @@ func main() {
   if !in.Scan() { os.Exit(2) }
   var start map[string]any
   if json.Unmarshal(in.Bytes(), &start) != nil || start["type"] != "start" { os.Exit(3) }
+	args, ok := start["args"].(map[string]any)
+	if !ok { os.Exit(7) }
+	if args["breadth"] != nil {
+		if args["breadth"] != float64(3) || args["strict"] != true { os.Exit(7) }
+	}
   enc := json.NewEncoder(os.Stdout)
   _ = enc.Encode(map[string]any{"type":"host_notify","kind":"phase","title":"Demo"})
   _ = enc.Encode(map[string]any{

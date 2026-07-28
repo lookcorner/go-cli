@@ -382,7 +382,8 @@ Remote relay / workspace hub remains planned/XL (product-blocked). See queue #5.
 - [x] Workflow execution host + NDJSON Rhai sidecar protocol on
       `compat/workflow-rhai-exec` (`GORK_WORKFLOW_RUNNER` / `gork-workflow-runner`;
       `agent()` → SubagentBackend). The reference `deep-research` script is
-      embedded and executable through that path; journal/UI remain follow-ups.
+      embedded and executable through that path with typed JSON arguments;
+      journal/UI remain follow-ups.
 
 ## Remaining XL / blocked (do not start without explicit kickoff)
 

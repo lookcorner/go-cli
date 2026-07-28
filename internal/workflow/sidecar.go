@@ -19,7 +19,7 @@ var lookPath = exec.LookPath
 var commandContext = exec.CommandContext
 
 // RunWithSidecar starts an external Rhai runner and serves host requests until outcome.
-func RunWithSidecar(ctx context.Context, runnerPath string, script string, args map[string]string, host *Host) (OutcomeMessage, error) {
+func RunWithSidecar(ctx context.Context, runnerPath string, script string, args map[string]any, host *Host) (OutcomeMessage, error) {
 	if strings.TrimSpace(runnerPath) == "" {
 		return OutcomeMessage{}, ErrRunnerUnavailable
 	}
@@ -141,7 +141,7 @@ func writeJSONLine(w io.Writer, value any) error {
 }
 
 // Execute runs a resolved workflow via the external Rhai sidecar + host agent().
-func Execute(ctx context.Context, resolved Resolved, args map[string]string, host *Host) (string, error) {
+func Execute(ctx context.Context, resolved Resolved, args map[string]any, host *Host) (string, error) {
 	if resolved.Source == "builtin" && strings.TrimSpace(resolved.Script) == "" {
 		return "", ErrBuiltinScriptMissing
 	}

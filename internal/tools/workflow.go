@@ -31,7 +31,7 @@ func (t *workflowTool) Definition() api.ToolDefinition {
 			"script_path":   map[string]any{"type": "string", "description": "Path to a .rhai workflow file"},
 			"script":        map[string]any{"type": "string", "description": "Inline Rhai workflow source"},
 			"validate_only": map[string]any{"type": "boolean", "description": "When true, only validate and return"},
-			"args":          map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
+			"args":          map[string]any{"type": "object", "description": "JSON arguments passed to the workflow", "additionalProperties": true},
 		}),
 	}
 }
@@ -108,11 +108,11 @@ func (s workflowAgentSpawner) SpawnAgent(ctx context.Context, opts workflow.Agen
 
 func (t *workflowTool) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
 	var args struct {
-		Name         string            `json:"name"`
-		ScriptPath   string            `json:"script_path"`
-		Script       string            `json:"script"`
-		ValidateOnly bool              `json:"validate_only"`
-		Args         map[string]string `json:"args"`
+		Name         string         `json:"name"`
+		ScriptPath   string         `json:"script_path"`
+		Script       string         `json:"script"`
+		ValidateOnly bool           `json:"validate_only"`
+		Args         map[string]any `json:"args"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return "", fmt.Errorf("invalid workflow arguments: %w", err)
