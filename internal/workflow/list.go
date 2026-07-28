@@ -1,5 +1,5 @@
-// Package workflow discovers named Rhai workflow scripts for ACP listing.
-// Full Rhai execution remains out of scope; this package only scans and parses meta.
+// Package workflow discovers named Rhai workflow scripts for ACP listing and
+// lightweight validation. Full Rhai execution is not implemented yet.
 package workflow
 
 import (

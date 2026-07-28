@@ -365,14 +365,16 @@ Remote relay / workspace hub remains planned/XL (product-blocked). See queue #5.
 - [x] `[ui].simple_mode` (default on; `false` mirrors unset `vim_mode` → on) and
       `[toolset.bash].login_shell_capture` / `GROK_LOGIN_ENV` (default on) on
       `compat/simple-mode-login-shell`.
+- [x] Workflow tool `validate_only` + resolve/validate helpers on
+      `compat/workflow-validate-only` (full Rhai execution still XL).
 
 ## Remaining XL / blocked (do not start without explicit kickoff)
 
 - Full cloud transcript replay: thin chat load already ships; reference hard-offs
   chat kind / `load_history`; neither tree has a messages API. Next slice needs
   a remote fetch contract first.
-- Rhai workflow **execution**: list-only today; match Rust tool/slash launch +
-  host `agent()` (needs Rhai runner FFI/sidecar). Journal/parallel/UI deferred.
+- Rhai workflow **execution**: validate_only tool landed; full run needs Rhai
+  runner FFI/sidecar + host `agent()` (journal/parallel/UI deferred).
 - Remote relay / workspace hub: product-blocked (COMPAT `Workspace server`
   planned).
 

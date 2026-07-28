@@ -277,6 +277,7 @@ func NewRegistryWithHunkMode(ws *workspace.Workspace, approver Approver, mode Hu
 		&exitPlanModeTool{mode: plan},
 		&askUserQuestionTool{questions: questions},
 		webFetch,
+		newWorkflowTool(func() string { return ws.Root() }),
 	}
 	registry := &Registry{
 		tools: make(map[string]Tool, len(items)), approver: approver, processes: processes, goal: goal,
