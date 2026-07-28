@@ -540,12 +540,12 @@ func TestConfigureBashBoundsForegroundTimeoutAndOutput(t *testing.T) {
 		t.Fatalf("default output limit=%d want %d", got, defaultBashOutputBytes)
 	}
 
-	manager.ConfigureBash(0, 0, 0, "", true)
+	manager.ConfigureBash(0, 0, 0, "", true, false, nil)
 	if manager.defaultShellTimeout() != defaultBashTimeout || manager.outputByteLimit() != defaultBashOutputBytes {
 		t.Fatal("zero configuration overrode the built-in defaults")
 	}
 
-	manager.ConfigureBash(30*time.Second, time.Minute, 64, "", true)
+	manager.ConfigureBash(30*time.Second, time.Minute, 64, "", true, false, nil)
 	if got := manager.defaultShellTimeout(); got != 30*time.Second {
 		t.Fatalf("configured timeout=%s", got)
 	}
@@ -582,7 +582,7 @@ func TestConfigureBashBoundsForegroundTimeoutAndOutput(t *testing.T) {
 		t.Fatalf("background output=%q err=%v", background, err)
 	}
 
-	manager.ConfigureBash(50*time.Millisecond, time.Minute, 0, "", true)
+	manager.ConfigureBash(50*time.Millisecond, time.Minute, 0, "", true, false, nil)
 	if got := manager.defaultShellTimeout(); got != 50*time.Millisecond {
 		t.Fatalf("timeout not configured: got %s", got)
 	}
@@ -609,7 +609,7 @@ func TestRunTerminalCommandUsesConfiguredForegroundCeiling(t *testing.T) {
 	}
 	manager := NewProcessManager(ws, PromptApprover{Mode: PermissionAuto})
 	defer manager.Close()
-	manager.ConfigureBash(time.Second, 40*time.Millisecond, 0, "", true)
+	manager.ConfigureBash(time.Second, 40*time.Millisecond, 0, "", true, false, nil)
 	tool := &runTerminalCommandTool{manager: manager}
 
 	timeoutSchema := tool.Definition().Parameters["properties"].(map[string]any)["timeout"].(map[string]any)
@@ -643,7 +643,7 @@ func TestConfiguredBashPrefixAppliesOnlyToBashCommands(t *testing.T) {
 	}
 	manager := NewProcessManager(ws, PromptApprover{Mode: PermissionAuto})
 	defer manager.Close()
-	manager.ConfigureBash(0, 0, 0, "printf prefix", true)
+	manager.ConfigureBash(0, 0, 0, "printf prefix", true, false, nil)
 
 	foreground, err := manager.RunForeground(context.Background(), "printf command", 0)
 	if err != nil || !strings.Contains(foreground, "prefixcommand") {
@@ -677,7 +677,7 @@ func TestRunTerminalCommandCanRejectBackgroundOperator(t *testing.T) {
 	}
 	manager := NewProcessManager(ws, PromptApprover{Mode: PermissionAuto})
 	defer manager.Close()
-	manager.ConfigureBash(0, 0, 0, "", false)
+	manager.ConfigureBash(0, 0, 0, "", false, false, nil)
 	tool := &runTerminalCommandTool{manager: manager}
 
 	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"pkill -f ./worker && ./worker","description":"restart worker"}`)); err == nil || !strings.Contains(err.Error(), "self-matching pkill") {
@@ -693,6 +693,76 @@ func TestRunTerminalCommandCanRejectBackgroundOperator(t *testing.T) {
 	background, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"printf done &","description":"explicit background","is_background":true}`))
 	if err != nil || !strings.Contains(background, "Background task") {
 		t.Fatalf("explicit background=%q err=%v", background, err)
+	}
+}
+
+func TestRunTerminalCommandAutomaticallyMovesToBackground(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture is Unix-specific")
+	}
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewProcessManager(ws, PromptApprover{Mode: PermissionAuto})
+	defer manager.Close()
+	budget := uint64(30)
+	manager.ConfigureBash(time.Second, time.Minute, 0, "", true, true, &budget)
+	tool := &runTerminalCommandTool{manager: manager}
+	timeoutSchema := tool.Definition().Parameters["properties"].(map[string]any)["timeout"].(map[string]any)
+	if !strings.Contains(timeoutSchema["description"].(string), "automatically moved to background") {
+		t.Fatalf("timeout schema=%#v", timeoutSchema)
+	}
+
+	started := time.Now()
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"sleep 0.12; printf done","description":"slow command"}`))
+	if err != nil || !strings.Contains(result, "automatically moved to background") || time.Since(started) > 500*time.Millisecond {
+		t.Fatalf("result=%q elapsed=%s err=%v", result, time.Since(started), err)
+	}
+	id := strings.Fields(result)[2]
+	output, err := manager.WaitOutput(context.Background(), id, time.Second)
+	if err != nil || !strings.Contains(output, "done") {
+		t.Fatalf("background output=%q err=%v", output, err)
+	}
+
+	result, err = tool.Execute(context.Background(), json.RawMessage(`{"command":"cd /; sleep 0.12","description":"isolated state"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id = strings.Fields(result)[2]
+	if _, err := manager.WaitOutput(context.Background(), id, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	manager.ConfigureBash(time.Second, time.Minute, 0, "", true, false, nil)
+	pwd, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"pwd","description":"check state"}`))
+	if err != nil || !strings.Contains(pwd, ws.Root()) {
+		t.Fatalf("foreground state was polluted: output=%q err=%v", pwd, err)
+	}
+}
+
+func TestForegroundWaitBudgetResolution(t *testing.T) {
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewProcessManager(ws, PromptApprover{Mode: PermissionAuto})
+	defer manager.Close()
+	manager.ConfigureBash(0, 0, 0, "", true, true, nil)
+	if wait, auto := manager.foregroundWait(time.Minute); !auto || wait != 15*time.Second {
+		t.Fatalf("default wait=%s auto=%v", wait, auto)
+	}
+	t.Setenv("GROK_FOREGROUND_BLOCK_BUDGET_MS", "25")
+	if wait, auto := manager.foregroundWait(time.Minute); !auto || wait != 25*time.Millisecond {
+		t.Fatalf("environment wait=%s auto=%v", wait, auto)
+	}
+	zero := uint64(0)
+	manager.ConfigureBash(0, 0, 0, "", true, true, &zero)
+	if wait, auto := manager.foregroundWait(time.Minute); !auto || wait != time.Minute {
+		t.Fatalf("zero-budget wait=%s auto=%v", wait, auto)
+	}
+	manager.ConfigureBash(0, 0, 0, "", true, false, nil)
+	if wait, auto := manager.foregroundWait(time.Minute); auto || wait != time.Minute {
+		t.Fatalf("disabled wait=%s auto=%v", wait, auto)
 	}
 }
 

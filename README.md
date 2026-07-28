@@ -1807,6 +1807,12 @@ When the local key is absent, authenticated remote settings may supply the
 default; an explicit local value always wins.
 The Bash tool also rejects literal self-matching `pkill/pgrep -f` restart
 patterns that could terminate their own shell wrapper, with safer remediation.
+Default-on `auto_background_on_timeout` moves a foreground command into the
+existing task lifecycle instead of killing it when its wait expires. The
+independent `foreground_block_budget_ms` defaults to 15 seconds; `0` disables
+that short budget so only the command timeout triggers the move. Local policy
+overrides the authenticated remote fallback. When the TOML budget is unset,
+`GROK_FOREGROUND_BLOCK_BUDGET_MS` may override the 15-second runtime default.
 `[toolset.bash] login_shell_capture`
 (default on; `GROK_LOGIN_ENV`) sources the user shell rc once at session start and
 merges that environment into agent shells. Top-level `[shell_environment_policy]`

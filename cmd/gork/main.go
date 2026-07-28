@@ -755,7 +755,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if cfg.Toolset.Bash.LoginShellCapture {
 		registry.CaptureLoginShellEnvironment(context.Background())
 	}
-	registry.ConfigureBash(bashTimeout(cfg.Toolset.Bash.TimeoutSeconds), bashTimeout(cfg.Toolset.Bash.MaxTimeoutSeconds), bashOutputLimit(cfg.Toolset.Bash.OutputByteLimit), cfg.Toolset.Bash.CommandPrefix, cfg.Toolset.Bash.AllowBackgroundOperator)
+	registry.ConfigureBash(bashTimeout(cfg.Toolset.Bash.TimeoutSeconds), bashTimeout(cfg.Toolset.Bash.MaxTimeoutSeconds), bashOutputLimit(cfg.Toolset.Bash.OutputByteLimit), cfg.Toolset.Bash.CommandPrefix, cfg.Toolset.Bash.AllowBackgroundOperator, cfg.Toolset.Bash.AutoBackgroundOnTimeout, cfg.Toolset.Bash.ForegroundBlockBudgetMS)
 	if err := registry.ConfigureFileToolset(cfg.Toolset.FileToolset, cfg.Toolset.Hashline.Scheme, cfg.Toolset.Hashline.HashLen, cfg.Toolset.Hashline.ChunkSize); err != nil {
 		_ = registry.Close()
 		return err
@@ -3702,7 +3702,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		if sessionCfg.Toolset.Bash.LoginShellCapture {
 			registry.CaptureLoginShellEnvironment(context.Background())
 		}
-		registry.ConfigureBash(bashTimeout(sessionCfg.Toolset.Bash.TimeoutSeconds), bashTimeout(sessionCfg.Toolset.Bash.MaxTimeoutSeconds), bashOutputLimit(sessionCfg.Toolset.Bash.OutputByteLimit), sessionCfg.Toolset.Bash.CommandPrefix, sessionCfg.Toolset.Bash.AllowBackgroundOperator)
+		registry.ConfigureBash(bashTimeout(sessionCfg.Toolset.Bash.TimeoutSeconds), bashTimeout(sessionCfg.Toolset.Bash.MaxTimeoutSeconds), bashOutputLimit(sessionCfg.Toolset.Bash.OutputByteLimit), sessionCfg.Toolset.Bash.CommandPrefix, sessionCfg.Toolset.Bash.AllowBackgroundOperator, sessionCfg.Toolset.Bash.AutoBackgroundOnTimeout, sessionCfg.Toolset.Bash.ForegroundBlockBudgetMS)
 		if err := registry.ConfigureFileToolset(sessionCfg.Toolset.FileToolset, sessionCfg.Toolset.Hashline.Scheme, sessionCfg.Toolset.Hashline.HashLen, sessionCfg.Toolset.Hashline.ChunkSize); err != nil {
 			_ = registry.Close()
 			return nil, nil, err

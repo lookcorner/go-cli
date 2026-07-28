@@ -272,6 +272,10 @@ explicit structured background tasks; local configuration takes precedence
 over its authenticated remote fallback.
 Literal self-matching `pkill/pgrep -f` restart patterns are rejected before
 execution so they cannot terminate the command's own shell wrapper.
+Default-on `auto_background_on_timeout` and its optional
+`foreground_block_budget_ms` move long foreground commands into the queryable,
+killable background-task lifecycle without applying their eventual shell state
+to later foreground commands; local policy beats its remote fallback.
 
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |

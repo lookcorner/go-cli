@@ -155,6 +155,7 @@ type Config struct {
 	hiddenModelsConfigured          bool
 	disabledModelsConfigured        bool
 	bashAllowBackgroundConfigured   bool
+	bashAutoBackgroundConfigured    bool
 }
 
 type AutoModeConfig struct {
@@ -177,6 +178,8 @@ type BashConfig struct {
 	OutputByteLimit         uint64  `json:"output_byte_limit"`
 	CommandPrefix           string  `json:"cmd_prefix,omitempty"`
 	AllowBackgroundOperator bool    `json:"allow_background_operator"`
+	AutoBackgroundOnTimeout bool    `json:"auto_background_on_timeout"`
+	ForegroundBlockBudgetMS *uint64 `json:"foreground_block_budget_ms,omitempty"`
 	LoginShellCapture       bool    `json:"login_shell_capture"`
 }
 
@@ -664,6 +667,8 @@ type fileBashConfig struct {
 	OutputByteLimit         *uint64  `json:"output_byte_limit,omitempty" toml:"output_byte_limit"`
 	CommandPrefix           *string  `json:"cmd_prefix,omitempty" toml:"cmd_prefix"`
 	AllowBackgroundOperator *bool    `json:"allow_background_operator,omitempty" toml:"allow_background_operator"`
+	AutoBackgroundOnTimeout *bool    `json:"auto_background_on_timeout,omitempty" toml:"auto_background_on_timeout"`
+	ForegroundBlockBudgetMS *uint64  `json:"foreground_block_budget_ms,omitempty" toml:"foreground_block_budget_ms"`
 	LoginShellCapture       *bool    `json:"login_shell_capture,omitempty" toml:"login_shell_capture"`
 }
 
@@ -992,7 +997,7 @@ func Load(path string) (Config, error) {
 		AskUserQuestion:             AskUserQuestionConfig{TimeoutEnabled: true, TimeoutSeconds: 30 * 60},
 		CancelRewindEnabled:         true,
 		ShellEnvironmentPolicy:      ShellEnvironmentPolicy{Inherit: "all", IgnoreDefaultExcludes: true},
-		Toolset:                     ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}, Bash: BashConfig{TimeoutSeconds: 120, MaxTimeoutSeconds: 36000, OutputByteLimit: 20000, AllowBackgroundOperator: true, LoginShellCapture: true}},
+		Toolset:                     ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}, Bash: BashConfig{TimeoutSeconds: 120, MaxTimeoutSeconds: 36000, OutputByteLimit: 20000, AllowBackgroundOperator: true, AutoBackgroundOnTimeout: true, LoginShellCapture: true}},
 		Goal:                        GoalConfig{VerifierCount: 3, ClassifierMaxRuns: 10, ReverifyAfter: 8},
 		UI:                          UIConfig{MaxThoughtsWidth: 120, Theme: "groknight", AutoDarkTheme: "groknight", AutoLightTheme: "grokday", HunkTrackerMode: "agent_only", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, PageFlipOnSend: true, ShowThinkingBlocks: true, DisplayRefresh: DisplayRefreshConfig{ProbeEnabled: true, FloorMS: 8, CeilingMS: 16, MinHz: 55, MaxHz: 165}, ScrollSpeed: 50, ScrollMode: "auto", DefaultSelectedPermission: "always_allow_all_sessions", GroupToolVerbs: true, PromptSuggestions: true, ContextualHints: Hints{Undo: true, PlanMode: true, ImageInput: true, SendNow: true, SmallScreen: true, WordSelect: true, SSHWrap: true}, VoiceCaptureMode: "hold", VoiceSTTLanguage: "en", VoiceKeybindEnabled: true, PermissionMode: "ask", SimpleMode: true, Notifications: NotificationsConfig{Method: "auto", Condition: "unfocused", IdleThresholdSecs: 3, Events: []string{"turn_complete", "approval_required"}, ProgressBar: true, SleepPrevention: true, SessionRecap: true, RecapThresholdSecs: 30, Title: NotificationTitleConfig{Enabled: true, Items: []string{"action-required", "spinner", "activity", "session-name", "grok"}}}},
 		Dashboard:                   DashboardConfig{Enabled: true, Grouping: "state"},
@@ -1275,6 +1280,14 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	if disk.Toolset.Bash.AllowBackgroundOperator != nil {
 		cfg.Toolset.Bash.AllowBackgroundOperator = *disk.Toolset.Bash.AllowBackgroundOperator
 		cfg.bashAllowBackgroundConfigured = true
+	}
+	if disk.Toolset.Bash.AutoBackgroundOnTimeout != nil {
+		cfg.Toolset.Bash.AutoBackgroundOnTimeout = *disk.Toolset.Bash.AutoBackgroundOnTimeout
+		cfg.bashAutoBackgroundConfigured = true
+	}
+	if disk.Toolset.Bash.ForegroundBlockBudgetMS != nil {
+		value := *disk.Toolset.Bash.ForegroundBlockBudgetMS
+		cfg.Toolset.Bash.ForegroundBlockBudgetMS = &value
 	}
 	if disk.Toolset.Bash.LoginShellCapture != nil {
 		cfg.Toolset.Bash.LoginShellCapture = *disk.Toolset.Bash.LoginShellCapture

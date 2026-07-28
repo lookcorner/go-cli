@@ -453,9 +453,9 @@ func (r *Registry) ConfigureEnvironment(values map[string]string) {
 }
 
 // ConfigureBash applies the [toolset.bash] command policy to this registry.
-func (r *Registry) ConfigureBash(timeout, maxTimeout time.Duration, outputLimit int, prefix string, allowBackground bool) {
+func (r *Registry) ConfigureBash(timeout, maxTimeout time.Duration, outputLimit int, prefix string, allowBackground, autoBackground bool, foregroundBudgetMS *uint64) {
 	if r != nil {
-		r.processes.ConfigureBash(timeout, maxTimeout, outputLimit, prefix, allowBackground)
+		r.processes.ConfigureBash(timeout, maxTimeout, outputLimit, prefix, allowBackground, autoBackground, foregroundBudgetMS)
 	}
 }
 

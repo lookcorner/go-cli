@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -57,6 +58,8 @@ type ProcessManager struct {
 	bashOutput      int
 	bashPrefix      string
 	allowBackground bool
+	autoBackground  bool
+	bashBudgetMS    *uint64
 	shellEnvPolicy  ShellEnvironmentPolicy
 	cgroupMu        sync.Mutex
 	cgroup          shellCgroup
@@ -74,12 +77,22 @@ type foregroundSlot struct {
 
 // ConfigureBash sets the [toolset.bash] command policy. Zero numeric values keep
 // the built-in timeout and output defaults.
-func (m *ProcessManager) ConfigureBash(timeout, maxTimeout time.Duration, outputLimit int, prefix string, allowBackground bool) {
+func (m *ProcessManager) ConfigureBash(timeout, maxTimeout time.Duration, outputLimit int, prefix string, allowBackground, autoBackground bool, foregroundBudgetMS *uint64) {
 	m.bashMu.Lock()
 	m.bashTimeout, m.bashMaxTimeout, m.bashOutput = max(timeout, 0), max(maxTimeout, 0), max(outputLimit, 0)
 	m.bashPrefix = prefix
 	m.allowBackground = allowBackground
+	m.autoBackground = autoBackground
+	m.bashBudgetMS = cloneUint64(foregroundBudgetMS)
 	m.bashMu.Unlock()
+}
+
+func cloneUint64(value *uint64) *uint64 {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 // ConfigureCgroupMemory sets Linux cgroup v2 memory.high/max for spawned shell
@@ -259,6 +272,31 @@ func (m *ProcessManager) backgroundOperatorAllowed() bool {
 	m.bashMu.RLock()
 	defer m.bashMu.RUnlock()
 	return m.allowBackground
+}
+
+func (m *ProcessManager) foregroundWait(timeout time.Duration) (time.Duration, bool) {
+	m.bashMu.RLock()
+	autoBackground, budgetMS := m.autoBackground, cloneUint64(m.bashBudgetMS)
+	m.bashMu.RUnlock()
+	if !autoBackground {
+		return timeout, false
+	}
+	if budgetMS == nil {
+		value := uint64(15_000)
+		if raw := os.Getenv("GROK_FOREGROUND_BLOCK_BUDGET_MS"); raw != "" {
+			if parsed, err := strconv.ParseUint(raw, 10, 64); err == nil {
+				value = parsed
+			}
+		}
+		if value > uint64((time.Duration(1<<63-1))/time.Millisecond) {
+			return timeout, true
+		}
+		return min(timeout, time.Duration(value)*time.Millisecond), true
+	}
+	if *budgetMS == 0 || *budgetMS > uint64((time.Duration(1<<63-1))/time.Millisecond) {
+		return timeout, true
+	}
+	return min(timeout, time.Duration(*budgetMS)*time.Millisecond), true
 }
 
 // outputByteLimit is the configured capture ceiling, or the reference default.
@@ -574,6 +612,10 @@ func (m *ProcessManager) processObserver() ProcessObserver {
 }
 
 func (m *ProcessManager) RunForeground(ctx context.Context, command string, timeout time.Duration) (string, error) {
+	return m.RunForegroundDescribed(ctx, command, "", timeout)
+}
+
+func (m *ProcessManager) RunForegroundDescribed(ctx context.Context, command, description string, timeout time.Duration) (string, error) {
 	if strings.TrimSpace(command) == "" {
 		return "", errors.New("command must not be empty")
 	}
@@ -586,17 +628,18 @@ func (m *ProcessManager) RunForeground(ctx context.Context, command string, time
 		return "", fmt.Errorf("checkpoint before terminal command: %w", err)
 	}
 	m.stateMu.Lock()
-	defer m.stateMu.Unlock()
 	cmd, capture, err := m.persistentShellCommand(command)
 	if err != nil {
+		m.stateMu.Unlock()
 		return "", err
 	}
-	defer capture.cleanup()
 	configureProcessGroup(cmd)
 	buffer := &tailBuffer{limit: m.outputByteLimit()}
 	cmd.Stdout = buffer
 	cmd.Stderr = buffer
 	if err := cmd.Start(); err != nil {
+		m.stateMu.Unlock()
+		capture.cleanup()
 		return "", fmt.Errorf("start command: %w", err)
 	}
 	m.adoptShellProcess(cmd)
@@ -607,7 +650,8 @@ func (m *ProcessManager) RunForeground(ctx context.Context, command string, time
 	if timeout <= 0 {
 		timeout = m.defaultShellTimeout()
 	}
-	timer := time.NewTimer(timeout)
+	waitFor, autoBackground := m.foregroundWait(timeout)
+	timer := time.NewTimer(waitFor)
 	defer timer.Stop()
 	var waitErr error
 	status := "0"
@@ -619,14 +663,31 @@ func (m *ProcessManager) RunForeground(ctx context.Context, command string, time
 			status = exitStatus(waitErr)
 		}
 	case <-timer.C:
-		status = "killed (timeout)"
-		waitErr = terminateAndWait(cmd, wait)
+		if autoBackground {
+			id, promoteErr := m.promoteForeground(ctx, command, description, cmd, capture, buffer, wait, checkpoint)
+			if promoteErr == nil {
+				m.stateMu.Unlock()
+				output := strings.TrimSpace(buffer.String())
+				result := fmt.Sprintf("Background task %s started\nCommand exceeded the foreground wait and was automatically moved to background. Use get_task_output with task_ids=[%q] to retrieve the output.", id, id)
+				if output != "" {
+					result += "\n\nPartial output:\n" + output
+				}
+				return result, nil
+			}
+			status = "killed (timeout)"
+			waitErr = terminateAndWait(cmd, wait)
+		} else {
+			status = "killed (timeout)"
+			waitErr = terminateAndWait(cmd, wait)
+		}
 	case <-ctx.Done():
 		status = "killed (cancelled)"
 		waitErr = terminateAndWait(cmd, wait)
 	}
 	_ = waitErr
 	m.applyShellCapture(capture)
+	m.stateMu.Unlock()
+	capture.cleanup()
 	checkpointErr := m.rewind.afterWorkspace(checkpoint)
 	output := strings.TrimSpace(buffer.String())
 	if checkpointErr != nil {
@@ -636,6 +697,40 @@ func (m *ProcessManager) RunForeground(ctx context.Context, command string, time
 		return "exit: " + status, nil
 	}
 	return "exit: " + status + "\n" + output, nil
+}
+
+func (m *ProcessManager) promoteForeground(ctx context.Context, command, description string, cmd *exec.Cmd, capture shellCapture, buffer *tailBuffer, wait <-chan error, checkpoint *workspaceMutation) (string, error) {
+	id := fmt.Sprintf("task_%d", m.nextID.Add(1))
+	process := &backgroundProcess{
+		id: id, command: command, description: description, cmd: cmd, output: buffer, started: time.Now(), done: make(chan struct{}), kind: "bash",
+	}
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return "", errors.New("process manager is closed")
+	}
+	m.processes[id] = process
+	m.mu.Unlock()
+	call, _ := ToolCallFromContext(ctx)
+	if observer := m.processObserver(); observer != nil {
+		observer.TaskBackgrounded(ProcessBackgrounded{ToolCallID: call.ID, TaskID: id, Command: command, CWD: cmd.Dir, Description: description, Kind: "bash"})
+	}
+	go func() {
+		err := <-wait
+		capture.cleanup()
+		if checkpointErr := m.rewind.afterWorkspace(checkpoint); checkpointErr != nil {
+			err = errors.Join(err, fmt.Errorf("checkpoint after background command: %w", checkpointErr))
+		}
+		process.mu.Lock()
+		process.err, process.ended = err, time.Now()
+		process.mu.Unlock()
+		process.deliverWaiters()
+		if observer := m.processObserver(); observer != nil {
+			observer.TaskCompleted(snapshotProcess(process, true))
+		}
+		close(process.done)
+	}()
+	return id, nil
 }
 
 type shellCapture struct {
@@ -1407,13 +1502,17 @@ func (t *monitorTool) Execute(ctx context.Context, raw json.RawMessage) (string,
 func (t *runTerminalCommandTool) Definition() api.ToolDefinition {
 	maxTimeout := uint64(t.manager.maxShellTimeout() / time.Millisecond)
 	defaultTimeout := uint64(t.manager.defaultShellTimeout() / time.Millisecond)
+	timeoutDescription := fmt.Sprintf("Optional timeout in milliseconds (max %d). Default: %d. In background mode, 0 disables the timeout.", maxTimeout, defaultTimeout)
+	if wait, autoBackground := t.manager.foregroundWait(t.manager.defaultShellTimeout()); autoBackground {
+		timeoutDescription += fmt.Sprintf(" Foreground commands still running after %d ms are automatically moved to background instead of killed.", wait/time.Millisecond)
+	}
 	return api.ToolDefinition{
 		Type: "function", Name: "run_terminal_cmd",
 		Description: "Run a terminal command in the workspace. Set is_background for long-running commands; use get_task_output and kill_task with the returned task_id.",
 		Parameters: objectSchema(map[string]any{
 			"command":       map[string]any{"type": "string", "description": "The shell command to run."},
 			"description":   map[string]any{"type": "string", "description": "One sentence explaining why the command is needed."},
-			"timeout":       map[string]any{"type": "integer", "minimum": 0, "maximum": maxTimeout, "description": fmt.Sprintf("Optional timeout in milliseconds (max %d). Default: %d. In background mode, 0 disables the timeout.", maxTimeout, defaultTimeout)},
+			"timeout":       map[string]any{"type": "integer", "minimum": 0, "maximum": maxTimeout, "description": timeoutDescription},
 			"is_background": map[string]any{"type": "boolean", "description": "Run in the background and return a task_id immediately."},
 		}, "command", "description"),
 	}
@@ -1454,7 +1553,7 @@ func (t *runTerminalCommandTool) Execute(ctx context.Context, raw json.RawMessag
 		}
 		return fmt.Sprintf("Background task %s started\nUse get_task_output with task_ids=[%q] to retrieve the output.", id, id), nil
 	}
-	return t.manager.RunForeground(ctx, args.Command, timeout)
+	return t.manager.RunForegroundDescribed(ctx, args.Command, args.Description, timeout)
 }
 
 type taskOutputTool struct {

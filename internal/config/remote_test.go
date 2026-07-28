@@ -125,6 +125,34 @@ func TestApplyRemoteSettingsBashBackgroundOperatorPrecedence(t *testing.T) {
 	}
 }
 
+func TestApplyRemoteSettingsBashAutoBackgroundPrecedence(t *testing.T) {
+	cfg, err := Load(filepath.Join(t.TempDir(), "missing.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{AutoBackgroundOnTimeout: boolPointer(false)})
+	if cfg.Toolset.Bash.AutoBackgroundOnTimeout {
+		t.Fatal("remote setting did not disable automatic backgrounding")
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{})
+	if !cfg.Toolset.Bash.AutoBackgroundOnTimeout {
+		t.Fatal("missing remote setting did not restore automatic backgrounding default")
+	}
+
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[toolset.bash]\nauto_background_on_timeout = false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{AutoBackgroundOnTimeout: boolPointer(true)})
+	if cfg.Toolset.Bash.AutoBackgroundOnTimeout {
+		t.Fatal("remote setting overrode local automatic-backgrounding policy")
+	}
+}
+
 func TestFetchRemoteSettingsIncludesSessionIdentity(t *testing.T) {
 	requireLoopback(t)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
