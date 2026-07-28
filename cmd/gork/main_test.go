@@ -2842,6 +2842,13 @@ func TestMCPToolTimeoutPrecedence(t *testing.T) {
 	}
 }
 
+func TestMCPExposeImageBase64Precedence(t *testing.T) {
+	on, off := true, false
+	if !mcpExposeImageBase64(&on, nil) || mcpExposeImageBase64(&on, &off) || !mcpExposeImageBase64(&off, &on) || mcpExposeImageBase64(nil, nil) {
+		t.Fatal("unexpected image base64 exposure precedence")
+	}
+}
+
 func TestResolveProjectTrustPromptsAndPersists(t *testing.T) {
 	previousVersion := version.Current
 	version.Current = "1.0.0"

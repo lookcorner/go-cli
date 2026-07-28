@@ -54,6 +54,9 @@ func applyMCPMetaConfig(servers []MCPServer, meta map[string]any) {
 		entry, _ := configs[servers[index].Name].(map[string]any)
 		servers[index].StartupTimeoutMS = mcpMetaMilliseconds(entry["startupTimeoutMs"])
 		servers[index].ToolTimeoutMS = mcpMetaMilliseconds(entry["toolTimeoutMs"])
+		if value, ok := entry["exposeImageBase64"].(bool); ok {
+			servers[index].ExposeImageBase64Meta = &value
+		}
 		rawToolTimeouts, _ := entry["toolTimeoutsMs"].(map[string]any)
 		for name, raw := range rawToolTimeouts {
 			if timeout := mcpMetaMilliseconds(raw); timeout != nil {

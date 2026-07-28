@@ -15,6 +15,8 @@ type ServerConfig struct {
 	ToolTimeouts          map[string]uint64
 	ToolTimeoutMS         *uint64
 	ToolTimeoutsMS        map[string]uint64
+	ExposeImageBase64     *bool
+	ExposeImageBase64Meta *bool
 	Disabled              bool
 	DisabledTools         []string
 }

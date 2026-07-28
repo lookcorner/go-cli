@@ -5459,7 +5459,8 @@ func startMCPServers(
 		toolTimeout, toolTimeouts := mcpToolTimeouts(server.ToolTimeoutSeconds, server.ToolTimeouts, server.ToolTimeoutMS, server.ToolTimeoutsMS)
 		client.SetToolTimeouts(toolTimeout, toolTimeouts)
 		clients = append(clients, client)
-		if err = registerMCPClient(ctx, name, client, initialized, cfg.DisabledMCPTools[name], registry, approver, stderr, toolsChanged, mcp.OutputConfig{MaxBytes: cfg.MCP.MaxOutputBytes, ArtifactDir: artifactDir}); err != nil {
+		output := mcp.OutputConfig{MaxBytes: cfg.MCP.MaxOutputBytes, ArtifactDir: artifactDir, ExposeImageBase64: mcpExposeImageBase64(server.ExposeImageBase64, server.ExposeImageBase64Meta)}
+		if err = registerMCPClient(ctx, name, client, initialized, cfg.DisabledMCPTools[name], registry, approver, stderr, toolsChanged, output); err != nil {
 			closeClients()
 			return nil, err
 		}
@@ -5519,6 +5520,13 @@ func mcpMillisecondsTimeout(milliseconds uint64) (time.Duration, bool) {
 		seconds++
 	}
 	return time.Duration(seconds) * time.Second, true
+}
+
+func mcpExposeImageBase64(configured, metadata *bool) bool {
+	if metadata != nil {
+		return *metadata
+	}
+	return configured != nil && *configured
 }
 
 func registerMCPClient(
@@ -5642,7 +5650,8 @@ func startACPMCPServers(
 		toolTimeout, toolTimeouts := mcpToolTimeouts(nil, nil, server.ToolTimeoutMS, server.ToolTimeoutsMS)
 		client.SetToolTimeouts(toolTimeout, toolTimeouts)
 		clients = append(clients, client)
-		if err := registerMCPClient(ctx, server.Name, client, initialized, disabledTools[server.Name], registry, approver, stderr, toolsChanged, mcp.OutputConfig{MaxBytes: cfg.MCP.MaxOutputBytes, ArtifactDir: artifactDir}); err != nil {
+		output := mcp.OutputConfig{MaxBytes: cfg.MCP.MaxOutputBytes, ArtifactDir: artifactDir, ExposeImageBase64: mcpExposeImageBase64(server.ExposeImageBase64, server.ExposeImageBase64Meta)}
+		if err := registerMCPClient(ctx, server.Name, client, initialized, disabledTools[server.Name], registry, approver, stderr, toolsChanged, output); err != nil {
 			for _, client := range clients {
 				_ = client.Close()
 			}
@@ -5674,6 +5683,7 @@ func startSubagentMCPServers(
 			StartupTimeoutSeconds: server.StartupTimeoutSeconds, StartupTimeoutMS: server.StartupTimeoutMS,
 			ToolTimeoutSeconds: server.ToolTimeoutSeconds, ToolTimeouts: maps.Clone(server.ToolTimeouts),
 			ToolTimeoutMS: server.ToolTimeoutMS, ToolTimeoutsMS: maps.Clone(server.ToolTimeoutsMS),
+			ExposeImageBase64: server.ExposeImageBase64, ExposeImageBase64Meta: server.ExposeImageBase64Meta,
 		}
 	}
 	clients, err := startMCPServers(ctx, cfg, workspaceRoot, registry, approver, tokenProvider, stderr, nil, nil, artifactDir)
@@ -5930,6 +5940,7 @@ func (r *sessionMCPRuntime) mergedConfig(requested []mcp.ServerConfig) (config.C
 			StartupTimeoutSeconds: server.StartupTimeoutSeconds, StartupTimeoutMS: server.StartupTimeoutMS,
 			ToolTimeoutSeconds: server.ToolTimeoutSeconds, ToolTimeouts: maps.Clone(server.ToolTimeouts),
 			ToolTimeoutMS: server.ToolTimeoutMS, ToolTimeoutsMS: maps.Clone(server.ToolTimeoutsMS),
+			ExposeImageBase64: server.ExposeImageBase64, ExposeImageBase64Meta: server.ExposeImageBase64Meta,
 		}
 	}
 	for _, name := range cfg.DisabledMCPServers {
@@ -5958,6 +5969,7 @@ func (r *sessionMCPRuntime) mergedConfig(requested []mcp.ServerConfig) (config.C
 			StartupTimeoutSeconds: server.StartupTimeoutSeconds, StartupTimeoutMS: server.StartupTimeoutMS,
 			ToolTimeoutSeconds: server.ToolTimeoutSeconds, ToolTimeouts: maps.Clone(server.ToolTimeouts),
 			ToolTimeoutMS: server.ToolTimeoutMS, ToolTimeoutsMS: maps.Clone(server.ToolTimeoutsMS),
+			ExposeImageBase64: server.ExposeImageBase64, ExposeImageBase64Meta: server.ExposeImageBase64Meta,
 		}
 		catalog = append(catalog, entry)
 		if !entry.Disabled {

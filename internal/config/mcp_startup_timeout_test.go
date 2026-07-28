@@ -10,7 +10,7 @@ func TestMCPStartupTimeoutPrecedenceAndServerOverride(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("GROK_HOME", home)
 	path := filepath.Join(home, "config.toml")
-	if err := os.WriteFile(path, []byte("[mcp]\nstartup_timeout_sec = 40\n\n[mcp_servers.fixture]\ncommand = \"fixture\"\nstartup_timeout_sec = 9\ntool_timeout_sec = 12\ntool_timeouts = { search = 3 }\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("[mcp]\nstartup_timeout_sec = 40\n\n[mcp_servers.fixture]\ncommand = \"fixture\"\nstartup_timeout_sec = 9\ntool_timeout_sec = 12\ntool_timeouts = { search = 3 }\nexpose_image_base64 = true\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("MCP_TIMEOUT", "1501")
@@ -24,7 +24,7 @@ func TestMCPStartupTimeoutPrecedenceAndServerOverride(t *testing.T) {
 		t.Fatalf("per-server timeout=%v", timeout)
 	}
 	server := cfg.MCPServers["fixture"]
-	if server.ToolTimeoutSeconds == nil || *server.ToolTimeoutSeconds != 12 || server.ToolTimeouts["search"] != 3 {
+	if server.ToolTimeoutSeconds == nil || *server.ToolTimeoutSeconds != 12 || server.ToolTimeouts["search"] != 3 || server.ExposeImageBase64 == nil || !*server.ExposeImageBase64 {
 		t.Fatalf("per-server tool timeouts=%#v", server)
 	}
 	if err := os.WriteFile(filepath.Join(home, "requirements.toml"), []byte("[mcp]\nstartup_timeout_sec = 4\n"), 0o600); err != nil {

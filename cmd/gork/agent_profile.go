@@ -101,6 +101,7 @@ func applyProfileMCP(profile *agents.Definition, cfg *config.Config) ([]mcp.Serv
 			StartupTimeoutSeconds: server.StartupTimeoutSeconds, StartupTimeoutMS: server.StartupTimeoutMS,
 			ToolTimeoutSeconds: server.ToolTimeoutSeconds, ToolTimeouts: maps.Clone(server.ToolTimeouts),
 			ToolTimeoutMS: server.ToolTimeoutMS, ToolTimeoutsMS: maps.Clone(server.ToolTimeoutsMS),
+			ExposeImageBase64: server.ExposeImageBase64, ExposeImageBase64Meta: server.ExposeImageBase64Meta,
 		})
 	}
 	for name, server := range cfg.MCPServers {

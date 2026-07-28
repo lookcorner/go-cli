@@ -541,6 +541,8 @@ type MCPServerConfig struct {
 	ToolTimeouts            map[string]uint64 `json:"tool_timeouts,omitempty" toml:"tool_timeouts"`
 	ToolTimeoutMS           *uint64           `json:"-" toml:"-"`
 	ToolTimeoutsMS          map[string]uint64 `json:"-" toml:"-"`
+	ExposeImageBase64       *bool             `json:"expose_image_base64,omitempty" toml:"expose_image_base64"`
+	ExposeImageBase64Meta   *bool             `json:"-" toml:"-"`
 	Enabled                 *bool             `json:"enabled,omitempty" toml:"enabled"`
 	Setup                   *MCPSetupConfig   `json:"setup,omitempty" toml:"setup"`
 }

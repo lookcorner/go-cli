@@ -34,8 +34,9 @@ type ToolAdapter struct {
 // OutputConfig keeps oversized MCP results recoverable without placing the
 // complete payload in model context.
 type OutputConfig struct {
-	MaxBytes    uint64
-	ArtifactDir string
+	MaxBytes          uint64
+	ArtifactDir       string
+	ExposeImageBase64 bool
 }
 
 func NewToolAdapters(client *Client, serverName string, remoteTools []ToolInfo, approver tools.Approver, output ...OutputConfig) []*ToolAdapter {
@@ -95,6 +96,9 @@ func (t *ToolAdapter) ExecuteResult(ctx context.Context, raw json.RawMessage) (t
 			}
 			images = append(images, image)
 			parts = append(parts, fmt.Sprintf("[Image: %s, %dx%d]", image.MediaType, image.Width, image.Height))
+			if t.output.ExposeImageBase64 {
+				parts = append(parts, fmt.Sprintf("<mcp_image_base64 mime=\"%s\">\n%s\n</mcp_image_base64>", content.MIMEType, content.Data))
+			}
 		default:
 			encoded, _ := json.Marshal(content)
 			parts = append(parts, string(encoded))

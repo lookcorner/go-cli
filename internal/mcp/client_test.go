@@ -61,8 +61,13 @@ func TestStdioLifecycleAndToolCall(t *testing.T) {
 		t.Fatalf("unexpected tool output: %q", output)
 	}
 	imageResult, err := adapters[0].ExecuteResult(context.Background(), json.RawMessage(`{"message":"image"}`))
-	if err != nil || len(imageResult.Images) != 1 || imageResult.Images[0].MediaType != "image/png" || !strings.Contains(imageResult.Output, "[Image: image/png, 1x1]") {
+	if err != nil || len(imageResult.Images) != 1 || imageResult.Images[0].MediaType != "image/png" || !strings.Contains(imageResult.Output, "[Image: image/png, 1x1]") || strings.Contains(imageResult.Output, "<mcp_image_base64") {
 		t.Fatalf("unexpected MCP image result=%#v err=%v", imageResult, err)
+	}
+	adapters[0].output.ExposeImageBase64 = true
+	exposedImage, err := adapters[0].ExecuteResult(context.Background(), json.RawMessage(`{"message":"image"}`))
+	if err != nil || !strings.Contains(exposedImage.Output, `<mcp_image_base64 mime="image/png">`) || !strings.Contains(exposedImage.Output, "iVBORw0KGgo") {
+		t.Fatalf("exposed MCP image result=%#v err=%v", exposedImage, err)
 	}
 	resources := NewResourceAdapters(client, "fixture")
 	listed, err := resources[0].Execute(context.Background(), json.RawMessage(`{}`))
