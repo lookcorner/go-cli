@@ -460,6 +460,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleCommands(incoming)
 		case "x.ai/workspaces/list":
 			s.handleStaticExtension(incoming)
+		case "x.ai/workspace_hub/status":
+			s.handleWorkspaceHubStatus(incoming)
 		case "x.ai/compact_conversation", "x.ai/memory/flush", "x.ai/memory/rewrite":
 			s.handleMemoryExtension(ctx, incoming)
 		case "x.ai/btw":

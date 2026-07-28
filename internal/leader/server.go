@@ -231,6 +231,7 @@ func (s *Server) serveClient(ctx context.Context, stream io.ReadWriteCloser) {
 		"leader_protocol_version": ProtocolVersion,
 		"leader_binary_version":   s.config.BinaryVersion,
 		"leader_capabilities": map[string]any{
+			// workspace_exposure stays false; see internal/workspacehub (product-blocked).
 			"control_v1": true, "runtime_cpu_profile": false,
 			"profile_formats": []any{}, "workspace_exposure": false, "relaunch_v1": false,
 		},
