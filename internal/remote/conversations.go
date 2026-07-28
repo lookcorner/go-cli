@@ -161,6 +161,72 @@ func (c *ConversationsClient) SoftDeleteConversation(ctx context.Context, conver
 	return err
 }
 
+// ErrMessagesUnavailable means grok.com has no messages history endpoint yet
+// (or returned 404/405/501). Callers must fail closed and keep thin chat load.
+var ErrMessagesUnavailable = errors.New("conversation messages API unavailable")
+
+// ConversationMessage is one provisional app-chat transcript row.
+// Wire names follow the conversations list style; confirm against grok-web before
+// enabling real replay.
+type ConversationMessage struct {
+	MessageID  string `json:"messageId"`
+	Role       string `json:"role"`
+	Content    string `json:"content"`
+	CreateTime string `json:"createTime,omitempty"`
+}
+
+// ListMessagesQuery pages older messages with a beforeId cursor.
+type ListMessagesQuery struct {
+	BeforeID string
+	PageSize int
+}
+
+// ListMessagesPage is one conversation messages response.
+type ListMessagesPage struct {
+	Messages     []ConversationMessage
+	NextBeforeID string
+}
+
+// ListMessages calls GET /rest/app-chat/conversations/{id}/messages (provisional).
+// 404/405/501 map to ErrMessagesUnavailable so ACP can keep thin chat load.
+func (c *ConversationsClient) ListMessages(ctx context.Context, conversationID string, query ListMessagesQuery) (ListMessagesPage, error) {
+	id := strings.TrimSpace(conversationID)
+	if id == "" {
+		return ListMessagesPage{}, errors.New("conversation id is required")
+	}
+	pageSize := query.PageSize
+	if pageSize <= 0 {
+		pageSize = 50
+	}
+	values := url.Values{}
+	values.Set("pageSize", strconv.Itoa(pageSize))
+	if before := strings.TrimSpace(query.BeforeID); before != "" {
+		values.Set("beforeId", before)
+	}
+	data, err := c.do(ctx, http.MethodGet, "/rest/app-chat/conversations/"+url.PathEscape(id)+"/messages?"+values.Encode(), nil, false)
+	if err != nil {
+		var httpErr HTTPError
+		if errors.As(err, &httpErr) {
+			switch httpErr.Status {
+			case http.StatusNotFound, http.StatusMethodNotAllowed, http.StatusNotImplemented:
+				return ListMessagesPage{}, ErrMessagesUnavailable
+			}
+		}
+		return ListMessagesPage{}, err
+	}
+	var wire struct {
+		Messages     []ConversationMessage `json:"messages"`
+		NextBeforeID string                `json:"nextBeforeId"`
+	}
+	if json.Unmarshal(data, &wire) != nil {
+		return ListMessagesPage{}, errors.New("failed to parse conversation messages response")
+	}
+	return ListMessagesPage{
+		Messages:     wire.Messages,
+		NextBeforeID: strings.TrimSpace(wire.NextBeforeID),
+	}, nil
+}
+
 func (c *ConversationsClient) do(ctx context.Context, method, path string, body []byte, acceptNotFound bool) ([]byte, error) {
 	credential, err := auth.Load(c.AuthPath, c.AuthScope)
 	if err != nil || credential.Key == "" || !credential.IsXAIAuth() {

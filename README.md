@@ -1459,7 +1459,10 @@ reasons when the lane degrades. With the same gate, `x.ai/session/rename` and
 bool, or soft-delete the
 cloud conversation (404 soft-delete is idempotent). `session/load` and
 `session/resume` with `_meta["x.ai/session"].kind=chat` open a thin resident
-chat session without local JSONL (no transcript replay yet), preferring the
+chat session without local JSONL (runner transcript replay still deferred),
+probing provisional `GET /rest/app-chat/conversations/{id}/messages` and
+exposing fail-closed `_meta["x.ai/partial"]` plus `x.ai/session/load_history`
+paging when the endpoint is missing, preferring the
 grok.com `/rest/modes` catalog for the returned model picker.
 Process-wide `--chat` (or `GROK_CHAT_MODE=1`) forces the session list to chat
 rows, opens `session/new` as chat, refuses local Build loads, and advertises

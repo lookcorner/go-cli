@@ -186,3 +186,66 @@ func TestChatModeFlagConflict(t *testing.T) {
 		t.Fatal("leader conflict matrix")
 	}
 }
+
+func TestListMessagesWireContract(t *testing.T) {
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	if err := auth.Save(authPath, "scope", auth.Credential{
+		Key: "oauth-token", UserID: "user-1", AuthMode: "oidc", Issuer: "https://auth.x.ai",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var seenPath, seenQuery string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenPath, seenQuery = r.URL.Path, r.URL.RawQuery
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"messages": []map[string]any{{
+				"messageId": "m1", "role": "user", "content": "hi",
+				"createTime": "2026-06-18T18:00:00Z",
+			}},
+			"nextBeforeId": "m0",
+		})
+	}))
+	defer upstream.Close()
+
+	client := &ConversationsClient{
+		HTTP: upstream.Client(), BaseURL: upstream.URL,
+		AuthPath: authPath, AuthScope: "scope",
+	}
+	page, err := client.ListMessages(context.Background(), "conv-1", ListMessagesQuery{PageSize: 20, BeforeID: "m9"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Messages) != 1 || page.Messages[0].MessageID != "m1" || page.NextBeforeID != "m0" {
+		t.Fatalf("page=%#v", page)
+	}
+	if seenPath != "/rest/app-chat/conversations/conv-1/messages" {
+		t.Fatalf("path=%q", seenPath)
+	}
+	if !strings.Contains(seenQuery, "pageSize=20") || !strings.Contains(seenQuery, "beforeId=m9") {
+		t.Fatalf("query=%q", seenQuery)
+	}
+}
+
+func TestListMessagesUnavailableStatuses(t *testing.T) {
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	if err := auth.Save(authPath, "scope", auth.Credential{
+		Key: "oauth-token", UserID: "user-1", AuthMode: "oidc", Issuer: "https://auth.x.ai",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, status := range []int{http.StatusNotFound, http.StatusMethodNotAllowed, http.StatusNotImplemented} {
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(status)
+			_, _ = io.WriteString(w, "missing")
+		}))
+		client := &ConversationsClient{
+			HTTP: upstream.Client(), BaseURL: upstream.URL,
+			AuthPath: authPath, AuthScope: "scope",
+		}
+		_, err := client.ListMessages(context.Background(), "conv-1", ListMessagesQuery{})
+		upstream.Close()
+		if !errors.Is(err, ErrMessagesUnavailable) {
+			t.Fatalf("status=%d err=%v", status, err)
+		}
+	}
+}
