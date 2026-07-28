@@ -31,7 +31,7 @@ type cursorHeader struct {
 	} `json:"trackedGitRepos"`
 }
 
-func scanCursor(cwd string, now time.Time) []ForeignSummary {
+func scanCursorDesktop(cwd string, now time.Time) []ForeignSummary {
 	root := cursorUserDataDir()
 	path := filepath.Join(root, "globalStorage", "state.vscdb")
 	if !safeForeignDir(root) || !safeForeignDir(filepath.Dir(path)) || !safeForeignFile(path) {

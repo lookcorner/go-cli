@@ -9,6 +9,9 @@ the privacy-oriented community build of the Grok Build coding agent.
 Use `gork inspect` for a redacted configuration and component report, including
 effective Cursor, Claude, and Codex compatibility settings with their local
 resolution source, or `gork inspect --json` for machine-readable output.
+When `compat.cursor.sessions` is enabled, TUI foreign-session discovery covers
+Cursor Desktop composer headers and Cursor CLI chats under
+`~/.cursor/chats/<md5(cwd)>`.
 Use `gork version [--json]` for reference-shaped version information and
 `gork share <session-id>` to create a share URL for an authenticated,
 share-enabled local session.
