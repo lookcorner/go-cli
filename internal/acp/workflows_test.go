@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/tools"
@@ -110,21 +111,39 @@ func TestWorkflowSlashCommandExecutesThroughACP(t *testing.T) {
 	})
 	server.wg.Wait()
 	messages := decodeACPOutput(t, output.Bytes())
-	resultSeen, completed := false, false
+	started, completed := false, false
 	for _, item := range messages {
 		if item["method"] == "session/update" {
 			params, _ := item["params"].(map[string]any)
 			update, _ := params["update"].(map[string]any)
 			content, _ := update["content"].(map[string]any)
 			text, _ := content["text"].(string)
-			resultSeen = resultSeen || strings.Contains(text, "ACP workflow complete")
+			started = started || strings.Contains(text, "started in the background")
 		}
 		if item["method"] == "x.ai/session/prompt_complete" {
 			completed = true
 		}
 	}
-	if !resultSeen || !completed || current.running {
-		t.Fatalf("result=%v completed=%v running=%v messages=%#v", resultSeen, completed, current.running, messages)
+	deadline := time.Now().Add(2 * time.Second)
+	resultSeen := false
+	for time.Now().Before(deadline) && !resultSeen {
+		for _, run := range registry.WorkflowRuns() {
+			resultSeen = run.Name == "review-changes" && run.Status == "completed" && strings.Contains(run.Result, "ACP workflow complete")
+		}
+		if !resultSeen {
+			time.Sleep(time.Millisecond)
+		}
+	}
+	if !started || !completed || !resultSeen || current.running {
+		t.Fatalf("started=%v completed=%v result=%v running=%v messages=%#v runs=%+v", started, completed, resultSeen, current.running, messages, registry.WorkflowRuns())
+	}
+	status, ok := workflowManagementMessage(runner, "/workflows")
+	if !ok || !strings.Contains(status, "review-changes") || !strings.Contains(status, "completed") {
+		t.Fatalf("status=%q ok=%v", status, ok)
+	}
+	stopped, ok := workflowManagementMessage(runner, "/workflow missing stop")
+	if !ok || !strings.Contains(stopped, "not running") {
+		t.Fatalf("stop=%q ok=%v", stopped, ok)
 	}
 }
 

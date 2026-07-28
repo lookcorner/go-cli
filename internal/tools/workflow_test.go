@@ -35,7 +35,9 @@ fn main() {
 	if err := os.WriteFile(path, []byte(script), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	tool := newWorkflowTool(func() string { return root }, &subagentHolder{})
+	manager := workflow.NewManager()
+	defer manager.Close()
+	tool := newWorkflowTool(func() string { return root }, &subagentHolder{}, manager)
 	out, err := tool.Execute(context.Background(), json.RawMessage(`{"script_path":".grok/workflows/demo-flow.rhai","validate_only":true}`))
 	if err != nil || !strings.Contains(out, `validated`) {
 		t.Fatalf("out=%q err=%v", out, err)

@@ -3,12 +3,48 @@ package acp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/workflow"
 )
+
+func workflowManagementMessage(runner *agent.Runner, prompt string) (string, bool) {
+	if runner == nil || runner.Tools == nil || !runner.Tools.HasTool("workflow") {
+		return "", false
+	}
+	fields := strings.Fields(strings.TrimSpace(prompt))
+	if len(fields) == 1 && fields[0] == "/workflows" {
+		runs := runner.Tools.WorkflowRuns()
+		if len(runs) == 0 {
+			return "No workflow runs yet.", true
+		}
+		var b strings.Builder
+		b.WriteString(fmt.Sprintf("Workflow runs (%d):\n", len(runs)))
+		for _, run := range runs {
+			phase := ""
+			if run.Phase != "" {
+				phase = " - " + run.Phase
+			}
+			b.WriteString(fmt.Sprintf("- `%s` - **%s** - %s%s\n", run.ID, run.Name, run.Status, phase))
+			if run.Error != "" {
+				b.WriteString("  Error: " + run.Error + "\n")
+			} else if run.Result != "" {
+				b.WriteString("  " + run.Result + "\n")
+			}
+		}
+		return strings.TrimSpace(b.String()), true
+	}
+	if len(fields) == 3 && fields[0] == "/workflow" && strings.EqualFold(fields[2], "stop") {
+		if runner.Tools.StopWorkflow(fields[1]) {
+			return fmt.Sprintf("Workflow `%s` is stopping.", fields[1]), true
+		}
+		return fmt.Sprintf("Workflow `%s` is not running.", fields[1]), true
+	}
+	return "", false
+}
 
 func appendWorkflowCommands(commands []map[string]any, runner *agent.Runner, cwd string, workspaceSkills bool) []map[string]any {
 	if runner == nil || runner.Tools == nil || !runner.Tools.HasTool("workflow") {

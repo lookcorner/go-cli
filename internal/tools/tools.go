@@ -21,6 +21,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/lookcorner/go-cli/internal/api"
+	"github.com/lookcorner/go-cli/internal/workflow"
 	"github.com/lookcorner/go-cli/internal/workspace"
 )
 
@@ -132,6 +133,8 @@ type Registry struct {
 	goal           *GoalStore
 	scheduler      *Scheduler
 	ownsScheduler  bool
+	workflows      *workflow.Manager
+	ownsWorkflows  bool
 	plan           *PlanMode
 	questions      *UserQuestions
 	todos          *todoStore
@@ -241,6 +244,7 @@ func NewRegistryWithHunkMode(ws *workspace.Workspace, approver Approver, mode Hu
 	goal := NewGoalStore()
 	goal.workspaceRoot = ws.Root()
 	scheduler := NewScheduler()
+	workflows := workflow.NewManager()
 	plan := NewPlanMode(ws, approver)
 	questions := &UserQuestions{plan: plan, timeoutEnabled: true, timeout: 30 * time.Minute}
 	rewind := &mutationCheckpoint{}
@@ -277,12 +281,12 @@ func NewRegistryWithHunkMode(ws *workspace.Workspace, approver Approver, mode Hu
 		&exitPlanModeTool{mode: plan},
 		&askUserQuestionTool{questions: questions},
 		webFetch,
-		newWorkflowTool(func() string { return ws.Root() }, subagents),
+		newWorkflowTool(func() string { return ws.Root() }, subagents, workflows),
 	}
 	registry := &Registry{
 		tools: make(map[string]Tool, len(items)), approver: approver, processes: processes, goal: goal,
 		hunks: NewHunkTracker(ws, mode), rewind: rewind, readFile: readFile, webFetch: webFetch,
-		subagents: subagents, scheduler: scheduler, ownsScheduler: true, plan: plan, questions: questions,
+		subagents: subagents, scheduler: scheduler, ownsScheduler: true, workflows: workflows, ownsWorkflows: true, plan: plan, questions: questions,
 		todos:       todos,
 		fileToolset: "standard", hashline: defaultHashlineConfig(),
 		pathHints: pathHints, shellEnvPolicy: DefaultShellEnvironmentPolicy(),
@@ -313,6 +317,9 @@ func (r *Registry) ForWorkspace(ws *workspace.Workspace) *Registry {
 	child.SetPathNotFoundHints(pathHints)
 	_ = child.scheduler.Close()
 	child.scheduler, child.ownsScheduler = r.scheduler, false
+	child.workflows.Close()
+	child.workflows, child.ownsWorkflows = r.workflows, false
+	child.tools["workflow"] = newWorkflowTool(func() string { return ws.Root() }, child.subagents, child.workflows)
 	child.plan = r.plan
 	child.questions = r.questions
 	for _, name := range []string{"scheduler_create", "scheduler_list", "scheduler_delete"} {
@@ -784,6 +791,17 @@ func (r *Registry) BackgroundTasks() []ProcessSnapshot {
 	return r.processes.Snapshots()
 }
 
+func (r *Registry) WorkflowRuns() []workflow.RunSnapshot {
+	if r == nil || r.workflows == nil {
+		return nil
+	}
+	return r.workflows.Snapshots()
+}
+
+func (r *Registry) StopWorkflow(id string) bool {
+	return r != nil && r.workflows != nil && r.workflows.Stop(strings.TrimSpace(id))
+}
+
 func (r *Registry) SetProcessObserver(observer ProcessObserver) {
 	if r != nil && r.processes != nil {
 		r.processes.SetObserver(observer)
@@ -947,6 +965,9 @@ func (r *Registry) Close() error {
 	var stateErr, processErr, schedulerErr error
 	if r.hunks != nil {
 		stateErr = r.hunks.saveState()
+	}
+	if r.ownsWorkflows && r.workflows != nil {
+		r.workflows.Close()
 	}
 	if r.processes != nil {
 		processErr = r.processes.Close()

@@ -2389,7 +2389,7 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = label + " failed"
 			m.appendSystem(fmt.Sprintf("Workflow `%s` failed: %v", msg.name, msg.err))
 		} else {
-			m.status = label + " complete"
+			m.status = label + " started"
 			m.appendSystem(msg.result)
 		}
 	case mcpDoneEvent:
@@ -3245,7 +3245,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "/workflows", "/list-workflows":
-			m.appendSystem(m.listWorkflowsCatalog())
+			m.appendSystem(m.listWorkflowRuns())
 			m.status = "workflows"
 			return m, nil
 		case "/workflow":

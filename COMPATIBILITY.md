@@ -38,15 +38,17 @@ their executable project components after an explicit grant.
 Skill catalogs support all-session `x.ai/skills/refresh-baseline` and
 `x.ai/internal/reload_skills` / `x.ai/internal/reload_workflows` disk refreshes.
 `x.ai/workflows/list` discovers builtin/project/user `.rhai` workflow meta
-(lightweight map parse; TUI `/workflows` + `/workflow validate`; the embedded
+(lightweight map parse; TUI `/workflow list` + `/workflow validate`; the embedded
 reference `deep-research` workflow and file workflows run via the
 `GORK_WORKFLOW_RUNNER` NDJSON sidecar with typed JSON arguments + host `agent()`
-→ subagents; TUI `/deep-research <query>` launches the builtin asynchronously;
+→ subagents; launches return a run ID immediately and execute in a bounded
+session-owned background manager; TUI `/deep-research <query>` launches the builtin;
 `/workflow <name> [args]` launches saved workflows with reference-compatible
 JSON/text/null argument mapping; the TUI and ACP command catalog also advertise
 and dispatch non-conflicting saved workflows as dynamic `/name <args>` commands;
-journal,
-pause/resume/stop/save, and the live run dashboard remain deferred).
+TUI and ACP `/workflows` list active/recent runs and `/workflow <run-id> stop`
+cancels one; journal, pause/resume/save, automatic completion notices, and the
+rich run dashboard remain deferred).
 `x.ai/mcp/setup` persists select-field answers in `$GROK_HOME/mcp_preferences.json`,
 resolves `setup` templates (v0 one-select), reloads MCP, and enables the server.
 `x.ai/mcp/list` also surfaces unresolved setup schemas as `setuprequired`

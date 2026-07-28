@@ -119,6 +119,12 @@ func availableCommandsForCWD(runner *agent.Runner, workspaceSkills bool, cwd str
 	if runner.Tools != nil && runner.Tools.HasTool(imagine.VideoTool) {
 		commands = append(commands, availableCommand("imagine-video", "Generate a video from a text description", "description of the video to generate", nil))
 	}
+	if runner.Tools != nil && runner.Tools.HasTool("workflow") {
+		commands = append(commands,
+			availableCommand("workflows", "Show active and recent workflow runs", "", nil),
+			availableCommand("workflow", "Manage a workflow run", "<run-id> stop", nil),
+		)
+	}
 	if runner.Skills == nil {
 		return appendWorkflowCommands(commands, runner, cwd, workspaceSkills)
 	}

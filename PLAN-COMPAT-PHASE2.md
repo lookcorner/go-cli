@@ -382,9 +382,11 @@ Remote relay / workspace hub remains planned/XL (product-blocked). See queue #5.
 - [x] Workflow execution host + NDJSON Rhai sidecar protocol on
       `compat/workflow-rhai-exec` (`GORK_WORKFLOW_RUNNER` / `gork-workflow-runner`;
       `agent()` → SubagentBackend). The reference `deep-research` script is
-      embedded and executable through that path with typed JSON arguments;
-      TUI `/deep-research <query>` launches it asynchronously. Journal and
-      pause/resume/stop/save run management remain follow-ups. TUI
+      embedded and executable through that path with typed JSON arguments.
+      Launches now return immediately into a bounded session-owned manager;
+      TUI and ACP `/workflows` list active/recent runs and `/workflow <run-id>
+      stop` cancels one. Journal, pause/resume/save, automatic completion
+      notices, and the rich run dashboard remain follow-ups. TUI
       `/workflow <name> [args]` launches saved workflows with the reference
       JSON-object, text-fallback, and null argument mapping; in the TUI and ACP,
       unique names that do not collide with builtins or invocable skills also

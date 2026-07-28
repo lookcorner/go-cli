@@ -1515,17 +1515,20 @@ re-discover every live session's catalog from disk.
 `deep-research`, project `.grok/workflows`, and `$GROK_HOME/workflows`) by
 scanning `.rhai` files and parsing `let meta = #{...}` without executing Rhai.
 The builtin includes the embedded reference `deep-research` script.
-The TUI mirrors that catalog with `/workflows`, and `/workflow validate
+The TUI mirrors that catalog with `/workflow list`, and `/workflow validate
 <name|path>` runs the same lightweight validation as the `workflow` tool's
 `validate_only` mode. Full execution uses `GORK_WORKFLOW_RUNNER` (or
 `gork-workflow-runner` on PATH) over the NDJSON host protocol, with `agent()`
 mapped to local subagents.
 Workflow `args` retain their JSON types, including the numeric `breadth` accepted
-by the builtin `deep-research` workflow. `/deep-research <query>` launches that
-builtin asynchronously through the same tool and writes its result back to the
-TUI. `/workflow <name> [args]` does the same for saved workflows: a JSON object
+by the builtin `deep-research` workflow. Launches return immediately with a run
+ID and continue in the session-owned background manager. `/deep-research
+<query>` launches the builtin through the same tool. `/workflow <name> [args]`
+does the same for saved workflows: a JSON object
 is preserved as-is, plain text becomes both `query` and `objective`, and omitted
-input is sent as JSON `null`. Pause/resume/stop/save and the live run dashboard
+input is sent as JSON `null`. In both TUI and ACP sessions, `/workflows` shows
+active and recent runs, and `/workflow <run-id> stop` cancels an active run.
+Journal, pause/resume/save, automatic completion notices, and the rich dashboard
 remain deferred. In the TUI and ACP command catalog, unique saved workflow names
 that do not collide with a builtin command or user-invocable skill also appear
 directly, so `/review-changes ...` is equivalent to `/workflow review-changes

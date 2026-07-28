@@ -57,7 +57,7 @@ var slashCommandCatalog = []slashCommandItem{
 	{name: "videos", aliases: []string{"list-videos"}, description: "List session-generated video clips"},
 	{name: "downloads", aliases: []string{"list-downloads"}, description: "List session web_fetch downloads"},
 	{name: "fetched", aliases: []string{"list-fetched", "web-fetch-artifacts"}, placeholder: "[path|name]", description: "List or show truncated web_fetch text artifacts"},
-	{name: "workflows", aliases: []string{"list-workflows"}, description: "List discoverable Rhai workflows"},
+	{name: "workflows", aliases: []string{"list-workflows"}, description: "Show active and recent workflow runs"},
 	{name: "workflow", placeholder: "<name> [JSON args] | validate <name|path>", description: "Launch or validate a Rhai workflow"},
 	{name: "deep-research", placeholder: "<query>", description: "Research with parallel agents and cross-check evidence"},
 	{name: "model", aliases: []string{"m"}, placeholder: "<name> [effort]", description: "Switch model"},

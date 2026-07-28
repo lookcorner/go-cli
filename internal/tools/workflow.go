@@ -16,16 +16,17 @@ import (
 type workflowTool struct {
 	cwd       func() string
 	subagents *subagentHolder
+	manager   *workflow.Manager
 }
 
-func newWorkflowTool(wsRoot func() string, subagents *subagentHolder) *workflowTool {
-	return &workflowTool{cwd: wsRoot, subagents: subagents}
+func newWorkflowTool(wsRoot func() string, subagents *subagentHolder, manager *workflow.Manager) *workflowTool {
+	return &workflowTool{cwd: wsRoot, subagents: subagents, manager: manager}
 }
 
 func (t *workflowTool) Definition() api.ToolDefinition {
 	return api.ToolDefinition{
 		Type: "function", Name: "workflow",
-		Description: "Validate or launch a named Rhai workflow. validate_only checks meta/structure without running. Full execution requires GORK_WORKFLOW_RUNNER (or gork-workflow-runner on PATH) and maps agent() to local subagents.",
+		Description: "Validate or launch a named Rhai workflow in the background. validate_only checks meta/structure without running. Launch returns immediately; use /workflows for status. Full execution requires GORK_WORKFLOW_RUNNER (or gork-workflow-runner on PATH) and maps agent() to local subagents.",
 		Parameters: objectSchema(map[string]any{
 			"name":          map[string]any{"type": "string", "description": "Workflow name from the catalog"},
 			"script_path":   map[string]any{"type": "string", "description": "Path to a .rhai workflow file"},
@@ -165,6 +166,13 @@ func (t *workflowTool) Execute(ctx context.Context, raw json.RawMessage) (string
 	if args.ValidateOnly {
 		return fmt.Sprintf("workflow %q validated (%s)", resolved.Name, resolved.Source), nil
 	}
+	if _, err := workflow.ResolveRunnerBinary(); err != nil {
+		return "", err
+	}
+	if t.manager == nil {
+		return "", errors.New("workflow manager is unavailable")
+	}
 	host := &workflow.Host{Spawner: workflowAgentSpawner{holder: t.subagents}}
-	return workflow.Execute(ctx, resolved, args.Args, host)
+	run := t.manager.Launch(resolved, args.Args, host)
+	return fmt.Sprintf("Workflow %q started in the background (run `%s`). Use `/workflows` to follow progress.", resolved.Name, run.ID), nil
 }

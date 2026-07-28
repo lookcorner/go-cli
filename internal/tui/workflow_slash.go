@@ -148,6 +148,32 @@ func (m *model) listWorkflowsCatalog() string {
 	return strings.TrimSpace(b.String())
 }
 
+func (m *model) listWorkflowRuns() string {
+	if m.runner == nil || m.runner.Tools == nil {
+		return "Workflow runs are unavailable."
+	}
+	runs := m.runner.Tools.WorkflowRuns()
+	if len(runs) == 0 {
+		return "No workflow runs yet. Launch a saved workflow with `/workflow <name> [args]`."
+	}
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Workflow runs (%d):\n", len(runs)))
+	for _, run := range runs {
+		phase := ""
+		if run.Phase != "" {
+			phase = " — " + run.Phase
+		}
+		b.WriteString(fmt.Sprintf("- `%s` — **%s** — %s%s\n", run.ID, run.Name, run.Status, phase))
+		if run.Error != "" {
+			b.WriteString("  Error: " + run.Error + "\n")
+		} else if run.Result != "" {
+			b.WriteString("  " + run.Result + "\n")
+		}
+	}
+	b.WriteString("\nStop a running workflow with `/workflow <run-id> stop`.")
+	return strings.TrimSpace(b.String())
+}
+
 func (m *model) validateWorkflowArg(arg string) string {
 	arg = strings.TrimSpace(arg)
 	if arg == "" {
@@ -187,6 +213,12 @@ func (m *model) handleWorkflowSlash(fields []string) string {
 	case "list":
 		return m.listWorkflowsCatalog()
 	default:
-		return "Usage: /workflow <name> [JSON args or text] | /workflow validate <name|path> | /deep-research <query>\nWorkflow pause/resume/stop/save and the run dashboard are deferred."
+		if len(fields) == 2 && strings.EqualFold(fields[1], "stop") {
+			if m.runner != nil && m.runner.Tools != nil && m.runner.Tools.StopWorkflow(fields[0]) {
+				return fmt.Sprintf("Workflow `%s` is stopping.", fields[0])
+			}
+			return fmt.Sprintf("Workflow `%s` is not running.", fields[0])
+		}
+		return "Usage: /workflow <name> [JSON args or text] | /workflow <run-id> stop | /workflow validate <name|path> | /deep-research <query>\nWorkflow pause/resume/save remain deferred."
 	}
 }

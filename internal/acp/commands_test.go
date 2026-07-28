@@ -74,7 +74,7 @@ func TestCommandsListAdvertisesCapabilitiesAndSkills(t *testing.T) {
 		command := raw.(map[string]any)
 		byName[command["name"].(string)] = command
 	}
-	for _, name := range []string{"compact", "always-approve", "privacy", "doctor", "usage", "release-notes", "share", "mcps", "context", "session-info", "hooks-trust", "hooks-list", "hooks-add", "hooks-remove", "hooks-untrust", "plugins", "reload-plugins", "feedback", "goal", "loop", "local:compact", "local:plugins", "local:feedback", "deploy", "deep-research", "review-changes"} {
+	for _, name := range []string{"compact", "always-approve", "privacy", "doctor", "usage", "release-notes", "share", "mcps", "context", "session-info", "hooks-trust", "hooks-list", "hooks-add", "hooks-remove", "hooks-untrust", "plugins", "reload-plugins", "feedback", "goal", "loop", "workflows", "workflow", "local:compact", "local:plugins", "local:feedback", "deploy", "deep-research", "review-changes"} {
 		if byName[name] == nil {
 			t.Fatalf("missing command %q in %#v", name, commands)
 		}

@@ -2107,6 +2107,11 @@ func (s *Server) handlePromptRequest(parent context.Context, incoming message, c
 	if s.queuePrompt(current, incoming, &params, prompt) {
 		return
 	}
+	if message, ok := workflowManagementMessage(current.runner, prompt); ok {
+		s.handleLocalMessagePrompt(incoming, current, newPromptLifecycle(params), message)
+		s.markRunningPrompt(current, promptID(params.Meta))
+		return
+	}
 	if name, input, ok := resolveWorkflowSlashCommand(current.runner, current.cwd, prompt); ok {
 		s.handleWorkflowSlashPrompt(parent, incoming, current, newPromptLifecycle(params), name, input)
 		return

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -70,9 +71,10 @@ func TestDeepResearchSlashUsesWorkflowTool(t *testing.T) {
 	}
 	updated, followup := m.Update(command())
 	m = updated.(*model)
-	if followup != nil || m.status != "deep research complete" || !strings.Contains(m.transcript.String(), "verified report") {
+	if followup != nil || m.status != "deep research started" || !strings.Contains(m.transcript.String(), "started in the background") {
 		t.Fatalf("status=%q followup=%v transcript=%q", m.status, followup != nil, m.transcript.String())
 	}
+	wantTUIWorkflowRun(t, registry, "deep-research", "completed")
 }
 
 func TestNamedWorkflowSlashPreservesJSONObjectArgs(t *testing.T) {
@@ -111,10 +113,25 @@ fn main() { complete("ok"); }
 		}
 		updated, followup := m.Update(command())
 		m = updated.(*model)
-		if followup != nil || m.status != "workflow complete" || !strings.Contains(m.transcript.String(), "verified report") {
+		if followup != nil || m.status != "workflow started" || !strings.Contains(m.transcript.String(), "started in the background") {
 			t.Fatalf("input=%q status=%q followup=%v transcript=%q", input, m.status, followup != nil, m.transcript.String())
 		}
+		wantTUIWorkflowRun(t, registry, "demo-flow", "completed")
 	}
+}
+
+func wantTUIWorkflowRun(t *testing.T, registry *tools.Registry, name, status string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, run := range registry.WorkflowRuns() {
+			if run.Name == name && run.Status == status {
+				return
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("workflow %q status %q not found: %+v", name, status, registry.WorkflowRuns())
 }
 
 func TestWorkflowSlashCommandsDoNotShadowBuiltinsOrSkills(t *testing.T) {
@@ -158,6 +175,46 @@ func TestWorkflowSlashCommandsDoNotShadowBuiltinsOrSkills(t *testing.T) {
 	}
 }
 
+func TestWorkflowRunListAndStop(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, ".grok", "workflows")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	script := "let meta = #{\n  name: \"blocking-flow\",\n  description: \"Wait until stopped\",\n};\n"
+	if err := os.WriteFile(filepath.Join(dir, "blocking-flow.rhai"), []byte(script), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, nil)
+	defer registry.Close()
+	t.Setenv("GORK_WORKFLOW_RUNNER", buildTUIWorkflowRunner(t))
+	if _, err := registry.Execute(context.Background(), "workflow", []byte(`{"name":"blocking-flow"}`)); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	var runID string
+	for time.Now().Before(deadline) && runID == "" {
+		for _, run := range registry.WorkflowRuns() {
+			if run.Name == "blocking-flow" && run.Status == "running" {
+				runID = run.ID
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	m := &model{runner: &agent.Runner{Tools: registry}}
+	if runID == "" || !strings.Contains(m.listWorkflowRuns(), runID) {
+		t.Fatalf("runID=%q list=%q", runID, m.listWorkflowRuns())
+	}
+	if message := m.handleWorkflowSlash([]string{runID, "stop"}); !strings.Contains(message, "stopping") {
+		t.Fatalf("stop=%q", message)
+	}
+	wantTUIWorkflowRun(t, registry, "blocking-flow", "cancelled")
+}
+
 func TestWorkflowLaunchArgsKeepManagementFormsSeparate(t *testing.T) {
 	for _, fields := range [][]string{nil, {"validate", "demo"}, {"pause", "demo"}, {"demo", "stop"}} {
 		if name, input, ok := workflowLaunchArgs(fields); ok {
@@ -180,7 +237,8 @@ import (
   "bufio"
   "encoding/json"
   "os"
-  "strings"
+	"strings"
+	"time"
 )
 func main() {
   scanner := bufio.NewScanner(os.Stdin)
@@ -193,6 +251,8 @@ func main() {
 		if args["query"] != "verify widgets" { os.Exit(4) }
 	} else if strings.Contains(script, "name: \"demo-flow\"") {
 		if args["target"] != "origin/main...HEAD" || args["depth"] != float64(3) { os.Exit(4) }
+	} else if strings.Contains(script, "name: \"blocking-flow\"") {
+		for { time.Sleep(time.Hour) }
 	} else { os.Exit(4) }
   _ = json.NewEncoder(os.Stdout).Encode(map[string]any{
     "type":"outcome", "outcome":"completed", "result":map[string]any{"report":"verified report"},
