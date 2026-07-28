@@ -362,6 +362,14 @@ Remote relay / workspace hub remains planned/XL (product-blocked). See queue #5.
 - [x] Top-level `[shell_environment_policy]` (inherit/exclude/set/include_only
       + default secret excludes) applied to shell + ProcessManager spawn env on
       `compat/shell-environment-policy`.
+- [x] Workflow tool `validate_only` + resolve/validate helpers on
+      `compat/workflow-validate-only` (full Rhai execution still XL).
+
+## Remaining XL / blocked
+
+- Full cloud transcript replay (thin load ships; no messages API / reference hard-off).
+- Rhai workflow **execution** (validate_only landed; needs runner + host `agent()`).
+- Remote relay / workspace hub (product-blocked).
 
 ---
 
