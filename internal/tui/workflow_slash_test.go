@@ -1,10 +1,18 @@
 package tui
 
 import (
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	tea "charm.land/bubbletea/v2"
+
+	"github.com/lookcorner/go-cli/internal/agent"
+	"github.com/lookcorner/go-cli/internal/tools"
+	"github.com/lookcorner/go-cli/internal/workspace"
 )
 
 func TestListAndValidateWorkflowSlash(t *testing.T) {
@@ -39,5 +47,82 @@ fn main() {
 	}
 	if got := m.handleWorkflowSlash([]string{"run", "demo-flow"}); !strings.Contains(got, "Usage") {
 		t.Fatalf("run hint=%q", got)
+	}
+}
+
+func TestDeepResearchSlashUsesWorkflowTool(t *testing.T) {
+	root := t.TempDir()
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, nil)
+	defer registry.Close()
+	t.Setenv("GORK_WORKFLOW_RUNNER", buildTUIWorkflowRunner(t))
+
+	m := &model{ctx: context.Background(), runner: &agent.Runner{Tools: registry}}
+	m.setInput("/deep-research verify widgets")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command == nil || m.status != "deep research running" || !strings.Contains(m.transcript.String(), "Deep research started") {
+		t.Fatalf("status=%q command=%v transcript=%q", m.status, command != nil, m.transcript.String())
+	}
+	updated, followup := m.Update(command())
+	m = updated.(*model)
+	if followup != nil || m.status != "deep research complete" || !strings.Contains(m.transcript.String(), "verified report") {
+		t.Fatalf("status=%q followup=%v transcript=%q", m.status, followup != nil, m.transcript.String())
+	}
+}
+
+func buildTUIWorkflowRunner(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	source := filepath.Join(dir, "runner.go")
+	binary := filepath.Join(dir, "runner")
+	code := `package main
+import (
+  "bufio"
+  "encoding/json"
+  "os"
+  "strings"
+)
+func main() {
+  scanner := bufio.NewScanner(os.Stdin)
+  if !scanner.Scan() { os.Exit(2) }
+  var start map[string]any
+  if json.Unmarshal(scanner.Bytes(), &start) != nil || start["type"] != "start" { os.Exit(3) }
+  script, _ := start["script"].(string)
+  args, _ := start["args"].(map[string]any)
+  if !strings.Contains(script, "name: \"deep-research\"") || args["query"] != "verify widgets" { os.Exit(4) }
+  _ = json.NewEncoder(os.Stdout).Encode(map[string]any{
+    "type":"outcome", "outcome":"completed", "result":map[string]any{"report":"verified report"},
+  })
+}
+`
+	if err := os.WriteFile(source, []byte(code), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command("go", "build", "-o", binary, source)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build workflow runner: %v\n%s", err, output)
+	}
+	return binary
+}
+
+func TestDeepResearchRunnerUnavailable(t *testing.T) {
+	message := runDeepResearch(context.Background(), nil, "query")()
+	done, ok := message.(deepResearchDoneEvent)
+	if !ok || done.err == nil || !strings.Contains(done.err.Error(), "unavailable") {
+		t.Fatalf("message=%#v", message)
+	}
+}
+
+func TestDeepResearchSlashRequiresQuery(t *testing.T) {
+	m := &model{}
+	m.setInput("/deep-research")
+	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(*model)
+	if command != nil || m.status != "deep research query required" || !strings.Contains(m.transcript.String(), "Usage: /deep-research <query>") {
+		t.Fatalf("status=%q command=%v transcript=%q", m.status, command != nil, m.transcript.String())
 	}
 }

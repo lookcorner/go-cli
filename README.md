@@ -1517,9 +1517,13 @@ scanning `.rhai` files and parsing `let meta = #{...}` without executing Rhai.
 The builtin includes the embedded reference `deep-research` script.
 The TUI mirrors that catalog with `/workflows`, and `/workflow validate
 <name|path>` runs the same lightweight validation as the `workflow` tool's
-`validate_only` mode, or full execution when `GORK_WORKFLOW_RUNNER` (or `gork-workflow-runner` on PATH) speaks the NDJSON host protocol and `agent()` maps to local subagents.
+`validate_only` mode. Full execution uses `GORK_WORKFLOW_RUNNER` (or
+`gork-workflow-runner` on PATH) over the NDJSON host protocol, with `agent()`
+mapped to local subagents.
 Workflow `args` retain their JSON types, including the numeric `breadth` accepted
-by the builtin `deep-research` workflow.
+by the builtin `deep-research` workflow. `/deep-research <query>` launches that
+builtin asynchronously through the same tool and writes its result back to the
+TUI; generic run-management UI remains deferred.
 
 Live session MCP servers are exposed through `x.ai/mcp/list`, and
 `x.ai/mcp/call` invokes a named server tool through the same client and

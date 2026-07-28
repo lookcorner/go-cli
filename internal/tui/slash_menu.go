@@ -59,6 +59,7 @@ var slashCommandCatalog = []slashCommandItem{
 	{name: "fetched", aliases: []string{"list-fetched", "web-fetch-artifacts"}, placeholder: "[path|name]", description: "List or show truncated web_fetch text artifacts"},
 	{name: "workflows", aliases: []string{"list-workflows"}, description: "List discoverable Rhai workflows"},
 	{name: "workflow", placeholder: "validate <name|path>", description: "Validate a Rhai workflow (run via workflow tool + GORK_WORKFLOW_RUNNER)"},
+	{name: "deep-research", placeholder: "<query>", description: "Research with parallel agents and cross-check evidence"},
 	{name: "model", aliases: []string{"m"}, placeholder: "<name> [effort]", description: "Switch model"},
 	{name: "effort", placeholder: "<level>", description: "Set reasoning effort"},
 	{name: "always-approve", description: "Toggle always-approve mode"},
@@ -260,6 +261,8 @@ func (m *model) slashCommandAvailable(name string) bool {
 		return !m.minimal
 	case "play-video", "video-play", "videos", "list-videos", "downloads", "list-downloads", "fetched", "list-fetched", "web-fetch-artifacts", "workflows", "list-workflows", "workflow":
 		return !m.minimal || name == "downloads" || name == "list-downloads" || name == "fetched" || name == "list-fetched" || name == "web-fetch-artifacts" || name == "workflows" || name == "list-workflows" || name == "workflow"
+	case "deep-research":
+		return runner != nil && runner.Tools != nil && runner.Tools.HasTool("workflow")
 	case "expand":
 		return m.minimal
 	case "edit-prompt":

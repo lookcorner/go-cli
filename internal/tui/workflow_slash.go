@@ -1,12 +1,39 @@
 package tui
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
+
+	"github.com/lookcorner/go-cli/internal/tools"
 	"github.com/lookcorner/go-cli/internal/workflow"
 )
+
+type deepResearchDoneEvent struct {
+	result string
+	err    error
+}
+
+func runDeepResearch(ctx context.Context, registry *tools.Registry, query string) tea.Cmd {
+	return func() tea.Msg {
+		if registry == nil || !registry.HasTool("workflow") {
+			return deepResearchDoneEvent{err: fmt.Errorf("workflow tool is unavailable")}
+		}
+		arguments, err := json.Marshal(map[string]any{
+			"name": "deep-research",
+			"args": map[string]any{"query": query},
+		})
+		if err != nil {
+			return deepResearchDoneEvent{err: err}
+		}
+		result, err := registry.Execute(ctx, "workflow", arguments)
+		return deepResearchDoneEvent{result: result, err: err}
+	}
+}
 
 func (m *model) listWorkflowsCatalog() string {
 	cwd := ""
@@ -26,7 +53,7 @@ func (m *model) listWorkflowsCatalog() string {
 		}
 		b.WriteString(fmt.Sprintf("%d. `%s` (%s)%s\n   %s\n", index+1, item.Name, item.Source, path, item.Description))
 	}
-	b.WriteString("\nValidate with `/workflow validate <name|path>`. Run via the workflow tool when GORK_WORKFLOW_RUNNER is set.")
+	b.WriteString("\nValidate with `/workflow validate <name|path>`. Run deep research with `/deep-research <query>` when GORK_WORKFLOW_RUNNER is set.")
 	return strings.TrimSpace(b.String())
 }
 
@@ -69,6 +96,6 @@ func (m *model) handleWorkflowSlash(fields []string) string {
 	case "list":
 		return m.listWorkflowsCatalog()
 	default:
-		return "Usage: /workflows | /workflow validate <name|path>\nFull run uses the workflow tool + GORK_WORKFLOW_RUNNER (TUI run/stop/resume UI deferred)."
+		return "Usage: /workflows | /workflow validate <name|path> | /deep-research <query>\nGeneric workflow run/stop/resume UI is deferred."
 	}
 }

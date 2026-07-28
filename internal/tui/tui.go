@@ -2378,6 +2378,14 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.viewer = &readOnlyViewer{title: "Side question", content: content, at: time.Now()}
 		m.scroll = 0
+	case deepResearchDoneEvent:
+		if msg.err != nil {
+			m.status = "deep research failed"
+			m.appendSystem("Deep research failed: " + msg.err.Error())
+		} else {
+			m.status = "deep research complete"
+			m.appendSystem(msg.result)
+		}
 	case mcpDoneEvent:
 		if m.mcp != nil {
 			m.mcp.busy = false
@@ -3238,6 +3246,21 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.appendSystem(m.handleWorkflowSlash(fields[1:]))
 			m.status = "workflow"
 			return m, nil
+		case "/deep-research":
+			query := strings.TrimSpace(strings.Join(fields[1:], " "))
+			if query == "" {
+				m.appendSystem("Usage: /deep-research <query>\nResearch with bounded parallel agents, independently cross-check the evidence, and write a concise cited report.")
+				m.status = "deep research query required"
+				return m, nil
+			}
+			if m.runner == nil || m.runner.Tools == nil || !m.runner.Tools.HasTool("workflow") {
+				m.appendSystem("Deep research is unavailable because the workflow tool is disabled.")
+				m.status = "deep research unavailable"
+				return m, nil
+			}
+			m.appendSystem("Deep research started. It will cross-check candidate claims and return a cited report here.")
+			m.status = "deep research running"
+			return m, runDeepResearch(m.ctx, m.runner.Tools, query)
 		case "/login", "/logout":
 			if m.runner == nil {
 				m.status = "authentication unavailable"
