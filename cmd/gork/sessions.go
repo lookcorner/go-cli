@@ -206,9 +206,16 @@ func listWorkspaceSessions(dir, cwd string) ([]sessionlog.Info, error) {
 }
 
 func searchWorkspaceSessions(dir, cwd, query string, limit int) (sessionlog.SearchResult, error) {
-	paths, _ := workspaceSessionScope(dir, cwd)
-	cwds := make([]string, 0, len(paths))
-	for path := range paths {
+	items, err := listWorkspaceSessions(dir, cwd)
+	if err != nil {
+		return sessionlog.SearchResult{}, err
+	}
+	cwdSet := make(map[string]bool)
+	for _, item := range items {
+		cwdSet[item.CWD] = true
+	}
+	cwds := make([]string, 0, len(cwdSet))
+	for path := range cwdSet {
 		cwds = append(cwds, path)
 	}
 	sort.Strings(cwds)
