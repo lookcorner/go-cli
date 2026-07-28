@@ -48,6 +48,8 @@ func printInspectReport(output io.Writer, report inspectapp.Report) {
 	fmt.Fprintf(output, "Project trusted: %t\n", report.ProjectTrusted)
 	fmt.Fprintf(output, "Permission mode: %s (%d rules)\n", cleanCLIText(report.Permissions.Mode), report.Permissions.Rules)
 	fmt.Fprintf(output, "API-key authentication disabled: %t\n", report.LoginPolicy.APIKeyAuthDisabled)
+	fmt.Fprintf(output, "Workspace hub: blocked (exposure=%t dial=%t url=%s)\n",
+		report.WorkspaceHub.Exposure, report.WorkspaceHub.DialAllowed, cleanCLIText(report.WorkspaceHub.HubURL))
 
 	printInspectSection(output, "Project instructions", len(report.Instructions), func() {
 		for _, item := range report.Instructions {

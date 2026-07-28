@@ -16,6 +16,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/skills"
 	"github.com/lookcorner/go-cli/internal/version"
 	"github.com/lookcorner/go-cli/internal/workspace"
+	"github.com/lookcorner/go-cli/internal/workspacehub"
 )
 
 type Report struct {
@@ -35,7 +36,20 @@ type Report struct {
 	LSPServers        []LSPServer    `json:"lspServers"`
 	ConfigSources     []ConfigSource `json:"configSources"`
 	ExternalCompat    ExternalCompat `json:"externalCompat"`
+	WorkspaceHub      WorkspaceHub   `json:"workspaceHub"`
 	DiscoveryWarnings []string       `json:"discoveryWarnings,omitempty"`
+}
+
+// WorkspaceHub is the fail-closed remote hub / relay posture.
+type WorkspaceHub struct {
+	Enabled            bool     `json:"enabled"`
+	Exposure           bool     `json:"workspaceExposure"`
+	HubURL             string   `json:"hubUrl"`
+	ProductUnlocked    bool     `json:"productUnlocked"`
+	UnlockRequested    bool     `json:"unlockRequested"`
+	DialAllowed        bool     `json:"dialAllowed"`
+	BlockedReasons     []string `json:"blockedReasons"`
+	UnlockRequirements []string `json:"unlockRequirements"`
 }
 
 type ExternalCompat struct {
@@ -206,6 +220,7 @@ func Build(cwd, configPath string) (Report, error) {
 			RemoteSettingsLoaded: false,
 			Cells:                cfg.CompatibilitySettings(),
 		},
+		WorkspaceHub: workspaceHubStatus(),
 	}
 	if root, ok := workspace.FindGitRoot(ws.Root()); ok {
 		report.ProjectRoot = root
@@ -216,6 +231,16 @@ func Build(cwd, configPath string) (Report, error) {
 	}
 	sort.Strings(report.DiscoveryWarnings)
 	return report, nil
+}
+
+func workspaceHubStatus() WorkspaceHub {
+	status := workspacehub.Current()
+	return WorkspaceHub{
+		Enabled: status.Enabled, Exposure: status.Exposure, HubURL: status.HubURL,
+		ProductUnlocked: status.ProductUnlocked, UnlockRequested: status.UnlockRequested,
+		DialAllowed: status.DialAllowed, BlockedReasons: status.BlockedReasons,
+		UnlockRequirements: status.UnlockRequirements,
+	}
 }
 
 func enabledPlugins(inventory []plugin.Plugin) []plugin.Plugin {

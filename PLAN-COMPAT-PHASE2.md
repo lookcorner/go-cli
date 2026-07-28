@@ -37,7 +37,14 @@ Shipped deferred doctor probes: sandbox.toml profile-conflict, Wayland data-cont
 
 Product-coupled (`computer-hub.grok.com`, OIDC hub auth, preview supervisor).
 Go keeps fail-closed headless + `workspace_exposure: false`. Do not dial hub
-without an explicit product unlock. Deferred doctor probes: Wayland + local WezTerm Kitty keyboard shipped; SSH WezTerm XTVERSION doctor recovery and Cursor CLI session discovery shipped.
+without an explicit product unlock.
+
+### Fail-closed surface (shipped on `compat/workspace-hub-fail-closed`)
+
+- [x] `internal/workspacehub` status + `Dial` refuse (`ErrProductBlocked`)
+- [x] `gork inspect` `workspaceHub` cell + ACP `x.ai/workspace_hub/status`
+- [x] Leader `workspace_exposure: false` documented
+- [ ] Real hub WebSocket client / preview supervisor (needs product unlock)
 
 ---
 
@@ -383,8 +390,8 @@ Remote relay / workspace hub remains planned/XL (product-blocked). See queue #5.
   shipped; inject into local runner only after grok.com `/messages` is confirmed.
 - Rhai runner **binary**: Go host is ready; ship/link a real `xai-workflow`
   sidecar build (journal/parallel/UI still deferred).
-- Remote relay / workspace hub: product-blocked (COMPAT `Workspace server`
-  planned).
+- Remote relay / workspace hub: fail-closed surface shipped; real dial still
+  product-blocked until OIDC hub auth + preview supervisor unlock.
 
 ---
 
