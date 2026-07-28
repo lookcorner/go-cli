@@ -61,6 +61,7 @@ type Facts struct {
 	VoiceDetail      string `json:"voiceDetail,omitempty"`
 	DataControl      string `json:"dataControl,omitempty"`
 	XTVERSION        string `json:"xtversion,omitempty"`
+	FFmpeg           bool   `json:"ffmpeg"`
 }
 
 type Counts struct {
@@ -131,6 +132,10 @@ func BuildSnapshot(getenv func(string) string, lookPath func(string) (string, er
 	if finding := waylandDataControlFinding(dataControl, wlCopy); finding != "" {
 		findings = append(findings, finding)
 	}
+	ffmpegOK := ffmpegAvailable(lookPath)
+	if finding := ffmpegFinding(ffmpegOK); finding != "" {
+		findings = append(findings, finding)
+	}
 	dataControlFact := ""
 	if dataControl != DataControlNotApplicable {
 		dataControlFact = string(dataControl)
@@ -143,7 +148,7 @@ func BuildSnapshot(getenv func(string) string, lookPath func(string) (string, er
 			NativeClip: clipboard, ClipboardTool: clipboardTool, OSC52: osc52, GOOS: goos,
 			SetClipboard: tmux.SetClipboard, AllowPassthrough: tmux.AllowPassthrough, ExtendedKeys: tmux.ExtendedKeys,
 			ControlMode: tmux.ControlMode, VoiceMicrophone: voiceMic, VoiceDetail: voiceDetail,
-			DataControl: dataControlFact, XTVERSION: xtversion,
+			DataControl: dataControlFact, XTVERSION: xtversion, FFmpeg: ffmpegOK,
 		},
 		Findings: findings,
 		Counts:   Counts{Issues: len(findings)},
@@ -157,6 +162,7 @@ func (s Snapshot) Human() string {
 	if s.Facts.XTVERSION != "" {
 		fmt.Fprintf(&out, "  xtversion    %s\n", s.Facts.XTVERSION)
 	}
+	fmt.Fprintf(&out, "  ffmpeg       %s\n", map[bool]string{true: "on", false: "off"}[s.Facts.FFmpeg])
 	if s.Facts.Multiplexer == "tmux" || strings.Contains(s.Facts.Multiplexer, "tmux") {
 		fmt.Fprintf(&out, "  set-clipboard %s\n  allow-passthrough %s\n  extended-keys %s\n  control-mode %s\n",
 			tmuxFactOrUnknown(s.Facts.SetClipboard), tmuxFactOrUnknown(s.Facts.AllowPassthrough), tmuxFactOrUnknown(s.Facts.ExtendedKeys),

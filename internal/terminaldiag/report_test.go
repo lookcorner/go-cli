@@ -36,10 +36,13 @@ func TestIsCommand(t *testing.T) {
 
 func TestBuildSnapshotJSONShape(t *testing.T) {
 	env := map[string]string{"TERM_PROGRAM": "kitty", "TERM": "xterm-kitty", "COLORTERM": "truecolor"}
-	snapshot := BuildSnapshot(func(key string) string { return env[key] }, func(string) (string, error) {
+	snapshot := BuildSnapshot(func(key string) string { return env[key] }, func(name string) (string, error) {
+		if name == "ffmpeg" {
+			return "/usr/bin/ffmpeg", nil
+		}
 		return "", errors.New("missing")
 	}, "linux")
-	if snapshot.SchemaVersion != SchemaVersion || snapshot.Facts.Terminal != "kitty" || snapshot.Counts.Issues != 0 || !snapshot.Facts.OSC52 {
+	if snapshot.SchemaVersion != SchemaVersion || snapshot.Facts.Terminal != "kitty" || snapshot.Counts.Issues != 0 || !snapshot.Facts.OSC52 || !snapshot.Facts.FFmpeg {
 		t.Fatalf("snapshot=%#v", snapshot)
 	}
 	payload, err := json.Marshal(snapshot)
@@ -56,15 +59,15 @@ func TestBuildReportDescribesTerminalAndRoutes(t *testing.T) {
 		"TMUX": "/tmp/tmux", "SSH_CONNECTION": "client server", "GROK_OSC52_SINK": "1",
 	}
 	report := buildReport(func(key string) string { return env[key] }, func(name string) (string, error) {
-		if name == "pbcopy" {
-			return "/usr/bin/pbcopy", nil
+		if name == "pbcopy" || name == "ffmpeg" {
+			return "/usr/bin/" + name, nil
 		}
 		return "", errors.New("missing")
 	}, "darwin")
 	for _, want := range []string{
 		"terminal     WezTerm", "multiplexer  tmux", "ssh          yes", "color        truecolor",
 		"set-clipboard external", "allow-passthrough on", "extended-keys on", "control-mode off",
-		"native       active (tool: pbcopy)", "osc 52       active", "No issues found.",
+		"native       active (tool: pbcopy)", "osc 52       active", "ffmpeg       on", "No issues found.",
 	} {
 		if !strings.Contains(report, want) {
 			t.Errorf("missing %q in %q", want, report)
@@ -222,8 +225,8 @@ func TestBuildReportExplainsDegradedEnvironment(t *testing.T) {
 	}, "linux")
 	for _, want := range []string{
 		"terminal     dumb", "color        none", "native       off", "osc 52       off",
-		"4 issue(s)", "TERM=dumb", "can't reach the target clipboard", "`/copy <file>`",
-		"terminal bell", "unfocused",
+		"5 issue(s)", "TERM=dumb", "can't reach the target clipboard", "`/copy <file>`",
+		"terminal bell", "unfocused", "/play-video",
 	} {
 		if !strings.Contains(report, want) {
 			t.Errorf("missing %q in %q", want, report)
@@ -288,8 +291,8 @@ func TestBuildReportWarnsForBasicTmuxColor(t *testing.T) {
 		"TERM_PROGRAM": "WezTerm", "TERM": "screen", "TMUX": "yes", "BYOBU_BACKEND": "tmux",
 	}
 	report := buildReport(func(key string) string { return env[key] }, func(name string) (string, error) {
-		if name == "wl-copy" {
-			return "/usr/bin/wl-copy", nil
+		if name == "wl-copy" || name == "ffmpeg" {
+			return "/usr/bin/" + name, nil
 		}
 		return "", errors.New("missing")
 	}, "linux")
