@@ -78,7 +78,8 @@ OAuth enrollment for HTTP/SSE servers, with durable tokens and ACP/TUI status.
 - [x] Headless clients can paste a callback URL via `SubmitMCPAuthCallback` /
       ACP `x.ai/mcp/auth_submit` on `compat/mcp-oauth-pasted-callback`.
 - [x] `gork inspect` MCP cells expose auth=static|env|stored|oauth_byo|none
-      plus env-var names only (never tokens/headers/secrets).
+      plus env-var names only (never tokens/headers/secrets) on
+      `compat/mcp-oauth-inspect-presence`.
 
 ### Phase 1 notes
 
