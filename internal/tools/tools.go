@@ -452,11 +452,11 @@ func (r *Registry) ConfigureEnvironment(values map[string]string) {
 	r.processes.ConfigureEnvironment(values)
 }
 
-// ConfigureBash applies the [toolset.bash] foreground timeout and output
-// ceiling to commands started by this registry.
-func (r *Registry) ConfigureBash(timeout time.Duration, outputLimit int) {
+// ConfigureBash applies the [toolset.bash] foreground timeout bounds and
+// output ceiling to commands started by this registry.
+func (r *Registry) ConfigureBash(timeout, maxTimeout time.Duration, outputLimit int) {
 	if r != nil {
-		r.processes.ConfigureBash(timeout, outputLimit)
+		r.processes.ConfigureBash(timeout, maxTimeout, outputLimit)
 	}
 }
 

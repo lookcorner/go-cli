@@ -62,6 +62,9 @@ func TestBashConfigRuntimeBounds(t *testing.T) {
 	if got := bashTimeout(0.25); got != 250*time.Millisecond {
 		t.Fatalf("fractional timeout=%s", got)
 	}
+	if got := bashTimeout(0.0004); got != time.Millisecond {
+		t.Fatalf("sub-millisecond timeout=%s", got)
+	}
 	if got := bashTimeout(40000); got != 10*time.Hour {
 		t.Fatalf("timeout clamp=%s", got)
 	}

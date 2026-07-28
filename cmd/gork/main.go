@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -754,7 +755,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if cfg.Toolset.Bash.LoginShellCapture {
 		registry.CaptureLoginShellEnvironment(context.Background())
 	}
-	registry.ConfigureBash(bashTimeout(cfg.Toolset.Bash.TimeoutSeconds), bashOutputLimit(cfg.Toolset.Bash.OutputByteLimit))
+	registry.ConfigureBash(bashTimeout(cfg.Toolset.Bash.TimeoutSeconds), bashTimeout(cfg.Toolset.Bash.MaxTimeoutSeconds), bashOutputLimit(cfg.Toolset.Bash.OutputByteLimit))
 	if err := registry.ConfigureFileToolset(cfg.Toolset.FileToolset, cfg.Toolset.Hashline.Scheme, cfg.Toolset.Hashline.HashLen, cfg.Toolset.Hashline.ChunkSize); err != nil {
 		_ = registry.Close()
 		return err
@@ -3701,7 +3702,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		if sessionCfg.Toolset.Bash.LoginShellCapture {
 			registry.CaptureLoginShellEnvironment(context.Background())
 		}
-		registry.ConfigureBash(bashTimeout(sessionCfg.Toolset.Bash.TimeoutSeconds), bashOutputLimit(sessionCfg.Toolset.Bash.OutputByteLimit))
+		registry.ConfigureBash(bashTimeout(sessionCfg.Toolset.Bash.TimeoutSeconds), bashTimeout(sessionCfg.Toolset.Bash.MaxTimeoutSeconds), bashOutputLimit(sessionCfg.Toolset.Bash.OutputByteLimit))
 		if err := registry.ConfigureFileToolset(sessionCfg.Toolset.FileToolset, sessionCfg.Toolset.Hashline.Scheme, sessionCfg.Toolset.Hashline.HashLen, sessionCfg.Toolset.Hashline.ChunkSize); err != nil {
 			_ = registry.Close()
 			return nil, nil, err
@@ -6273,7 +6274,8 @@ func bashTimeout(seconds float64) time.Duration {
 	if seconds <= 0 {
 		return 0
 	}
-	return time.Duration(min(seconds, 36000) * float64(time.Second))
+	milliseconds := math.Round(min(seconds, 36000) * 1000)
+	return time.Duration(max(milliseconds, 1)) * time.Millisecond
 }
 
 func bashOutputLimit(bytes uint64) int {

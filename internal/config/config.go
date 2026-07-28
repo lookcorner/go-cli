@@ -172,6 +172,7 @@ type ToolsetConfig struct {
 // BashConfig is the [toolset.bash] table bounding shell commands.
 type BashConfig struct {
 	TimeoutSeconds    float64 `json:"timeout_secs"`
+	MaxTimeoutSeconds float64 `json:"max_timeout_secs"`
 	OutputByteLimit   uint64  `json:"output_byte_limit"`
 	LoginShellCapture bool    `json:"login_shell_capture"`
 }
@@ -656,6 +657,7 @@ type fileHashlineConfig struct {
 
 type fileBashConfig struct {
 	TimeoutSeconds    *float64 `json:"timeout_secs,omitempty" toml:"timeout_secs"`
+	MaxTimeoutSeconds *float64 `json:"max_timeout_secs,omitempty" toml:"max_timeout_secs"`
 	OutputByteLimit   *uint64  `json:"output_byte_limit,omitempty" toml:"output_byte_limit"`
 	LoginShellCapture *bool    `json:"login_shell_capture,omitempty" toml:"login_shell_capture"`
 }
@@ -985,7 +987,7 @@ func Load(path string) (Config, error) {
 		AskUserQuestion:             AskUserQuestionConfig{TimeoutEnabled: true, TimeoutSeconds: 30 * 60},
 		CancelRewindEnabled:         true,
 		ShellEnvironmentPolicy:      ShellEnvironmentPolicy{Inherit: "all", IgnoreDefaultExcludes: true},
-		Toolset:                     ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}, Bash: BashConfig{TimeoutSeconds: 120, OutputByteLimit: 20000, LoginShellCapture: true}},
+		Toolset:                     ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}, Bash: BashConfig{TimeoutSeconds: 120, MaxTimeoutSeconds: 36000, OutputByteLimit: 20000, LoginShellCapture: true}},
 		Goal:                        GoalConfig{VerifierCount: 3, ClassifierMaxRuns: 10, ReverifyAfter: 8},
 		UI:                          UIConfig{MaxThoughtsWidth: 120, Theme: "groknight", AutoDarkTheme: "groknight", AutoLightTheme: "grokday", HunkTrackerMode: "agent_only", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, PageFlipOnSend: true, ShowThinkingBlocks: true, DisplayRefresh: DisplayRefreshConfig{ProbeEnabled: true, FloorMS: 8, CeilingMS: 16, MinHz: 55, MaxHz: 165}, ScrollSpeed: 50, ScrollMode: "auto", DefaultSelectedPermission: "always_allow_all_sessions", GroupToolVerbs: true, PromptSuggestions: true, ContextualHints: Hints{Undo: true, PlanMode: true, ImageInput: true, SendNow: true, SmallScreen: true, WordSelect: true, SSHWrap: true}, VoiceCaptureMode: "hold", VoiceSTTLanguage: "en", VoiceKeybindEnabled: true, PermissionMode: "ask", SimpleMode: true, Notifications: NotificationsConfig{Method: "auto", Condition: "unfocused", IdleThresholdSecs: 3, Events: []string{"turn_complete", "approval_required"}, ProgressBar: true, SleepPrevention: true, SessionRecap: true, RecapThresholdSecs: 30, Title: NotificationTitleConfig{Enabled: true, Items: []string{"action-required", "spinner", "activity", "session-name", "grok"}}}},
 		Dashboard:                   DashboardConfig{Enabled: true, Grouping: "state"},
@@ -1255,6 +1257,9 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.Toolset.Bash.TimeoutSeconds != nil {
 		cfg.Toolset.Bash.TimeoutSeconds = *disk.Toolset.Bash.TimeoutSeconds
+	}
+	if disk.Toolset.Bash.MaxTimeoutSeconds != nil {
+		cfg.Toolset.Bash.MaxTimeoutSeconds = *disk.Toolset.Bash.MaxTimeoutSeconds
 	}
 	if disk.Toolset.Bash.OutputByteLimit != nil {
 		cfg.Toolset.Bash.OutputByteLimit = *disk.Toolset.Bash.OutputByteLimit
@@ -3127,6 +3132,9 @@ func (c Config) Validate() error {
 	}
 	if math.IsNaN(c.Toolset.Bash.TimeoutSeconds) || math.IsInf(c.Toolset.Bash.TimeoutSeconds, 0) || c.Toolset.Bash.TimeoutSeconds < 0 {
 		return errors.New("toolset bash timeout_secs must be finite and non-negative")
+	}
+	if math.IsNaN(c.Toolset.Bash.MaxTimeoutSeconds) || math.IsInf(c.Toolset.Bash.MaxTimeoutSeconds, 0) || c.Toolset.Bash.MaxTimeoutSeconds < 0 {
+		return errors.New("toolset bash max_timeout_secs must be finite and non-negative")
 	}
 	if c.Pruning.KeepLastNTurns < 0 || c.Pruning.SoftTrimThreshold < 0 || c.Pruning.SoftTrimHead < 0 || c.Pruning.SoftTrimTail < 0 || c.Pruning.HardClearAgeTurns < 0 {
 		return errors.New("compaction pruning values must not be negative")

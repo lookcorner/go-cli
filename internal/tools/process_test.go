@@ -540,14 +540,17 @@ func TestConfigureBashBoundsForegroundTimeoutAndOutput(t *testing.T) {
 		t.Fatalf("default output limit=%d want %d", got, defaultBashOutputBytes)
 	}
 
-	manager.ConfigureBash(0, 0)
+	manager.ConfigureBash(0, 0, 0)
 	if manager.defaultShellTimeout() != defaultBashTimeout || manager.outputByteLimit() != defaultBashOutputBytes {
 		t.Fatal("zero configuration overrode the built-in defaults")
 	}
 
-	manager.ConfigureBash(30*time.Second, 64)
+	manager.ConfigureBash(30*time.Second, time.Minute, 64)
 	if got := manager.defaultShellTimeout(); got != 30*time.Second {
 		t.Fatalf("configured timeout=%s", got)
+	}
+	if got := manager.maxShellTimeout(); got != time.Minute {
+		t.Fatalf("configured max timeout=%s", got)
 	}
 	output, err := manager.RunForeground(context.Background(), "printf '%0.sx' $(seq 1 200)", 0)
 	if err != nil {
@@ -579,7 +582,7 @@ func TestConfigureBashBoundsForegroundTimeoutAndOutput(t *testing.T) {
 		t.Fatalf("background output=%q err=%v", background, err)
 	}
 
-	manager.ConfigureBash(50*time.Millisecond, 0)
+	manager.ConfigureBash(50*time.Millisecond, time.Minute, 0)
 	if got := manager.defaultShellTimeout(); got != 50*time.Millisecond {
 		t.Fatalf("timeout not configured: got %s", got)
 	}
@@ -593,6 +596,40 @@ func TestConfigureBashBoundsForegroundTimeoutAndOutput(t *testing.T) {
 	}
 	if !strings.Contains(output, "killed (timeout)") {
 		t.Fatalf("expected timeout status, got: %q", output)
+	}
+}
+
+func TestRunTerminalCommandUsesConfiguredForegroundCeiling(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture is Unix-specific")
+	}
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewProcessManager(ws, PromptApprover{Mode: PermissionAuto})
+	defer manager.Close()
+	manager.ConfigureBash(time.Second, 40*time.Millisecond, 0)
+	tool := &runTerminalCommandTool{manager: manager}
+
+	timeoutSchema := tool.Definition().Parameters["properties"].(map[string]any)["timeout"].(map[string]any)
+	if timeoutSchema["maximum"] != uint64(40) || !strings.Contains(timeoutSchema["description"].(string), "max 40") || !strings.Contains(timeoutSchema["description"].(string), "Default: 40") || !strings.Contains(timeoutSchema["description"].(string), "background mode") {
+		t.Fatalf("timeout schema=%#v", timeoutSchema)
+	}
+	started := time.Now()
+	output, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"sleep 1","description":"test ceiling","timeout":500}`))
+	if err != nil || !strings.Contains(output, "killed (timeout)") || time.Since(started) > time.Second {
+		t.Fatalf("foreground output=%q elapsed=%s err=%v", output, time.Since(started), err)
+	}
+
+	background, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"sleep 0.08; printf done","description":"test background","timeout":500,"is_background":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := strings.Fields(background)[2]
+	result, err := manager.WaitOutput(context.Background(), id, time.Second)
+	if err != nil || !strings.Contains(result, "done") {
+		t.Fatalf("background result=%q err=%v", result, err)
 	}
 }
 

@@ -260,6 +260,11 @@ select the production or explicit-PID leader, emit reference-shaped JSON, and
 terminate only identity-verified gork processes while cleaning stale candidate
 files. Remote relay forwarding and workspace exposure remain.
 
+Shell configuration includes the reference `[toolset.bash].max_timeout_secs`
+foreground ceiling (10-hour production default, 5-minute fallback when set to
+zero), with the same ceiling reflected in the model-visible tool schema; positive
+background timeouts remain exempt from that foreground-only limit.
+
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |
 | Responses API streaming | done | SSE text deltas, terminal response IDs, function calls and JSON fallback |

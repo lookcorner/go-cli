@@ -788,14 +788,14 @@ func TestLoadAndValidateBashConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Toolset.Bash.TimeoutSeconds != 120 || cfg.Toolset.Bash.OutputByteLimit != 20000 {
+	if cfg.Toolset.Bash.TimeoutSeconds != 120 || cfg.Toolset.Bash.MaxTimeoutSeconds != 36000 || cfg.Toolset.Bash.OutputByteLimit != 20000 {
 		t.Fatalf("default bash config=%#v", cfg.Toolset.Bash)
 	}
-	if err := os.WriteFile(path, []byte("[toolset.bash]\ntimeout_secs = 0.05\noutput_byte_limit = 64\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("[toolset.bash]\ntimeout_secs = 0.05\nmax_timeout_secs = 30\noutput_byte_limit = 64\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err = Load(path)
-	if err != nil || cfg.Toolset.Bash.TimeoutSeconds != 0.05 || cfg.Toolset.Bash.OutputByteLimit != 64 {
+	if err != nil || cfg.Toolset.Bash.TimeoutSeconds != 0.05 || cfg.Toolset.Bash.MaxTimeoutSeconds != 30 || cfg.Toolset.Bash.OutputByteLimit != 64 {
 		t.Fatalf("bash config=%#v err=%v", cfg.Toolset.Bash, err)
 	}
 	cfg.APIKey = "test-key"
@@ -803,6 +803,11 @@ func TestLoadAndValidateBashConfig(t *testing.T) {
 	cfg.Toolset.Bash.TimeoutSeconds = -1
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "bash timeout_secs") {
 		t.Fatalf("negative bash timeout error=%v", err)
+	}
+	cfg.Toolset.Bash.TimeoutSeconds = 1
+	cfg.Toolset.Bash.MaxTimeoutSeconds = -1
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "bash max_timeout_secs") {
+		t.Fatalf("negative bash max timeout error=%v", err)
 	}
 }
 

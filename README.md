@@ -1793,8 +1793,11 @@ foreground session when they finish. The earlier aliases
 `start_background_command`, `get_background_command_output`, and
 `kill_background_command` remain available. Output is captured in a bounded
 tail buffer. `[toolset.bash] timeout_secs` changes the default foreground
-timeout and `output_byte_limit` changes the captured tail limit; unset values
-default to 120 seconds and 20,000 bytes. `[toolset.bash] login_shell_capture`
+timeout, `max_timeout_secs` bounds model-selected foreground timeouts, and
+`output_byte_limit` changes the captured tail limit; unset values default to
+120 seconds, 10 hours, and 20,000 bytes respectively. The maximum does not
+shorten a positive timeout chosen for a background task, and background timeout
+`0` remains unbounded. `[toolset.bash] login_shell_capture`
 (default on; `GROK_LOGIN_ENV`) sources the user shell rc once at session start and
 merges that environment into agent shells. Top-level `[shell_environment_policy]`
 can reshape the inherited agent shell environment (`inherit = all|core|none`,

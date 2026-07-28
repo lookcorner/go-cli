@@ -53,6 +53,7 @@ type ProcessManager struct {
 	observer        ProcessObserver
 	bashMu          sync.RWMutex
 	bashTimeout     time.Duration
+	bashMaxTimeout  time.Duration
 	bashOutput      int
 	shellEnvPolicy  ShellEnvironmentPolicy
 	cgroupMu        sync.Mutex
@@ -71,9 +72,9 @@ type foregroundSlot struct {
 
 // ConfigureBash sets the [toolset.bash] bounds for shell commands. Zero values
 // keep the built-in defaults.
-func (m *ProcessManager) ConfigureBash(timeout time.Duration, outputLimit int) {
+func (m *ProcessManager) ConfigureBash(timeout, maxTimeout time.Duration, outputLimit int) {
 	m.bashMu.Lock()
-	m.bashTimeout, m.bashOutput = max(timeout, 0), max(outputLimit, 0)
+	m.bashTimeout, m.bashMaxTimeout, m.bashOutput = max(timeout, 0), max(maxTimeout, 0), max(outputLimit, 0)
 	m.bashMu.Unlock()
 }
 
@@ -221,10 +222,23 @@ func (m *ProcessManager) endForeground(slot *foregroundSlot) {
 func (m *ProcessManager) defaultShellTimeout() time.Duration {
 	m.bashMu.RLock()
 	defer m.bashMu.RUnlock()
-	if m.bashTimeout > 0 {
-		return m.bashTimeout
+	limit := m.bashMaxTimeout
+	if limit <= 0 {
+		limit = 5 * time.Minute
 	}
-	return defaultBashTimeout
+	if m.bashTimeout > 0 {
+		return min(m.bashTimeout, limit)
+	}
+	return min(defaultBashTimeout, limit)
+}
+
+func (m *ProcessManager) maxShellTimeout() time.Duration {
+	m.bashMu.RLock()
+	defer m.bashMu.RUnlock()
+	if m.bashMaxTimeout > 0 {
+		return m.bashMaxTimeout
+	}
+	return 5 * time.Minute
 }
 
 // outputByteLimit is the configured capture ceiling, or the reference default.
@@ -1367,13 +1381,15 @@ func (t *monitorTool) Execute(ctx context.Context, raw json.RawMessage) (string,
 }
 
 func (t *runTerminalCommandTool) Definition() api.ToolDefinition {
+	maxTimeout := uint64(t.manager.maxShellTimeout() / time.Millisecond)
+	defaultTimeout := uint64(t.manager.defaultShellTimeout() / time.Millisecond)
 	return api.ToolDefinition{
 		Type: "function", Name: "run_terminal_cmd",
 		Description: "Run a terminal command in the workspace. Set is_background for long-running commands; use get_task_output and kill_task with the returned task_id.",
 		Parameters: objectSchema(map[string]any{
 			"command":       map[string]any{"type": "string", "description": "The shell command to run."},
 			"description":   map[string]any{"type": "string", "description": "One sentence explaining why the command is needed."},
-			"timeout":       map[string]any{"type": "integer", "minimum": 0, "maximum": 300000, "description": "Timeout in milliseconds; default 120000."},
+			"timeout":       map[string]any{"type": "integer", "minimum": 0, "maximum": maxTimeout, "description": fmt.Sprintf("Optional timeout in milliseconds (max %d). Default: %d. In background mode, 0 disables the timeout.", maxTimeout, defaultTimeout)},
 			"is_background": map[string]any{"type": "boolean", "description": "Run in the background and return a task_id immediately."},
 		}, "command", "description"),
 	}
@@ -1394,7 +1410,12 @@ func (t *runTerminalCommandTool) Execute(ctx context.Context, raw json.RawMessag
 		timeout = 0
 	}
 	if args.Timeout != nil {
-		timeout = time.Duration(min(*args.Timeout, uint64(300000))) * time.Millisecond
+		requested := time.Duration(min(*args.Timeout, uint64(36000000))) * time.Millisecond
+		if args.IsBackground {
+			timeout = requested
+		} else {
+			timeout = min(requested, t.manager.maxShellTimeout())
+		}
 	}
 	if args.IsBackground {
 		id, err := t.manager.StartDescribed(ctx, args.Command, args.Description, timeout)
