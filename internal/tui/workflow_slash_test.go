@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/lookcorner/go-cli/internal/agent"
+	"github.com/lookcorner/go-cli/internal/skills"
 	"github.com/lookcorner/go-cli/internal/tools"
 	"github.com/lookcorner/go-cli/internal/workspace"
 )
@@ -98,17 +99,63 @@ fn main() { complete("ok"); }
 	defer registry.Close()
 	t.Setenv("GORK_WORKFLOW_RUNNER", buildTUIWorkflowRunner(t))
 
-	m := &model{ctx: context.Background(), workspace: root, runner: &agent.Runner{Tools: registry}}
-	m.setInput(`/workflow demo-flow {"target":"origin/main...HEAD","depth":3}`)
-	updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
-	m = updated.(*model)
-	if command == nil || m.status != "workflow running" || !strings.Contains(m.transcript.String(), "demo-flow") {
-		t.Fatalf("status=%q command=%v transcript=%q", m.status, command != nil, m.transcript.String())
+	for _, input := range []string{
+		`/workflow demo-flow {"target":"origin/main...HEAD","depth":3}`,
+		`/demo-flow {"target":"origin/main...HEAD","depth":3}`,
+	} {
+		m := &model{ctx: context.Background(), workspace: root, runner: &agent.Runner{Tools: registry}}
+		m.setInput(input)
+		updated, command := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+		m = updated.(*model)
+		if command == nil || m.status != "workflow running" || !strings.Contains(m.transcript.String(), "demo-flow") {
+			t.Fatalf("input=%q status=%q command=%v transcript=%q", input, m.status, command != nil, m.transcript.String())
+		}
+		updated, followup := m.Update(command())
+		m = updated.(*model)
+		if followup != nil || m.status != "workflow complete" || !strings.Contains(m.transcript.String(), "verified report") {
+			t.Fatalf("input=%q status=%q followup=%v transcript=%q", input, m.status, followup != nil, m.transcript.String())
+		}
 	}
-	updated, followup := m.Update(command())
-	m = updated.(*model)
-	if followup != nil || m.status != "workflow complete" || !strings.Contains(m.transcript.String(), "verified report") {
-		t.Fatalf("status=%q followup=%v transcript=%q", m.status, followup != nil, m.transcript.String())
+}
+
+func TestWorkflowSlashCommandsDoNotShadowBuiltinsOrSkills(t *testing.T) {
+	root := t.TempDir()
+	workflowDir := filepath.Join(root, ".grok", "workflows")
+	if err := os.MkdirAll(workflowDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"model", "deploy", "triage-flakes"} {
+		script := "let meta = #{\n  name: \"" + name + "\",\n  description: \"Run " + name + "\",\n};\n"
+		if err := os.WriteFile(filepath.Join(workflowDir, name+".rhai"), []byte(script), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	skillDir := filepath.Join(root, ".grok", "skills", "deploy")
+	if err := os.MkdirAll(skillDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: deploy\ndescription: Deploy skill\nuser-invocable: true\n---\nRun deploy.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := skills.Discover(root, skills.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, nil)
+	defer registry.Close()
+	m := &model{workspace: root, runner: &agent.Runner{Tools: registry, Skills: catalog}}
+	commands := m.namedWorkflowCommands()
+	if _, ok := commands["triage-flakes"]; !ok || commands["model"].Name != "" || commands["deploy"].Name != "" {
+		t.Fatalf("commands=%#v", commands)
+	}
+	m.setInput("/tri")
+	suggestions := m.slashSuggestions()
+	if len(suggestions) == 0 || suggestions[0].insert != "/triage-flakes " || !strings.HasPrefix(suggestions[0].description, "Workflow:") {
+		t.Fatalf("suggestions=%#v", suggestions)
 	}
 }
 

@@ -38,6 +38,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/terminaldiag"
 	"github.com/lookcorner/go-cli/internal/tools"
 	"github.com/lookcorner/go-cli/internal/voice"
+	"github.com/lookcorner/go-cli/internal/workflow"
 	"github.com/lookcorner/go-cli/internal/wrap"
 )
 
@@ -748,6 +749,7 @@ func (w bridgeWriter) Write(data []byte) (int, error) {
 type model struct {
 	ctx                 context.Context
 	runner              *agent.Runner
+	workflowCatalog     []workflow.Listing
 	bridge              *Bridge
 	workspace           string
 	foreignSessions     session.ForeignSources
@@ -3343,6 +3345,10 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if m.runner != nil && (m.runner.HookCatalog != nil || m.runner.PluginInventory != nil || m.runner.MarketplaceList != nil || m.runner.Skills != nil) {
 				extensionCommands = " `/hooks` `/plugins` `/marketplace` `/skills`"
 			}
+			workflowCommands := ""
+			if m.runner != nil && m.runner.Tools != nil && m.runner.Tools.HasTool("workflow") {
+				workflowCommands = " `/workflows` `/workflow <name> [args]` `/deep-research <query>`"
+			}
 			agentCommands := ""
 			if m.runner != nil && (m.runner.AgentDefinitions != nil || m.runner.Personas != nil) {
 				agentCommands = " `/config-agents` (`/agents`) `/personas`"
@@ -3360,7 +3366,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if !m.minimal {
 				fullscreenCommands = " `/copy [N]` `/dashboard` (`/sessions`, `/agents-dashboard`) `/find` `/jump` `/theme [name]` (`/t`) `/timeline`"
 			}
-			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + announcementCommand + agentCommands + " `/btw <question>` `/cd <path>` `/compact` `/compact-mode` `/context` `/docs [web|title]` `/dream` `/effort [level]` `/exit` `/export [filename]` `/home` `/login` `/logout`" + feedbackCommand + " `/flush` `/fork [--worktree|--no-worktree] [directive]` `/help` `/history`" + extensionCommands + imagineCommands + " `/loop` `/memory`" + mcpCommand + " `/model [name] [effort]` (`/m`) `/multiline` `/new` (`/clear`)" + screenCommand + " `/plan [description]` `/privacy [opt-out]` `/queue` `/recap` `/release-notes` (`/changelog`) `/remember` `/rename <title>` `/resume` `/rewind` `/session-info` (`/status`, `/info`) `/settings`" + shareCommand + " `/tasks` `/doctor [fix [FIX]]` (`/terminal-setup`)" + fullscreenCommands + mouseCommand + " `/timestamps` `/transcript` `/usage [show|manage]` (`/cost`) `/view-plan` `/vim-mode`")
+			m.appendSystem("# Commands\n\n`! <command>` " + permissionCommands + announcementCommand + agentCommands + " `/btw <question>` `/cd <path>` `/compact` `/compact-mode` `/context` `/docs [web|title]` `/dream` `/effort [level]` `/exit` `/export [filename]` `/home` `/login` `/logout`" + feedbackCommand + " `/flush` `/fork [--worktree|--no-worktree] [directive]` `/help` `/history`" + extensionCommands + imagineCommands + " `/loop` `/memory`" + mcpCommand + " `/model [name] [effort]` (`/m`) `/multiline` `/new` (`/clear`)" + screenCommand + " `/plan [description]` `/privacy [opt-out]` `/queue` `/recap` `/release-notes` (`/changelog`) `/remember` `/rename <title>` `/resume` `/rewind` `/session-info` (`/status`, `/info`) `/settings`" + shareCommand + " `/tasks` `/doctor [fix [FIX]]` (`/terminal-setup`)" + fullscreenCommands + mouseCommand + " `/timestamps` `/transcript` `/usage [show|manage]` (`/cost`) `/view-plan` `/vim-mode`" + workflowCommands)
 			m.status = "commands"
 			return m, nil
 		case "/docs", "/howto", "/guides":
@@ -3754,6 +3760,12 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.running = true
 			m.status = "copying response"
 			return m, runCopy(m.runner, n)
+		}
+		if name, ok := m.dynamicWorkflowCommand(fields[0]); ok {
+			input := strings.TrimSpace(strings.TrimPrefix(prompt, fields[0]))
+			message, command := m.startNamedWorkflow(name, input)
+			m.appendSystem(message)
+			return m, command
 		}
 		m.running = true
 		turnCtx, cancel := context.WithCancel(m.ctx)

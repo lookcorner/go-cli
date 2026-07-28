@@ -173,6 +173,7 @@ func (m *model) slashSuggestions() []slashSuggestion {
 		}
 	}
 	items = append(items, m.slashSkillSuggestions(query)...)
+	items = append(items, m.slashWorkflowSuggestions(query)...)
 	sort.SliceStable(items, func(i, j int) bool {
 		if items[i].score != items[j].score {
 			return items[i].score > items[j].score

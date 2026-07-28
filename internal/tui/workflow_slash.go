@@ -87,12 +87,64 @@ func (m *model) startNamedWorkflow(name, input string) (string, tea.Cmd) {
 	return fmt.Sprintf("Workflow `%s` started. Its result will appear here when it finishes.", name), runWorkflow(m.ctx, m.runner.Tools, name, namedWorkflowArgs(input))
 }
 
-func (m *model) listWorkflowsCatalog() string {
-	cwd := ""
-	if m != nil {
-		cwd = strings.TrimSpace(m.workspace)
+func (m *model) discoverWorkflows(refresh bool) []workflow.Listing {
+	if refresh || len(m.workflowCatalog) == 0 {
+		m.workflowCatalog = workflow.List(strings.TrimSpace(m.workspace))
 	}
-	items := workflow.List(cwd)
+	return m.workflowCatalog
+}
+
+func (m *model) namedWorkflowCommands() map[string]workflow.Listing {
+	if m.runner == nil || m.runner.Tools == nil || !m.runner.Tools.HasTool("workflow") {
+		return nil
+	}
+	taken := make(map[string]bool, len(slashCommandCatalog))
+	for _, item := range slashCommandCatalog {
+		taken[strings.ToLower(item.name)] = true
+		for _, alias := range item.aliases {
+			taken[strings.ToLower(alias)] = true
+		}
+	}
+	if m.runner.Skills != nil {
+		for _, item := range m.runner.Skills.List() {
+			if item.Enabled && item.UserInvocable {
+				taken[strings.ToLower(item.Name)] = true
+			}
+		}
+	}
+	commands := make(map[string]workflow.Listing)
+	for _, item := range m.discoverWorkflows(false) {
+		if !taken[item.Name] {
+			commands[item.Name] = item
+		}
+	}
+	return commands
+}
+
+func (m *model) slashWorkflowSuggestions(query string) []slashSuggestion {
+	items := make([]slashSuggestion, 0)
+	for name, item := range m.namedWorkflowCommands() {
+		score, ok := slashMatchScore(name, strings.ToLower(query))
+		if !ok {
+			continue
+		}
+		items = append(items, slashSuggestion{
+			label: "/" + name + " <args>", match: name, insert: "/" + name + " ",
+			description: "Workflow: " + item.Description, chain: true,
+			exact: []string{"/" + name}, score: score,
+		})
+	}
+	return items
+}
+
+func (m *model) dynamicWorkflowCommand(command string) (string, bool) {
+	name := strings.TrimPrefix(strings.ToLower(command), "/")
+	_, ok := m.namedWorkflowCommands()[name]
+	return name, ok
+}
+
+func (m *model) listWorkflowsCatalog() string {
+	items := m.discoverWorkflows(true)
 	if len(items) == 0 {
 		return "No workflows found. Add `.rhai` scripts under `.grok/workflows/` or `$GROK_HOME/workflows/`."
 	}
@@ -105,7 +157,7 @@ func (m *model) listWorkflowsCatalog() string {
 		}
 		b.WriteString(fmt.Sprintf("%d. `%s` (%s)%s\n   %s\n", index+1, item.Name, item.Source, path, item.Description))
 	}
-	b.WriteString("\nLaunch with `/workflow <name> [JSON args or text]`, or validate with `/workflow validate <name|path>`. Deep research also has `/deep-research <query>`.")
+	b.WriteString("\nLaunch with `/workflow <name> [JSON args or text]` or its non-conflicting `/name <args>` shortcut. Validate with `/workflow validate <name|path>`. Deep research also has `/deep-research <query>`.")
 	return strings.TrimSpace(b.String())
 }
 

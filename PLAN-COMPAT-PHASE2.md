@@ -386,7 +386,9 @@ Remote relay / workspace hub remains planned/XL (product-blocked). See queue #5.
       TUI `/deep-research <query>` launches it asynchronously. Journal and
       pause/resume/stop/save run management remain follow-ups. TUI
       `/workflow <name> [args]` launches saved workflows with the reference
-      JSON-object, text-fallback, and null argument mapping.
+      JSON-object, text-fallback, and null argument mapping; in the TUI, unique
+      names that do not collide with builtins or invocable skills also resolve
+      directly as `/name <args>`.
 
 ## Remaining XL / blocked (do not start without explicit kickoff)
 
