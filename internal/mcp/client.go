@@ -34,7 +34,7 @@ type ProcessConfig struct {
 	Dir            string
 	Stderr         io.Writer
 	Sampling       SamplingHandler
-	StartupTimeout time.Duration
+	StartupTimeout *time.Duration
 }
 
 type SamplingHandler func(context.Context, SamplingRequest) (SamplingResult, error)
@@ -260,7 +260,7 @@ func Start(ctx context.Context, cfg ProcessConfig) (*Client, InitializeResult, e
 }
 
 // StartACP connects to an in-process SDK MCP server over the ACP reverse channel.
-func StartACP(ctx context.Context, name string, reverse ReverseCall, sampling SamplingHandler, startupTimeout time.Duration) (*Client, InitializeResult, error) {
+func StartACP(ctx context.Context, name string, reverse ReverseCall, sampling SamplingHandler, startupTimeout *time.Duration) (*Client, InitializeResult, error) {
 	if strings.TrimSpace(name) == "" || reverse == nil {
 		return nil, InitializeResult{}, errors.New("ACP MCP server name and reverse call are required")
 	}
@@ -738,11 +738,11 @@ func (c *Client) Close() error {
 	}
 }
 
-func effectiveStartupTimeout(timeout time.Duration) time.Duration {
-	if timeout <= 0 {
+func effectiveStartupTimeout(timeout *time.Duration) time.Duration {
+	if timeout == nil {
 		return 30 * time.Second
 	}
-	return timeout
+	return *timeout
 }
 
 func mergeEnv(base []string, overlay map[string]string) []string {

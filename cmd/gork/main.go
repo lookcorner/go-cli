@@ -5428,17 +5428,13 @@ func startMCPServers(
 	}
 	for _, name := range names {
 		server := cfg.MCPServers[name]
-		startupTimeout := cfg.MCP.StartupTimeoutSeconds
-		if server.StartupTimeoutSeconds != nil && *server.StartupTimeoutSeconds > 0 && *server.StartupTimeoutSeconds <= uint64((1<<63-1)/int64(time.Second)) {
-			startupTimeout = *server.StartupTimeoutSeconds
-		}
-		startupDuration := time.Duration(startupTimeout) * time.Second
+		startupDuration := mcpStartupTimeout(cfg.MCP.StartupTimeoutSeconds, server.StartupTimeoutSeconds, server.StartupTimeoutMS)
 		sampling := newMCPSamplingHandler(cfg, approver, tokenProvider, name)
 		fmt.Fprintf(stderr, "[gork] starting MCP server: %s\n", name)
 		var client *mcp.Client
 		var initialized mcp.InitializeResult
 		if server.URL != "" {
-			httpConfig := mcp.HTTPConfig{Name: name, URL: server.URL, Headers: mcpHTTPHeaders(server), StartupTimeout: startupDuration}
+			httpConfig := mcp.HTTPConfig{Name: name, URL: server.URL, Headers: mcpHTTPHeaders(server), StartupTimeout: &startupDuration}
 			transport := strings.ToLower(strings.TrimSpace(server.Type))
 			if transport != "" && transport != "sse" && transport != "http" && transport != "streamable-http" {
 				err = fmt.Errorf("MCP server %q has unsupported transport type %q", name, server.Type)
@@ -5452,7 +5448,7 @@ func startMCPServers(
 		} else {
 			client, initialized, err = mcp.Start(ctx, mcp.ProcessConfig{
 				Name: name, Command: server.Command, Args: server.Args,
-				Env: server.Env, Dir: workspaceRoot, Stderr: stderr, Sampling: sampling, StartupTimeout: startupDuration,
+				Env: server.Env, Dir: workspaceRoot, Stderr: stderr, Sampling: sampling, StartupTimeout: &startupDuration,
 			})
 		}
 		if err != nil {
@@ -5469,6 +5465,23 @@ func startMCPServers(
 		}
 	}
 	return clients, nil
+}
+
+func mcpStartupTimeout(globalSeconds uint64, serverSeconds, metadataMilliseconds *uint64) time.Duration {
+	seconds := globalSeconds
+	if seconds == 0 {
+		seconds = 30
+	}
+	if serverSeconds != nil && *serverSeconds <= uint64((1<<63-1)/int64(time.Second)) {
+		seconds = *serverSeconds
+	}
+	if metadataMilliseconds != nil && *metadataMilliseconds <= uint64((1<<63-1)/int64(time.Second))*1000 {
+		seconds = *metadataMilliseconds / 1000
+		if *metadataMilliseconds%1000 != 0 {
+			seconds++
+		}
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 func registerMCPClient(
@@ -5579,9 +5592,10 @@ func startACPMCPServers(
 	for _, server := range servers {
 		server := server
 		sampling := newMCPSamplingHandler(cfg, approver, tokenProvider, server.Name)
+		startupTimeout := mcpStartupTimeout(cfg.MCP.StartupTimeoutSeconds, nil, server.StartupTimeoutMS)
 		client, initialized, err := mcp.StartACP(ctx, server.Name, func(ctx context.Context, payload json.RawMessage) (json.RawMessage, error) {
 			return reverse(ctx, server.ServerID, payload)
-		}, sampling, time.Duration(cfg.MCP.StartupTimeoutSeconds)*time.Second)
+		}, sampling, &startupTimeout)
 		if err != nil {
 			for _, client := range clients {
 				_ = client.Close()
@@ -5618,6 +5632,7 @@ func startSubagentMCPServers(
 		cfg.MCPServers[server.Name] = config.MCPServerConfig{
 			Type: server.Type, Command: server.Command, Args: append([]string(nil), server.Args...),
 			Env: cloneStringsMap(server.Env), URL: server.URL, Headers: cloneStringsMap(server.Headers),
+			StartupTimeoutMS: server.StartupTimeoutMS,
 		}
 	}
 	clients, err := startMCPServers(ctx, cfg, workspaceRoot, registry, approver, tokenProvider, stderr, nil, nil, artifactDir)
@@ -5871,6 +5886,7 @@ func (r *sessionMCPRuntime) mergedConfig(requested []mcp.ServerConfig) (config.C
 		cfg.MCPServers[server.Name] = config.MCPServerConfig{
 			Type: server.Type, Command: server.Command, Args: append([]string(nil), server.Args...),
 			Env: cloneStringsMap(server.Env), URL: server.URL, Headers: cloneStringsMap(server.Headers),
+			StartupTimeoutMS: server.StartupTimeoutMS,
 		}
 	}
 	for _, name := range cfg.DisabledMCPServers {
@@ -5895,7 +5911,8 @@ func (r *sessionMCPRuntime) mergedConfig(requested []mcp.ServerConfig) (config.C
 		entry := mcp.ServerConfig{
 			Type: server.Type, Name: name, Command: server.Command, Args: append([]string(nil), server.Args...),
 			Env: cloneStringsMap(server.Env), URL: server.URL, Headers: cloneStringsMap(server.Headers), Disabled: !server.IsEnabled(),
-			DisabledTools: append([]string(nil), cfg.DisabledMCPTools[name]...),
+			DisabledTools:    append([]string(nil), cfg.DisabledMCPTools[name]...),
+			StartupTimeoutMS: server.StartupTimeoutMS,
 		}
 		catalog = append(catalog, entry)
 		if !entry.Disabled {

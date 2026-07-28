@@ -2804,6 +2804,27 @@ func TestMCPHTTPHeadersUseBearerTokenEnvironment(t *testing.T) {
 	}
 }
 
+func TestMCPStartupTimeoutPrecedence(t *testing.T) {
+	server := uint64(7)
+	if got := mcpStartupTimeout(30, &server, nil); got != 7*time.Second {
+		t.Fatalf("server timeout=%s", got)
+	}
+	metadata := uint64(1250)
+	if got := mcpStartupTimeout(30, &server, &metadata); got != 2*time.Second {
+		t.Fatalf("metadata timeout=%s", got)
+	}
+	if got := mcpStartupTimeout(30, nil, nil); got != 30*time.Second {
+		t.Fatalf("global timeout=%s", got)
+	}
+	if got := mcpStartupTimeout(0, nil, nil); got != 30*time.Second {
+		t.Fatalf("zero global timeout=%s", got)
+	}
+	zero := uint64(0)
+	if got := mcpStartupTimeout(30, &zero, nil); got != 0 {
+		t.Fatalf("zero server timeout=%s", got)
+	}
+}
+
 func TestResolveProjectTrustPromptsAndPersists(t *testing.T) {
 	previousVersion := version.Current
 	version.Current = "1.0.0"

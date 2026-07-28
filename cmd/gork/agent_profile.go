@@ -97,6 +97,7 @@ func applyProfileMCP(profile *agents.Definition, cfg *config.Config) ([]mcp.Serv
 		inherited = append(inherited, mcp.ServerConfig{
 			Name: name, Type: server.Type, Command: server.Command, Args: append([]string(nil), server.Args...),
 			Env: cloneStringsMap(server.Env), URL: server.URL, Headers: cloneStringsMap(server.Headers), Disabled: !server.IsEnabled(),
+			StartupTimeoutMS: server.StartupTimeoutMS,
 		})
 	}
 	for name, server := range cfg.MCPServers {

@@ -162,7 +162,7 @@ func TestHTTPStartupTimeout(t *testing.T) {
 	})
 	_, _, err := StartHTTP(context.Background(), HTTPConfig{
 		Name: "slow", URL: "https://mcp.example/rpc",
-		Client: &http.Client{Transport: transport}, StartupTimeout: 10 * time.Millisecond,
+		Client: &http.Client{Transport: transport}, StartupTimeout: durationPointer(10 * time.Millisecond),
 	})
 	if err == nil || !strings.Contains(err.Error(), "context deadline exceeded") {
 		t.Fatalf("startup timeout error=%v", err)

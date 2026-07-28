@@ -1720,6 +1720,7 @@ func (s *Server) handleNewSession(ctx context.Context, incoming message) {
 		s.respondError(incoming.ID, -32602, err.Error())
 		return
 	}
+	applyMCPMetaConfig(servers, params.Meta)
 	yoloMode, autoMode := sessionPermissionModeOverrides(params.Meta)
 	sessionConfig := SessionConfig{
 		CWD: params.CWD, Model: model, SessionID: id, MCPServers: servers,
@@ -2700,6 +2701,7 @@ func (s *Server) handleRestoreSession(ctx context.Context, incoming message, rep
 		s.respondError(incoming.ID, -32602, err.Error())
 		return
 	}
+	applyMCPMetaConfig(servers, params.Meta)
 	noReplay, _ := params.Meta["noReplay"].(bool)
 	restoreCode, _ := params.Meta["x.ai/restore_code"].(bool)
 	if requested := stringMeta(params.Meta, "x.ai/display_cwd"); requested != "" {

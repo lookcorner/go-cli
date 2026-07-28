@@ -67,7 +67,7 @@ func TestStandaloneSSELifecycle(t *testing.T) {
 	client, initialized, err := StartSSE(context.Background(), HTTPConfig{
 		Name: "fixture", URL: "https://mcp.example/sse",
 		Headers: map[string]string{"Authorization": "Bearer fixture"}, Client: &http.Client{Transport: transport},
-		StartupTimeout: 100 * time.Millisecond,
+		StartupTimeout: durationPointer(100 * time.Millisecond),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -140,7 +140,7 @@ func TestSSEStartupTimeout(t *testing.T) {
 	started := time.Now()
 	_, _, err := StartSSE(context.Background(), HTTPConfig{
 		Name: "slow", URL: "https://mcp.example/sse",
-		Client: &http.Client{Transport: transport}, StartupTimeout: 10 * time.Millisecond,
+		Client: &http.Client{Transport: transport}, StartupTimeout: durationPointer(10 * time.Millisecond),
 	})
 	if err == nil || time.Since(started) > time.Second {
 		t.Fatalf("startup timeout error=%v elapsed=%s", err, time.Since(started))

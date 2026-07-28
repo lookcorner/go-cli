@@ -21,7 +21,7 @@ type HTTPConfig struct {
 	Headers        map[string]string
 	Client         *http.Client
 	Sampling       SamplingHandler
-	StartupTimeout time.Duration
+	StartupTimeout *time.Duration
 	// Auth enables store-backed Bearer attach and optional 401 refresh.
 	// Enrollment (browser/DCR) is separate; Auth.TokenURL is required to refresh.
 	Auth *HTTPAuth

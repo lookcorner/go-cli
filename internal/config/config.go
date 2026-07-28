@@ -536,6 +536,7 @@ type MCPServerConfig struct {
 	OAuthScopes             []string          `json:"oauth_scopes,omitempty" toml:"oauth_scopes"`
 	OAuthCallbackPort       *uint16           `json:"oauth_callback_port,omitempty" toml:"oauth_callback_port"`
 	StartupTimeoutSeconds   *uint64           `json:"startup_timeout_sec,omitempty" toml:"startup_timeout_sec"`
+	StartupTimeoutMS        *uint64           `json:"-" toml:"-"`
 	Enabled                 *bool             `json:"enabled,omitempty" toml:"enabled"`
 	Setup                   *MCPSetupConfig   `json:"setup,omitempty" toml:"setup"`
 }

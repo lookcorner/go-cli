@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/lookcorner/go-cli/internal/config"
 	mcppkg "github.com/lookcorner/go-cli/internal/mcp"
@@ -43,7 +44,20 @@ func parseMCPSDKServers(meta map[string]any) []MCPServer {
 		seen[name] = true
 		servers = append(servers, MCPServer{Type: "acp", Name: name, ServerID: serverID})
 	}
+	applyMCPMetaConfig(servers, meta)
 	return servers
+}
+
+func applyMCPMetaConfig(servers []MCPServer, meta map[string]any) {
+	configs, _ := meta["mcpConfig"].(map[string]any)
+	for index := range servers {
+		entry, _ := configs[servers[index].Name].(map[string]any)
+		value, ok := entry["startupTimeoutMs"].(float64)
+		if ok && value >= 0 && value <= float64(uint64((1<<63-1)/int64(time.Second))*1000) && value == float64(uint64(value)) {
+			timeout := uint64(value)
+			servers[index].StartupTimeoutMS = &timeout
+		}
+	}
 }
 
 func (s *Server) callMCPSDK(ctx context.Context, serverID string, payload json.RawMessage) (json.RawMessage, error) {

@@ -291,6 +291,8 @@ environment over local/managed config over remote precedence as the reference.
 MCP startup handshakes default to 30 seconds and honor requirements, the
 `MCP_TIMEOUT`/`GROK_MCP_STARTUP_TIMEOUT_SECS` environment variables, local or
 managed config, remote settings, and per-server `startup_timeout_sec` overrides.
+ACP session `_meta.mcpConfig.<server>.startupTimeoutMs` overrides that stack
+for both regular and SDK-backed MCP servers.
 
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |
