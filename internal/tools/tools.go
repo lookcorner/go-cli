@@ -399,6 +399,37 @@ func (r *Registry) ConfigureShellEnvironmentPolicy(policy ShellEnvironmentPolicy
 	r.processes.ConfigureShellEnvironmentPolicy(policy)
 }
 
+// CaptureLoginShellEnvironment merges login-shell env into shell/process tools.
+func (r *Registry) CaptureLoginShellEnvironment(ctx context.Context) {
+	if r == nil {
+		return
+	}
+	entries := CaptureLoginShellEnv(ctx)
+	if len(entries) == 0 {
+		return
+	}
+	values := make(map[string]string, len(entries))
+	for _, entry := range entries {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok || key == "" {
+			continue
+		}
+		values[key] = value
+	}
+	r.mu.Lock()
+	if r.environment == nil {
+		r.environment = make(map[string]string)
+	}
+	for key, value := range values {
+		r.environment[key] = value
+	}
+	if shell, ok := r.tools["shell"].(*shellTool); ok {
+		shell.setEnvironment(cloneEnvironment(r.environment))
+	}
+	r.mu.Unlock()
+	r.processes.MergeLoginShellEnvironment(entries)
+}
+
 // ConfigureEnvironment overlays variables for commands started by this registry.
 func (r *Registry) ConfigureEnvironment(values map[string]string) {
 	if r == nil {

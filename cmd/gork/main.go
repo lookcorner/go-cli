@@ -740,6 +740,9 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 	registry.ConfigureShellEnvironmentPolicy(shellEnvPolicy(cfg.ShellEnvironmentPolicy))
 	registry.ConfigureEnvironment(cfg.Env)
+	if cfg.Toolset.Bash.LoginShellCapture {
+		registry.CaptureLoginShellEnvironment(context.Background())
+	}
 	registry.ConfigureBash(bashTimeout(cfg.Toolset.Bash.TimeoutSeconds), bashOutputLimit(cfg.Toolset.Bash.OutputByteLimit))
 	if err := registry.ConfigureFileToolset(cfg.Toolset.FileToolset, cfg.Toolset.Hashline.Scheme, cfg.Toolset.Hashline.HashLen, cfg.Toolset.Hashline.ChunkSize); err != nil {
 		_ = registry.Close()
@@ -3668,6 +3671,9 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 		}
 		registry.ConfigureShellEnvironmentPolicy(shellEnvPolicy(sessionCfg.ShellEnvironmentPolicy))
 		registry.ConfigureEnvironment(sessionCfg.Env)
+		if sessionCfg.Toolset.Bash.LoginShellCapture {
+			registry.CaptureLoginShellEnvironment(context.Background())
+		}
 		registry.ConfigureBash(bashTimeout(sessionCfg.Toolset.Bash.TimeoutSeconds), bashOutputLimit(sessionCfg.Toolset.Bash.OutputByteLimit))
 		if err := registry.ConfigureFileToolset(sessionCfg.Toolset.FileToolset, sessionCfg.Toolset.Hashline.Scheme, sessionCfg.Toolset.Hashline.HashLen, sessionCfg.Toolset.Hashline.ChunkSize); err != nil {
 			_ = registry.Close()
