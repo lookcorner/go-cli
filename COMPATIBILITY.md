@@ -38,7 +38,7 @@ their executable project components after an explicit grant.
 Skill catalogs support all-session `x.ai/skills/refresh-baseline` and
 `x.ai/internal/reload_skills` / `x.ai/internal/reload_workflows` disk refreshes.
 `x.ai/workflows/list` discovers builtin/project/user `.rhai` workflow meta
-(lightweight map parse; Rhai execution remains).
+(lightweight map parse; TUI `/workflows` + `/workflow validate`; Rhai execution remains).
 `x.ai/mcp/setup` persists select-field answers in `$GROK_HOME/mcp_preferences.json`,
 resolves `setup` templates (v0 one-select), reloads MCP, and enables the server.
 `x.ai/mcp/list` also surfaces unresolved setup schemas as `setuprequired`
