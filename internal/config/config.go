@@ -41,6 +41,7 @@ type Config struct {
 	Backend                         string                     `json:"backend,omitempty"`
 	SystemPrompt                    string                     `json:"system_prompt,omitempty"`
 	ExtraHeaders                    map[string]string          `json:"extra_headers,omitempty"`
+	Sampling                        ModelSamplingConfig        `json:"sampling,omitempty"`
 	MaxSteps                        int                        `json:"max_steps,omitempty"`
 	Env                             map[string]string          `json:"env,omitempty"`
 	ShellEnvironmentPolicy          ShellEnvironmentPolicy     `json:"shell_environment_policy,omitempty"`
@@ -230,8 +231,16 @@ type ModelProfile struct {
 	SupportsReasoningEffort     bool
 	ReasoningEfforts            []ReasoningEffortOption
 	ExtraHeaders                map[string]string
+	Sampling                    ModelSamplingConfig
 	hiddenConfigured            bool
 	supportsReasoningConfigured bool
+}
+
+type ModelSamplingConfig struct {
+	Temperature         *float64 `json:"temperature,omitempty"`
+	TopP                *float64 `json:"top_p,omitempty"`
+	MaxCompletionTokens *uint32  `json:"max_completion_tokens,omitempty"`
+	StreamToolCalls     *bool    `json:"stream_tool_calls,omitempty"`
 }
 
 type ReasoningEffortOption struct {
@@ -656,12 +665,16 @@ type fileConfig struct {
 	GrokComConfig       fileGrokComConfig `json:"grok_com_config,omitempty" toml:"grok_com_config"`
 	Auth                fileAuthConfig    `json:"auth,omitempty" toml:"auth"`
 	Models              struct {
-		Default        string            `toml:"default"`
-		WebSearch      string            `toml:"web_search"`
-		AllowedModels  []string          `toml:"allowed_models"`
-		HiddenModels   []string          `toml:"hidden_models"`
-		DisabledModels []string          `toml:"disabled_models"`
-		ExtraHeaders   map[string]string `toml:"extra_headers"`
+		Default             string            `toml:"default"`
+		WebSearch           string            `toml:"web_search"`
+		AllowedModels       []string          `toml:"allowed_models"`
+		HiddenModels        []string          `toml:"hidden_models"`
+		DisabledModels      []string          `toml:"disabled_models"`
+		ExtraHeaders        map[string]string `toml:"extra_headers"`
+		Temperature         *float64          `toml:"temperature"`
+		TopP                *float64          `toml:"top_p"`
+		MaxCompletionTokens *uint32           `toml:"max_completion_tokens"`
+		StreamToolCalls     *bool             `toml:"stream_tool_calls"`
 	} `json:"-" toml:"models"`
 	ModelEntries map[string]modelConfig `json:"-" toml:"model"`
 	Toolset      struct {
@@ -906,6 +919,10 @@ type modelConfig struct {
 	SupportsReasoningEffort     *bool             `toml:"supports_reasoning_effort"`
 	ReasoningEfforts            []any             `toml:"reasoning_efforts"`
 	ExtraHeaders                map[string]string `toml:"extra_headers"`
+	Temperature                 *float64          `toml:"temperature"`
+	TopP                        *float64          `toml:"top_p"`
+	MaxCompletionTokens         *uint32           `toml:"max_completion_tokens"`
+	StreamToolCalls             *bool             `toml:"stream_tool_calls"`
 }
 
 type sessionConfig struct {
@@ -1216,6 +1233,10 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 		cfg.Backend = disk.Backend
 	}
 	cfg.ExtraHeaders = mergeExtraHeaders(cfg.ExtraHeaders, disk.Models.ExtraHeaders)
+	cfg.Sampling = mergeSampling(cfg.Sampling, ModelSamplingConfig{
+		Temperature: disk.Models.Temperature, TopP: disk.Models.TopP,
+		MaxCompletionTokens: disk.Models.MaxCompletionTokens, StreamToolCalls: disk.Models.StreamToolCalls,
+	})
 	if profile, ok := cfg.ModelProfiles[cfg.DefaultModelID]; ok {
 		cfg.ReasoningEffort = profile.ReasoningEffort
 		cfg.ModelSupportsReasoningEffort = profile.SupportsReasoningEffort
@@ -1755,6 +1776,10 @@ func mergeModelProfiles(cfg *Config, entries map[string]modelConfig) error {
 		if entry.ExtraHeaders != nil {
 			profile.ExtraHeaders = mergeExtraHeaders(profile.ExtraHeaders, entry.ExtraHeaders)
 		}
+		profile.Sampling = mergeSampling(profile.Sampling, ModelSamplingConfig{
+			Temperature: entry.Temperature, TopP: entry.TopP,
+			MaxCompletionTokens: entry.MaxCompletionTokens, StreamToolCalls: entry.StreamToolCalls,
+		})
 		normalized, err := normalizeModelProfile(name, profile)
 		if err != nil {
 			return err
@@ -1831,6 +1856,17 @@ func (c Config) EffectiveExtraHeaders() map[string]string {
 	return mergeExtraHeaders(c.ExtraHeaders, profile.ExtraHeaders)
 }
 
+func (c Config) EffectiveSampling() ModelSamplingConfig {
+	_, profile, ok := c.modelProfileWithDefault(c.DefaultModelID)
+	if !ok {
+		_, profile, ok = c.modelProfileWithDefault(c.Model)
+	}
+	if !ok {
+		return cloneSampling(c.Sampling)
+	}
+	return mergeSampling(c.Sampling, profile.Sampling)
+}
+
 func (c Config) ModelSlugs() []string {
 	names := make([]string, 0, len(c.ModelProfiles))
 	for name := range c.ModelProfiles {
@@ -1849,6 +1885,7 @@ func (c Config) ModelSlugs() []string {
 func (c *Config) ReloadModelCatalog(next Config) {
 	c.ModelProfiles = cloneModelProfiles(next.ModelProfiles)
 	c.ExtraHeaders = mergeExtraHeaders(nil, next.ExtraHeaders)
+	c.Sampling = cloneSampling(next.Sampling)
 	c.Model = next.Model
 	if next.defaultModelConfigured || c.defaultModelConfigured {
 		c.DefaultModelID = next.DefaultModelID
@@ -1884,9 +1921,42 @@ func cloneModelProfiles(source map[string]ModelProfile) map[string]ModelProfile 
 	for id, profile := range source {
 		profile.ReasoningEfforts = append([]ReasoningEffortOption(nil), profile.ReasoningEfforts...)
 		profile.ExtraHeaders = mergeExtraHeaders(nil, profile.ExtraHeaders)
+		profile.Sampling = cloneSampling(profile.Sampling)
 		cloned[id] = profile
 	}
 	return cloned
+}
+
+func mergeSampling(base, override ModelSamplingConfig) ModelSamplingConfig {
+	result := cloneSampling(base)
+	if override.Temperature != nil {
+		result.Temperature = clonePointer(override.Temperature)
+	}
+	if override.TopP != nil {
+		result.TopP = clonePointer(override.TopP)
+	}
+	if override.MaxCompletionTokens != nil {
+		result.MaxCompletionTokens = clonePointer(override.MaxCompletionTokens)
+	}
+	if override.StreamToolCalls != nil {
+		result.StreamToolCalls = clonePointer(override.StreamToolCalls)
+	}
+	return result
+}
+
+func cloneSampling(source ModelSamplingConfig) ModelSamplingConfig {
+	return ModelSamplingConfig{
+		Temperature: clonePointer(source.Temperature), TopP: clonePointer(source.TopP),
+		MaxCompletionTokens: clonePointer(source.MaxCompletionTokens), StreamToolCalls: clonePointer(source.StreamToolCalls),
+	}
+}
+
+func clonePointer[T any](value *T) *T {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
 }
 
 func mergeExtraHeaders(base, override map[string]string) map[string]string {

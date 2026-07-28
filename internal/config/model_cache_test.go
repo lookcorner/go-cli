@@ -28,6 +28,8 @@ func TestLoadModelCacheValidatesAndAppliesConfiguredOverrides(t *testing.T) {
 				Model: "fast-api", BaseURL: "https://session.example/v1", Name: "Fast", Backend: "responses", ContextWindow: 1000,
 				SupportedInAPI: boolPointer(false), ReasoningEfforts: []ReasoningEffortOption{{ID: "high", Value: "high", Default: true}},
 				ExtraHeaders: map[string]string{"X-Remote": "remote", "X-Shared": "remote"},
+				Temperature:  float64Pointer(0.7), TopP: float64Pointer(0.9),
+				MaxCompletionTokens: uint32Pointer(2048), StreamToolCalls: boolPointer(true),
 			}, APIBaseURL: "https://api-key.example/v1"},
 			"messages": {Info: modelCacheInfo{Model: "claude", BaseURL: "https://messages.example/v1", Backend: "messages", ContextWindow: 2000}},
 		},
@@ -39,7 +41,11 @@ func TestLoadModelCacheValidatesAndAppliesConfiguredOverrides(t *testing.T) {
 	}
 	contextWindow := 3000
 	cfg := Config{ModelProfiles: map[string]ModelProfile{
-		"fast":  {Name: "Configured Fast", Hidden: false, hiddenConfigured: true, ContextWindow: contextWindow, ExtraHeaders: map[string]string{"x-shared": "local"}},
+		"fast": {
+			Name: "Configured Fast", Hidden: false, hiddenConfigured: true, ContextWindow: contextWindow,
+			ExtraHeaders: map[string]string{"x-shared": "local"},
+			Sampling:     ModelSamplingConfig{Temperature: float64Pointer(0.2), StreamToolCalls: boolPointer(false)},
+		},
 		"local": {Model: "local-api", BaseURL: "https://local.example/v1", Backend: "responses", ContextWindow: 4000},
 	}}
 	cfg.ApplyModelCache(cache)
@@ -50,6 +56,10 @@ func TestLoadModelCacheValidatesAndAppliesConfiguredOverrides(t *testing.T) {
 	}
 	if len(fast.ExtraHeaders) != 2 || fast.ExtraHeaders["X-Remote"] != "remote" || fast.ExtraHeaders["x-shared"] != "local" {
 		t.Fatalf("merged fast headers=%#v", fast.ExtraHeaders)
+	}
+	if fast.Sampling.Temperature == nil || *fast.Sampling.Temperature != 0.2 || fast.Sampling.TopP == nil || *fast.Sampling.TopP != 0.9 ||
+		fast.Sampling.MaxCompletionTokens == nil || *fast.Sampling.MaxCompletionTokens != 2048 || fast.Sampling.StreamToolCalls == nil || *fast.Sampling.StreamToolCalls {
+		t.Fatalf("merged fast sampling=%#v", fast.Sampling)
 	}
 	if messages := cfg.ModelProfiles["messages"]; messages.Backend != "anthropic_messages" || messages.Hidden {
 		t.Fatalf("messages profile=%#v", messages)
@@ -128,7 +138,7 @@ func TestFetchModelCacheSessionCatalog(t *testing.T) {
 			}
 		}
 		writer.Header().Set("ETag", `"catalog-1"`)
-		fmt.Fprint(writer, `{"data":[null,7,{"id":"grok-fast","model":"grok-fast-api","name":"Fast","baseUrl":"https://inference.example/v1","apiBackend":"responses","contextWindow":131072,"autoCompactThresholdPercent":80,"reasoningEffort":"MAX","reasoningEfforts":["low",{"id":"deep","value":"high","default":true},7],"extraHeaders":{"X-Remote":"yes"},"supportedInApi":false},{"api_backend":"messages","_meta":{"model":"grok-meta","totalContextTokens":64000,"supportsReasoningEffort":true}},{"model":"dual-context","contextWindow":1.5,"context_window":4096}]}`)
+		fmt.Fprint(writer, `{"data":[null,7,{"id":"grok-fast","model":"grok-fast-api","name":"Fast","baseUrl":"https://inference.example/v1","apiBackend":"responses","contextWindow":131072,"autoCompactThresholdPercent":80,"reasoningEffort":"MAX","reasoningEfforts":["low",{"id":"deep","value":"high","default":true},7],"extraHeaders":{"X-Remote":"yes"},"temperature":0.4,"topP":0.8,"maxCompletionTokens":4096,"streamToolCalls":true,"supportedInApi":false},{"api_backend":"messages","_meta":{"model":"grok-meta","totalContextTokens":64000,"supportsReasoningEffort":true}},{"model":"dual-context","contextWindow":1.5,"context_window":4096}]}`)
 	}))
 	defer server.Close()
 
@@ -142,6 +152,10 @@ func TestFetchModelCacheSessionCatalog(t *testing.T) {
 	fast := cache.profiles["grok-fast"]
 	if fast.Model != "grok-fast-api" || fast.Backend != "responses" || fast.ContextWindow != 131072 || fast.ReasoningEffort != "xhigh" || !fast.SupportsReasoningEffort || len(fast.ReasoningEfforts) != 2 || fast.ExtraHeaders["X-Remote"] != "yes" {
 		t.Fatalf("fast profile=%#v", fast)
+	}
+	if fast.Sampling.Temperature == nil || *fast.Sampling.Temperature != 0.4 || fast.Sampling.TopP == nil || *fast.Sampling.TopP != 0.8 ||
+		fast.Sampling.MaxCompletionTokens == nil || *fast.Sampling.MaxCompletionTokens != 4096 || fast.Sampling.StreamToolCalls == nil || !*fast.Sampling.StreamToolCalls {
+		t.Fatalf("fast sampling=%#v", fast.Sampling)
 	}
 	meta := cache.profiles["grok-meta"]
 	if meta.Model != "grok-meta" || meta.Backend != "anthropic_messages" || meta.BaseURL != server.URL+"/v1" || meta.ContextWindow != 64000 || !meta.SupportsReasoningEffort {

@@ -18,6 +18,7 @@ type Client struct {
 	tokenProvider TokenProvider
 	errorMapper   ErrorMapper
 	extraHeaders  map[string]string
+	defaults      SamplingDefaults
 	http          *http.Client
 }
 
@@ -25,6 +26,9 @@ func (c *Client) SetTokenProvider(provider TokenProvider) { c.tokenProvider = pr
 func (c *Client) SetErrorMapper(mapper ErrorMapper)       { c.errorMapper = mapper }
 func (c *Client) SetExtraHeaders(headers map[string]string) {
 	c.extraHeaders = cloneHeaders(headers)
+}
+func (c *Client) SetSamplingDefaults(defaults SamplingDefaults) {
+	c.defaults = cloneSamplingDefaults(defaults)
 }
 
 func NewClient(baseURL, apiKey string, httpClient *http.Client) *Client {
@@ -40,6 +44,7 @@ func (c *Client) StreamResponse(ctx context.Context, request ResponseRequest, on
 }
 
 func (c *Client) StreamResponseEvents(ctx context.Context, request ResponseRequest, onEvent func(StreamEvent)) (StreamResult, error) {
+	request = applySamplingDefaults(request, c.defaults)
 	body, err := json.Marshal(request)
 	if err != nil {
 		return StreamResult{}, fmt.Errorf("encode response request: %w", err)

@@ -59,6 +59,10 @@ type modelCacheInfo struct {
 	SupportsReasoningEffort     bool                    `json:"supports_reasoning_effort"`
 	ReasoningEfforts            []ReasoningEffortOption `json:"reasoning_efforts"`
 	ExtraHeaders                map[string]string       `json:"extra_headers,omitempty"`
+	Temperature                 *float64                `json:"temperature,omitempty"`
+	TopP                        *float64                `json:"top_p,omitempty"`
+	MaxCompletionTokens         *uint32                 `json:"max_completion_tokens,omitempty"`
+	StreamToolCalls             *bool                   `json:"stream_tool_calls,omitempty"`
 }
 
 type ModelFetchRequest struct {
@@ -138,6 +142,10 @@ func modelCacheProfiles(cached modelCacheFile, authMethod string) (map[string]Mo
 			ReasoningEffort: entry.Info.ReasoningEffort, SupportsReasoningEffort: entry.Info.SupportsReasoningEffort,
 			ReasoningEfforts: append([]ReasoningEffortOption(nil), entry.Info.ReasoningEfforts...),
 			ExtraHeaders:     mergeExtraHeaders(nil, entry.Info.ExtraHeaders),
+			Sampling: ModelSamplingConfig{
+				Temperature: entry.Info.Temperature, TopP: entry.Info.TopP,
+				MaxCompletionTokens: entry.Info.MaxCompletionTokens, StreamToolCalls: entry.Info.StreamToolCalls,
+			},
 		})
 		if err != nil {
 			return nil, false
@@ -289,7 +297,11 @@ func parseRemoteModel(raw map[string]any, defaultBaseURL, authMethod string) (st
 		Hidden: firstModelBool(raw, meta, "hidden"), SupportedInAPI: firstModelBoolPointer(raw, meta, "supportedInApi", "supported_in_api"),
 		ReasoningEffort: reasoningEffort, SupportsReasoningEffort: firstModelBool(raw, meta, "supportsReasoningEffort", "supports_reasoning_effort"),
 		ReasoningEfforts: options, ExtraHeaders: firstModelStringMap(raw, "extraHeaders", "extra_headers"),
+		Temperature:     firstModelFloat(raw, "temperature"),
+		TopP:            firstModelFloat(raw, "topP", "top_p"),
+		StreamToolCalls: firstModelBoolPointer(raw, meta, "streamToolCalls", "stream_tool_calls"),
 	}
+	info.MaxCompletionTokens = firstModelUint32(raw, "maxCompletionTokens", "max_completion_tokens")
 	if info.Name == "" {
 		info.Name = model
 	}
@@ -328,6 +340,33 @@ func firstModelInt(values map[string]any, names ...string) (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+func firstModelFloat(values map[string]any, names ...string) *float64 {
+	for _, name := range names {
+		switch value := values[name].(type) {
+		case float64:
+			if !math.IsNaN(value) && !math.IsInf(value, 0) {
+				return &value
+			}
+		case json.Number:
+			if parsed, err := strconv.ParseFloat(value.String(), 64); err == nil && !math.IsNaN(parsed) && !math.IsInf(parsed, 0) {
+				return &parsed
+			}
+		}
+	}
+	return nil
+}
+
+func firstModelUint32(values map[string]any, names ...string) *uint32 {
+	for _, name := range names {
+		value, ok := firstModelInt(values, name)
+		if ok && value >= 0 && uint64(value) <= math.MaxUint32 {
+			parsed := uint32(value)
+			return &parsed
+		}
+	}
+	return nil
 }
 
 func parseRemoteReasoningEffortOptions(raw []any) []ReasoningEffortOption {
@@ -494,4 +533,5 @@ func mergeModelProfile(target *ModelProfile, source ModelProfile) {
 	if source.ExtraHeaders != nil {
 		target.ExtraHeaders = mergeExtraHeaders(target.ExtraHeaders, source.ExtraHeaders)
 	}
+	target.Sampling = mergeSampling(target.Sampling, source.Sampling)
 }

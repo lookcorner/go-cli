@@ -23,6 +23,7 @@ type MessagesClient struct {
 	tokenProvider TokenProvider
 	errorMapper   ErrorMapper
 	extraHeaders  map[string]string
+	defaults      SamplingDefaults
 	http          *http.Client
 	mu            sync.Mutex
 	history       []messagesMessage
@@ -34,6 +35,9 @@ func (c *MessagesClient) SetTokenProvider(provider TokenProvider) { c.tokenProvi
 func (c *MessagesClient) SetErrorMapper(mapper ErrorMapper)       { c.errorMapper = mapper }
 func (c *MessagesClient) SetExtraHeaders(headers map[string]string) {
 	c.extraHeaders = cloneHeaders(headers)
+}
+func (c *MessagesClient) SetSamplingDefaults(defaults SamplingDefaults) {
+	c.defaults = cloneSamplingDefaults(defaults)
 }
 
 type messagesMessage struct {
@@ -75,7 +79,7 @@ func (c *MessagesClient) CloneForCompaction(includeHistory bool) Streamer {
 	defer c.mu.Unlock()
 	clone := &MessagesClient{
 		baseURL: c.baseURL, apiKey: c.apiKey, tokenProvider: c.tokenProvider, errorMapper: c.errorMapper,
-		extraHeaders: cloneHeaders(c.extraHeaders), http: c.http, pruning: c.pruning,
+		extraHeaders: cloneHeaders(c.extraHeaders), defaults: cloneSamplingDefaults(c.defaults), http: c.http, pruning: c.pruning,
 	}
 	if includeHistory {
 		clone.history = make([]messagesMessage, len(c.history))
@@ -147,6 +151,7 @@ func (c *MessagesClient) StreamResponse(ctx context.Context, request ResponseReq
 }
 
 func (c *MessagesClient) StreamResponseEvents(ctx context.Context, request ResponseRequest, onEvent func(StreamEvent)) (StreamResult, error) {
+	request = applySamplingDefaults(request, c.defaults)
 	if request.Reasoning != nil {
 		return StreamResult{}, errors.New("messages backend does not support reasoning effort overrides")
 	}
@@ -192,6 +197,9 @@ func (c *MessagesClient) StreamResponseEvents(ctx context.Context, request Respo
 	}
 	if request.Temperature != nil {
 		payload["temperature"] = *request.Temperature
+	}
+	if request.TopP != nil {
+		payload["top_p"] = *request.TopP
 	}
 	if request.JSONSchema != nil {
 		payload["output_config"] = map[string]any{

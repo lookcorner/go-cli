@@ -298,6 +298,11 @@ CLI values take precedence over environment, file, managed, and remote settings.
 [models]
 default = "gork-default"
 allowed_models = ["gork-*"]
+# Optional request defaults inherited by models that leave them unset.
+temperature = 0.7
+top_p = 0.95
+max_completion_tokens = 32768
+stream_tool_calls = true
 
 [model.gork-default]
 model = "YOUR_RESPONSES_API_MODEL"
@@ -309,6 +314,9 @@ context_window = 131072
 supports_reasoning_effort = true
 reasoning_effort = "high"
 reasoning_efforts = ["low", "medium", "high", { id = "max", value = "xhigh", label = "Max" }]
+# Per-model values override the [models] request defaults.
+temperature = 0.2
+stream_tool_calls = false
 
 [auto_mode]
 enabled = true

@@ -302,6 +302,10 @@ Folder trust defaults on and follows environment over local/managed config over
 remote `folder_trust_enabled` precedence.
 Global `[models].extra_headers`, per-model `extra_headers`, and remote catalog
 headers merge case-insensitively and apply only to inference requests.
+Global and per-model `temperature`, `top_p`, `max_completion_tokens`, and
+`stream_tool_calls` use per-model > remote catalog > global fallback precedence and
+apply to Responses, Chat Completions, and Anthropic Messages request shapes;
+the xAI-only streaming-tools flag is emitted only for Responses.
 
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |

@@ -69,8 +69,54 @@ type ResponseRequest struct {
 	PreviousResponseID string           `json:"previous_response_id,omitempty"`
 	MaxOutputTokens    int64            `json:"max_output_tokens,omitempty"`
 	Temperature        *float64         `json:"temperature,omitempty"`
+	TopP               *float64         `json:"top_p,omitempty"`
+	StreamToolCalls    bool             `json:"stream_tool_calls,omitempty"`
 	Reasoning          *ReasoningConfig `json:"reasoning,omitempty"`
 	Stream             bool             `json:"stream"`
+}
+
+type SamplingDefaults struct {
+	Temperature         *float64
+	TopP                *float64
+	MaxCompletionTokens *uint32
+	StreamToolCalls     *bool
+}
+
+func applySamplingDefaults(request ResponseRequest, defaults SamplingDefaults) ResponseRequest {
+	if request.Temperature == nil {
+		request.Temperature = defaults.Temperature
+	}
+	if request.TopP == nil {
+		request.TopP = defaults.TopP
+	}
+	if request.MaxOutputTokens == 0 && defaults.MaxCompletionTokens != nil {
+		request.MaxOutputTokens = int64(*defaults.MaxCompletionTokens)
+	}
+	if defaults.StreamToolCalls != nil {
+		request.StreamToolCalls = *defaults.StreamToolCalls
+	}
+	return request
+}
+
+func cloneSamplingDefaults(defaults SamplingDefaults) SamplingDefaults {
+	clone := func(value *float64) *float64 {
+		if value == nil {
+			return nil
+		}
+		copy := *value
+		return &copy
+	}
+	result := defaults
+	result.Temperature, result.TopP = clone(defaults.Temperature), clone(defaults.TopP)
+	if defaults.MaxCompletionTokens != nil {
+		value := *defaults.MaxCompletionTokens
+		result.MaxCompletionTokens = &value
+	}
+	if defaults.StreamToolCalls != nil {
+		value := *defaults.StreamToolCalls
+		result.StreamToolCalls = &value
+	}
+	return result
 }
 
 func (r ResponseRequest) MarshalJSON() ([]byte, error) {

@@ -2218,18 +2218,24 @@ func TestFolderTrustConfigAndEnvironmentPrecedence(t *testing.T) {
 	}
 }
 
-func TestModelExtraHeadersMergeCaseInsensitively(t *testing.T) {
+func TestModelRequestDefaultsMerge(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	data := []byte(`
 [models]
 default = "primary"
 extra_headers = { X-Global = "global", X-Shared = "global" }
+temperature = 0.7
+top_p = 0.9
+max_completion_tokens = 1000
+stream_tool_calls = true
 
 [model.primary]
 model = "primary-api"
 base_url = "https://example.invalid/v1"
 context_window = 1000
 extra_headers = { x-shared = "model", X-Model = "primary" }
+temperature = 0.2
+stream_tool_calls = false
 `)
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
@@ -2248,6 +2254,11 @@ extra_headers = { x-shared = "model", X-Model = "primary" }
 	headers["X-Global"] = "mutated"
 	if cfg.ExtraHeaders["X-Global"] != "global" {
 		t.Fatal("effective headers alias configuration")
+	}
+	sampling := cfg.EffectiveSampling()
+	if sampling.Temperature == nil || *sampling.Temperature != 0.2 || sampling.TopP == nil || *sampling.TopP != 0.9 ||
+		sampling.MaxCompletionTokens == nil || *sampling.MaxCompletionTokens != 1000 || sampling.StreamToolCalls == nil || *sampling.StreamToolCalls {
+		t.Fatalf("effective sampling=%#v", sampling)
 	}
 }
 

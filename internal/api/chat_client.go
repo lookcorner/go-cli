@@ -22,6 +22,7 @@ type ChatClient struct {
 	tokenProvider TokenProvider
 	errorMapper   ErrorMapper
 	extraHeaders  map[string]string
+	defaults      SamplingDefaults
 	http          *http.Client
 	mu            sync.Mutex
 	history       []chatMessage
@@ -33,6 +34,9 @@ func (c *ChatClient) SetTokenProvider(provider TokenProvider) { c.tokenProvider 
 func (c *ChatClient) SetErrorMapper(mapper ErrorMapper)       { c.errorMapper = mapper }
 func (c *ChatClient) SetExtraHeaders(headers map[string]string) {
 	c.extraHeaders = cloneHeaders(headers)
+}
+func (c *ChatClient) SetSamplingDefaults(defaults SamplingDefaults) {
+	c.defaults = cloneSamplingDefaults(defaults)
 }
 
 type chatMessage struct {
@@ -82,7 +86,7 @@ func (c *ChatClient) CloneForCompaction(includeHistory bool) Streamer {
 	defer c.mu.Unlock()
 	clone := &ChatClient{
 		baseURL: c.baseURL, apiKey: c.apiKey, tokenProvider: c.tokenProvider, errorMapper: c.errorMapper,
-		extraHeaders: cloneHeaders(c.extraHeaders), http: c.http, pruning: c.pruning,
+		extraHeaders: cloneHeaders(c.extraHeaders), defaults: cloneSamplingDefaults(c.defaults), http: c.http, pruning: c.pruning,
 	}
 	if includeHistory {
 		clone.history = append([]chatMessage(nil), c.history...)
@@ -140,6 +144,7 @@ func (c *ChatClient) StreamResponse(ctx context.Context, request ResponseRequest
 }
 
 func (c *ChatClient) StreamResponseEvents(ctx context.Context, request ResponseRequest, onEvent func(StreamEvent)) (StreamResult, error) {
+	request = applySamplingDefaults(request, c.defaults)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -179,6 +184,9 @@ func (c *ChatClient) StreamResponseEvents(ctx context.Context, request ResponseR
 	}
 	if request.Temperature != nil {
 		payload["temperature"] = *request.Temperature
+	}
+	if request.TopP != nil {
+		payload["top_p"] = *request.TopP
 	}
 	if request.Reasoning != nil {
 		payload["reasoning_effort"] = request.Reasoning.Effort

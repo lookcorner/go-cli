@@ -2768,18 +2768,25 @@ func shouldClearACPModelCache(authMethod string, result auth.LogoutResult) bool 
 func newModelClient(cfg config.Config, tokenProvider api.TokenProvider) (agent.ResponseStreamer, error) {
 	httpClient := &http.Client{Timeout: cfg.HTTPTimeout}
 	mapper := func(err error) error { return userModelError(err, tokenProvider == nil) }
+	sampling := cfg.EffectiveSampling()
+	defaults := api.SamplingDefaults{
+		Temperature: sampling.Temperature, TopP: sampling.TopP,
+		MaxCompletionTokens: sampling.MaxCompletionTokens, StreamToolCalls: sampling.StreamToolCalls,
+	}
 	switch cfg.Backend {
 	case "responses":
 		client := api.NewClient(cfg.BaseURL, cfg.APIKey, httpClient)
 		client.SetTokenProvider(tokenProvider)
 		client.SetErrorMapper(mapper)
 		client.SetExtraHeaders(cfg.EffectiveExtraHeaders())
+		client.SetSamplingDefaults(defaults)
 		return client, nil
 	case "chat_completions":
 		client := api.NewChatClient(cfg.BaseURL, cfg.APIKey, httpClient)
 		client.SetTokenProvider(tokenProvider)
 		client.SetErrorMapper(mapper)
 		client.SetExtraHeaders(cfg.EffectiveExtraHeaders())
+		client.SetSamplingDefaults(defaults)
 		client.SetPruning(modelPruningConfig(cfg))
 		return client, nil
 	case "anthropic_messages":
@@ -2787,6 +2794,7 @@ func newModelClient(cfg config.Config, tokenProvider api.TokenProvider) (agent.R
 		client.SetTokenProvider(tokenProvider)
 		client.SetErrorMapper(mapper)
 		client.SetExtraHeaders(cfg.EffectiveExtraHeaders())
+		client.SetSamplingDefaults(defaults)
 		client.SetPruning(modelPruningConfig(cfg))
 		return client, nil
 	default:
