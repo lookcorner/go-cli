@@ -138,6 +138,7 @@ type Config struct {
 	uiRememberApprovalsConfigured   bool
 	uiCollapsedEditsConfigured      bool
 	uiGroupToolVerbsConfigured      bool
+	uiShowThinkingConfigured        bool
 	uiRefreshConfigured             refreshConfigured
 	uiContextualUndoConfigured      bool
 	uiContextualPlanModeConfigured  bool
@@ -819,6 +820,7 @@ type requirementsFile struct {
 		RememberToolApprovals        *bool            `toml:"remember_tool_approvals"`
 		CollapsedEditBlocks          *bool            `toml:"collapsed_edit_blocks"`
 		GroupToolVerbs               *bool            `toml:"group_tool_verbs"`
+		ShowThinkingBlocks           *bool            `toml:"show_thinking_blocks"`
 		ContextualHints              *hints           `toml:"contextual_hints"`
 		DisplayRefresh               *RefreshSettings `toml:"display_refresh"`
 	} `toml:"ui"`
@@ -1445,6 +1447,7 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.UI.ShowThinkingBlocks != nil {
 		cfg.UI.ShowThinkingBlocks = *disk.UI.ShowThinkingBlocks
+		cfg.uiShowThinkingConfigured = true
 	}
 	applyDisplayRefreshFile(cfg, disk.UI.DisplayRefresh)
 	cfg.UI.Notifications = mergeNotifications(cfg.UI.Notifications, disk.UI.Notifications)
@@ -2320,6 +2323,10 @@ func applyEnv(cfg *Config) {
 	if value, ok := envBool("GROK_PROMPT_SUGGESTIONS"); ok {
 		cfg.UI.PromptSuggestions = value
 	}
+	if value, ok := envBool("GROK_SHOW_THINKING_BLOCKS"); ok {
+		cfg.UI.ShowThinkingBlocks = value
+		cfg.uiShowThinkingConfigured = true
+	}
 	if value, ok := envBool("GROK_DISPLAY_REFRESH_PROBE_ENABLED"); ok {
 		cfg.UI.DisplayRefresh.ProbeEnabled = value
 		cfg.uiRefreshConfigured.probe = true
@@ -2870,6 +2877,10 @@ func applyRequirementsData(cfg *Config, data []byte, source string, envFailClose
 	if requirement.UI.GroupToolVerbs != nil {
 		cfg.UI.GroupToolVerbs = *requirement.UI.GroupToolVerbs
 		cfg.uiGroupToolVerbsConfigured = true
+	}
+	if requirement.UI.ShowThinkingBlocks != nil {
+		cfg.UI.ShowThinkingBlocks = *requirement.UI.ShowThinkingBlocks
+		cfg.uiShowThinkingConfigured = true
 	}
 	applyDisplayRefreshFile(cfg, requirement.UI.DisplayRefresh)
 	if requirement.UI.ContextualHints != nil && requirement.UI.ContextualHints.Undo != nil {

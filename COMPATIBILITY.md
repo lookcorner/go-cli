@@ -284,6 +284,8 @@ Remote `file_toolset = "hashline"` is used only as the reference fallback when
 the effective local toolset remains `standard`; local hashline stays authoritative.
 Question timeouts resolve enabled/seconds independently through requirements,
 environment, local/managed config, remote settings, then the 30-minute default.
+Thinking-block visibility defaults on and follows requirements, environment,
+local/managed config, then the remote fallback.
 
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |

@@ -32,6 +32,7 @@ type RemoteSettings struct {
 	RememberToolApprovals            *bool                `json:"remember_tool_approvals"`
 	GroupToolVerbs                   *bool                `json:"group_tool_verbs"`
 	CollapsedEditBlocks              *bool                `json:"collapsed_edit_blocks"`
+	ShowThinkingBlocks               *bool                `json:"show_thinking_blocks"`
 	ContextualHints                  *RemoteHints         `json:"contextual_hints"`
 	DisplayRefresh                   *RefreshSettings     `json:"display_refresh"`
 	SubscriptionWatchIntervalSeconds *uint64              `json:"subscription_watch_interval_secs"`
@@ -249,6 +250,9 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 	}
 	if !c.uiCollapsedEditsConfigured {
 		c.UI.CollapsedEditBlocks = remote.CollapsedEditBlocks != nil && *remote.CollapsedEditBlocks
+	}
+	if !c.uiShowThinkingConfigured {
+		c.UI.ShowThinkingBlocks = remote.ShowThinkingBlocks == nil || *remote.ShowThinkingBlocks
 	}
 	if !c.uiGroupToolVerbsConfigured {
 		c.UI.GroupToolVerbs = remote.GroupToolVerbs == nil || *remote.GroupToolVerbs
