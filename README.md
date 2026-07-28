@@ -1504,6 +1504,9 @@ re-discover every live session's catalog from disk.
 `x.ai/workflows/list` returns session-scoped workflow listings (builtin
 `deep-research`, project `.grok/workflows`, and `$GROK_HOME/workflows`) by
 scanning `.rhai` files and parsing `let meta = #{...}` without executing Rhai.
+The TUI mirrors that catalog with `/workflows`, and `/workflow validate
+<name|path>` runs the same lightweight validation as the `workflow` tool's
+`validate_only` mode (full Rhai execution is not available yet).
 
 Live session MCP servers are exposed through `x.ai/mcp/list`, and
 `x.ai/mcp/call` invokes a named server tool through the same client and

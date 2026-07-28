@@ -3221,6 +3221,14 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.status = "web_fetch artifact"
 			}
 			return m, nil
+		case "/workflows", "/list-workflows":
+			m.appendSystem(m.listWorkflowsCatalog())
+			m.status = "workflows"
+			return m, nil
+		case "/workflow":
+			m.appendSystem(m.handleWorkflowSlash(fields[1:]))
+			m.status = "workflow"
+			return m, nil
 		case "/login", "/logout":
 			if m.runner == nil {
 				m.status = "authentication unavailable"
