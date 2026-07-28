@@ -13,6 +13,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/skills"
 	"github.com/lookcorner/go-cli/internal/tools"
+	"github.com/lookcorner/go-cli/internal/workspace"
 )
 
 func TestSkillRefreshUpdatesAllSessions(t *testing.T) {
@@ -102,6 +103,7 @@ func TestSkillRefreshRoutesWithoutSessions(t *testing.T) {
 
 func TestReloadWorkflowsAdvertisesCommands(t *testing.T) {
 	root := t.TempDir()
+	t.Setenv("GROK_HOME", t.TempDir())
 	catalog, err := skills.Discover(root, skills.Config{})
 	if err != nil {
 		t.Fatal(err)
@@ -113,9 +115,22 @@ func TestReloadWorkflowsAdvertisesCommands(t *testing.T) {
 	if err := os.WriteFile(path, []byte("---\nname: ship\ndescription: Ship it\n---\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	workflowPath := filepath.Join(root, ".grok", "workflows", "triage-flakes.rhai")
+	if err := os.MkdirAll(filepath.Dir(workflowPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(workflowPath, []byte("let meta = #{\n  name: \"triage-flakes\",\n  description: \"Triage flaky tests\",\n};\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := workspace.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry(ws, nil)
+	defer registry.Close()
 	var output bytes.Buffer
 	server := &Server{output: &output, sessions: map[string]*session{
-		"live": {id: "live", cwd: root, runner: &agent.Runner{Skills: catalog}},
+		"live": {id: "live", cwd: root, runner: &agent.Runner{Skills: catalog, Tools: registry}},
 	}}
 	server.handleSkills(context.Background(), message{ID: json.RawMessage("1"), Method: "x.ai/internal/reload_workflows"})
 	messages := decodeACPOutput(t, output.Bytes())
@@ -130,7 +145,12 @@ func TestReloadWorkflowsAdvertisesCommands(t *testing.T) {
 		t.Fatalf("update=%#v", update)
 	}
 	commands := update["availableCommands"].([]any)
-	if len(commands) < 1 {
+	foundWorkflow := false
+	for _, raw := range commands {
+		command := raw.(map[string]any)
+		foundWorkflow = foundWorkflow || command["name"] == "triage-flakes"
+	}
+	if !foundWorkflow {
 		t.Fatalf("commands=%#v", commands)
 	}
 	if messages[1]["result"].(map[string]any)["reloaded"] != float64(1) {

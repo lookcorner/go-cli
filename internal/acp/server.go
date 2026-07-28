@@ -2107,6 +2107,10 @@ func (s *Server) handlePromptRequest(parent context.Context, incoming message, c
 	if s.queuePrompt(current, incoming, &params, prompt) {
 		return
 	}
+	if name, input, ok := resolveWorkflowSlashCommand(current.runner, current.cwd, prompt); ok {
+		s.handleWorkflowSlashPrompt(parent, incoming, current, newPromptLifecycle(params), name, input)
+		return
+	}
 	if enabled, ok := alwaysApproveCommand(prompt); ok {
 		s.handleAlwaysApprovePrompt(incoming, current, newPromptLifecycle(params), enabled)
 		s.markRunningPrompt(current, promptID(params.Meta))

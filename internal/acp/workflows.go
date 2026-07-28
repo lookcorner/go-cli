@@ -1,10 +1,123 @@
 package acp
 
 import (
+	"context"
 	"encoding/json"
+	"strings"
+	"time"
 
+	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/workflow"
 )
+
+func appendWorkflowCommands(commands []map[string]any, runner *agent.Runner, cwd string, workspaceSkills bool) []map[string]any {
+	if runner == nil || runner.Tools == nil || !runner.Tools.HasTool("workflow") {
+		return commands
+	}
+	taken := make(map[string]bool, len(commands))
+	for _, command := range commands {
+		taken[command["name"].(string)] = true
+	}
+	if runner.Skills != nil {
+		for _, item := range runner.Skills.List() {
+			if item.Enabled && item.UserInvocable && (workspaceSkills || item.Scope == "user") {
+				taken[item.Name] = true
+			}
+		}
+	}
+	for _, item := range workflow.List(cwd) {
+		if taken[item.Name] {
+			continue
+		}
+		meta := map[string]any{"workflowSource": item.Source}
+		if item.Path != nil {
+			meta["workflowPath"] = *item.Path
+		}
+		commands = append(commands, availableCommand(item.Name, "Workflow: "+item.Description, "<args>", meta))
+	}
+	return commands
+}
+
+func resolveWorkflowSlashCommand(runner *agent.Runner, cwd, prompt string) (string, string, bool) {
+	trimmed := strings.TrimSpace(prompt)
+	fields := strings.Fields(trimmed)
+	if len(fields) == 0 || !strings.HasPrefix(fields[0], "/") {
+		return "", "", false
+	}
+	name := strings.TrimPrefix(strings.ToLower(fields[0]), "/")
+	for _, command := range availableCommandsForCWD(runner, cwd != "", cwd) {
+		if command["name"] != name {
+			continue
+		}
+		meta, _ := command["_meta"].(map[string]any)
+		if meta["workflowSource"] == nil {
+			return "", "", false
+		}
+		return name, strings.TrimSpace(strings.TrimPrefix(trimmed, fields[0])), true
+	}
+	return "", "", false
+}
+
+func (s *Server) handleWorkflowSlashPrompt(parent context.Context, incoming message, current *session, lifecycle promptLifecycle, name, input string) {
+	current.mu.Lock()
+	if current.closed {
+		current.mu.Unlock()
+		s.failPrompt(incoming, current, lifecycle, "session is closed")
+		return
+	}
+	if current.running {
+		current.mu.Unlock()
+		s.failPrompt(incoming, current, lifecycle, "session already has an active prompt")
+		return
+	}
+	runCtx, cancel := context.WithCancel(parent)
+	runDone := make(chan struct{})
+	registry := current.runner.Tools
+	current.cancel = cancel
+	current.running = true
+	current.runDone = runDone
+	current.runningPromptID = lifecycle.promptID
+	current.updated = time.Now().UTC()
+	current.mu.Unlock()
+
+	request := map[string]any{"name": name}
+	if args := workflow.ArgumentsFromInput(input); len(args) > 0 {
+		request["args"] = args
+	}
+	arguments, err := json.Marshal(request)
+	if err != nil {
+		cancel()
+	}
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		defer cancel()
+		s.notifyRosterUpsert(current, "working")
+		result := ""
+		if err == nil {
+			result, err = registry.Execute(runCtx, "workflow", arguments)
+		}
+		stopReason := "end_turn"
+		if runCtx.Err() != nil {
+			stopReason = "cancelled"
+		} else if err == nil {
+			s.sendCommandOutput(current.id, result)
+		}
+		current.mu.Lock()
+		current.running = false
+		current.runDone = nil
+		current.runningPromptID = ""
+		current.cancel = nil
+		cancelTrigger := current.cancelTrigger
+		current.cancelTrigger = ""
+		current.updated = time.Now().UTC()
+		close(runDone)
+		current.mu.Unlock()
+		s.notifyRosterUpsert(current, "idle")
+		s.finishPrompt(incoming, current, lifecycle, stopReason, agent.Result{}, err, cancelTrigger)
+		s.startNext(current)
+	}()
+}
 
 func (s *Server) handleWorkflowsList(incoming message) {
 	var req struct {

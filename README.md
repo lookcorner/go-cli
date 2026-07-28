@@ -1526,9 +1526,10 @@ builtin asynchronously through the same tool and writes its result back to the
 TUI. `/workflow <name> [args]` does the same for saved workflows: a JSON object
 is preserved as-is, plain text becomes both `query` and `objective`, and omitted
 input is sent as JSON `null`. Pause/resume/stop/save and the live run dashboard
-remain deferred. Unique saved workflow names that do not collide with a builtin
-command or user-invocable skill also appear directly in the slash menu, so
-`/review-changes ...` is equivalent to `/workflow review-changes ...`.
+remain deferred. In the TUI and ACP command catalog, unique saved workflow names
+that do not collide with a builtin command or user-invocable skill also appear
+directly, so `/review-changes ...` is equivalent to `/workflow review-changes
+...`. ACP executes these commands asynchronously through the same workflow tool.
 
 Live session MCP servers are exposed through `x.ai/mcp/list`, and
 `x.ai/mcp/call` invokes a named server tool through the same client and

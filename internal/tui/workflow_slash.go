@@ -43,19 +43,6 @@ func runDeepResearch(ctx context.Context, registry *tools.Registry, query string
 	return runWorkflow(ctx, registry, "deep-research", args)
 }
 
-func namedWorkflowArgs(input string) json.RawMessage {
-	input = strings.TrimSpace(input)
-	if input == "" {
-		return nil
-	}
-	var object map[string]any
-	if json.Unmarshal([]byte(input), &object) == nil && object != nil {
-		return json.RawMessage(input)
-	}
-	args, _ := json.Marshal(map[string]string{"query": input, "objective": input})
-	return args
-}
-
 func workflowLaunchArgs(fields []string) (name, input string, ok bool) {
 	if len(fields) == 0 {
 		return "", "", false
@@ -84,7 +71,7 @@ func (m *model) startNamedWorkflow(name, input string) (string, tea.Cmd) {
 		return fmt.Sprintf("Workflow `%s` invalid: %v", name, err), nil
 	}
 	m.status = "workflow running"
-	return fmt.Sprintf("Workflow `%s` started. Its result will appear here when it finishes.", name), runWorkflow(m.ctx, m.runner.Tools, name, namedWorkflowArgs(input))
+	return fmt.Sprintf("Workflow `%s` started. Its result will appear here when it finishes.", name), runWorkflow(m.ctx, m.runner.Tools, name, workflow.ArgumentsFromInput(input))
 }
 
 func (m *model) discoverWorkflows(refresh bool) []workflow.Listing {

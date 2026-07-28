@@ -2065,7 +2065,7 @@ func TestMemoryFlushExtensionAndSlashCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	commands := commandResponse["result"].(map[string]any)["commands"].([]any)
-	if len(commands) != 13 || commands[2].(map[string]any)["name"] != "privacy" || commands[3].(map[string]any)["name"] != "doctor" || commands[4].(map[string]any)["name"] != "usage" || commands[5].(map[string]any)["name"] != "release-notes" || commands[6].(map[string]any)["name"] != "flush" || commands[7].(map[string]any)["name"] != "dream" || commands[8].(map[string]any)["name"] != "memory" || commands[9].(map[string]any)["name"] != "context" || commands[10].(map[string]any)["name"] != "session-info" || commands[11].(map[string]any)["name"] != "goal" || commands[12].(map[string]any)["name"] != "loop" {
+	if len(commands) != 14 || commands[2].(map[string]any)["name"] != "privacy" || commands[3].(map[string]any)["name"] != "doctor" || commands[4].(map[string]any)["name"] != "usage" || commands[5].(map[string]any)["name"] != "release-notes" || commands[6].(map[string]any)["name"] != "flush" || commands[7].(map[string]any)["name"] != "dream" || commands[8].(map[string]any)["name"] != "memory" || commands[9].(map[string]any)["name"] != "context" || commands[10].(map[string]any)["name"] != "session-info" || commands[11].(map[string]any)["name"] != "goal" || commands[12].(map[string]any)["name"] != "loop" || commands[13].(map[string]any)["name"] != "deep-research" {
 		t.Fatalf("memory commands=%#v", commands)
 	}
 	output.Reset()
@@ -2077,7 +2077,7 @@ func TestMemoryFlushExtensionAndSlashCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	commands = commandResponse["result"].(map[string]any)["commands"].([]any)
-	if len(commands) != 11 || commands[2].(map[string]any)["name"] != "privacy" || commands[3].(map[string]any)["name"] != "doctor" || commands[4].(map[string]any)["name"] != "usage" || commands[5].(map[string]any)["name"] != "release-notes" || commands[6].(map[string]any)["name"] != "memory" || commands[7].(map[string]any)["name"] != "context" || commands[8].(map[string]any)["name"] != "session-info" || commands[9].(map[string]any)["name"] != "goal" || commands[10].(map[string]any)["name"] != "loop" {
+	if len(commands) != 12 || commands[2].(map[string]any)["name"] != "privacy" || commands[3].(map[string]any)["name"] != "doctor" || commands[4].(map[string]any)["name"] != "usage" || commands[5].(map[string]any)["name"] != "release-notes" || commands[6].(map[string]any)["name"] != "memory" || commands[7].(map[string]any)["name"] != "context" || commands[8].(map[string]any)["name"] != "session-info" || commands[9].(map[string]any)["name"] != "goal" || commands[10].(map[string]any)["name"] != "loop" || commands[11].(map[string]any)["name"] != "deep-research" {
 		t.Fatalf("disabled memory commands=%#v", commands)
 	}
 	if _, err := runner.SetMemoryEnabled(context.Background(), true); err != nil {

@@ -27,7 +27,7 @@ func (s *Server) handleCommands(incoming message) {
 		return
 	}
 	runner := s.commandRunner(req.CWD)
-	s.respond(incoming.ID, map[string]any{"commands": availableCommands(runner, req.CWD != "")})
+	s.respond(incoming.ID, map[string]any{"commands": availableCommandsForCWD(runner, req.CWD != "", req.CWD)})
 }
 
 func (s *Server) commandRunner(cwd string) *agent.Runner {
@@ -52,6 +52,10 @@ func (s *Server) commandRunner(cwd string) *agent.Runner {
 }
 
 func availableCommands(runner *agent.Runner, workspaceSkills bool) []map[string]any {
+	return availableCommandsForCWD(runner, workspaceSkills, "")
+}
+
+func availableCommandsForCWD(runner *agent.Runner, workspaceSkills bool, cwd string) []map[string]any {
 	commands := []map[string]any{
 		availableCommand("compact", "Compress conversation history to save context window", "optional context about what to preserve", nil),
 		availableCommand("always-approve", "Toggle always-approve mode (skip all permission prompts)", "on|off", nil),
@@ -116,7 +120,7 @@ func availableCommands(runner *agent.Runner, workspaceSkills bool) []map[string]
 		commands = append(commands, availableCommand("imagine-video", "Generate a video from a text description", "description of the video to generate", nil))
 	}
 	if runner.Skills == nil {
-		return commands
+		return appendWorkflowCommands(commands, runner, cwd, workspaceSkills)
 	}
 	items := runner.Skills.List()
 	counts := make(map[string]int)
@@ -167,7 +171,7 @@ func availableCommands(runner *agent.Runner, workspaceSkills bool) []map[string]
 		}
 		commands = append(commands, command(name))
 	}
-	return commands
+	return appendWorkflowCommands(commands, runner, cwd, workspaceSkills)
 }
 
 type goalCommand struct {

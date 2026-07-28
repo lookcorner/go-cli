@@ -2,7 +2,6 @@ package tui
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -156,19 +155,6 @@ func TestWorkflowSlashCommandsDoNotShadowBuiltinsOrSkills(t *testing.T) {
 	suggestions := m.slashSuggestions()
 	if len(suggestions) == 0 || suggestions[0].insert != "/triage-flakes " || !strings.HasPrefix(suggestions[0].description, "Workflow:") {
 		t.Fatalf("suggestions=%#v", suggestions)
-	}
-}
-
-func TestNamedWorkflowArgsMatchReferenceFallback(t *testing.T) {
-	if namedWorkflowArgs("") != nil {
-		t.Fatal("empty input did not preserve null args")
-	}
-	var args map[string]any
-	if err := json.Unmarshal(namedWorkflowArgs("review release"), &args); err != nil || args["query"] != "review release" || args["objective"] != "review release" {
-		t.Fatalf("args=%#v err=%v", args, err)
-	}
-	if err := json.Unmarshal(namedWorkflowArgs(`{"depth":3}`), &args); err != nil || args["depth"] != float64(3) {
-		t.Fatalf("typed args=%#v err=%v", args, err)
 	}
 }
 

@@ -43,8 +43,9 @@ reference `deep-research` workflow and file workflows run via the
 `GORK_WORKFLOW_RUNNER` NDJSON sidecar with typed JSON arguments + host `agent()`
 → subagents; TUI `/deep-research <query>` launches the builtin asynchronously;
 `/workflow <name> [args]` launches saved workflows with reference-compatible
-JSON/text/null argument mapping; the TUI also advertises and dispatches
-non-conflicting saved workflows as dynamic `/name <args>` commands; journal,
+JSON/text/null argument mapping; the TUI and ACP command catalog also advertise
+and dispatch non-conflicting saved workflows as dynamic `/name <args>` commands;
+journal,
 pause/resume/stop/save, and the live run dashboard remain deferred).
 `x.ai/mcp/setup` persists select-field answers in `$GROK_HOME/mcp_preferences.json`,
 resolves `setup` templates (v0 one-select), reloads MCP, and enables the server.

@@ -91,7 +91,7 @@ func (s *Server) AdvertiseCommandsAllSessions() int {
 		}
 		s.notify(current.id, map[string]any{
 			"sessionUpdate":     "available_commands_update",
-			"availableCommands": availableCommands(runner, cwd != ""),
+			"availableCommands": availableCommandsForCWD(runner, cwd != "", cwd),
 		})
 		reloaded++
 	}

@@ -35,6 +35,7 @@ func (imagineACPTool) Execute(context.Context, json.RawMessage) (string, error) 
 
 func TestCommandsListAdvertisesCapabilitiesAndSkills(t *testing.T) {
 	root := t.TempDir()
+	t.Setenv("GROK_HOME", t.TempDir())
 	userRoot := t.TempDir()
 	writeCommandSkill(t, root, "deploy", "---\nname: deploy\ndescription: Deploy the service\nuser-invocable: true\nargument-hint: environment\nmetadata:\n  short-description: Safe deploy\n---\nDeploy it.\n")
 	writeCommandSkill(t, root, "compact", "---\nname: compact\ndescription: Skill compact\nuser-invocable: true\n---\nCompact it.\n")
@@ -42,6 +43,16 @@ func TestCommandsListAdvertisesCapabilitiesAndSkills(t *testing.T) {
 	writeCommandSkill(t, root, "feedback", "---\nname: feedback\ndescription: Skill feedback\nuser-invocable: true\n---\nFeedback skill.\n")
 	writeCommandSkill(t, root, "hidden", "---\nname: hidden\ndescription: Hidden command\nuser-invocable: false\n---\nHidden.\n")
 	writeCommandSkill(t, userRoot, "global", "---\nname: global\ndescription: Global command\nuser-invocable: true\n---\nGlobal.\n")
+	workflowDir := filepath.Join(root, ".grok", "workflows")
+	if err := os.MkdirAll(workflowDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range []struct{ name, description string }{{"deploy", "shadowed"}, {"review-changes", "Review the current patch"}} {
+		script := "let meta = #{\n  name: \"" + item.name + "\",\n  description: \"" + item.description + "\",\n};\n"
+		if err := os.WriteFile(filepath.Join(workflowDir, item.name+".rhai"), []byte(script), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	catalog, err := skills.Discover(root, skills.Config{Paths: []string{filepath.Join(userRoot, ".grok", "skills")}})
 	if err != nil {
 		t.Fatal(err)
@@ -63,7 +74,7 @@ func TestCommandsListAdvertisesCapabilitiesAndSkills(t *testing.T) {
 		command := raw.(map[string]any)
 		byName[command["name"].(string)] = command
 	}
-	for _, name := range []string{"compact", "always-approve", "privacy", "doctor", "usage", "release-notes", "share", "mcps", "context", "session-info", "hooks-trust", "hooks-list", "hooks-add", "hooks-remove", "hooks-untrust", "plugins", "reload-plugins", "feedback", "goal", "loop", "local:compact", "local:plugins", "local:feedback", "deploy"} {
+	for _, name := range []string{"compact", "always-approve", "privacy", "doctor", "usage", "release-notes", "share", "mcps", "context", "session-info", "hooks-trust", "hooks-list", "hooks-add", "hooks-remove", "hooks-untrust", "plugins", "reload-plugins", "feedback", "goal", "loop", "local:compact", "local:plugins", "local:feedback", "deploy", "deep-research", "review-changes"} {
 		if byName[name] == nil {
 			t.Fatalf("missing command %q in %#v", name, commands)
 		}
@@ -82,6 +93,11 @@ func TestCommandsListAdvertisesCapabilitiesAndSkills(t *testing.T) {
 	if meta["scope"] != "local" || meta["path"] == "" {
 		t.Fatalf("deploy meta=%#v", meta)
 	}
+	workflowCommand := byName["review-changes"]
+	workflowMeta := workflowCommand["_meta"].(map[string]any)
+	if workflowCommand["description"] != "Workflow: Review the current patch" || workflowCommand["input"].(map[string]any)["hint"] != "<args>" || workflowMeta["workflowSource"] != "project" || workflowMeta["workflowPath"] == "" {
+		t.Fatalf("workflow command=%#v", workflowCommand)
+	}
 
 	output.Reset()
 	server.handleCommands(message{ID: json.RawMessage("2"), Params: json.RawMessage(`{}`)})
@@ -92,7 +108,7 @@ func TestCommandsListAdvertisesCapabilitiesAndSkills(t *testing.T) {
 		command := raw.(map[string]any)
 		byName[command["name"].(string)] = command
 	}
-	if byName["global"] == nil || byName["deploy"] != nil || byName["local:compact"] != nil {
+	if byName["global"] == nil || byName["deep-research"] == nil || byName["review-changes"] != nil || byName["deploy"] != nil || byName["local:compact"] != nil {
 		t.Fatalf("global commands=%#v", commands)
 	}
 }
