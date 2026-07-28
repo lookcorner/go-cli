@@ -54,6 +54,7 @@ type ProcessManager struct {
 	bashMu          sync.RWMutex
 	bashTimeout     time.Duration
 	bashOutput      int
+	shellEnvPolicy  ShellEnvironmentPolicy
 	cgroupMu        sync.Mutex
 	cgroup          shellCgroup
 	cgroupCfg       CgroupMemoryConfig
@@ -344,12 +345,20 @@ func NewProcessManager(ws *workspace.Workspace, approver Approver) *ProcessManag
 	return &ProcessManager{
 		ws: ws, approver: approver, processes: make(map[string]*backgroundProcess),
 		currentDir: ws.Root(), environment: os.Environ(),
+		shellEnvPolicy: DefaultShellEnvironmentPolicy(),
 	}
+}
+
+func (m *ProcessManager) ConfigureShellEnvironmentPolicy(policy ShellEnvironmentPolicy) {
+	m.stateMu.Lock()
+	m.shellEnvPolicy = policy
+	m.stateMu.Unlock()
 }
 
 func (m *ProcessManager) ConfigureEnvironment(values map[string]string) {
 	m.stateMu.Lock()
-	m.environment = setEnvironment(os.Environ(), values)
+	base := ApplyShellEnvironmentPolicy(os.Environ(), m.shellEnvPolicy)
+	m.environment = setEnvironment(base, values)
 	m.stateMu.Unlock()
 }
 

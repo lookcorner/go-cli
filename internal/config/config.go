@@ -42,6 +42,7 @@ type Config struct {
 	SystemPrompt                    string                     `json:"system_prompt,omitempty"`
 	MaxSteps                        int                        `json:"max_steps,omitempty"`
 	Env                             map[string]string          `json:"env,omitempty"`
+	ShellEnvironmentPolicy          ShellEnvironmentPolicy     `json:"shell_environment_policy,omitempty"`
 	MCPServers                      map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
 	DisabledMCPServers              []string                   `json:"disabled_mcp_servers,omitempty"`
 	DisabledMCPTools                map[string][]string        `json:"disabled_mcp_tools,omitempty"`
@@ -567,6 +568,15 @@ func (c MCPServerConfig) IsEnabled() bool {
 	return c.Enabled == nil || *c.Enabled
 }
 
+// ShellEnvironmentPolicy is the top-level [shell_environment_policy] table.
+type ShellEnvironmentPolicy struct {
+	Inherit               string            `json:"inherit,omitempty"`
+	IgnoreDefaultExcludes bool              `json:"ignore_default_excludes"`
+	Exclude               []string          `json:"exclude,omitempty"`
+	Set                   map[string]string `json:"set,omitempty"`
+	IncludeOnly           []string          `json:"include_only,omitempty"`
+}
+
 type fileConfig struct {
 	APIKey             string                     `json:"api_key,omitempty" toml:"api_key"`
 	BaseURL            string                     `json:"base_url,omitempty" toml:"base_url"`
@@ -575,6 +585,7 @@ type fileConfig struct {
 	SystemPrompt       string                     `json:"system_prompt,omitempty" toml:"system_prompt"`
 	MaxSteps           int                        `json:"max_steps,omitempty" toml:"max_steps"`
 	Env                map[string]string          `json:"env,omitempty" toml:"env"`
+	ShellEnvironmentPolicy *fileShellEnvironmentPolicy `json:"shell_environment_policy,omitempty" toml:"shell_environment_policy"`
 	HTTPTimeout        string                     `json:"http_timeout,omitempty" toml:"http_timeout"`
 	MCPServers         map[string]MCPServerConfig `json:"mcp_servers,omitempty" toml:"mcp_servers"`
 	DisabledMCPServers []string                   `json:"disabled_mcp_servers,omitempty" toml:"disabled_mcp_servers"`
@@ -644,6 +655,14 @@ type fileHashlineConfig struct {
 type fileBashConfig struct {
 	TimeoutSeconds  *float64 `json:"timeout_secs,omitempty" toml:"timeout_secs"`
 	OutputByteLimit *uint64  `json:"output_byte_limit,omitempty" toml:"output_byte_limit"`
+}
+
+type fileShellEnvironmentPolicy struct {
+	Inherit               *string           `json:"inherit,omitempty" toml:"inherit"`
+	IgnoreDefaultExcludes *bool             `json:"ignore_default_excludes,omitempty" toml:"ignore_default_excludes"`
+	Exclude               []string          `json:"exclude,omitempty" toml:"exclude"`
+	Set                   map[string]string `json:"set,omitempty" toml:"set"`
+	IncludeOnly           []string          `json:"include_only,omitempty" toml:"include_only"`
 }
 
 type fileUIConfig struct {
@@ -961,6 +980,7 @@ func Load(path string) (Config, error) {
 		ShowTips:                    true,
 		AskUserQuestion:             AskUserQuestionConfig{TimeoutEnabled: true, TimeoutSeconds: 30 * 60},
 		CancelRewindEnabled:         true,
+		ShellEnvironmentPolicy:      ShellEnvironmentPolicy{Inherit: "all", IgnoreDefaultExcludes: true},
 		Toolset:                     ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}, Bash: BashConfig{TimeoutSeconds: 120, OutputByteLimit: 20000}},
 		Goal:                        GoalConfig{VerifierCount: 3, ClassifierMaxRuns: 10, ReverifyAfter: 8},
 		UI:                          UIConfig{MaxThoughtsWidth: 120, Theme: "groknight", AutoDarkTheme: "groknight", AutoLightTheme: "grokday", HunkTrackerMode: "agent_only", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, PageFlipOnSend: true, ShowThinkingBlocks: true, DisplayRefresh: DisplayRefreshConfig{ProbeEnabled: true, FloorMS: 8, CeilingMS: 16, MinHz: 55, MaxHz: 165}, ScrollSpeed: 50, ScrollMode: "auto", DefaultSelectedPermission: "always_allow_all_sessions", GroupToolVerbs: true, PromptSuggestions: true, ContextualHints: Hints{Undo: true, PlanMode: true, ImageInput: true, SendNow: true, SmallScreen: true, WordSelect: true, SSHWrap: true}, VoiceCaptureMode: "hold", VoiceSTTLanguage: "en", VoiceKeybindEnabled: true, PermissionMode: "ask", Notifications: NotificationsConfig{Method: "auto", Condition: "unfocused", IdleThresholdSecs: 3, Events: []string{"turn_complete", "approval_required"}, ProgressBar: true, SleepPrevention: true, SessionRecap: true, RecapThresholdSecs: 30, Title: NotificationTitleConfig{Enabled: true, Items: []string{"action-required", "spinner", "activity", "session-name", "grok"}}}},
@@ -1159,6 +1179,9 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 		for key, value := range disk.Env {
 			cfg.Env[key] = value
 		}
+	}
+	if disk.ShellEnvironmentPolicy != nil {
+		applyShellEnvironmentPolicy(&cfg.ShellEnvironmentPolicy, *disk.ShellEnvironmentPolicy)
 	}
 	if disk.MCPServers != nil {
 		if cfg.MCPServers == nil {
@@ -2058,6 +2081,33 @@ func applyAskUserQuestionConfig(target *AskUserQuestionConfig, source fileAskUse
 	}
 	if source.TimeoutSeconds != nil {
 		target.TimeoutSeconds = normalizedQuestionTimeout(*source.TimeoutSeconds)
+	}
+}
+
+func applyShellEnvironmentPolicy(target *ShellEnvironmentPolicy, source fileShellEnvironmentPolicy) {
+	if source.Inherit != nil {
+		inherit := strings.ToLower(strings.TrimSpace(*source.Inherit))
+		switch inherit {
+		case "all", "core", "none":
+			target.Inherit = inherit
+		default:
+			// Fail open like reference typo handling: keep prior inherit.
+		}
+	}
+	if source.IgnoreDefaultExcludes != nil {
+		target.IgnoreDefaultExcludes = *source.IgnoreDefaultExcludes
+	}
+	if source.Exclude != nil {
+		target.Exclude = append([]string(nil), source.Exclude...)
+	}
+	if source.Set != nil {
+		target.Set = make(map[string]string, len(source.Set))
+		for key, value := range source.Set {
+			target.Set[key] = value
+		}
+	}
+	if source.IncludeOnly != nil {
+		target.IncludeOnly = append([]string(nil), source.IncludeOnly...)
 	}
 }
 

@@ -1762,7 +1762,10 @@ foreground session when they finish. The earlier aliases
 `kill_background_command` remain available. Output is captured in a bounded
 tail buffer. `[toolset.bash] timeout_secs` changes the default foreground
 timeout and `output_byte_limit` changes the captured tail limit; unset values
-default to 120 seconds and 20,000 bytes. Process groups are terminated on
+default to 120 seconds and 20,000 bytes. Top-level `[shell_environment_policy]`
+can reshape the inherited agent shell environment (`inherit = all|core|none`,
+`exclude`/`include_only` globs, `set`, and optional default `*KEY*`/`*SECRET*`/
+`*TOKEN*` excludes when `ignore_default_excludes = false`). Process groups are terminated on
 request, and every remaining
 process is cleaned up when Gork exits. File operations resolve symlinks and
 reject paths outside the selected workspace. Shell commands start in the

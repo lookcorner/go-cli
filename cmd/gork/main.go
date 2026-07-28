@@ -738,6 +738,7 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		_ = registry.Close()
 		return err
 	}
+	registry.ConfigureShellEnvironmentPolicy(shellEnvPolicy(cfg.ShellEnvironmentPolicy))
 	registry.ConfigureEnvironment(cfg.Env)
 	registry.ConfigureBash(bashTimeout(cfg.Toolset.Bash.TimeoutSeconds), bashOutputLimit(cfg.Toolset.Bash.OutputByteLimit))
 	if err := registry.ConfigureFileToolset(cfg.Toolset.FileToolset, cfg.Toolset.Hashline.Scheme, cfg.Toolset.Hashline.HashLen, cfg.Toolset.Hashline.ChunkSize); err != nil {
@@ -3665,6 +3666,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			_ = registry.Close()
 			return nil, nil, err
 		}
+		registry.ConfigureShellEnvironmentPolicy(shellEnvPolicy(sessionCfg.ShellEnvironmentPolicy))
 		registry.ConfigureEnvironment(sessionCfg.Env)
 		registry.ConfigureBash(bashTimeout(sessionCfg.Toolset.Bash.TimeoutSeconds), bashOutputLimit(sessionCfg.Toolset.Bash.OutputByteLimit))
 		if err := registry.ConfigureFileToolset(sessionCfg.Toolset.FileToolset, sessionCfg.Toolset.Hashline.Scheme, sessionCfg.Toolset.Hashline.HashLen, sessionCfg.Toolset.Hashline.ChunkSize); err != nil {
@@ -6242,4 +6244,31 @@ func bashTimeout(seconds float64) time.Duration {
 
 func bashOutputLimit(bytes uint64) int {
 	return int(min(bytes, uint64(^uint(0)>>1)))
+}
+
+func shellEnvPolicy(policy config.ShellEnvironmentPolicy) tools.ShellEnvironmentPolicy {
+	inherit := tools.ShellEnvironmentInherit(strings.ToLower(strings.TrimSpace(policy.Inherit)))
+	switch inherit {
+	case tools.ShellEnvironmentInheritCore, tools.ShellEnvironmentInheritNone, tools.ShellEnvironmentInheritAll:
+	default:
+		inherit = tools.ShellEnvironmentInheritAll
+	}
+	return tools.ShellEnvironmentPolicy{
+		Inherit:               inherit,
+		IgnoreDefaultExcludes: policy.IgnoreDefaultExcludes,
+		Exclude:               append([]string(nil), policy.Exclude...),
+		Set:                   mapsClone(policy.Set),
+		IncludeOnly:           append([]string(nil), policy.IncludeOnly...),
+	}
+}
+
+func mapsClone(source map[string]string) map[string]string {
+	if source == nil {
+		return nil
+	}
+	out := make(map[string]string, len(source))
+	for key, value := range source {
+		out[key] = value
+	}
+	return out
 }

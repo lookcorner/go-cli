@@ -359,6 +359,9 @@ Remote relay / workspace hub remains planned/XL (product-blocked). See queue #5.
 
 - [x] `[ui].ui_theme` fills canonical `theme` when `theme` is unset (`theme`
       wins if both set) on `compat/ui-theme-alias`.
+- [x] Top-level `[shell_environment_policy]` (inherit/exclude/set/include_only
+      + default secret excludes) applied to shell + ProcessManager spawn env on
+      `compat/shell-environment-policy`.
 
 ---
 

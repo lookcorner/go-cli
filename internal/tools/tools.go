@@ -145,6 +145,7 @@ type Registry struct {
 	fileToolset   string
 	hashline      hashlineConfig
 	environment   map[string]string
+	shellEnvPolicy ShellEnvironmentPolicy
 	sandbox       SandboxProfile
 	restrictNet   bool
 	pathHints     *atomic.Bool
@@ -256,7 +257,7 @@ func NewRegistryWithHunkMode(ws *workspace.Workspace, approver Approver, mode Hu
 		&searchFilesTool{ws: ws},
 		&writeFileTool{ws: ws, approver: approver, rewind: rewind},
 		&editFileTool{ws: ws, approver: approver, rewind: rewind},
-		&shellTool{ws: ws, approver: approver, timeout: 2 * time.Minute, rewind: rewind},
+		&shellTool{ws: ws, approver: approver, timeout: 2 * time.Minute, rewind: rewind, shellEnvPolicy: DefaultShellEnvironmentPolicy()},
 		&startCommandTool{manager: processes},
 		&commandOutputTool{manager: processes},
 		&killCommandTool{manager: processes},
@@ -283,7 +284,7 @@ func NewRegistryWithHunkMode(ws *workspace.Workspace, approver Approver, mode Hu
 		subagents: subagents, scheduler: scheduler, ownsScheduler: true, plan: plan, questions: questions,
 		todos:       todos,
 		fileToolset: "standard", hashline: defaultHashlineConfig(),
-		pathHints: pathHints,
+		pathHints: pathHints, shellEnvPolicy: DefaultShellEnvironmentPolicy(),
 	}
 	for _, item := range items {
 		registry.tools[item.Definition().Name] = item
@@ -298,9 +299,11 @@ func (r *Registry) ForWorkspace(ws *workspace.Workspace) *Registry {
 	}
 	r.mu.RLock()
 	fileToolset, hashline, environment, sandbox, restrictNet := r.fileToolset, r.hashline, cloneEnvironment(r.environment), r.sandbox, r.restrictNet
+	shellEnvPolicy := r.shellEnvPolicy
 	pathHints := r.pathHints != nil && r.pathHints.Load()
 	r.mu.RUnlock()
 	child := NewRegistry(ws, r.approver)
+	child.ConfigureShellEnvironmentPolicy(shellEnvPolicy)
 	child.ConfigureEnvironment(environment)
 	child.setSandbox(sandbox, restrictNet)
 	if fileToolset == "hashline" {
@@ -379,6 +382,20 @@ func (r *Registry) setSandbox(profile SandboxProfile, restrictNetwork bool) {
 	}
 	r.mu.Unlock()
 	r.processes.setSandbox(profile, restrictNetwork)
+}
+
+// ConfigureShellEnvironmentPolicy sets how agent shells inherit process env.
+func (r *Registry) ConfigureShellEnvironmentPolicy(policy ShellEnvironmentPolicy) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.shellEnvPolicy = policy
+	if shell, ok := r.tools["shell"].(*shellTool); ok {
+		shell.setShellEnvironmentPolicy(policy)
+	}
+	r.mu.Unlock()
+	r.processes.ConfigureShellEnvironmentPolicy(policy)
 }
 
 // ConfigureEnvironment overlays variables for commands started by this registry.
@@ -1726,6 +1743,7 @@ type shellTool struct {
 	timeout         time.Duration
 	rewind          *mutationCheckpoint
 	environment     map[string]string
+	shellEnvPolicy  ShellEnvironmentPolicy
 	sandbox         SandboxProfile
 	restrictNetwork bool
 	envMu           sync.RWMutex
@@ -1738,16 +1756,22 @@ func (t *shellTool) setSandbox(profile SandboxProfile, restrictNetwork bool) {
 	t.envMu.Unlock()
 }
 
+func (t *shellTool) setShellEnvironmentPolicy(policy ShellEnvironmentPolicy) {
+	t.envMu.Lock()
+	t.shellEnvPolicy = policy
+	t.envMu.Unlock()
+}
+
 func (t *shellTool) setEnvironment(values map[string]string) {
 	t.envMu.Lock()
 	t.environment = values
 	t.envMu.Unlock()
 }
 
-func (t *shellTool) environmentSnapshot() (map[string]string, SandboxProfile, bool) {
+func (t *shellTool) environmentSnapshot() (map[string]string, ShellEnvironmentPolicy, SandboxProfile, bool) {
 	t.envMu.RLock()
 	defer t.envMu.RUnlock()
-	return cloneEnvironment(t.environment), t.sandbox, t.restrictNetwork
+	return cloneEnvironment(t.environment), t.shellEnvPolicy, t.sandbox, t.restrictNetwork
 }
 
 func (t *shellTool) Definition() api.ToolDefinition {
@@ -1783,13 +1807,13 @@ func (t *shellTool) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	if runtime.GOOS == "windows" {
 		executable, commandArgs = "cmd.exe", []string{"/C", args.Command}
 	}
-	environment, sandbox, restrictNetwork := t.environmentSnapshot()
+	environment, shellEnvPolicy, sandbox, restrictNetwork := t.environmentSnapshot()
 	command, err := sandboxCommand(commandCtx, sandbox, restrictNetwork, t.ws.Root(), executable, commandArgs...)
 	if err != nil {
 		return "", err
 	}
 	command.Dir = t.ws.Root()
-	command.Env = setEnvironment(os.Environ(), environment)
+	command.Env = setEnvironment(ApplyShellEnvironmentPolicy(os.Environ(), shellEnvPolicy), environment)
 	var output cappedBuffer
 	command.Stdout = &output
 	command.Stderr = &output
