@@ -57,7 +57,7 @@ var slashCommandCatalog = []slashCommandItem{
 	{name: "downloads", aliases: []string{"list-downloads"}, description: "List session web_fetch downloads"},
 	{name: "fetched", aliases: []string{"list-fetched", "web-fetch-artifacts"}, placeholder: "[path|name]", description: "List or show truncated web_fetch text artifacts"},
 	{name: "workflows", aliases: []string{"list-workflows"}, description: "List discoverable Rhai workflows"},
-	{name: "workflow", placeholder: "validate <name|path>", description: "Validate a Rhai workflow (execution not available yet)"},
+	{name: "workflow", placeholder: "validate <name|path>", description: "Validate a Rhai workflow (run via workflow tool + GORK_WORKFLOW_RUNNER)"},
 	{name: "model", aliases: []string{"m"}, placeholder: "<name> [effort]", description: "Switch model"},
 	{name: "effort", placeholder: "<level>", description: "Set reasoning effort"},
 	{name: "always-approve", description: "Toggle always-approve mode"},

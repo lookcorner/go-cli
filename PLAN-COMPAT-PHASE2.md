@@ -369,14 +369,18 @@ Remote relay / workspace hub remains planned/XL (product-blocked). See queue #5.
       `compat/workflow-validate-only` (full Rhai execution still XL).
 - [x] TUI `/workflows` catalog + `/workflow validate <name|path>` on
       `compat/workflow-slash-validate`.
+- [x] Workflow execution host + NDJSON Rhai sidecar protocol on
+      `compat/workflow-rhai-exec` (`GORK_WORKFLOW_RUNNER` / `gork-workflow-runner`;
+      `agent()` → SubagentBackend). Journal/parallel/UI and embedded
+      `deep-research` script remain follow-ups.
 
 ## Remaining XL / blocked (do not start without explicit kickoff)
 
 - Full cloud transcript replay: thin chat load already ships; reference hard-offs
   chat kind / `load_history`; neither tree has a messages API. Next slice needs
   a remote fetch contract first.
-- Rhai workflow **execution**: validate_only tool landed; full run needs Rhai
-  runner FFI/sidecar + host `agent()` (journal/parallel/UI deferred).
+- Rhai runner **binary**: Go host is ready; ship/link a real `xai-workflow`
+  sidecar build (journal/parallel/UI still deferred).
 - Remote relay / workspace hub: product-blocked (COMPAT `Workspace server`
   planned).
 

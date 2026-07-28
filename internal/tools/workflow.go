@@ -7,23 +7,25 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/lookcorner/go-cli/internal/api"
 	"github.com/lookcorner/go-cli/internal/workflow"
 )
 
 type workflowTool struct {
-	cwd func() string
+	cwd       func() string
+	subagents *subagentHolder
 }
 
-func newWorkflowTool(wsRoot func() string) *workflowTool {
-	return &workflowTool{cwd: wsRoot}
+func newWorkflowTool(wsRoot func() string, subagents *subagentHolder) *workflowTool {
+	return &workflowTool{cwd: wsRoot, subagents: subagents}
 }
 
 func (t *workflowTool) Definition() api.ToolDefinition {
 	return api.ToolDefinition{
 		Type: "function", Name: "workflow",
-		Description: "Validate or launch a named Rhai workflow. validate_only checks meta/structure without running. Full execution is not available yet.",
+		Description: "Validate or launch a named Rhai workflow. validate_only checks meta/structure without running. Full execution requires GORK_WORKFLOW_RUNNER (or gork-workflow-runner on PATH) and maps agent() to local subagents.",
 		Parameters: objectSchema(map[string]any{
 			"name":          map[string]any{"type": "string", "description": "Workflow name from the catalog"},
 			"script_path":   map[string]any{"type": "string", "description": "Path to a .rhai workflow file"},
@@ -34,7 +36,77 @@ func (t *workflowTool) Definition() api.ToolDefinition {
 	}
 }
 
-func (t *workflowTool) Execute(_ context.Context, raw json.RawMessage) (string, error) {
+type workflowAgentSpawner struct {
+	holder *subagentHolder
+}
+
+func (s workflowAgentSpawner) SpawnAgent(ctx context.Context, opts workflow.AgentOpts) (workflow.AgentResult, error) {
+	if s.holder == nil {
+		return workflow.AgentResult{}, errors.New("subagent backend is not initialized")
+	}
+	backend := s.holder.get()
+	if backend == nil {
+		return workflow.AgentResult{}, errors.New("subagent backend is not initialized")
+	}
+	agentType := strings.TrimSpace(opts.AgentType)
+	if agentType == "" {
+		agentType = "general-purpose"
+		if typed, ok := backend.(defaultAgentBackend); ok && typed.DefaultType() != "" {
+			agentType = typed.DefaultType()
+		}
+	}
+	isolation := "none"
+	if opts.IsolationWorktree {
+		isolation = "worktree"
+	}
+	label := strings.TrimSpace(opts.Label)
+	if label == "" {
+		label = "workflow-agent"
+	}
+	start := time.Now()
+	result, err := backend.Start(ctx, SubagentRequest{
+		Prompt:         opts.Prompt,
+		Description:    label,
+		Type:           agentType,
+		Background:     false,
+		BackgroundSet:  true,
+		CapabilityMode: strings.TrimSpace(opts.CapabilityMode),
+		Isolation:      isolation,
+		ResumeFrom:     strings.TrimSpace(opts.ResumeFrom),
+		Model:          strings.TrimSpace(opts.Model),
+	})
+	if err != nil {
+		return workflow.AgentResult{}, err
+	}
+	duration := uint64(time.Since(start).Milliseconds())
+	if result.DurationMS > 0 {
+		duration = uint64(result.DurationMS)
+	}
+	output := json.RawMessage(`{}`)
+	if text := strings.TrimSpace(result.Output); text != "" {
+		if json.Valid([]byte(text)) {
+			output = json.RawMessage(text)
+		} else {
+			encoded, _ := json.Marshal(map[string]any{"text": text})
+			output = encoded
+		}
+	}
+	success := !strings.EqualFold(result.Status, "failed") && !strings.EqualFold(result.Status, "error")
+	tokens := uint64(0)
+	if result.TokensUsed > 0 {
+		tokens = uint64(result.TokensUsed)
+	}
+	return workflow.AgentResult{
+		AgentID:    result.ID,
+		Success:    success,
+		Output:     output,
+		Cancelled:  strings.EqualFold(result.Status, "cancelled"),
+		TokensUsed: tokens,
+		DurationMS: duration,
+	}, nil
+}
+
+func (t *workflowTool) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
 	var args struct {
 		Name         string            `json:"name"`
 		ScriptPath   string            `json:"script_path"`
@@ -93,5 +165,6 @@ func (t *workflowTool) Execute(_ context.Context, raw json.RawMessage) (string, 
 	if args.ValidateOnly {
 		return fmt.Sprintf("workflow %q validated (%s)", resolved.Name, resolved.Source), nil
 	}
-	return "", fmt.Errorf("workflow execution is not available yet; re-run with validate_only=true (resolved %s %q)", resolved.Source, resolved.Name)
+	host := &workflow.Host{Spawner: workflowAgentSpawner{holder: t.subagents}}
+	return workflow.Execute(ctx, resolved, args.Args, host)
 }

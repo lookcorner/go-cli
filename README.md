@@ -1506,7 +1506,7 @@ re-discover every live session's catalog from disk.
 scanning `.rhai` files and parsing `let meta = #{...}` without executing Rhai.
 The TUI mirrors that catalog with `/workflows`, and `/workflow validate
 <name|path>` runs the same lightweight validation as the `workflow` tool's
-`validate_only` mode (full Rhai execution is not available yet).
+`validate_only` mode, or full execution when `GORK_WORKFLOW_RUNNER` (or `gork-workflow-runner` on PATH) speaks the NDJSON host protocol and `agent()` maps to local subagents.
 
 Live session MCP servers are exposed through `x.ai/mcp/list`, and
 `x.ai/mcp/call` invokes a named server tool through the same client and
