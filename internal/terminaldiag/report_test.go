@@ -15,6 +15,10 @@ func init() {
 		return voice.InputProbe{}
 	}
 	pathExists = func(string) bool { return false }
+	probeSandboxConflict = func() string { return "" }
+	probeWaylandDataControl = func(func(string) string, func(string) (string, error)) (DataControlFact, string) {
+		return DataControlNotApplicable, ""
+	}
 }
 
 func TestIsCommand(t *testing.T) {
@@ -31,11 +35,14 @@ func TestIsCommand(t *testing.T) {
 }
 
 func TestBuildSnapshotJSONShape(t *testing.T) {
-	env := map[string]string{"TERM_PROGRAM": "WezTerm", "TERM": "xterm-256color", "COLORTERM": "truecolor"}
-	snapshot := BuildSnapshot(func(key string) string { return env[key] }, func(string) (string, error) {
+	env := map[string]string{"TERM_PROGRAM": "kitty", "TERM": "xterm-kitty", "COLORTERM": "truecolor"}
+	snapshot := BuildSnapshot(func(key string) string { return env[key] }, func(name string) (string, error) {
+		if name == "ffmpeg" {
+			return "/usr/bin/ffmpeg", nil
+		}
 		return "", errors.New("missing")
 	}, "linux")
-	if snapshot.SchemaVersion != SchemaVersion || snapshot.Facts.Terminal != "WezTerm" || snapshot.Counts.Issues != 0 || !snapshot.Facts.OSC52 {
+	if snapshot.SchemaVersion != SchemaVersion || snapshot.Facts.Terminal != "kitty" || snapshot.Counts.Issues != 0 || !snapshot.Facts.OSC52 || !snapshot.Facts.FFmpeg {
 		t.Fatalf("snapshot=%#v", snapshot)
 	}
 	payload, err := json.Marshal(snapshot)
@@ -52,15 +59,15 @@ func TestBuildReportDescribesTerminalAndRoutes(t *testing.T) {
 		"TMUX": "/tmp/tmux", "SSH_CONNECTION": "client server", "GROK_OSC52_SINK": "1",
 	}
 	report := buildReport(func(key string) string { return env[key] }, func(name string) (string, error) {
-		if name == "pbcopy" {
-			return "/usr/bin/pbcopy", nil
+		if name == "pbcopy" || name == "ffmpeg" {
+			return "/usr/bin/" + name, nil
 		}
 		return "", errors.New("missing")
 	}, "darwin")
 	for _, want := range []string{
 		"terminal     WezTerm", "multiplexer  tmux", "ssh          yes", "color        truecolor",
 		"set-clipboard external", "allow-passthrough on", "extended-keys on", "control-mode off",
-		"native       active (tool: pbcopy)", "osc 52       active", "No issues found.",
+		"native       active (tool: pbcopy)", "osc 52       active", "ffmpeg       on", "No issues found.",
 	} {
 		if !strings.Contains(report, want) {
 			t.Errorf("missing %q in %q", want, report)
@@ -71,7 +78,7 @@ func TestBuildReportDescribesTerminalAndRoutes(t *testing.T) {
 func TestBuildReportRecommendsSSHWrap(t *testing.T) {
 	env := map[string]string{
 		"TERM": "xterm-256color", "COLORTERM": "truecolor",
-		"SSH_CONNECTION": "1 2 3 4", "TERM_PROGRAM": "WezTerm",
+		"SSH_CONNECTION": "1 2 3 4", "TERM_PROGRAM": "kitty",
 	}
 	snapshot := BuildSnapshot(func(key string) string { return env[key] }, func(string) (string, error) {
 		return "/bin/pbcopy", nil
@@ -218,8 +225,8 @@ func TestBuildReportExplainsDegradedEnvironment(t *testing.T) {
 	}, "linux")
 	for _, want := range []string{
 		"terminal     dumb", "color        none", "native       off", "osc 52       off",
-		"4 issue(s)", "TERM=dumb", "can't reach the target clipboard", "`/copy <file>`",
-		"terminal bell", "unfocused",
+		"5 issue(s)", "TERM=dumb", "can't reach the target clipboard", "`/copy <file>`",
+		"terminal bell", "unfocused", "/play-video",
 	} {
 		if !strings.Contains(report, want) {
 			t.Errorf("missing %q in %q", want, report)
@@ -284,8 +291,8 @@ func TestBuildReportWarnsForBasicTmuxColor(t *testing.T) {
 		"TERM_PROGRAM": "WezTerm", "TERM": "screen", "TMUX": "yes", "BYOBU_BACKEND": "tmux",
 	}
 	report := buildReport(func(key string) string { return env[key] }, func(name string) (string, error) {
-		if name == "wl-copy" {
-			return "/usr/bin/wl-copy", nil
+		if name == "wl-copy" || name == "ffmpeg" {
+			return "/usr/bin/" + name, nil
 		}
 		return "", errors.New("missing")
 	}, "linux")
@@ -298,7 +305,7 @@ func TestBuildReportWarnsForBasicTmuxColor(t *testing.T) {
 
 func TestBuildSnapshotWarnsForNoColor(t *testing.T) {
 	env := map[string]string{
-		"TERM_PROGRAM": "WezTerm", "TERM": "xterm-256color", "COLORTERM": "truecolor", "NO_COLOR": "1",
+		"TERM_PROGRAM": "kitty", "TERM": "xterm-kitty", "COLORTERM": "truecolor", "NO_COLOR": "1",
 	}
 	snapshot := BuildSnapshot(func(key string) string { return env[key] }, func(string) (string, error) {
 		return "/bin/pbcopy", nil
@@ -427,7 +434,7 @@ func TestBuildSnapshotWarnsForMissingVoiceInput(t *testing.T) {
 	}
 	t.Cleanup(func() { probeVoiceInput = prev })
 
-	env := map[string]string{"TERM_PROGRAM": "WezTerm", "TERM": "xterm-256color", "COLORTERM": "truecolor"}
+	env := map[string]string{"TERM_PROGRAM": "kitty", "TERM": "xterm-kitty", "COLORTERM": "truecolor"}
 	snapshot := BuildSnapshot(func(key string) string { return env[key] }, func(string) (string, error) {
 		return "/bin/pbcopy", nil
 	}, "darwin")
@@ -454,7 +461,7 @@ func TestBuildSnapshotReportsVoiceDevice(t *testing.T) {
 	}
 	t.Cleanup(func() { probeVoiceInput = prev })
 
-	env := map[string]string{"TERM_PROGRAM": "WezTerm", "TERM": "xterm-256color", "COLORTERM": "truecolor"}
+	env := map[string]string{"TERM_PROGRAM": "kitty", "TERM": "xterm-kitty", "COLORTERM": "truecolor"}
 	report := buildReport(func(key string) string { return env[key] }, func(string) (string, error) {
 		return "/bin/pbcopy", nil
 	}, "darwin")
@@ -527,6 +534,31 @@ func TestBuildSnapshotWarnsForLegacyVTENewline(t *testing.T) {
 	}, "linux")
 	if strings.Contains(strings.Join(snapshot.Findings, "\n"), "Shift+Enter") {
 		t.Fatalf("modern VTE should not warn: %#v", snapshot.Findings)
+	}
+}
+
+func TestBuildSnapshotWarnsForWezTermKittyOff(t *testing.T) {
+	env := map[string]string{"TERM_PROGRAM": "WezTerm", "TERM": "xterm-256color", "COLORTERM": "truecolor"}
+	snapshot := BuildSnapshot(func(key string) string { return env[key] }, func(string) (string, error) {
+		return "/bin/pbcopy", nil
+	}, "darwin")
+	joined := strings.Join(snapshot.Findings, "\n")
+	for _, want := range []string{
+		"WezTerm's Kitty keyboard protocol is off",
+		"enable_kitty_keyboard = true",
+		"~/.config/wezterm/wezterm.lua",
+		`\`,
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("missing %q in %q", want, joined)
+		}
+	}
+	env["TMUX"] = "1"
+	snapshot = BuildSnapshot(func(key string) string { return env[key] }, func(string) (string, error) {
+		return "/bin/pbcopy", nil
+	}, "darwin")
+	if strings.Contains(strings.Join(snapshot.Findings, "\n"), "Kitty keyboard protocol") {
+		t.Fatalf("tmux should suppress wezterm-kitty finding: %#v", snapshot.Findings)
 	}
 }
 

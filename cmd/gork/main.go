@@ -44,6 +44,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/notify"
 	"github.com/lookcorner/go-cli/internal/personas"
 	"github.com/lookcorner/go-cli/internal/plugin"
+	"github.com/lookcorner/go-cli/internal/remote"
 	"github.com/lookcorner/go-cli/internal/session"
 	sessionshare "github.com/lookcorner/go-cli/internal/share"
 	"github.com/lookcorner/go-cli/internal/skills"
@@ -108,6 +109,7 @@ type options struct {
 	goal               bool
 	goalRuns           int
 	acp                bool
+	chat               bool
 	trust              bool
 	experimentalMemory bool
 	noMemory           bool
@@ -131,6 +133,9 @@ func (f *stringListFlag) Set(value string) error {
 }
 
 func main() {
+	if tools.MaybeExecSeccompNamespaceLockdown(os.Args) {
+		return
+	}
 	if err := run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return
@@ -188,7 +193,7 @@ func parseRunOptions(args []string, stderr io.Writer) (options, *flag.FlagSet, e
 	flags.BoolVar(&opts.alwaysApprove, "always-approve", false, "auto-approve all tool executions")
 	flags.BoolVar(&opts.alwaysApprove, "yolo", false, "auto-approve all tool executions")
 	flags.BoolVar(&opts.alwaysApprove, "dangerously-skip-permissions", false, "auto-approve all tool executions")
-	flags.StringVar(&opts.sandbox, "sandbox", "", "shell sandbox: off, workspace, read-only, or strict")
+	flags.StringVar(&opts.sandbox, "sandbox", "", "shell sandbox: off, workspace, read-only, strict, or a custom sandbox.toml profile")
 	flags.Var(&opts.allow, "allow", "allow matching Tool(pattern) permission rule; repeatable")
 	flags.Var(&opts.deny, "deny", "deny matching Tool(pattern) permission rule; repeatable")
 	flags.StringVar(&opts.sessionDir, "session-dir", "", "session JSONL directory")
@@ -229,6 +234,7 @@ func parseRunOptions(args []string, stderr io.Writer) (options, *flag.FlagSet, e
 	flags.BoolVar(&opts.goal, "goal", false, "keep running turns until update_goal completes or blocks the goal")
 	flags.IntVar(&opts.goalRuns, "goal-runs", 10, "maximum turns in --goal mode")
 	flags.BoolVar(&opts.acp, "acp", false, "serve Agent Client Protocol v1 over stdio")
+	flags.BoolVar(&opts.chat, "chat", false, "gateway chat mode: cloud conversations lane and chat session defaults")
 	flags.BoolVar(&opts.trust, "trust", false, "trust this workspace's executable project configuration")
 	flags.BoolVar(&opts.experimentalMemory, "experimental-memory", false, "enable cross-session workspace memory")
 	flags.BoolVar(&opts.noMemory, "no-memory", false, "disable cross-session memory")
@@ -431,6 +437,14 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if opts.acp && (opts.tui || opts.interactive || opts.goal) {
 		return errors.New("--acp cannot be combined with --tui, --interactive, or --goal")
 	}
+	if opts.chat {
+		if conflict := remote.ChatModeFlagConflict(true, opts.forkSession); conflict != "" {
+			return errors.New(conflict)
+		}
+		if err := remote.EnableProcessChatMode(); err != nil {
+			return err
+		}
+	}
 	if opts.goalRuns < 1 {
 		return errors.New("--goal-runs must be greater than zero")
 	}
@@ -438,6 +452,9 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	cfg, err := config.Load(opts.configPath)
 	if err != nil {
 		return err
+	}
+	if opts.chat && remote.ChatModeConflictsWithLeader(true, cfg.UseLeader) {
+		return errors.New(remote.ChatModeLeaderConflict)
 	}
 	if err := prepareManagedPolicy(&cfg, opts.configPath, stderr); err != nil {
 		return err
@@ -651,6 +668,9 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	memoryEmbedder := memoryEmbedderFor(cfg.Memory, cfg.BaseURL, cfg.APIKey, cfg.HTTPTimeout)
+	attachMemoryEmbedder(memoryStore, memoryEmbedder)
+	scheduleMemoryEmbeddingWarmup(memoryStore, cfg.Memory)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -710,6 +730,15 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		_ = registry.Close()
 		return err
 	}
+	if err := tools.EnsureParentBwrapHookWriteDeny(cfg.Sandbox.Profile, ws.Root(), args, stderr); err != nil {
+		_ = registry.Close()
+		return err
+	}
+	if err := tools.ApplyParentLandlock(cfg.Sandbox.Profile, ws.Root(), stderr); err != nil {
+		_ = registry.Close()
+		return err
+	}
+	registry.ConfigureShellEnvironmentPolicy(shellEnvPolicy(cfg.ShellEnvironmentPolicy))
 	registry.ConfigureEnvironment(cfg.Env)
 	registry.ConfigureBash(bashTimeout(cfg.Toolset.Bash.TimeoutSeconds), bashOutputLimit(cfg.Toolset.Bash.OutputByteLimit))
 	if err := registry.ConfigureFileToolset(cfg.Toolset.FileToolset, cfg.Toolset.Hashline.Scheme, cfg.Toolset.Hashline.HashLen, cfg.Toolset.Hashline.ChunkSize); err != nil {
@@ -1119,14 +1148,14 @@ func runOnce(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		TextOutput:           stdout, StatusOutput: stderr,
 		ContextWindow: cfg.ContextWindow, CompactThresholdPercent: cfg.AutoCompactThresholdPercent,
 		TwoPassCompaction: cfg.TwoPassCompaction,
-		Memory:            memoryStore, MemoryConfig: cfg.Memory,
-		OpenMemory:    memoryStoreOpener(cfg.Memory, ws.Root(), logger.ID()),
+		Memory:            memoryStore, MemoryConfig: cfg.Memory, MemoryEmbedder: memoryEmbedder,
+		OpenMemory:    memoryStoreOpener(cfg.Memory, ws.Root(), logger.ID(), memoryEmbedder),
 		ReloadMCPBase: reloadMCPBase, UpdateMCPServers: mcpRuntime.Update,
 		MCPServers: mcpRuntime.Configs, MCPServerCatalog: mcpRuntime.Catalog,
 		ToggleMCPServer: toggleMCPServer, ToggleMCPTool: toggleMCPTool,
 		UpsertMCPServer: upsertMCPServer, DeleteMCPServer: deleteMCPServer,
 		AuthenticateMCPServer: authenticateMCPServer,
-		UpdateSkills: updateSkills, UpdatePlugins: updatePlugins,
+		UpdateSkills:          updateSkills, UpdatePlugins: updatePlugins,
 		MarketplaceList: func() ([]marketplace.ScanResult, error) { return marketplace.List(opts.configPath, ws.Root()) }, MarketplaceAction: marketplaceAction,
 	}
 	if subagents != nil {
@@ -2832,11 +2861,44 @@ func newMemoryStore(workspaceRoot, sessionID string, gcMaxAgeDays uint64) (*memo
 	return store, nil
 }
 
-func memoryStoreOpener(cfg memory.Config, workspaceRoot, sessionID string) func() (*memory.Store, error) {
+// memoryEmbedderFor builds an OpenAI-compatible embedder when [memory.embedding].model is set.
+func memoryEmbedderFor(cfg memory.Config, baseURL, apiKey string, timeout time.Duration) memory.EmbeddingProvider {
+	provider, ok := memory.NewAPIEmbeddingProvider(cfg.Embedding, baseURL, apiKey, &http.Client{Timeout: timeout})
+	if !ok {
+		return nil
+	}
+	return provider
+}
+
+func attachMemoryEmbedder(store *memory.Store, embedder memory.EmbeddingProvider) {
+	if store == nil || embedder == nil {
+		return
+	}
+	store.SetEmbedder(embedder)
+}
+
+func scheduleMemoryEmbeddingWarmup(store *memory.Store, cfg memory.Config) {
+	if store == nil || store.IsEphemeral() || !memory.VectorSearchEnabled(cfg) {
+		return
+	}
+	go func() {
+		_, _ = store.WarmEmbeddings(context.Background(), cfg.Index)
+	}()
+}
+
+func memoryStoreOpener(cfg memory.Config, workspaceRoot, sessionID string, embedder memory.EmbeddingProvider) func() (*memory.Store, error) {
 	if !cfg.Enabled {
 		return nil
 	}
-	return func() (*memory.Store, error) { return newMemoryStore(workspaceRoot, sessionID, cfg.GC.MaxAgeDays) }
+	return func() (*memory.Store, error) {
+		store, err := newMemoryStore(workspaceRoot, sessionID, cfg.GC.MaxAgeDays)
+		if err != nil {
+			return nil, err
+		}
+		attachMemoryEmbedder(store, embedder)
+		scheduleMemoryEmbeddingWarmup(store, cfg)
+		return store, nil
+	}
 }
 
 func waitRunnerMemory(runner *agent.Runner) {
@@ -3239,6 +3301,10 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 	if err != nil {
 		return err
 	}
+	// Re-exec under parent bwrap before ACP stdio handshake when sandbox requires hook write-deny.
+	if err := tools.EnsureParentBwrapHookWriteDeny(cfg.Sandbox.Profile, opts.workspace, os.Args[1:], stderr); err != nil {
+		return err
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	authPath, _ := auth.DefaultPath()
@@ -3460,6 +3526,7 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 	server.Auth.Authenticate = loginCoordinator.Authenticate
 	server.Auth.GetURL = loginCoordinator.GetURL
 	server.Auth.SubmitCode = loginCoordinator.SubmitCode
+	server.Auth.Cancel = loginCoordinator.Cancel
 	server.Initialized = func() {
 		go refreshBundle(ctx)
 		go watchACPAnnouncements(ctx, acpAnnouncementsRefreshInterval(), func(pollCtx context.Context) *config.RemoteSettings {
@@ -3591,6 +3658,15 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			_ = registry.Close()
 			return nil, nil, err
 		}
+		if err := tools.EnsureParentBwrapHookWriteDeny(sessionCfg.Sandbox.Profile, ws.Root(), os.Args[1:], statusOutput); err != nil {
+			_ = registry.Close()
+			return nil, nil, err
+		}
+		if err := tools.ApplyParentLandlock(sessionCfg.Sandbox.Profile, ws.Root(), statusOutput); err != nil {
+			_ = registry.Close()
+			return nil, nil, err
+		}
+		registry.ConfigureShellEnvironmentPolicy(shellEnvPolicy(sessionCfg.ShellEnvironmentPolicy))
 		registry.ConfigureEnvironment(sessionCfg.Env)
 		registry.ConfigureBash(bashTimeout(sessionCfg.Toolset.Bash.TimeoutSeconds), bashOutputLimit(sessionCfg.Toolset.Bash.OutputByteLimit))
 		if err := registry.ConfigureFileToolset(sessionCfg.Toolset.FileToolset, sessionCfg.Toolset.Hashline.Scheme, sessionCfg.Toolset.Hashline.HashLen, sessionCfg.Toolset.Hashline.ChunkSize); err != nil {
@@ -3633,6 +3709,9 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			_ = registry.Close()
 			return nil, nil, err
 		}
+		memoryEmbedder := memoryEmbedderFor(sessionCfg.Memory, sessionCfg.BaseURL, sessionCfg.APIKey, sessionCfg.HTTPTimeout)
+		attachMemoryEmbedder(memoryStore, memoryEmbedder)
+		scheduleMemoryEmbeddingWarmup(memoryStore, sessionCfg.Memory)
 		if err := tools.RegisterMemoryTools(registry, memoryStore, sessionCfg.Memory); err != nil {
 			_ = logger.Close()
 			_ = registry.Close()
@@ -4108,19 +4187,19 @@ func runACP(cfg config.Config, opts options, allowRules, askRules, denyRules []s
 			TextOutput:           textOutput, StatusOutput: statusOutput,
 			ContextWindow: sessionCfg.ContextWindow, CompactThresholdPercent: sessionCfg.AutoCompactThresholdPercent,
 			TwoPassCompaction: sessionCfg.TwoPassCompaction,
-			Memory:            memoryStore, MemoryConfig: sessionCfg.Memory,
-			OpenMemory:    memoryStoreOpener(sessionCfg.Memory, ws.Root(), logger.ID()),
+			Memory:            memoryStore, MemoryConfig: sessionCfg.Memory, MemoryEmbedder: memoryEmbedder,
+			OpenMemory:    memoryStoreOpener(sessionCfg.Memory, ws.Root(), logger.ID(), memoryEmbedder),
 			ReloadMCPBase: reloadMCPBase, UpdateMCPServers: mcpRuntime.Update,
 			MCPServers: mcpRuntime.Configs, MCPServerCatalog: mcpRuntime.Catalog,
 			ToggleMCPServer: toggleMCPServer, ToggleMCPTool: toggleMCPTool,
 			UpsertMCPServer: upsertMCPServer, DeleteMCPServer: deleteMCPServer,
 			AuthenticateMCPServer: authenticateMCPServer,
-			HandleMCPSDKMessage:  mcpRuntime.HandleSDKMessage,
-			UpdateSkills:        updateSkills,
-			UpdatePlugins:       updatePlugins,
-			MarketplaceList:     func() ([]marketplace.ScanResult, error) { return marketplace.List(opts.configPath, ws.Root()) },
-			MarketplaceAction:   marketplaceAction,
-			SessionID:           logger.ID(), SessionPath: logger.Path(), Workspace: ws.Root(), PromptWorkspace: sessionConfig.DisplayCWD,
+			HandleMCPSDKMessage:   mcpRuntime.HandleSDKMessage,
+			UpdateSkills:          updateSkills,
+			UpdatePlugins:         updatePlugins,
+			MarketplaceList:       func() ([]marketplace.ScanResult, error) { return marketplace.List(opts.configPath, ws.Root()) },
+			MarketplaceAction:     marketplaceAction,
+			SessionID:             logger.ID(), SessionPath: logger.Path(), Workspace: ws.Root(), PromptWorkspace: sessionConfig.DisplayCWD,
 		}
 		if subagentManager != nil {
 			runner.AgentDefinitions = subagentManager.Definitions
@@ -5764,6 +5843,9 @@ func (r *sessionMCPRuntime) mergedConfig(requested []mcp.ServerConfig) (config.C
 	catalog := make([]mcp.ServerConfig, 0, len(names))
 	for _, name := range names {
 		server := cfg.MCPServers[name]
+		if server.NeedsSetup() {
+			continue
+		}
 		entry := mcp.ServerConfig{
 			Type: server.Type, Name: name, Command: server.Command, Args: append([]string(nil), server.Args...),
 			Env: cloneStringsMap(server.Env), URL: server.URL, Headers: cloneStringsMap(server.Headers), Disabled: !server.IsEnabled(),
@@ -5815,6 +5897,22 @@ func cloneMCPConfigMap(source map[string]config.MCPServerConfig) map[string]conf
 		server.Args = append([]string(nil), server.Args...)
 		server.Env = cloneStringsMap(server.Env)
 		server.Headers = cloneStringsMap(server.Headers)
+		if server.Setup != nil {
+			setup := *server.Setup
+			setup.Fields = append([]config.MCPSetupField(nil), setup.Fields...)
+			for i := range setup.Fields {
+				setup.Fields[i].Options = append([]config.MCPSetupOption(nil), setup.Fields[i].Options...)
+			}
+			if setup.Variables != nil {
+				vars := make(map[string]config.MCPSetupDerivedValue, len(setup.Variables))
+				for key, value := range setup.Variables {
+					value.Map = cloneStringsMap(value.Map)
+					vars[key] = value
+				}
+				setup.Variables = vars
+			}
+			server.Setup = &setup
+		}
 		cloned[name] = server
 	}
 	return cloned
@@ -6146,4 +6244,31 @@ func bashTimeout(seconds float64) time.Duration {
 
 func bashOutputLimit(bytes uint64) int {
 	return int(min(bytes, uint64(^uint(0)>>1)))
+}
+
+func shellEnvPolicy(policy config.ShellEnvironmentPolicy) tools.ShellEnvironmentPolicy {
+	inherit := tools.ShellEnvironmentInherit(strings.ToLower(strings.TrimSpace(policy.Inherit)))
+	switch inherit {
+	case tools.ShellEnvironmentInheritCore, tools.ShellEnvironmentInheritNone, tools.ShellEnvironmentInheritAll:
+	default:
+		inherit = tools.ShellEnvironmentInheritAll
+	}
+	return tools.ShellEnvironmentPolicy{
+		Inherit:               inherit,
+		IgnoreDefaultExcludes: policy.IgnoreDefaultExcludes,
+		Exclude:               append([]string(nil), policy.Exclude...),
+		Set:                   mapsClone(policy.Set),
+		IncludeOnly:           append([]string(nil), policy.IncludeOnly...),
+	}
+}
+
+func mapsClone(source map[string]string) map[string]string {
+	if source == nil {
+		return nil
+	}
+	out := make(map[string]string, len(source))
+	for key, value := range source {
+		out[key] = value
+	}
+	return out
 }

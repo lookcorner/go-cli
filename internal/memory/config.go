@@ -3,15 +3,16 @@ package memory
 const defaultRecencyDecay = 0.95
 
 type Config struct {
-	Enabled                  bool         `json:"enabled"`
-	InitialInjection         bool         `json:"initial_injection"`
-	InitialInjectionMinScore *float64     `json:"initial_injection_min_score,omitempty"`
-	SaveOnEnd                bool         `json:"save_on_end"`
-	Flush                    FlushConfig  `json:"flush"`
-	Index                    IndexConfig  `json:"index"`
-	Search                   SearchConfig `json:"search"`
-	GC                       GCConfig     `json:"gc"`
-	Dream                    DreamConfig  `json:"dream"`
+	Enabled                  bool            `json:"enabled"`
+	InitialInjection         bool            `json:"initial_injection"`
+	InitialInjectionMinScore *float64        `json:"initial_injection_min_score,omitempty"`
+	SaveOnEnd                bool            `json:"save_on_end"`
+	Flush                    FlushConfig     `json:"flush"`
+	Index                    IndexConfig     `json:"index"`
+	Search                   SearchConfig    `json:"search"`
+	Embedding                EmbeddingConfig `json:"embedding"`
+	GC                       GCConfig        `json:"gc"`
+	Dream                    DreamConfig     `json:"dream"`
 }
 
 type IndexConfig struct {
@@ -19,10 +20,19 @@ type IndexConfig struct {
 	ChunkOverlapChars int `json:"chunk_overlap_chars"`
 }
 
+// EmbeddingConfig mirrors Rust [memory.embedding]. Empty Model keeps text-only search.
+type EmbeddingConfig struct {
+	Provider   string  `json:"provider"`
+	Model      *string `json:"model,omitempty"`
+	Dimensions int     `json:"dimensions"`
+}
+
 type SearchConfig struct {
 	MaxResults    int                 `json:"max_results"`
 	MinScore      float64             `json:"min_score"`
 	RecencyDecay  float64             `json:"recency_decay"`
+	VectorWeight  float64             `json:"vector_weight"`
+	TextWeight    float64             `json:"text_weight"`
 	TemporalDecay TemporalDecayConfig `json:"temporal_decay"`
 	MMR           MMRConfig           `json:"mmr"`
 	SourceWeights map[string]float64  `json:"source_weights"`
@@ -56,6 +66,9 @@ type FlushConfig struct {
 	Model               string  `json:"flush_model,omitempty"`
 	MaxWriteChars       int     `json:"max_flush_write_chars"`
 	IdleTimeoutSeconds  *uint64 `json:"idle_timeout_secs,omitempty"`
+	// SemanticDedupThreshold is cosine similarity for flush near-dup rejection.
+	// Nil uses DefaultSemanticDedupThreshold (0.92). Requires embeddings+vec.
+	SemanticDedupThreshold *float64 `json:"semantic_dedup_threshold,omitempty"`
 }
 
 func DefaultConfig() Config {
@@ -66,11 +79,13 @@ func DefaultConfig() Config {
 		Index:            IndexConfig{MaxChunkChars: 1600, ChunkOverlapChars: 320},
 		Search: SearchConfig{
 			MaxResults: 6, MinScore: 0.35, RecencyDecay: defaultRecencyDecay,
+			VectorWeight: 0.7, TextWeight: 0.3,
 			TemporalDecay: TemporalDecayConfig{Enabled: true, HalfLifeDays: 7},
 			MMR:           MMRConfig{Lambda: 0.7},
 			SourceWeights: map[string]float64{"workspace": 1, "session": 1, "global": 1},
 		},
-		GC:    GCConfig{MaxAgeDays: 30},
-		Dream: DreamConfig{Enabled: true, MinHours: 4, MinSessions: 3, StaleLockSeconds: 3600},
+		Embedding: EmbeddingConfig{Provider: "api", Dimensions: 1024},
+		GC:        GCConfig{MaxAgeDays: 30},
+		Dream:     DreamConfig{Enabled: true, MinHours: 4, MinSessions: 3, StaleLockSeconds: 3600},
 	}
 }

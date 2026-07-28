@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/lookcorner/go-cli/internal/compat"
 	"github.com/lookcorner/go-cli/internal/memory"
@@ -41,6 +42,7 @@ type Config struct {
 	SystemPrompt                    string                     `json:"system_prompt,omitempty"`
 	MaxSteps                        int                        `json:"max_steps,omitempty"`
 	Env                             map[string]string          `json:"env,omitempty"`
+	ShellEnvironmentPolicy          ShellEnvironmentPolicy     `json:"shell_environment_policy,omitempty"`
 	MCPServers                      map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
 	DisabledMCPServers              []string                   `json:"disabled_mcp_servers,omitempty"`
 	DisabledMCPTools                map[string][]string        `json:"disabled_mcp_tools,omitempty"`
@@ -511,6 +513,35 @@ type MCPServerConfig struct {
 	OAuthScopes             []string          `json:"oauth_scopes,omitempty" toml:"oauth_scopes"`
 	OAuthCallbackPort       *uint16           `json:"oauth_callback_port,omitempty" toml:"oauth_callback_port"`
 	Enabled                 *bool             `json:"enabled,omitempty" toml:"enabled"`
+	Setup                   *MCPSetupConfig   `json:"setup,omitempty" toml:"setup"`
+}
+
+// MCPSetupConfig is the interactive select schema for setup-required MCP servers.
+type MCPSetupConfig struct {
+	Fields    []MCPSetupField                 `json:"fields" toml:"fields"`
+	Variables map[string]MCPSetupDerivedValue `json:"variables,omitempty" toml:"variables"`
+}
+
+// MCPSetupField is one select prompt shown before connecting a server.
+type MCPSetupField struct {
+	ID       string           `json:"id" toml:"id"`
+	Label    string           `json:"label" toml:"label"`
+	Type     string           `json:"type" toml:"type"`
+	Required bool             `json:"required,omitempty" toml:"required"`
+	Default  *string          `json:"default,omitempty" toml:"default"`
+	Options  []MCPSetupOption `json:"options,omitempty" toml:"options"`
+}
+
+// MCPSetupOption is one selectable value for an MCPSetupField.
+type MCPSetupOption struct {
+	Label string `json:"label" toml:"label"`
+	Value string `json:"value" toml:"value"`
+}
+
+// MCPSetupDerivedValue maps a selected field value into a template variable.
+type MCPSetupDerivedValue struct {
+	From string            `json:"from" toml:"from"`
+	Map  map[string]string `json:"map" toml:"map"`
 }
 
 type LSPServerConfig struct {
@@ -537,31 +568,41 @@ func (c MCPServerConfig) IsEnabled() bool {
 	return c.Enabled == nil || *c.Enabled
 }
 
+// ShellEnvironmentPolicy is the top-level [shell_environment_policy] table.
+type ShellEnvironmentPolicy struct {
+	Inherit               string            `json:"inherit,omitempty"`
+	IgnoreDefaultExcludes bool              `json:"ignore_default_excludes"`
+	Exclude               []string          `json:"exclude,omitempty"`
+	Set                   map[string]string `json:"set,omitempty"`
+	IncludeOnly           []string          `json:"include_only,omitempty"`
+}
+
 type fileConfig struct {
-	APIKey             string                     `json:"api_key,omitempty" toml:"api_key"`
-	BaseURL            string                     `json:"base_url,omitempty" toml:"base_url"`
-	Model              string                     `json:"model,omitempty" toml:"model_name"`
-	Backend            string                     `json:"backend,omitempty" toml:"backend"`
-	SystemPrompt       string                     `json:"system_prompt,omitempty" toml:"system_prompt"`
-	MaxSteps           int                        `json:"max_steps,omitempty" toml:"max_steps"`
-	Env                map[string]string          `json:"env,omitempty" toml:"env"`
-	HTTPTimeout        string                     `json:"http_timeout,omitempty" toml:"http_timeout"`
-	MCPServers         map[string]MCPServerConfig `json:"mcp_servers,omitempty" toml:"mcp_servers"`
-	DisabledMCPServers []string                   `json:"disabled_mcp_servers,omitempty" toml:"disabled_mcp_servers"`
-	DisabledMCPTools   map[string][]string        `json:"disabled_mcp_tools,omitempty" toml:"disabled_mcp_tools"`
-	LSPServers         map[string]LSPServerConfig `json:"lsp_servers,omitempty" toml:"lsp_servers"`
-	Permission         PermissionConfig           `json:"permission,omitempty" toml:"permission"`
-	Sandbox            SandboxConfig              `json:"sandbox,omitempty" toml:"sandbox"`
-	AutoMode           AutoModeConfig             `json:"auto_mode,omitempty" toml:"auto_mode"`
-	Session            sessionConfig              `json:"session,omitempty" toml:"session"`
-	ContextWindow      int                        `json:"context_window,omitempty" toml:"context_window"`
-	Compaction         fileCompactionConfig       `json:"compaction,omitempty" toml:"compaction"`
-	Memory             *fileMemoryConfig          `json:"memory,omitempty" toml:"memory"`
-	Compat             fileCompatConfig           `json:"compat,omitempty" toml:"compat"`
-	Skills             SkillsConfig               `json:"skills,omitempty" toml:"skills"`
-	Plugins            PluginsConfig              `json:"plugins,omitempty" toml:"plugins"`
-	Marketplace        MarketplaceConfig          `json:"marketplace,omitempty" toml:"marketplace"`
-	CLI                struct {
+	APIKey                 string                      `json:"api_key,omitempty" toml:"api_key"`
+	BaseURL                string                      `json:"base_url,omitempty" toml:"base_url"`
+	Model                  string                      `json:"model,omitempty" toml:"model_name"`
+	Backend                string                      `json:"backend,omitempty" toml:"backend"`
+	SystemPrompt           string                      `json:"system_prompt,omitempty" toml:"system_prompt"`
+	MaxSteps               int                         `json:"max_steps,omitempty" toml:"max_steps"`
+	Env                    map[string]string           `json:"env,omitempty" toml:"env"`
+	ShellEnvironmentPolicy *fileShellEnvironmentPolicy `json:"shell_environment_policy,omitempty" toml:"shell_environment_policy"`
+	HTTPTimeout            string                      `json:"http_timeout,omitempty" toml:"http_timeout"`
+	MCPServers             map[string]MCPServerConfig  `json:"mcp_servers,omitempty" toml:"mcp_servers"`
+	DisabledMCPServers     []string                    `json:"disabled_mcp_servers,omitempty" toml:"disabled_mcp_servers"`
+	DisabledMCPTools       map[string][]string         `json:"disabled_mcp_tools,omitempty" toml:"disabled_mcp_tools"`
+	LSPServers             map[string]LSPServerConfig  `json:"lsp_servers,omitempty" toml:"lsp_servers"`
+	Permission             PermissionConfig            `json:"permission,omitempty" toml:"permission"`
+	Sandbox                SandboxConfig               `json:"sandbox,omitempty" toml:"sandbox"`
+	AutoMode               AutoModeConfig              `json:"auto_mode,omitempty" toml:"auto_mode"`
+	Session                sessionConfig               `json:"session,omitempty" toml:"session"`
+	ContextWindow          int                         `json:"context_window,omitempty" toml:"context_window"`
+	Compaction             fileCompactionConfig        `json:"compaction,omitempty" toml:"compaction"`
+	Memory                 *fileMemoryConfig           `json:"memory,omitempty" toml:"memory"`
+	Compat                 fileCompatConfig            `json:"compat,omitempty" toml:"compat"`
+	Skills                 SkillsConfig                `json:"skills,omitempty" toml:"skills"`
+	Plugins                PluginsConfig               `json:"plugins,omitempty" toml:"plugins"`
+	Marketplace            MarketplaceConfig           `json:"marketplace,omitempty" toml:"marketplace"`
+	CLI                    struct {
 		UseLeader *bool `json:"use_leader,omitempty" toml:"use_leader"`
 	} `json:"cli,omitempty" toml:"cli"`
 	Features struct {
@@ -616,9 +657,18 @@ type fileBashConfig struct {
 	OutputByteLimit *uint64  `json:"output_byte_limit,omitempty" toml:"output_byte_limit"`
 }
 
+type fileShellEnvironmentPolicy struct {
+	Inherit               *string           `json:"inherit,omitempty" toml:"inherit"`
+	IgnoreDefaultExcludes *bool             `json:"ignore_default_excludes,omitempty" toml:"ignore_default_excludes"`
+	Exclude               []string          `json:"exclude,omitempty" toml:"exclude"`
+	Set                   map[string]string `json:"set,omitempty" toml:"set"`
+	IncludeOnly           []string          `json:"include_only,omitempty" toml:"include_only"`
+}
+
 type fileUIConfig struct {
 	MaxThoughtsWidth             *int                     `json:"max_thoughts_width,omitempty" toml:"max_thoughts_width"`
 	Theme                        *string                  `json:"theme,omitempty" toml:"theme"`
+	UITheme                      *string                  `json:"ui_theme,omitempty" toml:"ui_theme"`
 	AutoDarkTheme                *string                  `json:"auto_dark_theme,omitempty" toml:"auto_dark_theme"`
 	AutoLightTheme               *string                  `json:"auto_light_theme,omitempty" toml:"auto_light_theme"`
 	HunkTrackerMode              *string                  `json:"hunk_tracker_mode,omitempty" toml:"hunk_tracker_mode"`
@@ -821,8 +871,15 @@ type fileMemoryConfig struct {
 	Session          *fileMemorySessionConfig          `json:"session,omitempty" toml:"session"`
 	Index            *fileMemoryIndexConfig            `json:"index,omitempty" toml:"index"`
 	Search           *fileMemorySearchConfig           `json:"search,omitempty" toml:"search"`
+	Embedding        *fileMemoryEmbeddingConfig        `json:"embedding,omitempty" toml:"embedding"`
 	GC               *fileMemoryGCConfig               `json:"gc,omitempty" toml:"gc"`
 	Dream            *fileMemoryDreamConfig            `json:"dream,omitempty" toml:"dream"`
+}
+
+type fileMemoryEmbeddingConfig struct {
+	Provider   *string `json:"provider,omitempty" toml:"provider"`
+	Model      *string `json:"model,omitempty" toml:"model"`
+	Dimensions *int    `json:"dimensions,omitempty" toml:"dimensions"`
 }
 
 type fileMemoryIndexConfig struct {
@@ -834,6 +891,8 @@ type fileMemorySearchConfig struct {
 	MaxResults    *int                           `json:"max_results,omitempty" toml:"max_results"`
 	MinScore      *float64                       `json:"min_score,omitempty" toml:"min_score"`
 	RecencyDecay  *float64                       `json:"recency_decay,omitempty" toml:"recency_decay"`
+	VectorWeight  *float64                       `json:"vector_weight,omitempty" toml:"vector_weight"`
+	TextWeight    *float64                       `json:"text_weight,omitempty" toml:"text_weight"`
 	TemporalDecay *fileMemoryTemporalDecayConfig `json:"temporal_decay,omitempty" toml:"temporal_decay"`
 	MMR           *fileMemoryMMRConfig           `json:"mmr,omitempty" toml:"mmr"`
 	SourceWeights map[string]float64             `json:"source_weights,omitempty" toml:"source_weights"`
@@ -871,11 +930,12 @@ type fileMemorySessionConfig struct {
 }
 
 type fileMemoryFlushConfig struct {
-	Enabled             *bool   `json:"enabled,omitempty" toml:"enabled"`
-	SoftThresholdTokens *int    `json:"soft_threshold_tokens,omitempty" toml:"soft_threshold_tokens"`
-	FlushModel          *string `json:"flush_model,omitempty" toml:"flush_model"`
-	MaxFlushWriteChars  *int    `json:"max_flush_write_chars,omitempty" toml:"max_flush_write_chars"`
-	IdleTimeoutSeconds  *uint64 `json:"idle_timeout_secs,omitempty" toml:"idle_timeout_secs"`
+	Enabled                *bool    `json:"enabled,omitempty" toml:"enabled"`
+	SoftThresholdTokens    *int     `json:"soft_threshold_tokens,omitempty" toml:"soft_threshold_tokens"`
+	FlushModel             *string  `json:"flush_model,omitempty" toml:"flush_model"`
+	MaxFlushWriteChars     *int     `json:"max_flush_write_chars,omitempty" toml:"max_flush_write_chars"`
+	IdleTimeoutSeconds     *uint64  `json:"idle_timeout_secs,omitempty" toml:"idle_timeout_secs"`
+	SemanticDedupThreshold *float64 `json:"semantic_dedup_threshold,omitempty" toml:"semantic_dedup_threshold"`
 }
 
 type filePruningConfig struct {
@@ -920,6 +980,7 @@ func Load(path string) (Config, error) {
 		ShowTips:                    true,
 		AskUserQuestion:             AskUserQuestionConfig{TimeoutEnabled: true, TimeoutSeconds: 30 * 60},
 		CancelRewindEnabled:         true,
+		ShellEnvironmentPolicy:      ShellEnvironmentPolicy{Inherit: "all", IgnoreDefaultExcludes: true},
 		Toolset:                     ToolsetConfig{FileToolset: "standard", Hashline: HashlineConfig{Scheme: "chunk", HashLen: 3, ChunkSize: 8}, Bash: BashConfig{TimeoutSeconds: 120, OutputByteLimit: 20000}},
 		Goal:                        GoalConfig{VerifierCount: 3, ClassifierMaxRuns: 10, ReverifyAfter: 8},
 		UI:                          UIConfig{MaxThoughtsWidth: 120, Theme: "groknight", AutoDarkTheme: "groknight", AutoLightTheme: "grokday", HunkTrackerMode: "agent_only", ScreenMode: "fullscreen", RenderMermaid: "auto", KeepTextSelection: "flash", ShowTimestamps: true, PageFlipOnSend: true, ShowThinkingBlocks: true, DisplayRefresh: DisplayRefreshConfig{ProbeEnabled: true, FloorMS: 8, CeilingMS: 16, MinHz: 55, MaxHz: 165}, ScrollSpeed: 50, ScrollMode: "auto", DefaultSelectedPermission: "always_allow_all_sessions", GroupToolVerbs: true, PromptSuggestions: true, ContextualHints: Hints{Undo: true, PlanMode: true, ImageInput: true, SendNow: true, SmallScreen: true, WordSelect: true, SSHWrap: true}, VoiceCaptureMode: "hold", VoiceSTTLanguage: "en", VoiceKeybindEnabled: true, PermissionMode: "ask", Notifications: NotificationsConfig{Method: "auto", Condition: "unfocused", IdleThresholdSecs: 3, Events: []string{"turn_complete", "approval_required"}, ProgressBar: true, SleepPrevention: true, SessionRecap: true, RecapThresholdSecs: 30, Title: NotificationTitleConfig{Enabled: true, Items: []string{"action-required", "spinner", "activity", "session-name", "grok"}}}},
@@ -1119,6 +1180,9 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 			cfg.Env[key] = value
 		}
 	}
+	if disk.ShellEnvironmentPolicy != nil {
+		applyShellEnvironmentPolicy(&cfg.ShellEnvironmentPolicy, *disk.ShellEnvironmentPolicy)
+	}
 	if disk.MCPServers != nil {
 		if cfg.MCPServers == nil {
 			cfg.MCPServers = make(map[string]MCPServerConfig)
@@ -1217,6 +1281,13 @@ func applyFileConfig(cfg *Config, disk *fileConfig) error {
 	}
 	if disk.UI.Theme != nil {
 		canonical, ok := theme.Canonical(*disk.UI.Theme)
+		if !ok {
+			return errors.New("ui theme must be auto, groknight, grokday, tokyonight, rosepine-moon, or oscura-midnight")
+		}
+		cfg.UI.Theme = canonical
+	} else if disk.UI.UITheme != nil {
+		// Reference alias: [ui].ui_theme fills theme when theme is unset.
+		canonical, ok := theme.Canonical(*disk.UI.UITheme)
 		if !ok {
 			return errors.New("ui theme must be auto, groknight, grokday, tokyonight, rosepine-moon, or oscura-midnight")
 		}
@@ -1914,6 +1985,12 @@ func applyMemoryConfig(cfg *Config, source *fileMemoryConfig, flush *fileMemoryF
 			if source.Search.RecencyDecay != nil {
 				cfg.Memory.Search.RecencyDecay = *source.Search.RecencyDecay
 			}
+			if source.Search.VectorWeight != nil {
+				cfg.Memory.Search.VectorWeight = min(1, max(0, *source.Search.VectorWeight))
+			}
+			if source.Search.TextWeight != nil {
+				cfg.Memory.Search.TextWeight = min(1, max(0, *source.Search.TextWeight))
+			}
 			if source.Search.TemporalDecay != nil {
 				if source.Search.TemporalDecay.Enabled != nil {
 					cfg.Memory.Search.TemporalDecay.Enabled = *source.Search.TemporalDecay.Enabled
@@ -1932,6 +2009,22 @@ func applyMemoryConfig(cfg *Config, source *fileMemoryConfig, flush *fileMemoryF
 			}
 			if source.Search.SourceWeights != nil {
 				cfg.Memory.Search.SourceWeights = source.Search.SourceWeights
+			}
+		}
+		if source.Embedding != nil {
+			if source.Embedding.Provider != nil {
+				cfg.Memory.Embedding.Provider = strings.TrimSpace(*source.Embedding.Provider)
+			}
+			if source.Embedding.Model != nil {
+				model := strings.TrimSpace(*source.Embedding.Model)
+				if model == "" {
+					cfg.Memory.Embedding.Model = nil
+				} else {
+					cfg.Memory.Embedding.Model = &model
+				}
+			}
+			if source.Embedding.Dimensions != nil && *source.Embedding.Dimensions > 0 {
+				cfg.Memory.Embedding.Dimensions = *source.Embedding.Dimensions
 			}
 		}
 		if source.GC != nil && source.GC.MaxAgeDays != nil {
@@ -1975,6 +2068,10 @@ func applyMemoryConfig(cfg *Config, source *fileMemoryConfig, flush *fileMemoryF
 			value := *flush.IdleTimeoutSeconds
 			cfg.Memory.Flush.IdleTimeoutSeconds = &value
 		}
+		if flush.SemanticDedupThreshold != nil {
+			value := min(1, max(0, *flush.SemanticDedupThreshold))
+			cfg.Memory.Flush.SemanticDedupThreshold = &value
+		}
 	}
 }
 
@@ -1984,6 +2081,33 @@ func applyAskUserQuestionConfig(target *AskUserQuestionConfig, source fileAskUse
 	}
 	if source.TimeoutSeconds != nil {
 		target.TimeoutSeconds = normalizedQuestionTimeout(*source.TimeoutSeconds)
+	}
+}
+
+func applyShellEnvironmentPolicy(target *ShellEnvironmentPolicy, source fileShellEnvironmentPolicy) {
+	if source.Inherit != nil {
+		inherit := strings.ToLower(strings.TrimSpace(*source.Inherit))
+		switch inherit {
+		case "all", "core", "none":
+			target.Inherit = inherit
+		default:
+			// Fail open like reference typo handling: keep prior inherit.
+		}
+	}
+	if source.IgnoreDefaultExcludes != nil {
+		target.IgnoreDefaultExcludes = *source.IgnoreDefaultExcludes
+	}
+	if source.Exclude != nil {
+		target.Exclude = append([]string(nil), source.Exclude...)
+	}
+	if source.Set != nil {
+		target.Set = make(map[string]string, len(source.Set))
+		for key, value := range source.Set {
+			target.Set[key] = value
+		}
+	}
+	if source.IncludeOnly != nil {
+		target.IncludeOnly = append([]string(nil), source.IncludeOnly...)
 	}
 }
 
@@ -2899,6 +3023,24 @@ func firstConfiguredEnv(value any) string {
 	return ""
 }
 
+func validSandboxProfileName(profile string) bool {
+	switch strings.ToLower(strings.TrimSpace(profile)) {
+	case "", "off", "none", "workspace", "read-only", "readonly", "strict":
+		return true
+	}
+	name := strings.ToLower(strings.TrimSpace(profile))
+	if name == "" {
+		return false
+	}
+	for _, r := range name {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 func (c Config) Validate() error {
 	if err := c.ValidateAuthPolicy(); err != nil {
 		return err
@@ -2912,8 +3054,8 @@ func (c Config) Validate() error {
 	if c.Backend != "responses" && c.Backend != "chat_completions" && c.Backend != "anthropic_messages" {
 		return fmt.Errorf("unsupported backend %q: use responses, chat_completions, or anthropic_messages", c.Backend)
 	}
-	if c.Sandbox.Profile != "" && c.Sandbox.Profile != "off" && c.Sandbox.Profile != "workspace" && c.Sandbox.Profile != "read-only" && c.Sandbox.Profile != "strict" {
-		return errors.New("sandbox profile must be off, workspace, read-only, or strict")
+	if c.Sandbox.Profile != "" && !validSandboxProfileName(c.Sandbox.Profile) {
+		return errors.New("sandbox profile must be off, workspace, read-only, strict, or a custom sandbox.toml name")
 	}
 	if c.BaseURL == "" {
 		return errors.New("missing API base URL")

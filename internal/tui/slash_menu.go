@@ -50,6 +50,12 @@ var slashCommandCatalog = []slashCommandItem{
 	{name: "context", description: "Show context usage"},
 	{name: "minimal", description: "Switch to native scrollback"},
 	{name: "fullscreen", aliases: []string{"full"}, description: "Switch to full-screen mode"},
+	{name: "preview-image", aliases: []string{"image-preview"}, placeholder: "[path|name]", description: "Open an image overlay (latest or session images/)"},
+	{name: "images", aliases: []string{"list-images"}, description: "List session web_fetch images"},
+	{name: "play-video", aliases: []string{"video-play"}, placeholder: "[path|name]", description: "Play a video overlay (latest session clip if omitted; ffmpeg)"},
+	{name: "videos", aliases: []string{"list-videos"}, description: "List session-generated video clips"},
+	{name: "downloads", aliases: []string{"list-downloads"}, description: "List session web_fetch downloads"},
+	{name: "fetched", aliases: []string{"list-fetched", "web-fetch-artifacts"}, placeholder: "[path|name]", description: "List or show truncated web_fetch text artifacts"},
 	{name: "model", aliases: []string{"m"}, placeholder: "<name> [effort]", description: "Switch model"},
 	{name: "effort", placeholder: "<level>", description: "Set reasoning effort"},
 	{name: "always-approve", description: "Toggle always-approve mode"},
@@ -247,6 +253,10 @@ func (m *model) slashCommandAvailable(name string) bool {
 		return !m.minimal
 	case "fullscreen":
 		return m.minimal
+	case "preview-image", "image-preview", "images", "list-images":
+		return !m.minimal
+	case "play-video", "video-play", "videos", "list-videos", "downloads", "list-downloads", "fetched", "list-fetched", "web-fetch-artifacts":
+		return !m.minimal || name == "downloads" || name == "list-downloads" || name == "fetched" || name == "list-fetched" || name == "web-fetch-artifacts"
 	case "expand":
 		return m.minimal
 	case "always-approve":

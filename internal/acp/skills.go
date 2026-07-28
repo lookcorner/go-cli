@@ -14,6 +14,10 @@ func (s *Server) handleSkills(ctx context.Context, incoming message) {
 		s.handleSkillRefresh(incoming)
 		return
 	}
+	if incoming.Method == "x.ai/internal/reload_workflows" {
+		s.handleReloadWorkflows(incoming)
+		return
+	}
 	var req struct {
 		CWD     string `json:"cwd"`
 		Path    string `json:"path"`
@@ -54,6 +58,44 @@ func (s *Server) handleSkillRefresh(incoming message) {
 		return
 	}
 	s.respond(incoming.ID, map[string]any{"ok": true})
+}
+
+// handleReloadWorkflows mirrors Rust advertise_commands_all_sessions: refresh
+// skill catalogs and push available_commands_update to every live session.
+func (s *Server) handleReloadWorkflows(incoming message) {
+	s.respond(incoming.ID, map[string]any{"reloaded": s.AdvertiseCommandsAllSessions()})
+}
+
+// AdvertiseCommandsAllSessions refreshes skills and notifies each live session
+// with an available_commands_update (Rust SessionCommand::AdvertiseCommands).
+func (s *Server) AdvertiseCommandsAllSessions() int {
+	s.mu.Lock()
+	sessions := make([]*session, 0, len(s.sessions))
+	for _, current := range s.sessions {
+		sessions = append(sessions, current)
+	}
+	s.mu.Unlock()
+	reloaded := 0
+	for _, current := range sessions {
+		if current == nil {
+			continue
+		}
+		current.mu.Lock()
+		runner, closed, cwd := current.runner, current.closed, current.cwd
+		current.mu.Unlock()
+		if closed || runner == nil {
+			continue
+		}
+		if runner.Skills != nil {
+			_ = runner.Skills.Refresh()
+		}
+		s.notify(current.id, map[string]any{
+			"sessionUpdate":     "available_commands_update",
+			"availableCommands": availableCommands(runner, cwd != ""),
+		})
+		reloaded++
+	}
+	return reloaded
 }
 
 // ReloadSkills refreshes every live session after shared bundled content changes.

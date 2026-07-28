@@ -9,7 +9,10 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/lookcorner/go-cli/internal/config"
 	mcppkg "github.com/lookcorner/go-cli/internal/mcp"
+	"github.com/lookcorner/go-cli/internal/plugin"
+	"github.com/lookcorner/go-cli/internal/workspace"
 )
 
 type callableMCPTool interface {
@@ -178,26 +181,29 @@ func mcpServerTransportEqual(left, right MCPServer) bool {
 
 func (s *Server) handleMCP(ctx context.Context, incoming message) {
 	var req struct {
-		SessionID       string            `json:"sessionId"`
-		LegacySessionID string            `json:"session_id"`
-		Server          string            `json:"server"`
-		ServerName      string            `json:"server_name"`
-		ServerNameCamel string            `json:"serverName"`
-		ToolName        string            `json:"tool_name"`
-		ToolNameCamel   string            `json:"toolName"`
-		ServerURL       string            `json:"serverUrl"`
-		ServerID        string            `json:"serverId"`
-		Message         json.RawMessage   `json:"message"`
-		Tool            string            `json:"tool"`
-		URI             string            `json:"uri"`
-		Arguments       json.RawMessage   `json:"arguments"`
-		Enabled         *bool             `json:"enabled"`
-		Type            string            `json:"type"`
-		Command         string            `json:"command"`
-		Args            []string          `json:"args"`
-		Env             map[string]string `json:"env"`
-		URL             string            `json:"url"`
-		Headers         map[string]string `json:"headers"`
+		SessionID        string            `json:"sessionId"`
+		LegacySessionID  string            `json:"session_id"`
+		Server           string            `json:"server"`
+		ServerName       string            `json:"server_name"`
+		ServerNameCamel  string            `json:"serverName"`
+		ToolName         string            `json:"tool_name"`
+		ToolNameCamel    string            `json:"toolName"`
+		ServerURL        string            `json:"serverUrl"`
+		ServerID         string            `json:"serverId"`
+		Message          json.RawMessage   `json:"message"`
+		Tool             string            `json:"tool"`
+		URI              string            `json:"uri"`
+		Arguments        json.RawMessage   `json:"arguments"`
+		Enabled          *bool             `json:"enabled"`
+		Type             string            `json:"type"`
+		Command          string            `json:"command"`
+		Args             []string          `json:"args"`
+		Env              map[string]string `json:"env"`
+		URL              string            `json:"url"`
+		Headers          map[string]string `json:"headers"`
+		Code             string            `json:"code"`
+		CallbackURL      string            `json:"callback_url"`
+		CallbackURLCamel string            `json:"callbackUrl"`
 	}
 	if json.Unmarshal(incoming.Params, &req) != nil {
 		s.respondError(incoming.ID, -32602, "invalid MCP parameters")
@@ -217,6 +223,10 @@ func (s *Server) handleMCP(ctx context.Context, incoming message) {
 			Type: req.Type, Name: req.ServerName, Command: req.Command, Args: req.Args,
 			Env: req.Env, URL: req.URL, Headers: req.Headers,
 		})
+		return
+	}
+	if incoming.Method == "x.ai/mcp/setup" {
+		s.handleMCPSetup(ctx, incoming)
 		return
 	}
 	if incoming.Method == "x.ai/mcp/auth_status" {
@@ -301,6 +311,33 @@ func (s *Server) handleMCP(ctx context.Context, incoming message) {
 		}
 		s.respond(incoming.ID, map[string]any{"result": map[string]any{
 			"status": "authenticated", "error": nil,
+		}, "error": nil})
+		return
+	}
+	if incoming.Method == "x.ai/mcp/auth_submit" {
+		if req.ServerName == "" {
+			s.respondError(incoming.ID, -32602, "server_name is required")
+			return
+		}
+		value := strings.TrimSpace(req.CallbackURL)
+		if value == "" {
+			value = strings.TrimSpace(req.CallbackURLCamel)
+		}
+		if value == "" {
+			value = strings.TrimSpace(req.Code)
+		}
+		if value == "" {
+			s.respondError(incoming.ID, -32602, "callback_url or code is required")
+			return
+		}
+		if err := mcppkg.SubmitMCPAuthCallback(req.ServerName, value); err != nil {
+			s.respond(incoming.ID, map[string]any{"result": map[string]any{
+				"status": "failed", "error": err.Error(),
+			}, "error": nil})
+			return
+		}
+		s.respond(incoming.ID, map[string]any{"result": map[string]any{
+			"status": "submitted", "error": nil,
 		}, "error": nil})
 		return
 	}
@@ -457,7 +494,7 @@ func (s *Server) handleMCPList(incoming message, sessionID string) {
 }
 
 func mcpServerCatalog(current *session) []map[string]any {
-	if current == nil || current.runner == nil || current.runner.Tools == nil {
+	if current == nil || current.runner == nil {
 		return []map[string]any{}
 	}
 	current.mu.Lock()
@@ -466,31 +503,36 @@ func mcpServerCatalog(current *session) []map[string]any {
 	if provider == nil {
 		provider = current.runner.MCPServers
 	}
+	cwd := current.cwd
 	current.mu.Unlock()
 	if provider != nil {
 		configs = provider()
 	}
 	toolsByServer := make(map[string][]map[string]any)
-	for _, registered := range current.runner.Tools.SnapshotTools() {
-		tool, ok := registered.(callableMCPTool)
-		if !ok {
-			continue
+	if current.runner.Tools != nil {
+		for _, registered := range current.runner.Tools.SnapshotTools() {
+			tool, ok := registered.(callableMCPTool)
+			if !ok {
+				continue
+			}
+			server, name, info := tool.MCPIdentity()
+			entry := map[string]any{"name": name, "enabled": true}
+			if info.Title != "" {
+				entry["displayName"] = info.Title
+			}
+			if info.Description != "" {
+				entry["description"] = info.Description
+			}
+			if len(info.Annotations) > 0 {
+				entry["_meta"] = info.Annotations
+			}
+			toolsByServer[server] = append(toolsByServer[server], entry)
 		}
-		server, name, info := tool.MCPIdentity()
-		entry := map[string]any{"name": name, "enabled": true}
-		if info.Title != "" {
-			entry["displayName"] = info.Title
-		}
-		if info.Description != "" {
-			entry["description"] = info.Description
-		}
-		if len(info.Annotations) > 0 {
-			entry["_meta"] = info.Annotations
-		}
-		toolsByServer[server] = append(toolsByServer[server], entry)
 	}
 	servers := make([]map[string]any, 0, len(configs))
+	seen := map[string]bool{}
 	for _, config := range configs {
+		seen[config.Name] = true
 		entry := map[string]any{"name": config.Name, "source": "local"}
 		if config.URL != "" {
 			entry["type"], entry["url"] = "http", config.URL
@@ -534,8 +576,111 @@ func mcpServerCatalog(current *session) []map[string]any {
 		entry["session"] = session
 		servers = append(servers, entry)
 	}
+	servers = append(servers, mcpSetupRequiredPlaceholders(cwd, sessionMCPSetupPlugins(current), seen)...)
 	sort.Slice(servers, func(i, j int) bool { return servers[i]["name"].(string) < servers[j]["name"].(string) })
 	return servers
+}
+
+func sessionMCPSetupPlugins(current *session) []plugin.Plugin {
+	if current == nil || current.runner == nil || current.runner.PluginInventory == nil {
+		return nil
+	}
+	inventory := current.runner.PluginInventory()
+	out := make([]plugin.Plugin, 0, len(inventory))
+	for _, item := range inventory {
+		if item.Executable {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func mcpSetupRequiredPlaceholders(cwd string, plugins []plugin.Plugin, seen map[string]bool) []map[string]any {
+	path, err := config.DefaultPath()
+	if err != nil {
+		return nil
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		return nil
+	}
+	trusted := workspace.ResolveFolderTrust(cwd, cfg.FolderTrustEnabled, false) == workspace.TrustTrusted
+	entries := config.CollectMCPSetupConfigs(cwd, cfg, plugins, trusted)
+	prefs := config.LoadMCPPreferences().File
+	out := make([]map[string]any, 0)
+	names := make([]string, 0, len(entries))
+	for name := range entries {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if seen[name] {
+			continue
+		}
+		entry := entries[name]
+		var pref *config.MCPServerPreferences
+		if stored, ok := prefs.Servers[name]; ok {
+			copy := stored
+			pref = &copy
+		}
+		resolution := entry.Config.ResolveSetup(pref)
+		if resolution.Kind == config.MCPSetupResolved {
+			continue
+		}
+		setup := entry.Config.Setup
+		if resolution.Kind == config.MCPSetupRequired || resolution.Kind == config.MCPSetupInvalid {
+			setupCopy := resolution.Setup
+			if setupCopy.Fields == nil && setup != nil {
+				setupCopy = *setup
+			}
+			setup = &setupCopy
+		}
+		row := map[string]any{
+			"name":   name,
+			"source": "local",
+			"type":   "http",
+			"url":    "",
+			"session": map[string]any{
+				"enabled":       entry.Config.IsEnabled(),
+				"status":        "setuprequired",
+				"tools":         []map[string]any{},
+				"setupRequired": true,
+			},
+		}
+		if setup != nil {
+			row["setup"] = mcpSetupWire(*setup)
+		}
+		if pref != nil && len(pref.Values) > 0 {
+			row["setupValues"] = pref.Values
+		}
+		if entry.Source.Plugin != nil {
+			row["sourceLabel"] = "plugin: " + *entry.Source.Plugin
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
+func mcpSetupWire(setup config.MCPSetupConfig) map[string]any {
+	fields := make([]map[string]any, 0, len(setup.Fields))
+	for _, field := range setup.Fields {
+		item := map[string]any{
+			"id":       field.ID,
+			"label":    field.Label,
+			"type":     field.Type,
+			"required": field.Required,
+			"options":  field.Options,
+		}
+		if field.Default != nil {
+			item["default"] = *field.Default
+		}
+		fields = append(fields, item)
+	}
+	out := map[string]any{"fields": fields}
+	if len(setup.Variables) > 0 {
+		out["variables"] = setup.Variables
+	}
+	return out
 }
 
 func (s *Server) handleMCPConfig(ctx context.Context, incoming message, sessionID, name, toolName string, enabled *bool, server mcppkg.ServerConfig) {

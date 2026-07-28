@@ -125,7 +125,7 @@ func TestClipboardPasteReadsTextAndImage(t *testing.T) {
 		updated, _ = m.Update(command())
 		m = updated.(*model)
 		if len(m.promptImages) != 1 || !strings.HasPrefix(m.promptImages[0].ImageURL, "data:image/png;base64,") ||
-			m.status != "image attached · 1 total" || !strings.Contains(m.View().Content, "[Image x1]") {
+			m.status != "image attached · 1 total" || !strings.Contains(m.View().Content, "[Image #1]") {
 			t.Fatalf("images=%#v status=%q view=%q", m.promptImages, m.status, m.View().Content)
 		}
 		updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))

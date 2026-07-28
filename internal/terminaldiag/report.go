@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/lookcorner/go-cli/internal/notify"
+	"github.com/lookcorner/go-cli/internal/tools"
 	"github.com/lookcorner/go-cli/internal/voice"
 )
 
@@ -22,6 +23,16 @@ var probeVoiceInput = voice.ProbeInput
 var pathExists = func(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// probeSandboxConflict returns a sandbox.toml profile-conflict finding for the
+// current workspace. Tests replace this to keep reports cwd-independent.
+var probeSandboxConflict = func() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = "."
+	}
+	return tools.SandboxProfileConflictFinding(cwd)
 }
 
 const SchemaVersion = "1"
@@ -48,6 +59,9 @@ type Facts struct {
 	ControlMode      string `json:"tmuxControlMode,omitempty"`
 	VoiceMicrophone  string `json:"voiceMicrophone,omitempty"`
 	VoiceDetail      string `json:"voiceDetail,omitempty"`
+	DataControl      string `json:"dataControl,omitempty"`
+	XTVERSION        string `json:"xtversion,omitempty"`
+	FFmpeg           bool   `json:"ffmpeg"`
 }
 
 type Counts struct {
@@ -101,12 +115,32 @@ func BuildSnapshot(getenv func(string) string, lookPath func(string) (string, er
 		findings = append(findings, tmuxProbeFindings(tmux)...)
 	}
 	findings = append(findings, notificationFindings(getenv)...)
-	findings = append(findings, newlineFindings(getenv, brand)...)
+	findings = append(findings, newlineFindings(getenv, brand, ssh)...)
 	if finding := sshWrapRecommendation(getenv, ssh); finding != "" {
 		findings = append(findings, finding)
 	}
 	voiceMic, voiceDetail, voiceFindings := voiceFindings(lookPath)
 	findings = append(findings, voiceFindings...)
+	if finding := probeSandboxConflict(); finding != "" {
+		findings = append(findings, finding)
+	}
+	dataControl, _ := probeWaylandDataControl(getenv, lookPath)
+	wlCopy := false
+	if _, err := lookPath("wl-copy"); err == nil {
+		wlCopy = true
+	}
+	if finding := waylandDataControlFinding(dataControl, wlCopy); finding != "" {
+		findings = append(findings, finding)
+	}
+	ffmpegOK := ffmpegAvailable(lookPath)
+	if finding := ffmpegFinding(ffmpegOK); finding != "" {
+		findings = append(findings, finding)
+	}
+	dataControlFact := ""
+	if dataControl != DataControlNotApplicable {
+		dataControlFact = string(dataControl)
+	}
+	xtversion, _ := XTVERSION()
 	return Snapshot{
 		SchemaVersion: SchemaVersion,
 		Facts: Facts{
@@ -114,6 +148,7 @@ func BuildSnapshot(getenv func(string) string, lookPath func(string) (string, er
 			NativeClip: clipboard, ClipboardTool: clipboardTool, OSC52: osc52, GOOS: goos,
 			SetClipboard: tmux.SetClipboard, AllowPassthrough: tmux.AllowPassthrough, ExtendedKeys: tmux.ExtendedKeys,
 			ControlMode: tmux.ControlMode, VoiceMicrophone: voiceMic, VoiceDetail: voiceDetail,
+			DataControl: dataControlFact, XTVERSION: xtversion, FFmpeg: ffmpegOK,
 		},
 		Findings: findings,
 		Counts:   Counts{Issues: len(findings)},
@@ -124,6 +159,10 @@ func (s Snapshot) Human() string {
 	var out strings.Builder
 	fmt.Fprintf(&out, "Environment\n  terminal     %s\n  multiplexer  %s\n  ssh          %s\n  color        %s\n",
 		s.Facts.Terminal, s.Facts.Multiplexer, yesNo(s.Facts.SSH), s.Facts.Color)
+	if s.Facts.XTVERSION != "" {
+		fmt.Fprintf(&out, "  xtversion    %s\n", s.Facts.XTVERSION)
+	}
+	fmt.Fprintf(&out, "  ffmpeg       %s\n", map[bool]string{true: "on", false: "off"}[s.Facts.FFmpeg])
 	if s.Facts.Multiplexer == "tmux" || strings.Contains(s.Facts.Multiplexer, "tmux") {
 		fmt.Fprintf(&out, "  set-clipboard %s\n  allow-passthrough %s\n  extended-keys %s\n  control-mode %s\n",
 			tmuxFactOrUnknown(s.Facts.SetClipboard), tmuxFactOrUnknown(s.Facts.AllowPassthrough), tmuxFactOrUnknown(s.Facts.ExtendedKeys),
@@ -134,6 +173,16 @@ func (s Snapshot) Human() string {
 		fmt.Fprintf(&out, " (tool: %s)", s.Facts.ClipboardTool)
 	}
 	fmt.Fprintf(&out, "\n  osc 52       %s\n", activeOff(s.Facts.OSC52))
+	if s.Facts.DataControl != "" {
+		label := s.Facts.DataControl
+		switch DataControlFact(s.Facts.DataControl) {
+		case DataControlAvailable:
+			label = "on"
+		case DataControlMissing:
+			label = "off"
+		}
+		fmt.Fprintf(&out, "  data-control %s\n", label)
+	}
 	if s.Facts.VoiceMicrophone != "" {
 		out.WriteString("\nVoice\n")
 		if s.Facts.VoiceMicrophone == "none" {
@@ -403,11 +452,11 @@ func isAppleTerminal(brand string) bool {
 	return normalized == "apple_terminal" || normalized == "apple terminal"
 }
 
-
 // newlineFindings mirrors reference terminal.newline-fallback for env-detectable
-// hosts where Shift+Enter cannot be distinguished from Enter (VTE < 0.82 and
-// VS Code-family xterm.js). Kitty-protocol-unavailable unknowns stay deferred.
-func newlineFindings(getenv func(string) string, brand string) []string {
+// hosts where Shift+Enter cannot be distinguished from Enter (VTE < 0.82,
+// VS Code-family xterm.js, local WezTerm without Kitty keyboard protocol, and
+// SSH WezTerm recovered via XTVERSION when TERM_PROGRAM is not forwarded).
+func newlineFindings(getenv func(string) string, brand string, ssh bool) []string {
 	if finding := vteNewlineFinding(getenv, brand); finding != "" {
 		return []string{finding}
 	}
@@ -415,7 +464,62 @@ func newlineFindings(getenv func(string) string, brand string) []string {
 		terminal := vscodeTerminalLabel(getenv, brand)
 		return []string{"Shift+Enter can't insert a newline in this xterm.js terminal.\n    Use Alt+Enter to insert a newline in " + terminal + ". xterm.js sends Shift+Enter as Enter in this setup."}
 	}
+	xtversion, _ := XTVERSION()
+	if finding := weztermKittyFinding(getenv, brand, ssh, xtversion); finding != "" {
+		return []string{finding}
+	}
 	return nil
+}
+
+// weztermKittyFinding mirrors Rust wezterm_kitty_keyboard_warning_from.
+// Environment brand → local wezterm.lua guidance; SSH + unknown brand +
+// XTVERSION WezTerm → SSH-specific backslash guidance (no local lua fix).
+func weztermKittyFinding(getenv func(string) string, brand string, ssh bool, xtversion string) string {
+	shape := weztermShape(getenv, brand, ssh, xtversion)
+	switch shape {
+	case weztermShapeEnvironment:
+		return "Shift+Enter can't insert a newline because WezTerm's Kitty keyboard protocol is off\n" +
+			"    → Set `config.enable_kitty_keyboard = true` in ~/.config/wezterm/wezterm.lua\n" +
+			"    Restart WezTerm after changing this setting. Until then, type `\\` and then press Enter to insert a newline."
+	case weztermShapeSSHXTVERSION:
+		return "Shift+Enter can't insert a newline in WezTerm over SSH\n" +
+			"    For this session, type `\\` and then press Enter. Gork can't negotiate the Kitty " +
+			"keyboard protocol over SSH yet. `enable_kitty_keyboard = true` applies only to local WezTerm sessions."
+	default:
+		return ""
+	}
+}
+
+type weztermShapeKind int
+
+const (
+	weztermShapeNone weztermShapeKind = iota
+	weztermShapeEnvironment
+	weztermShapeSSHXTVERSION
+)
+
+func weztermShape(getenv func(string) string, brand string, ssh bool, xtversion string) weztermShapeKind {
+	if mux := terminalMultiplexer(getenv); mux != "none" {
+		return weztermShapeNone
+	}
+	if normalizeBrandKey(brand) == "wezterm" {
+		return weztermShapeEnvironment
+	}
+	// Rust maps plain xterm / missing TERM_PROGRAM to Unknown; Go often keeps
+	// TERM as the brand string, so treat generic TERM brands as SSH-recoverable.
+	if ssh && brandAllowsSSHWezTermXTVERSION(brand) && xtversionIsWezTerm(xtversion) {
+		return weztermShapeSSHXTVERSION
+	}
+	return weztermShapeNone
+}
+
+func brandAllowsSSHWezTermXTVERSION(brand string) bool {
+	switch key := normalizeBrandKey(brand); key {
+	case "unknown", "", "xterm", "xterm-256color", "xterm-color", "vt100", "vt220", "ansi":
+		return true
+	default:
+		return strings.HasPrefix(key, "xterm")
+	}
 }
 
 func vteNewlineFinding(getenv func(string) string, brand string) string {
@@ -473,7 +577,6 @@ func vscodeTerminalLabel(getenv func(string) string, brand string) string {
 		return "VS Code"
 	}
 }
-
 
 func voiceFindings(lookPath func(string) (string, error)) (mic, detail string, findings []string) {
 	probe := probeVoiceInput(lookPath)

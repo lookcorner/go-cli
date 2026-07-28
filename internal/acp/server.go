@@ -26,6 +26,7 @@ import (
 	"github.com/lookcorner/go-cli/internal/hooks"
 	"github.com/lookcorner/go-cli/internal/imagine"
 	mcppkg "github.com/lookcorner/go-cli/internal/mcp"
+	"github.com/lookcorner/go-cli/internal/remote"
 	sessionlog "github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/terminaldiag"
 	"github.com/lookcorner/go-cli/internal/tools"
@@ -171,6 +172,7 @@ type session struct {
 	cwd                 string
 	displayCWD          string
 	title               string
+	kind                string
 	updated             time.Time
 	runner              *agent.Runner
 	close               func()
@@ -196,6 +198,7 @@ type session struct {
 	promptIndex         int
 	activePrompt        int
 	inputTokens         int
+	usage               sessionUsageLedger
 	rewind              *workspace.RewindStore
 	logPath             string
 	mode                string
@@ -320,6 +323,19 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				meta["defaultAuthMethodId"] = authConfig.DefaultMethodID
 			}
 			meta["x.ai/mcp/sdk"] = true
+			if remote.ProcessChatModeEnabled() {
+				meta["chatMode"] = true
+				modes := s.fetchChatModesState(ctx)
+				if len(modes.Available) > 0 {
+					available := make([]modelInfo, 0, len(modes.Available))
+					for _, item := range modes.Available {
+						available = append(available, modelInfo{
+							ModelID: item.ModelID, Name: item.Name, Description: item.Description, Meta: item.Meta,
+						})
+					}
+					meta["modelState"] = sessionModelState{CurrentModelID: modes.CurrentModelID, Available: available}
+				}
+			}
 			s.respond(incoming.ID, map[string]any{
 				"protocolVersion": ProtocolVersion,
 				"agentCapabilities": map[string]any{
@@ -368,7 +384,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleYoloModeChanged(incoming.Params)
 		case "x.ai/permissions/reset":
 			s.handlePermissionReset()
-		case "x.ai/debug/arm_auto_compact", "x.ai/debug/trigger_feedback":
+		case "x.ai/debug/arm_auto_compact", "x.ai/debug/trigger_feedback", "x.ai/debug/agent":
 			s.handleDebug(incoming)
 		case "session/cancel":
 			s.handleCancel(incoming.Params)
@@ -402,6 +418,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleSessionUpdates(incoming)
 		case "x.ai/session/info", "x.ai/session/rename", "x.ai/session/delete", "x.ai/session/search", "x.ai/prompt_history":
 			s.handleSessionAdmin(incoming)
+		case "x.ai/session/usage":
+			s.handleSessionUsage(incoming)
 		case "x.ai/session/update_mcp_servers":
 			s.handleUpdateMCPServers(ctx, incoming)
 		case "x.ai/internal/reload_all_mcp_servers", "x.ai/internal/reload_project_mcp_servers":
@@ -410,7 +428,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleModelReload(incoming)
 		case "x.ai/internal/evict_sessions":
 			s.handleEvictSessions(incoming.Params)
-		case "x.ai/auth/info", "x.ai/auth/getBearerToken", "x.ai/auth/get_url", "x.ai/auth/submit_code", "x.ai/auth/logout", "x.ai/auth/check_subscription", "x.ai/internal/auth_cleared", "x.ai/getApiKey", "x.ai/setApiKey":
+		case "x.ai/auth/info", "x.ai/auth/getBearerToken", "x.ai/auth/get_url", "x.ai/auth/submit_code", "x.ai/auth/cancel", "x.ai/auth/logout", "x.ai/auth/check_subscription", "x.ai/internal/auth_cleared", "x.ai/getApiKey", "x.ai/setApiKey":
 			s.handleAuth(ctx, incoming)
 		case "x.ai/privacy/setCodingDataRetention":
 			s.handlePrivacy(ctx, incoming)
@@ -434,7 +452,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleFuzzySearch(ctx, incoming)
 		case "x.ai/code/goto-definition", "x.ai/code/goto-references", "x.ai/code/find-definitions", "x.ai/code/find-references", "x.ai/code/status":
 			s.handleCodeNavigation(ctx, incoming)
-		case "x.ai/mcp/list", "x.ai/mcp/call", "x.ai/mcp/read_resource", "x.ai/mcp/auth_status", "x.ai/mcp/auth_trigger", "x.ai/mcp/toggle", "x.ai/mcp/toggle_tool", "x.ai/mcp/upsert", "x.ai/mcp/delete", "x.ai/mcp/sdk_message":
+		case "x.ai/mcp/list", "x.ai/mcp/call", "x.ai/mcp/read_resource", "x.ai/mcp/auth_status", "x.ai/mcp/auth_trigger", "x.ai/mcp/auth_submit", "x.ai/mcp/setup", "x.ai/mcp/toggle", "x.ai/mcp/toggle_tool", "x.ai/mcp/upsert", "x.ai/mcp/delete", "x.ai/mcp/sdk_message":
 			s.handleMCP(ctx, incoming)
 		case "x.ai/commands/list":
 			s.handleCommands(incoming)
@@ -460,7 +478,9 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleSuggest(ctx, incoming)
 		case "x.ai/queue/remove", "x.ai/queue/reorder", "x.ai/queue/clear", "x.ai/queue/edit", "x.ai/queue/interject":
 			s.handleQueueUpdate(incoming)
-		case "x.ai/skills/list", "x.ai/skills/config", "x.ai/skills/add", "x.ai/skills/remove", "x.ai/skills/reset", "x.ai/skills/toggle", "x.ai/skills/refresh-baseline", "x.ai/internal/reload_skills":
+		case "x.ai/workflows/list":
+			s.handleWorkflowsList(incoming)
+		case "x.ai/skills/list", "x.ai/skills/config", "x.ai/skills/add", "x.ai/skills/remove", "x.ai/skills/reset", "x.ai/skills/toggle", "x.ai/skills/refresh-baseline", "x.ai/internal/reload_skills", "x.ai/internal/reload_workflows":
 			s.handleSkills(ctx, incoming)
 		case "x.ai/plugins/list", "x.ai/plugins/action", "x.ai/plugins/notify-updates", "x.ai/plugins/reload":
 			s.handlePlugins(ctx, incoming)
@@ -490,11 +510,31 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 	}
 }
 
+func (s *Server) handleSessionUsage(incoming message) {
+	var req struct {
+		SessionID string `json:"sessionId"`
+	}
+	if json.Unmarshal(incoming.Params, &req) != nil || strings.TrimSpace(req.SessionID) == "" {
+		s.respondError(incoming.ID, -32602, "sessionId is required")
+		return
+	}
+	current := s.lookupSession(req.SessionID)
+	if current == nil {
+		s.respondError(incoming.ID, -32602, "session not found: "+req.SessionID)
+		return
+	}
+	current.mu.Lock()
+	usage := current.usage.wire()
+	current.mu.Unlock()
+	s.respond(incoming.ID, map[string]any{"usage": usage})
+}
+
 func (s *Server) handleSessionAdmin(incoming message) {
 	var req struct {
 		SessionID            string `json:"sessionId"`
 		Title                string `json:"title"`
 		CWD                  string `json:"cwd"`
+		Kind                 string `json:"kind"`
 		Query                string `json:"query"`
 		Limit                int    `json:"limit"`
 		Offset               int    `json:"offset"`
@@ -502,6 +542,7 @@ func (s *Server) handleSessionAdmin(incoming message) {
 		PromptSessionID      string `json:"session_id"`
 		FilterSessionID      string `json:"filter_session_id"`
 		FilterSessionIDCamel string `json:"filterSessionId"`
+		Starred              *bool  `json:"starred"`
 	}
 	if json.Unmarshal(incoming.Params, &req) != nil {
 		s.respondError(incoming.ID, -32602, "invalid session parameters")
@@ -564,17 +605,38 @@ func (s *Server) handleSessionAdmin(incoming message) {
 			s.respondError(incoming.ID, -32602, "sessionId is required")
 			return
 		}
-		if err := sessionlog.Rename(s.SessionDir, req.SessionID, req.Title); err != nil {
+		title := strings.TrimSpace(req.Title)
+		if strings.EqualFold(strings.TrimSpace(req.Kind), "chat") {
+			if title == "" && req.Starred == nil {
+				s.respondError(incoming.ID, -32602, "chat rename requires title or starred")
+				return
+			}
+			if title != "" && req.Starred != nil {
+				s.updateChatConversation(incoming, req.SessionID, &title, req.Starred)
+				return
+			}
+			if req.Starred != nil {
+				s.starChatConversation(incoming, req.SessionID, *req.Starred)
+				return
+			}
+			s.renameChatConversation(incoming, req.SessionID, title)
+			return
+		}
+		if title == "" {
+			s.respondError(incoming.ID, -32602, "title must not be blank")
+			return
+		}
+		if err := sessionlog.Rename(s.SessionDir, req.SessionID, title); err != nil {
 			s.respondError(incoming.ID, -32000, err.Error())
 			return
 		}
 		if current := s.lookupSession(req.SessionID); current != nil {
 			current.mu.Lock()
-			current.title = strings.TrimSpace(req.Title)
+			current.title = title
 			current.updated = time.Now().UTC()
 			current.mu.Unlock()
 			s.notify(req.SessionID, map[string]any{
-				"sessionUpdate": "session_info_update", "title": strings.TrimSpace(req.Title),
+				"sessionUpdate": "session_info_update", "title": title,
 				"updatedAt": time.Now().UTC().Format(time.RFC3339),
 			})
 		}
@@ -582,6 +644,10 @@ func (s *Server) handleSessionAdmin(incoming message) {
 	case "x.ai/session/delete":
 		if req.SessionID == "" {
 			s.respondError(incoming.ID, -32602, "sessionId is required")
+			return
+		}
+		if strings.EqualFold(strings.TrimSpace(req.Kind), "chat") {
+			s.deleteChatConversation(incoming, req.SessionID)
 			return
 		}
 		s.closeSession(req.SessionID)
@@ -722,10 +788,47 @@ func (s *Server) handleStaticExtension(incoming message) {
 			s.respondError(incoming.ID, -32602, "invalid workspace list parameters")
 			return
 		}
-		s.respond(incoming.ID, map[string]any{"result": map[string]any{
-			"workspaces": []any{},
-			"_meta":      map[string]any{"x.ai/partial": map[string]any{"workspaces": true, "reason": "no_oauth"}},
-		}})
+		pageSize := 50
+		if req.PageSize != nil && *req.PageSize > 0 {
+			pageSize = *req.PageSize
+		}
+		config := s.authSnapshot()
+		client := &remote.WorkspacesClient{
+			HTTP: config.HTTP, BaseURL: remote.ResolveWorkspacesBaseURL(),
+			AuthPath: config.Path, AuthScope: config.Scope, TokenProvider: config.TokenProvider,
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), conversationsListTimeout)
+		defer cancel()
+		page, err := client.ListWorkspaces(ctx, remote.WorkspacesListQuery{
+			PageSize: pageSize, PageToken: req.PageToken, Query: req.Query, Kind: req.Kind,
+		})
+		if err != nil {
+			reason := "error"
+			if errors.Is(err, remote.ErrNoOAuth) {
+				reason = "no_oauth"
+			}
+			s.respond(incoming.ID, map[string]any{"result": map[string]any{
+				"workspaces": []any{},
+				"_meta":      map[string]any{"x.ai/partial": map[string]any{"workspaces": true, "reason": reason}},
+			}})
+			return
+		}
+		rows := make([]map[string]any, 0, len(page.Workspaces))
+		for _, workspace := range page.Workspaces {
+			row := map[string]any{"id": workspace.WorkspaceID, "name": workspace.Name}
+			if workspace.Kind != "" {
+				row["kind"] = workspace.Kind
+			}
+			if workspace.CreateTime != "" {
+				row["createTime"] = workspace.CreateTime
+			}
+			rows = append(rows, row)
+		}
+		result := map[string]any{"workspaces": rows}
+		if page.NextPageToken != "" {
+			result["nextPageToken"] = page.NextPageToken
+		}
+		s.respond(incoming.ID, map[string]any{"result": result})
 	}
 }
 
@@ -1594,6 +1697,10 @@ func (s *Server) handleNewSession(ctx context.Context, incoming message) {
 	}
 	if json.Unmarshal(incoming.Params, &params) != nil || params.CWD == "" {
 		s.respondError(incoming.ID, -32602, "cwd is required")
+		return
+	}
+	if remote.ProcessChatModeEnabled() || sessionKindFromMeta(params.Meta) == "chat" {
+		s.handleNewChatSession(ctx, incoming, params.CWD, params.Meta)
 		return
 	}
 	id, model, err := sessionStartupOverrides(params.Meta)
@@ -2521,6 +2628,18 @@ func (s *Server) handleRestoreSession(ctx context.Context, incoming message, rep
 	}
 	if json.Unmarshal(incoming.Params, &params) != nil || params.SessionID == "" || params.CWD == "" {
 		s.respondError(incoming.ID, -32602, "sessionId and cwd are required")
+		return
+	}
+	if sessionKindFromMeta(params.Meta) == "chat" {
+		s.handleRestoreChatSession(ctx, incoming, params.SessionID, params.CWD, params.Meta)
+		return
+	}
+	if remote.ProcessChatModeEnabled() {
+		if localBuildSessionExists(s.SessionDir, params.SessionID, params.CWD) {
+			s.respondError(incoming.ID, -32602, remote.ChatModeLocalBuildRefusal)
+			return
+		}
+		s.handleRestoreChatSession(ctx, incoming, params.SessionID, params.CWD, params.Meta)
 		return
 	}
 	path, err := sessionlog.PathForID(s.SessionDir, params.SessionID)

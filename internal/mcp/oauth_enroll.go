@@ -33,6 +33,9 @@ type AuthenticateOpts struct {
 	OpenURL         func(string) bool
 	HTTPClient      *http.Client
 	Force           bool
+	// PastedInput, when set, reads a callback URL / "code state" line for
+	// headless clients that cannot reach the loopback redirect.
+	PastedInput io.Reader
 	// Metadata, when set, skips discovery (tests / pre-discovered AS).
 	Metadata *OAuthMetadata
 }
@@ -51,9 +54,10 @@ type oauthCallback struct {
 	err   error
 }
 
-// AuthenticateMCPServer runs browser PKCE enrollment (with DCR when needed)
-// and persists tokens to mcp_credentials.json.
-func AuthenticateMCPServer(ctx context.Context, name, serverURL string, opts AuthenticateOpts) (AuthenticateResult, error) {
+// authenticateMCPServerFlow runs browser PKCE enrollment (with DCR when needed)
+// and persists tokens to mcp_credentials.json. Callers should prefer
+// AuthenticateMCPServer for in-process/cross-process dedup.
+func authenticateMCPServerFlow(ctx context.Context, name, serverURL string, opts AuthenticateOpts) (AuthenticateResult, error) {
 	name = strings.TrimSpace(name)
 	serverURL = strings.TrimSpace(serverURL)
 	if name == "" || serverURL == "" {
@@ -140,6 +144,11 @@ func AuthenticateMCPServer(ctx context.Context, name, serverURL string, opts Aut
 	}
 
 	callback := make(chan oauthCallback, 1)
+	unregister := registerMCPAuthSubmit(name, callback)
+	defer unregister()
+	if opts.PastedInput != nil {
+		go readPastedMCPCallback(opts.PastedInput, callback)
+	}
 	server := &http.Server{ReadHeaderTimeout: 5 * time.Second, Handler: mcpOAuthCallbackHandler(callback)}
 	serveDone := make(chan struct{})
 	go func() {
@@ -155,16 +164,29 @@ func AuthenticateMCPServer(ctx context.Context, name, serverURL string, opts Aut
 	if opts.OpenURL != nil {
 		opened = opts.OpenURL(authURL)
 	}
-	if !opened {
-		// Still wait for loopback / pasted-style delivery via OpenURL hook
-		// that completes the redirect without returning true, or direct hits.
-	}
+	_ = opened
+
+	tokenBefore := storedAccessToken(path, name, serverURL)
+	poll := time.NewTicker(2 * time.Second)
+	defer poll.Stop()
 
 	var result oauthCallback
-	select {
-	case result = <-callback:
-	case <-ctx.Done():
-		return AuthenticateResult{}, ctx.Err()
+waitCallback:
+	for {
+		select {
+		case result = <-callback:
+			break waitCallback
+		case <-poll.C:
+			if token := storedAccessToken(path, name, serverURL); token != "" && token != tokenBefore {
+				if store, err := LoadCredentialStore(path); err == nil {
+					if creds, ok := store.Get(name, serverURL); ok && creds.AccessToken() != "" {
+						return AuthenticateResult{Credentials: creds, TokenURL: meta.TokenEndpoint, Metadata: meta}, nil
+					}
+				}
+			}
+		case <-ctx.Done():
+			return AuthenticateResult{}, ctx.Err()
+		}
 	}
 	if result.err != nil {
 		return AuthenticateResult{}, result.err

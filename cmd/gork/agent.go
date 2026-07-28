@@ -124,6 +124,8 @@ func normalizeAgentArgs(args []string) ([]string, *agentServerOptions, error) {
 			}
 		case "--always-approve", "--yolo":
 			result = append(result, "--always-approve")
+		case "--chat":
+			result = append(result, "--chat")
 		case "--no-leader":
 			server.noLeader = true
 		case "--no-exit-on-disconnect":

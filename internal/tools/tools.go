@@ -125,30 +125,32 @@ func ToolCallFromContext(ctx context.Context) (ToolCallContext, bool) {
 }
 
 type Registry struct {
-	mu            sync.RWMutex
-	tools         map[string]Tool
-	approver      Approver
-	processes     *ProcessManager
-	goal          *GoalStore
-	scheduler     *Scheduler
-	ownsScheduler bool
-	plan          *PlanMode
-	questions     *UserQuestions
-	todos         *todoStore
-	readPolicy    Approver
-	hunks         *HunkTracker
-	rewind        *mutationCheckpoint
-	readFile      *readFileTool
-	webFetch      *webFetchTool
-	subagents     *subagentHolder
-	goalRoles     GoalRoleConfig
-	fileToolset   string
-	hashline      hashlineConfig
-	environment   map[string]string
-	sandbox       SandboxProfile
-	pathHints     *atomic.Bool
-	allowedTools  map[string]bool
-	deniedTools   map[string]bool
+	mu             sync.RWMutex
+	tools          map[string]Tool
+	approver       Approver
+	processes      *ProcessManager
+	goal           *GoalStore
+	scheduler      *Scheduler
+	ownsScheduler  bool
+	plan           *PlanMode
+	questions      *UserQuestions
+	todos          *todoStore
+	readPolicy     Approver
+	hunks          *HunkTracker
+	rewind         *mutationCheckpoint
+	readFile       *readFileTool
+	webFetch       *webFetchTool
+	subagents      *subagentHolder
+	goalRoles      GoalRoleConfig
+	fileToolset    string
+	hashline       hashlineConfig
+	environment    map[string]string
+	shellEnvPolicy ShellEnvironmentPolicy
+	sandbox        SandboxProfile
+	restrictNet    bool
+	pathHints      *atomic.Bool
+	allowedTools   map[string]bool
+	deniedTools    map[string]bool
 }
 
 type mutationCheckpoint struct {
@@ -255,7 +257,7 @@ func NewRegistryWithHunkMode(ws *workspace.Workspace, approver Approver, mode Hu
 		&searchFilesTool{ws: ws},
 		&writeFileTool{ws: ws, approver: approver, rewind: rewind},
 		&editFileTool{ws: ws, approver: approver, rewind: rewind},
-		&shellTool{ws: ws, approver: approver, timeout: 2 * time.Minute, rewind: rewind},
+		&shellTool{ws: ws, approver: approver, timeout: 2 * time.Minute, rewind: rewind, shellEnvPolicy: DefaultShellEnvironmentPolicy()},
 		&startCommandTool{manager: processes},
 		&commandOutputTool{manager: processes},
 		&killCommandTool{manager: processes},
@@ -282,7 +284,7 @@ func NewRegistryWithHunkMode(ws *workspace.Workspace, approver Approver, mode Hu
 		subagents: subagents, scheduler: scheduler, ownsScheduler: true, plan: plan, questions: questions,
 		todos:       todos,
 		fileToolset: "standard", hashline: defaultHashlineConfig(),
-		pathHints: pathHints,
+		pathHints: pathHints, shellEnvPolicy: DefaultShellEnvironmentPolicy(),
 	}
 	for _, item := range items {
 		registry.tools[item.Definition().Name] = item
@@ -296,12 +298,14 @@ func (r *Registry) ForWorkspace(ws *workspace.Workspace) *Registry {
 		return nil
 	}
 	r.mu.RLock()
-	fileToolset, hashline, environment, sandbox := r.fileToolset, r.hashline, cloneEnvironment(r.environment), r.sandbox
+	fileToolset, hashline, environment, sandbox, restrictNet := r.fileToolset, r.hashline, cloneEnvironment(r.environment), r.sandbox, r.restrictNet
+	shellEnvPolicy := r.shellEnvPolicy
 	pathHints := r.pathHints != nil && r.pathHints.Load()
 	r.mu.RUnlock()
 	child := NewRegistry(ws, r.approver)
+	child.ConfigureShellEnvironmentPolicy(shellEnvPolicy)
 	child.ConfigureEnvironment(environment)
-	child.setSandbox(sandbox)
+	child.setSandbox(sandbox, restrictNet)
 	if fileToolset == "hashline" {
 		_ = child.ConfigureFileToolset(fileToolset, hashline.scheme, hashline.hashLen, hashline.chunkSize)
 	}
@@ -352,14 +356,14 @@ func (r *Registry) ConfigureSandbox(value string) error {
 	if r == nil {
 		return nil
 	}
-	profile, err := ParseSandboxProfile(value)
+	resolved, err := ResolveSandboxProfile(value, r.processes.ws.Root())
 	if err != nil {
 		return err
 	}
-	if err := validateSandboxRuntime(profile); err != nil {
+	if err := validateSandboxRuntime(resolved.ChildBase); err != nil {
 		return err
 	}
-	r.setSandbox(profile)
+	r.setSandbox(resolved.ChildBase, resolved.RestrictNetwork)
 	return nil
 }
 
@@ -369,14 +373,29 @@ func (r *Registry) SetPathNotFoundHints(enabled bool) {
 	}
 }
 
-func (r *Registry) setSandbox(profile SandboxProfile) {
+func (r *Registry) setSandbox(profile SandboxProfile, restrictNetwork bool) {
 	r.mu.Lock()
 	r.sandbox = profile
+	r.restrictNet = restrictNetwork
 	if shell, ok := r.tools["shell"].(*shellTool); ok {
-		shell.setSandbox(profile)
+		shell.setSandbox(profile, restrictNetwork)
 	}
 	r.mu.Unlock()
-	r.processes.setSandbox(profile)
+	r.processes.setSandbox(profile, restrictNetwork)
+}
+
+// ConfigureShellEnvironmentPolicy sets how agent shells inherit process env.
+func (r *Registry) ConfigureShellEnvironmentPolicy(policy ShellEnvironmentPolicy) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.shellEnvPolicy = policy
+	if shell, ok := r.tools["shell"].(*shellTool); ok {
+		shell.setShellEnvironmentPolicy(policy)
+	}
+	r.mu.Unlock()
+	r.processes.ConfigureShellEnvironmentPolicy(policy)
 }
 
 // ConfigureEnvironment overlays variables for commands started by this registry.
@@ -1719,18 +1738,27 @@ func atomicWrite(path string, data []byte, mode os.FileMode) error {
 }
 
 type shellTool struct {
-	ws          *workspace.Workspace
-	approver    Approver
-	timeout     time.Duration
-	rewind      *mutationCheckpoint
-	environment map[string]string
-	sandbox     SandboxProfile
-	envMu       sync.RWMutex
+	ws              *workspace.Workspace
+	approver        Approver
+	timeout         time.Duration
+	rewind          *mutationCheckpoint
+	environment     map[string]string
+	shellEnvPolicy  ShellEnvironmentPolicy
+	sandbox         SandboxProfile
+	restrictNetwork bool
+	envMu           sync.RWMutex
 }
 
-func (t *shellTool) setSandbox(profile SandboxProfile) {
+func (t *shellTool) setSandbox(profile SandboxProfile, restrictNetwork bool) {
 	t.envMu.Lock()
 	t.sandbox = profile
+	t.restrictNetwork = restrictNetwork
+	t.envMu.Unlock()
+}
+
+func (t *shellTool) setShellEnvironmentPolicy(policy ShellEnvironmentPolicy) {
+	t.envMu.Lock()
+	t.shellEnvPolicy = policy
 	t.envMu.Unlock()
 }
 
@@ -1740,10 +1768,10 @@ func (t *shellTool) setEnvironment(values map[string]string) {
 	t.envMu.Unlock()
 }
 
-func (t *shellTool) environmentSnapshot() (map[string]string, SandboxProfile) {
+func (t *shellTool) environmentSnapshot() (map[string]string, ShellEnvironmentPolicy, SandboxProfile, bool) {
 	t.envMu.RLock()
 	defer t.envMu.RUnlock()
-	return cloneEnvironment(t.environment), t.sandbox
+	return cloneEnvironment(t.environment), t.shellEnvPolicy, t.sandbox, t.restrictNetwork
 }
 
 func (t *shellTool) Definition() api.ToolDefinition {
@@ -1779,17 +1807,25 @@ func (t *shellTool) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	if runtime.GOOS == "windows" {
 		executable, commandArgs = "cmd.exe", []string{"/C", args.Command}
 	}
-	environment, sandbox := t.environmentSnapshot()
-	command, err := sandboxCommand(commandCtx, sandbox, t.ws.Root(), executable, commandArgs...)
+	environment, shellEnvPolicy, sandbox, restrictNetwork := t.environmentSnapshot()
+	command, err := sandboxCommand(commandCtx, sandbox, restrictNetwork, t.ws.Root(), executable, commandArgs...)
 	if err != nil {
 		return "", err
 	}
 	command.Dir = t.ws.Root()
-	command.Env = setEnvironment(os.Environ(), environment)
+	command.Env = setEnvironment(ApplyShellEnvironmentPolicy(os.Environ(), shellEnvPolicy), environment)
 	var output cappedBuffer
 	command.Stdout = &output
 	command.Stderr = &output
-	err = command.Run()
+	if err = command.Start(); err != nil {
+		checkpointErr := t.rewind.afterWorkspace(checkpoint)
+		return output.String(), errors.Join(fmt.Errorf("start command: %w", err), checkpointErr)
+	}
+	if guard := tryShellCgroup(DefaultCgroupMemoryConfig()); guard != nil {
+		_ = guard.AddProcess(command.Process.Pid)
+		defer guard.Close()
+	}
+	err = command.Wait()
 	checkpointErr := t.rewind.afterWorkspace(checkpoint)
 	if commandCtx.Err() != nil {
 		return output.String(), errors.Join(fmt.Errorf("command timed out after %s", t.timeout), checkpointErr)

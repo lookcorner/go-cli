@@ -29,6 +29,7 @@ type Store struct {
 	sessionsDir  string
 	sessionID    string
 	ephemeral    bool
+	embedder     EmbeddingProvider
 }
 
 type FileInfo struct {
@@ -190,6 +191,24 @@ func open(root, workspace, sessionID string, ephemeral bool) (*Store, error) {
 }
 
 func (s *Store) IsEphemeral() bool { return s.ephemeral }
+
+// WorkspaceDir returns the durable per-workspace memory directory path.
+func (s *Store) WorkspaceDir() string {
+	if s == nil {
+		return ""
+	}
+	return s.workspaceDir
+}
+
+// SetEmbedder configures optional vector search / semantic dedup embeddings.
+func (s *Store) SetEmbedder(provider EmbeddingProvider) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.embedder = provider
+	s.mu.Unlock()
+}
 
 func ephemeralWorkspace(workspace string) bool {
 	raw := filepath.ToSlash(filepath.Clean(workspace))

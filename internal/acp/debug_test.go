@@ -48,6 +48,30 @@ func TestDebugArmAutoCompactDrivesNextTurn(t *testing.T) {
 	}
 }
 
+func TestDebugAgentReportsRegistryCounts(t *testing.T) {
+	var output bytes.Buffer
+	server := &Server{
+		output: &output,
+		sessions: map[string]*session{
+			"a": {id: "a", runner: &agent.Runner{ListSubagents: func() []tools.SubagentResult {
+				return []tools.SubagentResult{{Status: "running"}, {Status: "completed"}}
+			}}},
+			"b": {id: "b", runner: &agent.Runner{}},
+		},
+		pending: make(map[string]chan permissionResult),
+	}
+	server.pending["p1"] = make(chan permissionResult, 1)
+	server.handleDebug(message{ID: json.RawMessage("1"), Method: "x.ai/debug/agent", Params: json.RawMessage(`{}`)})
+	response := decodeACP(t, json.NewDecoder(&output))
+	registries := response["result"].(map[string]any)["registries"].(map[string]any)
+	if registries["sessions"] != float64(2) || registries["subagent_active"] != float64(1) || registries["subagent_completed"] != float64(1) || registries["permission_event_receivers"] != float64(1) {
+		t.Fatalf("registries=%#v", registries)
+	}
+	if _, ok := registries["workspace_bindings"]; !ok || registries["workspace_bindings"] != nil {
+		t.Fatalf("workspace_bindings=%#v", registries["workspace_bindings"])
+	}
+}
+
 func TestDebugTriggerFeedbackNotifiesReturnsAndPersists(t *testing.T) {
 	logger, err := sessionlog.NewLoggerWithID(t.TempDir(), "debug-feedback")
 	if err != nil {

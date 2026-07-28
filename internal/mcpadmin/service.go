@@ -233,7 +233,7 @@ func Doctor(ctx context.Context, cwd, userConfigPath, name string, probe ProbeFu
 	for _, entry := range entries {
 		item := DoctorEntry{
 			Name: entry.Name, Transport: transport(entry.Config), Target: target(entry.Config),
-			Source: string(entry.Scope), Checks: make([]Check, 0, 2),
+			Source: string(entry.Scope), Checks: make([]Check, 0, 3),
 		}
 		if entry.Blocked != "" {
 			item.Checks = append(item.Checks, Check{
@@ -252,6 +252,14 @@ func Doctor(ctx context.Context, cwd, userConfigPath, name string, probe ProbeFu
 			report.FailingCount++
 			report.Servers = append(report.Servers, item)
 			continue
+		}
+		if check, ok := oauthCredentialsCheck(entry.Name, entry.Config); ok {
+			item.Checks = append(item.Checks, check)
+			if !check.Passed {
+				report.FailingCount++
+				report.Servers = append(report.Servers, item)
+				continue
+			}
 		}
 		probeCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
 		result, probeErr := probe(probeCtx, entry.Name, entry.Config, cwd)
@@ -284,11 +292,11 @@ func Probe(ctx context.Context, name string, server config.MCPServerConfig, cwd 
 		})
 	case "http":
 		client, initialized, err = mcp.StartHTTP(ctx, mcp.HTTPConfig{
-			Name: name, URL: server.URL, Headers: serverHeaders(server), Client: &http.Client{Timeout: 25 * time.Second},
+			Name: name, URL: server.URL, Headers: probeHeaders(name, server), Client: &http.Client{Timeout: 25 * time.Second},
 		})
 	case "sse":
 		client, initialized, err = mcp.StartSSE(ctx, mcp.HTTPConfig{
-			Name: name, URL: server.URL, Headers: serverHeaders(server), Client: &http.Client{Timeout: 25 * time.Second},
+			Name: name, URL: server.URL, Headers: probeHeaders(name, server), Client: &http.Client{Timeout: 25 * time.Second},
 		})
 	default:
 		return ProbeResult{}, fmt.Errorf("unsupported MCP transport %q", server.Type)
@@ -538,6 +546,48 @@ func serverHeaders(server config.MCPServerConfig) map[string]string {
 		}
 	}
 	return headers
+}
+
+func probeHeaders(name string, server config.MCPServerConfig) map[string]string {
+	return mcp.ApplyCredentialHeaders(serverHeaders(server), name, server.URL, "")
+}
+
+// oauthCredentialsCheck reports auth readiness for remote HTTP/SSE servers.
+// Stdio servers skip this check (ok=false).
+func oauthCredentialsCheck(name string, server config.MCPServerConfig) (Check, bool) {
+	switch transport(server) {
+	case "http", "sse":
+	default:
+		return Check{}, false
+	}
+	if strings.TrimSpace(server.URL) == "" {
+		return Check{}, false
+	}
+	headers := serverHeaders(server)
+	if headerHasAuthorization(headers) {
+		detail := "static bearer"
+		if server.BearerTokenEnvVar != "" && os.Getenv(server.BearerTokenEnvVar) != "" {
+			detail = "bearer_token_env_var"
+		}
+		return Check{Label: "oauth credentials", Passed: true, Detail: detail}, true
+	}
+	remote := mcp.ServerConfig{Name: name, Type: transport(server), URL: server.URL, Headers: headers}
+	if mcp.NeedsMCPAuth(remote, "") {
+		return Check{
+			Label: "oauth credentials", Detail: "no stored or static credentials",
+			Hint: "authenticate via /mcps I or x.ai/mcp/auth_trigger",
+		}, true
+	}
+	return Check{Label: "oauth credentials", Passed: true, Detail: "stored credentials"}, true
+}
+
+func headerHasAuthorization(headers map[string]string) bool {
+	for key, value := range headers {
+		if strings.EqualFold(key, "Authorization") && strings.TrimSpace(value) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func sanitizeError(message string) string {

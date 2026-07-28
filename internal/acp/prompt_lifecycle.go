@@ -48,6 +48,11 @@ func (s *Server) finishPrompt(incoming message, current *session, lifecycle prom
 		stopReason = "error"
 		agentResult = err.Error()
 	}
+	if err == nil && stopReason != "cancelled" && stopReason != "error" {
+		current.mu.Lock()
+		current.usage.recordTurn(result)
+		current.mu.Unlock()
+	}
 	params := map[string]any{
 		"sessionId": lifecycle.sessionID, "promptId": lifecycle.promptID,
 		"stopReason": stopReason, "agentResult": agentResult,

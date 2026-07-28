@@ -16,7 +16,7 @@ import (
 // project TOML replacing global entries.
 func DiscoverMCPServers(workspaceRoot string, cfg Config, plugins []plugin.Plugin, projectTrusted bool) map[string]MCPServerConfig {
 	home, _ := os.UserHomeDir()
-	return discoverMCPServers(workspaceRoot, home, cfg, plugins, projectTrusted)
+	return ApplyMCPSetupPreferences(discoverMCPServers(workspaceRoot, home, cfg, plugins, projectTrusted))
 }
 
 func discoverMCPServers(workspaceRoot, home string, cfg Config, plugins []plugin.Plugin, projectTrusted bool) map[string]MCPServerConfig {
@@ -107,13 +107,74 @@ func discoverMCPServers(workspaceRoot, home string, cfg Config, plugins []plugin
 
 	for name, server := range servers {
 		server = expandMCPServer(server, "", "")
-		if strings.TrimSpace(server.Command) == "" && strings.TrimSpace(server.URL) == "" {
+		if strings.TrimSpace(server.Command) == "" && strings.TrimSpace(server.URL) == "" && server.Setup == nil {
 			disabled := false
 			server.Enabled = &disabled
 		}
 		servers[name] = server
 	}
 	return servers
+}
+
+// MCPSetupServerEntry is a config row that declares a setup schema.
+type MCPSetupServerEntry struct {
+	Name   string
+	Config MCPServerConfig
+	Source MCPPreferenceSource
+}
+
+// CollectMCPSetupConfigs returns enabled servers that declare setup schemas
+// (before preference resolution). Used by x.ai/mcp/setup and list placeholders.
+// Config/TOML/project sources win over plugins; plugin rows carry Source.Plugin.
+func CollectMCPSetupConfigs(workspaceRoot string, cfg Config, plugins []plugin.Plugin, projectTrusted bool) map[string]MCPSetupServerEntry {
+	home, _ := os.UserHomeDir()
+	out := map[string]MCPSetupServerEntry{}
+	configServers := discoverMCPServers(workspaceRoot, home, cfg, nil, projectTrusted)
+	for name, server := range configServers {
+		if !server.IsEnabled() || server.Setup == nil {
+			continue
+		}
+		scope := "user"
+		if _, inUser := cfg.MCPServers[name]; !inUser && projectTrusted {
+			scope = "project"
+		}
+		out[name] = MCPSetupServerEntry{
+			Name:   name,
+			Config: server,
+			Source: MCPPreferenceSource{Kind: "config", Scope: &scope},
+		}
+	}
+	claimed := map[string]bool{}
+	for name := range configServers {
+		claimed[name] = true
+	}
+	for _, item := range plugins {
+		if !item.Executable {
+			continue
+		}
+		pluginName := item.Name
+		for _, source := range []struct {
+			data        []byte
+			allowDirect bool
+		}{
+			{data: readSmallFile(item.MCPConfig)},
+			{data: item.InlineMCP, allowDirect: true},
+		} {
+			for name, server := range parseMCPJSON(source.data, source.allowDirect) {
+				if claimed[name] || !server.IsEnabled() || server.Setup == nil {
+					continue
+				}
+				server = expandMCPServer(server, item.Root, item.DataDir)
+				claimed[name] = true
+				out[name] = MCPSetupServerEntry{
+					Name:   name,
+					Config: server,
+					Source: MCPPreferenceSource{Kind: "plugin", Plugin: &pluginName},
+				}
+			}
+		}
+	}
+	return out
 }
 
 func projectMCPNames(workspaceRoot, home string) map[string]bool {

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -592,5 +593,78 @@ func TestConfigureBashBoundsForegroundTimeoutAndOutput(t *testing.T) {
 	}
 	if !strings.Contains(output, "killed (timeout)") {
 		t.Fatalf("expected timeout status, got: %q", output)
+	}
+}
+
+type injectableMemoryCgroup struct {
+	mu   sync.Mutex
+	next *MemoryHighEvent
+}
+
+func (c *injectableMemoryCgroup) AddProcess(int) error { return nil }
+func (c *injectableMemoryCgroup) Close() error         { return nil }
+func (c *injectableMemoryCgroup) Path() string         { return "injectable-cgroup" }
+func (c *injectableMemoryCgroup) TryRecvMemoryHigh() *MemoryHighEvent {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ev := c.next
+	c.next = nil
+	return ev
+}
+
+func TestHandleMemoryHighKillsNewestBackgroundAsOOM(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture is Unix-specific")
+	}
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewProcessManager(ws, PromptApprover{Mode: PermissionAuto})
+	defer manager.Close()
+	fake := &injectableMemoryCgroup{}
+	manager.cgroup = fake
+
+	older, err := manager.Start(context.Background(), "sleep 30")
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	newer, err := manager.Start(context.Background(), "sleep 30")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fake.mu.Lock()
+	fake.next = &MemoryHighEvent{MemoryCurrent: 950, MemoryHighBytes: 1000}
+	fake.mu.Unlock()
+	manager.handleMemoryHigh()
+
+	deadline := time.Now().Add(3 * time.Second)
+	var newerSnap ProcessSnapshot
+	for time.Now().Before(deadline) {
+		for _, snap := range manager.Snapshots() {
+			if snap.TaskID == newer && snap.Completed {
+				newerSnap = snap
+				goto check
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("newer task did not complete after OOM kill")
+check:
+	if newerSnap.ExitCode == nil || *newerSnap.ExitCode != ProcessOOMExitCode {
+		t.Fatalf("exit=%v want %d", newerSnap.ExitCode, ProcessOOMExitCode)
+	}
+	if newerSnap.Signal == nil || *newerSnap.Signal != "oom" {
+		t.Fatalf("signal=%v", newerSnap.Signal)
+	}
+	for _, snap := range manager.Snapshots() {
+		if snap.TaskID == older && snap.Completed {
+			t.Fatalf("older task should still be running: %#v", snap)
+		}
+	}
+	if err := manager.Kill(context.Background(), older); err != nil {
+		t.Fatal(err)
 	}
 }

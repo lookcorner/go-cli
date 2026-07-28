@@ -99,3 +99,44 @@ func TestSkillRefreshRoutesWithoutSessions(t *testing.T) {
 		t.Fatalf("messages=%#v", messages)
 	}
 }
+
+func TestReloadWorkflowsAdvertisesCommands(t *testing.T) {
+	root := t.TempDir()
+	catalog, err := skills.Discover(root, skills.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, ".grok", "skills", "ship", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("---\nname: ship\ndescription: Ship it\n---\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	server := &Server{output: &output, sessions: map[string]*session{
+		"live": {id: "live", cwd: root, runner: &agent.Runner{Skills: catalog}},
+	}}
+	server.handleSkills(context.Background(), message{ID: json.RawMessage("1"), Method: "x.ai/internal/reload_workflows"})
+	messages := decodeACPOutput(t, output.Bytes())
+	if len(messages) != 2 {
+		t.Fatalf("messages=%#v", messages)
+	}
+	if messages[0]["method"] != "session/update" {
+		t.Fatalf("notify=%#v", messages[0])
+	}
+	update := messages[0]["params"].(map[string]any)["update"].(map[string]any)
+	if update["sessionUpdate"] != "available_commands_update" {
+		t.Fatalf("update=%#v", update)
+	}
+	commands := update["availableCommands"].([]any)
+	if len(commands) < 1 {
+		t.Fatalf("commands=%#v", commands)
+	}
+	if messages[1]["result"].(map[string]any)["reloaded"] != float64(1) {
+		t.Fatalf("response=%#v", messages[1])
+	}
+	if items := catalog.List(); len(items) != 1 || items[0].Name != "ship" {
+		t.Fatalf("catalog=%#v", items)
+	}
+}

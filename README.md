@@ -9,6 +9,9 @@ the privacy-oriented community build of the Grok Build coding agent.
 Use `gork inspect` for a redacted configuration and component report, including
 effective Cursor, Claude, and Codex compatibility settings with their local
 resolution source, or `gork inspect --json` for machine-readable output.
+When `compat.cursor.sessions` is enabled, TUI foreign-session discovery covers
+Cursor Desktop composer headers and Cursor CLI chats under
+`~/.cursor/chats/<md5(cwd)>`.
 Use `gork version [--json]` for reference-shaped version information and
 `gork share <session-id>` to create a share URL for an authenticated,
 share-enabled local session.
@@ -74,7 +77,8 @@ session log keeps the citation and deletion tombstone but deliberately omits
 the comment body and performs no cloud upload.
 Client developers can use `x.ai/debug/trigger_feedback` to emit a synthetic,
 locally recorded feedback-request notification without model inference or a
-remote feedback service.
+remote feedback service, and `x.ai/debug/agent` for process-local registry
+counts.
 
 ACP clients can request turn-end ghost text through `x.ai/suggestPrompt`. The
 extension echoes the client generation, returns `null` when no safe suggestion
@@ -466,8 +470,15 @@ preserves trailing blank-line numbering on full-file reads. `memory_edit`
 replaces or deletes a 0-based line range with write approval, reusing the same
 path allowlist and atomic persistence; an empty `new_text` forgets the range,
 and identical content is a no-op.
-It is a deterministic text-only backend; semantic/vector retrieval remains
-pending. Session startup also removes, in the background, empty orphan memory
+It uses durable workspace `index.sqlite` FTS5 BM25 to narrow search candidates
+(`[memory.embedding]` + Markdown reindex), then the same in-process ranker for
+decay/source weights/MMR (ephemeral and index failures fail open). When
+`[memory.embedding].model` is set, session startup attaches an
+`APIEmbeddingProvider` (base URL/API key) so search merges FTS with L2 KNN and
+flush can semantic-dedup near-duplicates. After attach, a background
+`WarmEmbeddings` pass reindexes memory Markdown and fills missing chunk vectors
+(fail-open).
+Session startup also removes, in the background, empty orphan memory
 workspaces older than `[memory.gc].max_age_days` (30 by default); temporary
 `tmp*` workspaces use a 7-day limit when they contain sessions and are removed
 immediately when empty.
@@ -619,7 +630,12 @@ folded tool block into view, and press `e` to expand or collapse it in place.
 Image attachments in tool results are rendered inline on kitty terminals via
 Unicode placeholders (both fullscreen and minimal mode), and in minimal mode
 on terminals that speak the iTerm2 or sixel graphics protocols (detected from
-the environment); other terminals keep the metadata-only rendering. Image
+the environment); other terminals keep the metadata-only rendering. Modal fullscreen overlay escape helpers (Kitty transmit/place and iTerm2) plus
+a `/preview-image` bordered popup chrome, Kitty placeholder click-to-open, footer
+`[Image #N]` prompt-chip hover/click preview, and `/play-video <path>` (ffmpeg
+frame extract) are ready; `/play-video` with no args or a bare name opens the
+newest clip under `artifacts/<session>/videos/`, `/videos` lists those clips,
+`/downloads` lists `artifacts/<session>/downloads` (web_fetch PDFs), `/images` lists `artifacts/<session>/images` (`/preview-image` opens newest or `images/N.png`), and `/fetched` lists truncated text/markdown under `artifacts/<session>/web_fetch/` (`/fetched web_fetch/N.md` or a bare name shows a 32 KiB-capped preview). Image
 bytes persist to the session's asset store, so resumed sessions render the
 same images again.
 On directly supported terminals, Markdown links, bare HTTP(S)/FTP/email URLs, and quoted
@@ -731,7 +747,9 @@ when no browser is available.
 `rosepine-moon`, `oscura-midnight`, and `auto`; aliases such as `dark`, `light`,
 `tokyo`, `rose-pine`, and `oscura` are accepted. With no name, the command cycles
 through the concrete themes. `auto` follows the terminal background hint, and a
-write failure restores the previous palette. `[ui].auto_dark_theme` and
+write failure restores the previous palette. Configs that only set `[ui].ui_theme`
+(reference alias) apply the same palette when `theme` is unset; an explicit
+`theme` always wins. `[ui].auto_dark_theme` and
 `[ui].auto_light_theme` choose the concrete palettes used by `auto`, defaulting
 to `groknight` and `grokday`; `auto` or unknown mapping values fall back to those
 defaults instead of preventing startup.
@@ -1073,7 +1091,7 @@ state; opt-in aliases and ambiguous values such as `on` or `off` are rejected.
 `gork doctor [--json]` and `/doctor` (also `/terminal-setup`, `/terminal-check`, or `/terminal-info`) report the
 detected terminal, multiplexer, SSH and color state, available clipboard routes,
 live tmux option probes when inside tmux (including control-mode), and actionable setup warnings — including
-`NO_COLOR`, Apple Terminal truecolor/OSC 52 limits, iTerm2 OSC 52 permission and VS Code-family SSH non-ASCII copy caveats, SSH/container OSC 52 delivery-unverified and delivery-unavailable clipboard gaps, Voice microphone detection (and a missing-input warning when capture is supported), VTE/xterm.js Shift+Enter newline-fallback gaps, default notification BEL-fallback and focus-tracking gaps, and Byobu-on-screen — without calling the model.
+`NO_COLOR`, Apple Terminal truecolor/OSC 52 limits, iTerm2 OSC 52 permission and VS Code-family SSH non-ASCII copy caveats, SSH/container OSC 52 delivery-unverified and delivery-unavailable clipboard gaps, Voice microphone detection (and a missing-input warning when capture is supported), VTE/xterm.js Shift+Enter newline-fallback gaps, local WezTerm Kitty-keyboard-off guidance, SSH WezTerm recovery via XTVERSION (TUI probe) with SSH-specific Shift+Enter notes; recorded self-report appears in doctor Facts/`--json` as `xtversion`, and whether `ffmpeg` is on PATH for `/play-video`, default notification BEL-fallback and focus-tracking gaps, and Byobu-on-screen — without calling the model.
 `gork doctor fix` and `/doctor fix` list automatic fixes. `gork doctor fix ssh-wrap --yes`
 or `/doctor fix ssh-wrap --yes` installs a managed shell alias so interactive `ssh`
 runs through `gork wrap ssh` (Bash/zsh/fish, local non-Windows shells only). Inside
@@ -1287,7 +1305,7 @@ cached-session, and interactive authentication methods plus the preferred defaul
 The standard `authenticate` request supports API keys, cached credentials, browser
 OIDC, headless device login, and configured external providers. Interactive clients
 receive the mode and URL through `x.ai/auth/get_url` and may return a pasted callback
-URL or authorization code through `x.ai/auth/submit_code`. Completed login updates
+URL or authorization code through `x.ai/auth/submit_code`. `x.ai/auth/cancel` stops an in-flight interactive login (idempotent; optional `request_seq` scopes the cancel). Completed login updates
 credentials, remote settings, model-cache identity, and subsequent sessions without
 restarting the server. Clients can clear the current or a named OAuth scope through
 `x.ai/auth/logout`; `x.ai/internal/auth_cleared` applies the same runtime cleanup when
@@ -1377,7 +1395,8 @@ inclusive `targetPromptIndex` truncation; later load/resume uses the stored
 model override.
 
 Persisted and live sessions also expose `x.ai/session/info`, `rename`,
-`delete`, and `search`. Rename appends an explicit title event, delete removes
+`delete`, and `search`. `x.ai/session/usage` returns cumulative in-process token
+and cost totals (`PromptUsage` wire shape; costs scrub when partial). Rename appends an explicit title event, delete removes
 only the validated JSONL log and its exact artifact directory, and search
 supports workspace filtering, pagination, ranked title/content matches, and
 optional snippets without a separate index service.
@@ -1428,8 +1447,21 @@ include the active model, reasoning effort, permission mode, and worktree state.
 
 `x.ai/session/list` provides the local build-session lane with reference cursor
 encoding, title/ID search, page limits, `kind`/`cwd` facet filters, and window
-facet counts. Its conversations partial flag remains false because this build
-has no cloud conversations backend.
+facet counts. Opt-in cloud conversations (`GROK_SESSION_LIST_CONVERSATIONS=1` or
+`GROK_CHAT_MODE=1`) merge `kind=chat` rows from grok.com
+`/rest/app-chat/conversations` when OAuth is available (including `starred`/`workspace`
+facets, `x.ai/facetFilters.starred`/`workspace`, and single-workspace API pushdown), and set
+`_meta["x.ai/partial"].conversations` with `no_oauth` / `timeout` / `error`
+reasons when the lane degrades. With the same gate, `x.ai/session/rename` and
+`x.ai/session/delete` accept `kind: "chat"` to PUT-rename, optional `starred`
+bool, or soft-delete the
+cloud conversation (404 soft-delete is idempotent). `session/load` and
+`session/resume` with `_meta["x.ai/session"].kind=chat` open a thin resident
+chat session without local JSONL (no transcript replay yet), preferring the
+grok.com `/rest/modes` catalog for the returned model picker.
+Process-wide `--chat` (or `GROK_CHAT_MODE=1`) forces the session list to chat
+rows, opens `session/new` as chat, refuses local Build loads, and advertises
+`chatMode` plus modes `modelState` on `initialize`.
 
 `x.ai/session/close` performs idempotent live-session shutdown using the same
 runtime and cancellation cleanup as the standard ACP close method.
@@ -1456,14 +1488,20 @@ requests fail silently and run only after three turns, three idle minutes, and
 a new turn since the last successful recap. Closing the session cancels and
 waits for recap generation without changing the main response chain or history.
 
-`x.ai/workspaces/list` returns the reference-compatible partial `no_oauth`
-response because this local build has no cloud workspace backend.
+`x.ai/workspaces/list` fetches grok.com `/rest/workspaces` when xAI OAuth is
+available (page/query/kind filters, `nextPageToken`), and otherwise returns the
+reference-compatible empty partial with `no_oauth` or `error`.
 
 Live ACP sessions expose their resolved skill catalog through
 `x.ai/skills/list` and `x.ai/skills/config`, including scope, invocation gates,
 plugin metadata, configured paths, ignore paths, and enabled state.
 `x.ai/skills/refresh-baseline` and the internal skills reload endpoint
 re-discover every live session's catalog from disk.
+`x.ai/internal/reload_workflows` also refreshes those catalogs and pushes an
+`available_commands_update` to every live session.
+`x.ai/workflows/list` returns session-scoped workflow listings (builtin
+`deep-research`, project `.grok/workflows`, and `$GROK_HOME/workflows`) by
+scanning `.rhai` files and parsing `let meta = #{...}` without executing Rhai.
 
 Live session MCP servers are exposed through `x.ai/mcp/list`, and
 `x.ai/mcp/call` invokes a named server tool through the same client and
@@ -1484,11 +1522,25 @@ pools are not yet available. HTTP/SSE servers attach `Authorization` from
 `$GROK_HOME/mcp_credentials.json` (Rust-compatible `name:url` keys) when no
 static header or `bearer_token_env_var` is set, refresh once on HTTP 401, and
 support interactive OAuth enrollment via RFC 8414/9728 discovery, DCR, and
-PKCE loopback. `x.ai/mcp/auth_status` lists servers that still need auth;
+PKCE loopback. `gork mcp doctor` reports an `oauth credentials` check for
+HTTP/SSE servers (static bearer, `bearer_token_env_var`, or store token;
+missing credentials fail closed with an enroll hint). `gork inspect` MCP
+entries add redacted targets plus `auth=` presence (`static`/`env`/`stored`/
+`oauth_byo`/`none`) and env-var names only—never tokens or secrets. `x.ai/mcp/auth_status`
+lists servers that still need auth;
 `x.ai/mcp/auth_trigger` and the TUI `/mcps` `I` key start enrollment for remote
-servers (stdio stays explicitly unsupported). Optional TOML fields
+servers (stdio stays explicitly unsupported). Concurrent enrollments share one
+browser flow via in-process single-flight, a Unix `$GROK_HOME/mcp_auth_*.lock`,
+and credential-store polling while waiting on the loopback callback. When the
+loopback redirect is unreachable, paste the callback URL through
+`x.ai/mcp/auth_submit` (or `SubmitMCPAuthCallback` / `PastedInput`). Optional TOML fields
 `oauth_client_id`, `oauth_client_secret_env_var`, `oauth_scopes`, and
-`oauth_callback_port` select BYO clients. Local MCP configuration files reload
+`oauth_callback_port` select BYO clients. Servers that declare a `setup`
+select schema complete configuration through `x.ai/mcp/setup`, which stores
+answers in `$GROK_HOME/mcp_preferences.json`, renders `{{variable}}` templates,
+reloads the live MCP base, and enables the server. `x.ai/mcp/list` includes
+unresolved setup schemas as `setuprequired` placeholders with `setup` and
+`setupValues`, including executable plugin MCP sources. Local MCP configuration files reload
 automatically without dropping client-provided session servers.
 The internal global and project-scoped MCP reload endpoints refresh matching
 live sessions from disk while preserving those client-provided overrides.
@@ -1710,7 +1762,10 @@ foreground session when they finish. The earlier aliases
 `kill_background_command` remain available. Output is captured in a bounded
 tail buffer. `[toolset.bash] timeout_secs` changes the default foreground
 timeout and `output_byte_limit` changes the captured tail limit; unset values
-default to 120 seconds and 20,000 bytes. Process groups are terminated on
+default to 120 seconds and 20,000 bytes. Top-level `[shell_environment_policy]`
+can reshape the inherited agent shell environment (`inherit = all|core|none`,
+`exclude`/`include_only` globs, `set`, and optional default `*KEY*`/`*SECRET*`/
+`*TOKEN*` excludes when `ignore_default_excludes = false`). Process groups are terminated on
 request, and every remaining
 process is cleaned up when Gork exits. File operations resolve symlinks and
 reject paths outside the selected workspace. Shell commands start in the
@@ -1726,8 +1781,33 @@ isolate child process networking through bubblewrap or Seatbelt. Requesting any
 sandbox fails closed when
 its platform helper is unavailable. This boundary covers spawned shell
 processes, not the parent Gork process, MCP/LSP servers, or in-process network
-clients. Approval and the file tools' workspace/symlink checks remain
-independent safety boundaries.
+clients. On Linux with cgroup v2, model-started foreground and background shell
+children and ACP PTY/piped terminals are also placed in a best-effort
+memory-limited cgroup (`memory.high` / `memory.max`); unavailable hosts skip
+silently. When `memory.events` reports sustained high pressure, Gork kills the
+newest running shell or ACP terminal child and reports exit `137` with signal
+`oom`. On Linux, enabling a sandbox profile also applies a best-effort
+parent-process Landlock FS allowlist (workspace/read-only/strict path sets);
+unsupported kernels warn and continue, and parent TCP stays open for model/MCP
+HTTP. Sandboxed Linux shells additionally install a seccomp namespace lockdown
+inside the bubblewrap child so nested `unshare`/`setns`/namespace `clone`
+attempts fail. Read-only and strict profiles also stack a child network seccomp
+deny (`connect`/`bind`/`send*`/`listen`/`accept*`) on top of `--unshare-net`.
+Linux also re-execs the parent under bubblewrap so global hook sources under
+`$GROK_HOME` (`hooks/`, `hooks-paths`, and listed files) are mounted
+read-only (fail-closed when `bwrap` is missing or the remount cannot be
+verified). Custom profiles in `$GROK_HOME/sandbox.toml` or
+`<workspace>/.grok/sandbox.toml` may `extends` a built-in and add
+`read_only` / `read_write` / `restrict_network`; parent Landlock applies the
+merged allowlist (fail-closed on Linux when Landlock cannot apply), and
+child shells wrap with the extends base. Project TOML is additive only
+(cannot replace a globally defined profile name). On Linux, custom `deny`
+paths are bind-over blocked during the same parent bwrap re-exec using
+mode-000 placeholders (exact paths and launch-time glob expansion;
+later-created glob matches are not covered). `gork doctor` / `/doctor`
+reports when a project `.grok/sandbox.toml` tries to redefine a user
+custom profile (global definition wins). Approval and the file tools'
+workspace/symlink checks remain independent safety boundaries.
 
 `monitor` runs a background command whose stdout is delivered as real-time,
 debounced events. It applies the reference line/batch limits, token-bucket rate

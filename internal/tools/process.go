@@ -35,24 +35,38 @@ const (
 )
 
 type ProcessManager struct {
-	ws           *workspace.Workspace
-	approver     Approver
-	nextID       atomic.Uint64
-	mu           sync.Mutex
-	processes    map[string]*backgroundProcess
-	closed       bool
-	stateMu      sync.Mutex
-	currentDir   string
-	environment  []string
-	shellPrelude string
-	sandboxMu    sync.RWMutex
-	sandbox      SandboxProfile
-	rewind       *mutationCheckpoint
-	observerMu   sync.RWMutex
-	observer     ProcessObserver
-	bashMu       sync.RWMutex
-	bashTimeout  time.Duration
-	bashOutput   int
+	ws              *workspace.Workspace
+	approver        Approver
+	nextID          atomic.Uint64
+	mu              sync.Mutex
+	processes       map[string]*backgroundProcess
+	closed          bool
+	stateMu         sync.Mutex
+	currentDir      string
+	environment     []string
+	shellPrelude    string
+	sandboxMu       sync.RWMutex
+	sandbox         SandboxProfile
+	restrictNetwork bool
+	rewind          *mutationCheckpoint
+	observerMu      sync.RWMutex
+	observer        ProcessObserver
+	bashMu          sync.RWMutex
+	bashTimeout     time.Duration
+	bashOutput      int
+	shellEnvPolicy  ShellEnvironmentPolicy
+	cgroupMu        sync.Mutex
+	cgroup          shellCgroup
+	cgroupCfg       CgroupMemoryConfig
+	oomStop         chan struct{}
+	fgMu            sync.Mutex
+	foreground      *foregroundSlot
+}
+
+type foregroundSlot struct {
+	cmd     *exec.Cmd
+	started time.Time
+	oom     atomic.Bool
 }
 
 // ConfigureBash sets the [toolset.bash] bounds for shell commands. Zero values
@@ -61,6 +75,145 @@ func (m *ProcessManager) ConfigureBash(timeout time.Duration, outputLimit int) {
 	m.bashMu.Lock()
 	m.bashTimeout, m.bashOutput = max(timeout, 0), max(outputLimit, 0)
 	m.bashMu.Unlock()
+}
+
+// ConfigureCgroupMemory sets Linux cgroup v2 memory.high/max for spawned shell
+// children. Zero values use DefaultCgroupMemoryConfig. Non-Linux hosts ignore this.
+func (m *ProcessManager) ConfigureCgroupMemory(cfg CgroupMemoryConfig) {
+	m.cgroupMu.Lock()
+	m.cgroupCfg = cfg
+	m.cgroupMu.Unlock()
+}
+
+func (m *ProcessManager) ensureShellCgroup() shellCgroup {
+	m.cgroupMu.Lock()
+	defer m.cgroupMu.Unlock()
+	if m.cgroup != nil {
+		return m.cgroup
+	}
+	m.cgroup = tryShellCgroup(m.cgroupCfg)
+	if m.cgroup != nil && m.oomStop == nil {
+		m.oomStop = make(chan struct{})
+		go m.pollMemoryHigh(m.oomStop)
+	}
+	return m.cgroup
+}
+
+func (m *ProcessManager) adoptShellProcess(cmd *exec.Cmd) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	guard := m.ensureShellCgroup()
+	if guard == nil {
+		return
+	}
+	_ = guard.AddProcess(cmd.Process.Pid)
+}
+
+func (m *ProcessManager) closeShellCgroup() {
+	m.cgroupMu.Lock()
+	guard := m.cgroup
+	m.cgroup = nil
+	stop := m.oomStop
+	m.oomStop = nil
+	m.cgroupMu.Unlock()
+	if stop != nil {
+		close(stop)
+	}
+	if guard != nil {
+		_ = guard.Close()
+	}
+}
+
+func (m *ProcessManager) pollMemoryHigh(stop <-chan struct{}) {
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			m.handleMemoryHigh()
+		}
+	}
+}
+
+func (m *ProcessManager) handleMemoryHigh() {
+	m.cgroupMu.Lock()
+	guard := m.cgroup
+	m.cgroupMu.Unlock()
+	if guard == nil || guard.TryRecvMemoryHigh() == nil {
+		return
+	}
+	m.killNewestForOOM()
+}
+
+func (m *ProcessManager) killNewestForOOM() {
+	type candidate struct {
+		started time.Time
+		kill    func()
+	}
+	var best *candidate
+
+	m.fgMu.Lock()
+	if slot := m.foreground; slot != nil && slot.cmd != nil && slot.cmd.Process != nil && !slot.oom.Load() {
+		started := slot.started
+		cmd := slot.cmd
+		best = &candidate{started: started, kill: func() {
+			slot.oom.Store(true)
+			_ = forceKillProcess(cmd)
+		}}
+	}
+	m.fgMu.Unlock()
+
+	m.mu.Lock()
+	for _, process := range m.processes {
+		select {
+		case <-process.done:
+			continue
+		default:
+		}
+		process.mu.Lock()
+		ended := !process.ended.IsZero() || process.oom
+		started := process.started
+		cmd := process.cmd
+		process.mu.Unlock()
+		if ended || cmd == nil || cmd.Process == nil {
+			continue
+		}
+		if best != nil && !started.After(best.started) {
+			continue
+		}
+		proc := process
+		best = &candidate{started: started, kill: func() {
+			proc.mu.Lock()
+			proc.oom = true
+			proc.killed = true
+			proc.mu.Unlock()
+			_ = forceKillProcess(cmd)
+		}}
+	}
+	m.mu.Unlock()
+
+	if best != nil {
+		best.kill()
+	}
+}
+
+func (m *ProcessManager) beginForeground(cmd *exec.Cmd) *foregroundSlot {
+	slot := &foregroundSlot{cmd: cmd, started: time.Now()}
+	m.fgMu.Lock()
+	m.foreground = slot
+	m.fgMu.Unlock()
+	return slot
+}
+
+func (m *ProcessManager) endForeground(slot *foregroundSlot) {
+	m.fgMu.Lock()
+	if m.foreground == slot {
+		m.foreground = nil
+	}
+	m.fgMu.Unlock()
 }
 
 // defaultShellTimeout is the configured foreground timeout, or the reference
@@ -125,6 +278,7 @@ type backgroundProcess struct {
 	err         error
 	ended       time.Time
 	killed      bool
+	oom         bool
 	terminal    bool
 	blockWaited bool
 	consumed    bool
@@ -191,18 +345,27 @@ func NewProcessManager(ws *workspace.Workspace, approver Approver) *ProcessManag
 	return &ProcessManager{
 		ws: ws, approver: approver, processes: make(map[string]*backgroundProcess),
 		currentDir: ws.Root(), environment: os.Environ(),
+		shellEnvPolicy: DefaultShellEnvironmentPolicy(),
 	}
+}
+
+func (m *ProcessManager) ConfigureShellEnvironmentPolicy(policy ShellEnvironmentPolicy) {
+	m.stateMu.Lock()
+	m.shellEnvPolicy = policy
+	m.stateMu.Unlock()
 }
 
 func (m *ProcessManager) ConfigureEnvironment(values map[string]string) {
 	m.stateMu.Lock()
-	m.environment = setEnvironment(os.Environ(), values)
+	base := ApplyShellEnvironmentPolicy(os.Environ(), m.shellEnvPolicy)
+	m.environment = setEnvironment(base, values)
 	m.stateMu.Unlock()
 }
 
-func (m *ProcessManager) setSandbox(profile SandboxProfile) {
+func (m *ProcessManager) setSandbox(profile SandboxProfile, restrictNetwork bool) {
 	m.sandboxMu.Lock()
 	m.sandbox = profile
+	m.restrictNetwork = restrictNetwork
 	m.sandboxMu.Unlock()
 }
 
@@ -279,6 +442,7 @@ func (m *ProcessManager) start(ctx context.Context, command, description string,
 	if err := cmd.Start(); err != nil {
 		return "", fmt.Errorf("start command: %w", err)
 	}
+	m.adoptShellProcess(cmd)
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
@@ -375,6 +539,9 @@ func (m *ProcessManager) RunForeground(ctx context.Context, command string, time
 	if err := cmd.Start(); err != nil {
 		return "", fmt.Errorf("start command: %w", err)
 	}
+	m.adoptShellProcess(cmd)
+	fg := m.beginForeground(cmd)
+	defer m.endForeground(fg)
 	wait := make(chan error, 1)
 	go func() { wait <- cmd.Wait() }()
 	if timeout <= 0 {
@@ -386,7 +553,9 @@ func (m *ProcessManager) RunForeground(ctx context.Context, command string, time
 	status := "0"
 	select {
 	case waitErr = <-wait:
-		if waitErr != nil {
+		if fg.oom.Load() {
+			status = fmt.Sprintf("%d", ProcessOOMExitCode)
+		} else if waitErr != nil {
 			status = exitStatus(waitErr)
 		}
 	case <-timer.C:
@@ -795,7 +964,7 @@ func (m *ProcessManager) Snapshots() []ProcessSnapshot {
 
 func snapshotProcess(process *backgroundProcess, completed bool) ProcessSnapshot {
 	process.mu.Lock()
-	ended, killed, blockWaited := process.ended, process.killed, process.blockWaited
+	ended, killed, blockWaited, oom := process.ended, process.killed, process.blockWaited, process.oom
 	process.mu.Unlock()
 	output, truncated := process.output.Snapshot()
 	item := ProcessSnapshot{
@@ -806,7 +975,12 @@ func snapshotProcess(process *backgroundProcess, completed bool) ProcessSnapshot
 	if completed {
 		end := processTime(ended)
 		item.EndTime = &end
-		if process.cmd.ProcessState != nil && process.cmd.ProcessState.ExitCode() >= 0 {
+		if oom {
+			code := ProcessOOMExitCode
+			sig := "oom"
+			item.ExitCode = &code
+			item.Signal = &sig
+		} else if process.cmd.ProcessState != nil && process.cmd.ProcessState.ExitCode() >= 0 {
 			code := process.cmd.ProcessState.ExitCode()
 			item.ExitCode = &code
 		}
@@ -859,6 +1033,7 @@ func (m *ProcessManager) Close() error {
 			}
 		}
 	}
+	m.closeShellCgroup()
 	if len(failures) > 0 {
 		return errors.New(strings.Join(failures, "; "))
 	}
@@ -869,8 +1044,9 @@ func (m *ProcessManager) shellCommand(command string) (*exec.Cmd, error) {
 	executable, args := shellCommandParts(command)
 	m.sandboxMu.RLock()
 	profile := m.sandbox
+	restrictNetwork := m.restrictNetwork
 	m.sandboxMu.RUnlock()
-	return sandboxCommand(nil, profile, m.ws.Root(), executable, args...)
+	return sandboxCommand(nil, profile, restrictNetwork, m.ws.Root(), executable, args...)
 }
 
 func shellCommandParts(command string) (string, []string) {

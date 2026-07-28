@@ -895,8 +895,12 @@ type model struct {
 	activeTurnSerial    uint64
 	initial             string
 	pendingPrompts      []string
-	pendingPromptImages [][]api.ContentPart
 	promptImages        []api.ContentPart
+	promptChipHits      []promptChipHit
+	promptChipHover     int
+	promptChipRow       int
+	promptChipPartIndex int
+	pendingPromptImages [][]api.ContentPart
 	clipboardRead       func(context.Context) (appclipboard.Content, error)
 	primaryRead         func(context.Context) (string, error)
 	scheduled           []tools.ScheduledTaskFired
@@ -953,6 +957,11 @@ type model struct {
 	imageProtocol        imageProtocol
 	protocolChecked      bool
 	pendingImages        []tools.ImageAttachment
+	overlayImages        []tools.ImageAttachment
+	overlayByKittyID     map[int]tools.ImageAttachment
+	imageOverlay         *imageOverlayState
+	videoOverlay         *VideoViewer
+	videoOverlayEpoch    uint64
 	nextKittyID          int
 	kittyUploads         [][]byte
 	gboom                *gboomState
@@ -1298,7 +1307,7 @@ func Run(ctx context.Context, runner *agent.Runner, bridge *Bridge, initialPromp
 		modelName:          modelName, defaultModelID: options.DefaultModelID, previousID: previousID, width: 80, height: 24,
 		minimal:       options.Minimal,
 		contextWindow: runner.ContextWindow,
-		status:        "ready", initial: strings.TrimSpace(initialPrompt), historyIndex: -1,
+		status:        "ready", initial: strings.TrimSpace(initialPrompt), historyIndex: -1, promptChipHover: -1,
 		history: loadPromptHistory(runner, workspace), selectionMode: parseTextSelectionMode(options.Mode), persistSelection: options.SetSelectionMode,
 		wordSeparators: defaultWordSeparators, mouseToggle: options.MouseReportingToggle, vimMode: options.VimMode, persistVimMode: options.SetVimMode,
 		compactMode: options.CompactMode, persistCompactMode: options.SetCompactMode,
@@ -1507,12 +1516,19 @@ func (m *model) Init() tea.Cmd {
 		initial = m.minimalPrint(m.minimalInitial)
 		m.minimalInitial = ""
 	}
+	xtversionProbe := tea.Cmd(nil)
+	if terminaldiag.ShouldProbeXTVERSION(os.Getenv) {
+		xtversionProbe = func() tea.Msg { return tea.RequestTerminalVersion() }
+	}
 	if m.startupDashboard {
 		m.startupDashboard = false
-		return tea.Sequence(initial, m.openDashboard(), wait)
+		return tea.Sequence(initial, xtversionProbe, m.openDashboard(), wait)
 	}
 	if m.initial == "" {
 		commands := []tea.Cmd{wait}
+		if xtversionProbe != nil {
+			commands = append(commands, xtversionProbe)
+		}
 		if m.foreignResumeReady && (m.foreignSessions.Claude || m.foreignSessions.Codex || m.foreignSessions.Cursor) {
 			workspace, sources := m.workspace, m.foreignSessions
 			commands = append(commands, func() tea.Msg {
@@ -1534,7 +1550,7 @@ func (m *model) Init() tea.Cmd {
 	m.running = true
 	m.stashInFlightPrompt(prompt, nil, requestRewind)
 	m.beginTurn(prompt)
-	return tea.Sequence(initial, tea.Batch(wait, runTurn(turnCtx, m.runner, prompt, m.previousID, m.activeTurnSerial)))
+	return tea.Sequence(initial, tea.Batch(xtversionProbe, wait, runTurn(turnCtx, m.runner, prompt, m.previousID, m.activeTurnSerial)))
 }
 
 func (m *model) welcomeChangelogCmd() tea.Cmd {
@@ -1559,7 +1575,7 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if progressCommand := current.syncTurnActivity(); progressCommand != nil {
 			command = tea.Batch(command, progressCommand)
 		}
-		command = tea.Batch(command, current.flushKittyUploads())
+		command = tea.Batch(command, current.flushKittyUploads(), current.flushImageOverlay(), current.flushVideoOverlay())
 	}
 	if !ok || !current.minimal {
 		return updated, command
@@ -2497,6 +2513,23 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.finishDashboardPoll(msg)
 	case gboomTickEvent:
 		return m, m.handleGboomTick(msg)
+	case videoOverlayTickEvent:
+		if m.videoOverlay == nil || msg.epoch != m.videoOverlayEpoch {
+			return m, nil
+		}
+		m.videoOverlay.Tick()
+		return m, m.videoOverlayTickCmd()
+	case imageOverlayClickEvent:
+		if m.openImageOverlayByKittyID(msg.id) {
+			m.status = "image preview"
+		}
+		return m, nil
+	case promptChipHoverEvent:
+		if !msg.active {
+			return m, m.clearPromptChipHover()
+		}
+		m.setPromptChipHover(msg.index, msg.sticky)
+		return m, nil
 	case gboomMouseEvent:
 		if m.gboom != nil {
 			m.gboom.handleMouse(msg)
@@ -2599,6 +2632,9 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handlePaste(msg.text)
 	case tea.KeyboardEnhancementsMsg:
 		m.voiceKeyReleases = msg.SupportsEventTypes()
+	case tea.TerminalVersionMsg:
+		terminaldiag.RecordXTVERSION(msg.Name)
+		return m, nil
 	}
 	return m, nil
 }
@@ -2763,6 +2799,12 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.remember != nil {
 		return m.handleRememberReviewKey(msg)
 	}
+	if m.videoOverlay != nil {
+		return m.handleVideoOverlayKey(msg)
+	}
+	if m.imageOverlay != nil {
+		return m.handleImageOverlayKey(msg)
+	}
 	if m.viewer != nil {
 		if stroke == "ctrl+q" {
 			return m, tea.Quit
@@ -2892,7 +2934,12 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		if key.Code == tea.KeyEsc && len(m.input) == 0 && len(m.promptImages) > 0 {
 			m.promptImages = nil
+			m.promptChipHits = nil
+			m.promptChipHover = -1
 			m.status = "image attachments cleared"
+			if m.imageOverlay != nil && (m.imageOverlay.source == promptChipHoverSource || m.imageOverlay.source == promptChipClickSource) {
+				return m, m.closeImageOverlay()
+			}
 			return m, nil
 		}
 		if key.Code == tea.KeyEsc && len(m.input) == 0 {
@@ -3114,6 +3161,66 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.screenMode = &ScreenModeError{Path: sessionPath, Workspace: m.workspace}
 			m.status = "switching to fullscreen mode"
 			return m, tea.Quit
+		case "/preview-image", "/image-preview":
+			if m.minimal {
+				m.status = "image overlay is fullscreen-only"
+				return m, nil
+			}
+			path := ""
+			if len(fields) > 1 {
+				path = strings.TrimSpace(strings.Join(fields[1:], " "))
+			}
+			if !m.openImageOverlayPath(path) {
+				if m.status == "" || m.status == "ready" || m.status == "image preview" {
+					m.status = "no image to preview"
+				}
+			}
+			return m, nil
+		case "/images", "/list-images":
+			if m.minimal {
+				m.status = "session images are fullscreen-only"
+				return m, nil
+			}
+			m.appendSystem(m.listSessionImages())
+			m.status = "session images"
+			return m, nil
+		case "/play-video", "/video-play":
+			if m.minimal {
+				m.status = "video overlay is fullscreen-only"
+				return m, nil
+			}
+			path := ""
+			if len(fields) > 1 {
+				path = strings.TrimSpace(strings.Join(fields[1:], " "))
+			}
+			if !m.openVideoOverlayPath(path) {
+				return m, nil
+			}
+			return m, m.videoOverlayTickCmd()
+		case "/videos", "/list-videos":
+			if m.minimal {
+				m.status = "session videos are fullscreen-only"
+				return m, nil
+			}
+			m.appendSystem(m.listSessionVideos())
+			m.status = "session videos"
+			return m, nil
+		case "/downloads", "/list-downloads":
+			m.appendSystem(m.listSessionDownloads())
+			m.status = "session downloads"
+			return m, nil
+		case "/fetched", "/list-fetched", "/web-fetch-artifacts":
+			arg := ""
+			if len(fields) > 1 {
+				arg = strings.TrimSpace(strings.Join(fields[1:], " "))
+			}
+			m.appendSystem(m.sessionWebFetch(arg))
+			if arg == "" {
+				m.status = "session web_fetch artifacts"
+			} else {
+				m.status = "web_fetch artifact"
+			}
+			return m, nil
 		case "/login", "/logout":
 			if m.runner == nil {
 				m.status = "authentication unavailable"
@@ -5915,6 +6022,9 @@ func (m *model) enrichReplayImage(image *session.DisplayImage, sessionPath strin
 	image.Data = data
 	cols, rows := inlineImageCells(image.Width, image.Height, 12)
 	m.kittyUploads = append(m.kittyUploads, kittyTransmitVirtual(image.KittyID, data, cols, rows))
+	m.rememberOverlayImageID(image.KittyID, tools.ImageAttachment{
+		MediaType: image.MediaType, Width: image.Width, Height: image.Height, Data: data,
+	})
 }
 
 func (m *model) beginTurn(prompt string) {
@@ -6136,6 +6246,8 @@ func readPrimarySelection(ctx context.Context, goos string, mouse tea.Mouse, rea
 func (m *model) takePromptImages() []api.ContentPart {
 	images := m.promptImages
 	m.promptImages = nil
+	m.promptChipHits = nil
+	m.promptChipHover = -1
 	return images
 }
 
@@ -6507,6 +6619,12 @@ func (m *model) View() tea.View {
 		if m.jump != nil {
 			visible = m.jumpOverlay(visible, width)
 		}
+		if m.imageOverlay != nil {
+			visible = m.imageOverlayChrome(visible, width, m.contentHeight())
+		}
+		if m.videoOverlay != nil {
+			visible = m.videoOverlayChrome(visible, width, m.contentHeight())
+		}
 		visible = m.renderTimeline(visible, timelineRail)
 		visible = m.debug.overlay(visible, width, m.scroll, m.maxTranscriptScroll(), m.contentHeight(), transcriptLineCount, m.scrollLines, m.invertScroll, m.scrollFocused)
 	}
@@ -6518,6 +6636,7 @@ func (m *model) View() tea.View {
 	for index, line := range visible {
 		plainVisible[index] = stripUIANSI(line)
 	}
+	styledVisible := append([]string(nil), visible...)
 	if m.selection != nil {
 		visible = m.selection.highlightedLines(visible)
 	}
@@ -6635,7 +6754,18 @@ func (m *model) View() tea.View {
 		}
 		parts := m.slashMenuLines(width)
 		if len(m.promptImages) > 0 {
-			parts = append(parts, ansiDim+fmt.Sprintf("[Image x%d]", len(m.promptImages))+ansiReset)
+			chipLine, hits := promptImageChipLine(m.promptImages, width)
+			m.promptChipHits = hits
+			if chipLine != "" {
+				m.promptChipPartIndex = len(parts)
+				parts = append(parts, ansiDim+chipLine+ansiReset)
+			} else {
+				m.promptChipPartIndex = -1
+			}
+		} else {
+			m.promptChipHits = nil
+			m.promptChipPartIndex = -1
+			m.promptChipRow = -1
 		}
 		if m.voiceInterim != "" {
 			parts = append(parts, ansiDim+"🎙 "+truncate(m.voiceInterim, max(width-3, 1))+ansiReset)
@@ -6689,6 +6819,10 @@ func (m *model) View() tea.View {
 	contentHeight := m.contentHeight()
 	bannerHeight := len(banner)
 	bodyEnd := bannerHeight + contentHeight
+	if m.promptChipPartIndex >= 0 && len(m.promptChipHits) > 0 {
+		// header + banner + body + status, then footer part index.
+		m.promptChipRow = 1 + bannerHeight + contentHeight + 1 + m.promptChipPartIndex
+	}
 	view.OnMouse = func(message tea.MouseMsg) tea.Cmd {
 		mouse := message.Mouse()
 		if m.gboom != nil {
@@ -6738,6 +6872,16 @@ func (m *model) View() tea.View {
 					return nil
 				}
 			}
+			if !m.minimal && m.imageOverlay == nil && m.videoOverlay == nil && bodyRow >= 0 && bodyRow < len(styledVisible) {
+				if id, ok := kittyIDFromStyledLine(styledVisible[bodyRow]); ok {
+					return func() tea.Msg { return imageOverlayClickEvent{id: id} }
+				}
+			}
+			if !m.minimal && m.videoOverlay == nil && m.promptChipRow >= 0 && mouse.Y == m.promptChipRow {
+				if index, ok := m.promptChipAt(mouse.X); ok {
+					return func() tea.Msg { return promptChipHoverEvent{index: index, active: true, sticky: true} }
+				}
+			}
 			if mouse.Y >= bannerHeight+1 && mouse.Y <= bodyEnd {
 				adjusted := mouse
 				adjusted.Y -= bannerHeight
@@ -6761,6 +6905,14 @@ func (m *model) View() tea.View {
 				adjusted.Y -= bannerHeight
 				event := mouseSelectionEvent{phase: selectionMove, point: selectionPointForMouse(adjusted, m.selection.lines)}
 				return func() tea.Msg { return event }
+			}
+			if !m.minimal && m.videoOverlay == nil && m.promptChipRow >= 0 && mouse.Y == m.promptChipRow {
+				if index, ok := m.promptChipAt(mouse.X); ok {
+					return func() tea.Msg { return promptChipHoverEvent{index: index, active: true} }
+				}
+			}
+			if m.promptChipHover >= 0 && m.imageOverlay != nil && m.imageOverlay.source == promptChipHoverSource {
+				return func() tea.Msg { return promptChipHoverEvent{active: false} }
 			}
 			if m.jump == nil && timelineRail != nil {
 				hit := timelineRail.hit(mouse.X, bodyRow)

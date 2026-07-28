@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,11 +20,13 @@ import (
 
 	"github.com/lookcorner/go-cli/internal/agent"
 	"github.com/lookcorner/go-cli/internal/api"
+	"github.com/lookcorner/go-cli/internal/auth"
 	"github.com/lookcorner/go-cli/internal/hooks"
 	"github.com/lookcorner/go-cli/internal/marketplace"
 	mcppkg "github.com/lookcorner/go-cli/internal/mcp"
 	"github.com/lookcorner/go-cli/internal/memory"
 	"github.com/lookcorner/go-cli/internal/plugin"
+	"github.com/lookcorner/go-cli/internal/remote"
 	sessionlog "github.com/lookcorner/go-cli/internal/session"
 	"github.com/lookcorner/go-cli/internal/skills"
 	"github.com/lookcorner/go-cli/internal/subagent"
@@ -566,6 +570,8 @@ func TestSessionRosterChangedLifecycle(t *testing.T) {
 }
 
 func TestUnifiedSessionListWireContract(t *testing.T) {
+	t.Setenv("GROK_SESSION_LIST_CONVERSATIONS", "")
+	t.Setenv("GROK_CHAT_MODE", "")
 	dir, cwd := t.TempDir(), t.TempDir()
 	for _, id := range []string{"list-one", "list-two", "list-three"} {
 		logger, err := sessionlog.NewLoggerWithID(dir, id)
@@ -613,6 +619,578 @@ func TestUnifiedSessionListWireContract(t *testing.T) {
 	filtered := call(3, map[string]any{"cwd": cwd, "_meta": map[string]any{"x.ai/facetFilters": map[string]any{"kind": []any{"chat"}}}})
 	if rows := filtered["result"].(map[string]any)["result"].(map[string]any)["sessions"].([]any); len(rows) != 0 {
 		t.Fatalf("kind filter retained build rows: %#v", filtered)
+	}
+}
+
+func TestUnifiedSessionListConversationsLane(t *testing.T) {
+	t.Setenv("GROK_SESSION_LIST_CONVERSATIONS", "1")
+	t.Setenv("GROK_CHAT_MODE", "")
+	dir, cwd := t.TempDir(), t.TempDir()
+	logger, err := sessionlog.NewLoggerWithID(dir, "build-local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = logger.Append("session_metadata", map[string]any{"cwd": cwd, "modelId": "test-model"})
+	_ = logger.Append("user_prompt", map[string]any{"text": "local build"})
+	_ = logger.Close()
+
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	if err := auth.Save(authPath, "list-scope", auth.Credential{
+		Key: "oauth-token", UserID: "user-1", AuthMode: "oidc", Issuer: "https://auth.x.ai",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var seenQuery string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/rest/app-chat/conversations" {
+			t.Fatalf("path=%s", r.URL.Path)
+		}
+		seenQuery = r.URL.RawQuery
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"conversations": []map[string]any{{
+				"conversationId": "conv-chat",
+				"title":          "cloud chat",
+				"starred":        true,
+				"createTime":     "2026-06-18T17:30:00Z",
+				"modifyTime":     "2099-01-01T00:00:00Z",
+				"workspaces":     []map[string]any{{"workspaceId": "ws_alpha"}},
+			}, {
+				"conversationId": "conv-plain",
+				"title":          "plain chat",
+				"starred":        false,
+				"createTime":     "2026-06-18T16:30:00Z",
+				"modifyTime":     "2098-01-01T00:00:00Z",
+				"workspaces":     []map[string]any{{"workspaceId": "ws_beta"}},
+			}},
+		})
+	}))
+	defer upstream.Close()
+	t.Setenv("GROK_CONVERSATIONS_BASE_URL", upstream.URL)
+
+	var output bytes.Buffer
+	server := &Server{
+		SessionDir: dir, output: &output,
+		Auth: AuthConfig{Path: authPath, Scope: "list-scope", HTTP: upstream.Client()},
+	}
+	data, err := json.Marshal(map[string]any{"cwd": cwd, "limit": 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.handleUnifiedSessionList(message{ID: json.RawMessage("1"), Method: "x.ai/session/list", Params: data})
+	var response map[string]any
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	result := response["result"].(map[string]any)["result"].(map[string]any)
+	rows := result["sessions"].([]any)
+	if len(rows) != 3 {
+		t.Fatalf("expected build+2 chat rows: %#v", result)
+	}
+	first := rows[0].(map[string]any)
+	if first["sessionId"] != "conv-chat" || first["source"] != "conversation" {
+		t.Fatalf("expected starred chat first: %#v", first)
+	}
+	meta := first["_meta"].(map[string]any)["x.ai/session"].(map[string]any)
+	facets := meta["facets"].(map[string]any)
+	if meta["kind"] != "chat" || facets["starred"] != true || facets["workspace"] != "ws_alpha" {
+		t.Fatalf("chat meta=%#v", meta)
+	}
+	facetMeta := result["_meta"].(map[string]any)["x.ai/facets"].(map[string]any)
+	if !sessionListFacetHas(facetMeta, "starred", true) || !sessionListFacetHas(facetMeta, "workspace", "ws_alpha") {
+		t.Fatalf("facets=%#v", facetMeta)
+	}
+	partial := result["_meta"].(map[string]any)["x.ai/partial"].(map[string]any)
+	if partial["conversations"] != false {
+		t.Fatalf("partial=%#v", partial)
+	}
+
+	output.Reset()
+	chatOnly, err := json.Marshal(map[string]any{
+		"cwd": cwd, "_meta": map[string]any{"x.ai/facetFilters": map[string]any{"kind": []any{"chat"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.handleUnifiedSessionList(message{ID: json.RawMessage("2"), Method: "x.ai/session/list", Params: chatOnly})
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	chatRows := response["result"].(map[string]any)["result"].(map[string]any)["sessions"].([]any)
+	if len(chatRows) != 2 {
+		t.Fatalf("chat-only=%#v", response)
+	}
+
+	output.Reset()
+	starredOnly, err := json.Marshal(map[string]any{
+		"cwd": cwd,
+		"_meta": map[string]any{"x.ai/facetFilters": map[string]any{
+			"kind": []any{"chat"}, "starred": []any{true},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.handleUnifiedSessionList(message{ID: json.RawMessage("3"), Method: "x.ai/session/list", Params: starredOnly})
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	starredRows := response["result"].(map[string]any)["result"].(map[string]any)["sessions"].([]any)
+	if len(starredRows) != 1 || starredRows[0].(map[string]any)["sessionId"] != "conv-chat" {
+		t.Fatalf("starred-only=%#v", response)
+	}
+
+	output.Reset()
+	seenQuery = ""
+	workspaceOnly, err := json.Marshal(map[string]any{
+		"cwd": cwd,
+		"_meta": map[string]any{"x.ai/facetFilters": map[string]any{
+			"kind": []any{"chat"}, "workspace": []any{"ws_beta"},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.handleUnifiedSessionList(message{ID: json.RawMessage("4"), Method: "x.ai/session/list", Params: workspaceOnly})
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	workspaceRows := response["result"].(map[string]any)["result"].(map[string]any)["sessions"].([]any)
+	if len(workspaceRows) != 1 || workspaceRows[0].(map[string]any)["sessionId"] != "conv-plain" {
+		t.Fatalf("workspace-only=%#v", response)
+	}
+	if !strings.Contains(seenQuery, "workspaceId=ws_beta") {
+		t.Fatalf("expected workspace pushdown, query=%q", seenQuery)
+	}
+}
+
+func sessionListFacetHas(facets map[string]any, key string, value any) bool {
+	keys, _ := facets["keys"].([]any)
+	for _, raw := range keys {
+		entry, _ := raw.(map[string]any)
+		if entry["key"] != key {
+			continue
+		}
+		values, _ := entry["values"].([]any)
+		for _, item := range values {
+			row, _ := item.(map[string]any)
+			if row["value"] == value {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func TestChatConversationStarRename(t *testing.T) {
+	t.Setenv("GROK_SESSION_LIST_CONVERSATIONS", "1")
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	if err := auth.Save(authPath, "star-scope", auth.Credential{
+		Key: "oauth-token", UserID: "user-1", AuthMode: "oidc", Issuer: "https://auth.x.ai",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var gotBody map[string]any
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || r.URL.Path != "/rest/app-chat/conversations/conv-star" {
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatal(err)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer upstream.Close()
+	t.Setenv("GROK_CONVERSATIONS_BASE_URL", upstream.URL)
+
+	var output bytes.Buffer
+	server := &Server{
+		SessionDir: t.TempDir(), output: &output,
+		Auth: AuthConfig{Path: authPath, Scope: "star-scope", HTTP: upstream.Client()},
+	}
+	starred := true
+	payload, err := json.Marshal(map[string]any{
+		"sessionId": "conv-star", "kind": "chat", "starred": starred,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.handleSessionAdmin(message{ID: json.RawMessage("1"), Method: "x.ai/session/rename", Params: payload})
+	var response map[string]any
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response["result"].(map[string]any)["success"] != true {
+		t.Fatalf("response=%#v", response)
+	}
+	if gotBody["starred"] != true || gotBody["title"] != nil {
+		t.Fatalf("body=%#v", gotBody)
+	}
+}
+
+func TestUnifiedSessionListConversationsNoOAuthPartial(t *testing.T) {
+	t.Setenv("GROK_SESSION_LIST_CONVERSATIONS", "1")
+	t.Setenv("GROK_CHAT_MODE", "")
+	t.Setenv("GROK_CONVERSATIONS_BASE_URL", "http://127.0.0.1:1")
+	var output bytes.Buffer
+	server := &Server{
+		SessionDir: t.TempDir(), output: &output,
+		Auth: AuthConfig{Path: filepath.Join(t.TempDir(), "missing.json"), Scope: "scope"},
+	}
+	server.handleUnifiedSessionList(message{
+		ID: json.RawMessage("1"), Method: "x.ai/session/list",
+		Params: json.RawMessage(`{"cwd":"/tmp"}`),
+	})
+	var response map[string]any
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	partial := response["result"].(map[string]any)["result"].(map[string]any)["_meta"].(map[string]any)["x.ai/partial"].(map[string]any)
+	if partial["conversations"] != true || partial["reason"] != "no_oauth" {
+		t.Fatalf("partial=%#v", partial)
+	}
+}
+
+func TestSessionAdminChatRenameAndDelete(t *testing.T) {
+	t.Setenv("GROK_SESSION_LIST_CONVERSATIONS", "1")
+	t.Setenv("GROK_CHAT_MODE", "")
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	if err := auth.Save(authPath, "chat-scope", auth.Credential{
+		Key: "oauth-token", UserID: "user-1", AuthMode: "oidc", Issuer: "https://auth.x.ai",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var putPath, deletePath, putBody string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPut:
+			putPath = r.URL.Path
+			data, _ := io.ReadAll(r.Body)
+			putBody = string(data)
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodDelete:
+			deletePath = r.URL.Path
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer upstream.Close()
+	t.Setenv("GROK_CONVERSATIONS_BASE_URL", upstream.URL)
+
+	var output bytes.Buffer
+	closed := 0
+	server := &Server{
+		output: &output, sessions: map[string]*session{
+			"conv-live": {id: "conv-live", close: func() { closed++ }},
+		},
+		Auth: AuthConfig{Path: authPath, Scope: "chat-scope", HTTP: upstream.Client()},
+	}
+
+	server.handleSessionAdmin(message{
+		ID: json.RawMessage("1"), Method: "x.ai/session/rename",
+		Params: json.RawMessage(`{"sessionId":"conv-1","title":"  Renamed chat  ","kind":"chat"}`),
+	})
+	var response map[string]any
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response["result"].(map[string]any)["success"] != true {
+		t.Fatalf("rename=%#v", response)
+	}
+	if putPath != "/rest/app-chat/conversations/conv-1" || putBody != `{"title":"Renamed chat"}` {
+		t.Fatalf("put path=%q body=%q", putPath, putBody)
+	}
+
+	output.Reset()
+	server.handleSessionAdmin(message{
+		ID: json.RawMessage("2"), Method: "x.ai/session/delete",
+		Params: json.RawMessage(`{"sessionId":"conv-live","kind":"chat"}`),
+	})
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response["result"].(map[string]any)["success"] != true {
+		t.Fatalf("delete=%#v", response)
+	}
+	if deletePath != "/rest/app-chat/conversations/soft/conv-live" {
+		t.Fatalf("delete path=%q", deletePath)
+	}
+	if closed != 1 {
+		t.Fatalf("closed=%d", closed)
+	}
+}
+
+func TestSessionAdminChatRequiresLane(t *testing.T) {
+	t.Setenv("GROK_SESSION_LIST_CONVERSATIONS", "")
+	t.Setenv("GROK_CHAT_MODE", "")
+	var output bytes.Buffer
+	server := &Server{output: &output}
+	server.handleSessionAdmin(message{
+		ID: json.RawMessage("1"), Method: "x.ai/session/rename",
+		Params: json.RawMessage(`{"sessionId":"conv-1","title":"x","kind":"chat"}`),
+	})
+	var response map[string]any
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	errObj := response["error"].(map[string]any)
+	if errObj["code"].(float64) != -32602 {
+		t.Fatalf("response=%#v", response)
+	}
+}
+
+func TestRestoreChatSessionLoadsWithoutLocalJSONL(t *testing.T) {
+	t.Setenv("GROK_SESSION_LIST_CONVERSATIONS", "1")
+	t.Setenv("GROK_CHAT_MODE", "")
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	if err := auth.Save(authPath, "chat-scope", auth.Credential{
+		Key: "token", UserID: "user-1", AuthMode: "api_key",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/rest/modes" {
+			t.Fatalf("path=%s", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"modes": []map[string]any{{
+				"id": "auto", "title": "Auto",
+				"availability": map[string]any{"available": map[string]any{}},
+			}},
+			"defaultModeId": "auto",
+		})
+	}))
+	defer upstream.Close()
+	t.Setenv("GROK_MODES_BASE_URL", upstream.URL)
+
+	cwd, sessionDir := t.TempDir(), t.TempDir()
+	var output bytes.Buffer
+	server := &Server{
+		SessionDir: sessionDir, output: &output, sessions: make(map[string]*session),
+		Auth: AuthConfig{Path: authPath, Scope: "chat-scope", HTTP: upstream.Client()},
+		Factory: func(_ context.Context, cfg SessionConfig, approver tools.Approver, _, _ io.Writer) (*agent.Runner, func(), error) {
+			if cfg.ResumePath != "" || len(cfg.MCPServers) != 0 {
+				t.Fatalf("chat profile leaked resume/mcp: %#v", cfg)
+			}
+			ws, err := workspace.Open(cfg.CWD)
+			if err != nil {
+				return nil, nil, err
+			}
+			registry := tools.NewRegistry(ws, approver)
+			return &agent.Runner{Tools: registry, ModelID: cfg.Model}, func() { _ = registry.Close() }, nil
+		},
+	}
+	params, err := json.Marshal(map[string]any{
+		"sessionId": "conv-resume-1", "cwd": cwd, "mcpServers": []any{},
+		"_meta": map[string]any{"x.ai/session": map[string]any{"kind": "chat"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.handleRestoreSession(context.Background(), message{
+		ID: json.RawMessage("1"), Method: "session/load", Params: params,
+	}, true)
+	var result map[string]any
+	for _, msg := range decodeACPOutput(t, output.Bytes()) {
+		if msg["id"] == nil {
+			continue
+		}
+		id, ok := msg["id"].(float64)
+		if !ok || int(id) != 1 {
+			continue
+		}
+		result, _ = msg["result"].(map[string]any)
+		if result == nil {
+			t.Fatalf("unexpected response: %#v", msg)
+		}
+		break
+	}
+	if result == nil {
+		t.Fatalf("missing load response in %q", output.String())
+	}
+	if result["sessionId"] != "conv-resume-1" {
+		t.Fatalf("result=%#v", result)
+	}
+	meta, _ := result["_meta"].(map[string]any)
+	detail, _ := meta["x.ai/sessionDetail"].(map[string]any)
+	if detail["kind"] != "chat" {
+		t.Fatalf("detail=%#v meta=%#v", detail, meta)
+	}
+	models, _ := result["models"].(map[string]any)
+	if models["currentModelId"] != "auto" {
+		t.Fatalf("models=%#v", models)
+	}
+	if !server.closeSession("conv-resume-1") {
+		t.Fatal("expected live chat session")
+	}
+}
+
+func TestRestoreChatSessionRequiresLane(t *testing.T) {
+	t.Setenv("GROK_SESSION_LIST_CONVERSATIONS", "")
+	t.Setenv("GROK_CHAT_MODE", "")
+	var output bytes.Buffer
+	server := &Server{SessionDir: t.TempDir(), output: &output, sessions: make(map[string]*session)}
+	server.handleRestoreSession(context.Background(), message{
+		ID: json.RawMessage("1"), Method: "session/load",
+		Params: json.RawMessage(`{"sessionId":"conv-1","cwd":"/tmp","_meta":{"x.ai/session":{"kind":"chat"}}}`),
+	}, true)
+	var response map[string]any
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response["error"].(map[string]any)["code"].(float64) != -32602 {
+		t.Fatalf("response=%#v", response)
+	}
+}
+
+func TestProcessChatModeForcesListAndRefusesLocalBuild(t *testing.T) {
+	t.Setenv("GROK_SESSION_LIST_CONVERSATIONS", "")
+	t.Setenv("GROK_CHAT_MODE", "1")
+	dir, cwd := t.TempDir(), t.TempDir()
+	logger, err := sessionlog.NewLoggerWithID(dir, "build-local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = logger.Append("session_metadata", map[string]any{"cwd": cwd, "modelId": "test-model"})
+	_ = logger.Append("user_prompt", map[string]any{"text": "local build"})
+	_ = logger.Close()
+
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	if err := auth.Save(authPath, "chat-scope", auth.Credential{
+		Key: "oauth-token", UserID: "user-1", AuthMode: "oidc", Issuer: "https://auth.x.ai",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/rest/app-chat/conversations":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"conversations": []map[string]any{{
+					"conversationId": "conv-only", "title": "chat",
+					"modifyTime": "2099-01-01T00:00:00Z",
+				}},
+			})
+		case "/rest/modes":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"modes": []map[string]any{{
+					"id": "auto", "title": "Auto",
+					"availability": map[string]any{"available": map[string]any{}},
+				}},
+				"defaultModeId": "auto",
+			})
+		default:
+			t.Fatalf("path=%s", r.URL.Path)
+		}
+	}))
+	defer upstream.Close()
+	t.Setenv("GROK_CONVERSATIONS_BASE_URL", upstream.URL)
+	t.Setenv("GROK_MODES_BASE_URL", upstream.URL)
+
+	var output bytes.Buffer
+	server := &Server{
+		SessionDir: dir, output: &output, sessions: make(map[string]*session),
+		Auth: AuthConfig{Path: authPath, Scope: "chat-scope", HTTP: upstream.Client()},
+		Factory: func(_ context.Context, cfg SessionConfig, approver tools.Approver, _, _ io.Writer) (*agent.Runner, func(), error) {
+			ws, err := workspace.Open(cfg.CWD)
+			if err != nil {
+				return nil, nil, err
+			}
+			registry := tools.NewRegistry(ws, approver)
+			return &agent.Runner{Tools: registry, ModelID: cfg.Model}, func() { _ = registry.Close() }, nil
+		},
+	}
+
+	server.handleUnifiedSessionList(message{
+		ID: json.RawMessage("1"), Method: "x.ai/session/list",
+		Params: mustJSON(t, map[string]any{"cwd": cwd, "limit": 10}),
+	})
+	list := decodeACP(t, json.NewDecoder(&output))
+	rows := list["result"].(map[string]any)["result"].(map[string]any)["sessions"].([]any)
+	if len(rows) != 1 || rows[0].(map[string]any)["sessionId"] != "conv-only" {
+		t.Fatalf("chat-mode list=%#v", list)
+	}
+
+	output.Reset()
+	server.handleRestoreSession(context.Background(), message{
+		ID: json.RawMessage("2"), Method: "session/load",
+		Params: mustJSON(t, map[string]any{"sessionId": "build-local", "cwd": cwd}),
+	}, true)
+	refuse := decodeACP(t, json.NewDecoder(&output))
+	if refuse["error"].(map[string]any)["message"] != remote.ChatModeLocalBuildRefusal {
+		t.Fatalf("refuse=%#v", refuse)
+	}
+
+	output.Reset()
+	server.handleNewSession(context.Background(), message{
+		ID: json.RawMessage("3"), Method: "session/new",
+		Params: mustJSON(t, map[string]any{"cwd": cwd, "mcpServers": []any{}}),
+	})
+	var created map[string]any
+	for _, msg := range decodeACPOutput(t, output.Bytes()) {
+		if msg["id"] == nil {
+			continue
+		}
+		if id, ok := msg["id"].(float64); ok && int(id) == 3 {
+			created, _ = msg["result"].(map[string]any)
+			break
+		}
+	}
+	if created == nil {
+		t.Fatalf("missing new response in %q", output.String())
+	}
+	detail := created["_meta"].(map[string]any)["x.ai/sessionDetail"].(map[string]any)
+	if detail["kind"] != "chat" {
+		t.Fatalf("new chat detail=%#v", detail)
+	}
+	_ = server.closeSession(created["sessionId"].(string))
+}
+
+func TestInitializeAdvertisesChatModeModelState(t *testing.T) {
+	t.Setenv("GROK_CHAT_MODE", "1")
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	if err := auth.Save(authPath, "scope", auth.Credential{Key: "tok", UserID: "u1"}); err != nil {
+		t.Fatal(err)
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"modes": []map[string]any{{
+				"id": "auto", "title": "Auto",
+				"availability": map[string]any{"available": map[string]any{}},
+			}},
+			"defaultModeId": "auto",
+		})
+	}))
+	defer upstream.Close()
+	t.Setenv("GROK_MODES_BASE_URL", upstream.URL)
+	var output bytes.Buffer
+	server := &Server{
+		output: &output, Factory: func(context.Context, SessionConfig, tools.Approver, io.Writer, io.Writer) (*agent.Runner, func(), error) {
+			return nil, nil, errors.New("unused")
+		},
+		Auth: AuthConfig{Path: authPath, Scope: "scope", HTTP: upstream.Client()},
+	}
+	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1}}` + "\n")
+	done := make(chan error, 1)
+	go func() {
+		done <- server.Serve(context.Background(), input, &output)
+	}()
+	select {
+	case <-time.After(2 * time.Second):
+		t.Fatal("serve hung")
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	response := decodeACP(t, json.NewDecoder(&output))
+	meta := response["result"].(map[string]any)["_meta"].(map[string]any)
+	if meta["chatMode"] != true {
+		t.Fatalf("meta=%#v", meta)
+	}
+	state := meta["modelState"].(map[string]any)
+	if state["currentModelId"] != "auto" {
+		t.Fatalf("modelState=%#v", state)
 	}
 }
 
@@ -764,6 +1342,15 @@ func TestMCPAuthExtensionsForHTTPServers(t *testing.T) {
 	trigger := response["result"].(map[string]any)["result"].(map[string]any)
 	if authenticated != "remote" || trigger["status"] != "authenticated" {
 		t.Fatalf("authenticated=%q trigger=%#v", authenticated, trigger)
+	}
+	output.Reset()
+	server.handleMCP(context.Background(), message{ID: json.RawMessage("3"), Method: "x.ai/mcp/auth_submit", Params: json.RawMessage(`{"session_id":"mcp-http-auth","server_name":"remote","callback_url":"http://127.0.0.1/callback?code=a&state=b"}`)})
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	submit := response["result"].(map[string]any)["result"].(map[string]any)
+	if submit["status"] != "failed" || !strings.Contains(submit["error"].(string), "not active") {
+		t.Fatalf("expected inactive enroll submit failure: %#v", submit)
 	}
 }
 
@@ -1070,6 +1657,68 @@ func TestStaticExtensionsAndCompactCommand(t *testing.T) {
 	streamer.mu.Unlock()
 	if len(requests) != 1 || requests[0].PreviousResponseID != "response-1" || !strings.Contains(requests[0].Instructions, "handoff summary") {
 		t.Fatalf("unexpected compact request: %#v", requests)
+	}
+}
+
+func TestWorkspacesListFetchesWithOAuth(t *testing.T) {
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	if err := auth.Save(authPath, "ws-scope", auth.Credential{
+		Key: "oauth-token", UserID: "user-1", AuthMode: "oidc", Issuer: "https://auth.x.ai",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var seenQuery string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/rest/workspaces" {
+			t.Fatalf("path=%s", r.URL.Path)
+		}
+		seenQuery = r.URL.RawQuery
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"workspaces": []map[string]any{{
+				"workspaceId": "ws_1",
+				"name":        "Research",
+				"createTime":  "2026-06-18T17:30:00Z",
+				"kind":        "WORKSPACE_KIND_IMAGINE",
+			}},
+			"nextPageToken": "next",
+		})
+	}))
+	defer upstream.Close()
+	t.Setenv("GROK_WORKSPACES_BASE_URL", upstream.URL)
+
+	var output bytes.Buffer
+	server := &Server{
+		output: &output,
+		Auth:   AuthConfig{Path: authPath, Scope: "ws-scope", HTTP: upstream.Client()},
+	}
+	payload, err := json.Marshal(map[string]any{
+		"pageSize": 10, "pageToken": "tok", "query": "gpu", "kind": "WORKSPACE_KIND_IMAGINE",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.handleStaticExtension(message{ID: json.RawMessage("1"), Method: "x.ai/workspaces/list", Params: payload})
+	var response map[string]any
+	if err := json.NewDecoder(&output).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	result := response["result"].(map[string]any)["result"].(map[string]any)
+	rows := result["workspaces"].([]any)
+	if len(rows) != 1 {
+		t.Fatalf("result=%#v", result)
+	}
+	row := rows[0].(map[string]any)
+	if row["id"] != "ws_1" || row["name"] != "Research" || row["kind"] != "WORKSPACE_KIND_IMAGINE" || row["createTime"] != "2026-06-18T17:30:00Z" {
+		t.Fatalf("row=%#v", row)
+	}
+	if result["nextPageToken"] != "next" {
+		t.Fatalf("result=%#v", result)
+	}
+	if result["_meta"] != nil {
+		t.Fatalf("unexpected partial meta: %#v", result["_meta"])
+	}
+	if !strings.Contains(seenQuery, "pageSize=10") || !strings.Contains(seenQuery, "query=gpu") {
+		t.Fatalf("query=%q", seenQuery)
 	}
 }
 

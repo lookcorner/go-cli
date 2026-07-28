@@ -18,20 +18,24 @@ import (
 
 func TestParseSandboxProfile(t *testing.T) {
 	for input, want := range map[string]SandboxProfile{
-		"": SandboxOff, "off": SandboxOff, " WORKSPACE ": SandboxWorkspace, "read-only": SandboxReadOnly, "STRICT": SandboxStrict,
+		"": SandboxOff, "off": SandboxOff, "none": SandboxOff, " WORKSPACE ": SandboxWorkspace, "read-only": SandboxReadOnly, "readonly": SandboxReadOnly, "STRICT": SandboxStrict,
 	} {
 		got, err := ParseSandboxProfile(input)
 		if err != nil || got != want {
 			t.Fatalf("ParseSandboxProfile(%q)=%q, %v; want %q", input, got, err, want)
 		}
 	}
-	if _, err := ParseSandboxProfile("unknown"); err == nil {
-		t.Fatal("unsupported profile was accepted")
+	got, err := ParseSandboxProfile("project")
+	if err != nil || got != SandboxProfile("project") {
+		t.Fatalf("custom ParseSandboxProfile: %q %v", got, err)
+	}
+	if _, err := ParseSandboxProfile("bad name"); err == nil {
+		t.Fatal("invalid custom name was accepted")
 	}
 }
 
 func TestSandboxOffLeavesCommandUnwrapped(t *testing.T) {
-	path, args, err := sandboxInvocation("", "/workspace", "/bin/sh", []string{"-lc", "true"})
+	path, args, err := sandboxInvocation("", false, "/workspace", "/bin/sh", []string{"-lc", "true"})
 	if err != nil || path != "/bin/sh" || strings.Join(args, " ") != "-lc true" {
 		t.Fatalf("path=%q args=%q err=%v", path, args, err)
 	}
@@ -77,7 +81,7 @@ func TestStrictSeatbeltPolicyScopesReadsAndNetwork(t *testing.T) {
 
 func TestBubblewrapProfilesAndStrictParents(t *testing.T) {
 	workspace := t.TempDir()
-	strict := bubblewrapArgs(SandboxStrict, workspace, "/bin/sh")
+	strict := bubblewrapArgs(SandboxStrict, true, workspace, "/bin/sh")
 	strictText := strings.Join(strict, " ")
 	if !strings.Contains(strictText, "--tmpfs / ") || !strings.Contains(strictText, "--unshare-net") ||
 		!hasSandboxArgPair(strict, "--ro-bind", workspace, workspace) || !hasSandboxArgPair(strict, "--bind", workspace, workspace) {
@@ -98,11 +102,11 @@ func TestBubblewrapProfilesAndStrictParents(t *testing.T) {
 			t.Fatalf("strict args missing parent %q: %q", parent, strict)
 		}
 	}
-	readOnlyText := strings.Join(bubblewrapArgs(SandboxReadOnly, workspace, "/bin/sh"), " ")
+	readOnlyText := strings.Join(bubblewrapArgs(SandboxReadOnly, true, workspace, "/bin/sh"), " ")
 	if !strings.Contains(readOnlyText, "--ro-bind / / ") || !strings.Contains(readOnlyText, "--unshare-net") {
 		t.Fatalf("read-only args=%q", readOnlyText)
 	}
-	workspaceText := strings.Join(bubblewrapArgs(SandboxWorkspace, workspace, "/bin/sh"), " ")
+	workspaceText := strings.Join(bubblewrapArgs(SandboxWorkspace, false, workspace, "/bin/sh"), " ")
 	if strings.Contains(workspaceText, "--unshare-net") || !strings.Contains(workspaceText, "--ro-bind / / ") {
 		t.Fatalf("workspace args=%q", workspaceText)
 	}
@@ -225,7 +229,7 @@ func TestStrictSandboxAllowsWorkspaceAndDeniesHomeRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Remove(outsidePath) })
-	command, err := sandboxCommand(context.Background(), SandboxStrict, root, "/bin/sh", "-lc",
+	command, err := sandboxCommand(context.Background(), SandboxStrict, true, root, "/bin/sh", "-lc",
 		"cat inside.txt && printf written > created.txt && cat "+strconv.Quote(outsidePath))
 	if err != nil {
 		t.Fatal(err)
@@ -256,7 +260,7 @@ func TestDarwinStrictSandboxDeniesNetwork(t *testing.T) {
 	}
 	defer listener.Close()
 	address := listener.Addr().(*net.TCPAddr)
-	cmd, err := sandboxCommand(context.Background(), SandboxStrict, t.TempDir(), "/usr/bin/nc", "-z", "127.0.0.1", strconv.Itoa(address.Port))
+	cmd, err := sandboxCommand(context.Background(), SandboxStrict, true, t.TempDir(), "/usr/bin/nc", "-z", "127.0.0.1", strconv.Itoa(address.Port))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,7 +293,7 @@ func TestDarwinWorkspaceSandboxDeniesHomeWrite(t *testing.T) {
 	}
 	target := filepath.Join(home, ".gork-sandbox-probe-"+time.Now().UTC().Format("20060102150405.000000000"))
 	t.Cleanup(func() { _ = os.Remove(target) })
-	cmd, err := sandboxCommand(context.Background(), SandboxWorkspace, t.TempDir(), "/bin/sh", "-lc", "printf denied > "+strconv.Quote(target))
+	cmd, err := sandboxCommand(context.Background(), SandboxWorkspace, false, t.TempDir(), "/bin/sh", "-lc", "printf denied > "+strconv.Quote(target))
 	if err != nil {
 		t.Fatal(err)
 	}

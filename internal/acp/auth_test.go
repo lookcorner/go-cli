@@ -192,6 +192,33 @@ func TestAuthenticateAndInteractiveAuthExtensions(t *testing.T) {
 	}
 }
 
+func TestAuthCancelIsIdempotentAndScoped(t *testing.T) {
+	var output bytes.Buffer
+	var cancelled []uint64
+	server := &Server{output: &output, Auth: AuthConfig{
+		Cancel: func(requestSeq *uint64) {
+			if requestSeq == nil {
+				cancelled = append(cancelled, 0)
+				return
+			}
+			cancelled = append(cancelled, *requestSeq)
+		},
+	}}
+	server.handleAuth(context.Background(), message{ID: json.RawMessage("1"), Method: "x.ai/auth/cancel", Params: json.RawMessage(`{}`)})
+	server.handleAuth(context.Background(), message{ID: json.RawMessage("2"), Method: "x.ai/auth/cancel", Params: json.RawMessage(`{"request_seq":7}`)})
+	server.handleAuth(context.Background(), message{ID: json.RawMessage("3"), Method: "x.ai/auth/cancel"})
+	decoder := json.NewDecoder(&output)
+	for id := 1; id <= 3; id++ {
+		response := decodeACP(t, decoder)
+		if response["id"] != float64(id) || response["result"].(map[string]any)["cancelled"] != true {
+			t.Fatalf("response=%#v", response)
+		}
+	}
+	if len(cancelled) != 3 || cancelled[0] != 0 || cancelled[1] != 7 || cancelled[2] != 0 {
+		t.Fatalf("cancelled=%v", cancelled)
+	}
+}
+
 func TestAuthenticateAndAuthExtensionErrors(t *testing.T) {
 	var output bytes.Buffer
 	server := &Server{output: &output, Auth: AuthConfig{Authenticate: func(context.Context, AuthRequest) (*AuthMeta, error) {

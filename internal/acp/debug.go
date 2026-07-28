@@ -11,6 +11,10 @@ func (s *Server) handleDebug(incoming message) {
 		s.handleDebugFeedback(incoming)
 		return
 	}
+	if incoming.Method == "x.ai/debug/agent" {
+		s.handleDebugAgent(incoming)
+		return
+	}
 	var params struct {
 		SessionID      string `json:"sessionId"`
 		SessionIDSnake string `json:"session_id"`
@@ -41,6 +45,60 @@ func (s *Server) handleDebug(incoming message) {
 	}
 	runner.ArmAutoCompact()
 	s.respond(incoming.ID, map[string]any{"result": map[string]any{"armed": true}})
+}
+
+// handleDebugAgent returns process-local registry counts for client engineers.
+// Field names follow Rust RegistrySnapshot; unsupported registries report 0.
+func (s *Server) handleDebugAgent(incoming message) {
+	s.mu.Lock()
+	sessions := len(s.sessions)
+	pendingPermissions := len(s.pending)
+	pendingPlan := len(s.pendingPlan)
+	pendingQuestion := len(s.pendingQuestion)
+	pendingHook := len(s.pendingHook)
+	pendingTrust := len(s.pendingTrust)
+	pendingMCP := len(s.pendingMCP)
+	sessionCopies := make([]*session, 0, len(s.sessions))
+	for _, current := range s.sessions {
+		sessionCopies = append(sessionCopies, current)
+	}
+	s.mu.Unlock()
+
+	subagentPending, subagentActive, subagentCompleted := 0, 0, 0
+	for _, current := range sessionCopies {
+		current.mu.Lock()
+		runner := current.runner
+		current.mu.Unlock()
+		if runner == nil || runner.ListSubagents == nil {
+			continue
+		}
+		for _, item := range runner.ListSubagents() {
+			switch item.Status {
+			case "running":
+				subagentActive++
+			case "pending", "queued", "starting":
+				subagentPending++
+			default:
+				subagentCompleted++
+			}
+		}
+	}
+
+	s.respond(incoming.ID, map[string]any{"registries": map[string]any{
+		"sessions":                   sessions,
+		"session_threads":            0,
+		"dispatch_locks":             0,
+		"session_turn_numbers":       sessions,
+		"permission_event_receivers": pendingPermissions + pendingPlan + pendingQuestion + pendingHook + pendingTrust + pendingMCP,
+		"model_unavailable_sessions": 0,
+		"session_live_state":         sessions,
+		"session_index_claims":       0,
+		"require_gateway_sessions":   0,
+		"subagent_pending":           subagentPending,
+		"subagent_active":            subagentActive,
+		"subagent_completed":         subagentCompleted,
+		"workspace_bindings":         nil,
+	}})
 }
 
 func (s *Server) handleDebugFeedback(incoming message) {

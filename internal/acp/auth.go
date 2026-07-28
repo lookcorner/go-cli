@@ -26,6 +26,7 @@ type AuthConfig struct {
 	Authenticate      func(context.Context, AuthRequest) (*AuthMeta, error)
 	GetURL            func(context.Context) (AuthURLResult, error)
 	SubmitCode        func(string) error
+	Cancel            func(requestSeq *uint64)
 	CheckSubscription func(context.Context) SubscriptionCheckResult
 }
 
@@ -282,6 +283,19 @@ func (s *Server) handleAuth(ctx context.Context, incoming message) {
 			return
 		}
 		s.respond(incoming.ID, map[string]any{"submitted": true})
+		return
+	case "x.ai/auth/cancel":
+		var params struct {
+			RequestSeq *uint64 `json:"request_seq"`
+		}
+		if len(incoming.Params) > 0 && string(incoming.Params) != "null" && json.Unmarshal(incoming.Params, &params) != nil {
+			s.respondErrorData(incoming.ID, -32602, "Invalid params", "invalid params")
+			return
+		}
+		if config.Cancel != nil {
+			config.Cancel(params.RequestSeq)
+		}
+		s.respond(incoming.ID, map[string]any{"cancelled": true})
 		return
 	case "x.ai/auth/check_subscription":
 		result := SubscriptionCheckResult{}

@@ -168,6 +168,9 @@ func (r *Runner) SetMemoryEnabled(ctx context.Context, enabled bool) (string, er
 			return "", err
 		}
 		cfg.Enabled = true
+		if r.MemoryEmbedder != nil {
+			store.SetEmbedder(r.MemoryEmbedder)
+		}
 		if err := tools.SetMemoryTools(r.Tools, store, cfg, true); err != nil {
 			return "", err
 		}
@@ -196,8 +199,12 @@ func (r *Runner) ListMemory() ([]memory.FileInfo, error) {
 
 func (r *Runner) memoryState() (*memory.Store, memory.Config) {
 	r.memoryMu.Lock()
-	defer r.memoryMu.Unlock()
-	return r.Memory, r.MemoryConfig
+	store, cfg, embedder := r.Memory, r.MemoryConfig, r.MemoryEmbedder
+	r.memoryMu.Unlock()
+	if store != nil && embedder != nil {
+		store.SetEmbedder(embedder)
+	}
+	return store, cfg
 }
 
 func (r *Runner) MemoryAvailability() (configured, enabled bool) {
@@ -513,15 +520,19 @@ func (r *Runner) runMemoryFlush(ctx context.Context, streamer ResponseStreamer, 
 	if err == nil {
 		accepted, outcome = processMemoryFlushResponse(result.Text, memoryConfig.Flush.MaxWriteChars)
 		if outcome == "accepted" {
-			var written bool
-			path, written, err = store.Write(trigger, accepted)
-			switch {
-			case err != nil:
-				outcome = "error"
-			case written:
-				outcome = "written"
-			default:
+			if r.semanticFlushDuplicate(store, accepted, memoryConfig) {
 				outcome = "duplicate"
+			} else {
+				var written bool
+				path, written, err = store.Write(trigger, accepted)
+				switch {
+				case err != nil:
+					outcome = "error"
+				case written:
+					outcome = "written"
+				default:
+					outcome = "duplicate"
+				}
 			}
 		}
 	}
@@ -698,6 +709,49 @@ func processMemoryFlushResponse(value string, maxChars int) (string, string) {
 		}
 	}
 	return "", "rejected"
+}
+
+// semanticFlushDuplicate mirrors Rust is_semantically_duplicate.
+// Fail open when no embedder, ephemeral store, or index/KNN errors.
+func (r *Runner) semanticFlushDuplicate(store *memory.Store, content string, cfg memory.Config) bool {
+	if r == nil || r.MemoryEmbedder == nil || store == nil || store.IsEphemeral() || !memory.VectorSearchEnabled(cfg) {
+		return false
+	}
+	idx, err := memory.OpenIndex(store.WorkspaceDir(), cfg.Embedding, cfg.Index)
+	if err != nil {
+		return false
+	}
+	defer idx.Close()
+	files, err := store.List()
+	if err != nil {
+		return false
+	}
+	for _, file := range files {
+		data, readErr := store.Get(file.Path, 0, nil)
+		if readErr != nil {
+			continue
+		}
+		if _, err := idx.ReindexFile(file.Path, file.Source, data); err != nil {
+			return false
+		}
+	}
+	if _, err := idx.EmbedMissing(context.Background(), r.MemoryEmbedder); err != nil {
+		return false
+	}
+	has, err := idx.HasEmbeddings()
+	if err != nil || !has {
+		return false
+	}
+	vectors, err := r.MemoryEmbedder.Embed(context.Background(), []string{content})
+	if err != nil || len(vectors) == 0 {
+		return false
+	}
+	neighbors, err := idx.VectorSearch(vectors[0], memory.SemanticDedupKNNLimit)
+	if err != nil {
+		return false
+	}
+	threshold := memory.EffectiveSemanticDedupThreshold(cfg.Flush.SemanticDedupThreshold)
+	return memory.IsSemanticallyDuplicate(neighbors, threshold)
 }
 
 func isNoReply(value string) bool {

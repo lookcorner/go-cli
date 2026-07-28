@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/lookcorner/go-cli/internal/config"
+	"github.com/lookcorner/go-cli/internal/mcp"
 	"github.com/lookcorner/go-cli/internal/version"
 )
 
@@ -164,6 +165,73 @@ func TestDoctorReportsButDoesNotProbeUntrustedProjectServer(t *testing.T) {
 	if probed || report.FailingCount != 1 || len(report.Servers) != 1 ||
 		report.Servers[0].Checks[0].Label != "folder untrusted" {
 		t.Fatalf("probed=%v report=%#v", probed, report)
+	}
+}
+
+func TestDoctorOAuthCredentialsCheck(t *testing.T) {
+	root := testRepo(t)
+	grokHome := os.Getenv("GROK_HOME")
+	userPath := filepath.Join(t.TempDir(), "config.toml")
+	writeFile(t, userPath, `
+[mcp_servers.needs]
+url = "https://mcp.example/needs"
+type = "http"
+[mcp_servers.static]
+url = "https://mcp.example/static"
+type = "http"
+headers = { Authorization = "Bearer static-token" }
+[mcp_servers.env]
+url = "https://mcp.example/env"
+type = "http"
+bearer_token_env_var = "DOCTOR_MCP_TOKEN"
+[mcp_servers.stored]
+url = "https://mcp.example/stored"
+type = "http"
+[mcp_servers.local]
+command = "local-server"
+`)
+	t.Setenv("DOCTOR_MCP_TOKEN", "from-env")
+	if err := os.MkdirAll(grokHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	storePath := filepath.Join(grokHome, "mcp_credentials.json")
+	key := mcp.CredentialKey("stored", "https://mcp.example/stored")
+	payload := `{"` + key + `":{"client_id":"c","token_response":{"access_token":"tok","token_type":"Bearer"}}}`
+	if err := os.WriteFile(storePath, []byte(payload), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	probed := map[string]bool{}
+	report, err := Doctor(context.Background(), root, userPath, "", func(_ context.Context, name string, _ config.MCPServerConfig, _ string) (ProbeResult, error) {
+		probed[name] = true
+		return ProbeResult{ProtocolVersion: "2025-11-25", ToolCount: 1}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]DoctorEntry{}
+	for _, item := range report.Servers {
+		byName[item.Name] = item
+	}
+	needs := byName["needs"]
+	if needs.Healthy || probed["needs"] || len(needs.Checks) != 1 || needs.Checks[0].Label != "oauth credentials" || needs.Checks[0].Passed {
+		t.Fatalf("needs=%#v probed=%v", needs, probed["needs"])
+	}
+	if !strings.Contains(needs.Checks[0].Hint, "auth_trigger") {
+		t.Fatalf("hint=%q", needs.Checks[0].Hint)
+	}
+	for _, name := range []string{"static", "env", "stored", "local"} {
+		item := byName[name]
+		if !item.Healthy || !probed[name] {
+			t.Fatalf("%s healthy=%v probed=%v checks=%#v", name, item.Healthy, probed[name], item.Checks)
+		}
+	}
+	if byName["static"].Checks[0].Detail != "static bearer" || byName["env"].Checks[0].Detail != "bearer_token_env_var" ||
+		byName["stored"].Checks[0].Detail != "stored credentials" {
+		t.Fatalf("details static=%q env=%q stored=%q", byName["static"].Checks[0].Detail, byName["env"].Checks[0].Detail, byName["stored"].Checks[0].Detail)
+	}
+	if len(byName["local"].Checks) < 2 || byName["local"].Checks[0].Label == "oauth credentials" {
+		t.Fatalf("stdio should skip oauth check: %#v", byName["local"].Checks)
 	}
 }
 

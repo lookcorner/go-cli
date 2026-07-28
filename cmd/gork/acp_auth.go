@@ -121,6 +121,8 @@ type acpLoginCoordinator struct {
 	stderr        io.Writer
 	active        *auth.BrowserLogin
 	inFlight      bool
+	loginCancel   context.CancelFunc
+	clientSeq     uint64
 	urlReady      chan struct{}
 	urlPublished  bool
 	urlConsumed   bool
@@ -204,17 +206,28 @@ func (c *acpLoginCoordinator) authenticateAfterCachedUnavailable(ctx context.Con
 }
 
 func (c *acpLoginCoordinator) authenticateInteractive(ctx context.Context, request acp.AuthRequest) (*acp.AuthMeta, error) {
-	if !c.beginInteractive() {
+	var clientSeq *uint64
+	if value, ok := request.Meta["request_seq"].(float64); ok && value >= 0 {
+		seq := uint64(value)
+		clientSeq = &seq
+	}
+	if !c.beginInteractive(clientSeq) {
 		return nil, errors.New("an authentication session is already active")
 	}
 	defer c.endInteractive()
+	authCtx, cancel := context.WithCancel(ctx)
+	c.mu.Lock()
+	c.loginCancel = cancel
+	c.mu.Unlock()
+	defer cancel()
+
 	if reauth, _ := request.Meta["reauth"].(bool); reauth {
 		_ = auth.Remove(c.authPath, c.authConfig.Scope())
 	}
 	if c.appConfig().AuthProviderCommand != "" {
 		mode := "command"
 		c.publishURL(acp.AuthURLResult{ExternalProvider: true, Mode: &mode})
-		token, err := c.tokenProvider(ctx, "")
+		token, err := c.tokenProvider(authCtx, "")
 		if err != nil {
 			return nil, err
 		}
@@ -223,10 +236,10 @@ func (c *acpLoginCoordinator) authenticateInteractive(ctx context.Context, reque
 			return nil, err
 		}
 		credential.Key = token
-		return c.finish(ctx, request.MethodID, credential)
+		return c.finish(authCtx, request.MethodID, credential)
 	}
 	if headless, _ := request.Meta["headless"].(bool); headless {
-		code, err := c.client.RequestDeviceCode(ctx, c.authConfig)
+		code, err := c.client.RequestDeviceCode(authCtx, c.authConfig)
 		if err != nil {
 			c.publishURL(acp.AuthURLResult{})
 			return nil, err
@@ -237,14 +250,14 @@ func (c *acpLoginCoordinator) authenticateInteractive(ctx context.Context, reque
 		}
 		mode := "device"
 		c.publishURL(acp.AuthURLResult{AuthURL: &url, Mode: &mode})
-		credential, err := c.client.CompleteDeviceLogin(ctx, c.authConfig, code)
+		credential, err := c.client.CompleteDeviceLogin(authCtx, c.authConfig, code)
 		if err != nil {
 			return nil, err
 		}
-		return c.finish(ctx, request.MethodID, credential)
+		return c.finish(authCtx, request.MethodID, credential)
 	}
 
-	login, err := c.client.StartBrowserLogin(ctx, c.authConfig)
+	login, err := c.client.StartBrowserLogin(authCtx, c.authConfig)
 	if err != nil {
 		c.publishURL(acp.AuthURLResult{})
 		return nil, err
@@ -255,13 +268,13 @@ func (c *acpLoginCoordinator) authenticateInteractive(ctx context.Context, reque
 	defer login.Close()
 	url, mode := login.AuthorizationURL, "loopback"
 	c.publishURL(acp.AuthURLResult{AuthURL: &url, Mode: &mode})
-	loginCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
-	defer cancel()
+	loginCtx, timeoutCancel := context.WithTimeout(authCtx, 10*time.Minute)
+	defer timeoutCancel()
 	credential, err := login.Complete(loginCtx, nil)
 	if err != nil {
 		return nil, err
 	}
-	return c.finish(ctx, request.MethodID, credential)
+	return c.finish(authCtx, request.MethodID, credential)
 }
 
 func (c *acpLoginCoordinator) finish(ctx context.Context, methodID string, credential auth.Credential) (*acp.AuthMeta, error) {
@@ -293,7 +306,7 @@ func (c *acpLoginCoordinator) finish(ctx context.Context, methodID string, crede
 	return acpAuthMeta(cfg, credential, allowed), nil
 }
 
-func (c *acpLoginCoordinator) beginInteractive() bool {
+func (c *acpLoginCoordinator) beginInteractive(clientSeq *uint64) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.inFlight {
@@ -301,6 +314,11 @@ func (c *acpLoginCoordinator) beginInteractive() bool {
 	}
 	c.inFlight = true
 	c.active = nil
+	c.loginCancel = nil
+	c.clientSeq = 0
+	if clientSeq != nil {
+		c.clientSeq = *clientSeq
+	}
 	c.urlReady = make(chan struct{})
 	c.urlPublished = false
 	c.urlConsumed = false
@@ -312,11 +330,30 @@ func (c *acpLoginCoordinator) endInteractive() {
 	c.mu.Lock()
 	c.inFlight = false
 	c.active = nil
+	c.loginCancel = nil
+	c.clientSeq = 0
 	if !c.urlPublished {
 		c.urlPublished = true
 		close(c.urlReady)
 	}
 	c.mu.Unlock()
+}
+
+// Cancel stops an in-flight interactive login. Idempotent. When requestSeq is
+// set, only that attempt is cancelled so a delayed cancel cannot tear down a
+// successor login (mirrors Rust interactive_auth.cancel_for_client_seq).
+func (c *acpLoginCoordinator) Cancel(requestSeq *uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if requestSeq != nil && c.clientSeq != 0 && *requestSeq != c.clientSeq {
+		return
+	}
+	if c.loginCancel != nil {
+		c.loginCancel()
+	}
+	if c.active != nil {
+		_ = c.active.Close()
+	}
 }
 
 func (c *acpLoginCoordinator) publishURL(result acp.AuthURLResult) {

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -273,7 +274,107 @@ func TestACPPipedTerminalLifecycle(t *testing.T) {
 	}
 }
 
-func TestACPPipedTerminalBackgroundUnblocksWait(t *testing.T) {
+func TestPipedTerminalAdoptsSharedCgroup(t *testing.T) {
+	fake := &recordingShellCgroup{}
+	manager := newTerminalManager(nil)
+	manager.newCgroup = func() tools.ShellCgroup { return fake }
+
+	id, err := manager.createCommand("session", "sleep 2", nil, t.TempDir(), nil, terminalOutputBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.pids) != 1 || fake.pids[0] <= 0 {
+		t.Fatalf("expected one adopted pid, got %#v", fake.pids)
+	}
+	if outcome, err := manager.killCommand("session", id); err != nil || outcome != "killed" {
+		t.Fatalf("kill outcome=%q err=%v", outcome, err)
+	}
+	manager.closeAll()
+	if !fake.closed {
+		t.Fatal("expected shared cgroup release on closeAll")
+	}
+}
+
+func TestPipedTerminalOOMKillsNewestCommand(t *testing.T) {
+	fake := &recordingShellCgroup{}
+	manager := newTerminalManager(nil)
+	manager.newCgroup = func() tools.ShellCgroup { return fake }
+
+	older, err := manager.createCommand("session", "sleep 30", nil, t.TempDir(), nil, terminalOutputBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	newer, err := manager.createCommand("session", "sleep 30", nil, t.TempDir(), nil, terminalOutputBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fake.mu.Lock()
+	fake.next = &tools.MemoryHighEvent{MemoryCurrent: 950, MemoryHighBytes: 1000}
+	fake.mu.Unlock()
+	manager.handleTerminalMemoryHigh()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if cmd := manager.findCommand(newer); cmd != nil {
+			cmd.mu.Lock()
+			code, signal, oom := cmd.exitCode, cmd.signal, cmd.oom
+			cmd.mu.Unlock()
+			if oom && code != nil && *code == tools.ProcessOOMExitCode && signal == "oom" {
+				goto checkOlder
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("newer command did not report OOM exit")
+checkOlder:
+	if cmd := manager.findCommand(older); cmd != nil {
+		cmd.mu.Lock()
+		exited := cmd.exitCode != nil || cmd.signal != ""
+		cmd.mu.Unlock()
+		if exited {
+			t.Fatal("older command should still be running")
+		}
+	}
+	if _, err := manager.killCommand("session", older); err != nil {
+		t.Fatal(err)
+	}
+	manager.closeAll()
+}
+
+type recordingShellCgroup struct {
+	mu     sync.Mutex
+	pids   []int
+	closed bool
+	next   *tools.MemoryHighEvent
+}
+
+func (r *recordingShellCgroup) AddProcess(pid int) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pids = append(r.pids, pid)
+	return nil
+}
+
+func (r *recordingShellCgroup) Close() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.closed = true
+	return nil
+}
+
+func (r *recordingShellCgroup) Path() string { return "fake-cgroup" }
+
+func (r *recordingShellCgroup) TryRecvMemoryHigh() *tools.MemoryHighEvent {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ev := r.next
+	r.next = nil
+	return ev
+}
+
+func TestPipedTerminalBackgroundUnblocksWait(t *testing.T) {
 	manager := newTerminalManager(nil)
 	defer manager.closeAll()
 	id, err := manager.createCommand("session", "sleep 5", nil, t.TempDir(), nil, terminalOutputBytes)

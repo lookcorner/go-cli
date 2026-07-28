@@ -1,0 +1,99 @@
+package tools
+
+import (
+	"fmt"
+	"strconv"
+	"strings"
+	"sync/atomic"
+)
+
+// CgroupMemoryConfig configures Linux cgroup v2 memory limits for model-started
+// shell children. Matches the Rust LocalTerminalBackend memory_high + headroom
+// shape (cpu.max is not set).
+type CgroupMemoryConfig struct {
+	MemoryHighBytes uint64
+	HeadroomBytes   uint64
+}
+
+// DefaultCgroupMemoryConfig returns 512 MiB soft / 256 MiB headroom hard ceiling.
+func DefaultCgroupMemoryConfig() CgroupMemoryConfig {
+	return CgroupMemoryConfig{
+		MemoryHighBytes: 512 << 20,
+		HeadroomBytes:   256 << 20,
+	}
+}
+
+func (c CgroupMemoryConfig) memoryMax() uint64 {
+	if c.MemoryHighBytes == 0 && c.HeadroomBytes == 0 {
+		c = DefaultCgroupMemoryConfig()
+	}
+	return c.MemoryHighBytes + c.HeadroomBytes
+}
+
+func (c CgroupMemoryConfig) normalized() CgroupMemoryConfig {
+	if c.MemoryHighBytes == 0 && c.HeadroomBytes == 0 {
+		return DefaultCgroupMemoryConfig()
+	}
+	if c.MemoryHighBytes == 0 {
+		c.MemoryHighBytes = DefaultCgroupMemoryConfig().MemoryHighBytes
+	}
+	if c.HeadroomBytes == 0 {
+		c.HeadroomBytes = DefaultCgroupMemoryConfig().HeadroomBytes
+	}
+	return c
+}
+
+// ShellCgroup confines spawned shell/terminal PIDs. Implementations are best-effort.
+type ShellCgroup interface {
+	AddProcess(pid int) error
+	Close() error
+	Path() string
+	// TryRecvMemoryHigh returns a pending memory.high event, or nil.
+	TryRecvMemoryHigh() *MemoryHighEvent
+}
+
+// ProcessOOMExitCode matches the Rust LocalTerminalBackend PROCESS_OOM_EXIT_CODE
+// (128 + SIGKILL) reported when memory.high pressure kills a child.
+const ProcessOOMExitCode = 137
+
+// MemoryHighEvent is emitted when memory.events high increments while RSS stays
+// above 90% of memory.high (same filter as the Rust MemoryHighMonitor).
+type MemoryHighEvent struct {
+	MemoryCurrent   uint64
+	MemoryHighBytes uint64
+}
+
+// shellCgroup is the historical unexported alias used inside ProcessManager.
+type shellCgroup = ShellCgroup
+
+var cgroupSeq atomic.Uint64
+
+func nextCgroupName() string {
+	return fmt.Sprintf("gork-shell-%d", cgroupSeq.Add(1))
+}
+
+// NewShellCgroup creates a best-effort Linux cgroup v2 memory guard for
+// model-started children. Non-Linux hosts and unsupported setups return nil.
+func NewShellCgroup(cfg CgroupMemoryConfig) ShellCgroup {
+	return tryShellCgroup(cfg)
+}
+
+// parseMemoryEventsHigh reads the `high <N>` counter from memory.events.
+func parseMemoryEventsHigh(contents string) (uint64, bool) {
+	for _, line := range strings.Split(contents, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 || fields[0] != "high" {
+			continue
+		}
+		n, err := strconv.ParseUint(fields[1], 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		return n, true
+	}
+	return 0, false
+}
+
+func memoryHighBuffer(threshold uint64) uint64 {
+	return threshold * 9 / 10
+}
