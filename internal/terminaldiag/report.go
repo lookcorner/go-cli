@@ -113,7 +113,7 @@ func BuildSnapshot(getenv func(string) string, lookPath func(string) (string, er
 		findings = append(findings, tmuxProbeFindings(tmux)...)
 	}
 	findings = append(findings, notificationFindings(getenv)...)
-	findings = append(findings, newlineFindings(getenv, brand)...)
+	findings = append(findings, newlineFindings(getenv, brand, ssh)...)
 	if finding := sshWrapRecommendation(getenv, ssh); finding != "" {
 		findings = append(findings, finding)
 	}
@@ -443,9 +443,9 @@ func isAppleTerminal(brand string) bool {
 
 // newlineFindings mirrors reference terminal.newline-fallback for env-detectable
 // hosts where Shift+Enter cannot be distinguished from Enter (VTE < 0.82,
-// VS Code-family xterm.js, and local WezTerm without Kitty keyboard protocol).
-// Async XTVERSION probes for SSH WezTerm remain deferred.
-func newlineFindings(getenv func(string) string, brand string) []string {
+// VS Code-family xterm.js, local WezTerm without Kitty keyboard protocol, and
+// SSH WezTerm recovered via XTVERSION when TERM_PROGRAM is not forwarded).
+func newlineFindings(getenv func(string) string, brand string, ssh bool) []string {
 	if finding := vteNewlineFinding(getenv, brand); finding != "" {
 		return []string{finding}
 	}
@@ -453,24 +453,62 @@ func newlineFindings(getenv func(string) string, brand string) []string {
 		terminal := vscodeTerminalLabel(getenv, brand)
 		return []string{"Shift+Enter can't insert a newline in this xterm.js terminal.\n    Use Alt+Enter to insert a newline in " + terminal + ". xterm.js sends Shift+Enter as Enter in this setup."}
 	}
-	if finding := weztermKittyFinding(getenv, brand); finding != "" {
+	xtversion, _ := XTVERSION()
+	if finding := weztermKittyFinding(getenv, brand, ssh, xtversion); finding != "" {
 		return []string{finding}
 	}
 	return nil
 }
 
-// weztermKittyFinding mirrors Rust wezterm_kitty_keyboard_warning Environment shape.
-// Suppressed under tmux/zellij/screen (wezterm.lua alone would not help).
-func weztermKittyFinding(getenv func(string) string, brand string) string {
-	if normalizeBrandKey(brand) != "wezterm" {
+// weztermKittyFinding mirrors Rust wezterm_kitty_keyboard_warning_from.
+// Environment brand → local wezterm.lua guidance; SSH + unknown brand +
+// XTVERSION WezTerm → SSH-specific backslash guidance (no local lua fix).
+func weztermKittyFinding(getenv func(string) string, brand string, ssh bool, xtversion string) string {
+	shape := weztermShape(getenv, brand, ssh, xtversion)
+	switch shape {
+	case weztermShapeEnvironment:
+		return "Shift+Enter can't insert a newline because WezTerm's Kitty keyboard protocol is off\n" +
+			"    → Set `config.enable_kitty_keyboard = true` in ~/.config/wezterm/wezterm.lua\n" +
+			"    Restart WezTerm after changing this setting. Until then, type `\\` and then press Enter to insert a newline."
+	case weztermShapeSSHXTVERSION:
+		return "Shift+Enter can't insert a newline in WezTerm over SSH\n" +
+			"    For this session, type `\\` and then press Enter. Gork can't negotiate the Kitty " +
+			"keyboard protocol over SSH yet. `enable_kitty_keyboard = true` applies only to local WezTerm sessions."
+	default:
 		return ""
 	}
+}
+
+type weztermShapeKind int
+
+const (
+	weztermShapeNone weztermShapeKind = iota
+	weztermShapeEnvironment
+	weztermShapeSSHXTVERSION
+)
+
+func weztermShape(getenv func(string) string, brand string, ssh bool, xtversion string) weztermShapeKind {
 	if mux := terminalMultiplexer(getenv); mux != "none" {
-		return ""
+		return weztermShapeNone
 	}
-	return "Shift+Enter can't insert a newline because WezTerm's Kitty keyboard protocol is off\n" +
-		"    → Set `config.enable_kitty_keyboard = true` in ~/.config/wezterm/wezterm.lua\n" +
-		"    Restart WezTerm after changing this setting. Until then, type `\\` and then press Enter to insert a newline."
+	if normalizeBrandKey(brand) == "wezterm" {
+		return weztermShapeEnvironment
+	}
+	// Rust maps plain xterm / missing TERM_PROGRAM to Unknown; Go often keeps
+	// TERM as the brand string, so treat generic TERM brands as SSH-recoverable.
+	if ssh && brandAllowsSSHWezTermXTVERSION(brand) && xtversionIsWezTerm(xtversion) {
+		return weztermShapeSSHXTVERSION
+	}
+	return weztermShapeNone
+}
+
+func brandAllowsSSHWezTermXTVERSION(brand string) bool {
+	switch key := normalizeBrandKey(brand); key {
+	case "unknown", "", "xterm", "xterm-256color", "xterm-color", "vt100", "vt220", "ansi":
+		return true
+	default:
+		return strings.HasPrefix(key, "xterm")
+	}
 }
 
 func vteNewlineFinding(getenv func(string) string, brand string) string {

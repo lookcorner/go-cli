@@ -1516,12 +1516,19 @@ func (m *model) Init() tea.Cmd {
 		initial = m.minimalPrint(m.minimalInitial)
 		m.minimalInitial = ""
 	}
+	xtversionProbe := tea.Cmd(nil)
+	if terminaldiag.ShouldProbeXTVERSION(os.Getenv) {
+		xtversionProbe = func() tea.Msg { return tea.RequestTerminalVersion() }
+	}
 	if m.startupDashboard {
 		m.startupDashboard = false
-		return tea.Sequence(initial, m.openDashboard(), wait)
+		return tea.Sequence(initial, xtversionProbe, m.openDashboard(), wait)
 	}
 	if m.initial == "" {
 		commands := []tea.Cmd{wait}
+		if xtversionProbe != nil {
+			commands = append(commands, xtversionProbe)
+		}
 		if m.foreignResumeReady && (m.foreignSessions.Claude || m.foreignSessions.Codex || m.foreignSessions.Cursor) {
 			workspace, sources := m.workspace, m.foreignSessions
 			commands = append(commands, func() tea.Msg {
@@ -1543,7 +1550,7 @@ func (m *model) Init() tea.Cmd {
 	m.running = true
 	m.stashInFlightPrompt(prompt, nil, requestRewind)
 	m.beginTurn(prompt)
-	return tea.Sequence(initial, tea.Batch(wait, runTurn(turnCtx, m.runner, prompt, m.previousID, m.activeTurnSerial)))
+	return tea.Sequence(initial, tea.Batch(xtversionProbe, wait, runTurn(turnCtx, m.runner, prompt, m.previousID, m.activeTurnSerial)))
 }
 
 func (m *model) welcomeChangelogCmd() tea.Cmd {
@@ -2625,6 +2632,9 @@ func (m *model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handlePaste(msg.text)
 	case tea.KeyboardEnhancementsMsg:
 		m.voiceKeyReleases = msg.SupportsEventTypes()
+	case tea.TerminalVersionMsg:
+		terminaldiag.RecordXTVERSION(msg.Name)
+		return m, nil
 	}
 	return m, nil
 }
