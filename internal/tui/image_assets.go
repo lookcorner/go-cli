@@ -27,6 +27,6 @@ func (m *model) listSessionImages() string {
 	for index, asset := range assets {
 		b.WriteString(fmt.Sprintf("%d. `%s` (%d bytes)\n", index+1, asset.URI, asset.Size))
 	}
-	b.WriteString("\nPreview with `/preview-image` (latest transcript or session image).")
+	b.WriteString("\nPreview with `/preview-image` (latest) or `/preview-image images/N.png`.")
 	return strings.TrimSpace(b.String())
 }

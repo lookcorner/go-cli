@@ -46,15 +46,49 @@ func (m *model) openImageOverlay(image tools.ImageAttachment, title string) bool
 }
 
 func (m *model) openLatestImageOverlay() bool {
+	return m.openImageOverlayPath("")
+}
+
+func (m *model) openImageOverlayPath(arg string) bool {
 	if m == nil {
 		return false
 	}
-	for index := len(m.overlayImages) - 1; index >= 0; index-- {
-		if m.openImageOverlay(m.overlayImages[index], fmt.Sprintf("Image #%d", index+1)) {
-			return true
+	arg = strings.TrimSpace(arg)
+	if arg == "" {
+		for index := len(m.overlayImages) - 1; index >= 0; index-- {
+			if m.openImageOverlay(m.overlayImages[index], fmt.Sprintf("Image #%d", index+1)) {
+				return true
+			}
 		}
+		return m.openLatestSessionImageOverlay()
 	}
-	return m.openLatestSessionImageOverlay()
+	sessionPath := ""
+	if m.runner != nil {
+		sessionPath = strings.TrimSpace(m.runner.SessionPath)
+	}
+	path := arg
+	title := filepath.Base(arg)
+	if sessionPath != "" {
+		if resolved, err := session.ResolveImageAsset(sessionPath, arg); err == nil {
+			path = resolved
+			title = filepath.ToSlash(filepath.Join("images", filepath.Base(resolved)))
+		} else if !filepath.IsAbs(arg) {
+			m.status = err.Error()
+			return false
+		}
+	} else if !filepath.IsAbs(arg) {
+		abs, err := filepath.Abs(arg)
+		if err != nil {
+			m.status = err.Error()
+			return false
+		}
+		if _, err := os.Stat(abs); err != nil {
+			m.status = fmt.Sprintf("session image %q not found", arg)
+			return false
+		}
+		path = abs
+	}
+	return m.openImageOverlayFile(path, title)
 }
 
 func (m *model) openLatestSessionImageOverlay() bool {
@@ -69,12 +103,16 @@ func (m *model) openLatestSessionImageOverlay() bool {
 	if err != nil || !ok {
 		return false
 	}
-	data, err := os.ReadFile(asset.Path)
+	return m.openImageOverlayFile(asset.Path, asset.URI)
+}
+
+func (m *model) openImageOverlayFile(path, title string) bool {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		m.status = err.Error()
 		return false
 	}
-	mediaType := sessionImageMediaType(asset.Name)
+	mediaType := sessionImageMediaType(path)
 	if mediaType == "" {
 		m.status = "unsupported session image type"
 		return false
@@ -84,7 +122,10 @@ func (m *model) openLatestSessionImageOverlay() bool {
 		m.status = err.Error()
 		return false
 	}
-	return m.openImageOverlay(attachment, asset.URI)
+	if title == "" {
+		title = filepath.Base(path)
+	}
+	return m.openImageOverlay(attachment, title)
 }
 
 func sessionImageMediaType(name string) string {

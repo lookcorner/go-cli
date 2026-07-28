@@ -635,7 +635,7 @@ a `/preview-image` bordered popup chrome, Kitty placeholder click-to-open, foote
 `[Image #N]` prompt-chip hover/click preview, and `/play-video <path>` (ffmpeg
 frame extract) are ready; `/play-video` with no args or a bare name opens the
 newest clip under `artifacts/<session>/videos/`, `/videos` lists those clips,
-`/downloads` lists `artifacts/<session>/downloads` (web_fetch PDFs), and `/images` lists `artifacts/<session>/images` (`/preview-image` can open the newest). Image
+`/downloads` lists `artifacts/<session>/downloads` (web_fetch PDFs), and `/images` lists `artifacts/<session>/images` (`/preview-image` opens newest or `images/N.png`). Image
 bytes persist to the session's asset store, so resumed sessions render the
 same images again.
 On directly supported terminals, Markdown links, bare HTTP(S)/FTP/email URLs, and quoted

@@ -50,7 +50,7 @@ var slashCommandCatalog = []slashCommandItem{
 	{name: "context", description: "Show context usage"},
 	{name: "minimal", description: "Switch to native scrollback"},
 	{name: "fullscreen", aliases: []string{"full"}, description: "Switch to full-screen mode"},
-	{name: "preview-image", aliases: []string{"image-preview"}, description: "Open the latest image overlay"},
+	{name: "preview-image", aliases: []string{"image-preview"}, placeholder: "[path|name]", description: "Open an image overlay (latest or session images/)"},
 	{name: "images", aliases: []string{"list-images"}, description: "List session web_fetch images"},
 	{name: "play-video", aliases: []string{"video-play"}, placeholder: "[path|name]", description: "Play a video overlay (latest session clip if omitted; ffmpeg)"},
 	{name: "videos", aliases: []string{"list-videos"}, description: "List session-generated video clips"},

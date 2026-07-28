@@ -339,6 +339,8 @@ an explicit request.
 - [x] Session image discovery: `ListImageAssets` / `/images`, with
       `/preview-image` falling back to newest artifact image on
       `compat/session-image-discovery`.
+- [x] `/preview-image [path|name]` resolves `images/` like `/play-video` on
+      `compat/session-image-preview-path`.
 
 ### Still open
 

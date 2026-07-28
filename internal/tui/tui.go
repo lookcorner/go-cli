@@ -3166,8 +3166,14 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.status = "image overlay is fullscreen-only"
 				return m, nil
 			}
-			if !m.openLatestImageOverlay() {
-				m.status = "no image to preview"
+			path := ""
+			if len(fields) > 1 {
+				path = strings.TrimSpace(strings.Join(fields[1:], " "))
+			}
+			if !m.openImageOverlayPath(path) {
+				if m.status == "" || m.status == "ready" || m.status == "image preview" {
+					m.status = "no image to preview"
+				}
 			}
 			return m, nil
 		case "/images", "/list-images":
