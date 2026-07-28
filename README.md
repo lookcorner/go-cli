@@ -1799,6 +1799,10 @@ timeout, `max_timeout_secs` bounds model-selected foreground timeouts, and
 shorten a positive timeout chosen for a background task, and background timeout
 `0` remains unbounded. Optional `cmd_prefix` runs before each foreground or
 background Bash command using `&&`; monitor commands are unchanged.
+`allow_background_operator = false` rejects untracked foreground `&` jobs and
+directs the model to use `is_background = true`; it still permits quoted or
+escaped ampersands, redirects, `&&`, heredocs, and parallel work followed by
+`wait`. The setting defaults to `true`.
 `[toolset.bash] login_shell_capture`
 (default on; `GROK_LOGIN_ENV`) sources the user shell rc once at session start and
 merges that environment into agent shells. Top-level `[shell_environment_policy]`

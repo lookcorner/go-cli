@@ -56,6 +56,7 @@ type ProcessManager struct {
 	bashMaxTimeout  time.Duration
 	bashOutput      int
 	bashPrefix      string
+	allowBackground bool
 	shellEnvPolicy  ShellEnvironmentPolicy
 	cgroupMu        sync.Mutex
 	cgroup          shellCgroup
@@ -71,12 +72,13 @@ type foregroundSlot struct {
 	oom     atomic.Bool
 }
 
-// ConfigureBash sets the [toolset.bash] bounds for shell commands. Zero values
-// keep the built-in defaults.
-func (m *ProcessManager) ConfigureBash(timeout, maxTimeout time.Duration, outputLimit int, prefix string) {
+// ConfigureBash sets the [toolset.bash] command policy. Zero numeric values keep
+// the built-in timeout and output defaults.
+func (m *ProcessManager) ConfigureBash(timeout, maxTimeout time.Duration, outputLimit int, prefix string, allowBackground bool) {
 	m.bashMu.Lock()
 	m.bashTimeout, m.bashMaxTimeout, m.bashOutput = max(timeout, 0), max(maxTimeout, 0), max(outputLimit, 0)
 	m.bashPrefix = prefix
+	m.allowBackground = allowBackground
 	m.bashMu.Unlock()
 }
 
@@ -253,6 +255,12 @@ func (m *ProcessManager) prefixedShellCommand(command string) string {
 	return prefix + " && " + command
 }
 
+func (m *ProcessManager) backgroundOperatorAllowed() bool {
+	m.bashMu.RLock()
+	defer m.bashMu.RUnlock()
+	return m.allowBackground
+}
+
 // outputByteLimit is the configured capture ceiling, or the reference default.
 func (m *ProcessManager) outputByteLimit() int {
 	m.bashMu.RLock()
@@ -371,7 +379,7 @@ func NewProcessManager(ws *workspace.Workspace, approver Approver) *ProcessManag
 	return &ProcessManager{
 		ws: ws, approver: approver, processes: make(map[string]*backgroundProcess),
 		currentDir: ws.Root(), environment: os.Environ(),
-		shellEnvPolicy: DefaultShellEnvironmentPolicy(),
+		shellEnvPolicy: DefaultShellEnvironmentPolicy(), allowBackground: true,
 	}
 }
 
@@ -1420,6 +1428,9 @@ func (t *runTerminalCommandTool) Execute(ctx context.Context, raw json.RawMessag
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return "", fmt.Errorf("decode run_terminal_cmd arguments: %w", err)
+	}
+	if runtime.GOOS != "windows" && !args.IsBackground && !t.manager.backgroundOperatorAllowed() && containsUnwaitedBackgroundOperator(args.Command) {
+		return "", errors.New("remove the background '&' from your command and set is_background=true instead")
 	}
 	timeout := t.manager.defaultShellTimeout()
 	if args.IsBackground {

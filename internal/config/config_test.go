@@ -788,14 +788,14 @@ func TestLoadAndValidateBashConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Toolset.Bash.TimeoutSeconds != 120 || cfg.Toolset.Bash.MaxTimeoutSeconds != 36000 || cfg.Toolset.Bash.OutputByteLimit != 20000 {
+	if cfg.Toolset.Bash.TimeoutSeconds != 120 || cfg.Toolset.Bash.MaxTimeoutSeconds != 36000 || cfg.Toolset.Bash.OutputByteLimit != 20000 || !cfg.Toolset.Bash.AllowBackgroundOperator {
 		t.Fatalf("default bash config=%#v", cfg.Toolset.Bash)
 	}
-	if err := os.WriteFile(path, []byte("[toolset.bash]\ntimeout_secs = 0.05\nmax_timeout_secs = 30\noutput_byte_limit = 64\ncmd_prefix = 'source ./env.sh'\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("[toolset.bash]\ntimeout_secs = 0.05\nmax_timeout_secs = 30\noutput_byte_limit = 64\ncmd_prefix = 'source ./env.sh'\nallow_background_operator = false\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err = Load(path)
-	if err != nil || cfg.Toolset.Bash.TimeoutSeconds != 0.05 || cfg.Toolset.Bash.MaxTimeoutSeconds != 30 || cfg.Toolset.Bash.OutputByteLimit != 64 || cfg.Toolset.Bash.CommandPrefix != "source ./env.sh" {
+	if err != nil || cfg.Toolset.Bash.TimeoutSeconds != 0.05 || cfg.Toolset.Bash.MaxTimeoutSeconds != 30 || cfg.Toolset.Bash.OutputByteLimit != 64 || cfg.Toolset.Bash.CommandPrefix != "source ./env.sh" || cfg.Toolset.Bash.AllowBackgroundOperator {
 		t.Fatalf("bash config=%#v err=%v", cfg.Toolset.Bash, err)
 	}
 	cfg.APIKey = "test-key"

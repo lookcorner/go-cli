@@ -266,6 +266,9 @@ zero), with the same ceiling reflected in the model-visible tool schema; positiv
 background timeouts remain exempt from that foreground-only limit.
 The same Bash section's optional `cmd_prefix` is chained before foreground and
 background Bash commands while leaving monitor commands untouched.
+Its default-on `allow_background_operator` can reject foreground POSIX `&` jobs
+while preserving logical operators, redirects, quoted text, heredocs, and
+explicit structured background tasks.
 
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |

@@ -540,12 +540,12 @@ func TestConfigureBashBoundsForegroundTimeoutAndOutput(t *testing.T) {
 		t.Fatalf("default output limit=%d want %d", got, defaultBashOutputBytes)
 	}
 
-	manager.ConfigureBash(0, 0, 0, "")
+	manager.ConfigureBash(0, 0, 0, "", true)
 	if manager.defaultShellTimeout() != defaultBashTimeout || manager.outputByteLimit() != defaultBashOutputBytes {
 		t.Fatal("zero configuration overrode the built-in defaults")
 	}
 
-	manager.ConfigureBash(30*time.Second, time.Minute, 64, "")
+	manager.ConfigureBash(30*time.Second, time.Minute, 64, "", true)
 	if got := manager.defaultShellTimeout(); got != 30*time.Second {
 		t.Fatalf("configured timeout=%s", got)
 	}
@@ -582,7 +582,7 @@ func TestConfigureBashBoundsForegroundTimeoutAndOutput(t *testing.T) {
 		t.Fatalf("background output=%q err=%v", background, err)
 	}
 
-	manager.ConfigureBash(50*time.Millisecond, time.Minute, 0, "")
+	manager.ConfigureBash(50*time.Millisecond, time.Minute, 0, "", true)
 	if got := manager.defaultShellTimeout(); got != 50*time.Millisecond {
 		t.Fatalf("timeout not configured: got %s", got)
 	}
@@ -609,7 +609,7 @@ func TestRunTerminalCommandUsesConfiguredForegroundCeiling(t *testing.T) {
 	}
 	manager := NewProcessManager(ws, PromptApprover{Mode: PermissionAuto})
 	defer manager.Close()
-	manager.ConfigureBash(time.Second, 40*time.Millisecond, 0, "")
+	manager.ConfigureBash(time.Second, 40*time.Millisecond, 0, "", true)
 	tool := &runTerminalCommandTool{manager: manager}
 
 	timeoutSchema := tool.Definition().Parameters["properties"].(map[string]any)["timeout"].(map[string]any)
@@ -643,7 +643,7 @@ func TestConfiguredBashPrefixAppliesOnlyToBashCommands(t *testing.T) {
 	}
 	manager := NewProcessManager(ws, PromptApprover{Mode: PermissionAuto})
 	defer manager.Close()
-	manager.ConfigureBash(0, 0, 0, "printf prefix")
+	manager.ConfigureBash(0, 0, 0, "printf prefix", true)
 
 	foreground, err := manager.RunForeground(context.Background(), "printf command", 0)
 	if err != nil || !strings.Contains(foreground, "prefixcommand") {
@@ -664,6 +664,32 @@ func TestConfiguredBashPrefixAppliesOnlyToBashCommands(t *testing.T) {
 	monitor, err := manager.WaitOutput(context.Background(), monitorID, time.Second)
 	if err != nil || !strings.Contains(monitor, "monitor") || strings.Contains(monitor, "prefix") {
 		t.Fatalf("monitor=%q err=%v", monitor, err)
+	}
+}
+
+func TestRunTerminalCommandCanRejectBackgroundOperator(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("cmd.exe uses ampersand as a sequential separator")
+	}
+	ws, err := workspace.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewProcessManager(ws, PromptApprover{Mode: PermissionAuto})
+	defer manager.Close()
+	manager.ConfigureBash(0, 0, 0, "", false)
+	tool := &runTerminalCommandTool{manager: manager}
+
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"printf first & printf second","description":"background operator"}`)); err == nil || !strings.Contains(err.Error(), "is_background=true") {
+		t.Fatalf("background operator error=%v", err)
+	}
+	output, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"printf first && printf second","description":"logical and"}`))
+	if err != nil || !strings.Contains(output, "firstsecond") {
+		t.Fatalf("logical-and output=%q err=%v", output, err)
+	}
+	background, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"printf done &","description":"explicit background","is_background":true}`))
+	if err != nil || !strings.Contains(background, "Background task") {
+		t.Fatalf("explicit background=%q err=%v", background, err)
 	}
 }
 
