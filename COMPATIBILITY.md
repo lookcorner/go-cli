@@ -280,6 +280,8 @@ When automatic backgrounding is disabled, the reference five-minute maximum
 foreground block prevents model-selected multi-hour waits from wedging a turn.
 Default-on login-shell environment capture now follows the full requirements
 over environment over local/managed config over remote precedence chain.
+Remote `file_toolset = "hashline"` is used only as the reference fallback when
+the effective local toolset remains `standard`; local hashline stays authoritative.
 
 | Area | Status | Current behavior / remaining work |
 | --- | --- | --- |

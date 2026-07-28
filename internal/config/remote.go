@@ -42,6 +42,7 @@ type RemoteSettings struct {
 	AllowBackgroundOperator          *bool                `json:"allow_background_operator"`
 	AutoBackgroundOnTimeout          *bool                `json:"auto_background_on_timeout"`
 	LoginShellCapture                *bool                `json:"login_shell_capture"`
+	FileToolset                      *string              `json:"file_toolset"`
 	MaxMCPOutputBytes                *uint64              `json:"max_mcp_output_bytes"`
 	AutoWakeEnabled                  *bool                `json:"auto_wake_enabled"`
 	FeedbackEnabled                  *bool                `json:"feedback_enabled"`
@@ -215,6 +216,14 @@ func (c *Config) ApplyRemoteSettings(remote *RemoteSettings) {
 	}
 	if !c.bashLoginShellConfigured {
 		c.Toolset.Bash.LoginShellCapture = remote.LoginShellCapture == nil || *remote.LoginShellCapture
+	}
+	if c.fileToolsetRemote {
+		c.Toolset.FileToolset = "standard"
+		c.fileToolsetRemote = false
+	}
+	if c.Toolset.FileToolset == "standard" && remote.FileToolset != nil && strings.TrimSpace(*remote.FileToolset) == "hashline" {
+		c.Toolset.FileToolset = "hashline"
+		c.fileToolsetRemote = true
 	}
 	if !c.uiPermissionModeConfigured {
 		c.UI.PermissionMode = "ask"

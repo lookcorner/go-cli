@@ -153,6 +153,40 @@ func TestApplyRemoteSettingsBashAutoBackgroundPrecedence(t *testing.T) {
 	}
 }
 
+func TestApplyRemoteSettingsFileToolsetFallback(t *testing.T) {
+	hashline, standard, invalid := "hashline", "standard", "other"
+	cfg, err := Load(filepath.Join(t.TempDir(), "missing.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{FileToolset: &hashline})
+	if cfg.Toolset.FileToolset != "hashline" {
+		t.Fatalf("remote toolset=%q", cfg.Toolset.FileToolset)
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{FileToolset: &invalid})
+	if cfg.Toolset.FileToolset != "standard" {
+		t.Fatalf("invalid remote toolset=%q", cfg.Toolset.FileToolset)
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{FileToolset: &hashline})
+	cfg.ApplyRemoteSettings(&RemoteSettings{})
+	if cfg.Toolset.FileToolset != "standard" {
+		t.Fatalf("cleared remote toolset=%q", cfg.Toolset.FileToolset)
+	}
+
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[toolset]\nfile_toolset = \"hashline\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ApplyRemoteSettings(&RemoteSettings{FileToolset: &standard})
+	if cfg.Toolset.FileToolset != "hashline" || cfg.fileToolsetRemote {
+		t.Fatalf("local hashline was overridden: %#v", cfg.Toolset)
+	}
+}
+
 func TestFetchRemoteSettingsIncludesSessionIdentity(t *testing.T) {
 	requireLoopback(t)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

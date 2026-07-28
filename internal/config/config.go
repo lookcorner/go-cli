@@ -159,6 +159,7 @@ type Config struct {
 	bashAutoBackgroundConfigured    bool
 	bashLoginShellConfigured        bool
 	mcpMaxOutputConfigured          bool
+	fileToolsetRemote               bool
 }
 
 // MCPConfig bounds the amount of one MCP tool result placed inline in model
