@@ -3,10 +3,13 @@ package tui
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/lookcorner/go-cli/internal/session"
 )
 
 type videoOverlayTickEvent struct{ epoch uint64 }
@@ -26,12 +29,58 @@ func (m *model) openVideoOverlay(viewer *VideoViewer) bool {
 }
 
 func (m *model) openVideoOverlayPath(path string) bool {
-	viewer, err := OpenVideoFromPath(path, m.inlineProtocol())
+	resolved, err := m.resolvePlayVideoPath(path)
+	if err != nil {
+		m.status = err.Error()
+		return false
+	}
+	viewer, err := OpenVideoFromPath(resolved, m.inlineProtocol())
 	if err != nil {
 		m.status = err.Error()
 		return false
 	}
 	return m.openVideoOverlay(viewer)
+}
+
+// resolvePlayVideoPath accepts absolute paths, videos/<name>, bare basenames
+// under the session videos/ folder, or "" for the newest session clip.
+func (m *model) resolvePlayVideoPath(arg string) (string, error) {
+	arg = strings.TrimSpace(arg)
+	sessionPath := ""
+	if m != nil && m.runner != nil {
+		sessionPath = strings.TrimSpace(m.runner.SessionPath)
+	}
+	if arg == "" {
+		if sessionPath == "" {
+			return "", fmt.Errorf("usage: /play-video <path>")
+		}
+		asset, ok, err := session.LatestVideoAsset(sessionPath)
+		if err != nil {
+			return "", err
+		}
+		if !ok {
+			return "", fmt.Errorf("no session videos under videos/")
+		}
+		return asset.Path, nil
+	}
+	if filepath.IsAbs(arg) {
+		return arg, nil
+	}
+	if sessionPath != "" {
+		if resolved, err := session.ResolveVideoAsset(sessionPath, arg); err == nil {
+			return resolved, nil
+		}
+	}
+	// Fall back to workspace-relative paths for ad-hoc clips.
+	if abs, err := filepath.Abs(arg); err == nil {
+		if _, err := os.Stat(abs); err == nil {
+			return abs, nil
+		}
+	}
+	if sessionPath != "" {
+		return "", fmt.Errorf("session video %q not found", arg)
+	}
+	return "", fmt.Errorf("video path not found: %s", arg)
 }
 
 func (m *model) closeVideoOverlay() tea.Cmd {

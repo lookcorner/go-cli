@@ -3169,10 +3169,6 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if len(fields) > 1 {
 				path = strings.TrimSpace(strings.Join(fields[1:], " "))
 			}
-			if path == "" {
-				m.status = "usage: /play-video <path>"
-				return m, nil
-			}
 			if !m.openVideoOverlayPath(path) {
 				return m, nil
 			}

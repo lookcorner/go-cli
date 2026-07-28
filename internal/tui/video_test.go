@@ -1,11 +1,15 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/lookcorner/go-cli/internal/agent"
 )
 
 func TestVideoViewerStubPlayback(t *testing.T) {
@@ -65,5 +69,34 @@ func TestOpenVideoFromPathRequiresFFmpegOrGraphics(t *testing.T) {
 	}
 	if _, err := OpenVideoFromPath("/tmp/missing.mp4", imageProtocolKitty); err == nil || !strings.Contains(err.Error(), "ffmpeg") {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestResolvePlayVideoPathSessionAssets(t *testing.T) {
+	dir := t.TempDir()
+	sessionPath := filepath.Join(dir, "s.jsonl")
+	videos := filepath.Join(dir, "videos")
+	if err := os.MkdirAll(videos, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	clip := filepath.Join(videos, "3.mp4")
+	if err := os.WriteFile(clip, []byte("clip"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := &model{runner: &agent.Runner{SessionPath: sessionPath}}
+	got, err := m.resolvePlayVideoPath("")
+	if err != nil || got != clip {
+		t.Fatalf("latest got=%q err=%v", got, err)
+	}
+	got, err = m.resolvePlayVideoPath("3.mp4")
+	if err != nil || got != clip {
+		t.Fatalf("basename got=%q err=%v", got, err)
+	}
+	got, err = m.resolvePlayVideoPath("videos/3.mp4")
+	if err != nil || got != clip {
+		t.Fatalf("uri got=%q err=%v", got, err)
+	}
+	if _, err := m.resolvePlayVideoPath("missing.mp4"); err == nil {
+		t.Fatal("missing accepted")
 	}
 }
