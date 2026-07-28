@@ -2,6 +2,7 @@ package tools
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -126,23 +127,37 @@ func TestCustomLandlockFailClosedOnLinuxWithoutApply(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("Linux fail-closed only")
 	}
+	if os.Getenv("GORK_LANDLOCK_CHILD") == "1" {
+		home := os.Getenv("GORK_LANDLOCK_HOME")
+		workspace := os.Getenv("GORK_LANDLOCK_WORKSPACE")
+		t.Setenv("GROK_HOME", home)
+		t.Setenv(InsideBwrapEnv, "")
+		_ = os.Unsetenv(InsideBwrapEnv)
+		if err := ApplyParentLandlock("missing", workspace, nil); err == nil || !strings.Contains(err.Error(), "not found") {
+			t.Fatalf("err=%v", err)
+		}
+		// May succeed or fail-closed depending on kernel; must not panic.
+		_ = ApplyParentLandlock("locked", workspace, nil)
+		return
+	}
 	home := t.TempDir()
 	workspace := t.TempDir()
-	t.Setenv("GROK_HOME", home)
-	t.Setenv(InsideBwrapEnv, "")
-	_ = os.Unsetenv(InsideBwrapEnv)
 	if err := os.WriteFile(filepath.Join(home, "sandbox.toml"), []byte(""+
 		"[profiles.locked]\n"+
 		"extends = \"workspace\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// On kernels without Landlock, BestEffort returns applied=false → fail-closed.
-	// On kernels with Landlock, apply succeeds → no error. Either outcome is fine
-	// as long as missing custom still errors.
-	if err := ApplyParentLandlock("missing", workspace, nil); err == nil || !strings.Contains(err.Error(), "not found") {
-		t.Fatalf("err=%v", err)
+	// Apply only in a child so Linux Landlock cannot poison later package tests.
+	cmd := exec.Command(os.Args[0], "-test.run=^TestCustomLandlockFailClosedOnLinuxWithoutApply$", "-test.count=1")
+	cmd.Env = append(os.Environ(),
+		"GORK_LANDLOCK_CHILD=1",
+		"GORK_LANDLOCK_HOME="+home,
+		"GORK_LANDLOCK_WORKSPACE="+workspace,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("landlock child failed: %v\n%s", err, out)
 	}
-	_ = ApplyParentLandlock("locked", workspace, nil) // may succeed or fail-closed depending on kernel
 }
 
 func quoteTOML(path string) string {

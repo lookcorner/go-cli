@@ -2,6 +2,7 @@ package tools
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -49,10 +50,28 @@ func TestApplyParentLandlockOffAndInvalid(t *testing.T) {
 	if err := ApplyParentLandlock("missing-custom", t.TempDir(), nil); err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("err=%v", err)
 	}
-	// Non-off built-ins should not fail-closed even without Landlock (darwin / old kernel).
+	// Applying workspace Landlock to this process would poison later package
+	// tests on Linux (e.g. block /dev/null). Exercise apply in a child only.
+	runLandlockChild(t, "TestApplyParentLandlockWorkspaceChild")
+}
+
+func TestApplyParentLandlockWorkspaceChild(t *testing.T) {
+	if os.Getenv("GORK_LANDLOCK_CHILD") != "1" {
+		t.Skip("landlock apply child only")
+	}
 	var buf strings.Builder
 	if err := ApplyParentLandlock("workspace", t.TempDir(), &buf); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func runLandlockChild(t *testing.T, testName string) {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "-test.run=^"+testName+"$", "-test.count=1")
+	cmd.Env = append(os.Environ(), "GORK_LANDLOCK_CHILD=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("landlock child %s failed: %v\n%s", testName, err, out)
 	}
 }
 
