@@ -26,7 +26,7 @@ func (m *model) listWorkflowsCatalog() string {
 		}
 		b.WriteString(fmt.Sprintf("%d. `%s` (%s)%s\n   %s\n", index+1, item.Name, item.Source, path, item.Description))
 	}
-	b.WriteString("\nValidate with `/workflow validate <name|path>`. Execution is not available yet.")
+	b.WriteString("\nValidate with `/workflow validate <name|path>`. Run via the workflow tool when GORK_WORKFLOW_RUNNER is set.")
 	return strings.TrimSpace(b.String())
 }
 
@@ -69,6 +69,6 @@ func (m *model) handleWorkflowSlash(fields []string) string {
 	case "list":
 		return m.listWorkflowsCatalog()
 	default:
-		return "Usage: /workflows | /workflow validate <name|path>\nExecution (run/stop/resume) is not available yet."
+		return "Usage: /workflows | /workflow validate <name|path>\nFull run uses the workflow tool + GORK_WORKFLOW_RUNNER (TUI run/stop/resume UI deferred)."
 	}
 }

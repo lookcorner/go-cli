@@ -1,5 +1,6 @@
-// Package workflow discovers named Rhai workflow scripts for ACP listing and
-// lightweight validation. Full Rhai execution is not implemented yet.
+// Package workflow discovers and validates Rhai workflow scripts, and runs them
+// via an external Rhai sidecar (GORK_WORKFLOW_RUNNER) with a Go host that maps
+// agent() to SubagentBackend.
 package workflow
 
 import (
