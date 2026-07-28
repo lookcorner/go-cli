@@ -198,11 +198,14 @@ Merge grok.com cloud chat conversations into ACP `x.ai/session/list`.
 - [x] Rename/soft-delete parity for chat kind.
 - [x] Thin chat load/resume + `/rest/modes` picker.
 - [x] Process `--chat` / chat-mode ACP defaults.
-- [ ] Full cloud transcript replay (follow-up).
+- [x] Messages API contract + fail-closed ACP hooks on
+      `compat/cloud-transcript-messages-contract`
+      (`ListMessages`, `x.ai/session/load_history`, session/load partial meta).
+- [ ] Full cloud transcript replay into the local runner (needs live API confirm).
 
 ### Out of scope for slices 1–4
 
-Fetching and replaying grok.com message history into the local runner.
+Injecting grok.com message history into the local runner (contract shipped; replay deferred).
 
 ---
 
@@ -376,9 +379,8 @@ Remote relay / workspace hub remains planned/XL (product-blocked). See queue #5.
 
 ## Remaining XL / blocked (do not start without explicit kickoff)
 
-- Full cloud transcript replay: thin chat load already ships; reference hard-offs
-  chat kind / `load_history`; neither tree has a messages API. Next slice needs
-  a remote fetch contract first.
+- Full cloud transcript **runner replay**: messages contract + `load_history`
+  shipped; inject into local runner only after grok.com `/messages` is confirmed.
 - Rhai runner **binary**: Go host is ready; ship/link a real `xai-workflow`
   sidecar build (journal/parallel/UI still deferred).
 - Remote relay / workspace hub: product-blocked (COMPAT `Workspace server`

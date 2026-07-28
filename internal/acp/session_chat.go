@@ -146,7 +146,12 @@ func (s *Server) handleRestoreChatSession(ctx context.Context, incoming message,
 	created.kind = "chat"
 	mode := created.mode
 	created.mu.Unlock()
-	s.respond(incoming.ID, s.chatSessionStartResponse(created, mode, modes))
+	response := s.chatSessionStartResponse(created, mode, modes)
+	_, reason := s.probeChatHistory(ctx, sessionID)
+	// Fail closed: never inject remote transcript into the runner here.
+	// Clients page via x.ai/session/load_history when the messages API exists.
+	applyChatHistoryMeta(response["_meta"].(map[string]any), reason, false)
+	s.respond(incoming.ID, response)
 	s.startFolderTrustPrompt(created)
 }
 

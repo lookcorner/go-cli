@@ -418,6 +418,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 			s.handleSessionUpdates(incoming)
 		case "x.ai/session/info", "x.ai/session/rename", "x.ai/session/delete", "x.ai/session/search", "x.ai/prompt_history":
 			s.handleSessionAdmin(incoming)
+		case "x.ai/session/load_history":
+			s.handleLoadChatHistory(incoming)
 		case "x.ai/session/usage":
 			s.handleSessionUsage(incoming)
 		case "x.ai/session/update_mcp_servers":
