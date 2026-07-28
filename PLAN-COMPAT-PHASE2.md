@@ -367,6 +367,8 @@ Remote relay / workspace hub remains planned/XL (product-blocked). See queue #5.
       `compat/simple-mode-login-shell`.
 - [x] Workflow tool `validate_only` + resolve/validate helpers on
       `compat/workflow-validate-only` (full Rhai execution still XL).
+- [x] TUI `/workflows` catalog + `/workflow validate <name|path>` on
+      `compat/workflow-slash-validate`.
 
 ## Remaining XL / blocked (do not start without explicit kickoff)
 

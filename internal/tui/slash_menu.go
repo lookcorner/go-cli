@@ -56,6 +56,8 @@ var slashCommandCatalog = []slashCommandItem{
 	{name: "videos", aliases: []string{"list-videos"}, description: "List session-generated video clips"},
 	{name: "downloads", aliases: []string{"list-downloads"}, description: "List session web_fetch downloads"},
 	{name: "fetched", aliases: []string{"list-fetched", "web-fetch-artifacts"}, placeholder: "[path|name]", description: "List or show truncated web_fetch text artifacts"},
+	{name: "workflows", aliases: []string{"list-workflows"}, description: "List discoverable Rhai workflows"},
+	{name: "workflow", placeholder: "validate <name|path>", description: "Validate a Rhai workflow (execution not available yet)"},
 	{name: "model", aliases: []string{"m"}, placeholder: "<name> [effort]", description: "Switch model"},
 	{name: "effort", placeholder: "<level>", description: "Set reasoning effort"},
 	{name: "always-approve", description: "Toggle always-approve mode"},
@@ -255,8 +257,8 @@ func (m *model) slashCommandAvailable(name string) bool {
 		return m.minimal
 	case "preview-image", "image-preview", "images", "list-images":
 		return !m.minimal
-	case "play-video", "video-play", "videos", "list-videos", "downloads", "list-downloads", "fetched", "list-fetched", "web-fetch-artifacts":
-		return !m.minimal || name == "downloads" || name == "list-downloads" || name == "fetched" || name == "list-fetched" || name == "web-fetch-artifacts"
+	case "play-video", "video-play", "videos", "list-videos", "downloads", "list-downloads", "fetched", "list-fetched", "web-fetch-artifacts", "workflows", "list-workflows", "workflow":
+		return !m.minimal || name == "downloads" || name == "list-downloads" || name == "fetched" || name == "list-fetched" || name == "web-fetch-artifacts" || name == "workflows" || name == "list-workflows" || name == "workflow"
 	case "expand":
 		return m.minimal
 	case "always-approve":
